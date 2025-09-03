@@ -5,7 +5,7 @@
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
-  import { Download, Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, Clock } from 'lucide-svelte'
+  import { Download, Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, Clock,ChevronsUpDown } from 'lucide-svelte'
   import { files, downloadQueue } from '$lib/stores'
   
   let searchHash = ''
@@ -224,18 +224,21 @@
       </div>
       
       <div class="flex items-center gap-2">
-        <div class="flex items-center gap-2 text-sm">
+        <div class="flex items-center gap-2 text-sm relative">
           <Settings class="h-4 w-4" />
           <Label>Max Concurrent:</Label>
           <select 
             bind:value={maxConcurrentDownloads}
-            class="px-2 py-1 border rounded bg-background"
+            class="pl-2 pr-6 py-1 border rounded bg-background appearance-none"
           >
             <option value={1}>1</option>
             <option value={3}>3</option>
             <option value={5}>5</option>
             <option value={10}>10</option>
           </select>
+          <ChevronsUpDown
+            class="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+          />
         </div>
         <Button
           size="sm"

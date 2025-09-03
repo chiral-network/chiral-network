@@ -5,7 +5,7 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { Cpu, Zap, TrendingUp, Award, Play, Pause, Settings, Hash, Clock, Coins } from 'lucide-svelte'
+  import { Cpu, Zap, TrendingUp, Award, Play, Pause, Settings, Hash, Clock, Coins, ChevronsUpDown } from 'lucide-svelte'
   import { onMount, onDestroy } from 'svelte'
   
   // Mining state
@@ -219,18 +219,21 @@
     
     <div class="space-y-4">
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div>
+        <div class="relative">
           <Label for="pool-select">Mining Pool</Label>
           <select
             id="pool-select"
             bind:value={miningPool}
             disabled={isMining}
-            class="w-full mt-2 px-3 py-2 border rounded-lg bg-background"
+            class="w-full mt-2 px-3 py-2 border rounded-lg bg-background appearance-none"
           >
             {#each pools as pool}
               <option value={pool.value}>{pool.label}</option>
             {/each}
           </select>
+          <ChevronsUpDown
+            class="pointer-events-none absolute right-2 mt-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+          />
         </div>
         
         <div>

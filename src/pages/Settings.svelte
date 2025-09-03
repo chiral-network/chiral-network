@@ -4,7 +4,7 @@
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
-  import { Settings, Save, FolderOpen, HardDrive, Wifi, Shield, Bell, Info, RefreshCw, Database } from 'lucide-svelte'
+  import { Settings, Save, FolderOpen, HardDrive, Wifi, Shield, Bell, Info, RefreshCw, Database, ChevronsUpDown} from 'lucide-svelte'
   import { currentTheme } from '$lib/stores'
   import { onMount } from 'svelte'
   
@@ -452,18 +452,21 @@
         </div>
       </div>
       
-      <div>
+      <div class="relative">
         <Label for="log-level">Log Level</Label>
         <select
           id="log-level"
           bind:value={settings.logLevel}
-          class="w-full mt-2 px-3 py-2 border rounded-lg bg-background"
+          class="w-full mt-2 px-3 py-2 border rounded-lg bg-background appearance-none"
         >
           <option value="error">Error</option>
           <option value="warn">Warning</option>
           <option value="info">Info</option>
           <option value="debug">Debug</option>
         </select>
+        <ChevronsUpDown
+          class="pointer-events-none absolute right-2 mt-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+        />
       </div>
       
       <div class="flex items-center gap-2">
