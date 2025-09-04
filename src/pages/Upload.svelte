@@ -1,4 +1,5 @@
 <script lang="ts">
+  let fileInput: HTMLInputElement;
   import Button from '$lib/components/ui/button.svelte'
   import Card from '$lib/components/ui/card.svelte'
   import Input from '$lib/components/ui/input.svelte'
@@ -84,22 +85,23 @@
             {formatFileSize($files.filter(f => f.status === 'seeding' || f.status === 'uploaded').reduce((sum, f) => sum + f.size, 0))} total
           </p>
         </div>
-        
-        <div class="flex gap-2">
-          <label for="file-input">
-            <Button as="span" size="sm">
-              <Plus class="h-4 w-4 mr-2" />
-              Add Files
-            </Button>
-          </label>
-          <input
-            id="file-input"
-            type="file"
-            multiple
-            on:change={handleFileSelect}
-            class="hidden"
-          />
-        </div>
+      
+
+
+      <div class="flex gap-2">
+        <Button size="sm" on:click={() => fileInput.click()}>
+          <Plus class="h-4 w-4 mr-2" />
+          Add Files
+        </Button>
+        <input
+          id="file-input"
+          type="file"
+          multiple
+          bind:this={fileInput}
+          on:change={handleFileSelect}
+          class="hidden"
+        />
+      </div>
       </div>
       
       <!-- File List -->
