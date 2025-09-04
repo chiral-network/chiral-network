@@ -1,6 +1,6 @@
 <script lang="ts">
   import './styles/globals.css'
-  import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu } from 'lucide-svelte'
+  import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Sun, Moon } from 'lucide-svelte'
   import UploadPage from './pages/Upload.svelte'
   import DownloadPage from './pages/Download.svelte'
   import ProxyPage from './pages/Proxy.svelte'
@@ -12,6 +12,12 @@
   import { networkStatus } from '$lib/stores'
   
   let currentPage = 'download'
+  let theme = 'dark'
+
+  function toggleTheme() {
+    theme = theme === 'dark' ? 'light' : 'dark'
+    document.documentElement.classList.toggle('dark', theme === 'dark')
+  }
   
   const menuItems = [
     { id: 'download', label: 'Download', icon: Download },
@@ -30,9 +36,20 @@
   <div class="w-64 bg-card border-r transition-all">
     <nav class="p-4 space-y-2">
       <!-- Network Status at top of sidebar -->
-      <div class="flex items-center gap-2 px-3 py-2 mb-4 text-xs">
-        <div class="w-2 h-2 rounded-full {$networkStatus === 'connected' ? 'bg-green-500' : 'bg-red-500'}"></div>
-        <span class="text-muted-foreground">{$networkStatus}</span>
+      <div class="flex items-center justify-between gap-2 px-3 py-2 mb-4 text-xs">
+        <div class="flex items-center gap-2">
+          <div class="w-2 h-2 rounded-full {$networkStatus === 'connected' ? 'bg-green-500' : 'bg-red-500'}"></div>
+          <span class="text-muted-foreground">{$networkStatus}</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <button on:click={toggleTheme} class="text-muted-foreground hover:text-foreground">
+            {#if theme === 'dark'}
+              <Sun class="h-4 w-4" />
+            {:else}
+              <Moon class="h-4 w-4" />
+            {/if}
+          </button>
+        </div>
       </div>
       
       {#each menuItems as item}
