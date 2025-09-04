@@ -14,6 +14,7 @@
   
   let currentPage = 'download'
   let theme = 'dark'
+  let mounted = false;
 
   onMount(() => {
     const savedTheme = localStorage.getItem('theme')
@@ -21,6 +22,7 @@
       theme = savedTheme
       document.documentElement.classList.toggle('dark', theme === 'dark')
     }
+    mounted = true;
   });
 
   function toggleTheme() {
@@ -52,13 +54,15 @@
           <span class="text-muted-foreground">{$networkStatus}</span>
         </div>
         <div class="flex items-center gap-2">
-          <button on:click={toggleTheme} class="text-muted-foreground hover:text-foreground">
-            {#if theme === 'dark'}
-              <Sun class="h-4 w-4" />
-            {:else}
-              <Moon class="h-4 w-4" />
-            {/if}
-          </button>
+          {#if mounted}
+            <button on:click={toggleTheme} class="text-muted-foreground hover:text-foreground">
+              {#if theme === 'dark'}
+                <Sun class="h-4 w-4" />
+              {:else}
+                <Moon class="h-4 w-4" />
+              {/if}
+            </button>
+          {/if}
         </div>
       </div>
       
