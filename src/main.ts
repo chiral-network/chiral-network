@@ -1,4 +1,5 @@
 import App from './App.svelte'
+import { mount } from 'svelte';
 import './styles/globals.css'
 
 console.log('Main.ts loading...')
@@ -13,7 +14,7 @@ if (!target) {
   document.body.innerHTML = '<h1 style="color: red;">Error: Could not find app element!</h1>'
 } else {
   try {
-    app = new App({
+    app = mount (App, {
       target: target,
     })
     console.log('App created successfully')
