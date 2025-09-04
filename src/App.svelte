@@ -47,7 +47,7 @@
   <!-- Sidebar -->
   <div class="w-64 bg-card border-r transition-all">
     <nav class="p-4 space-y-2">
-      <!-- Network Status at top of sidebar -->
+      <!-- Network Status and Light/Dark mode toggle at top of sidebar -->
       <div class="flex items-center justify-between gap-2 px-3 py-2 mb-4 text-xs">
         <div class="flex items-center gap-2">
           <div class="w-2 h-2 rounded-full {$networkStatus === 'connected' ? 'bg-green-500' : 'bg-red-500'}"></div>
