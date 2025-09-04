@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import './styles/globals.css'
   import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Sun, Moon } from 'lucide-svelte'
   import UploadPage from './pages/Upload.svelte'
@@ -14,9 +15,18 @@
   let currentPage = 'download'
   let theme = 'dark'
 
+  onMount(() => {
+    const savedTheme = localStorage.getItem('theme')
+    if (savedTheme) {
+      theme = savedTheme
+      document.documentElement.classList.toggle('dark', theme === 'dark')
+    }
+  });
+
   function toggleTheme() {
     theme = theme === 'dark' ? 'light' : 'dark'
     document.documentElement.classList.toggle('dark', theme === 'dark')
+    localStorage.setItem('theme', theme)
   }
   
   const menuItems = [
