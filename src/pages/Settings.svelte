@@ -1,21 +1,33 @@
 <script lang="ts">
-  import Card from '$lib/components/ui/card.svelte'
-  import Button from '$lib/components/ui/button.svelte'
-  import Input from '$lib/components/ui/input.svelte'
-  import Label from '$lib/components/ui/label.svelte'
-  import Badge from '$lib/components/ui/badge.svelte'
-  import { Settings, Save, FolderOpen, HardDrive, Wifi, Shield, Bell, Info, RefreshCw, Database, ChevronsUpDown} from 'lucide-svelte'
-  import { currentTheme } from '$lib/stores'
-  import { onMount } from 'svelte'
-  
+  import Card from "$lib/components/ui/card.svelte";
+  import Button from "$lib/components/ui/button.svelte";
+  import Input from "$lib/components/ui/input.svelte";
+  import Label from "$lib/components/ui/label.svelte";
+  import Badge from "$lib/components/ui/badge.svelte";
+  import {
+    Settings,
+    Save,
+    FolderOpen,
+    HardDrive,
+    Wifi,
+    Shield,
+    Bell,
+    Info,
+    RefreshCw,
+    Database,
+    ChevronsUpDown,
+  } from "lucide-svelte";
+  import { currentTheme } from "$lib/stores";
+  import { onMount } from "svelte";
+
   // Settings state
   let settings = {
     // Storage settings
-    storagePath: '~/ChiralNetwork/Storage',
+    storagePath: "~/ChiralNetwork/Storage",
     maxStorageSize: 100, // GB
     autoCleanup: true,
     cleanupThreshold: 90, // %
-    
+
     // Network settings
     maxConnections: 50,
     uploadBandwidth: 0, // 0 = unlimited
@@ -23,44 +35,45 @@
     port: 30303,
     enableUPnP: true,
     enableNAT: true,
-    
+
     // Privacy settings
     enableProxy: true,
     enableEncryption: true,
     anonymousMode: false,
     shareAnalytics: true,
-    
+
     // Notifications
     enableNotifications: true,
     notifyOnComplete: true,
     notifyOnError: true,
     soundAlerts: false,
-    
+
     // Advanced
     enableDHT: true,
     enableIPFS: false,
     chunkSize: 256, // KB
     cacheSize: 1024, // MB
-    logLevel: 'info',
-    autoUpdate: true
-  }
-  
-  let savedSettings = { ...settings }
-  let hasChanges = false
-  
+    logLevel: "info",
+    autoUpdate: true,
+  };
+
+  let savedSettings = { ...settings };
+  let hasChanges = false;
+  let fileInputEl: HTMLInputElement | null = null;
+
   // Check for changes
-  $: hasChanges = JSON.stringify(settings) !== JSON.stringify(savedSettings)
-  
+  $: hasChanges = JSON.stringify(settings) !== JSON.stringify(savedSettings);
+
   function saveSettings() {
     // Save to local storage
-    localStorage.setItem('chiralSettings', JSON.stringify(settings))
-    savedSettings = { ...settings }
-    hasChanges = false
+    localStorage.setItem("chiralSettings", JSON.stringify(settings));
+    savedSettings = { ...settings };
+    hasChanges = false;
   }
-  
+
   function resetSettings() {
     settings = {
-      storagePath: '~/ChiralNetwork/Storage',
+      storagePath: "~/ChiralNetwork/Storage",
       maxStorageSize: 100,
       autoCleanup: true,
       cleanupThreshold: 90,
@@ -82,79 +95,90 @@
       enableIPFS: false,
       chunkSize: 256,
       cacheSize: 1024,
-      logLevel: 'info',
-      autoUpdate: true
-    }
+      logLevel: "info",
+      autoUpdate: true,
+    };
   }
-  
+
   function selectStoragePath() {
     // In a real app, this would open a folder picker dialog
-    console.log('Opening folder picker...')
+    console.log("Opening folder picker...");
   }
-  
+
   function clearCache() {
     // Clear application cache
-    console.log('Clearing cache...')
+    console.log("Clearing cache...");
   }
-  
+
   function exportSettings() {
-    const blob = new Blob([JSON.stringify(settings, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'chiral-settings.json'
-    a.click()
-    URL.revokeObjectURL(url)
+    const blob = new Blob([JSON.stringify(settings, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "chiral-settings.json";
+    a.click();
+    URL.revokeObjectURL(url);
   }
-  
+
   function importSettings(event: Event) {
-    const file = (event.target as HTMLInputElement).files?.[0]
-    if (file) {
-      const reader = new FileReader()
-      reader.onload = (e) => {
-        try {
-          const imported = JSON.parse(e.target?.result as string)
-          settings = { ...settings, ...imported }
-        } catch (error) {
-          console.error('Failed to import settings:', error)
-        }
+    const file = (event.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const imported = JSON.parse(e.target?.result as string);
+        settings = { ...settings, ...imported };
+        savedSettings = { ...settings };
+        localStorage.setItem("chiralSettings", JSON.stringify(settings));
+        hasChanges = false;
+      } catch (err) {
+        console.error("Failed to import settings:", err);
+        alert("Invalid JSON file. Please select a valid export.");
       }
-      reader.readAsText(file)
-    }
+    };
+    reader.readAsText(file);
+
+    // allow re-uploading the same file later
+    (event.target as HTMLInputElement).value = "";
   }
-  
+
   onMount(() => {
     // Load settings from local storage
-    const stored = localStorage.getItem('chiralSettings')
+    const stored = localStorage.getItem("chiralSettings");
     if (stored) {
       try {
-        settings = JSON.parse(stored)
-        savedSettings = { ...settings }
+        settings = JSON.parse(stored);
+        savedSettings = { ...settings };
       } catch (e) {
-        console.error('Failed to load settings:', e)
+        console.error("Failed to load settings:", e);
       }
     }
-  })
+  });
 </script>
 
 <div class="space-y-6">
   <div class="flex items-center justify-between">
     <div>
       <h1 class="text-3xl font-bold">Settings</h1>
-      <p class="text-muted-foreground mt-2">Configure your Chiral Network preferences</p>
+      <p class="text-muted-foreground mt-2">
+        Configure your Chiral Network preferences
+      </p>
     </div>
     {#if hasChanges}
       <Badge variant="outline" class="text-orange-500">Unsaved changes</Badge>
     {/if}
   </div>
-  
+
   <!-- Storage Settings -->
   <Card class="p-6">
     <div class="flex items-center gap-2 mb-4">
       <HardDrive class="h-5 w-5" />
       <h2 class="text-lg font-semibold">Storage</h2>
     </div>
-    
+
     <div class="space-y-4">
       <div>
         <Label for="storage-path">Storage Location</Label>
@@ -170,7 +194,7 @@
           </Button>
         </div>
       </div>
-      
+
       <div class="grid grid-cols-2 gap-4">
         <div>
           <Label for="max-storage">Max Storage Size (GB)</Label>
@@ -183,7 +207,7 @@
             class="mt-2"
           />
         </div>
-        
+
         <div>
           <Label for="cleanup-threshold">Auto-Cleanup Threshold (%)</Label>
           <Input
@@ -197,7 +221,7 @@
           />
         </div>
       </div>
-      
+
       <div class="flex items-center gap-2">
         <input
           type="checkbox"
@@ -210,14 +234,14 @@
       </div>
     </div>
   </Card>
-  
+
   <!-- Network Settings -->
   <Card class="p-6">
     <div class="flex items-center gap-2 mb-4">
       <Wifi class="h-5 w-5" />
       <h2 class="text-lg font-semibold">Network</h2>
     </div>
-    
+
     <div class="space-y-4">
       <div class="grid grid-cols-2 gap-4">
         <div>
@@ -231,7 +255,7 @@
             class="mt-2"
           />
         </div>
-        
+
         <div>
           <Label for="port">Port</Label>
           <Input
@@ -244,7 +268,7 @@
           />
         </div>
       </div>
-      
+
       <div class="grid grid-cols-2 gap-4">
         <div>
           <Label for="upload-bandwidth">Upload Limit (MB/s, 0=unlimited)</Label>
@@ -256,9 +280,11 @@
             class="mt-2"
           />
         </div>
-        
+
         <div>
-          <Label for="download-bandwidth">Download Limit (MB/s, 0=unlimited)</Label>
+          <Label for="download-bandwidth"
+            >Download Limit (MB/s, 0=unlimited)</Label
+          >
           <Input
             id="download-bandwidth"
             type="number"
@@ -268,7 +294,7 @@
           />
         </div>
       </div>
-      
+
       <div class="space-y-2">
         <div class="flex items-center gap-2">
           <input
@@ -280,7 +306,7 @@
             Enable UPnP port mapping
           </Label>
         </div>
-        
+
         <div class="flex items-center gap-2">
           <input
             type="checkbox"
@@ -291,7 +317,7 @@
             Enable NAT traversal
           </Label>
         </div>
-        
+
         <div class="flex items-center gap-2">
           <input
             type="checkbox"
@@ -305,14 +331,14 @@
       </div>
     </div>
   </Card>
-  
+
   <!-- Privacy Settings -->
   <Card class="p-6">
     <div class="flex items-center gap-2 mb-4">
       <Shield class="h-5 w-5" />
       <h2 class="text-lg font-semibold">Privacy & Security</h2>
     </div>
-    
+
     <div class="space-y-2">
       <div class="flex items-center gap-2">
         <input
@@ -324,7 +350,7 @@
           Enable proxy routing for anonymity
         </Label>
       </div>
-      
+
       <div class="flex items-center gap-2">
         <input
           type="checkbox"
@@ -335,7 +361,7 @@
           Enable end-to-end encryption
         </Label>
       </div>
-      
+
       <div class="flex items-center gap-2">
         <input
           type="checkbox"
@@ -346,7 +372,7 @@
           Anonymous mode (hide all identifying information)
         </Label>
       </div>
-      
+
       <div class="flex items-center gap-2">
         <input
           type="checkbox"
@@ -359,14 +385,14 @@
       </div>
     </div>
   </Card>
-  
+
   <!-- Notifications -->
   <Card class="p-6">
     <div class="flex items-center gap-2 mb-4">
       <Bell class="h-5 w-5" />
       <h2 class="text-lg font-semibold">Notifications</h2>
     </div>
-    
+
     <div class="space-y-2">
       <div class="flex items-center gap-2">
         <input
@@ -378,7 +404,7 @@
           Enable desktop notifications
         </Label>
       </div>
-      
+
       {#if settings.enableNotifications}
         <div class="ml-6 space-y-2">
           <div class="flex items-center gap-2">
@@ -391,7 +417,7 @@
               Notify when downloads complete
             </Label>
           </div>
-          
+
           <div class="flex items-center gap-2">
             <input
               type="checkbox"
@@ -402,7 +428,7 @@
               Notify on errors
             </Label>
           </div>
-          
+
           <div class="flex items-center gap-2">
             <input
               type="checkbox"
@@ -417,14 +443,14 @@
       {/if}
     </div>
   </Card>
-  
+
   <!-- Advanced Settings -->
   <Card class="p-6">
     <div class="flex items-center gap-2 mb-4">
       <Database class="h-5 w-5" />
       <h2 class="text-lg font-semibold">Advanced</h2>
     </div>
-    
+
     <div class="space-y-4">
       <div class="grid grid-cols-2 gap-4">
         <div>
@@ -438,7 +464,7 @@
             class="mt-2"
           />
         </div>
-        
+
         <div>
           <Label for="cache-size">Cache Size (MB)</Label>
           <Input
@@ -451,7 +477,7 @@
           />
         </div>
       </div>
-      
+
       <div class="relative">
         <Label for="log-level">Log Level</Label>
         <select
@@ -468,7 +494,7 @@
           class="pointer-events-none absolute right-2 mt-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
         />
       </div>
-      
+
       <div class="flex items-center gap-2">
         <input
           type="checkbox"
@@ -479,22 +505,27 @@
           Automatically install updates
         </Label>
       </div>
-      
+
       <div class="flex gap-2">
         <Button variant="outline" size="sm" on:click={clearCache}>
           <RefreshCw class="h-4 w-4 mr-2" />
           Clear Cache
         </Button>
-        
+
         <Button variant="outline" size="sm" on:click={exportSettings}>
           Export Settings
         </Button>
-        
+
         <label for="import-settings">
-          <Button variant="outline" size="sm" as="span">
+          <Button
+            variant="outline"
+            size="sm"
+            on:click={() => fileInputEl?.click()}
+          >
             Import Settings
           </Button>
           <input
+            bind:this={fileInputEl}
             id="import-settings"
             type="file"
             accept=".json"
@@ -505,17 +536,17 @@
       </div>
     </div>
   </Card>
-  
+
   <!-- Action Buttons -->
   <div class="flex items-center justify-between">
     <Button variant="outline" on:click={resetSettings}>
       Reset to Defaults
     </Button>
-    
+
     <div class="flex gap-2">
       <Button
         variant="outline"
-        on:click={() => settings = { ...savedSettings }}
+        on:click={() => (settings = { ...savedSettings })}
         disabled={!hasChanges}
       >
         Cancel
