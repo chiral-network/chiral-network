@@ -1,5 +1,5 @@
 [package]
-name = "chiral-network"
+name = "chiral-network-tauri"
 version = "0.1.0"
 description = "Chiral Network - IPFS-like decentralized file sharing"
 authors = ["Chiral Network Team"]
