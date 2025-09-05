@@ -27,6 +27,7 @@ The Chiral Network implements a multi-layered protocol stack combining blockchai
 ### 1. Peer Discovery Protocol
 
 #### Bootstrap Process
+
 ```
 1. Connect to Seed Nodes
    Seeds: [
@@ -50,6 +51,7 @@ The Chiral Network implements a multi-layered protocol stack combining blockchai
 ```
 
 #### Message Format
+
 ```
 PeerDiscovery Message {
   header: {
@@ -71,12 +73,14 @@ PeerDiscovery Message {
 ### 2. DHT Protocol (Kademlia)
 
 #### Node ID Generation
+
 ```
 Node ID = SHA256(public_key || nonce)
 Distance = XOR(NodeID_A, NodeID_B)
 ```
 
 #### Routing Table Structure
+
 ```
 K-Buckets (k=20, b=160):
 ┌────────────────────────────────┐
@@ -90,6 +94,7 @@ K-Buckets (k=20, b=160):
 #### DHT Operations
 
 ##### PING
+
 ```
 Request:
 {
@@ -107,6 +112,7 @@ Response:
 ```
 
 ##### FIND_NODE
+
 ```
 Request:
 {
@@ -128,6 +134,7 @@ Response:
 ```
 
 ##### STORE
+
 ```
 Request:
 {
@@ -148,6 +155,7 @@ Response:
 ```
 
 ##### FIND_VALUE
+
 ```
 Request:
 {
@@ -175,6 +183,7 @@ Response (if not found):
 ### 3. File Transfer Protocol
 
 #### File Metadata Exchange
+
 ```protobuf
 message FileMetadata {
   string file_hash = 1;      // SHA-256 hash
@@ -195,6 +204,7 @@ message ChunkInfo {
 ```
 
 #### Chunk Transfer Protocol
+
 ```
 1. Request Chunk
    → REQUEST_CHUNK {
@@ -226,6 +236,7 @@ message ChunkInfo {
 ```
 
 #### Parallel Transfer Optimization
+
 ```
 MaxParallelChunks = 10
 WindowSize = 5
@@ -234,7 +245,7 @@ For chunks 0..n:
   While active_transfers < MaxParallelChunks:
     Request next chunk
     Track in flight
-  
+
   On chunk received:
     Verify and store
     Request next chunk
@@ -244,6 +255,7 @@ For chunks 0..n:
 ### 4. Blockchain Protocol
 
 #### Block Structure
+
 ```
 EthereumBlock {
   header: {
@@ -267,6 +279,7 @@ EthereumBlock {
 ```
 
 #### Transaction Format
+
 ```
 EthereumTransaction {
   nonce: u64,
@@ -290,6 +303,7 @@ TransactionTypes:
 #### Consensus Messages
 
 ##### NewBlock
+
 ```
 {
   type: "NEW_BLOCK",
@@ -300,6 +314,7 @@ TransactionTypes:
 ```
 
 ##### GetBlockHeaders
+
 ```
 {
   type: "GET_BLOCK_HEADERS",
@@ -311,6 +326,7 @@ TransactionTypes:
 ```
 
 ##### NewPooledTransactionHashes
+
 ```
 {
   type: "NEW_POOLED_TRANSACTION_HASHES",
@@ -321,6 +337,7 @@ TransactionTypes:
 ### 5. Storage Proof Protocol
 
 #### Proof of Storage
+
 ```
 Challenge-Response Protocol:
 1. Challenger generates random seed
@@ -344,17 +361,18 @@ Proof {
 ```
 
 #### Proof Generation
+
 ```rust
 fn generate_proof(challenge: Challenge) -> Proof {
     let mut proofs = Vec::new();
-    
+
     for index in challenge.chunk_indices {
         let chunk = storage.get_chunk(challenge.file_hash, index);
         let hash = sha256(chunk.data);
         let merkle_proof = generate_merkle_proof(index);
         proofs.push((hash, merkle_proof));
     }
-    
+
     Proof {
         file_hash: challenge.file_hash,
         proofs,
@@ -369,19 +387,21 @@ fn generate_proof(challenge: Challenge) -> Proof {
 ### 1. libp2p Integration
 
 #### Protocol Multiplexing
+
 ```yaml
 protocols:
-  /chiral/kad/1.0.0:      # Kademlia DHT
+  /chiral/kad/1.0.0: # Kademlia DHT
     handler: dht_handler
   /chiral/transfer/1.0.0: # File transfer
     handler: transfer_handler
-  /chiral/market/1.0.0:   # Market protocol
+  /chiral/market/1.0.0: # Market protocol
     handler: market_handler
-  /chiral/eth/1.0.0:      # Ethereum-compatible sync
+  /chiral/eth/1.0.0: # Ethereum-compatible sync
     handler: eth_handler
 ```
 
 #### Stream Multiplexing
+
 ```
 Connection
     ├── Stream 1: DHT queries
@@ -393,6 +413,7 @@ Connection
 ### 2. NAT Traversal
 
 #### STUN Protocol
+
 ```
 STUN Request:
 {
@@ -416,6 +437,7 @@ STUN Response:
 ```
 
 #### TURN Relay
+
 ```
 Relay Protocol:
 Client A → TURN Server → Client B
@@ -436,6 +458,7 @@ Client A → TURN Server → Client B
 ### 3. WebRTC Integration
 
 #### Signaling Protocol
+
 ```javascript
 // Offer
 {
@@ -458,6 +481,7 @@ Client A → TURN Server → Client B
 ```
 
 #### Data Channel Protocol
+
 ```
 DataChannel Configuration:
 {
@@ -472,6 +496,7 @@ DataChannel Configuration:
 ## Message Serialization
 
 ### Protocol Buffers Schema
+
 ```protobuf
 syntax = "proto3";
 package chiral;
@@ -507,6 +532,7 @@ message FileResponse {
 ```
 
 ### MessagePack Format
+
 ```
 Message Structure:
 ┌──────────┬──────────┬──────────┬──────────┐
@@ -522,6 +548,7 @@ Message Structure:
 ## Protocol Negotiation
 
 ### Version Negotiation
+
 ```
 Client: HELLO {
   versions: [0x0003, 0x0002, 0x0001],
@@ -536,6 +563,7 @@ Server: HELLO_ACK {
 ```
 
 ### Capability Discovery
+
 ```
 Capabilities Bitmap:
 Bit 0: Storage Node
@@ -550,6 +578,7 @@ Bit 6-31: Reserved
 ## Network Topology
 
 ### Overlay Network Structure
+
 ```
 Super Nodes (High Bandwidth/Storage)
     │
@@ -569,6 +598,7 @@ Super Nodes (High Bandwidth/Storage)
 ### Routing Strategies
 
 #### Iterative Routing
+
 ```
 1. Query α closest nodes
 2. Wait for responses
@@ -577,6 +607,7 @@ Super Nodes (High Bandwidth/Storage)
 ```
 
 #### Recursive Routing
+
 ```
 1. Query closest node
 2. Node forwards query
@@ -587,16 +618,18 @@ Super Nodes (High Bandwidth/Storage)
 ## Quality of Service
 
 ### Priority Levels
+
 ```
 enum Priority {
   Critical = 0,  // System messages
-  High = 1,      // Financial transactions  
+  High = 1,      // Financial transactions
   Normal = 2,    // File transfers
   Low = 3,       // Background sync
 }
 ```
 
 ### Bandwidth Allocation
+
 ```
 Total Bandwidth = 100 Mbps
 - Critical: 10% reserved
@@ -606,6 +639,7 @@ Total Bandwidth = 100 Mbps
 ```
 
 ### Flow Control
+
 ```
 Window-based Flow Control:
 - Initial window: 64 KB
@@ -617,6 +651,7 @@ Window-based Flow Control:
 ## Protocol Security
 
 ### Message Authentication
+
 ```
 HMAC-SHA256(key, message) where:
 - key = shared_secret
@@ -624,6 +659,7 @@ HMAC-SHA256(key, message) where:
 ```
 
 ### Replay Attack Prevention
+
 ```
 Requirements:
 1. Timestamp within 5 minutes
@@ -632,6 +668,7 @@ Requirements:
 ```
 
 ### Protocol Fuzzing
+
 ```yaml
 fuzzing_targets:
   - message_parsing
@@ -643,24 +680,27 @@ fuzzing_targets:
 ## Performance Metrics
 
 ### Latency Targets
-| Operation | Target | Maximum |
-|-----------|--------|---------|
-| Ping | 50ms | 200ms |
-| DHT Lookup | 500ms | 2s |
-| Chunk Request | 100ms | 1s |
-| Block Propagation | 1s | 5s |
+
+| Operation         | Target | Maximum |
+| ----------------- | ------ | ------- |
+| Ping              | 50ms   | 200ms   |
+| DHT Lookup        | 500ms  | 2s      |
+| Chunk Request     | 100ms  | 1s      |
+| Block Propagation | 1s     | 5s      |
 
 ### Throughput Targets
-| Operation | Target | Minimum |
-|-----------|--------|---------|
-| File Upload | 10 MB/s | 1 MB/s |
-| File Download | 20 MB/s | 2 MB/s |
-| DHT Operations | 100/s | 10/s |
-| Transactions | 100/s | 10/s |
+
+| Operation      | Target  | Minimum |
+| -------------- | ------- | ------- |
+| File Upload    | 10 MB/s | 1 MB/s  |
+| File Download  | 20 MB/s | 2 MB/s  |
+| DHT Operations | 100/s   | 10/s    |
+| Transactions   | 100/s   | 10/s    |
 
 ## Protocol Extensions
 
 ### Custom Protocol Registration
+
 ```typescript
 interface ProtocolHandler {
   name: string;
@@ -669,15 +709,16 @@ interface ProtocolHandler {
 }
 
 network.registerProtocol({
-  name: '/chiral/custom/1.0.0',
-  version: '1.0.0',
+  name: "/chiral/custom/1.0.0",
+  version: "1.0.0",
   handler: async (stream) => {
     // Handle protocol
-  }
+  },
 });
 ```
 
 ### Protocol Upgrade Path
+
 ```
 Version 1.0.0 → 1.1.0:
 - Backward compatible
@@ -693,6 +734,7 @@ Version 1.x → 2.0.0:
 ## Debugging & Monitoring
 
 ### Protocol Tracing
+
 ```
 TRACE [2024-01-01 00:00:00] DHT FIND_NODE
   → Target: 0x1234...
@@ -706,6 +748,7 @@ DEBUG [2024-01-01 00:00:01] FILE_TRANSFER
 ```
 
 ### Network Diagnostics
+
 ```bash
 # Test connectivity
 chiral-cli network ping <peer_id>
@@ -720,6 +763,7 @@ chiral-cli network stats --protocol=dht
 ## Protocol Compliance
 
 ### Standards Compliance
+
 - libp2p Specification v1.0
 - Ethereum Wire Protocol (RLPx)
 - Ethereum DevP2P Protocol
@@ -727,6 +771,7 @@ chiral-cli network stats --protocol=dht
 - JSON-RPC 2.0 (Ethereum-compatible)
 
 ### Testing Suite
+
 ```yaml
 test_categories:
   conformance:
@@ -746,6 +791,7 @@ test_categories:
 ## Future Protocol Enhancements
 
 ### Planned Features
+
 1. **QUIC Transport:** Lower latency connections
 2. **GraphSync:** Efficient graph synchronization
 3. **Bitswap:** Content exchange protocol
@@ -753,6 +799,7 @@ test_categories:
 5. **Noise Protocol:** Modern crypto handshake
 
 ### Research Areas
+
 - Quantum-resistant protocols
 - Machine learning optimization
 - Satellite communication
