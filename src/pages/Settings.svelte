@@ -5,19 +5,16 @@
   import Label from "$lib/components/ui/label.svelte";
   import Badge from "$lib/components/ui/badge.svelte";
   import {
-    Settings,
     Save,
     FolderOpen,
     HardDrive,
     Wifi,
     Shield,
     Bell,
-    Info,
     RefreshCw,
     Database,
     ChevronsUpDown,
   } from "lucide-svelte";
-  import { currentTheme } from "$lib/stores";
   import { onMount } from "svelte";
 
   // Settings state

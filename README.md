@@ -262,7 +262,6 @@ npm run tauri build # Desktop production build
 - ✅ Analytics dashboard
 - ✅ CPU mining with pool support
 - ✅ Comprehensive settings management
-- ✅ Dark/Light theme switching
 
 ### Phase 2: P2P Integration (Next)
 
