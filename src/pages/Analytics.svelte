@@ -96,7 +96,9 @@
             +12.5% this week
           </p>
         </div>
-        <DollarSign class="h-8 w-8 text-muted-foreground" />
+        <div class="p-2 bg-green-500/10 rounded-lg">
+          <DollarSign class="h-5 w-5 text-green-500" />
+        </div>
       </div>
     </Card>
     
@@ -107,7 +109,9 @@
           <p class="text-2xl font-bold">{formatSize(storageUsed)}</p>
           <Progress value={storageUsed} max={10737418240} class="mt-2 h-1" />
         </div>
-        <HardDrive class="h-8 w-8 text-muted-foreground" />
+        <div class="p-2 bg-purple-500/10 rounded-lg">
+          <HardDrive class="h-5 w-5 text-purple-500" />
+        </div>
       </div>
     </Card>
     
@@ -120,7 +124,9 @@
             {downloadedFiles.length} downloaded
           </p>
         </div>
-        <Upload class="h-8 w-8 text-muted-foreground" />
+        <div class="p-2 bg-blue-500/10 rounded-lg">
+          <Upload class="h-5 w-5 text-blue-500" />
+        </div>
       </div>
     </Card>
     
@@ -137,7 +143,9 @@
             {/each}
           </div>
         </div>
-        <Award class="h-8 w-8 text-muted-foreground" />
+        <div class="p-2 bg-yellow-500/10 rounded-lg">
+          <Award class="h-5 w-5 text-yellow-500" />
+        </div>
       </div>
     </Card>
   </div>
