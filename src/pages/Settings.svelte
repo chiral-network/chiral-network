@@ -117,7 +117,7 @@
       });
 
       if (typeof result === "string") {
-        settings.storagePath = result;
+        settings.storagePath = result.replace(home,"~");
       }
     } catch {
       alert("Please run with: npm run tauri dev")
