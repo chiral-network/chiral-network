@@ -2,15 +2,15 @@
   import Card from '$lib/components/ui/card.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
-  import { TrendingUp, TrendingDown, Download, Upload, DollarSign, HardDrive, Clock, Award } from 'lucide-svelte'
+  import { TrendingUp, Upload, DollarSign, HardDrive, Award } from 'lucide-svelte'
   import { files, wallet, networkStats } from '$lib/stores'
   import { onMount } from 'svelte'
   
-  let uploadedFiles = []
-  let downloadedFiles = []
+  let uploadedFiles: any[] = []
+  let downloadedFiles: any[] = []
   let totalUploaded = 0
   let totalDownloaded = 0
-  let earningsHistory = []
+  let earningsHistory: any[] = []
   let storageUsed = 0
   let bandwidthUsed = { upload: 0, download: 0 }
   
@@ -70,11 +70,11 @@
   
   // Calculate top performers
   $: topEarners = uploadedFiles
-    .sort((a, b) => ((b.downloads || 0) * b.price) - ((a.downloads || 0) * a.price))
+    .sort((a, b) => ((b.seeders || 0) * (b.size || 0)) - ((a.seeders || 0) * (a.size || 0)))
     .slice(0, 5)
-  
+
   $: popularFiles = [...$files]
-    .sort((a, b) => (b.downloads || 0) - (a.downloads || 0))
+    .sort((a, b) => (b.seeders || 0) - (a.seeders || 0))
     .slice(0, 5)
 </script>
 
@@ -210,11 +210,11 @@
               <span class="text-sm font-medium text-muted-foreground">#{i + 1}</span>
               <div>
                 <p class="text-sm font-medium">{file.name}</p>
-                <p class="text-xs text-muted-foreground">{file.downloads || 0} downloads</p>
+                <p class="text-xs text-muted-foreground">{file.seeders || 0} seeders</p>
               </div>
             </div>
             <Badge variant="outline">
-              {((file.downloads || 0) * file.price).toFixed(2)} CN
+              {((file.seeders || 0) * (file.size / 1000000)).toFixed(2)} MB
             </Badge>
           </div>
         {/each}
@@ -239,11 +239,11 @@
             </div>
             <div class="flex items-center gap-2">
               <Badge variant="outline">
-                {file.downloads || 0} DL
+                {file.seeders || 0} Seeders
               </Badge>
-              {#if file.rating}
+              {#if file.leechers && file.leechers > 0}
                 <Badge variant="secondary">
-                  ⭐ {file.rating.toFixed(1)}
+                  {file.leechers} Leechers
                 </Badge>
               {/if}
             </div>

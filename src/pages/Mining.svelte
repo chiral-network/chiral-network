@@ -5,8 +5,8 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { Cpu, Zap, TrendingUp, Award, Play, Pause, Settings, Hash, Clock, Coins, ChevronsUpDown } from 'lucide-svelte'
-  import { onMount, onDestroy } from 'svelte'
+  import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, ChevronsUpDown } from 'lucide-svelte'
+  import { onDestroy } from 'svelte'
   
   // Mining state
   let isMining = false
@@ -22,7 +22,6 @@
   
   // Statistics
   let sessionStartTime = Date.now()
-  let lastBlockTime = 0
   let estimatedTimeToBlock = 0
   let powerConsumption = 0
   let efficiency = 0
@@ -33,8 +32,8 @@
   let uptimeInterval: number | null = null
   
   // Mining history
-  let miningHistory = []
-  let recentBlocks = []
+  let miningHistory: any[] = []
+  let recentBlocks: any[] = []
   
   // Mock mining intervals
   let miningInterval: number | null = null
@@ -74,8 +73,8 @@
       // Estimate time to next block
       const blockProbability = 0.0001 * (hashRate / 100)
       estimatedTimeToBlock = Math.floor(1 / blockProbability)
-    }, 1000)
-    
+    }, 1000) as unknown as number
+
     // Update mining history
     statsInterval = setInterval(() => {
       if (!isMining) return
@@ -85,7 +84,7 @@
         hashRate: hashRate,
         power: powerConsumption
       }]
-    }, 5000)
+    }, 5000) as unknown as number
   }
   
   function stopMining() {
@@ -113,7 +112,6 @@
     blocksFound++
     const reward = 5 + Math.random() * 2
     totalRewards += reward
-    lastBlockTime = Date.now()
     
     recentBlocks = [{
       id: `block-${Date.now()}`,
@@ -285,7 +283,7 @@
       <div class="flex items-center justify-between pt-4">
         <div class="text-sm space-y-1">
           <p class="text-muted-foreground">
-            Session: <span class="font-medium">{isMining ? formatUptime() : '0h 0m 0s'}</span>
+            Session: <span class="font-medium">{isMining ? formatUptime(uptimeNow) : '0h 0m 0s'}</span>
           </p>
           <p class="text-muted-foreground">
             Total Hashes: <span class="font-medium">{formatNumber(totalHashes)}</span>

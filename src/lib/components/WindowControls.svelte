@@ -1,23 +1,25 @@
 <script lang="ts">
-  // Only show if we're in Tauri
+  import { onMount } from 'svelte'
+  import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
+
   let isTauri = false
   let appWindow: any = null
-  
-  if (typeof window !== 'undefined' && '__TAURI__' in window) {
-    isTauri = true
-    import('@tauri-apps/api/window').then(module => {
-      appWindow = module.appWindow
-    })
-  }
-  
+
+  onMount(() => {
+    if (typeof window !== 'undefined' && '__TAURI__' in window) {
+      isTauri = true
+      appWindow = getCurrentWebviewWindow()
+    }
+  })
+
   async function minimizeWindow() {
     if (appWindow) await appWindow.minimize()
   }
-  
+
   async function maximizeWindow() {
     if (appWindow) await appWindow.toggleMaximize()
   }
-  
+
   async function closeWindow() {
     if (appWindow) await appWindow.close()
   }
@@ -29,16 +31,16 @@
       on:click={minimizeWindow}
       class="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-600 transition-colors"
       aria-label="Minimize"
-    />
+    ></button>
     <button
       on:click={maximizeWindow}
       class="w-3 h-3 rounded-full bg-green-500 hover:bg-green-600 transition-colors"
       aria-label="Maximize"
-    />
+    ></button>
     <button
       on:click={closeWindow}
       class="w-3 h-3 rounded-full bg-red-500 hover:bg-red-600 transition-colors"
       aria-label="Close"
-    />
+    ></button>
   </div>
 {/if}

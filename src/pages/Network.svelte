@@ -4,7 +4,7 @@
   import Button from '$lib/components/ui/button.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { Users, Globe, HardDrive, Activity, RefreshCw, UserPlus, Signal } from 'lucide-svelte'
+  import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal } from 'lucide-svelte'
   import { peers, networkStats, networkStatus } from '$lib/stores'
   import { onMount } from 'svelte'
   

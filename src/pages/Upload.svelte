@@ -1,14 +1,14 @@
 <script lang="ts">
   import Button from '$lib/components/ui/button.svelte'
   import Card from '$lib/components/ui/card.svelte'
-  import Input from '$lib/components/ui/input.svelte'
-  import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
-  import { Upload, File, X, Plus, FolderOpen } from 'lucide-svelte'
+  import { File, X, Plus, FolderOpen } from 'lucide-svelte'
   import { files } from '$lib/stores'
   
   let isDragging = false
-  
+  let dragCounter = 0
+  let fileInput: HTMLInputElement
+
   function handleFileSelect(event: Event) {
     const input = event.target as HTMLInputElement
     if (input.files) {
@@ -16,31 +16,47 @@
       input.value = '' // Reset input
     }
   }
-  
-  function handleDrop(event: DragEvent) {
-    event.preventDefault()
+
+  function handleDrop(event: CustomEvent<DragEvent>) {
+    const dragEvent = event.detail
+    dragEvent.preventDefault()
     isDragging = false
-    
-    if (event.dataTransfer?.files) {
-      addFiles(Array.from(event.dataTransfer.files))
+    dragCounter = 0
+
+    if (dragEvent.dataTransfer?.files) {
+      addFiles(Array.from(dragEvent.dataTransfer.files))
     }
   }
-  
-  function handleDragOver(event: DragEvent) {
-    event.preventDefault()
-    isDragging = true
+
+  function handleDragOver(event: CustomEvent<DragEvent>) {
+    const dragEvent = event.detail
+    dragEvent.preventDefault()
+    // Allow drop
   }
-  
-  function handleDragLeave(event: DragEvent) {
-    event.preventDefault()
-    isDragging = false
+
+  function handleDragEnter(event: CustomEvent<DragEvent>) {
+    const dragEvent = event.detail
+    dragEvent.preventDefault()
+    dragCounter++
+    if (dragCounter === 1) {
+      isDragging = true
+    }
+  }
+
+  function handleDragLeave(event: CustomEvent<DragEvent>) {
+    const dragEvent = event.detail
+    dragEvent.preventDefault()
+    dragCounter--
+    if (dragCounter === 0) {
+      isDragging = false
+    }
   }
   
   function removeFile(fileId: string) {
     files.update(f => f.filter(file => file.id !== fileId))
   }
   
-  function addFiles(filesToAdd: File[]) {
+  function addFiles(filesToAdd: any[]) {
     // Generate hashes and add to store
     const newFiles = filesToAdd.map((file, i) => ({
       id: `file-${Date.now()}-${i}`,
@@ -69,38 +85,60 @@
     <p class="text-muted-foreground mt-2">Share your files on the Chiral Network</p>
   </div>
   
-  <Card 
-    class="p-6 transition-colors {isDragging ? 'border-primary bg-primary/5' : ''}"
+  <Card
+    class="relative p-6 transition-all duration-200 border-dashed {isDragging ? 'border-primary bg-primary/5 scale-[1.01]' : 'border-muted-foreground/25 hover:border-muted-foreground/50'}"
     on:drop={handleDrop}
     on:dragover={handleDragOver}
+    on:dragenter={handleDragEnter}
     on:dragleave={handleDragLeave}
   >
     <div class="space-y-4">
-      <div class="flex items-center justify-between mb-4">
-        <div>
-          <h2 class="text-lg font-semibold">Shared Files</h2>
-          <p class="text-sm text-muted-foreground mt-1">
-            {$files.filter(f => f.status === 'seeding' || f.status === 'uploaded').length} files • 
-            {formatFileSize($files.filter(f => f.status === 'seeding' || f.status === 'uploaded').reduce((sum, f) => sum + f.size, 0))} total
-          </p>
-        </div>
-        
-        <div class="flex gap-2">
-          <label for="file-input">
-            <Button as="span" size="sm">
+      <!-- Drag & Drop Indicator -->
+      {#if $files.filter(f => f.status === 'seeding' || f.status === 'uploaded').length === 0}
+        <div class="text-center py-8 border-2 border-dashed border-muted-foreground/25 rounded-lg bg-muted/10">
+          <FolderOpen class="h-12 w-12 mx-auto text-muted-foreground mb-3" />
+          <h3 class="text-lg font-semibold text-muted-foreground mb-2">Drop files here to share</h3>
+          <p class="text-sm text-muted-foreground mb-4">Drag and drop files anywhere on this card, or click "Add Files" below</p>
+          <div class="flex justify-center gap-2">
+            <Button size="sm" on:click={() => fileInput?.click()}>
               <Plus class="h-4 w-4 mr-2" />
               Add Files
             </Button>
-          </label>
+          </div>
           <input
-            id="file-input"
+            bind:this={fileInput}
             type="file"
             multiple
             on:change={handleFileSelect}
             class="hidden"
           />
         </div>
-      </div>
+      {:else}
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h2 class="text-lg font-semibold">Shared Files</h2>
+            <p class="text-sm text-muted-foreground mt-1">
+              {$files.filter(f => f.status === 'seeding' || f.status === 'uploaded').length} files •
+              {formatFileSize($files.filter(f => f.status === 'seeding' || f.status === 'uploaded').reduce((sum, f) => sum + f.size, 0))} total
+            </p>
+            <p class="text-xs text-muted-foreground mt-1">💡 Tip: You can also drag and drop files here to add them</p>
+          </div>
+
+          <div class="flex gap-2">
+            <Button size="sm" on:click={() => fileInput?.click()}>
+              <Plus class="h-4 w-4 mr-2" />
+              Add More Files
+            </Button>
+            <input
+              bind:this={fileInput}
+              type="file"
+              multiple
+              on:change={handleFileSelect}
+              class="hidden"
+            />
+          </div>
+        </div>
+      {/if}
       
       <!-- File List -->
       {#if $files.filter(f => f.status === 'seeding' || f.status === 'uploaded').length > 0}
@@ -134,6 +172,7 @@
                   on:click={() => navigator.clipboard.writeText(file.hash)}
                   class="p-1 hover:bg-accent rounded transition-colors"
                   title="Copy hash"
+                  aria-label="Copy file hash"
                 >
                   <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -143,6 +182,7 @@
                   on:click={() => removeFile(file.id)}
                   class="p-1 hover:bg-destructive/10 rounded transition-colors"
                   title="Stop sharing"
+                  aria-label="Stop sharing file"
                 >
                   <X class="h-4 w-4" />
                 </button>
