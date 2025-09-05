@@ -5,8 +5,8 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { Cpu, Zap, TrendingUp, Award, Play, Pause, Settings, Hash, Clock, Coins } from 'lucide-svelte'
-  import { onMount, onDestroy } from 'svelte'
+  import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, ChevronsUpDown } from 'lucide-svelte'
+  import { onDestroy } from 'svelte'
   
   // Mining state
   let isMining = false
@@ -22,23 +22,34 @@
   
   // Statistics
   let sessionStartTime = Date.now()
-  let lastBlockTime = 0
   let estimatedTimeToBlock = 0
   let powerConsumption = 0
   let efficiency = 0
   let temperature = 45
+
+  // Uptime tick (forces template to re-render every second while mining)
+  let uptimeNow: number = Date.now()
+  let uptimeInterval: number | null = null
   
   // Mining history
-  let miningHistory = []
-  let recentBlocks = []
+  let miningHistory: any[] = []
+  let recentBlocks: any[] = []
   
   // Mock mining intervals
-  let miningInterval = null
-  let statsInterval = null
+  let miningInterval: number | null = null
+  let statsInterval: number | null = null
   
   function startMining() {
     isMining = true
     sessionStartTime = Date.now()
+
+    // start uptime ticker so UI updates every second
+    uptimeNow = Date.now()
+    if (!uptimeInterval) {
+      uptimeInterval = setInterval(() => {
+        uptimeNow = Date.now()
+      }, 1000) as unknown as number
+    }
     
     // Simulate mining
     miningInterval = setInterval(() => {
@@ -62,8 +73,8 @@
       // Estimate time to next block
       const blockProbability = 0.0001 * (hashRate / 100)
       estimatedTimeToBlock = Math.floor(1 / blockProbability)
-    }, 1000)
-    
+    }, 1000) as unknown as number
+
     // Update mining history
     statsInterval = setInterval(() => {
       if (!isMining) return
@@ -73,7 +84,7 @@
         hashRate: hashRate,
         power: powerConsumption
       }]
-    }, 5000)
+    }, 5000) as unknown as number
   }
   
   function stopMining() {
@@ -89,13 +100,18 @@
       clearInterval(statsInterval)
       statsInterval = null
     }
+
+    // stop uptime ticker
+    if (uptimeInterval) {
+      clearInterval(uptimeInterval as unknown as number)
+      uptimeInterval = null
+    }
   }
   
   function findBlock() {
     blocksFound++
     const reward = 5 + Math.random() * 2
     totalRewards += reward
-    lastBlockTime = Date.now()
     
     recentBlocks = [{
       id: `block-${Date.now()}`,
@@ -107,8 +123,8 @@
     }, ...recentBlocks.slice(0, 4)]
   }
   
-  function formatUptime() {
-    const uptime = Date.now() - sessionStartTime
+  function formatUptime(now: number = Date.now()) {
+    const uptime = now - sessionStartTime
     const hours = Math.floor(uptime / 3600000)
     const minutes = Math.floor((uptime % 3600000) / 60000)
     const seconds = Math.floor((uptime % 60000) / 1000)
@@ -219,18 +235,21 @@
     
     <div class="space-y-4">
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div>
+        <div class="relative">
           <Label for="pool-select">Mining Pool</Label>
           <select
             id="pool-select"
             bind:value={miningPool}
             disabled={isMining}
-            class="w-full mt-2 px-3 py-2 border rounded-lg bg-background"
+            class="w-full mt-2 px-3 py-2 border rounded-lg bg-background appearance-none"
           >
             {#each pools as pool}
               <option value={pool.value}>{pool.label}</option>
             {/each}
           </select>
+          <ChevronsUpDown
+            class="pointer-events-none absolute right-2 mt-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+          />
         </div>
         
         <div>
@@ -264,7 +283,7 @@
       <div class="flex items-center justify-between pt-4">
         <div class="text-sm space-y-1">
           <p class="text-muted-foreground">
-            Session: <span class="font-medium">{isMining ? formatUptime() : '0h 0m 0s'}</span>
+            Session: <span class="font-medium">{isMining ? formatUptime(uptimeNow) : '0h 0m 0s'}</span>
           </p>
           <p class="text-muted-foreground">
             Total Hashes: <span class="font-medium">{formatNumber(totalHashes)}</span>

@@ -9,7 +9,7 @@ fn main() {
     println!("Starting Chiral Network...");
     
     tauri::Builder::default()
-        .plugin(tauri_plugin_app::init())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {

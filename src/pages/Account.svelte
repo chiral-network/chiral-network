@@ -98,8 +98,9 @@
       </div>
     </Card>
     
-    <Card class="p-6">
-      <h2 class="text-lg font-semibold mb-4">Send CN Tokens</h2>
+      <Card class="p-6">
+    <h2 class="text-lg font-semibold mb-4">Send CN Tokens</h2>
+    <form autocomplete="off" data-form-type="other" data-lpignore="true">
       <div class="space-y-4">
         <div>
           <Label for="recipient">Recipient Address</Label>
@@ -108,9 +109,13 @@
             bind:value={recipientAddress}
             placeholder="0x..."
             class="mt-2"
+            autocomplete="off"
+            data-form-type="other"
+            data-lpignore="true"
+            aria-autocomplete="none"
           />
         </div>
-        
+
         <div>
           <Label for="amount">Amount (CN)</Label>
           <Input
@@ -120,13 +125,18 @@
             placeholder="0.00"
             max={$wallet.balance}
             class="mt-2"
+            autocomplete="off"
+            data-form-type="other"
+            data-lpignore="true"
+            aria-autocomplete="none"
           />
           <p class="text-xs text-muted-foreground mt-1">
             Available: {$wallet.balance.toFixed(2)} CN
           </p>
         </div>
-        
+
         <Button
+          type="button"
           class="w-full"
           on:click={sendTransaction}
           disabled={!recipientAddress || sendAmount <= 0 || sendAmount > $wallet.balance}
@@ -135,7 +145,8 @@
           Send Transaction
         </Button>
       </div>
-    </Card>
+    </form>
+  </Card>
   </div>
   
   <Card class="p-6">
@@ -176,32 +187,39 @@
       <h2 class="text-lg font-semibold">Security</h2>
       <Settings class="h-5 w-5 text-muted-foreground" />
     </div>
-    
-    <div class="space-y-4">
-      <div>
-        <Label>Private Key</Label>
-        <div class="flex gap-2 mt-2">
-          <Input
-            type={privateKeyVisible ? 'text' : 'password'}
-            value="your-private-key-here-do-not-share"
-            readonly
-            class="flex-1 font-mono text-sm"
-          />
-          <Button
-            variant="outline"
-            size="sm"
-            on:click={() => privateKeyVisible = !privateKeyVisible}
-          >
-            {privateKeyVisible ? 'Hide' : 'Show'}
-          </Button>
+
+    <form autocomplete="off" data-form-type="other" data-lpignore="true">
+      <div class="space-y-4">
+        <div>
+          <Label>Private Key</Label>
+          <div class="flex gap-2 mt-2">
+            <Input
+              type={privateKeyVisible ? 'text' : 'password'}
+              value="your-private-key-here-do-not-share"
+              readonly
+              class="flex-1 font-mono text-sm"
+              autocomplete="off"
+              data-form-type="other"
+              data-lpignore="true"
+              aria-autocomplete="none"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              on:click={() => privateKeyVisible = !privateKeyVisible}
+            >
+              {privateKeyVisible ? 'Hide' : 'Show'}
+            </Button>
+          </div>
+          <p class="text-xs text-muted-foreground mt-1">Never share your private key with anyone</p>
         </div>
-        <p class="text-xs text-muted-foreground mt-1">Never share your private key with anyone</p>
+
+        <Button type="button" variant="outline" class="w-full">
+          <Key class="h-4 w-4 mr-2" />
+          Export Wallet
+        </Button>
       </div>
-      
-      <Button variant="outline" class="w-full">
-        <Key class="h-4 w-4 mr-2" />
-        Export Wallet
-      </Button>
-    </div>
+    </form>
   </Card>
 </div>
