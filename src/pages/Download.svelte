@@ -5,7 +5,7 @@
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
-  import { Download, Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, Clock,ChevronsUpDown } from 'lucide-svelte'
+  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, Clock,ChevronsUpDown } from 'lucide-svelte'
   import { files, downloadQueue } from '$lib/stores'
   
   let searchHash = ''
@@ -296,7 +296,10 @@
                 {#if file.status === 'queued'}
                   <select
                     value={file.priority || 'normal'}
-                    on:change={(e) => changePriority(file.id, e.target.value)}
+                    on:change={(e) => {
+                      const target = e.target as HTMLSelectElement;
+                      if (target) changePriority(file.id, target.value as 'low' | 'normal' | 'high');
+                    }}
                     class="text-xs px-2 py-1 border rounded bg-background"
                   >
                     <option value="low">Low Priority</option>

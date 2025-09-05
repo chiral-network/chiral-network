@@ -1,19 +1,16 @@
 <script lang="ts">
   import { cn } from '$lib/utils'
-  import type { HTMLButtonAttributes } from 'svelte/elements'
-  
-  type $$Props = HTMLButtonAttributes & {
-    variant?: 'default' | 'destructive' | 'outline' | 'secondary' | 'ghost' | 'link'
-    size?: 'default' | 'sm' | 'lg' | 'icon'
-  }
-  
-  export let variant: $$Props['variant'] = 'default'
-  export let size: $$Props['size'] = 'default'
-  
+
+  type Variant = 'default' | 'destructive' | 'outline' | 'secondary' | 'ghost' | 'link'
+  type Size = 'default' | 'sm' | 'lg' | 'icon'
+
+  export let variant: Variant = 'default'
+  export let size: Size = 'default'
+
   let className: string | null | undefined = undefined
   export { className as class }
-  
-  const variants = {
+
+  const variants: Record<Variant, string> = {
     default: 'bg-primary text-primary-foreground hover:bg-primary/90',
     destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90',
     outline: 'border border-input bg-background hover:bg-accent hover:text-accent-foreground',
@@ -21,8 +18,8 @@
     ghost: 'hover:bg-accent hover:text-accent-foreground',
     link: 'text-primary underline-offset-4 hover:underline',
   }
-  
-  const sizes = {
+
+  const sizes: Record<Size, string> = {
     default: 'h-10 px-4 py-2',
     sm: 'h-9 rounded-md px-3',
     lg: 'h-11 rounded-md px-8',
@@ -38,9 +35,6 @@
     sizes[size],
     className
   )}
-  on:click
-  on:mouseenter
-  on:mouseleave
 >
   <slot />
 </button>
