@@ -19,6 +19,9 @@
   } from "lucide-svelte";
   import { currentTheme } from "$lib/stores";
   import { onMount } from "svelte";
+  import { open } from "@tauri-apps/plugin-dialog";
+  import { homeDir } from "@tauri-apps/api/path";
+  import { getVersion } from "@tauri-apps/api/app";
 
   // Settings state
   let settings = {
@@ -100,9 +103,25 @@
     };
   }
 
-  function selectStoragePath() {
-    // In a real app, this would open a folder picker dialog
-    console.log("Opening folder picker...");
+  async function selectStoragePath() {
+    try {
+      await getVersion(); // only works in Tauri
+      const home = await homeDir();
+      const result = await open({
+        directory: true,
+        multiple: false,
+        defaultPath: settings.storagePath.startsWith("~/")
+          ? settings.storagePath.replace("~", home)
+          : settings.storagePath,
+        title: "Select Storage Location",
+      });
+
+      if (typeof result === "string") {
+        settings.storagePath = result;
+      }
+    } catch {
+      alert("Please run with: npm run tauri dev")
+    }
   }
 
   function clearCache() {
