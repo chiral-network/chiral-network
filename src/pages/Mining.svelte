@@ -5,7 +5,7 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, ChevronsUpDown } from 'lucide-svelte'
+  import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, ChevronsUpDown, Thermometer } from 'lucide-svelte'
   import { onDestroy } from 'svelte'
   
   // Mining state
@@ -175,7 +175,9 @@
             {selectedThreads} threads
           </p>
         </div>
-        <Cpu class="h-8 w-8 text-muted-foreground" />
+        <div class="p-2 bg-primary/10 rounded-lg">
+          <Cpu class="h-5 w-5 text-primary" />
+        </div>
       </div>
     </Card>
     
@@ -189,7 +191,9 @@
             {blocksFound} blocks found
           </p>
         </div>
-        <Coins class="h-8 w-8 text-muted-foreground" />
+        <div class="p-2 bg-yellow-500/10 rounded-lg">
+          <Coins class="h-5 w-5 text-yellow-500" />
+        </div>
       </div>
     </Card>
     
@@ -202,7 +206,9 @@
             {efficiency.toFixed(2)} H/W
           </p>
         </div>
-        <Zap class="h-8 w-8 text-muted-foreground" />
+        <div class="p-2 bg-amber-500/10 rounded-lg">
+          <Zap class="h-5 w-5 text-amber-500" />
+        </div>
       </div>
     </Card>
     
@@ -219,7 +225,9 @@
             />
           </div>
         </div>
-        <div class="text-2xl">🌡️</div>
+        <div class="p-2 bg-red-500/10 rounded-lg">
+          <Thermometer class="h-5 w-5 text-red-500" />
+        </div>
       </div>
     </Card>
   </div>
