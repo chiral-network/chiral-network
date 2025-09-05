@@ -154,13 +154,14 @@ const dummyNetworkStats: NetworkStats = {
 }
 
 // Stores
-export const files = writable<FileItem[]>(dummyFiles)
-export const proxyNodes = writable<ProxyNode[]>(dummyProxyNodes)
-export const wallet = writable<WalletInfo>(dummyWallet)
-export const activeDownloads = writable<number>(2)
-export const networkStatus = writable<'connected' | 'disconnected'>('connected')
-export const peers = writable<PeerInfo[]>(dummyPeers)
-export const chatMessages = writable<ChatMessage[]>([])
-export const networkStats = writable<NetworkStats>(dummyNetworkStats)
-export const downloadQueue = writable<FileItem[]>([])
-export const currentTheme = writable<'light' | 'dark'>('dark')
+export const files = writable<FileItem[]>(dummyFiles);
+export const proxyNodes = writable<ProxyNode[]>(dummyProxyNodes);
+export const wallet = writable<WalletInfo>(dummyWallet);
+export const activeDownloads = writable<number>(2);
+export const networkStatus = writable<"connected" | "disconnected">(
+  "connected"
+);
+export const peers = writable<PeerInfo[]>(dummyPeers);
+export const chatMessages = writable<ChatMessage[]>([]);
+export const networkStats = writable<NetworkStats>(dummyNetworkStats);
+export const downloadQueue = writable<FileItem[]>([]);

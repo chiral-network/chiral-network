@@ -99,7 +99,6 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 
 ### 9. User Experience Enhancements
 
-- **Dark/Light Theme**: Toggle between themes for comfort
 - **Drag & Drop Upload**: Intuitive file upload interface
 - **Real-Time Notifications**: Status updates via toast messages
 - **Responsive Design**: Adaptive layout for different screen sizes
@@ -111,7 +110,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 
 - **Svelte 5**: Reactive UI framework for efficient updates
 - **TypeScript**: Type-safe development with better IDE support
-- **Tailwind CSS**: Utility-first styling with dark mode support
+- **Tailwind CSS**: Utility-first styling
 - **Lucide Icons**: Consistent, customizable icon system
 - **Bits UI**: Accessible component primitives
 
@@ -262,7 +261,6 @@ npm run tauri build # Desktop production build
 - ✅ Analytics dashboard
 - ✅ CPU mining with pool support
 - ✅ Comprehensive settings management
-- ✅ Dark/Light theme switching
 
 ### Phase 2: P2P Integration (Next)
 
