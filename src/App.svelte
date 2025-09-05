@@ -35,7 +35,7 @@
         <div class="flex items-center">
           <button
             aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            class="p-2 rounded hover:bg-accent/20"
+            class="p-2 rounded transition-colors hover:bg-gray-100"
             on:click={() => sidebarCollapsed = !sidebarCollapsed}
           >
             <Menu class="h-5 w-5" />
