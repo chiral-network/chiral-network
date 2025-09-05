@@ -1,6 +1,6 @@
 <script lang="ts">
   import './styles/globals.css'
-  import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu } from 'lucide-svelte'
+  import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Sun, Moon } from 'lucide-svelte'
   import UploadPage from './pages/Upload.svelte'
   import DownloadPage from './pages/Download.svelte'
   import ProxyPage from './pages/Proxy.svelte'
@@ -9,9 +9,21 @@
   import AnalyticsPage from './pages/Analytics.svelte'
   import SettingsPage from './pages/Settings.svelte'
   import MiningPage from './pages/Mining.svelte'
-  import { networkStatus } from '$lib/stores'
+  import { networkStatus, currentTheme } from '$lib/stores'
   
   let currentPage = 'download'
+
+  // Theme toggle function
+  function toggleTheme() {
+    currentTheme.update(theme => theme === 'light' ? 'dark' : 'light');
+  }
+
+  // Apply theme to body element
+  $: {
+    if (typeof document !== 'undefined') {
+      document.body.className = $currentTheme === 'dark' ? 'dark' : '';
+    }
+  }
   
   const menuItems = [
     { id: 'download', label: 'Download', icon: Download },
@@ -44,6 +56,23 @@
           {item.label}
         </button>
       {/each}
+
+      <!-- Theme Toggle -->
+      <div class="mt-4 pt-4 border-t border-border">
+        <button
+          on:click={toggleTheme}
+          class="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors hover:bg-accent/50"
+          title="Toggle theme"
+        >
+          {#if $currentTheme === 'light'}
+            <Moon class="h-4 w-4" />
+            Dark Mode
+          {:else}
+            <Sun class="h-4 w-4" />
+            Light Mode
+          {/if}
+        </button>
+      </div>
     </nav>
   </div>
   

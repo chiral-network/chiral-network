@@ -5,20 +5,23 @@
   import Label from "$lib/components/ui/label.svelte";
   import Badge from "$lib/components/ui/badge.svelte";
   import {
-    Settings,
     Save,
     FolderOpen,
     HardDrive,
     Wifi,
     Shield,
     Bell,
-    Info,
     RefreshCw,
     Database,
     ChevronsUpDown,
   } from "lucide-svelte";
   import { currentTheme } from "$lib/stores";
   import { onMount } from "svelte";
+
+  // Theme toggle function
+  function toggleTheme() {
+    currentTheme.update(theme => theme === 'light' ? 'dark' : 'light');
+  }
 
   // Settings state
   let settings = {
@@ -170,6 +173,9 @@
     {#if hasChanges}
       <Badge variant="outline" class="text-orange-500">Unsaved changes</Badge>
     {/if}
+    <Button variant="outline" size="sm" on:click={() => toggleTheme()}>
+      {$currentTheme === 'light' ? '🌙 Dark' : '☀️ Light'}
+    </Button>
   </div>
 
   <!-- Storage Settings -->
