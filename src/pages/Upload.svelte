@@ -17,35 +17,30 @@
     }
   }
 
-  function handleDrop(event: CustomEvent<DragEvent>) {
-    const dragEvent = event.detail
-    dragEvent.preventDefault()
+  function handleDrop(event: DragEvent) {
+    event.preventDefault()
     isDragging = false
     dragCounter = 0
-
-    if (dragEvent.dataTransfer?.files) {
-      addFiles(Array.from(dragEvent.dataTransfer.files))
+    if (event.dataTransfer?.files) {
+      addFiles(Array.from(event.dataTransfer.files))
     }
   }
 
-  function handleDragOver(event: CustomEvent<DragEvent>) {
-    const dragEvent = event.detail
-    dragEvent.preventDefault()
+  function handleDragOver(event: DragEvent) {
+    event.preventDefault()
     // Allow drop
   }
 
-  function handleDragEnter(event: CustomEvent<DragEvent>) {
-    const dragEvent = event.detail
-    dragEvent.preventDefault()
+  function handleDragEnter(event: DragEvent) {
+    event.preventDefault()
     dragCounter++
     if (dragCounter === 1) {
       isDragging = true
     }
   }
 
-  function handleDragLeave(event: CustomEvent<DragEvent>) {
-    const dragEvent = event.detail
-    dragEvent.preventDefault()
+  function handleDragLeave(event: DragEvent) {
+    event.preventDefault()
     dragCounter--
     if (dragCounter === 0) {
       isDragging = false
@@ -94,24 +89,24 @@
   >
     <div class="space-y-4">
       <!-- Drag & Drop Indicator -->
+      <input
+        bind:this={fileInput}
+        type="file"
+        multiple
+        on:change={handleFileSelect}
+        class="hidden"
+      />
       {#if $files.filter(f => f.status === 'seeding' || f.status === 'uploaded').length === 0}
         <div class="text-center py-8 border-2 border-dashed border-muted-foreground/25 rounded-lg bg-muted/10">
           <FolderOpen class="h-12 w-12 mx-auto text-muted-foreground mb-3" />
           <h3 class="text-lg font-semibold text-muted-foreground mb-2">Drop files here to share</h3>
           <p class="text-sm text-muted-foreground mb-4">Drag and drop files anywhere on this card, or click "Add Files" below</p>
           <div class="flex justify-center gap-2">
-            <Button size="sm" on:click={() => fileInput?.click()}>
+            <button class="inline-flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90" on:click={() => { console.log('fileInput:', fileInput); fileInput?.click(); }}>
               <Plus class="h-4 w-4 mr-2" />
               Add Files
-            </Button>
+            </button>
           </div>
-          <input
-            bind:this={fileInput}
-            type="file"
-            multiple
-            on:change={handleFileSelect}
-            class="hidden"
-          />
         </div>
       {:else}
         <div class="flex items-center justify-between mb-4">
@@ -123,19 +118,11 @@
             </p>
             <p class="text-xs text-muted-foreground mt-1">💡 Tip: You can also drag and drop files here to add them</p>
           </div>
-
           <div class="flex gap-2">
-            <Button size="sm" on:click={() => fileInput?.click()}>
+            <button class="inline-flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90" on:click={() => { console.log('fileInput:', fileInput); fileInput?.click(); }}>
               <Plus class="h-4 w-4 mr-2" />
               Add More Files
-            </Button>
-            <input
-              bind:this={fileInput}
-              type="file"
-              multiple
-              on:change={handleFileSelect}
-              class="hidden"
-            />
+            </button>
           </div>
         </div>
       {/if}
