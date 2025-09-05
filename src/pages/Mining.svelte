@@ -27,18 +27,30 @@
   let powerConsumption = 0
   let efficiency = 0
   let temperature = 45
+
+  // Uptime tick (forces template to re-render every second while mining)
+  let uptimeNow: number = Date.now()
+  let uptimeInterval: number | null = null
   
   // Mining history
   let miningHistory = []
   let recentBlocks = []
   
   // Mock mining intervals
-  let miningInterval = null
-  let statsInterval = null
+  let miningInterval: number | null = null
+  let statsInterval: number | null = null
   
   function startMining() {
     isMining = true
     sessionStartTime = Date.now()
+
+    // start uptime ticker so UI updates every second
+    uptimeNow = Date.now()
+    if (!uptimeInterval) {
+      uptimeInterval = setInterval(() => {
+        uptimeNow = Date.now()
+      }, 1000) as unknown as number
+    }
     
     // Simulate mining
     miningInterval = setInterval(() => {
@@ -89,6 +101,12 @@
       clearInterval(statsInterval)
       statsInterval = null
     }
+
+    // stop uptime ticker
+    if (uptimeInterval) {
+      clearInterval(uptimeInterval as unknown as number)
+      uptimeInterval = null
+    }
   }
   
   function findBlock() {
@@ -107,8 +125,8 @@
     }, ...recentBlocks.slice(0, 4)]
   }
   
-  function formatUptime() {
-    const uptime = Date.now() - sessionStartTime
+  function formatUptime(now: number = Date.now()) {
+    const uptime = now - sessionStartTime
     const hours = Math.floor(uptime / 3600000)
     const minutes = Math.floor((uptime % 3600000) / 60000)
     const seconds = Math.floor((uptime % 60000) / 1000)
