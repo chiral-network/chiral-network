@@ -1,5 +1,4 @@
 <script lang="ts">
-  import Button from '$lib/components/ui/button.svelte'
   import Card from '$lib/components/ui/card.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import { File, X, Plus, FolderOpen } from 'lucide-svelte'
@@ -17,30 +16,34 @@
     }
   }
 
-  function handleDrop(event: DragEvent) {
-    event.preventDefault()
+  function handleDrop(event: CustomEvent<DragEvent>) {
+    const dragEvent = event.detail
+    dragEvent.preventDefault()
     isDragging = false
     dragCounter = 0
-    if (event.dataTransfer?.files) {
-      addFiles(Array.from(event.dataTransfer.files))
+    if (dragEvent.dataTransfer?.files) {
+      addFiles(Array.from(dragEvent.dataTransfer.files))
     }
   }
 
-  function handleDragOver(event: DragEvent) {
-    event.preventDefault()
+  function handleDragOver(event: CustomEvent<DragEvent>) {
+    const dragEvent = event.detail
+    dragEvent.preventDefault()
     // Allow drop
   }
 
-  function handleDragEnter(event: DragEvent) {
-    event.preventDefault()
+  function handleDragEnter(event: CustomEvent<DragEvent>) {
+    const dragEvent = event.detail
+    dragEvent.preventDefault()
     dragCounter++
     if (dragCounter === 1) {
       isDragging = true
     }
   }
 
-  function handleDragLeave(event: DragEvent) {
-    event.preventDefault()
+  function handleDragLeave(event: CustomEvent<DragEvent>) {
+    const dragEvent = event.detail
+    dragEvent.preventDefault()
     dragCounter--
     if (dragCounter === 0) {
       isDragging = false
