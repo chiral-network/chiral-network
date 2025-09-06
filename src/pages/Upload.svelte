@@ -18,16 +18,17 @@
   }
 
   function handleDrop(event: DragEvent) {
-    event.preventDefault()
-    isDragging = false
-    dragCounter = 0
-    if (event.dataTransfer?.files) {
+    console.log('Drop', event);
+    event.preventDefault();
+    isDragging = false;
+    dragCounter = 0;
+    if (event.dataTransfer?.files && event.dataTransfer.files.length > 0) {
       addFiles(Array.from(event.dataTransfer.files))
     }
   }
 
   function handleDragOver(event: DragEvent) {
-    event.preventDefault()
+    event.preventDefault();
     // Allow drop
   }
 
@@ -80,13 +81,14 @@
     <p class="text-muted-foreground mt-2">Share your files on the Chiral Network</p>
   </div>
   
-  <Card
-    class="relative p-6 transition-all duration-200 border-dashed {isDragging ? 'border-primary bg-primary/5 scale-[1.01]' : 'border-muted-foreground/25 hover:border-muted-foreground/50'}"
-    on:drop={handleDrop}
-    on:dragover={handleDragOver}
-    on:dragenter={handleDragEnter}
-    on:dragleave={handleDragLeave}
-  >
+  <Card class="relative p-6 transition-all duration-200 border-dashed {isDragging ? 'border-primary bg-primary/5 scale-[1.01]' : 'border-muted-foreground/25 hover:border-muted-foreground/50'}">
+    <div 
+      class="space-y-4"
+      on:drop={handleDrop}
+      on:dragover={handleDragOver}
+      on:dragenter={handleDragEnter}
+      on:dragleave={handleDragLeave}
+   >
     <div class="space-y-4">
       <!-- Drag & Drop Indicator -->
       <input
