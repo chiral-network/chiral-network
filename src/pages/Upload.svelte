@@ -18,10 +18,9 @@
   }
 
   function handleDrop(event: DragEvent) {
-    console.log('Drop', event);
-    event.preventDefault();
-    isDragging = false;
-    dragCounter = 0;
+    event.preventDefault()
+    isDragging = false
+    dragCounter = 0
     if (event.dataTransfer?.files && event.dataTransfer.files.length > 0) {
       addFiles(Array.from(event.dataTransfer.files))
     }
