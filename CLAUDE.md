@@ -13,7 +13,7 @@ Chiral Network is a BitTorrent-like P2P file sharing application built with Svel
 
 ### Technology Stack
 - **Frontend**: Svelte 4 + TypeScript
-- **Styling**: Tailwind CSS with dark/light theme support
+- **Styling**: Tailwind CSS
 - **Desktop**: Tauri 2 (Rust-based)
 - **State Management**: Svelte stores
 - **Icons**: Lucide Svelte
@@ -46,7 +46,6 @@ Chiral Network is a BitTorrent-like P2P file sharing application built with Svel
 - proxyNodes: Available proxy servers
 - networkStats: Global network statistics
 - wallet: User wallet for mining rewards
-- currentTheme: Theme preference
 ```
 
 ## Recent Design Decisions
@@ -77,13 +76,11 @@ Chiral Network is a BitTorrent-like P2P file sharing application built with Svel
 - Follow existing Svelte patterns
 - Keep components small and focused
 - Use Tailwind classes for styling
-- Maintain dark/light theme support
 
 ### Testing Approach
 - Test with mock data first
 - Ensure UI works without backend
 - Verify drag-and-drop functionality
-- Check theme switching
 - Test responsive design
 
 ## Common Tasks
@@ -100,12 +97,6 @@ Chiral Network is a BitTorrent-like P2P file sharing application built with Svel
 2. Adjust mock data if needed
 3. Update dependent components
 4. Test state reactivity
-
-### Updating Theme
-1. Use Tailwind dark: prefix
-2. Test both light and dark modes
-3. Ensure readable contrast
-4. Check all components
 
 ## Future Enhancements (Allowed)
 
@@ -168,8 +159,7 @@ npm run tauri icon path/to/icon.png
 ### Common Issues
 1. **Extra `</script>` tags**: Check Svelte files end correctly
 2. **Import errors**: Ensure all pages are properly imported
-3. **Theme not working**: Check dark: prefixes in Tailwind
-4. **Drag-drop failing**: Verify event handlers are attached
+3. **Drag-drop failing**: Verify event handlers are attached
 
 ### Debug Commands
 ```bash
@@ -190,5 +180,6 @@ For questions about design decisions or implementation details, refer to:
 4. Git history for decision context
 
 ---
-*Last Updated: Current Session*
-*Focus: BitTorrent-like P2P sharing without commercial features*
+
+_Last Updated: Current Session_
+_Focus: BitTorrent-like P2P sharing without commercial features_
