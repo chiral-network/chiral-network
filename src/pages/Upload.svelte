@@ -1,5 +1,4 @@
 <script lang="ts">
-  import Button from '$lib/components/ui/button.svelte'
   import Card from '$lib/components/ui/card.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import { File, X, Plus, FolderOpen } from 'lucide-svelte'
@@ -81,8 +80,9 @@
   </div>
   
   <Card class="relative p-6 transition-all duration-200 border-dashed {isDragging ? 'border-primary bg-primary/5 scale-[1.01]' : 'border-muted-foreground/25 hover:border-muted-foreground/50'}">
-    <div 
+    <div
       class="space-y-4"
+      role="region"
       on:drop={handleDrop}
       on:dragover={handleDragOver}
       on:dragenter={handleDragEnter}
@@ -185,7 +185,8 @@
           <p class="text-xs text-muted-foreground mt-1">Add files to start sharing on the network</p>
         </div>
       {/if}
-      
+
+    </div>
     </div>
   </Card>
 </div>
