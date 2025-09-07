@@ -5,13 +5,16 @@
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
-  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, Clock,ChevronsUpDown } from 'lucide-svelte'
+  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, Clock } from 'lucide-svelte'
   import { files, downloadQueue } from '$lib/stores'
   
   let searchHash = ''
   let maxConcurrentDownloads = 3
   let autoStartQueue = true
   let filterStatus = 'all' // 'all', 'active', 'queued', 'completed'
+
+  // Ensure maxConcurrentDownloads is always a valid number (minimum 1)
+  $: maxConcurrentDownloads = Math.max(1, Number(maxConcurrentDownloads) || 3)
   
   // Combine all files and queue into single list
   $: allDownloads = [...$files, ...$downloadQueue].sort((a, b) => {
@@ -224,20 +227,16 @@
       </div>
       
       <div class="flex items-center gap-2">
-        <div class="flex items-center gap-2 text-sm relative">
+        <div class="flex items-center gap-2 text-sm">
           <Settings class="h-4 w-4" />
           <Label>Max Concurrent:</Label>
-          <select 
+          <Input
+            type="number"
             bind:value={maxConcurrentDownloads}
-            class="pl-2 pr-6 py-1 border rounded bg-background appearance-none"
-          >
-            <option value={1}>1</option>
-            <option value={3}>3</option>
-            <option value={5}>5</option>
-            <option value={10}>10</option>
-          </select>
-          <ChevronsUpDown
-            class="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+            min="1"
+            step="1"
+            class="w-16 pl-2 pr-2 py-1 text-center"
+            placeholder="3"
           />
         </div>
         <Button
