@@ -189,9 +189,8 @@
       {#each $peers as peer}
         <div class="p-4 bg-secondary rounded-lg">
           <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-2 gap-2">
-            <!-- Left side: dot + name + address -->
             <div class="flex items-start gap-3 min-w-0">
-              <div class="w-2 h-2 rounded-full {
+              <div class="w-2 h-2 rounded-full flex-shrink-0 {
                 peer.status === 'online' ? 'bg-green-500' :
                 peer.status === 'away' ? 'bg-yellow-500' :
                 'bg-red-500'
