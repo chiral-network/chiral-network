@@ -74,20 +74,30 @@
       hash: searchHash,
       size: Math.floor(Math.random() * 100000000),
       price: Math.random() * 5,
-      status: 'downloading' as const,
-      progress: 0
+      status: 'queued' as const, 
+      priority: 'normal' as const
     }
     
-    files.update(f => [...f, newFile])
+    // prevents duplicates in files or queue 
+    const exists = [...$files, ...$downloadQueue].some(f => f.hash === newFile.hash)
+    if (exists) {
+      searchHash = ''
+      return
+    }
+    
+    downloadQueue.update(q => [...q, newFile])
     searchHash = ''
-    
-    // Add to queue if max concurrent downloads reached
-    if ($files.filter(f => f.status === 'downloading').length >= maxConcurrentDownloads) {
-      downloadQueue.update(q => [...q, { ...newFile, status: 'queued', priority: 'normal' }])
-    } else {
-      // Start download immediately
-      simulateDownloadProgress(newFile.id)
-    }
+    processQueue()
+  }
+
+  function processQueue() {
+    if ($files.some(f => f.status === 'downloading')) return
+    const nextFile = $downloadQueue[0]
+    if (!nextFile) return
+    downloadQueue.update(q => q.filter(f => f.id !== nextFile.id))
+    const downloadingFile = { ...nextFile, status: 'downloading' as const, progress: 0 }
+    files.update(f => [...f, downloadingFile])
+    simulateDownloadProgress(downloadingFile.id)
   }
   
   function togglePause(fileId: string) {
