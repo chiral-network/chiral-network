@@ -148,9 +148,9 @@
   
   <!-- Peer Discovery -->
   <Card class="p-6">
-    <div class="flex items-center justify-between mb-4">
+    <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
       <h2 class="text-lg font-semibold">Peer Discovery</h2>
-      <div class="flex gap-2">
+      <div class="flex-shrink-0">
         <Button
           size="sm"
           variant="outline"
@@ -166,12 +166,12 @@
     <div class="space-y-4">
       <div>
         <Label for="peer-address">Direct Connect</Label>
-        <div class="flex gap-2 mt-2">
+        <div class="flex flex-wrap gap-2 mt-2">
           <Input
             id="peer-address"
             bind:value={newPeerAddress}
             placeholder="Enter peer address (IP:Port or peer ID)"
-            class="flex-1"
+            class="flex-1 min-w-0 break-all"
           />
           <Button on:click={connectToPeer} disabled={!newPeerAddress}>
             <UserPlus class="h-4 w-4 mr-2" />
@@ -188,23 +188,26 @@
     <div class="space-y-3">
       {#each $peers as peer}
         <div class="p-4 bg-secondary rounded-lg">
-          <div class="flex items-center justify-between mb-2">
-            <div class="flex items-center gap-3">
+          <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-2 gap-2">
+            <!-- Left side: dot + name + address -->
+            <div class="flex items-start gap-3 min-w-0">
               <div class="w-2 h-2 rounded-full {
-                peer.status === 'online' ? 'bg-green-500' : 
-                peer.status === 'away' ? 'bg-yellow-500' : 
+                peer.status === 'online' ? 'bg-green-500' :
+                peer.status === 'away' ? 'bg-yellow-500' :
                 'bg-red-500'
               }"></div>
               <div>
                 <p class="font-medium">{peer.nickname || 'Anonymous'}</p>
-                <p class="text-xs text-muted-foreground">{peer.address}</p>
+                <p class="text-xs text-muted-foreground break-all">{peer.address}</p>
               </div>
             </div>
-            <div class="flex items-center gap-2">
-              <Badge variant="outline">
-                ⭐ {peer.reputation.toFixed(1)}
+            <div class="flex flex-wrap items-center gap-2 justify-end">
+              <Badge variant="outline" class="flex-shrink-0">
+              ⭐ {peer.reputation.toFixed(1)}
               </Badge>
-              <Badge variant={peer.status === 'online' ? 'default' : 'secondary'}>
+              <Badge variant={peer.status === 'online' ? 'default' : 'secondary'}
+                     class="flex-shrink-0"
+              >
                 {peer.status}
               </Badge>
             </div>
