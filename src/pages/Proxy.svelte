@@ -9,38 +9,46 @@
   
   let newNodeAddress = ''
   let proxyEnabled = true
-  
+  let isAddressValid = true
+  const validAddressRegex = /^[a-zA-Z0-9.-]+:[0-9]{1,5}$/
+
   function addNode() {
-    if (!newNodeAddress) return
-    
-    const newNode = {
-      id: `node-${Date.now()}`,
-      address: newNodeAddress,
-      status: 'connecting' as const,
-      bandwidth: 0,
-      latency: 999,
-      region: 'Unknown'
-    }
-    
-    proxyNodes.update(nodes => [...nodes, newNode])
-    newNodeAddress = ''
-    
-    // Simulate connection
-    setTimeout(() => {
-      proxyNodes.update(nodes => nodes.map(node => {
-        if (node.id === newNode.id) {
-          return {
-            ...node,
-            status: 'online',
-            bandwidth: Math.floor(Math.random() * 100),
-            latency: Math.floor(Math.random() * 100)
-          }
-        }
-        return node
-      }))
-    }, 2000)
+      const validAddressRegex = /^[a-zA-Z0-9.-]+:[0-9]{1,5}$/
+
+      if (!newNodeAddress || !validAddressRegex.test(newNodeAddress.trim())) {
+          alert('Please enter a valid proxy address (e.g., 192.168.1.100:8080)')
+          return
+      }
+
+      const newNode = {
+          id: `node-${Date.now()}`,
+          address: newNodeAddress.trim(),
+          status: 'connecting' as const,
+          bandwidth: 0,
+          latency: 999,
+          region: 'Unknown'
+      }
+
+      proxyNodes.update(nodes => [...nodes, newNode])
+      newNodeAddress = ''
+
+      // Simulate connection
+      setTimeout(() => {
+          proxyNodes.update(nodes => nodes.map(node => {
+              if (node.id === newNode.id) {
+                  return {
+                      ...node,
+                      status: 'online',
+                      bandwidth: Math.floor(Math.random() * 100),
+                      latency: Math.floor(Math.random() * 100)
+                  }
+              }
+              return node
+          }))
+      }, 2000)
   }
-  
+
+
   function removeNode(nodeId: string) {
     proxyNodes.update(nodes => nodes.filter(node => node.id !== nodeId))
   }
@@ -59,6 +67,7 @@
   
   $: activeNodes = $proxyNodes.filter(n => n.status === 'online').length
   $: totalBandwidth = $proxyNodes.reduce((sum, n) => sum + (n.status === 'online' ? n.bandwidth : 0), 0)
+  $: isAddressValid = validAddressRegex.test(newNodeAddress.trim())
 </script>
 
 <div class="space-y-6">
@@ -119,21 +128,25 @@
     </div>
     
     <div class="space-y-4">
-      <div>
-        <Label for="new-node">Add Proxy Node</Label>
-        <div class="flex gap-2 mt-2">
-          <Input
-            id="new-node"
-            bind:value={newNodeAddress}
-            placeholder="Enter node address (e.g., 192.168.1.100:8080)"
-            class="flex-1"
-          />
-          <Button on:click={addNode} disabled={!newNodeAddress}>
-            <Plus class="h-4 w-4 mr-2" />
-            Add Node
-          </Button>
+        <div>
+            <Label for="new-node">Add Proxy Node</Label>
+            <div class="flex gap-2 mt-2">
+                <Input
+                    id="new-node"
+                    bind:value={newNodeAddress}
+                    placeholder="Enter node address (e.g., 192.168.1.100:8080)"
+                    class="flex-1 {isAddressValid || newNodeAddress === '' ? '' : 'border border-red-500 focus:ring-red-500'}"
+                />
+                <Button on:click={addNode} disabled={!isAddressValid || !newNodeAddress}>
+                    <Plus class="h-4 w-4 mr-2" />
+                    Add Node
+                </Button>
+            </div>
+            {#if !isAddressValid && newNodeAddress !== ''}
+                <p class="text-sm text-red-500 mt-1">Please enter a valid proxy address (e.g., 192.168.1.100:8080)</p>
+            {/if}
         </div>
-      </div>
+
     </div>
   </Card>
   
