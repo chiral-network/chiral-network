@@ -147,16 +147,24 @@
               <div class="w-2 h-2 rounded-full {
                 node.status === 'online' ? 'bg-green-500' : 
                 node.status === 'offline' ? 'bg-red-500' : 
-                'bg-yellow-500'
+                node.status === 'connecting' ? 'bg-yellow-500' :
+                'bg-gray-500'
               }"></div>
               <div>
                 <p class="font-medium">{node.address}</p>
                 <p class="text-xs text-muted-foreground">{node.region}</p>
               </div>
             </div>
-            <Badge variant={
-              node.status === 'online' ? 'default' : 'outline'
-            }>
+              <Badge variant={node.status === 'online' ? 'default' :
+                   node.status === 'offline' ? 'secondary' :
+                   node.status === 'connecting' ? 'outline' : 'outline'}
+                      class={
+                        node.status === 'online' ? 'bg-green-500 text-white' :
+                        node.status === 'offline' ? 'bg-red-500 text-white' :
+                        node.status === 'connecting' ? 'bg-yellow-500 text-black' :
+                        'bg-gray-500 text-white'
+                      }
+              >
               {node.status}
             </Badge>
           </div>

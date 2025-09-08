@@ -74,20 +74,30 @@
       hash: searchHash,
       size: Math.floor(Math.random() * 100000000),
       price: Math.random() * 5,
-      status: 'downloading' as const,
-      progress: 0
+      status: 'queued' as const, 
+      priority: 'normal' as const
     }
     
-    files.update(f => [...f, newFile])
+    // prevents duplicates in files or queue 
+    const exists = [...$files, ...$downloadQueue].some(f => f.hash === newFile.hash)
+    if (exists) {
+      searchHash = ''
+      return
+    }
+    
+    downloadQueue.update(q => [...q, newFile])
     searchHash = ''
-    
-    // Add to queue if max concurrent downloads reached
-    if ($files.filter(f => f.status === 'downloading').length >= maxConcurrentDownloads) {
-      downloadQueue.update(q => [...q, { ...newFile, status: 'queued', priority: 'normal' }])
-    } else {
-      // Start download immediately
-      simulateDownloadProgress(newFile.id)
-    }
+    processQueue()
+  }
+
+  function processQueue() {
+    if ($files.some(f => f.status === 'downloading')) return
+    const nextFile = $downloadQueue[0]
+    if (!nextFile) return
+    downloadQueue.update(q => q.filter(f => f.id !== nextFile.id))
+    const downloadingFile = { ...nextFile, status: 'downloading' as const, progress: 0 }
+    files.update(f => [...f, downloadingFile])
+    simulateDownloadProgress(downloadingFile.id)
   }
   
   function togglePause(fileId: string) {
@@ -173,7 +183,7 @@
     <div class="space-y-4">
       <div>
         <Label for="hash-input">File Hash</Label>
-        <div class="flex gap-2 mt-2">
+        <div class="flex flex-col sm:flex-row gap-2 mt-2">
           <Input
             id="hash-input"
             bind:value={searchHash}
@@ -191,10 +201,10 @@
   
   <!-- Unified Downloads List -->
   <Card class="p-6">
-    <div class="flex items-center justify-between mb-4">
-      <div class="flex items-center gap-4">
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
+      <div class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
         <h2 class="text-lg font-semibold">Downloads</h2>
-        <div class="flex gap-2">
+        <div class="flex flex-wrap gap-2">
           <Button
             size="sm"
             variant={filterStatus === 'all' ? 'default' : 'outline'}
@@ -225,9 +235,9 @@
           </Button>
         </div>
       </div>
-      
-      <div class="flex items-center gap-2">
-        <div class="flex items-center gap-2 text-sm">
+
+      <div class="flex flex-col sm:flex-row sm:items-center gap-2 w-full sm:w-auto">
+        <div class="flex items-center gap-2 text-sm flex-wrap">
           <Settings class="h-4 w-4" />
           <Label>Max Concurrent:</Label>
           <Input
@@ -264,9 +274,10 @@
     {:else}
       <div class="space-y-3">
         {#each filteredDownloads as file, index}
-          <div class="p-4 border rounded-lg">
-            <div class="flex items-center justify-between mb-2">
-              <div class="flex items-center gap-3">
+
+          <div class="p-4 bg-secondary rounded-lg">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4 w-full flex-wrap">
+              <div class="flex flex-wrap items-center gap-2">
                 {#if file.status === 'queued'}
                   <div class="flex flex-col gap-1">
                     <button
@@ -285,13 +296,13 @@
                     </button>
                   </div>
                 {/if}
-                <div class="flex-1">
-                  <p class="font-medium">{file.name}</p>
-                  <p class="text-xs text-muted-foreground">Hash: {file.hash}</p>
+                <div class="flex-1 min-w-0">
+                  <p class="font-medium truncate">{file.name}</p>
+                  <p class="text-xs text-muted-foreground truncate">Hash: {file.hash}</p>
                 </div>
               </div>
-              
-              <div class="flex items-center gap-2">
+
+              <div class="flex flex-wrap items-center gap-2 mt-2 sm:mt-0">
                 {#if file.status === 'queued'}
                   <select
                     value={file.priority || 'normal'}
@@ -309,7 +320,7 @@
                 <Badge variant="outline">{formatFileSize(file.size)}</Badge>
                 <Badge variant={
                   file.status === 'downloading' ? 'default' : 
-                  file.status === 'completed' ? 'secondary' :
+                  file.status === 'completed' ? 'outline' :
                   file.status === 'queued' ? 'outline' :
                   file.status === 'paused' ? 'outline' : 'destructive'
                 }>
@@ -329,12 +340,13 @@
             {/if}
             
             {#if file.status === 'downloading' || file.status === 'paused' || file.status === 'queued'}
-              <div class="flex gap-2 mt-3">
+              <div class="flex flex-wrap gap-2 mt-3">
                 {#if file.status !== 'queued'}
                   <Button
                     size="sm"
                     variant="outline"
                     on:click={() => togglePause(file.id)}
+                    class="flex-1 min-w-[100px] sm:flex-none"
                   >
                     {#if file.status === 'downloading'}
                       <Pause class="h-3 w-3 mr-1" />
@@ -349,6 +361,7 @@
                   size="sm"
                   variant="destructive"
                   on:click={() => cancelDownload(file.id)}
+                  class="flex-1 min-w-[100px] sm:flex-none"
                 >
                   <X class="h-3 w-3 mr-1" />
                   {file.status === 'queued' ? 'Remove' : 'Cancel'}
@@ -357,9 +370,13 @@
             {/if}
             
             {#if file.status === 'completed'}
-              <div class="flex items-center justify-between mt-3 text-sm text-muted-foreground">
+              <div class="flex flex-wrap gap-2 mt-3">
                 <span>Download complete</span>
-                <Button size="sm" variant="outline">
+                <Button
+                        size="sm"
+                        variant="outline"
+                        class="flex-1 min-w-[100px] sm:flex-none"
+                >
                   <Clock class="h-3 w-3 mr-1" />
                   Open File
                 </Button>

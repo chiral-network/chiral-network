@@ -173,6 +173,45 @@
       }
     }
   });
+
+  const limits = {
+    maxStorageSize:     { min: 10,   max: 10000, label: "Max Storage Size (GB)" },
+    cleanupThreshold:   { min: 50,   max: 100,   label: "Auto-Cleanup Threshold (%)" },
+    maxConnections:     { min: 10,   max: 200,   label: "Max Connections" },
+    port:               { min: 1024, max: 65535, label: "Port" },
+    uploadBandwidth:    { min: 0,    max: Infinity, label: "Upload Limit (MB/s)" },
+    downloadBandwidth:  { min: 0,    max: Infinity, label: "Download Limit (MB/s)" },
+    chunkSize:          { min: 64,   max: 1024,  label: "Chunk Size (KB)" },
+    cacheSize:          { min: 256,  max: 8192,  label: "Cache Size (MB)" },
+  } as const;
+
+  let errors: Record<string, string | null> = {};
+
+  function rangeMessage(label: string, min: number, max: number) {
+    if (max === Infinity) return `${label} must be ≥ ${min}.`;
+    return `${label} must be between ${min} and ${max}.`;
+  }
+
+  function validate(settings : any) {
+    const next: Record<string, string | null> = {};
+    for (const [key, cfg] of Object.entries(limits)) {
+      const val = Number((settings as any)[key]);
+      if (val < cfg.min || val > cfg.max) {
+        next[key] = rangeMessage(cfg.label, cfg.min, cfg.max);
+        continue;
+      }
+      next[key] = null;
+    }
+    console.log(next)
+    errors = next;
+  }
+
+  // Revalidate whenever settings change
+  $: validate(settings);
+
+  // Valid when no error messages remain
+  $: isValid = Object.values(errors).every((e) => !e);
+
 </script>
 
 <div class="space-y-6">
@@ -222,6 +261,9 @@
             max="10000"
             class="mt-2"
           />
+          {#if errors.maxStorageSize}
+            <p class="mt-1 text-sm text-red-500">{errors.maxStorageSize}</p>
+          {/if}
         </div>
 
         <div>
@@ -235,6 +277,9 @@
             disabled={!settings.autoCleanup}
             class="mt-2"
           />
+          {#if errors.cleanupThreshold}
+            <p class="mt-1 text-sm text-red-500">{errors.cleanupThreshold}</p>
+          {/if}
         </div>
       </div>
 
@@ -270,6 +315,9 @@
             max="200"
             class="mt-2"
           />
+          {#if errors.maxConnections}
+            <p class="mt-1 text-sm text-red-500">{errors.maxConnections}</p>
+          {/if}
         </div>
 
         <div>
@@ -281,7 +329,10 @@
             min="1024"
             max="65535"
             class="mt-2"
-          />
+          /> 
+          {#if errors.port}
+            <p class="mt-1 text-sm text-red-500">{errors.port}</p>
+          {/if}
         </div>
       </div>
 
@@ -295,6 +346,9 @@
             min="0"
             class="mt-2"
           />
+          {#if errors.uploadBandwidth}
+            <p class="mt-1 text-sm text-red-500">{errors.uploadBandwidth}</p>
+          {/if}
         </div>
 
         <div>
@@ -308,6 +362,9 @@
             min="0"
             class="mt-2"
           />
+          {#if errors.downloadBandwidth}
+            <p class="mt-1 text-sm text-red-500">{errors.downloadBandwidth}</p>
+          {/if}
         </div>
       </div>
 
@@ -479,6 +536,9 @@
             max="1024"
             class="mt-2"
           />
+          {#if errors.chunkSize}
+            <p class="mt-1 text-sm text-red-500">{errors.chunkSize}</p>
+          {/if}
         </div>
 
         <div>
@@ -491,6 +551,9 @@
             max="8192"
             class="mt-2"
           />
+          {#if errors.cacheSize}
+            <p class="mt-1 text-sm text-red-500">{errors.cacheSize}</p>
+          {/if}
         </div>
       </div>
 
@@ -567,7 +630,7 @@
       >
         Cancel
       </Button>
-      <Button on:click={saveSettings} disabled={!hasChanges}>
+      <Button on:click={saveSettings} disabled={!hasChanges || !isValid}>
         <Save class="h-4 w-4 mr-2" />
         Save Settings
       </Button>
