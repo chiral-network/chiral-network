@@ -274,6 +274,7 @@
     {:else}
       <div class="space-y-3">
         {#each filteredDownloads as file, index}
+
           <div class="p-4 bg-secondary rounded-lg">
             <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4 w-full flex-wrap">
               <div class="flex flex-wrap items-center gap-2">
