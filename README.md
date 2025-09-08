@@ -362,7 +362,6 @@ MIT License - See LICENSE file for details
 
 Special thanks to all design teams whose concepts shaped this implementation:
 
-- Teams: Beluga, Dolphin, Otter, Seal, Seawolf, Squid, Amoeba, Tuna, Walrus, Whale
 - Focus on legitimate P2P use cases
 - BitTorrent-inspired continuous seeding model
 - Privacy-first architecture
@@ -373,7 +372,7 @@ For issues, questions, or suggestions:
 
 - GitHub Issues: [Report bugs or request features]
 - Documentation: [Comprehensive guides]
-- Community: [Join our Discord]
+- Community: Using Zulip 
 
 ## Disclaimer
 
