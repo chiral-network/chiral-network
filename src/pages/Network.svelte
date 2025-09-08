@@ -204,9 +204,14 @@
               <Badge variant="outline" class="flex-shrink-0">
               ⭐ {peer.reputation.toFixed(1)}
               </Badge>
-              <Badge variant={peer.status === 'online' ? 'default' : 'secondary'}
-                     class="flex-shrink-0"
-              >
+
+                <Badge variant={peer.status === 'online' ? 'default' : 'secondary'}
+                       class={
+                          peer.status === 'online' ? 'bg-green-500 text-white' :
+                          peer.status === 'away' ? 'bg-yellow-500 text-black' :
+                          'bg-red-500 text-white'
+                        }
+                >
                 {peer.status}
               </Badge>
             </div>
