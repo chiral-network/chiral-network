@@ -204,7 +204,7 @@
               <Badge variant="outline">
                 ⭐ {peer.reputation.toFixed(1)}
               </Badge>
-              <Badge variant={peer.status === 'online' ? 'default' : 'secondary'}>
+              <Badge variant={peer.status === 'online' ? 'default' : 'outline'}>
                 {peer.status}
               </Badge>
             </div>

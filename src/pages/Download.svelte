@@ -264,7 +264,7 @@
     {:else}
       <div class="space-y-3">
         {#each filteredDownloads as file, index}
-          <div class="p-4 bg-secondary rounded-lg">
+          <div class="p-4 border rounded-lg">
             <div class="flex items-center justify-between mb-2">
               <div class="flex items-center gap-3">
                 {#if file.status === 'queued'}

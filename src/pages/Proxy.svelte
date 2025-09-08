@@ -155,9 +155,7 @@
               </div>
             </div>
             <Badge variant={
-              node.status === 'online' ? 'default' : 
-              node.status === 'offline' ? 'secondary' : 
-              'outline'
+              node.status === 'online' ? 'default' : 'outline'
             }>
               {node.status}
             </Badge>
