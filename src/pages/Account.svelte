@@ -6,20 +6,37 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, Settings, Key, History } from 'lucide-svelte'
   import { wallet } from '$lib/stores'
+  import { writable } from 'svelte/store'
   
   let recipientAddress = ''
   let sendAmount = 0
   let privateKeyVisible = false
   
-  const transactions = [
-    { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', date: new Date('2024-03-15'), description: 'File purchase' },
-    { id: 2, type: 'sent', amount: 10.25, to: '0x1234...5678', date: new Date('2024-03-14'), description: 'Proxy service' },
-    { id: 3, type: 'received', amount: 100, from: '0xabcd...ef12', date: new Date('2024-03-13'), description: 'Upload reward' },
-    { id: 4, type: 'sent', amount: 5.5, to: '0x9876...5432', date: new Date('2024-03-12'), description: 'File download' },
-  ]
+  const transactions = writable([
+  { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', date: new Date('2024-03-15'), description: 'File purchase' },
+  { id: 2, type: 'sent', amount: 10.25, to: '0x1234...5678', date: new Date('2024-03-14'), description: 'Proxy service' },
+  { id: 3, type: 'received', amount: 100, from: '0xabcd...ef12', date: new Date('2024-03-13'), description: 'Upload reward' },
+  { id: 4, type: 'sent', amount: 5.5, to: '0x9876...5432', date: new Date('2024-03-12'), description: 'File download' },
+  ]);
+
+  // Warning message for amount input
+  let amountWarning = '';
+
+  // Copy feedback message
+  let copyMessage = '';
+
+  $: {
+    const prevAmount = sendAmount;
+    sendAmount = Math.max(0.01, Math.min(sendAmount, $wallet.balance));
+    amountWarning = (prevAmount !== sendAmount)
+      ? `Amount cannot be ${prevAmount}. Allowed range: 0.01-${$wallet.balance.toFixed(2)} CN.`
+      : '';
+  }
   
   function copyAddress() {
-    navigator.clipboard.writeText($wallet.address)
+    navigator.clipboard.writeText($wallet.address);
+    copyMessage = 'Copied!';
+    setTimeout(() => copyMessage = '', 1500);
   }
   
   function sendTransaction() {
@@ -32,6 +49,18 @@
       pendingTransactions: w.pendingTransactions + 1,
       totalSpent: w.totalSpent + sendAmount
     }))
+
+     transactions.update(txs => [
+    {
+      id: Date.now(),
+      type: 'sent',
+      amount: sendAmount,
+      to: recipientAddress,
+      date: new Date(),
+      description: 'Manual transaction'
+    },
+    ...txs // prepend so latest is first
+  ])
     
     recipientAddress = ''
     sendAmount = 0
@@ -66,11 +95,18 @@
       <div class="space-y-4">
         <div>
           <p class="text-sm text-muted-foreground">Address</p>
-          <div class="flex items-center gap-2 mt-1">
-            <p class="font-mono text-sm">{$wallet.address.slice(0, 10)}...{$wallet.address.slice(-8)}</p>
-            <Button size="sm" variant="ghost" on:click={copyAddress}>
-              <Copy class="h-3 w-3" />
-            </Button>
+          <div class="flex flex-col mt-1">
+            <div class="flex items-center gap-2">
+              <p class="font-mono text-sm">{$wallet.address.slice(0, 10)}...{$wallet.address.slice(-8)}</p>
+              <div class="flex flex-col items-center">
+                <Button size="sm" variant="ghost" on:click={copyAddress}>
+                  <Copy class="h-3 w-3" />
+                </Button>
+                {#if copyMessage}
+                  <span class="text-xs text-black-600 mt-1">{copyMessage}</span>
+                {/if}
+              </div>
+            </div>
           </div>
         </div>
         
@@ -130,6 +166,9 @@
             data-lpignore="true"
             aria-autocomplete="none"
           />
+          {#if amountWarning}
+            <p class="text-xs text-red-500 mt-1">{amountWarning}</p>
+          {/if}
           <p class="text-xs text-muted-foreground mt-1">
             Available: {$wallet.balance.toFixed(2)} CN
           </p>
@@ -156,7 +195,7 @@
     </div>
     
     <div class="space-y-2">
-      {#each transactions as tx}
+      {#each $transactions as tx}
         <div class="flex items-center justify-between p-3 bg-secondary rounded-lg">
           <div class="flex items-center gap-3">
             {#if tx.type === 'received'}

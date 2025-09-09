@@ -42,11 +42,33 @@
   let miningInterval: number | null = null
   let statsInterval: number | null = null
 
-  //CPU Threads error message
-  let validationError: string | null = null
 
-  //Bar or Line chart
+
+ // Bar or Line chart toggle
   let chartType: 'bar' | 'line' = 'bar';
+
+  // Threads and intensity warnings
+  let threadsWarning = '';
+  let intensityWarning = '';
+
+  $: {
+    const prevThreads = selectedThreads;
+    selectedThreads = Math.max(1, Math.min(selectedThreads, Math.min(cpuThreads, 16)));
+    threadsWarning =
+      prevThreads !== selectedThreads
+        ? `Threads value cannot be ${prevThreads}. Allowed range: 1-${Math.min(cpuThreads, 16)}.`
+        : '';
+  }
+
+  $: {
+    const prevIntensity = miningIntensity;
+    miningIntensity = Math.max(1, Math.min(miningIntensity, 100));
+    intensityWarning =
+      prevIntensity !== miningIntensity
+        ? `Intensity cannot be ${prevIntensity}. Allowed range: 1-100.`
+        : '';
+  }
+
   
   function startMining() {
     // clear previous errors if valid
@@ -283,8 +305,9 @@
             disabled={isMining}
             class="mt-2"
           />
-          {#if selectedThreads < 1 || selectedThreads > cpuThreads}
-            <p class="text-red-600 text-xs mt-1">Threads must be 1–{cpuThreads}</p>
+          {#if threadsWarning}
+            <p class="text-xs text-red-500 mt-1">{threadsWarning}</p>
+
           {/if}
         </div>
         
@@ -300,8 +323,10 @@
             disabled={isMining}
             class="mt-2"
           />
-          {#if miningIntensity < 1 || miningIntensity > 100}
-            <p class="text-red-600 text-xs mt-1">Intensity must be 1–100%</p>
+
+          {#if intensityWarning}
+            <p class="text-xs text-red-500 mt-1">{intensityWarning}</p>
+
           {/if}
         </div>
       </div>
