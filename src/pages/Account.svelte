@@ -13,11 +13,22 @@
   let privateKeyVisible = false
   
   const transactions = writable([
-    { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', date: new Date('2024-03-15'), description: 'File purchase' },
-    { id: 2, type: 'sent', amount: 10.25, to: '0x1234...5678', date: new Date('2024-03-14'), description: 'Proxy service' },
-    { id: 3, type: 'received', amount: 100, from: '0xabcd...ef12', date: new Date('2024-03-13'), description: 'Upload reward' },
-    { id: 4, type: 'sent', amount: 5.5, to: '0x9876...5432', date: new Date('2024-03-12'), description: 'File download' },
-  ])
+  { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', date: new Date('2024-03-15'), description: 'File purchase' },
+  { id: 2, type: 'sent', amount: 10.25, to: '0x1234...5678', date: new Date('2024-03-14'), description: 'Proxy service' },
+  { id: 3, type: 'received', amount: 100, from: '0xabcd...ef12', date: new Date('2024-03-13'), description: 'Upload reward' },
+  { id: 4, type: 'sent', amount: 5.5, to: '0x9876...5432', date: new Date('2024-03-12'), description: 'File download' },
+  ]);
+
+  // Warning message for amount input
+  let amountWarning = '';
+
+  $: {
+    const prevAmount = sendAmount;
+    sendAmount = Math.max(0.01, Math.min(sendAmount, $wallet.balance));
+    amountWarning = (prevAmount !== sendAmount)
+      ? `Amount cannot be ${prevAmount}. Allowed range: 0.01-${$wallet.balance.toFixed(2)} CN.`
+      : '';
+  }
   
   function copyAddress() {
     navigator.clipboard.writeText($wallet.address)
@@ -143,6 +154,9 @@
             data-lpignore="true"
             aria-autocomplete="none"
           />
+          {#if amountWarning}
+            <p class="text-xs text-red-500 mt-1">{amountWarning}</p>
+          {/if}
           <p class="text-xs text-muted-foreground mt-1">
             Available: {$wallet.balance.toFixed(2)} CN
           </p>

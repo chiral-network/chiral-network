@@ -9,12 +9,55 @@
     import AnalyticsPage from './pages/Analytics.svelte'
     import SettingsPage from './pages/Settings.svelte'
     import MiningPage from './pages/Mining.svelte'
+    import NotFound from './pages/NotFound.svelte'
     import { networkStatus } from '$lib/stores'
+    import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
+    import {onMount} from 'svelte';
+    import { tick } from 'svelte'
+
+    // gets path name not entire url:
+    // ex: http://locatlhost:1420/download -> /download
     
-    let currentPage = 'download'
+    // get path name based on current url
+    // if no path name, default to 'download'
+    const getPathName = (pathname: string) => {
+      const p = pathname.replace(/^\/+/, ''); // remove leading '/'
+      return p ? p.split('/')[0] : 'download'; // get first path name
+    };
+    
+    // makes currentPage var to be up-to-date to current page
+    function syncFromUrl() {
+      currentPage = getPathName(window.location.pathname);
+    }
+    
+    let currentPage = getPathName(window.location.pathname);
+    onMount(()=>{
+      // set the currentPage var
+      syncFromUrl();
+
+      // popstate - event that tracks history of current tab 
+      // (i.e. clicking on new url or going back)
+      const onPop = () => syncFromUrl();
+
+      // triggers onPop to make sure currentPage variable is up to date
+      window.addEventListener('popstate', onPop);
+
+      //  cleanup when component unmounts for removing duplicate event listeners. 
+      return () => window.removeEventListener('popstate', onPop);
+    })
     let sidebarCollapsed = false
     let mobileMenuOpen = false
-    
+
+    // Scroll to top when page changes
+    $: if (currentPage) {
+        tick().then(() => {
+            const mainContent = document.querySelector('.flex-1.overflow-auto')
+            if (mainContent) {
+                mainContent.scrollTop = 0
+            }
+        })
+    }
+
     const menuItems = [
       { id: 'download', label: 'Download', icon: Download },
       { id: 'upload', label: 'Upload', icon: Upload },
@@ -25,6 +68,47 @@
       { id: 'account', label: 'Account', icon: Wallet },
       { id: 'settings', label: 'Settings', icon: Settings },
     ]
+
+    // routes to be used:
+    const routes: RouteConfig[] = [
+      {
+        component: DownloadPage, // root path: '/'
+      },
+      {
+        path: "download",
+        component: DownloadPage
+      },
+      {
+        path: "upload",
+        component: UploadPage
+      },
+      {
+        path: "network",
+        component: NetworkPage
+      },
+      {
+        path: "mining",
+        component: MiningPage
+      },
+      {
+        path: "proxy",
+        component: ProxyPage
+      },
+      {
+        path: "analytics",
+        component: AnalyticsPage
+      },
+      {
+        path: "account",
+        component: AccountPage,
+      },
+      {
+        path: "settings",
+        component: SettingsPage
+      },
+    ]
+
+    
   </script>
   
   <div class="flex h-screen bg-background">
@@ -59,7 +143,10 @@
         <!-- Sidebar Nav Items -->
         {#each menuItems as item}
           <button
-            on:click={() => currentPage = item.id}
+            on:click={() => {
+              currentPage = item.id
+              goto(`/${item.id}`)
+            }}
             class="w-full group"
             aria-current={currentPage === item.id ? 'page' : undefined}
           >
@@ -77,7 +164,7 @@
     </div>
   
     <!-- Mobile Menu Button -->
-    <div class="absolute top-2 left-2 md:hidden">
+    <div class="absolute top-2 right-2 md:hidden">
       <button
         class="p-2 rounded bg-card shadow"
         on:click={() => mobileMenuOpen = true}
@@ -86,9 +173,13 @@
       </button>
     </div>
   
-<!-- Mobile Fullscreen Menu Overlay -->
+<!-- Mobile Menu Overlay -->
 {#if mobileMenuOpen}
-  <div class="fixed inset-0 z-50 bg-white flex flex-col">
+  <!-- Backdrop -->
+  <div class="fixed inset-0 bg-black bg-opacity-50 z-40 md:hidden" on:click={() => mobileMenuOpen = false}></div>
+
+  <!-- Sidebar -->
+  <div class="fixed top-0 right-0 h-full w-64 bg-white z-50 flex flex-col md:hidden">
     <!-- Mobile Header -->
     <div class="flex justify-between items-center p-4 border-b">
       <!-- Left side -->
@@ -112,6 +203,7 @@
         <button
           on:click={() => {
             currentPage = item.id
+            goto(`/${item.id}`)
             mobileMenuOpen = false
           }}
           class="w-full flex items-center rounded px-4 py-3 text-lg hover:bg-gray-100"
@@ -128,23 +220,17 @@
     <!-- Main Content -->
     <div class="flex-1 overflow-auto">
       <div class="p-6">
-        {#if currentPage === 'upload'}
-          <UploadPage />
-        {:else if currentPage === 'download'}
-          <DownloadPage />
-        {:else if currentPage === 'network'}
-          <NetworkPage />
-        {:else if currentPage === 'mining'}
-          <MiningPage />
-        {:else if currentPage === 'proxy'}
-          <ProxyPage />
-        {:else if currentPage === 'analytics'}
-          <AnalyticsPage />
-        {:else if currentPage === 'account'}
-          <AccountPage />
-        {:else if currentPage === 'settings'}
-          <SettingsPage />
-        {/if}
+        <!-- <Router {routes} /> -->
+         
+        <Router
+          {routes}
+          statuses={{
+            // visiting non-path default to NotFound page
+            404: () => ({
+              component: NotFound
+            })
+          }}
+        />
       </div>
     </div>
   </div>
