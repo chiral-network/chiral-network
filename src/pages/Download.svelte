@@ -5,13 +5,13 @@
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
-  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, Clock } from 'lucide-svelte'
+  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, File } from 'lucide-svelte'
   import { files, downloadQueue } from '$lib/stores'
   
   let searchHash = ''
   let maxConcurrentDownloads = 3
   let autoStartQueue = true
-  let filterStatus = 'all' // 'all', 'active', 'queued', 'completed'
+  let filterStatus = 'all' // 'all', 'active', 'paused', 'queued', 'completed', 'failed'
 
   // Ensure maxConcurrentDownloads is always a valid number (minimum 1)
   $: maxConcurrentDownloads = Math.max(1, Number(maxConcurrentDownloads) || 3)
@@ -32,17 +32,25 @@
   })
   
   // Filter downloads based on selected status
-  $: filteredDownloads = filterStatus === 'all' 
-    ? allDownloads.filter(f => f.status !== 'uploaded' && f.status !== 'seeding')
+  $: filteredDownloads = filterStatus === 'all'
+    ? allFilteredDownloads
     : filterStatus === 'active'
-    ? allDownloads.filter(f => f.status === 'downloading' || f.status === 'paused')
+    ? allFilteredDownloads.filter(f => f.status === 'downloading')
+    : filterStatus === 'paused'
+    ? allFilteredDownloads.filter(f => f.status === 'paused')
     : filterStatus === 'queued'
-    ? allDownloads.filter(f => f.status === 'queued')
-    : allDownloads.filter(f => f.status === 'completed')
+    ? allFilteredDownloads.filter(f => f.status === 'queued')
+    : filterStatus === 'completed'
+    ? allFilteredDownloads.filter(f => f.status === 'completed')
+    : allFilteredDownloads.filter(f => f.status === 'failed')
   
-  $: activeCount = allDownloads.filter(f => f.status === 'downloading').length
-  $: queuedCount = allDownloads.filter(f => f.status === 'queued').length
-  $: completedCount = allDownloads.filter(f => f.status === 'completed').length
+  // Calculate counts from the same filtered set used for "All"
+  $: allFilteredDownloads = allDownloads.filter(f => f.status !== 'uploaded' && f.status !== 'seeding')
+  $: activeCount = allFilteredDownloads.filter(f => f.status === 'downloading').length
+  $: pausedCount = allFilteredDownloads.filter(f => f.status === 'paused').length
+  $: queuedCount = allFilteredDownloads.filter(f => f.status === 'queued').length
+  $: completedCount = allFilteredDownloads.filter(f => f.status === 'completed').length
+  $: failedCount = allFilteredDownloads.filter(f => f.status === 'failed').length
   
   // Process download queue
   $: {
@@ -134,6 +142,14 @@
         if (file.id === fileId && file.status === 'downloading') {
           const speed = file.priority === 'high' ? 15 : file.priority === 'low' ? 5 : 10
           const newProgress = Math.min(100, (file.progress || 0) + Math.random() * speed)
+
+          // 10% chance of failure when progress is between 20-80%
+          const currentProgress = file.progress || 0
+          if (currentProgress > 20 && currentProgress < 80 && Math.random() < 0.1) {
+            clearInterval(interval)
+            return { ...file, status: 'failed' }
+          }
+
           if (newProgress >= 100) {
             clearInterval(interval)
             return { ...file, progress: 100, status: 'completed' }
@@ -210,7 +226,7 @@
             variant={filterStatus === 'all' ? 'default' : 'outline'}
             on:click={() => filterStatus = 'all'}
           >
-            All ({allDownloads.filter(f => f.status !== 'uploaded' && f.status !== 'seeding').length})
+            All ({allFilteredDownloads.length})
           </Button>
           <Button
             size="sm"
@@ -232,6 +248,20 @@
             on:click={() => filterStatus = 'completed'}
           >
             Completed ({completedCount})
+          </Button>
+          <Button
+            size="sm"
+            variant={filterStatus === 'paused' ? 'default' : 'outline'}
+            on:click={() => filterStatus = 'paused'}
+          >
+            Paused ({pausedCount})
+          </Button>
+          <Button
+            size="sm"
+            variant={filterStatus === 'failed' ? 'default' : 'outline'}
+            on:click={() => filterStatus = 'failed'}
+          >
+            Failed ({failedCount})
           </Button>
         </div>
       </div>
@@ -265,10 +295,14 @@
           No downloads yet. Enter a file hash above to start downloading.
         {:else if filterStatus === 'active'}
           No active downloads.
+        {:else if filterStatus === 'paused'}
+          No paused downloads.
         {:else if filterStatus === 'queued'}
           No files in queue.
-        {:else}
+        {:else if filterStatus === 'completed'}
           No completed downloads.
+        {:else}
+          No failed downloads.
         {/if}
       </p>
     {:else}
@@ -318,11 +352,11 @@
                   </select>
                 {/if}
                 <Badge variant="outline">{formatFileSize(file.size)}</Badge>
-                <Badge variant={
-                  file.status === 'downloading' ? 'default' : 
-                  file.status === 'completed' ? 'outline' :
-                  file.status === 'queued' ? 'outline' :
-                  file.status === 'paused' ? 'outline' : 'destructive'
+                <Badge class={
+                  file.status === 'downloading' ? 'bg-green-500 text-white border-green-500' :
+                  file.status === 'completed' ? 'bg-blue-500 text-white border-blue-500' :
+                  file.status === 'paused' ? 'bg-yellow-500 text-black border-yellow-500' :
+                  file.status === 'queued' ? 'bg-gray-500 text-white border-gray-500' : 'bg-red-500 text-white border-red-500'
                 }>
                   {file.status === 'queued' ? `Queued #${filteredDownloads.filter(f => f.status === 'queued').indexOf(file) + 1}` : file.status}
                 </Badge>
@@ -331,9 +365,8 @@
             
             {#if file.status === 'downloading' || file.status === 'paused'}
               <div class="space-y-2 mt-3">
-                <div class="flex items-center justify-between text-sm">
-                  <span>Progress</span>
-                  <span>{(file.progress || 0).toFixed(1)}%</span>
+                <div class="flex items-center text-sm">
+                  <span>Progress: {(file.progress || 0).toFixed(2)}%</span>
                 </div>
                 <Progress value={file.progress || 0} max={100} />
               </div>
@@ -370,14 +403,14 @@
             {/if}
             
             {#if file.status === 'completed'}
-              <div class="flex flex-wrap gap-2 mt-3">
-                <span>Download complete</span>
+              <div class="flex items-center gap-2 mt-3">
+                <span>Download complete!</span>
                 <Button
                         size="sm"
                         variant="outline"
                         class="flex-1 min-w-[100px] sm:flex-none"
                 >
-                  <Clock class="h-3 w-3 mr-1" />
+                  <File class="h-3 w-3 mr-1" />
                   Open File
                 </Button>
               </div>
