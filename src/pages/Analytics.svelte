@@ -213,9 +213,25 @@
       <h2 class="text-lg font-semibold mb-4">Top Earning Files</h2>
       <div class="space-y-2">
         {#each topEarners as file, i}
-          <div class="flex items-center justify-between p-2 rounded hover:bg-secondary">
+          <div
+            class="flex items-center justify-between p-2 rounded hover:bg-secondary"
+            style="
+              {i === 0 ? 'background: linear-gradient(90deg, #FFD70033 0%, #FFFACD33 100%);' : ''}
+              {i === 1 ? 'background: linear-gradient(90deg, #C0C0C033 0%, #F5F5F533 100%);' : ''}
+              {i === 2 ? 'background: linear-gradient(90deg, #CD7F3233 0%, #FFE4B533 100%);' : ''}
+            "
+          >
             <div class="flex items-center gap-2">
-              <span class="text-sm font-medium text-muted-foreground">#{i + 1}</span>
+              <span
+                class="text-sm font-medium"
+                style="
+                  {i === 0 ? 'color: #FFD700;' : ''}
+                  {i === 1 ? 'color: #C0C0C0;' : ''}
+                  {i === 2 ? 'color: #CD7F32;' : ''}
+                "
+              >
+                #{i + 1}
+              </span>
               <div>
                 <p class="text-sm font-medium">{file.name}</p>
                 <p class="text-xs text-muted-foreground">{file.seeders || 0} seeders</p>
@@ -226,7 +242,6 @@
             </Badge>
           </div>
         {/each}
-        
         {#if topEarners.length === 0}
           <p class="text-sm text-muted-foreground text-center py-4">No earnings yet</p>
         {/if}
@@ -237,9 +252,25 @@
       <h2 class="text-lg font-semibold mb-4">Popular Files</h2>
       <div class="space-y-2">
         {#each popularFiles as file, i}
-          <div class="flex items-center justify-between p-2 rounded hover:bg-secondary">
+          <div
+            class="flex items-center justify-between p-2 rounded hover:bg-secondary"
+            style="
+              {i === 0 ? 'background: linear-gradient(90deg, #FFD70033 0%, #FFFACD33 100%);' : ''}
+              {i === 1 ? 'background: linear-gradient(90deg, #C0C0C033 0%, #F5F5F533 100%);' : ''}
+              {i === 2 ? 'background: linear-gradient(90deg, #CD7F3233 0%, #FFE4B533 100%);' : ''}
+            "
+          >
             <div class="flex items-center gap-2">
-              <span class="text-sm font-medium text-muted-foreground">#{i + 1}</span>
+              <span
+                class="text-sm font-medium"
+                style="
+                  {i === 0 ? 'color: #FFD700;' : ''}
+                  {i === 1 ? 'color: #C0C0C0;' : ''}
+                  {i === 2 ? 'color: #CD7F32;' : ''}
+                "
+              >
+                #{i + 1}
+              </span>
               <div>
                 <p class="text-sm font-medium">{file.name}</p>
                 <p class="text-xs text-muted-foreground">{formatSize(file.size)}</p>
@@ -257,7 +288,6 @@
             </div>
           </div>
         {/each}
-        
         {#if popularFiles.length === 0}
           <p class="text-sm text-muted-foreground text-center py-4">No files yet</p>
         {/if}
