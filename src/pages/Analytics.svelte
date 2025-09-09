@@ -7,7 +7,9 @@
   import { files, wallet, networkStats, proxyNodes } from '$lib/stores'
   //import { files, wallet, networkStats } from '$lib/stores'
   import { onMount } from 'svelte'
-  
+  // import { DatePicker } from '@svelte-plugins/datepicker'
+  // import { Popover } from "bits-ui"; // Added Popover component
+
   let uploadedFiles: any[] = []
   let downloadedFiles: any[] = []
   let totalUploaded = 0
@@ -44,6 +46,22 @@ function computeLatencyStats() {
 }
 
   
+  // Dynamic earnings history chart values
+  let hoveredDay: typeof earningsHistory[0] | null = null;
+  let hoveredIndex: number | null = null;
+  let periodPreset: string = '30d';
+  // Use a single array for the date range
+  let customDateRange: [Date | null, Date | null] = [null, null];
+  const periodPresets = [
+    { label: 'Last 7 days', value: '7d' },
+    { label: 'Last 30 days', value: '30d' },
+    { label: 'This Month', value: 'month' },
+    { label: 'Last Month', value: 'lastmonth' },
+    { label: 'Year to Date', value: 'ytd' },
+    // { label: 'Custom…', value: 'custom' }
+  ];
+  const MAX_BARS = 60;
+
   // Calculate statistics
   $: {
     uploadedFiles = $files.filter(f => f.status === 'uploaded' || f.status === 'seeding')
@@ -53,9 +71,73 @@ function computeLatencyStats() {
     storageUsed = totalUploaded + totalDownloaded
   }
   
-  // Generate mock earnings history
+  $: chartMax = chartData.length > 0 ? Math.max(...chartData.map(d => d.earnings)) : 1;
+
+  $: filteredHistory = (() => {
+    const now = new Date();
+
+    // Helper to format date string
+    function formatDate(date: Date) {
+      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+
+    // Helper to pad missing days
+    function padHistory(start: Date, end: Date) {
+      const days = [];
+      let d = new Date(start);
+      while (d <= end) {
+        const dateStr = formatDate(d);
+        const found = earningsHistory.find(e => e.date === dateStr);
+        days.push(found ? found : { date: dateStr, earnings: 0, cumulative: 0 });
+        d.setDate(d.getDate() + 1);
+      }
+      return days;
+    }
+
+    if (periodPreset === '7d') {
+      const start = new Date(now);
+      start.setDate(now.getDate() - 6);
+      return padHistory(start, now);
+    }
+    if (periodPreset === '30d') {
+      const start = new Date(now);
+      start.setDate(now.getDate() - 29);
+      return padHistory(start, now);
+    }
+    if (periodPreset === 'month') {
+      const start = new Date(now.getFullYear(), now.getMonth(), 1);
+      const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      return padHistory(start, end);
+    }
+    if (periodPreset === 'lastmonth') {
+      const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const end = new Date(now.getFullYear(), now.getMonth(), 0);
+      return padHistory(start, end);
+    }
+    if (periodPreset === 'ytd') {
+      const start = new Date(now.getFullYear(), 0, 1);
+      return padHistory(start, now);
+    }
+    if (
+      periodPreset === 'custom' &&
+      customDateRange[0] &&
+      customDateRange[1]
+    ) {
+      const start = new Date(customDateRange[0]);
+      const end = new Date(customDateRange[1]);
+      if (start > end) return [];
+      return padHistory(start, end);
+    }
+    return earningsHistory;
+  })();
+
+  function handlePresetChange(value: string) {
+    periodPreset = value;
+  }
+
+  // Generate mock earnings history once on mount
   onMount(() => {
-    const days = 30
+    const days = 365;
     const history = []
     let cumulative = 0
     
@@ -64,9 +146,9 @@ function computeLatencyStats() {
       date.setDate(date.getDate() - i)
       const dailyEarning = Math.random() * 20
       cumulative += dailyEarning
-      
+
       history.push({
-        date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
         earnings: dailyEarning,
         cumulative: cumulative
       })
@@ -122,6 +204,26 @@ function computeLatencyStats() {
     return () => clearInterval(interval)
   })
   
+  // Aggregation function
+  function aggregateData(data: any[], maxBars: number) {
+    if (data.length <= maxBars) return data;
+    const groupSize = Math.ceil(data.length / maxBars);
+    const result = [];
+    for (let i = 0; i < data.length; i += groupSize) {
+      const group = data.slice(i, i + groupSize);
+      // Aggregate earnings and use the first date in the group
+      const earnings = group.reduce((sum, d) => sum + d.earnings, 0);
+      result.push({
+        date: group[0].date + (group.length > 1 ? ` – ${group[group.length - 1].date}` : ''),
+        earnings,
+        cumulative: group[group.length - 1].cumulative
+      });
+    }
+    return result;
+  }
+
+  $: chartData = aggregateData(filteredHistory, MAX_BARS);
+
   function formatSize(bytes: number): string {
     const units = ['B', 'KB', 'MB', 'GB', 'TB']
     let size = bytes
@@ -151,7 +253,6 @@ function computeLatencyStats() {
     <p class="text-muted-foreground mt-2">Track your performance and network activity</p>
   </div>
   
-  <!-- Key Metrics -->
   <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
     <Card class="p-4">
       <div class="flex items-center justify-between">
@@ -204,9 +305,13 @@ function computeLatencyStats() {
           <p class="text-2xl font-bold">{$wallet.reputation || 4.5}/5.0</p>
           <div class="flex gap-0.5 mt-1">
             {#each Array(5) as _, i}
-              <span class="text-yellow-500">
-                {i < Math.floor($wallet.reputation || 4.5) ? '★' : '☆'}
-              </span>
+              {#if ($wallet.reputation ?? 4.5) >= i + 1}
+                <span class="text-yellow-500">★</span>
+              {:else if ($wallet.reputation ?? 4.5) >= i + 0.5}
+                <span class="text-yellow-500">⯨</span> <!-- Unicode half star -->
+              {:else}
+                <span class="text-yellow-500 opacity-30">★</span>
+              {/if}
             {/each}
           </div>
         </div>
@@ -217,7 +322,6 @@ function computeLatencyStats() {
     </Card>
   </div>
   
-  <!-- Bandwidth Usage -->
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
     <Card class="p-6">
       <h2 class="text-lg font-semibold mb-4">Bandwidth Usage (Today)</h2>
@@ -273,6 +377,7 @@ function computeLatencyStats() {
       </div>
     </Card>
   </div>
+
   <!-- ADDING THIS -->
   <!-- Network Latency -->
 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -335,10 +440,6 @@ function computeLatencyStats() {
     </div>
   </Card>
 </div>
-
-
-
-  <!-- Top Performing Files -->
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
     <Card class="p-6">
       <h2 class="text-lg font-semibold mb-4">Top Earning Files</h2>
@@ -426,21 +527,75 @@ function computeLatencyStats() {
     </Card>
   </div>
   
-  <!-- Earnings Chart (simplified) -->
   <Card class="p-6">
-    <h2 class="text-lg font-semibold mb-4">Earnings History (Last 30 Days)</h2>
-    <div class="h-48 flex items-end gap-1">
-      {#each earningsHistory.slice(-30) as day}
-        <div 
-          class="flex-1 bg-primary/20 hover:bg-primary/30 transition-colors rounded-t"
-          style="height: {(day.earnings / 20) * 100}%"
+    <h2 class="text-lg font-semibold mb-4">Earnings History</h2>
+    <div class="flex gap-2 mb-4">
+      {#each periodPresets as preset}
+        <button
+          type="button"
+          class="px-3 py-1 rounded-full border transition-colors text-sm
+            {periodPreset === preset.value ? 'bg-primary text-white' : 'bg-muted text-primary'}"
+          on:click={() => handlePresetChange(preset.value)}
+          aria-pressed={periodPreset === preset.value}
+          tabindex="0"
+        >
+          {preset.label}
+        </button>
+      {/each}
+    </div>
+    
+    <!-- <Popover.Root>
+      <Popover.Trigger>
+        <button
+          class="px-3 py-1 rounded-full border transition-colors text-sm {periodPreset === 'custom' ? 'bg-primary text-white' : 'bg-muted text-primary'}"
+          on:click={() => {
+            periodPreset = 'custom';
+            // The popover itself handles showing/hiding
+          }}
+          aria-pressed={periodPreset === 'custom'}
+          tabindex="0"
+        >
+          Custom…
+        </button>
+      </Popover.Trigger>
+      <Popover.Content class="z-50 p-4">
+        <div class="flex flex-col gap-2 items-center">
+          <DatePicker 
+            mode="range" 
+            bind:value={customDateRange} 
+            class="min-w-[280px]"
+          />
+        </div>
+      </Popover.Content>
+    </Popover.Root> -->
+
+    <div class="relative h-48 flex items-end gap-1">
+      {#each chartData as day, i}
+        <div
+          role="button"
+          tabindex="0"
+          class="flex-1 bg-primary/20 hover:bg-primary/30 transition-colors rounded-t relative"
+          style="height: {(day.earnings / chartMax) * 100}%"
           title="{day.date}: {day.earnings.toFixed(2)} CN"
-        ></div>
+          on:mouseenter={() => { hoveredDay = day; hoveredIndex = i; }}
+          on:mouseleave={() => { hoveredDay = null; hoveredIndex = null; }}
+          aria-label="{day.date}: {day.earnings.toFixed(2)} CN"
+        >
+          {#if hoveredIndex === i && hoveredDay}
+            <div
+              class="absolute left-1/2 -translate-x-1/2 -top-8 z-10 px-2 py-1 rounded bg-primary text-white text-xs shadow-lg pointer-events-none"
+              style="white-space:nowrap;"
+            >
+              {hoveredDay.date}: {hoveredDay.earnings.toFixed(2)} CN
+              <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-6 border-l-transparent border-r-6 border-r-transparent border-t-6 border-t-primary"></span>
+            </div>
+          {/if}
+        </div>
       {/each}
     </div>
     <div class="flex justify-between mt-2 text-xs text-muted-foreground">
-      <span>{earningsHistory[0]?.date}</span>
-      <span>{earningsHistory[earningsHistory.length - 1]?.date}</span>
+      <span>{filteredHistory[0]?.date}</span>
+      <span>{filteredHistory[filteredHistory.length - 1]?.date}</span>
     </div>
   </Card>
 </div>
