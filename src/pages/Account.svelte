@@ -246,7 +246,7 @@
         </button>
       </div>
     </div>
-    <div class="space-y-2">
+    <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
       {#each filteredTransactions as tx}
         <div class="flex items-center justify-between p-3 bg-secondary rounded-lg">
           <div class="flex items-center gap-3">
