@@ -13,25 +13,30 @@
   let privateKeyVisible = false
   
   const transactions = writable([
-  { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', date: new Date('2024-03-15'), description: 'File purchase' },
-  { id: 2, type: 'sent', amount: 10.25, to: '0x1234...5678', date: new Date('2024-03-14'), description: 'Proxy service' },
-  { id: 3, type: 'received', amount: 100, from: '0xabcd...ef12', date: new Date('2024-03-13'), description: 'Upload reward' },
-  { id: 4, type: 'sent', amount: 5.5, to: '0x9876...5432', date: new Date('2024-03-12'), description: 'File download' },
+    { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', date: new Date('2024-03-15'), description: 'File purchase' },
+    { id: 2, type: 'sent', amount: 10.25, to: '0x1234...5678', date: new Date('2024-03-14'), description: 'Proxy service' },
+    { id: 3, type: 'received', amount: 100, from: '0xabcd...ef12', date: new Date('2024-03-13'), description: 'Upload reward' },
+    { id: 4, type: 'sent', amount: 5.5, to: '0x9876...5432', date: new Date('2024-03-12'), description: 'File download' },
   ]);
 
   // Warning message for amount input
-  let amountWarning = '';
+  let amountWarning = ''
+
+  // Copy feedback message
+  let copyMessage = ''
 
   $: {
-    const prevAmount = sendAmount;
-    sendAmount = Math.max(0.01, Math.min(sendAmount, $wallet.balance));
+    const prevAmount = sendAmount
+    sendAmount = Math.max(0.01, Math.min(sendAmount, $wallet.balance))
     amountWarning = (prevAmount !== sendAmount)
       ? `Amount cannot be ${prevAmount}. Allowed range: 0.01-${$wallet.balance.toFixed(2)} CN.`
-      : '';
+      : ''
   }
   
   function copyAddress() {
     navigator.clipboard.writeText($wallet.address)
+    copyMessage = 'Copied!'
+    setTimeout(() => copyMessage = '', 1500)
   }
   
   function sendTransaction() {
@@ -45,17 +50,17 @@
       totalSpent: w.totalSpent + sendAmount
     }))
 
-     transactions.update(txs => [
-    {
-      id: Date.now(),
-      type: 'sent',
-      amount: sendAmount,
-      to: recipientAddress,
-      date: new Date(),
-      description: 'Manual transaction'
-    },
-    ...txs // prepend so latest is first
-  ])
+    transactions.update(txs => [
+      {
+        id: Date.now(),
+        type: 'sent',
+        amount: sendAmount,
+        to: recipientAddress,
+        date: new Date(),
+        description: 'Manual transaction'
+      },
+      ...txs // prepend so latest is first
+    ])
     
     recipientAddress = ''
     sendAmount = 0
@@ -92,9 +97,14 @@
           <p class="text-sm text-muted-foreground">Address</p>
           <div class="flex items-center gap-2 mt-1">
             <p class="font-mono text-sm">{$wallet.address.slice(0, 10)}...{$wallet.address.slice(-8)}</p>
-            <Button size="sm" variant="ghost" on:click={copyAddress}>
-              <Copy class="h-3 w-3" />
-            </Button>
+            <div class="flex flex-col items-center">
+              <Button size="sm" variant="ghost" on:click={copyAddress}>
+                <Copy class="h-3 w-3" />
+              </Button>
+              {#if copyMessage}
+                <span class="text-xs text-muted-foreground mt-1">{copyMessage}</span>
+              {/if}
+            </div>
           </div>
         </div>
         
@@ -122,58 +132,58 @@
       </div>
     </Card>
     
-      <Card class="p-6">
-    <h2 class="text-lg font-semibold mb-4">Send CN Tokens</h2>
-    <form autocomplete="off" data-form-type="other" data-lpignore="true">
-      <div class="space-y-4">
-        <div>
-          <Label for="recipient">Recipient Address</Label>
-          <Input
-            id="recipient"
-            bind:value={recipientAddress}
-            placeholder="0x..."
-            class="mt-2"
-            autocomplete="off"
-            data-form-type="other"
-            data-lpignore="true"
-            aria-autocomplete="none"
-          />
-        </div>
+    <Card class="p-6">
+      <h2 class="text-lg font-semibold mb-4">Send CN Tokens</h2>
+      <form autocomplete="off" data-form-type="other" data-lpignore="true">
+        <div class="space-y-4">
+          <div>
+            <Label for="recipient">Recipient Address</Label>
+            <Input
+              id="recipient"
+              bind:value={recipientAddress}
+              placeholder="0x..."
+              class="mt-2"
+              autocomplete="off"
+              data-form-type="other"
+              data-lpignore="true"
+              aria-autocomplete="none"
+            />
+          </div>
 
-        <div>
-          <Label for="amount">Amount (CN)</Label>
-          <Input
-            id="amount"
-            type="number"
-            bind:value={sendAmount}
-            placeholder="0.00"
-            max={$wallet.balance}
-            class="mt-2"
-            autocomplete="off"
-            data-form-type="other"
-            data-lpignore="true"
-            aria-autocomplete="none"
-          />
-          {#if amountWarning}
-            <p class="text-xs text-red-500 mt-1">{amountWarning}</p>
-          {/if}
-          <p class="text-xs text-muted-foreground mt-1">
-            Available: {$wallet.balance.toFixed(2)} CN
-          </p>
-        </div>
+          <div>
+            <Label for="amount">Amount (CN)</Label>
+            <Input
+              id="amount"
+              type="number"
+              bind:value={sendAmount}
+              placeholder="0.00"
+              max={$wallet.balance}
+              class="mt-2"
+              autocomplete="off"
+              data-form-type="other"
+              data-lpignore="true"
+              aria-autocomplete="none"
+            />
+            {#if amountWarning}
+              <p class="text-xs text-red-500 mt-1">{amountWarning}</p>
+            {/if}
+            <p class="text-xs text-muted-foreground mt-1">
+              Available: {$wallet.balance.toFixed(2)} CN
+            </p>
+          </div>
 
-        <Button
-          type="button"
-          class="w-full"
-          on:click={sendTransaction}
-          disabled={!recipientAddress || sendAmount <= 0 || sendAmount > $wallet.balance}
-        >
-          <ArrowUpRight class="h-4 w-4 mr-2" />
-          Send Transaction
-        </Button>
-      </div>
-    </form>
-  </Card>
+          <Button
+            type="button"
+            class="w-full"
+            on:click={sendTransaction}
+            disabled={!recipientAddress || sendAmount <= 0 || sendAmount > $wallet.balance}
+          >
+            <ArrowUpRight class="h-4 w-4 mr-2" />
+            Send Transaction
+          </Button>
+        </div>
+      </form>
+    </Card>
   </div>
   
   <Card class="p-6">
