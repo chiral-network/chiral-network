@@ -127,9 +127,12 @@
         </div>
         
         {#if $wallet.pendingTransactions > 0}
-          <Badge variant="outline" class="w-full justify-center">
-            {$wallet.pendingTransactions} Pending Transaction{$wallet.pendingTransactions !== 1 ? 's' : ''}
-          </Badge>
+          <Button class="w-full justify-center bg-gray-100 hover:bg-gray-200 text-gray-800 rounded transition-colors py-2 font-normal" aria-label="View pending transactions">
+            <span class="flex items-center gap-2">
+              <svg class="h-4 w-4 text-gray-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /></svg>
+              {$wallet.pendingTransactions} Pending Transaction{$wallet.pendingTransactions !== 1 ? 's' : ''}
+            </span>
+          </Button>
         {/if}
       </div>
     </Card>
