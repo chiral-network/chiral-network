@@ -124,7 +124,7 @@
           </div>
         </div>
       {:else}
-        <div class="flex items-center justify-between mb-4">
+        <div class="flex flex-wrap items-center justify-between gap-4 mb-4">
           <div>
             <h2 class="text-lg font-semibold">Shared Files</h2>
             <p class="text-sm text-muted-foreground mt-1">
@@ -146,13 +146,13 @@
       {#if $files.filter(f => f.status === 'seeding' || f.status === 'uploaded').length > 0}
         <div class="space-y-2">
           {#each $files.filter(f => f.status === 'seeding' || f.status === 'uploaded') as file}
-            <div class="flex items-center justify-between p-3 bg-secondary rounded-lg hover:bg-secondary/80 transition-colors">
+            <div class="flex flex-wrap items-center justify-between gap-2 p-3 bg-secondary rounded-lg hover:bg-secondary/80 transition-colors">
               <div class="flex items-center gap-3">
                 <File class="h-4 w-4 text-muted-foreground" />
                 <div class="flex-1">
-                  <p class="text-sm font-medium">{file.name}</p>
-                  <div class="flex items-center gap-3 mt-1">
-                    <p class="text-xs text-muted-foreground">Hash: {file.hash}</p>
+                  <p class="text-sm font-medium truncate">{file.name}</p>
+                  <div class="flex flex-wrap items-center gap-3 mt-1">
+                    <p class="text-xs text-muted-foreground truncate">Hash: {file.hash}</p>
                     <span class="text-xs text-muted-foreground">•</span>
                     <p class="text-xs text-muted-foreground">{formatFileSize(file.size)}</p>
                     {#if file.seeders !== undefined}

@@ -186,7 +186,7 @@
   
   <!-- Connected Peers -->
   <Card class="p-6">
-      <div class="flex items-center justify-between mb-4">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
           <h2 class="text-lg font-semibold">Connected Peers ({$peers.length})</h2>
           <div class="flex items-center gap-2">
               <Label for="sort">Sort By</Label>
