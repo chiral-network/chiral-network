@@ -9,44 +9,29 @@
   import { writable } from 'svelte/store'
   
   let recipientAddress = ''
-  let sendAmount: number | "" = ""
+  let sendAmount = 0
   let privateKeyVisible = false
   
   const transactions = writable([
-  { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', date: new Date('2024-03-15'), description: 'File purchase' },
-  { id: 2, type: 'sent', amount: 10.25, to: '0x1234...5678', date: new Date('2024-03-14'), description: 'Proxy service' },
-  { id: 3, type: 'received', amount: 100, from: '0xabcd...ef12', date: new Date('2024-03-13'), description: 'Upload reward' },
-  { id: 4, type: 'sent', amount: 5.5, to: '0x9876...5432', date: new Date('2024-03-12'), description: 'File download' },
+    { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', date: new Date('2024-03-15'), description: 'File purchase' },
+    { id: 2, type: 'sent', amount: 10.25, to: '0x1234...5678', date: new Date('2024-03-14'), description: 'Proxy service' },
+    { id: 3, type: 'received', amount: 100, from: '0xabcd...ef12', date: new Date('2024-03-13'), description: 'Upload reward' },
+    { id: 4, type: 'sent', amount: 5.5, to: '0x9876...5432', date: new Date('2024-03-12'), description: 'File download' },
   ]);
 
-  // Warning message for amount and address input
-  let amountError  = '';
-  let addressError = "";
+  // Warning message for amount input
+  let amountWarning = ''
 
   // Copy feedback message
-  let copyMessage = '';
+  let copyMessage = ''
 
   $: {
-    if (sendAmount === "" || sendAmount == null) {
-      amountError = "Enter an amount"
-    } else if (sendAmount < 0.01) {
-      amountError = "Must send at least 0.01 CN"
-    } else if (sendAmount > $wallet.balance) {
-      amountError = "Insufficient balance"
-    } else {
-      amountError = ""
-    }
+    const prevAmount = sendAmount
+    sendAmount = Math.max(0.01, Math.min(sendAmount, $wallet.balance))
+    amountWarning = (prevAmount !== sendAmount)
+      ? `Amount cannot be ${prevAmount}. Allowed range: 0.01-${$wallet.balance.toFixed(2)} CN.`
+      : ''
   }
-
-  $: {
-    if (recipientAddress.trim() === "") {
-      addressError = "Recipient address is required"
-    } else {
-      addressError = ""
-    }
-  }
-
-  $: isSendValid = amountError === "" && addressError === ""
   
   function copyAddress() {
     navigator.clipboard.writeText($wallet.address);
@@ -55,21 +40,21 @@
   }
   
   function sendTransaction() {
-    if (!isSendValid) return
+    if (!recipientAddress || sendAmount <= 0) return
     
     // Simulate transaction
     wallet.update(w => ({
       ...w,
-      balance: w.balance - Number(sendAmount),
+      balance: w.balance - sendAmount,
       pendingTransactions: w.pendingTransactions + 1,
-      totalSpent: w.totalSpent + Number(sendAmount)
+      totalSpent: w.totalSpent + sendAmount
     }))
 
-     transactions.update(txs => [
+    transactions.update(txs => [
       {
         id: Date.now(),
         type: 'sent',
-        amount: Number(sendAmount),
+        amount: sendAmount,
         to: recipientAddress,
         date: new Date(),
         description: 'Manual transaction'
@@ -110,17 +95,15 @@
       <div class="space-y-4">
         <div>
           <p class="text-sm text-muted-foreground">Address</p>
-          <div class="flex flex-col mt-1">
-            <div class="flex items-center gap-2">
-              <p class="font-mono text-sm">{$wallet.address.slice(0, 10)}...{$wallet.address.slice(-8)}</p>
-              <div class="flex flex-col items-center">
-                <Button size="sm" variant="ghost" on:click={copyAddress}>
-                  <Copy class="h-3 w-3" />
-                </Button>
-                {#if copyMessage}
-                  <span class="text-xs text-black-600 mt-1">{copyMessage}</span>
-                {/if}
-              </div>
+          <div class="flex items-center gap-2 mt-1">
+            <p class="font-mono text-sm">{$wallet.address.slice(0, 10)}...{$wallet.address.slice(-8)}</p>
+            <div class="flex flex-col items-center">
+              <Button size="sm" variant="ghost" on:click={copyAddress}>
+                <Copy class="h-3 w-3" />
+              </Button>
+              {#if copyMessage}
+                <span class="text-xs text-muted-foreground mt-1">{copyMessage}</span>
+              {/if}
             </div>
           </div>
         </div>
@@ -149,59 +132,58 @@
       </div>
     </Card>
     
-      <Card class="p-6">
-    <h2 class="text-lg font-semibold mb-4">Send CN Tokens</h2>
-    <form autocomplete="off" data-form-type="other" data-lpignore="true">
-      <div class="space-y-4">
-        <div>
-          <Label for="recipient">Recipient Address</Label>
-          <Input
-            id="recipient"
-            bind:value={recipientAddress}
-            placeholder="0x..."
-            class="mt-2"
-            autocomplete="off"
-            data-form-type="other"
-            data-lpignore="true"
-            aria-autocomplete="none"
-          />
-          {#if addressError}<p class="text-xs text-red-600 mt-1">{addressError}</p>{/if}
-        </div>
+    <Card class="p-6">
+      <h2 class="text-lg font-semibold mb-4">Send CN Tokens</h2>
+      <form autocomplete="off" data-form-type="other" data-lpignore="true">
+        <div class="space-y-4">
+          <div>
+            <Label for="recipient">Recipient Address</Label>
+            <Input
+              id="recipient"
+              bind:value={recipientAddress}
+              placeholder="0x..."
+              class="mt-2"
+              autocomplete="off"
+              data-form-type="other"
+              data-lpignore="true"
+              aria-autocomplete="none"
+            />
+          </div>
 
-        <div>
-          <Label for="amount">Amount (CN)</Label>
-          <Input
-            id="amount"
-            type="number"
-            bind:value={sendAmount}
-            placeholder="0.00"
-            max={$wallet.balance}
-            class="mt-2"
-            autocomplete="off"
-            data-form-type="other"
-            data-lpignore="true"
-            aria-autocomplete="none"
-          />
-          {#if amountError}
-            <p class="text-xs text-red-500 mt-1">{amountError}</p>
-          {/if}
-          <p class="text-xs text-muted-foreground mt-1">
-            Available: {$wallet.balance.toFixed(2)} CN
-          </p>
-        </div>
+          <div>
+            <Label for="amount">Amount (CN)</Label>
+            <Input
+              id="amount"
+              type="number"
+              bind:value={sendAmount}
+              placeholder="0.00"
+              max={$wallet.balance}
+              class="mt-2"
+              autocomplete="off"
+              data-form-type="other"
+              data-lpignore="true"
+              aria-autocomplete="none"
+            />
+            {#if amountWarning}
+              <p class="text-xs text-red-500 mt-1">{amountWarning}</p>
+            {/if}
+            <p class="text-xs text-muted-foreground mt-1">
+              Available: {$wallet.balance.toFixed(2)} CN
+            </p>
+          </div>
 
-        <Button
-          type="button"
-          class="w-full"
-          on:click={sendTransaction}
-          disabled={!isSendValid}
-        >
-          <ArrowUpRight class="h-4 w-4 mr-2" />
-          Send Transaction
-        </Button>
-      </div>
-    </form>
-  </Card>
+          <Button
+            type="button"
+            class="w-full"
+            on:click={sendTransaction}
+            disabled={!recipientAddress || sendAmount <= 0 || sendAmount > $wallet.balance}
+          >
+            <ArrowUpRight class="h-4 w-4 mr-2" />
+            Send Transaction
+          </Button>
+        </div>
+      </form>
+    </Card>
   </div>
   
   <Card class="p-6">
