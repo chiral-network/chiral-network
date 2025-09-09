@@ -19,6 +19,9 @@
   let cpuThreads = navigator.hardwareConcurrency || 4
   let selectedThreads = Math.floor(cpuThreads / 2)
   let miningIntensity = 50 // percentage
+
+  // Reactive validation for disabling the button
+  $: isInvalid = selectedThreads < 1 || selectedThreads > cpuThreads || miningIntensity < 1 || miningIntensity > 100
   
   // Statistics
   let sessionStartTime = Date.now()
@@ -38,8 +41,16 @@
   // Mock mining intervals
   let miningInterval: number | null = null
   let statsInterval: number | null = null
+
+  //CPU Threads error message
+  let validationError: string | null = null
+
+  //Bar or Line chart
+  let chartType: 'bar' | 'line' = 'bar';
   
   function startMining() {
+    // clear previous errors if valid
+    validationError = null
     isMining = true
     sessionStartTime = Date.now()
 
@@ -156,6 +167,7 @@
   onDestroy(() => {
     stopMining()
   })
+
 </script>
 
 <div class="space-y-6">
@@ -271,6 +283,9 @@
             disabled={isMining}
             class="mt-2"
           />
+          {#if selectedThreads < 1 || selectedThreads > cpuThreads}
+            <p class="text-red-600 text-xs mt-1">Threads must be 1–{cpuThreads}</p>
+          {/if}
         </div>
         
         <div>
@@ -285,6 +300,9 @@
             disabled={isMining}
             class="mt-2"
           />
+          {#if miningIntensity < 1 || miningIntensity > 100}
+            <p class="text-red-600 text-xs mt-1">Intensity must be 1–100%</p>
+          {/if}
         </div>
       </div>
       
@@ -302,6 +320,7 @@
           size="lg"
           on:click={() => isMining ? stopMining() : startMining()}
           class="min-w-[150px]"
+          disabled={isInvalid}
         >
           {#if isMining}
             <Pause class="h-4 w-4 mr-2" />
@@ -312,6 +331,9 @@
           {/if}
         </Button>
       </div>
+      {#if validationError}
+        <p class="text-red-600 text-sm mt-2 text-right">{validationError}</p>
+      {/if}
     </div>
   </Card>
   
@@ -440,15 +462,72 @@
   {#if miningHistory.length > 0}
     <Card class="p-6">
       <h2 class="text-lg font-semibold mb-4">Hash Rate History</h2>
-      <div class="h-32 flex items-end gap-1">
-        {#each miningHistory as point}
-          <div 
-            class="flex-1 bg-primary/20 hover:bg-primary/30 transition-colors rounded-t"
-            style="height: {(point.hashRate / Math.max(...miningHistory.map(h => h.hashRate))) * 100}%"
-            title="{formatHashRate(point.hashRate)}"
-          ></div>
-        {/each}
+
+      <!-- Chart Type Toggle -->
+      <div class="flex items-center gap-2 mb-2">
+        <span class="text-sm text-muted-foreground">Chart Type:</span>
+        <Button size="sm" variant={chartType === 'bar' ? 'default' : 'outline'} on:click={() => chartType = 'bar'}>Bar</Button>
+        <Button size="sm" variant={chartType === 'line' ? 'default' : 'outline'} on:click={() => chartType = 'line'}>Line</Button>
       </div>
+
+      <!-- Chart Rendering -->
+      {#if chartType === 'bar'}
+        <div class="h-32 flex items-end gap-1">
+          {#each miningHistory as point}
+            <div
+                    class="flex-1 bg-primary/20 hover:bg-primary/30 transition-all rounded-t"
+                    style="height: {(point.hashRate / Math.max(...miningHistory.map(h => h.hashRate))) * 100}%; transition: height 0.5s ease;"
+                    title="{formatHashRate(point.hashRate)}"
+            ></div>
+          {/each}
+        </div>
+      {:else}
+        <div class="relative w-full h-32">
+          <svg class="w-full h-full border border-border rounded" viewBox="0 0 400 128" preserveAspectRatio="xMinYMax meet">
+            <!-- Grid background -->
+            <defs>
+              <pattern id="hashRateGrid" width="40" height="32" patternUnits="userSpaceOnUse">
+                <path d="M 40 0 L 0 0 0 32" fill="none" stroke="hsl(var(--border))" stroke-width="0.5" opacity="0.3"/>
+              </pattern>
+            </defs>
+            <rect width="100%" height="100%" fill="url(#hashRateGrid)" />
+
+            <!-- Data line with proper scaling -->
+            <polyline
+                    fill="none"
+                    stroke="hsl(var(--primary))"
+                    stroke-width="3"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    points={miningHistory.map((point, i) => {
+        const x = (i / Math.max(miningHistory.length - 1, 1)) * 380 + 10; // 10px margin
+        const maxHash = Math.max(...miningHistory.map(h => h.hashRate)) || 1;
+        const y = 118 - ((point.hashRate / maxHash) * 100); // 10px margin top/bottom
+        return `${x},${y}`;
+      }).join(" ")}
+            />
+
+            <!-- Data points -->
+            {#each miningHistory as point, i}
+              {@const x = (i / Math.max(miningHistory.length - 1, 1)) * 380 + 10}
+              {@const maxHash = Math.max(...miningHistory.map(h => h.hashRate)) || 1}
+              {@const y = 118 - ((point.hashRate / maxHash) * 100)}
+              <circle
+                      cx={x}
+                      cy={y}
+                      r="4"
+                      fill="hsl(var(--primary))"
+                      stroke="hsl(var(--background))"
+                      stroke-width="2"
+                      class="hover:r-6 transition-all cursor-pointer"
+              >
+                <title>{formatHashRate(point.hashRate)} at {new Date(point.timestamp).toLocaleTimeString()}</title>
+              </circle>
+            {/each}
+          </svg>
+        </div>
+      {/if}
+
       <p class="text-xs text-muted-foreground text-center mt-2">Last 5 minutes</p>
     </Card>
   {/if}
