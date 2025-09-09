@@ -19,7 +19,7 @@
   let cpuThreads = navigator.hardwareConcurrency || 4
   let selectedThreads = Math.floor(cpuThreads / 2)
   let miningIntensity = 50 // percentage
-  
+
   // Statistics
   let sessionStartTime = Date.now()
   let estimatedTimeToBlock = 0
@@ -42,24 +42,185 @@
   // Errors from out-of-bounds values
   let threadsWarning = '';
   let intensityWarning = '';
+  let threadsInputValue = '';
+  let intensityInputValue = '';
+  let miningValidationError = '';
 
-  $: {
-  const prevThreads = selectedThreads;
-  selectedThreads = Math.max(1, Math.min(selectedThreads, Math.min(cpuThreads, 16)));
-  threadsWarning = (prevThreads !== selectedThreads)
-    ? `Threads value cannot be ${prevThreads}. Allowed range: 1-${Math.min(cpuThreads, 16)}.`
-    : '';
+  // Initialize input values only once on mount
+  let initialized = false;
+  $: if (!initialized) {
+    threadsInputValue = selectedThreads.toString();
+    intensityInputValue = miningIntensity.toString();
+    initialized = true;
   }
 
+
+  // Comprehensive validation for mining start
   $: {
-    const prevIntensity = miningIntensity;
-    miningIntensity = Math.max(1, Math.min(miningIntensity, 100));
-    intensityWarning = (prevIntensity !== miningIntensity)
-      ? `Intensity cannot be ${prevIntensity}. Allowed range: 1-100.`
-      : '';
+    const threadsNum = parseInt(threadsInputValue) || 0;
+    const intensityNum = parseInt(intensityInputValue) || 0;
+    const maxThreads = Math.min(cpuThreads, 16);
+
+    const threadsEmpty = threadsInputValue === '';
+    const intensityEmpty = intensityInputValue === '';
+    const threadsInvalid = !threadsEmpty && (threadsNum < 1 || threadsNum > maxThreads);
+    const intensityInvalid = !intensityEmpty && (intensityNum < 10 || intensityNum > 100);
+
+    if (threadsEmpty && intensityEmpty) {
+      miningValidationError = 'Please enter CPU threads and mining intensity values';
+    } else if (threadsEmpty) {
+      miningValidationError = 'Please enter a value for CPU threads';
+    } else if (intensityEmpty) {
+      miningValidationError = 'Please enter a value for mining intensity';
+    } else if (threadsInvalid && intensityInvalid) {
+      miningValidationError = 'Invalid CPU threads and mining intensity values';
+    } else if (threadsInvalid) {
+      miningValidationError = `CPU threads must be between 1 and ${maxThreads}`;
+    } else if (intensityInvalid) {
+      miningValidationError = 'Mining intensity must be between 10% and 100%';
+    } else {
+      miningValidationError = '';
+    }
+  }
+
+  // Validate threads input
+  function validateThreads(value: string) {
+    if (value === '' || value === undefined) {
+      threadsWarning = '';
+      return;
+    }
+
+    const numValue = parseInt(value);
+    if (isNaN(numValue)) {
+      threadsWarning = 'Please enter a valid number';
+      return;
+    }
+
+    const maxThreads = Math.min(cpuThreads, 16);
+    if (numValue < 1) {
+      threadsWarning = 'Minimum threads is 1';
+      return;
+    }
+
+    if (numValue > maxThreads) {
+      threadsWarning = `Maximum threads is ${maxThreads}`;
+      return;
+    }
+
+    threadsWarning = '';
+  }
+
+  // Validate intensity input
+  function validateIntensity(value: string) {
+    if (value === '' || value === undefined) {
+      intensityWarning = '';
+      return;
+    }
+
+    const numValue = parseInt(value);
+    if (isNaN(numValue)) {
+      intensityWarning = 'Please enter a valid number';
+      return;
+    }
+
+    if (numValue < 10) {
+      intensityWarning = 'Minimum intensity is 10%';
+      return;
+    }
+
+    if (numValue > 100) {
+      intensityWarning = 'Maximum intensity is 100%';
+      return;
+    }
+
+    intensityWarning = '';
+  }
+
+  // Handle threads input changes
+  function handleThreadsInput() {
+    let value = threadsInputValue; // Use the bound value
+
+    // Remove any non-numeric characters except empty string
+    if (value !== '' && !/^[0-9]*$/.test(value)) {
+      value = value.replace(/[^0-9]/g, '');
+    }
+
+    if (value === '') {
+      selectedThreads = 1;
+      validateThreads('');
+      return;
+    }
+
+    const numValue = parseInt(value);
+    const maxThreads = Math.min(cpuThreads, 16);
+
+    // Clamp to valid range
+    const clampedValue = Math.max(1, Math.min(numValue, maxThreads));
+
+    threadsInputValue = clampedValue.toString();
+    selectedThreads = clampedValue;
+    validateThreads(threadsInputValue);
+  }
+
+  // Clear mining validation error when inputs become valid
+  $: if (miningValidationError === '') {
+    // Inputs are valid, no action needed
+  }
+
+  // Handle threads keydown to prevent invalid characters
+  function handleThreadsKeydown(event: any) {
+    const allowedKeys = ['Backspace', 'Delete', 'Tab', 'Enter', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
+    const isNumber = /^[0-9]$/.test(event.key);
+    const isInvalidChar = /^[-+.e]$/.test(event.key); // Prevent minus, plus, dot, and scientific notation
+
+    if (isInvalidChar || (!isNumber && !allowedKeys.includes(event.key))) {
+      event.preventDefault();
+    }
+  }
+
+  // Handle intensity input changes
+  function handleIntensityInput() {
+    let value = intensityInputValue; // Use the bound value
+
+    // Remove any non-numeric characters except empty string
+    if (value !== '' && !/^[0-9]*$/.test(value)) {
+      value = value.replace(/[^0-9]/g, '');
+    }
+
+    if (value === '') {
+      miningIntensity = 50;
+      validateIntensity('');
+      return;
+    }
+
+    const numValue = parseInt(value);
+
+    // Clamp to valid range
+    const clampedValue = Math.max(10, Math.min(numValue, 100));
+
+    intensityInputValue = clampedValue.toString();
+    miningIntensity = clampedValue;
+    validateIntensity(intensityInputValue);
+  }
+
+  // Handle intensity keydown to prevent invalid characters
+  function handleIntensityKeydown(event: any) {
+    const allowedKeys = ['Backspace', 'Delete', 'Tab', 'Enter', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
+    const isNumber = /^[0-9]$/.test(event.key);
+    const isInvalidChar = /^[-+.e]$/.test(event.key); // Prevent minus, plus, dot, and scientific notation
+
+    if (isInvalidChar || (!isNumber && !allowedKeys.includes(event.key))) {
+      event.preventDefault();
+    }
   }
   
   function startMining() {
+    // Values are already validated and clamped in the input handlers
+    // Just ensure they're within valid ranges as a final check
+    const maxThreads = Math.min(cpuThreads, 16);
+    selectedThreads = Math.max(1, Math.min(selectedThreads, maxThreads));
+    miningIntensity = Math.max(10, Math.min(miningIntensity, 100));
+
     isMining = true
     sessionStartTime = Date.now()
 
@@ -285,9 +446,14 @@
           <Input
             id="thread-count"
             type="number"
-            bind:value={selectedThreads}
+            bind:value={threadsInputValue}
             min="1"
-            max={cpuThreads}
+            max={Math.min(cpuThreads, 16)}
+            step="1"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            on:input={handleThreadsInput}
+            on:keydown={handleThreadsKeydown}
             disabled={isMining}
             class="mt-2"
           />
@@ -301,10 +467,14 @@
           <Input
             id="intensity"
             type="number"
-            bind:value={miningIntensity}
+            bind:value={intensityInputValue}
             min="10"
             max="100"
             step="10"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            on:input={handleIntensityInput}
+            on:keydown={handleIntensityKeydown}
             disabled={isMining}
             class="mt-2"
           />
@@ -327,6 +497,7 @@
         <Button
           size="lg"
           on:click={() => isMining ? stopMining() : startMining()}
+          disabled={!isMining && miningValidationError !== ''}
           class="min-w-[150px]"
         >
           {#if isMining}
@@ -338,6 +509,12 @@
           {/if}
         </Button>
       </div>
+
+      {#if miningValidationError}
+        <div class="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+          <p class="text-sm text-red-600 font-medium">{miningValidationError}</p>
+        </div>
+      {/if}
     </div>
   </Card>
   
