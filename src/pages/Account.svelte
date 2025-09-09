@@ -14,6 +14,9 @@
   // Warning message for amount input
   let amountWarning = '';
 
+  // Copy feedback message
+  let copyMessage = '';
+
   $: {
     const prevAmount = sendAmount;
     sendAmount = Math.max(0.01, Math.min(sendAmount, $wallet.balance));
@@ -30,7 +33,9 @@
   ]
   
   function copyAddress() {
-    navigator.clipboard.writeText($wallet.address)
+    navigator.clipboard.writeText($wallet.address);
+    copyMessage = 'Copied!';
+    setTimeout(() => copyMessage = '', 1500);
   }
   
   function sendTransaction() {
@@ -77,11 +82,18 @@
       <div class="space-y-4">
         <div>
           <p class="text-sm text-muted-foreground">Address</p>
-          <div class="flex items-center gap-2 mt-1">
-            <p class="font-mono text-sm">{$wallet.address.slice(0, 10)}...{$wallet.address.slice(-8)}</p>
-            <Button size="sm" variant="ghost" on:click={copyAddress}>
-              <Copy class="h-3 w-3" />
-            </Button>
+          <div class="flex flex-col mt-1">
+            <div class="flex items-center gap-2">
+              <p class="font-mono text-sm">{$wallet.address.slice(0, 10)}...{$wallet.address.slice(-8)}</p>
+              <div class="flex flex-col items-center">
+                <Button size="sm" variant="ghost" on:click={copyAddress}>
+                  <Copy class="h-3 w-3" />
+                </Button>
+                {#if copyMessage}
+                  <span class="text-xs text-black-600 mt-1">{copyMessage}</span>
+                {/if}
+              </div>
+            </div>
           </div>
         </div>
         
