@@ -10,8 +10,9 @@
   
   let recipientAddress = ''
   let sendAmount = 0
+  let rawAmountInput = '' // Track raw user input for validation
   let privateKeyVisible = false
-  
+
   const transactions = writable([
   { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', date: new Date('2024-03-15'), description: 'File purchase' },
   { id: 2, type: 'sent', amount: 10.25, to: '0x1234...5678', date: new Date('2024-03-14'), description: 'Proxy service' },
@@ -19,19 +20,48 @@
   { id: 4, type: 'sent', amount: 5.5, to: '0x9876...5432', date: new Date('2024-03-12'), description: 'File download' },
   ]);
 
-  // Warning message for amount input
+  // Validation states
   let amountWarning = '';
+  let balanceWarning = '';
+  let isAmountValid = true;
 
   // Copy feedback message
   let copyMessage = '';
   let privateKeyCopyMessage = '';
 
+  // Validation logic - similar to mining page
   $: {
-    const prevAmount = sendAmount;
-    sendAmount = Math.max(0.01, Math.min(sendAmount, $wallet.balance));
-    amountWarning = (prevAmount !== sendAmount)
-      ? `Amount cannot be ${prevAmount}. Allowed range: 0.01-${$wallet.balance.toFixed(2)} CN.`
-      : '';
+    if (rawAmountInput === '') {
+      amountWarning = '';
+      balanceWarning = '';
+      isAmountValid = true;
+      sendAmount = 0;
+    } else {
+      const inputValue = parseFloat(rawAmountInput);
+
+      if (isNaN(inputValue) || inputValue <= 0) {
+        amountWarning = 'Please enter a valid amount greater than 0.';
+        balanceWarning = '';
+        isAmountValid = false;
+        sendAmount = 0;
+      } else if (inputValue < 0.01) {
+        amountWarning = `Amount must be at least 0.01 CN.`;
+        balanceWarning = '';
+        isAmountValid = false;
+        sendAmount = 0;
+      } else if (inputValue > $wallet.balance) {
+        amountWarning = '';
+        balanceWarning = `Insufficient balance - Need ${(inputValue - $wallet.balance).toFixed(2)} more CN.`;
+        isAmountValid = false;
+        sendAmount = 0;
+      } else {
+        // Valid amount
+        amountWarning = '';
+        balanceWarning = '';
+        isAmountValid = true;
+        sendAmount = inputValue;
+      }
+    }
   }
   
   function copyAddress() {
@@ -47,8 +77,8 @@
   }
   
   function sendTransaction() {
-    if (!recipientAddress || sendAmount <= 0) return
-    
+    if (!recipientAddress || !isAmountValid || sendAmount <= 0) return
+
     // Simulate transaction
     wallet.update(w => ({
       ...w,
@@ -67,11 +97,13 @@
       description: 'Manual transaction'
     },
     ...txs // prepend so latest is first
-  ])
-    
+  ])  
+
+    // Clear form
     recipientAddress = ''
     sendAmount = 0
-    
+    rawAmountInput = ''
+
     // Simulate transaction completion
     setTimeout(() => {
       wallet.update(w => ({
@@ -152,7 +184,6 @@
             bind:value={recipientAddress}
             placeholder="0x..."
             class="mt-2"
-            autocomplete="off"
             data-form-type="other"
             data-lpignore="true"
             aria-autocomplete="none"
@@ -164,28 +195,32 @@
           <Input
             id="amount"
             type="number"
-            bind:value={sendAmount}
+            bind:value={rawAmountInput}
             placeholder="0.00"
-            max={$wallet.balance}
+            min="0.01"
+            step="0.01"
             class="mt-2"
-            autocomplete="off"
             data-form-type="other"
             data-lpignore="true"
             aria-autocomplete="none"
           />
-          {#if amountWarning}
-            <p class="text-xs text-red-500 mt-1">{amountWarning}</p>
-          {/if}
-          <p class="text-xs text-muted-foreground mt-1">
-            Available: {$wallet.balance.toFixed(2)} CN
-          </p>
+          <div class="flex items-center justify-between mt-1">
+            <p class="text-xs text-muted-foreground">
+              Available: {$wallet.balance.toFixed(2)} CN
+            </p>
+            {#if amountWarning}
+              <p class="text-xs text-red-500 font-medium">{amountWarning}</p>
+            {:else if balanceWarning}
+              <p class="text-xs text-red-500 font-medium">{balanceWarning}</p>
+            {/if}
+          </div>
         </div>
 
         <Button
           type="button"
           class="w-full"
           on:click={sendTransaction}
-          disabled={!recipientAddress || sendAmount <= 0 || sendAmount > $wallet.balance}
+          disabled={!recipientAddress || !isAmountValid || rawAmountInput === ''}
         >
           <ArrowUpRight class="h-4 w-4 mr-2" />
           Send Transaction
