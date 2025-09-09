@@ -11,6 +11,17 @@
   let sendAmount = 0
   let privateKeyVisible = false
   
+  // Warning message for amount input
+  let amountWarning = '';
+
+  $: {
+    const prevAmount = sendAmount;
+    sendAmount = Math.max(0.01, Math.min(sendAmount, $wallet.balance));
+    amountWarning = (prevAmount !== sendAmount)
+      ? `Amount cannot be ${prevAmount}. Allowed range: 0.01-${$wallet.balance.toFixed(2)} CN.`
+      : '';
+  }
+
   const transactions = [
     { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', date: new Date('2024-03-15'), description: 'File purchase' },
     { id: 2, type: 'sent', amount: 10.25, to: '0x1234...5678', date: new Date('2024-03-14'), description: 'Proxy service' },
@@ -130,6 +141,9 @@
             data-lpignore="true"
             aria-autocomplete="none"
           />
+          {#if amountWarning}
+            <p class="text-xs text-red-500 mt-1">{amountWarning}</p>
+          {/if}
           <p class="text-xs text-muted-foreground mt-1">
             Available: {$wallet.balance.toFixed(2)} CN
           </p>
