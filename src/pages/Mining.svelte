@@ -38,6 +38,26 @@
   // Mock mining intervals
   let miningInterval: number | null = null
   let statsInterval: number | null = null
+
+  // Errors from out-of-bounds values
+  let threadsWarning = '';
+  let intensityWarning = '';
+
+  $: {
+  const prevThreads = selectedThreads;
+  selectedThreads = Math.max(1, Math.min(selectedThreads, Math.min(cpuThreads, 16)));
+  threadsWarning = (prevThreads !== selectedThreads)
+    ? `Threads value cannot be ${prevThreads}. Allowed range: 1-${Math.min(cpuThreads, 16)}.`
+    : '';
+  }
+
+  $: {
+    const prevIntensity = miningIntensity;
+    miningIntensity = Math.max(1, Math.min(miningIntensity, 100));
+    intensityWarning = (prevIntensity !== miningIntensity)
+      ? `Intensity cannot be ${prevIntensity}. Allowed range: 1-100.`
+      : '';
+  }
   
   function startMining() {
     isMining = true
@@ -271,6 +291,9 @@
             disabled={isMining}
             class="mt-2"
           />
+          {#if threadsWarning}
+            <p class="text-xs text-red-500 mt-1">{threadsWarning}</p>
+          {/if}
         </div>
         
         <div>
@@ -285,6 +308,9 @@
             disabled={isMining}
             class="mt-2"
           />
+          {#if intensityWarning}
+            <p class="text-xs text-red-500 mt-1">{intensityWarning}</p>
+          {/if}
         </div>
       </div>
       
