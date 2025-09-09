@@ -46,7 +46,17 @@
     })
     let sidebarCollapsed = false
     let mobileMenuOpen = false
-    
+
+    // Scroll to top when page changes
+    $: if (currentPage) {
+        tick().then(() => {
+            const mainContent = document.querySelector('.flex-1.overflow-auto')
+            if (mainContent) {
+                mainContent.scrollTop = 0
+            }
+        })
+    }
+
     const menuItems = [
       { id: 'download', label: 'Download', icon: Download },
       { id: 'upload', label: 'Upload', icon: Upload },
