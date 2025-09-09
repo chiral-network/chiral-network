@@ -238,9 +238,13 @@
           <p class="text-2xl font-bold">{$wallet.reputation || 4.5}/5.0</p>
           <div class="flex gap-0.5 mt-1">
             {#each Array(5) as _, i}
-              <span class="text-yellow-500">
-                {i < Math.floor($wallet.reputation || 4.5) ? '★' : '☆'}
-              </span>
+              {#if ($wallet.reputation ?? 4.5) >= i + 1}
+                <span class="text-yellow-500">★</span>
+              {:else if ($wallet.reputation ?? 4.5) >= i + 0.5}
+                <span class="text-yellow-500">⯨</span> <!-- Unicode half star -->
+              {:else}
+                <span class="text-yellow-500 opacity-30">★</span>
+              {/if}
             {/each}
           </div>
         </div>
