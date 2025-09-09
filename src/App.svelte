@@ -10,11 +10,22 @@
     import SettingsPage from './pages/Settings.svelte'
     import MiningPage from './pages/Mining.svelte'
     import { networkStatus } from '$lib/stores'
-    
+    import { tick } from 'svelte'
+
     let currentPage = 'download'
     let sidebarCollapsed = false
     let mobileMenuOpen = false
-    
+
+    // Scroll to top when page changes
+    $: if (currentPage) {
+        tick().then(() => {
+            const mainContent = document.querySelector('.flex-1.overflow-auto')
+            if (mainContent) {
+                mainContent.scrollTop = 0
+            }
+        })
+    }
+
     const menuItems = [
       { id: 'download', label: 'Download', icon: Download },
       { id: 'upload', label: 'Upload', icon: Upload },
