@@ -4,7 +4,7 @@
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
-  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, Settings, Key, History } from 'lucide-svelte'
+  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, Settings, Key, History, Coins } from 'lucide-svelte'
   import { wallet } from '$lib/stores'
   import { writable } from 'svelte/store'
   
@@ -137,58 +137,61 @@
       </div>
     </Card>
     
-      <Card class="p-6">
-    <h2 class="text-lg font-semibold mb-4">Send CN Tokens</h2>
-    <form autocomplete="off" data-form-type="other" data-lpignore="true">
-      <div class="space-y-4">
-        <div>
-          <Label for="recipient">Recipient Address</Label>
-          <Input
-            id="recipient"
-            bind:value={recipientAddress}
-            placeholder="0x..."
-            class="mt-2"
-            autocomplete="off"
-            data-form-type="other"
-            data-lpignore="true"
-            aria-autocomplete="none"
-          />
-        </div>
-
-        <div>
-          <Label for="amount">Amount (CN)</Label>
-          <Input
-            id="amount"
-            type="number"
-            bind:value={sendAmount}
-            placeholder="0.00"
-            max={$wallet.balance}
-            class="mt-2"
-            autocomplete="off"
-            data-form-type="other"
-            data-lpignore="true"
-            aria-autocomplete="none"
-          />
-          {#if amountWarning}
-            <p class="text-xs text-red-500 mt-1">{amountWarning}</p>
-          {/if}
-          <p class="text-xs text-muted-foreground mt-1">
-            Available: {$wallet.balance.toFixed(2)} CN
-          </p>
-        </div>
-
-        <Button
-          type="button"
-          class="w-full"
-          on:click={sendTransaction}
-          disabled={!recipientAddress || sendAmount <= 0 || sendAmount > $wallet.balance}
-        >
-          <ArrowUpRight class="h-4 w-4 mr-2" />
-          Send Transaction
-        </Button>
+    <Card class="p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-lg font-semibold">Send CN Tokens</h2>
+        <Coins class="h-5 w-5 text-muted-foreground" />
       </div>
-    </form>
-  </Card>
+      <form autocomplete="off" data-form-type="other" data-lpignore="true">
+        <div class="space-y-4">
+          <div>
+            <Label for="recipient">Recipient Address</Label>
+            <Input
+              id="recipient"
+              bind:value={recipientAddress}
+              placeholder="0x..."
+              class="mt-2"
+              autocomplete="off"
+              data-form-type="other"
+              data-lpignore="true"
+              aria-autocomplete="none"
+            />
+          </div>
+
+          <div>
+            <Label for="amount">Amount (CN)</Label>
+            <Input
+              id="amount"
+              type="number"
+              bind:value={sendAmount}
+              placeholder="0.00"
+              max={$wallet.balance}
+              class="mt-2"
+              autocomplete="off"
+              data-form-type="other"
+              data-lpignore="true"
+              aria-autocomplete="none"
+            />
+            {#if amountWarning}
+              <p class="text-xs text-red-500 mt-1">{amountWarning}</p>
+            {/if}
+            <p class="text-xs text-muted-foreground mt-1">
+              Available: {$wallet.balance.toFixed(2)} CN
+            </p>
+          </div>
+
+          <Button
+            type="button"
+            class="w-full"
+            on:click={sendTransaction}
+            disabled={!recipientAddress || sendAmount <= 0 || sendAmount > $wallet.balance}
+          >
+            <ArrowUpRight class="h-4 w-4 mr-2" />
+            Send Transaction
+          </Button>
+        </div>
+      </form>
+    </Card>
   </div>
   
   <Card class="p-6">
