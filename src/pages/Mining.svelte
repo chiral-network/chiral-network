@@ -20,9 +20,6 @@
   let selectedThreads = Math.floor(cpuThreads / 2)
   let miningIntensity = 50 // percentage
 
-  // Reactive validation for disabling the button
-  $: isInvalid = selectedThreads < 1 || selectedThreads > cpuThreads || miningIntensity < 1 || miningIntensity > 100
-  
   // Statistics
   let sessionStartTime = Date.now()
   let estimatedTimeToBlock = 0
@@ -51,23 +48,27 @@
   let threadsWarning = '';
   let intensityWarning = '';
 
+  let validationError: string | null = null;
+
+
+  // Threads warning
   $: {
-    const prevThreads = selectedThreads;
-    selectedThreads = Math.max(1, Math.min(selectedThreads, Math.min(cpuThreads, 16)));
-    threadsWarning =
-      prevThreads !== selectedThreads
-        ? `Threads value cannot be ${prevThreads}. Allowed range: 1-${Math.min(cpuThreads, 16)}.`
-        : '';
+    const numThreads = Number(selectedThreads);
+    threadsWarning = (numThreads < 1 || numThreads > cpuThreads)
+            ? `Threads must be between 1 and ${cpuThreads}`
+            : '';
   }
 
+  // Intensity warning
   $: {
-    const prevIntensity = miningIntensity;
-    miningIntensity = Math.max(1, Math.min(miningIntensity, 100));
-    intensityWarning =
-      prevIntensity !== miningIntensity
-        ? `Intensity cannot be ${prevIntensity}. Allowed range: 1-100.`
-        : '';
+    const numIntensity = Number(miningIntensity);
+    intensityWarning = (numIntensity < 1 || numIntensity > 100)
+            ? `Intensity must be between 1 and 100`
+            : '';
   }
+
+  // Button disabled if either warning exists
+  $: isInvalid = !!threadsWarning || !!intensityWarning;
 
   
   function startMining() {
@@ -297,13 +298,17 @@
         <div>
           <Label for="thread-count">CPU Threads ({cpuThreads} available)</Label>
           <Input
-            id="thread-count"
-            type="number"
-            bind:value={selectedThreads}
-            min="1"
-            max={cpuThreads}
-            disabled={isMining}
-            class="mt-2"
+                  id="thread-count"
+                  type="number"
+                  bind:value={selectedThreads}
+                  on:input={(e: Event) => {
+                      const target = e.currentTarget as HTMLInputElement;
+                      selectedThreads = Number(target.value);
+                    }}
+                  min="1"
+                  max={cpuThreads}
+                  disabled={isMining}
+                  class="mt-2"
           />
           {#if threadsWarning}
             <p class="text-xs text-red-500 mt-1">{threadsWarning}</p>
@@ -314,14 +319,18 @@
         <div>
           <Label for="intensity">Mining Intensity (%)</Label>
           <Input
-            id="intensity"
-            type="number"
-            bind:value={miningIntensity}
-            min="10"
-            max="100"
-            step="10"
-            disabled={isMining}
-            class="mt-2"
+                  id="intensity"
+                  type="number"
+                  bind:value={miningIntensity}
+                  on:input={(e: Event) => {
+                      const target = e.currentTarget as HTMLInputElement;
+                      miningIntensity = Number(target.value);
+                    }}
+                  min="1"
+                  max="100"
+                  step="1"
+                  disabled={isMining}
+                  class="mt-2"
           />
 
           {#if intensityWarning}
