@@ -34,9 +34,9 @@
   }
   
   function copyAddress() {
-    navigator.clipboard.writeText($wallet.address)
-    copyMessage = 'Copied!'
-    setTimeout(() => copyMessage = '', 1500)
+    navigator.clipboard.writeText($wallet.address);
+    copyMessage = 'Copied!';
+    setTimeout(() => copyMessage = '', 1500);
   }
   
   function sendTransaction() {

@@ -10,7 +10,8 @@
   
   let discoveryRunning = false
   let newPeerAddress = ''
-  let sortOrder: 'none' | 'asc' | 'desc' = 'none'
+  let sortBy: 'reputation' | 'sharedFiles' | 'totalSize' | 'nickname' | 'location' | 'joinDate' | 'lastSeen' | 'status' = 'reputation'
+  let sortDirection: 'asc' | 'desc' = 'desc'
   
   function formatSize(bytes: number): string {
     const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
@@ -185,25 +186,93 @@
   
   <!-- Connected Peers -->
   <Card class="p-6">
-      <div class="flex items-center justify-between mb-4">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
           <h2 class="text-lg font-semibold">Connected Peers ({$peers.length})</h2>
           <div class="flex items-center gap-2">
               <Label for="sort">Sort By</Label>
               <select
                       id="sort"
-                      bind:value={sortOrder}
+                      bind:value={sortBy}
                       class="border rounded px-2 py-1 text-sm"
               >
-                  <option value="none">None</option>
-                  <option value="asc">Stars ↑ (Ascending)</option>
-                  <option value="desc">Stars ↓ (Descending)</option>
+                  <option value="reputation">Reputation</option>
+                  <option value="sharedFiles">Shared Files</option>
+                  <option value="totalSize">Total Size</option>
+                  <option value="nickname">Name</option>
+                  <option value="location">Location</option>
+                  <option value="joinDate">Join Date</option>
+                  <option value="lastSeen">Last Seen</option>
+                  <option value="status">Status</option>
+              </select>
+              <select
+                      id="sort-direction"
+                      bind:value={sortDirection}
+                      class="border rounded px-2 py-1 text-sm"
+              >
+                  <option value="asc">↑ Ascending</option>
+                  <option value="desc">↓ Descending</option>
               </select>
           </div>
       </div>
     <div class="space-y-3">
         {#each [...$peers].sort((a, b) => {
-            if (sortOrder === 'asc') return a.reputation - b.reputation
-            if (sortOrder === 'desc') return b.reputation - a.reputation
+            let aVal: any, bVal: any
+
+            switch (sortBy) {
+                case 'reputation':
+                    aVal = a.reputation
+                    bVal = b.reputation
+                    break
+                case 'sharedFiles':
+                    aVal = a.sharedFiles
+                    bVal = b.sharedFiles
+                    break
+                case 'totalSize':
+                    aVal = a.totalSize
+                    bVal = b.totalSize
+                    break
+                case 'nickname':
+                    aVal = (a.nickname || 'zzzzz').toLowerCase() // Put empty names at the end
+                    bVal = (b.nickname || 'zzzzz').toLowerCase()
+                    break
+                case 'location':
+                    aVal = (a.location || 'zzzzz').toLowerCase() // Put empty locations at the end
+                    bVal = (b.location || 'zzzzz').toLowerCase()
+                    break
+                case 'joinDate':
+                    aVal = new Date(a.joinDate).getTime()
+                    bVal = new Date(b.joinDate).getTime()
+                    break
+                case 'lastSeen':
+                    aVal = new Date(a.lastSeen).getTime()
+                    bVal = new Date(b.lastSeen).getTime()
+                    break
+                case 'status':
+                    // Assign numeric values for logical sorting: online (0) > away (1) > offline (2)
+                    aVal = a.status === 'online' ? 0 : a.status === 'away' ? 1 : 2
+                    bVal = b.status === 'online' ? 0 : b.status === 'away' ? 1 : 2
+                    break
+                default:
+                    return 0
+            }
+
+            // Handle string comparison
+            if (typeof aVal === 'string' && typeof bVal === 'string') {
+                if (aVal < bVal) {
+                    return sortDirection === 'asc' ? -1 : 1
+                } else if (aVal > bVal) {
+                    return sortDirection === 'asc' ? 1 : -1
+                } else {
+                    return 0
+                }
+            }
+
+            // Handle numeric comparison
+            if (typeof aVal === 'number' && typeof bVal === 'number') {
+                const result = aVal - bVal
+                return sortDirection === 'asc' ? result : -result
+            }
+
             return 0
         }) as peer}
         <div class="p-4 bg-secondary rounded-lg">
@@ -235,7 +304,7 @@
             </div>
           </div>
           
-          <div class="grid grid-cols-3 gap-4 text-sm">
+          <div class="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
             <div>
               <p class="text-xs text-muted-foreground">Shared Files</p>
               <p class="font-medium">{peer.sharedFiles}</p>
@@ -247,6 +316,20 @@
             <div>
               <p class="text-xs text-muted-foreground">Location</p>
               <p class="font-medium">{peer.location || 'Unknown'}</p>
+            </div>
+            <div>
+              <p class="text-xs text-muted-foreground">Joined</p>
+              <p class="font-medium">{new Date(peer.joinDate).toLocaleString()}</p>
+            </div>
+            <div>
+              <p class="text-xs text-muted-foreground">Last Seen</p>
+              <p class="font-medium">
+                {#if peer.status === 'online'}
+                  Now
+                {:else}
+                  {new Date(peer.lastSeen).toLocaleString()}
+                {/if}
+              </p>
             </div>
           </div>
         </div>

@@ -71,6 +71,20 @@
     if (bytes < 1048576) return (bytes / 1024).toFixed(2) + ' KB'
     return (bytes / 1048576).toFixed(2) + ' MB'
   }
+
+  // Hash copied popup state
+  import { tick } from 'svelte';
+  let copiedHash: string | null = null;
+  let showCopied = false;
+  async function handleCopy(hash: string) {
+    await navigator.clipboard.writeText(hash);
+    copiedHash = hash;
+    showCopied = true;
+    await tick();
+    setTimeout(() => {
+      showCopied = false;
+    }, 1200);
+  }
 </script>
 
 <div class="space-y-6">
@@ -110,7 +124,7 @@
           </div>
         </div>
       {:else}
-        <div class="flex items-center justify-between mb-4">
+        <div class="flex flex-wrap items-center justify-between gap-4 mb-4">
           <div>
             <h2 class="text-lg font-semibold">Shared Files</h2>
             <p class="text-sm text-muted-foreground mt-1">
@@ -132,13 +146,13 @@
       {#if $files.filter(f => f.status === 'seeding' || f.status === 'uploaded').length > 0}
         <div class="space-y-2">
           {#each $files.filter(f => f.status === 'seeding' || f.status === 'uploaded') as file}
-            <div class="flex items-center justify-between p-3 bg-secondary rounded-lg hover:bg-secondary/80 transition-colors">
+            <div class="flex flex-wrap items-center justify-between gap-2 p-3 bg-secondary rounded-lg hover:bg-secondary/80 transition-colors">
               <div class="flex items-center gap-3">
                 <File class="h-4 w-4 text-muted-foreground" />
                 <div class="flex-1">
-                  <p class="text-sm font-medium">{file.name}</p>
-                  <div class="flex items-center gap-3 mt-1">
-                    <p class="text-xs text-muted-foreground">Hash: {file.hash}</p>
+                  <p class="text-sm font-medium truncate">{file.name}</p>
+                  <div class="flex flex-wrap items-center gap-3 mt-1">
+                    <p class="text-xs text-muted-foreground truncate">Hash: {file.hash}</p>
                     <span class="text-xs text-muted-foreground">•</span>
                     <p class="text-xs text-muted-foreground">{formatFileSize(file.size)}</p>
                     {#if file.seeders !== undefined}
@@ -156,16 +170,23 @@
                 <Badge variant="secondary" class="text-green-600">
                   Seeding
                 </Badge>
-                <button
-                  on:click={() => navigator.clipboard.writeText(file.hash)}
-                  class="p-1 hover:bg-accent rounded transition-colors"
-                  title="Copy hash"
-                  aria-label="Copy file hash"
-                >
-                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                  </svg>
-                </button>
+                <div class="relative inline-block">
+                  <button
+                    on:click={() => handleCopy(file.hash)}
+                    class="p-1 hover:bg-destructive/10 rounded transition-colors"
+                    title="Copy hash"
+                    aria-label="Copy file hash"
+                  >
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                  </button>
+                  {#if showCopied && copiedHash === file.hash}
+                    <div class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 rounded bg-primary text-primary-foreground text-xs shadow z-10 whitespace-nowrap">
+                      Hash copied!
+                    </div>
+                  {/if}
+                </div>
                 <button
                   on:click={() => removeFile(file.id)}
                   class="p-1 hover:bg-destructive/10 rounded transition-colors"
