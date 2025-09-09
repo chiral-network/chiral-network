@@ -13,6 +13,7 @@
     import { networkStatus } from '$lib/stores'
     import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
     import {onMount} from 'svelte';
+    import { tick } from 'svelte'
 
     // gets path name not entire url:
     // ex: http://locatlhost:1420/download -> /download
