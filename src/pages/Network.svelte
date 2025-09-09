@@ -325,7 +325,7 @@
               <p class="text-xs text-muted-foreground">Last Seen</p>
               <p class="font-medium">
                 {#if peer.status === 'online'}
-                  {new Date(peer.lastSeen).toLocaleString()}
+                  Now
                 {:else}
                   {new Date(peer.lastSeen).toLocaleString()}
                 {/if}
