@@ -24,6 +24,7 @@
 
   // Copy feedback message
   let copyMessage = '';
+  let privateKeyCopyMessage = '';
 
   $: {
     const prevAmount = sendAmount;
@@ -37,6 +38,12 @@
     navigator.clipboard.writeText($wallet.address);
     copyMessage = 'Copied!';
     setTimeout(() => copyMessage = '', 1500);
+  }
+
+  function copyPrivateKey() {
+    navigator.clipboard.writeText('your-private-key-here-do-not-share');
+    privateKeyCopyMessage = 'Copied!';
+    setTimeout(() => privateKeyCopyMessage = '', 1500);
   }
   
   function sendTransaction() {
@@ -233,10 +240,10 @@
           <Label>Private Key</Label>
           <div class="flex gap-2 mt-2">
             <Input
-              type={privateKeyVisible ? 'text' : 'password'}
+              type="text"
               value="your-private-key-here-do-not-share"
               readonly
-              class="flex-1 font-mono text-sm"
+              class="flex-1 font-mono text-sm {!privateKeyVisible ? 'obscure-text' : ''}"
               autocomplete="off"
               data-form-type="other"
               data-lpignore="true"
@@ -246,11 +253,22 @@
               type="button"
               variant="outline"
               size="sm"
+              on:click={copyPrivateKey}
+            >
+              <Copy class="h-3 w-3" />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
               on:click={() => privateKeyVisible = !privateKeyVisible}
             >
               {privateKeyVisible ? 'Hide' : 'Show'}
             </Button>
           </div>
+          {#if privateKeyCopyMessage}
+            <p class="text-xs text-green-600 mt-1">{privateKeyCopyMessage}</p>
+          {/if}
           <p class="text-xs text-muted-foreground mt-1">Never share your private key with anyone</p>
         </div>
 
