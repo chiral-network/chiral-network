@@ -3,7 +3,9 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
   import { TrendingUp, Upload, DollarSign, HardDrive, Award } from 'lucide-svelte'
-  import { files, wallet, networkStats } from '$lib/stores'
+  //CHANGING IMPORT TO ADD PROXY NODES
+  import { files, wallet, networkStats, proxyNodes } from '$lib/stores'
+  //import { files, wallet, networkStats } from '$lib/stores'
   import { onMount } from 'svelte'
   
   let uploadedFiles: any[] = []
@@ -13,6 +15,34 @@
   let earningsHistory: any[] = []
   let storageUsed = 0
   let bandwidthUsed = { upload: 0, download: 0 }
+  //ADDING LATENCY STATE AND HELPER 
+  // Latency analytics (derived from proxy nodes)
+let avgLatency = 0
+let p95Latency = 0
+let bestLatency = 0
+let latencyHistory: { date: string; latency: number }[] = []
+
+function computeLatencyStats() {
+  // Use the live values from $proxyNodes
+  const latencies = $proxyNodes
+    .map(n => n.latency)
+    .filter(l => typeof l === 'number' && isFinite(l))
+
+  if (latencies.length === 0) {
+    avgLatency = 0
+    p95Latency = 0
+    bestLatency = 0
+    return
+  }
+
+  latencies.sort((a, b) => a - b)
+  const sum = latencies.reduce((s, v) => s + v, 0)
+  avgLatency = sum / latencies.length
+  const idx = Math.floor(0.95 * (latencies.length - 1))
+  p95Latency = latencies[idx]
+  bestLatency = latencies[0]
+}
+
   
   // Calculate statistics
   $: {
@@ -43,14 +73,51 @@
     }
     
     earningsHistory = history
+    //ADDING THIS: INITIALIZING THE LATENCY History
+    // Generate mock latency history (last 30 points)
+    const lhist: { date: string; latency: number }[] = []
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date()
+      d.setDate(d.getDate() - i)
+      // Base on current avg and add slight jitter
+      const base = $proxyNodes.length
+        ? ($proxyNodes.reduce((s, n) => s + (n.latency || 0), 0) / $proxyNodes.length)
+        : 80
+      const jitter = (Math.random() - 0.5) * 20
+      lhist.push({ date: d.toLocaleDateString(), latency: Math.max(5, base + jitter) })
+    }
+    latencyHistory = lhist
+    computeLatencyStats()
+
     
     // Update bandwidth usage periodically
+    /*const interval = setInterval(() => {
+      bandwidthUsed = {
+        upload: bandwidthUsed.upload + Math.random() * 100,
+        download: bandwidthUsed.download + Math.random() * 150
+      }
+    }, 3000)*/
+
+    //ADDING THIS extending refresh timer to include latency also
+    // Update bandwidth & latency periodically
     const interval = setInterval(() => {
       bandwidthUsed = {
         upload: bandwidthUsed.upload + Math.random() * 100,
         download: bandwidthUsed.download + Math.random() * 150
       }
+
+      // Simulate latency jitter and keep short history (30 points)
+      const base = $proxyNodes.length
+        ? ($proxyNodes.reduce((s, n) => s + (n.latency || 0), 0) / $proxyNodes.length)
+        : 80
+      const jitter = (Math.random() - 0.5) * 15
+      latencyHistory = [
+        ...latencyHistory.slice(1),
+        { date: new Date().toLocaleTimeString(), latency: Math.max(5, base + jitter) }
+      ]
+      computeLatencyStats()
     }, 3000)
+
     
     return () => clearInterval(interval)
   })
@@ -206,7 +273,71 @@
       </div>
     </Card>
   </div>
-  
+  <!-- ADDING THIS -->
+  <!-- Network Latency -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+  <Card class="p-6">
+    <h2 class="text-lg font-semibold mb-4">Network Latency</h2>
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-6 mb-6">
+      <div>
+        <p class="text-xs text-muted-foreground mb-1">Average</p>
+        <p class="text-2xl font-bold">{avgLatency.toFixed(0)} ms</p>
+      </div>
+      <div>
+        <p class="text-xs text-muted-foreground mb-1">P95</p>
+        <p class="text-2xl font-bold">{p95Latency.toFixed(0)} ms</p>
+      </div>
+      <div>
+        <p class="text-xs text-muted-foreground mb-1">Best</p>
+        <p class="text-2xl font-bold">{bestLatency.toFixed(0)} ms</p>
+      </div>
+    </div>
+
+    <div class="space-y-4">
+      <div>
+        <div class="flex justify-between mb-2">
+          <span class="text-sm">Current Avg</span>
+          <span class="text-sm font-medium">{avgLatency.toFixed(0)} ms</span>
+        </div>
+        <Progress value={Math.min(avgLatency, 300)} max={300} />
+        <p class="text-xs text-muted-foreground mt-1">
+          0–50 ms (great), 50–150 ms (ok), &gt;150 ms (poor)
+        </p>
+      </div>
+
+      <div class="pt-2 border-t text-sm grid grid-cols-2 gap-2">
+        <div class="flex justify-between items-center">
+          <span class="text-sm">Nodes Reporting</span>
+          <Badge variant="outline">{$proxyNodes.length}</Badge>
+        </div>
+        <div class="flex justify-between items-center">
+          <span class="text-sm">Sample Size</span>
+          <Badge variant="outline">{latencyHistory.length}</Badge>
+        </div>
+      </div>
+    </div>
+  </Card>
+
+  <Card class="p-6">
+    <h3 class="text-md font-medium mb-4">Latency (recent)</h3>
+    <div class="h-48 flex items-end gap-1">
+      {#each latencyHistory as p}
+        <div
+          class="flex-1 bg-primary/20 hover:bg-primary/30 transition-colors rounded-t"
+          style="height: {(Math.min(p.latency, 300) / 300) * 100}%"
+          title="{p.date}: {p.latency.toFixed(0)} ms"
+        ></div>
+      {/each}
+    </div>
+    <div class="flex justify-between mt-2 text-xs text-muted-foreground">
+      <span>{latencyHistory[0]?.date}</span>
+      <span>{latencyHistory[latencyHistory.length - 1]?.date}</span>
+    </div>
+  </Card>
+</div>
+
+
+
   <!-- Top Performing Files -->
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
     <Card class="p-6">

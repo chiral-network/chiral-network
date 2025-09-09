@@ -21,17 +21,17 @@
   ]);
 
   // Warning message for amount input
-  let amountWarning = '';
+  let amountWarning = ''
 
   // Copy feedback message
-  let copyMessage = '';
+  let copyMessage = ''
 
   $: {
-    const prevAmount = sendAmount;
-    sendAmount = Math.max(0.01, Math.min(sendAmount, $wallet.balance));
+    const prevAmount = sendAmount
+    sendAmount = Math.max(0.01, Math.min(sendAmount, $wallet.balance))
     amountWarning = (prevAmount !== sendAmount)
       ? `Amount cannot be ${prevAmount}. Allowed range: 0.01-${$wallet.balance.toFixed(2)} CN.`
-      : '';
+      : ''
   }
   
   function copyAddress() {
@@ -101,17 +101,15 @@
       <div class="space-y-4">
         <div>
           <p class="text-sm text-muted-foreground">Address</p>
-          <div class="flex flex-col mt-1">
-            <div class="flex items-center gap-2">
-              <p class="font-mono text-sm">{$wallet.address.slice(0, 10)}...{$wallet.address.slice(-8)}</p>
-              <div class="flex flex-col items-center">
-                <Button size="sm" variant="ghost" on:click={copyAddress}>
-                  <Copy class="h-3 w-3" />
-                </Button>
-                {#if copyMessage}
-                  <span class="text-xs text-black-600 mt-1">{copyMessage}</span>
-                {/if}
-              </div>
+          <div class="flex items-center gap-2 mt-1">
+            <p class="font-mono text-sm">{$wallet.address.slice(0, 10)}...{$wallet.address.slice(-8)}</p>
+            <div class="flex flex-col items-center">
+              <Button size="sm" variant="ghost" on:click={copyAddress}>
+                <Copy class="h-3 w-3" />
+              </Button>
+              {#if copyMessage}
+                <span class="text-xs text-muted-foreground mt-1">{copyMessage}</span>
+              {/if}
             </div>
           </div>
         </div>
