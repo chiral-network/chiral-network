@@ -235,7 +235,7 @@
       </div>
       <div>
         <label class="block text-xs font-medium mb-1">Sort</label>
-        <button type="button" class="border rounded px-3 py-1 text-sm bg-muted hover:bg-muted/70 transition-colors w-full" on:click={() => { sortDescending = !sortDescending; }}>
+        <button type="button" class="border rounded px-3 py-1 text-sm bg-white hover:bg-gray-100 transition-colors w-full" on:click={() => { sortDescending = !sortDescending; }}>
           {sortDescending ? 'Newest → Oldest' : 'Oldest → Newest'}
         </button>
       </div>
