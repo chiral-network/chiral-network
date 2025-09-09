@@ -19,6 +19,28 @@
     { id: 4, type: 'sent', amount: 5.5, to: '0x9876...5432', date: new Date('2024-03-12'), description: 'File download' },
   ]);
 
+  // Filtering state
+  let filterType: 'all' | 'sent' | 'received' = 'all';
+  let filterDateFrom: string = '';
+  let filterDateTo: string = '';
+  let sortDescending: boolean = true;
+
+  // Derived filtered transactions
+  $: filteredTransactions = $transactions
+    .filter(tx => {
+      const matchesType = filterType === 'all' || tx.type === filterType;
+      const txDate = tx.date instanceof Date ? tx.date : new Date(tx.date);
+      const fromOk = !filterDateFrom || txDate >= new Date(filterDateFrom);
+      const toOk = !filterDateTo || txDate <= new Date(filterDateTo);
+      return matchesType && fromOk && toOk;
+    })
+    .slice()
+    .sort((a, b) => {
+      const dateA = a.date instanceof Date ? a.date : new Date(a.date);
+      const dateB = b.date instanceof Date ? b.date : new Date(b.date);
+      return sortDescending ? dateB.getTime() - dateA.getTime() : dateA.getTime() - dateB.getTime();
+    });
+
   // Warning message for amount input
   let amountWarning = ''
 
@@ -191,9 +213,39 @@
       <h2 class="text-lg font-semibold">Transaction History</h2>
       <History class="h-5 w-5 text-muted-foreground" />
     </div>
-    
-    <div class="space-y-2">
-      {#each $transactions as tx}
+    <!-- Filter Controls -->
+    <div class="flex flex-wrap gap-4 mb-4 items-end">
+      <div>
+        <label class="block text-xs font-medium mb-1">Type</label>
+        <select bind:value={filterType} class="border rounded px-2 py-1 text-sm">
+          <option value="all">All</option>
+          <option value="sent">Sent</option>
+          <option value="received">Received</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-medium mb-1">From</label>
+        <input type="date" bind:value={filterDateFrom} class="border rounded px-2 py-1 text-sm" />
+      </div>
+      <div>
+        <label class="block text-xs font-medium mb-1">To</label>
+        <input type="date" bind:value={filterDateTo} class="border rounded px-2 py-1 text-sm" />
+      </div>
+      <div>
+        <label class="block text-xs font-medium mb-1">Sort</label>
+        <button type="button" class="border rounded px-3 py-1 text-sm bg-white hover:bg-gray-100 transition-colors w-full" on:click={() => { sortDescending = !sortDescending; }}>
+          {sortDescending ? 'Newest → Oldest' : 'Oldest → Newest'}
+        </button>
+      </div>
+      <div class="flex-1"></div>
+      <div class="flex flex-col gap-1 items-end">
+        <button type="button" class="border rounded px-3 py-1 text-sm bg-muted hover:bg-muted/70 transition-colors" on:click={() => { filterType = 'all'; filterDateFrom = ''; filterDateTo = ''; sortDescending = true; }}>
+          Reset
+        </button>
+      </div>
+    </div>
+    <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
+      {#each filteredTransactions as tx}
         <div class="flex items-center justify-between p-3 bg-secondary rounded-lg">
           <div class="flex items-center gap-3">
             {#if tx.type === 'received'}
