@@ -77,7 +77,7 @@
     </div>
   
     <!-- Mobile Menu Button -->
-    <div class="absolute top-2 left-2 md:hidden">
+    <div class="absolute top-2 right-2 md:hidden">
       <button
         class="p-2 rounded bg-card shadow"
         on:click={() => mobileMenuOpen = true}
@@ -86,9 +86,13 @@
       </button>
     </div>
   
-<!-- Mobile Fullscreen Menu Overlay -->
+<!-- Mobile Menu Overlay -->
 {#if mobileMenuOpen}
-  <div class="fixed inset-0 z-50 bg-white flex flex-col">
+  <!-- Backdrop -->
+  <div class="fixed inset-0 bg-black bg-opacity-50 z-40 md:hidden" on:click={() => mobileMenuOpen = false}></div>
+
+  <!-- Sidebar -->
+  <div class="fixed top-0 right-0 h-full w-64 bg-white z-50 flex flex-col md:hidden">
     <!-- Mobile Header -->
     <div class="flex justify-between items-center p-4 border-b">
       <!-- Left side -->

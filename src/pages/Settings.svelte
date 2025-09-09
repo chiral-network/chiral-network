@@ -585,20 +585,20 @@
         </Label>
       </div>
 
-      <div class="flex gap-2">
-        <Button variant="outline" size="sm" on:click={clearCache}>
+      <div class="flex flex-wrap gap-2">
+        <Button variant="outline" size="xs" on:click={clearCache}>
           <RefreshCw class="h-4 w-4 mr-2" />
           Clear Cache
         </Button>
 
-        <Button variant="outline" size="sm" on:click={exportSettings}>
+        <Button variant="outline" size="xs" on:click={exportSettings}>
           Export Settings
         </Button>
 
         <label for="import-settings">
           <Button
             variant="outline"
-            size="sm"
+            size="xs"
             on:click={() => fileInputEl?.click()}
           >
             Import Settings
@@ -617,20 +617,21 @@
   </Card>
 
   <!-- Action Buttons -->
-  <div class="flex items-center justify-between">
-    <Button variant="outline" on:click={resetSettings}>
+  <div class="flex flex-wrap items-center justify-between gap-2">
+    <Button variant="outline" size="xs" on:click={resetSettings}>
       Reset to Defaults
     </Button>
 
     <div class="flex gap-2">
       <Button
         variant="outline"
+        size="xs"
         on:click={() => (settings = { ...savedSettings })}
         disabled={!hasChanges}
       >
         Cancel
       </Button>
-      <Button on:click={saveSettings} disabled={!hasChanges || !isValid}>
+      <Button size="xs" on:click={saveSettings} disabled={!hasChanges || !isValid}>
         <Save class="h-4 w-4 mr-2" />
         Save Settings
       </Button>
