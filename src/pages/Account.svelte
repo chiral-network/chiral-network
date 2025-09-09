@@ -6,17 +6,18 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, Settings, Key, History } from 'lucide-svelte'
   import { wallet } from '$lib/stores'
+  import { writable } from 'svelte/store'
   
   let recipientAddress = ''
   let sendAmount = 0
   let privateKeyVisible = false
   
-  const transactions = [
+  const transactions = writable([
     { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', date: new Date('2024-03-15'), description: 'File purchase' },
     { id: 2, type: 'sent', amount: 10.25, to: '0x1234...5678', date: new Date('2024-03-14'), description: 'Proxy service' },
     { id: 3, type: 'received', amount: 100, from: '0xabcd...ef12', date: new Date('2024-03-13'), description: 'Upload reward' },
     { id: 4, type: 'sent', amount: 5.5, to: '0x9876...5432', date: new Date('2024-03-12'), description: 'File download' },
-  ]
+  ])
   
   function copyAddress() {
     navigator.clipboard.writeText($wallet.address)
@@ -32,6 +33,18 @@
       pendingTransactions: w.pendingTransactions + 1,
       totalSpent: w.totalSpent + sendAmount
     }))
+
+     transactions.update(txs => [
+    {
+      id: Date.now(),
+      type: 'sent',
+      amount: sendAmount,
+      to: recipientAddress,
+      date: new Date(),
+      description: 'Manual transaction'
+    },
+    ...txs // prepend so latest is first
+  ])
     
     recipientAddress = ''
     sendAmount = 0
@@ -156,7 +169,7 @@
     </div>
     
     <div class="space-y-2">
-      {#each transactions as tx}
+      {#each $transactions as tx}
         <div class="flex items-center justify-between p-3 bg-secondary rounded-lg">
           <div class="flex items-center gap-3">
             {#if tx.type === 'received'}
