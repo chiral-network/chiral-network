@@ -40,26 +40,37 @@
   let statsInterval: number | null = null
 
   // Errors from out-of-bounds values
-  let threadsWarning = '';
-  let intensityWarning = '';
+  let threadError = ""
+  let intensityError = ""
 
   $: {
-  const prevThreads = selectedThreads;
-  selectedThreads = Math.max(1, Math.min(selectedThreads, Math.min(cpuThreads, 16)));
-  threadsWarning = (prevThreads !== selectedThreads)
-    ? `Threads value cannot be ${prevThreads}. Allowed range: 1-${Math.min(cpuThreads, 16)}.`
-    : '';
+    if (selectedThreads === null || selectedThreads === undefined || selectedThreads === ("" as any)) {
+      threadError = "Required"
+    } else if (selectedThreads < 1) {
+      threadError = "At least 1 thread"
+    } else if (selectedThreads > cpuThreads) {
+      threadError = `Max ${cpuThreads} threads`
+    } else {
+      threadError = ""
+    }
   }
 
   $: {
-    const prevIntensity = miningIntensity;
-    miningIntensity = Math.max(1, Math.min(miningIntensity, 100));
-    intensityWarning = (prevIntensity !== miningIntensity)
-      ? `Intensity cannot be ${prevIntensity}. Allowed range: 1-100.`
-      : '';
+    if (miningIntensity === null || miningIntensity === undefined || miningIntensity === ("" as any)) {
+      intensityError = "Required"
+    } else if (miningIntensity < 1) {
+      intensityError = "At least 1"
+    } else if (miningIntensity > 100) {
+      intensityError = "Max 100"
+    } else {
+      intensityError = ""
+    }
   }
+
+  $: isMiningValid = threadError === "" && intensityError === ""
   
   function startMining() {
+    if (!isMiningValid) return
     isMining = true
     sessionStartTime = Date.now()
 
@@ -291,8 +302,8 @@
             disabled={isMining}
             class="mt-2"
           />
-          {#if threadsWarning}
-            <p class="text-xs text-red-500 mt-1">{threadsWarning}</p>
+          {#if threadError}
+            <p class="text-xs text-red-500 mt-1">{threadError}</p>
           {/if}
         </div>
         
@@ -308,8 +319,8 @@
             disabled={isMining}
             class="mt-2"
           />
-          {#if intensityWarning}
-            <p class="text-xs text-red-500 mt-1">{intensityWarning}</p>
+          {#if intensityError}
+            <p class="text-xs text-red-500 mt-1">{intensityError}</p>
           {/if}
         </div>
       </div>
@@ -328,6 +339,7 @@
           size="lg"
           on:click={() => isMining ? stopMining() : startMining()}
           class="min-w-[150px]"
+          disabled={!isMiningValid}
         >
           {#if isMining}
             <Pause class="h-4 w-4 mr-2" />

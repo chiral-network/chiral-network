@@ -9,7 +9,7 @@
   import { writable } from 'svelte/store'
   
   let recipientAddress = ''
-  let sendAmount = 0
+  let sendAmount: number | "" = ""
   let privateKeyVisible = false
   
   const transactions = writable([
@@ -19,19 +19,34 @@
   { id: 4, type: 'sent', amount: 5.5, to: '0x9876...5432', date: new Date('2024-03-12'), description: 'File download' },
   ]);
 
-  // Warning message for amount input
-  let amountWarning = '';
+  // Warning message for amount and address input
+  let amountError  = '';
+  let addressError = "";
 
   // Copy feedback message
   let copyMessage = '';
 
   $: {
-    const prevAmount = sendAmount;
-    sendAmount = Math.max(0.01, Math.min(sendAmount, $wallet.balance));
-    amountWarning = (prevAmount !== sendAmount)
-      ? `Amount cannot be ${prevAmount}. Allowed range: 0.01-${$wallet.balance.toFixed(2)} CN.`
-      : '';
+    if (sendAmount === "" || sendAmount == null) {
+      amountError = "Enter an amount"
+    } else if (sendAmount < 0.01) {
+      amountError = "Must send at least 0.01 CN"
+    } else if (sendAmount > $wallet.balance) {
+      amountError = "Insufficient balance"
+    } else {
+      amountError = ""
+    }
   }
+
+  $: {
+    if (recipientAddress.trim() === "") {
+      addressError = "Recipient address is required"
+    } else {
+      addressError = ""
+    }
+  }
+
+  $: isSendValid = amountError === "" && addressError === ""
   
   function copyAddress() {
     navigator.clipboard.writeText($wallet.address);
@@ -40,27 +55,27 @@
   }
   
   function sendTransaction() {
-    if (!recipientAddress || sendAmount <= 0) return
+    if (!isSendValid) return
     
     // Simulate transaction
     wallet.update(w => ({
       ...w,
-      balance: w.balance - sendAmount,
+      balance: w.balance - Number(sendAmount),
       pendingTransactions: w.pendingTransactions + 1,
-      totalSpent: w.totalSpent + sendAmount
+      totalSpent: w.totalSpent + Number(sendAmount)
     }))
 
      transactions.update(txs => [
-    {
-      id: Date.now(),
-      type: 'sent',
-      amount: sendAmount,
-      to: recipientAddress,
-      date: new Date(),
-      description: 'Manual transaction'
-    },
-    ...txs // prepend so latest is first
-  ])
+      {
+        id: Date.now(),
+        type: 'sent',
+        amount: Number(sendAmount),
+        to: recipientAddress,
+        date: new Date(),
+        description: 'Manual transaction'
+      },
+      ...txs // prepend so latest is first
+    ])
     
     recipientAddress = ''
     sendAmount = 0
@@ -150,6 +165,7 @@
             data-lpignore="true"
             aria-autocomplete="none"
           />
+          {#if addressError}<p class="text-xs text-red-600 mt-1">{addressError}</p>{/if}
         </div>
 
         <div>
@@ -166,8 +182,8 @@
             data-lpignore="true"
             aria-autocomplete="none"
           />
-          {#if amountWarning}
-            <p class="text-xs text-red-500 mt-1">{amountWarning}</p>
+          {#if amountError}
+            <p class="text-xs text-red-500 mt-1">{amountError}</p>
           {/if}
           <p class="text-xs text-muted-foreground mt-1">
             Available: {$wallet.balance.toFixed(2)} CN
@@ -178,7 +194,7 @@
           type="button"
           class="w-full"
           on:click={sendTransaction}
-          disabled={!recipientAddress || sendAmount <= 0 || sendAmount > $wallet.balance}
+          disabled={!isSendValid}
         >
           <ArrowUpRight class="h-4 w-4 mr-2" />
           Send Transaction
