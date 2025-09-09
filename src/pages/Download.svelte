@@ -12,45 +12,77 @@
   let maxConcurrentDownloads = 3
   let autoStartQueue = true
   let filterStatus = 'all' // 'all', 'active', 'paused', 'queued', 'completed', 'failed'
+  let activeSimulations = new Set<string>() // Track files with active progress simulations
 
   // Ensure maxConcurrentDownloads is always a valid number (minimum 1)
   $: maxConcurrentDownloads = Math.max(1, Number(maxConcurrentDownloads) || 3)
   
-  // Combine all files and queue into single list
-  $: allDownloads = [...$files, ...$downloadQueue].sort((a, b) => {
-    // Sort by status priority: downloading > queued > paused > completed > failed
+  // Combine all files and queue into single list with stable sorting
+  $: allDownloads = (() => {
+    const combined = [...$files, ...$downloadQueue]
+
+    // Sort by button order: active (downloading) > paused > completed > queued > failed
     const statusOrder = {
       'downloading': 0,
-      'queued': 1,
-      'paused': 2,
-      'completed': 3,
+      'paused': 1,
+      'completed': 2,
+      'queued': 3,
       'failed': 4,
       'uploaded': 5,
       'seeding': 6
     }
-    return (statusOrder[a.status] || 999) - (statusOrder[b.status] || 999)
-  })
+
+    return combined.sort((a, b) => {
+      const statusA = statusOrder[a.status] ?? 999
+      const statusB = statusOrder[b.status] ?? 999
+      const statusDiff = statusA - statusB
+
+      // If status is the same, sort by ID for stable ordering
+      if (statusDiff === 0) {
+        return a.id.localeCompare(b.id)
+      }
+
+      return statusDiff
+    })
+  })()
   
   // Filter downloads based on selected status
-  $: filteredDownloads = filterStatus === 'all'
-    ? allFilteredDownloads
-    : filterStatus === 'active'
-    ? allFilteredDownloads.filter(f => f.status === 'downloading')
-    : filterStatus === 'paused'
-    ? allFilteredDownloads.filter(f => f.status === 'paused')
-    : filterStatus === 'queued'
-    ? allFilteredDownloads.filter(f => f.status === 'queued')
-    : filterStatus === 'completed'
-    ? allFilteredDownloads.filter(f => f.status === 'completed')
-    : allFilteredDownloads.filter(f => f.status === 'failed')
+  $: filteredDownloads = (() => {
+    let filtered = allDownloads.filter(f => f.status !== 'uploaded' && f.status !== 'seeding')
+
+    switch (filterStatus) {
+      case 'active':
+        return filtered.filter(f => f.status === 'downloading')
+      case 'paused':
+        return filtered.filter(f => f.status === 'paused')
+      case 'queued':
+        return filtered.filter(f => f.status === 'queued')
+      case 'completed':
+        return filtered.filter(f => f.status === 'completed')
+      case 'failed':
+        return filtered.filter(f => f.status === 'failed')
+      default:
+        return filtered
+    }
+  })()
   
-  // Calculate counts from the same filtered set used for "All"
+  // Calculate counts from the filtered set (excluding uploaded/seeding)
   $: allFilteredDownloads = allDownloads.filter(f => f.status !== 'uploaded' && f.status !== 'seeding')
   $: activeCount = allFilteredDownloads.filter(f => f.status === 'downloading').length
   $: pausedCount = allFilteredDownloads.filter(f => f.status === 'paused').length
   $: queuedCount = allFilteredDownloads.filter(f => f.status === 'queued').length
   $: completedCount = allFilteredDownloads.filter(f => f.status === 'completed').length
   $: failedCount = allFilteredDownloads.filter(f => f.status === 'failed').length
+
+  // Start progress simulation for any downloading files when component mounts
+  $: if ($files.length > 0) {
+    $files.forEach(file => {
+      if (file.status === 'downloading' && !activeSimulations.has(file.id)) {
+        // Start simulation only if not already active
+        simulateDownloadProgress(file.id)
+      }
+    })
+  }
   
   // Process download queue
   $: {
@@ -82,7 +114,7 @@
       hash: searchHash,
       size: Math.floor(Math.random() * 100000000),
       price: Math.random() * 5,
-      status: 'queued' as const, 
+      status: 'queued' as const,
       priority: 'normal' as const
     }
     
@@ -99,7 +131,10 @@
   }
 
   function processQueue() {
-    if ($files.some(f => f.status === 'downloading')) return
+    // Only prevent starting new downloads if we've reached the max concurrent limit
+    const activeDownloads = $files.filter(f => f.status === 'downloading').length
+    if (activeDownloads >= maxConcurrentDownloads) return
+
     const nextFile = $downloadQueue[0]
     if (!nextFile) return
     downloadQueue.update(q => q.filter(f => f.id !== nextFile.id))
@@ -111,10 +146,20 @@
   function togglePause(fileId: string) {
     files.update(f => f.map(file => {
       if (file.id === fileId) {
-        return { 
-          ...file, 
-          status: file.status === 'downloading' ? 'paused' : 'downloading'
+        const newStatus = file.status === 'downloading' ? 'paused' as const : 'downloading' as const
+        const updatedFile = { ...file, status: newStatus }
+
+        // If resuming from paused to downloading, restart the simulation
+        if (newStatus === 'downloading' && file.status === 'paused') {
+          // Small delay to ensure DOM updates first
+          setTimeout(() => simulateDownloadProgress(fileId), 100)
         }
+        // If pausing from downloading to paused, stop the simulation
+        else if (newStatus === 'paused' && file.status === 'downloading') {
+          activeSimulations.delete(fileId)
+        }
+
+        return updatedFile
       }
       return file
     }))
@@ -123,6 +168,8 @@
   function cancelDownload(fileId: string) {
     files.update(f => f.filter(file => file.id !== fileId))
     downloadQueue.update(q => q.filter(file => file.id !== fileId))
+    // Clean up simulation tracking
+    activeSimulations.delete(fileId)
   }
   
   function startQueuedDownload(fileId: string) {
@@ -137,24 +184,37 @@
   }
   
   function simulateDownloadProgress(fileId: string) {
+    // Prevent duplicate simulations
+    if (activeSimulations.has(fileId)) {
+      return
+    }
+
+    activeSimulations.add(fileId)
+
     const interval = setInterval(() => {
       files.update(f => f.map(file => {
         if (file.id === fileId && file.status === 'downloading') {
           const speed = file.priority === 'high' ? 15 : file.priority === 'low' ? 5 : 10
           const newProgress = Math.min(100, (file.progress || 0) + Math.random() * speed)
 
-          // 10% chance of failure when progress is between 20-80%
+          // 5% chance of failure when progress is between 20-80%
           const currentProgress = file.progress || 0
-          if (currentProgress > 20 && currentProgress < 80 && Math.random() < 0.1) {
+          if (currentProgress > 20 && currentProgress < 80 && Math.random() < 0.05) {
             clearInterval(interval)
+            activeSimulations.delete(fileId)
             return { ...file, status: 'failed' }
           }
 
           if (newProgress >= 100) {
             clearInterval(interval)
+            activeSimulations.delete(fileId)
             return { ...file, progress: 100, status: 'completed' }
           }
           return { ...file, progress: newProgress }
+        } else if (file.id === fileId && file.status !== 'downloading') {
+          // File is no longer downloading, stop simulation
+          clearInterval(interval)
+          activeSimulations.delete(fileId)
         }
         return file
       }))
@@ -171,10 +231,10 @@
     downloadQueue.update(queue => {
       const index = queue.findIndex(f => f.id === fileId)
       if (index === -1) return queue
-      
+
       const newIndex = direction === 'up' ? Math.max(0, index - 1) : Math.min(queue.length - 1, index + 1)
       if (index === newIndex) return queue
-      
+
       const newQueue = [...queue]
       const [removed] = newQueue.splice(index, 1)
       newQueue.splice(newIndex, 0, removed)
@@ -237,10 +297,10 @@
           </Button>
           <Button
             size="sm"
-            variant={filterStatus === 'queued' ? 'default' : 'outline'}
-            on:click={() => filterStatus = 'queued'}
+            variant={filterStatus === 'paused' ? 'default' : 'outline'}
+            on:click={() => filterStatus = 'paused'}
           >
-            Queued ({queuedCount})
+            Paused ({pausedCount})
           </Button>
           <Button
             size="sm"
@@ -251,10 +311,10 @@
           </Button>
           <Button
             size="sm"
-            variant={filterStatus === 'paused' ? 'default' : 'outline'}
-            on:click={() => filterStatus = 'paused'}
+            variant={filterStatus === 'queued' ? 'default' : 'outline'}
+            on:click={() => filterStatus = 'queued'}
           >
-            Paused ({pausedCount})
+            Queued ({queuedCount})
           </Button>
           <Button
             size="sm"
