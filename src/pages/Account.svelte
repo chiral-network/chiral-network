@@ -40,11 +40,12 @@
     { id: 4, type: 'sent', amount: 5.5, to: '0x9876...5432', from: undefined, date: new Date('2024-03-12'), description: 'File download', status: 'completed' },
   ]);
 
-  // Validation states
+  // Enhanced validation states
   let validationWarning = '';
   let isAmountValid = true;
   let addressWarning = '';
   let isAddressValid = false;
+
 
   // Copy feedback message
   let copyMessage = '';
@@ -121,7 +122,31 @@
       }
     }
   }
+
+  // Enhanced address validation with user feedback
+  $: {
+    if (recipientAddress.trim() === '') {
+      addressWarning = '';
+      isAddressValid = true;
+    } else if (!isValidAddress(recipientAddress)) {
+      addressWarning = 'Address must contain valid hexadecimal characters (0-9, a-f, A-F)';
+      isAddressValid = false;
+    } else {
+      addressWarning = '';
+      isAddressValid = true;
+    }
+  }
   
+  // Enhanced address validation function
+  function isValidAddress(address: string): boolean {
+    // Check that everything after 0x is hexadecimal
+    const hexPart = address.slice(2);
+    if (hexPart.length === 0) return false;
+    
+    const hexRegex = /^[a-fA-F0-9]+$/;
+    return hexRegex.test(hexPart);
+  }
+
   function copyAddress() {
     const addressToCopy = $etcAccount ? $etcAccount.address : $wallet.address;
     navigator.clipboard.writeText(addressToCopy);
@@ -137,7 +162,7 @@
   
 
   function sendTransaction() {
-    if (!isAddressValid || !isAmountValid || sendAmount <= 0) return
+    if (!isAddressValid || !isAmountValid || !isAddressValid || sendAmount <= 0) return
 
     // Simulate transaction
     wallet.update(w => ({
@@ -328,6 +353,11 @@
     }
   }
 
+  
+  // Helper function to set max amount
+  function setMaxAmount() {
+    rawAmountInput = $wallet.balance.toString();
+  }
 </script>
 
 <div class="space-y-6">
@@ -465,7 +495,7 @@
             id="recipient"
             bind:value={recipientAddress}
             placeholder="0x..."
-            class="mt-2"
+            class="mt-2 {addressWarning ? 'border-red-500' : ''}"
             data-form-type="other"
             data-lpignore="true"
             aria-autocomplete="none"
@@ -482,18 +512,30 @@
 
         <div>
           <Label for="amount">Amount (CN)</Label>
-          <Input
-            id="amount"
-            type="number"
-            bind:value={rawAmountInput}
-            placeholder=""
-            min="0.01"
-            step="0.01"
-            class="mt-2 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]"
-            data-form-type="other"
-            data-lpignore="true"
-            aria-autocomplete="none"
-          />
+          <div class="relative mt-2">
+            <Input
+              id="amount"
+              type="number"
+              bind:value={rawAmountInput}
+              placeholder=""
+              min="0.01"
+              step="0.01"
+              class="mt-2 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]"
+              data-form-type="other"
+              data-lpignore="true"
+              aria-autocomplete="none"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              class="absolute right-1 top-1/2 transform -translate-y-1/2 h-8 px-3"
+              on:click={setMaxAmount}
+              disabled={$wallet.balance <= 0}
+            >
+              Max
+            </Button>
+          </div>
           <div class="flex items-center justify-between mt-1">
             <p class="text-xs text-muted-foreground">
               Available: {$wallet.balance.toFixed(2)} CN
@@ -509,7 +551,7 @@
           type="button"
           class="w-full"
           on:click={sendTransaction}
-          disabled={!isAddressValid || !isAmountValid || rawAmountInput === ''}
+          disabled={!isAddressValid || !isAmountValid || !isAddressValid || rawAmountInput === ''}
         >
           <ArrowUpRight class="h-4 w-4 mr-2" />
           Send Transaction
