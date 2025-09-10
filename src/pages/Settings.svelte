@@ -16,12 +16,15 @@
     ChevronsUpDown,
   } from "lucide-svelte";
   import { onMount } from "svelte";
-  import { open } from "@tauri-apps/plugin-dialog";
+  import { open, save } from "@tauri-apps/plugin-dialog";
   import { homeDir } from "@tauri-apps/api/path";
   import { getVersion } from "@tauri-apps/api/app";
+  import { userLocation } from "$lib/stores";
+    import { event } from "@tauri-apps/api";
 
+  let showResetConfirmModal = false;
   // Settings state
-  let settings = {
+  let defaultSettings = {
     // Storage settings
     storagePath: "~/ChiralNetwork/Storage",
     maxStorageSize: 100, // GB
@@ -35,6 +38,7 @@
     port: 30303,
     enableUPnP: true,
     enableNAT: true,
+    userLocation: "US-East", // Geographic region for peer sorting
 
     // Privacy settings
     enableProxy: true,
@@ -56,8 +60,8 @@
     logLevel: "info",
     autoUpdate: true,
   };
-
-  let savedSettings = { ...settings };
+  let settings = { ...defaultSettings };
+  let savedSettings = { ...defaultSettings };
   let hasChanges = false;
   let fileInputEl: HTMLInputElement | null = null;
 
@@ -68,37 +72,60 @@
     // Save to local storage
     localStorage.setItem("chiralSettings", JSON.stringify(settings));
     savedSettings = { ...settings };
-    hasChanges = false;
+    userLocation.set(settings.userLocation);
   }
 
-  function resetSettings() {
-    settings = {
-      storagePath: "~/ChiralNetwork/Storage",
-      maxStorageSize: 100,
-      autoCleanup: true,
-      cleanupThreshold: 90,
-      maxConnections: 50,
-      uploadBandwidth: 0,
-      downloadBandwidth: 0,
-      port: 30303,
-      enableUPnP: true,
-      enableNAT: true,
-      enableProxy: true,
-      enableEncryption: true,
-      anonymousMode: false,
-      shareAnalytics: true,
-      enableNotifications: true,
-      notifyOnComplete: true,
-      notifyOnError: true,
-      soundAlerts: false,
-      enableDHT: true,
-      enableIPFS: false,
-      chunkSize: 256,
-      cacheSize: 1024,
-      logLevel: "info",
-      autoUpdate: true,
-    };
+  function handleConfirmReset() {
+    settings = { ...defaultSettings };
+    saveSettings();
+    showResetConfirmModal = false;
   }
+
+  function openResetConfirm() {
+    showResetConfirmModal = true;
+  }
+  // function resetSettings() {
+  //   const defaultSettings = {
+  //     // Storage settings
+  //     storagePath: "~/ChiralNetwork/Storage",
+  //     maxStorageSize: 100, // GB
+  //     autoCleanup: true,
+  //     cleanupThreshold: 90, // %
+
+  //     // Network settings
+  //     maxConnections: 50,
+  //     uploadBandwidth: 0, // 0 = unlimited
+  //     downloadBandwidth: 0, // 0 = unlimited
+  //     port: 30303,
+  //     enableUPnP: true,
+  //     enableNAT: true,
+  //     userLocation: "US-East", // Geographic region for peer sorting
+
+  //     // Privacy settings
+  //     enableProxy: true,
+  //     enableEncryption: true,
+  //     anonymousMode: false,
+  //     shareAnalytics: true,
+
+  //     // Notifications
+  //     enableNotifications: true,
+  //     notifyOnComplete: true,
+  //     notifyOnError: true,
+  //     soundAlerts: false,
+
+  //     // Advanced
+  //     enableDHT: true,
+  //     enableIPFS: false,
+  //     chunkSize: 256, // KB
+  //     cacheSize: 1024, // MB
+  //     logLevel: "info",
+  //     autoUpdate: true,
+  //   };
+  //   if(confirm("Are you sure you want to reset all settings to their default values?")) {
+  //     settings = { ...defaultSettings };
+  //     saveSettings();
+  //   }
+  // }
 
   async function selectStoragePath() {
     try {
@@ -147,7 +174,7 @@
       try {
         const imported = JSON.parse(e.target?.result as string);
         settings = { ...settings, ...imported };
-        savedSettings = { ...settings };
+        saveSettings();
         localStorage.setItem("chiralSettings", JSON.stringify(settings));
         hasChanges = false;
       } catch (err) {
@@ -366,6 +393,24 @@
             <p class="mt-1 text-sm text-red-500">{errors.downloadBandwidth}</p>
           {/if}
         </div>
+      </div>
+
+      <!-- User Location -->
+      <div>
+        <Label for="user-location">Your Location</Label>
+        <select
+          id="user-location"
+          bind:value={settings.userLocation}
+          class="w-full px-3 py-2 mt-2 border rounded-md bg-white"
+        >
+          <option value="US-East">US East</option>
+          <option value="US-West">US West</option>
+          <option value="EU-West">Europe West</option>
+          <option value="Asia-Pacific">Asia Pacific</option>
+        </select>
+        <p class="text-xs text-muted-foreground mt-1">
+          Used to prioritize geographically closer peers for better performance
+        </p>
       </div>
 
       <div class="space-y-2">
@@ -618,7 +663,7 @@
 
   <!-- Action Buttons -->
   <div class="flex flex-wrap items-center justify-between gap-2">
-    <Button variant="outline" size="xs" on:click={resetSettings}>
+    <Button variant="outline" size="xs" on:click={openResetConfirm}>
       Reset to Defaults
     </Button>
 
@@ -638,3 +683,42 @@
     </div>
   </div>
 </div>
+{#if showResetConfirmModal}
+  <div
+    class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+    role="button"
+    tabindex="0"
+    on:click={() => showResetConfirmModal = false}
+    on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') showResetConfirmModal = false; }}
+  >
+    <div
+      class="bg-white p-6 rounded-lg shadow-xl w-full max-w-sm"
+      role="dialog"
+      tabindex="0"
+      aria-modal="true"
+      on:click|stopPropagation
+      on:keydown={(e) => {
+        if (e.key === 'Escape') showResetConfirmModal = false;
+      }}
+    >
+      <h3 class="text-lg font-bold mb-2">Are you sure?</h3>
+      <p class="text-sm text-gray-600 mb-6">
+        All settings will be reset to their default values. This action will be saved immediately.
+      </p>
+      <div class="flex justify-end gap-3">
+        <Button
+          variant="outline"
+          on:click={() => showResetConfirmModal = false}
+        >
+          Cancel
+        </Button>
+        <Button
+          variant="destructive"
+          on:click={handleConfirmReset}
+        >
+          Confirm Reset
+        </Button>
+      </div>
+    </div>
+  </div>
+{/if}
