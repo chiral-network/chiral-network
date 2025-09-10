@@ -9,8 +9,10 @@
   import { writable } from 'svelte/store'
   
   let recipientAddress = ''
-  let sendAmount = 0
+  let sendAmount = 0.01
   let privateKeyVisible = false
+
+
   
   const transactions = writable([
   { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', date: new Date('2024-03-15'), description: 'File purchase' },
@@ -25,12 +27,43 @@
   // Copy feedback message
   let copyMessage = '';
 
+  let addressWarning = ''; // warning message for address input
+
+
+  function isValidAddress(address: string): boolean {
+    // Development-friendly validation: flexible length, basic format check
+    if (!address.startsWith('0x')) return false;
+    if (address.length < 4) return false; // At least 0x + 2 characters
+    
+    // Check that everything after 0x is hexadecimal or empty (for development)
+    const hexPart = address.slice(2);
+    if (hexPart.length === 0) return false; // Need at least one hex character
+    
+    const hexRegex = /^[a-fA-F0-9]+$/;
+    return hexRegex.test(hexPart);
+  }
+
+
+  // Only show warnings for actual problems
+$: {
+  if (sendAmount > $wallet.balance) {
+    amountWarning = `Maximum amount is ${$wallet.balance.toFixed(2)} CN`;
+  } else if (sendAmount < 0.01) {
+    amountWarning = 'Minimum amount is 0.01 CN';
+  } else {
+    amountWarning = ''; // No warning for valid amounts (including 0.01)
+  }
+}
+
+  // Address Validation
   $: {
-    const prevAmount = sendAmount;
-    sendAmount = Math.max(0.01, Math.min(sendAmount, $wallet.balance));
-    amountWarning = (prevAmount !== sendAmount)
-      ? `Amount cannot be ${prevAmount}. Allowed range: 0.01-${$wallet.balance.toFixed(2)} CN.`
-      : '';
+    if (recipientAddress.trim() === '') {
+      addressWarning = '';
+    } else if (!isValidAddress(recipientAddress)) {
+      addressWarning = 'Address must start with "0x" and contain only valid hexadecimal characters (0-9, a-f, A-F) (minimal 2 characters after 0x)';
+    } else {
+      addressWarning = '';
+    }
   }
   
   function copyAddress() {
@@ -40,7 +73,7 @@
   }
   
   function sendTransaction() {
-    if (!recipientAddress || sendAmount <= 0) return
+    if (!recipientAddress || sendAmount <= 0 || !isValidAddress(recipientAddress)) return
     
     // Simulate transaction
     wallet.update(w => ({
@@ -143,13 +176,16 @@
           <Input
             id="recipient"
             bind:value={recipientAddress}
-            placeholder="0x..."
-            class="mt-2"
+            placeholder="0x1a2b3c... (any valid hex address for testing)"
+            class="mt-2 {addressWarning ? 'border-red-500' : ''}"
             autocomplete="off"
             data-form-type="other"
             data-lpignore="true"
             aria-autocomplete="none"
           />
+          {#if addressWarning}
+            <p class="text-xs text-red-500 mt-1">{addressWarning}</p>
+          {/if}
         </div>
 
         <div>
@@ -158,9 +194,11 @@
             id="amount"
             type="number"
             bind:value={sendAmount}
-            placeholder="0.00"
+            placeholder="0.01"
+            min="0.01"
             max={$wallet.balance}
-            class="mt-2"
+            step="0.01"
+            class="mt-2 {amountWarning ? 'border-red-500' : ''}"
             autocomplete="off"
             data-form-type="other"
             data-lpignore="true"
@@ -178,7 +216,7 @@
           type="button"
           class="w-full"
           on:click={sendTransaction}
-          disabled={!recipientAddress || sendAmount <= 0 || sendAmount > $wallet.balance}
+          disabled={!recipientAddress || sendAmount <= 0 || sendAmount > $wallet.balance || !isValidAddress(recipientAddress)}
         >
           <ArrowUpRight class="h-4 w-4 mr-2" />
           Send Transaction
