@@ -42,11 +42,9 @@
 
   // Enhanced validation states
   let validationWarning = '';
-  let addressWarning = '';        // ADDED
   let isAmountValid = true;
   let addressWarning = '';
   let isAddressValid = false;
-  let isAddressValid = true;      // ADDED
 
 
   // Copy feedback message
@@ -131,7 +129,7 @@
       addressWarning = '';
       isAddressValid = true;
     } else if (!isValidAddress(recipientAddress)) {
-      addressWarning = 'Address must start with "0x" and contain at least 2 valid hexadecimal characters (0-9, a-f, A-F)';
+      addressWarning = 'Address must contain valid hexadecimal characters (0-9, a-f, A-F)';
       isAddressValid = false;
     } else {
       addressWarning = '';
@@ -141,9 +139,6 @@
   
   // Enhanced address validation function
   function isValidAddress(address: string): boolean {
-    if (!address.startsWith('0x')) return false;
-    if (address.length < 4) return false; // At least 0x + 2 characters, for testing now
-    
     // Check that everything after 0x is hexadecimal
     const hexPart = address.slice(2);
     if (hexPart.length === 0) return false;
@@ -513,9 +508,6 @@
               <p class="text-xs text-red-500 font-medium">{addressWarning}</p>
             {/if}
           </div>
-          {#if addressWarning}
-            <p class="text-xs text-red-500 mt-1">{addressWarning}</p>
-          {/if}
         </div>
 
         <div>
