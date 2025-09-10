@@ -14,6 +14,11 @@
 
   function addNode() {
       const validAddressRegex = /^[a-zA-Z0-9.-]+:[0-9]{1,5}$/
+      const isDuplicate = $proxyNodes.some(node => node.address === newNodeAddress.trim())
+      if (isDuplicate) {
+          alert('This proxy address is already added!')
+          return
+      }
 
       if (!newNodeAddress || !validAddressRegex.test(newNodeAddress.trim())) {
           alert('Please enter a valid proxy address (e.g., 192.168.1.100:8080)')
