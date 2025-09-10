@@ -574,7 +574,7 @@ function computeLatencyStats() {
         <div
           role="button"
           tabindex="0"
-          class="flex-1 bg-primary/20 hover:bg-primary/30 transition-colors rounded-t relative"
+          class="flex-1 bg-gradient-to-t from-blue-400/40 to-blue-500/80 hover:from-blue-500/60 hover:to-blue-600/90 transition-all rounded-t-md shadow-sm relative group"
           style="height: {(day.earnings / chartMax) * 100}%"
           title="{day.date}: {day.earnings.toFixed(2)} CN"
           on:mouseenter={() => { hoveredDay = day; hoveredIndex = i; }}
