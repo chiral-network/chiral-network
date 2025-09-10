@@ -128,25 +128,46 @@
   // }
 
   async function selectStoragePath() {
-    try {
-      await getVersion(); // only works in Tauri
-      const home = await homeDir();
-      const result = await open({
-        directory: true,
-        multiple: false,
-        defaultPath: settings.storagePath.startsWith("~/")
-          ? settings.storagePath.replace("~", home)
-          : settings.storagePath,
-        title: "Select Storage Location",
-      });
+  try {
+    // Try Tauri first
+    await getVersion(); // only works in Tauri
+    const home = await homeDir();
+    const result = await open({
+      directory: true,
+      multiple: false,
+      defaultPath: settings.storagePath.startsWith("~/")
+        ? settings.storagePath.replace("~", home)
+        : settings.storagePath,
+      title: "Select Storage Location",
+    });
 
-      if (typeof result === "string") {
-        settings.storagePath = result.replace(home,"~");
+    if (typeof result === "string") {
+      settings.storagePath = result.replace(home, "~");
+    }
+  } catch {
+    // Fallback for browser environment
+    if (window.showDirectoryPicker) {
+      // Use File System Access API (Chrome/Edge)
+      try {
+        const directoryHandle = await window.showDirectoryPicker();
+        settings.storagePath = directoryHandle.name;
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          console.error('Directory picker error:', err);
+        }
       }
-    } catch {
-      alert("Please run with: npm run tauri dev")
+    } else {
+      // Fallback: let user type path manually
+      const newPath = prompt(
+        "Enter storage path (Tauri file picker not available in browser):", 
+        settings.storagePath
+      );
+      if (newPath) {
+        settings.storagePath = newPath;
+      }
     }
   }
+}
 
   function clearCache() {
     // Clear application cache
