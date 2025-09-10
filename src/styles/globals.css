@@ -45,3 +45,8 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Obscure text for private key when hidden */
+.obscure-text {
+  -webkit-text-security: disc;
+}

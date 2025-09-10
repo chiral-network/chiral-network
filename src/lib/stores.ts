@@ -44,6 +44,11 @@ export interface WalletInfo {
   reputation?: number;
 }
 
+export interface ETCAccount {
+  address: string;
+  private_key: string;
+}
+
 export interface PeerInfo {
   id: string;
   address: string;
@@ -190,3 +195,26 @@ export const peers = writable<PeerInfo[]>(dummyPeers);
 export const chatMessages = writable<ChatMessage[]>([]);
 export const networkStats = writable<NetworkStats>(dummyNetworkStats);
 export const downloadQueue = writable<FileItem[]>([]);
+export const userLocation = writable<string>("US-East");
+export const etcAccount = writable<ETCAccount | null>(null);
+
+// Mining state
+export interface MiningState {
+  isMining: boolean;
+  hashRate: string;
+  totalRewards: number;
+  blocksFound: number;
+  activeThreads: number;
+  minerIntensity: number;
+  selectedPool: string;
+}
+
+export const miningState = writable<MiningState>({
+  isMining: false,
+  hashRate: '0 H/s',
+  totalRewards: 0,
+  blocksFound: 0,
+  activeThreads: 1,
+  minerIntensity: 50,
+  selectedPool: 'solo',
+});
