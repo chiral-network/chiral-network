@@ -404,7 +404,7 @@
             Export Wallet
           </Button>
           {#if exportMessage}
-            <p class="text-xs text-green-600 text-center">{exportMessage}</p>
+            <p class="text-xs text-center {exportMessage.includes('successfully') ? 'text-green-600' : 'text-red-600'}">{exportMessage}</p>
           {/if}
         </div>
       </div>
