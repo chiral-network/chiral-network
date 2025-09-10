@@ -9,6 +9,7 @@
   import { writable, derived } from 'svelte/store'
   
   let recipientAddress = ''
+  let recipientError = ''
   let sendAmount = 0
   let privateKeyVisible = false
   let showPending = false
@@ -62,9 +63,17 @@
     setTimeout(() => copyMessage = '', 1500);
   }
   
+  function validateRecipient(address: string): string {
+    if (!address) return 'Recipient address is required.';
+    if (!address.startsWith('0x')) return 'Address must start with 0x.';
+    if (address.length !== 42) return 'Address must be 42 characters long.';
+    return '';
+  }
+
   function sendTransaction() {
-    if (!recipientAddress || sendAmount <= 0) return
-    
+    recipientError = validateRecipient(recipientAddress);
+    if (recipientError || sendAmount <= 0) return;
+
     // Simulate transaction
     wallet.update(w => ({
       ...w,
@@ -74,21 +83,21 @@
     }))
 
     transactions.update(txs => [
-    {
-      id: Date.now(),
-      type: 'sent',
-      amount: sendAmount,
-      to: recipientAddress,
-      date: new Date(),
-      description: 'Manual transaction',
-      status: 'pending'
-    },
-    ...txs // prepend so latest is first
-  ])
-    
+      {
+        id: Date.now(),
+        type: 'sent',
+        amount: sendAmount,
+        to: recipientAddress,
+        date: new Date(),
+        description: 'Manual transaction',
+        status: 'pending'
+      },
+      ...txs // prepend so latest is first
+    ])
+
     recipientAddress = ''
     sendAmount = 0
-    
+
     // Simulate transaction completion
     setTimeout(() => {
       wallet.update(w => ({
@@ -192,12 +201,16 @@
               id="recipient"
               bind:value={recipientAddress}
               placeholder="0x..."
-              class="mt-2"
+              class="mt-2 w-full"
               autocomplete="off"
               data-form-type="other"
               data-lpignore="true"
               aria-autocomplete="none"
+              on:input={() => { recipientError = validateRecipient(recipientAddress); }}
             />
+            {#if recipientError}
+              <p class="text-xs text-red-500 mt-1">{recipientError}</p>
+            {/if}
           </div>
 
           <div>
