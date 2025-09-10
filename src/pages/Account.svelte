@@ -61,13 +61,13 @@
     fetchBalance()
   }
 
-  // Derived filtered transactions
+  // Derived filtered transactions 
   $: filteredTransactions = $transactions
     .filter(tx => {
       const matchesType = filterType === 'all' || tx.type === filterType;
       const txDate = tx.date instanceof Date ? tx.date : new Date(tx.date);
-      const fromOk = !filterDateFrom || txDate >= new Date(filterDateFrom);
-      const toOk = !filterDateTo || txDate <= new Date(filterDateTo);
+      const fromOk = !filterDateFrom || txDate >= new Date(filterDateFrom + 'T00:00:00'); // the start of day
+      const toOk = !filterDateTo || txDate <= new Date(filterDateTo + 'T23:59:59'); // and the end of day to include full date ranges
       return matchesType && fromOk && toOk;
     })
     .slice()
