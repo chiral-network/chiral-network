@@ -7,6 +7,17 @@
   import { wallet, etcAccount } from '$lib/stores'
   import { writable, derived } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
+
+  interface Transaction {
+    id: number;
+    type: 'sent' | 'received';
+    amount: number;
+    to?: string;
+    from?: string;
+    date: Date;
+    description: string;
+    status: 'pending' | 'completed';
+  }
   
   let recipientAddress = ''
   let sendAmount = 0
@@ -27,8 +38,13 @@
   let isLoadingBalance = false
   let isGethRunning = false
   
-  // Real transactions will be fetched from blockchain in the future
-  const transactions = writable([]);
+  // Demo transactions - in real app these will be fetched from blockchain
+  const transactions = writable<Transaction[]>([
+    { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', to: undefined, date: new Date('2024-03-15'), description: 'File purchase', status: 'completed' },
+    { id: 2, type: 'sent', amount: 10.25, to: '0x1234...5678', from: undefined, date: new Date('2024-03-14'), description: 'Proxy service', status: 'completed' },
+    { id: 3, type: 'received', amount: 100, from: '0xabcd...ef12', to: undefined, date: new Date('2024-03-13'), description: 'Upload reward', status: 'completed' },
+    { id: 4, type: 'sent', amount: 5.5, to: '0x9876...5432', from: undefined, date: new Date('2024-03-12'), description: 'File download', status: 'completed' },
+  ]);
 
   // Validation states
   let amountWarning = '';
@@ -159,24 +175,28 @@
   // Ensure wallet.pendingTransactions matches actual pending transactions
   const pendingCount = derived(transactions, $txs => $txs.filter(tx => tx.status === 'pending').length);
 
+  // Ensure pendingCount is used (for linter)
+  $: void $pendingCount;
+
   // Load saved accounts on mount
   import { onMount } from 'svelte'
   
   let balanceInterval: number | undefined
   
-  onMount(async () => {
-    await loadSavedAccounts()
-    await checkGethStatus()
-    
+  onMount(() => {
+    loadSavedAccounts()
+    checkGethStatus()
+
     // Set up periodic balance refresh every 10 seconds
-    balanceInterval = setInterval(() => {
+    balanceInterval = window.setInterval(() => {
       if ($etcAccount && isGethRunning) {
         fetchBalance()
       }
     }, 10000)
-    
+
+    // Cleanup function
     return () => {
-      if (balanceInterval) clearInterval(balanceInterval)
+      if (balanceInterval) window.clearInterval(balanceInterval)
     }
   })
 
@@ -499,7 +519,6 @@
             </div>
           </div>
         {/if}
-        
       </div>
     </Card>
 <Card class="p-6">
@@ -528,7 +547,7 @@
             id="amount"
             type="number"
             bind:value={rawAmountInput}
-            placeholder="0.00"
+            placeholder=""
             min="0.01"
             step="0.01"
             class="mt-2"
@@ -546,15 +565,7 @@
               <p class="text-xs text-red-500 font-medium">{balanceWarning}</p>
             {/if}
           </div>
-          <Button
-            type="button"
-            class="w-full"
-            on:click={sendTransaction}
-            disabled={!recipientAddress || sendAmount <= 0 || sendAmount > parseFloat(accountBalance) || !$etcAccount || !isGethRunning}
-          >
-            <ArrowUpRight class="h-4 w-4 mr-2" />
-            Send Transaction
-          </Button>
+        
         </div>
 
         <Button
@@ -566,6 +577,34 @@
           <ArrowUpRight class="h-4 w-4 mr-2" />
           Send Transaction
         </Button>
+
+        <Button type="button" class="w-full justify-center bg-gray-100 hover:bg-gray-200 text-gray-800 rounded transition-colors py-2 font-normal" on:click={() => showPending = !showPending} aria-label="View pending transactions">
+          <span class="flex items-center gap-2">
+            <svg class="h-4 w-4 text-orange-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <circle cx="12" cy="10" r="8" />
+              <polyline points="12,6 12,10 16,14" />
+            </svg>
+            {#if $pendingCount > 0}
+              {$pendingCount} Pending Transaction{$pendingCount !== 1 ? 's' : ''}
+            {:else}
+              Pending Transactions
+            {/if}
+          </span>
+        </Button>
+        {#if showPending}
+          <div class="mt-2 p-3 bg-gray-50 rounded shadow">
+            <h3 class="text-sm mb-2 text-gray-700 font-normal">Pending Transactions</h3>
+            <ul class="space-y-1">
+              {#each $transactions.filter(tx => tx.status === 'pending') as tx}
+                <li class="text-xs text-gray-800 font-normal">
+                  {tx.description} ({tx.type === 'sent' ? 'To' : 'From'}: {tx.type === 'sent' ? tx.to : tx.from}) - {tx.amount} CN
+                </li>
+              {:else}
+                <li class="text-xs text-gray-500 font-normal">No pending transaction details available.</li>
+              {/each}
+            </ul>
+          </div>
+        {/if}
       </div>
     </form>
   </Card>
