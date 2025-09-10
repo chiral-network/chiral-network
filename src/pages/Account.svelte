@@ -3,7 +3,7 @@
   import Card from '$lib/components/ui/card.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, Settings, Key } from 'lucide-svelte'
+  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import} from 'lucide-svelte'
   import { wallet, etcAccount } from '$lib/stores'
   import { writable, derived } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
@@ -64,7 +64,7 @@
     fetchBalance()
   }
 
-  // Derived filtered transactions 
+  // Derived filtered transactions
   $: filteredTransactions = $transactions
     .filter(tx => {
       const matchesType = filterType === 'all' || tx.type === filterType;
@@ -149,7 +149,7 @@
     const hexRegex = /^[a-fA-F0-9]+$/;
     return hexRegex.test(hexPart);
   }
-
+  
   function copyAddress() {
     const addressToCopy = $etcAccount ? $etcAccount.address : $wallet.address;
     navigator.clipboard.writeText(addressToCopy);
@@ -166,6 +166,7 @@
   
   async function exportWallet() {
     try {
+      throw new Error('Test error message');
       const walletData = {
         address: $wallet.address,
         privateKey: "your-private-key-here-do-not-share", // this should change to be the actual private key
@@ -226,10 +227,10 @@
       setTimeout(() => exportMessage = '', 3000);
     }
   }
-
+  
   function sendTransaction() {
     if (!isAddressValid || !isAmountValid || !isAddressValid || sendAmount <= 0) return
-
+    
     // Simulate transaction
     wallet.update(w => ({
       ...w,
@@ -249,13 +250,13 @@
       status: 'pending'
     },
     ...txs // prepend so latest is first
-  ])  
-
+  ])
+    
     // Clear form
     recipientAddress = ''
     sendAmount = 0
     rawAmountInput = ''
-
+    
     // Simulate transaction completion
     setTimeout(() => {
       wallet.update(w => ({
@@ -479,22 +480,22 @@
         {:else}
           <div>
             <!-- Balance Display - Only when logged in -->
-            <div>
-              <p class="text-sm text-muted-foreground">Balance</p>
-              <p class="text-2xl font-bold">{$wallet.balance.toFixed(2)} CN</p>
-            </div>
-            
+        <div>
+          <p class="text-sm text-muted-foreground">Balance</p>
+          <p class="text-2xl font-bold">{$wallet.balance.toFixed(2)} CN</p>
+        </div>
+        
             <div class="grid grid-cols-2 gap-4 mt-4">
-              <div>
-                <p class="text-xs text-muted-foreground">Total Earned</p>
-                <p class="text-sm font-medium text-green-600">+{$wallet.totalEarned.toFixed(2)} CN</p>
-              </div>
-              <div>
-                <p class="text-xs text-muted-foreground">Total Spent</p>
-                <p class="text-sm font-medium text-red-600">-{$wallet.totalSpent.toFixed(2)} CN</p>
-              </div>
-            </div>
-            
+          <div>
+            <p class="text-xs text-muted-foreground">Total Earned</p>
+            <p class="text-sm font-medium text-green-600">+{$wallet.totalEarned.toFixed(2)} CN</p>
+          </div>
+          <div>
+            <p class="text-xs text-muted-foreground">Total Spent</p>
+            <p class="text-sm font-medium text-red-600">-{$wallet.totalSpent.toFixed(2)} CN</p>
+          </div>
+        </div>
+        
             <div class="mt-6">
               <p class="text-sm text-muted-foreground">Chiral Address</p>
               <div class="flex items-center gap-2 mt-1">
@@ -540,10 +541,19 @@
                   {privateKeyVisible ? 'Hide' : 'Show'}
                 </Button>
               </div>
-              <p class="text-xs text-muted-foreground mt-1">Never share your private key with anyone</p>
-            </div>
-          </div>
-        {/if}
+               <p class="text-xs text-muted-foreground mt-1">Never share your private key with anyone</p>
+             </div>
+             
+             <div class="mt-4">
+               <Button type="button" variant="outline" class="w-full" on:click={exportWallet}>
+                 Export Wallet
+               </Button>
+               {#if exportMessage}
+                 <p class="text-xs text-center mt-2 {exportMessage.includes('successfully') ? 'text-green-600' : 'text-red-600'}">{exportMessage}</p>
+               {/if}
+             </div>
+           </div>
+         {/if}
       </div>
     </Card>
     
@@ -650,9 +660,9 @@
             </ul>
           </div>
         {/if}
-      </div>
-    </form>
-  </Card>
+        </div>
+      </form>
+    </Card>
   {/if}
   </div>
   
@@ -726,51 +736,6 @@
       {/if}
     </div>
   </Card>
-  
-  <Card class="p-6">
-    <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold">Security</h2>
-      <Settings class="h-5 w-5 text-muted-foreground" />
-    </div>
 
-    <form autocomplete="off" data-form-type="other" data-lpignore="true">
-      <div class="space-y-4">
-        <div>
-          <Label>Private Key</Label>
-          <div class="flex gap-2 mt-2">
-            <Input
-              type={privateKeyVisible ? 'text' : 'password'}
-              value="your-private-key-here-do-not-share"
-              readonly
-              class="flex-1 font-mono text-sm"
-              autocomplete="off"
-              data-form-type="other"
-              data-lpignore="true"
-              aria-autocomplete="none"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              on:click={() => privateKeyVisible = !privateKeyVisible}
-            >
-              {privateKeyVisible ? 'Hide' : 'Show'}
-            </Button>
-          </div>
-          <p class="text-xs text-muted-foreground mt-1">Never share your private key with anyone</p>
-        </div>
-
-        <div class="space-y-2">
-          <Button type="button" variant="outline" class="w-full" on:click={exportWallet}>
-            <Key class="h-4 w-4 mr-2" />
-            Export Wallet
-          </Button>
-          {#if exportMessage}
-            <p class="text-xs text-center {exportMessage.includes('successfully') ? 'text-green-600' : 'text-red-600'}">{exportMessage}</p>
-          {/if}
-        </div>
-      </div>
-    </form>
-  </Card>
   {/if}
 </div>
