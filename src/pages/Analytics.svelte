@@ -529,7 +529,7 @@ function computeLatencyStats() {
   
   <Card class="p-6">
     <h2 class="text-lg font-semibold mb-4">Earnings History</h2>
-    <div class="flex gap-2 mb-4">
+    <div class="flex flex-wrap gap-2 mb-4">
       {#each periodPresets as preset}
         <button
           type="button"
@@ -569,30 +569,50 @@ function computeLatencyStats() {
       </Popover.Content>
     </Popover.Root> -->
 
-    <div class="relative h-48 flex items-end gap-1">
-      {#each chartData as day, i}
-        <div
-          role="button"
-          tabindex="0"
-          class="flex-1 bg-primary/20 hover:bg-primary/30 transition-colors rounded-t relative"
-          style="height: {(day.earnings / chartMax) * 100}%"
-          title="{day.date}: {day.earnings.toFixed(2)} CN"
-          on:mouseenter={() => { hoveredDay = day; hoveredIndex = i; }}
-          on:mouseleave={() => { hoveredDay = null; hoveredIndex = null; }}
-          aria-label="{day.date}: {day.earnings.toFixed(2)} CN"
-        >
-          {#if hoveredIndex === i && hoveredDay}
-            <div
-              class="absolute left-1/2 -translate-x-1/2 -top-8 z-10 px-2 py-1 rounded bg-primary text-white text-xs shadow-lg pointer-events-none"
-              style="white-space:nowrap;"
-            >
-              {hoveredDay.date}: {hoveredDay.earnings.toFixed(2)} CN
-              <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-6 border-l-transparent border-r-6 border-r-transparent border-t-6 border-t-primary"></span>
-            </div>
-          {/if}
+    <!-- Chart with Y-axis -->
+    <div class="flex h-48 gap-2">
+      <!-- Y-axis labels -->
+      <div class="flex flex-col justify-between text-xs text-muted-foreground pr-2">
+        <span>{chartMax.toFixed(0)} CN</span>
+        <span>{(chartMax / 2).toFixed(0)} CN</span>
+        <span>0</span>
+      </div>
+
+      <div class="relative flex-1 flex items-end gap-1">
+        <!-- Gridlines -->
+        <div class="absolute inset-0 flex flex-col justify-between">
+          <div class="border-t border-muted-foreground/20"></div>
+          <div class="border-t border-muted-foreground/20"></div>
+          <div class="border-t border-muted-foreground/20"></div>
         </div>
-      {/each}
+        
+        <!-- Bars -->
+        {#each chartData as day, i}
+          <div
+            role="button"
+            tabindex="0"
+            class="flex-1 bg-gradient-to-t from-blue-400/40 to-blue-500/80 hover:from-blue-500/60 hover:to-blue-600/90 transition-all rounded-t-md shadow-sm relative group"
+            style="height: {(day.earnings / chartMax) * 100}%"
+            title="{day.date}: {day.earnings.toFixed(2)} CN"
+            on:mouseenter={() => { hoveredDay = day; hoveredIndex = i; }}
+            on:mouseleave={() => { hoveredDay = null; hoveredIndex = null; }}
+            aria-label="{day.date}: {day.earnings.toFixed(2)} CN"
+          >
+            {#if hoveredIndex === i && hoveredDay}
+              <div
+                class="absolute left-1/2 -translate-x-1/2 -top-8 z-10 px-2 py-1 rounded bg-primary text-white text-xs shadow-lg pointer-events-none"
+                style="white-space:nowrap;"
+              >
+                {hoveredDay.date}: {hoveredDay.earnings.toFixed(2)} CN
+                <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-6 border-l-transparent border-r-6 border-r-transparent border-t-6 border-t-primary"></span>
+              </div>
+            {/if}
+          </div>
+        {/each}
+      </div>
     </div>
+
+    <!-- X-axis labels -->
     <div class="flex justify-between mt-2 text-xs text-muted-foreground">
       <span>{filteredHistory[0]?.date}</span>
       <span>{filteredHistory[filteredHistory.length - 1]?.date}</span>
