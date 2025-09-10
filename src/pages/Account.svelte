@@ -3,10 +3,13 @@
   import Card from '$lib/components/ui/card.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, Settings, Key, History, Coins, Plus, Import } from 'lucide-svelte'
+  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, Key, History, Coins, Plus, Import } from 'lucide-svelte'
   import { wallet, etcAccount } from '$lib/stores'
   import { writable, derived } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
+
+  // Check if running in Tauri environment
+  const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
   interface Transaction {
     id: number;
@@ -27,15 +30,10 @@
   let importPrivateKey = ''
   let isCreatingAccount = false
   let isImportingAccount = false
-  let password = ''
-  let confirmPassword = ''
-  let unlockPassword = ''
   let savedAccounts: string[] = []
   let selectedSavedAccount = ''
+  let unlockPassword = ''
   let showPasswordModal = false
-  let passwordAction: 'create' | 'import' | 'unlock' = 'create'
-  let accountBalance = '0.000000'
-  let isLoadingBalance = false
   let isGethRunning = false
   
   // Demo transactions - in real app these will be fetched from blockchain
@@ -81,12 +79,12 @@
       return sortDescending ? dateB.getTime() - dateA.getTime() : dateA.getTime() - dateB.getTime();
     });
 
-  // Validation logic - similar to mining page
+  // Validation logic
   $: {
     if (rawAmountInput === '') {
       amountWarning = '';
       balanceWarning = '';
-      isAmountValid = true;
+      isAmountValid = false;
       sendAmount = 0;
     } else {
       const inputValue = parseFloat(rawAmountInput);
@@ -202,7 +200,13 @@
 
   async function loadSavedAccounts() {
     try {
-      savedAccounts = await invoke('list_keystore_accounts') as string[]
+      if (isTauri) {
+        savedAccounts = await invoke('list_keystore_accounts') as string[]
+      } else {
+        // Fallback for web environment - no saved accounts
+        savedAccounts = []
+        console.log('Running in web mode - no saved accounts available')
+      }
     } catch (error) {
       console.error('Failed to load saved accounts:', error)
     }
@@ -210,10 +214,16 @@
 
   async function checkGethStatus() {
     try {
-      isGethRunning = await invoke('is_geth_running') as boolean
-      // Fetch balance if account exists and geth is running
-      if ($etcAccount && isGethRunning) {
-        fetchBalance()
+      if (isTauri) {
+        isGethRunning = await invoke('is_geth_running') as boolean
+        // Fetch balance if account exists and geth is running
+        if ($etcAccount && isGethRunning) {
+          fetchBalance()
+        }
+      } else {
+        // Fallback for web environment - assume geth is not running
+        isGethRunning = false
+        console.log('Running in web mode - geth not available')
       }
     } catch (error) {
       console.error('Failed to check geth status:', error)
@@ -221,46 +231,29 @@
   }
 
   async function fetchBalance() {
-    if (!$etcAccount || !isGethRunning) return
-    
-    isLoadingBalance = true
-    try {
-      accountBalance = await invoke('get_account_balance', { address: $etcAccount.address }) as string
-    } catch (error) {
-      console.error('Failed to fetch balance:', error)
-      accountBalance = '0.000000'
-    } finally {
-      isLoadingBalance = false
-    }
+    // Balance is now managed by wallet store, no need to fetch from blockchain
+    console.log('Balance is managed by wallet store')
   }
 
 
   async function createChiralAccount() {
-    passwordAction = 'create'
-    showPasswordModal = true
-  }
-
-  async function confirmCreateAccount() {
-    if (password !== confirmPassword) {
-      alert('Passwords do not match')
-      return
-    }
-    if (password.length < 8) {
-      alert('Password must be at least 8 characters')
-      return
-    }
-    
     isCreatingAccount = true
-    showPasswordModal = false
     try {
-      const account = await invoke('create_chiral_account') as { address: string, private_key: string }
+      let account: { address: string, private_key: string }
       
-      // Save to encrypted keystore
-      await invoke('save_account_to_keystore', {
-        address: account.address,
-        privateKey: account.private_key,
-        password: password
-      })
+      if (isTauri) {
+        // Use Tauri backend
+        account = await invoke('create_chiral_account') as { address: string, private_key: string }
+      } else {
+        // Fallback for web environment - generate demo account
+        const demoAddress = '0x' + Math.random().toString(16).substr(2, 40)
+        const demoPrivateKey = '0x' + Math.random().toString(16).substr(2, 64)
+        account = {
+          address: demoAddress,
+          private_key: demoPrivateKey
+        }
+        console.log('Running in web mode - using demo account')
+      }
       
       // Update the Chiral account store
       etcAccount.set(account)
@@ -269,15 +262,7 @@
         ...w,
         address: account.address
       }))
-      // Show private key after creation
-      privateKeyVisible = true
-      
-      // Reload saved accounts
-      await loadSavedAccounts()
-      
-      // Clear password fields
-      password = ''
-      confirmPassword = ''
+      // Private key stays hidden by default
       
       // Fetch balance for new account
       if (isGethRunning) {
@@ -293,31 +278,24 @@
 
   async function importChiralAccount() {
     if (!importPrivateKey) return
-    passwordAction = 'import'
-    showPasswordModal = true
-  }
-
-  async function confirmImportAccount() {
-    if (password !== confirmPassword) {
-      alert('Passwords do not match')
-      return
-    }
-    if (password.length < 8) {
-      alert('Password must be at least 8 characters')
-      return
-    }
     
     isImportingAccount = true
-    showPasswordModal = false
     try {
-      const account = await invoke('import_chiral_account', { privateKey: importPrivateKey }) as { address: string, private_key: string }
+      let account: { address: string, private_key: string }
       
-      // Save to encrypted keystore
-      await invoke('save_account_to_keystore', {
-        address: account.address,
-        privateKey: account.private_key,
-        password: password
-      })
+      if (isTauri) {
+        // Use Tauri backend
+        account = await invoke('import_chiral_account', { privateKey: importPrivateKey }) as { address: string, private_key: string }
+      } else {
+        // Fallback for web environment - use the provided private key
+        // In a real implementation, you'd derive the address from the private key
+        const demoAddress = '0x' + Math.random().toString(16).substr(2, 40)
+        account = {
+          address: demoAddress,
+          private_key: importPrivateKey
+        }
+        console.log('Running in web mode - using provided private key')
+      }
       
       // Update the Chiral account store
       etcAccount.set(account)
@@ -327,15 +305,7 @@
         address: account.address
       }))
       importPrivateKey = ''
-      // Show private key after import
-      privateKeyVisible = true
-      
-      // Reload saved accounts
-      await loadSavedAccounts()
-      
-      // Clear password fields
-      password = ''
-      confirmPassword = ''
+      // Private key stays hidden by default
       
       // Fetch balance for imported account
       if (isGethRunning) {
@@ -354,16 +324,23 @@
       alert('Please select an account to unlock')
       return
     }
-    passwordAction = 'unlock'
     showPasswordModal = true
   }
 
   async function confirmUnlockAccount() {
     try {
-      const account = await invoke('load_account_from_keystore', {
-        address: selectedSavedAccount,
-        password: unlockPassword
-      }) as { address: string, private_key: string }
+      let account: { address: string, private_key: string }
+      
+      if (isTauri) {
+        account = await invoke('load_account_from_keystore', {
+          address: selectedSavedAccount,
+          password: unlockPassword
+        }) as { address: string, private_key: string }
+      } else {
+        // Fallback for web environment - not available
+        alert('Account unlocking is not available in web mode. Please use the Tauri desktop app.')
+        return
+      }
       
       // Update the Chiral account store
       etcAccount.set(account)
@@ -403,6 +380,8 @@
       <div class="space-y-4">
         {#if !$etcAccount}
           <div class="space-y-3">
+            <p class="text-sm text-muted-foreground">Get started with Chiral Network by creating or importing an account:</p>
+            
             {#if savedAccounts.length > 0}
               <div class="space-y-2">
                 <p class="text-sm text-muted-foreground">Saved Accounts:</p>
@@ -434,8 +413,6 @@
                   <span class="bg-background px-2 text-muted-foreground">Or</span>
                 </div>
               </div>
-            {:else}
-              <p class="text-sm text-muted-foreground">No Chiral Network account yet. Create or import one:</p>
             {/if}
             
             <Button 
@@ -444,7 +421,7 @@
               disabled={isCreatingAccount}
             >
               <Plus class="h-4 w-4 mr-2" />
-              {isCreatingAccount ? 'Creating...' : 'Create New Chiral Account'}
+              {isCreatingAccount ? 'Creating...' : 'Create New Account'}
             </Button>
             
             <div class="space-y-2">
@@ -461,40 +438,41 @@
                 disabled={!importPrivateKey || isImportingAccount}
               >
                 <Import class="h-4 w-4 mr-2" />
-                {isImportingAccount ? 'Importing...' : 'Import Chiral Account'}
+                {isImportingAccount ? 'Importing...' : 'Import Existing Account'}
               </Button>
             </div>
           </div>
         {:else}
           <div>
-            <p class="text-sm text-muted-foreground">Chiral Address</p>
-            <div class="flex items-center gap-2 mt-1">
-              <p class="font-mono text-sm">{$etcAccount.address.slice(0, 10)}...{$etcAccount.address.slice(-8)}</p>
-              <div class="flex flex-col items-center">
-                <Button size="sm" variant="ghost" on:click={copyAddress}>
-                  <Copy class="h-3 w-3" />
-                </Button>
-                {#if copyMessage}
-                  <span class="text-xs text-muted-foreground mt-1">{copyMessage}</span>
-                {/if}
+            <!-- Balance Display - Only when logged in -->
+            <div>
+              <p class="text-sm text-muted-foreground">Balance</p>
+              <p class="text-2xl font-bold">{$wallet.balance.toFixed(2)} CN</p>
+            </div>
+            
+            <div class="grid grid-cols-2 gap-4 mt-4">
+              <div>
+                <p class="text-xs text-muted-foreground">Total Earned</p>
+                <p class="text-sm font-medium text-green-600">+{$wallet.totalEarned.toFixed(2)} CN</p>
+              </div>
+              <div>
+                <p class="text-xs text-muted-foreground">Total Spent</p>
+                <p class="text-sm font-medium text-red-600">-{$wallet.totalSpent.toFixed(2)} CN</p>
               </div>
             </div>
             
-            <div class="mt-3">
-              <p class="text-sm text-muted-foreground">Balance</p>
+            <div class="mt-6">
+              <p class="text-sm text-muted-foreground">Chiral Address</p>
               <div class="flex items-center gap-2 mt-1">
-                {#if isLoadingBalance}
-                  <p class="text-lg font-semibold">Loading...</p>
-                {:else}
-                  <p class="text-lg font-semibold">{accountBalance} CN</p>
-                {/if}
-                {#if isGethRunning}
-                  <Button size="sm" variant="ghost" on:click={fetchBalance}>
-                    <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                    </svg>
+                <p class="font-mono text-sm">{$etcAccount.address.slice(0, 10)}...{$etcAccount.address.slice(-8)}</p>
+                <div class="relative">
+                  <Button size="sm" variant="outline" on:click={copyAddress}>
+                    <Copy class="h-3 w-3" />
                   </Button>
-                {/if}
+                  {#if copyMessage}
+                    <span class="absolute top-full left-1/2 transform -translate-x-1/2 text-xs text-green-600 mt-1 whitespace-nowrap">{copyMessage}</span>
+                  {/if}
+                </div>
               </div>
             </div>
             
@@ -505,17 +483,30 @@
                   type={privateKeyVisible ? 'text' : 'password'}
                   value={$etcAccount.private_key}
                   readonly
-                  class="flex-1 font-mono text-xs"
+                  class="flex-1 font-mono text-xs min-w-0"
                 />
+                <div class="relative">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    on:click={copyPrivateKey}
+                  >
+                    <Copy class="h-3 w-3" />
+                  </Button>
+                  {#if privateKeyCopyMessage}
+                    <span class="absolute top-full left-1/2 transform -translate-x-1/2 text-xs text-green-600 mt-1 whitespace-nowrap">{privateKeyCopyMessage}</span>
+                  {/if}
+                </div>
                 <Button
                   size="sm"
-                  variant="ghost"
+                  variant="outline"
+                  class="w-16"
                   on:click={() => privateKeyVisible = !privateKeyVisible}
                 >
                   {privateKeyVisible ? 'Hide' : 'Show'}
                 </Button>
               </div>
-              <p class="text-xs text-red-500 mt-1">⚠️ Never share your private key!</p>
+              <p class="text-xs text-muted-foreground mt-1">Never share your private key with anyone</p>
             </div>
           </div>
         {/if}
@@ -550,7 +541,7 @@
             placeholder=""
             min="0.01"
             step="0.01"
-            class="mt-2"
+            class="mt-2 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]"
             data-form-type="other"
             data-lpignore="true"
             aria-autocomplete="none"
@@ -679,108 +670,26 @@
     </div>
   </Card>
   
-  <Card class="p-6">
-    <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold">Security</h2>
-      <Settings class="h-5 w-5 text-muted-foreground" />
-    </div>
-
-    <form autocomplete="off" data-form-type="other" data-lpignore="true">
-      <div class="space-y-4">
-        <div>
-          <Label>Private Key (Chiral)</Label>
-          <div class="flex gap-2 mt-2">
-            <Input
-              type="text"
-              value="your-private-key-here-do-not-share"
-              readonly
-              class="flex-1 font-mono text-sm {!privateKeyVisible ? 'obscure-text' : ''}"
-              autocomplete="off"
-              data-form-type="other"
-              data-lpignore="true"
-              aria-autocomplete="none"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              on:click={copyPrivateKey}
-            >
-              <Copy class="h-3 w-3" />
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              on:click={() => privateKeyVisible = !privateKeyVisible}
-            >
-              {privateKeyVisible ? 'Hide' : 'Show'}
-            </Button>
-          </div>
-          {#if privateKeyCopyMessage}
-            <p class="text-xs text-green-600 mt-1">{privateKeyCopyMessage}</p>
-          {/if}
-          <p class="text-xs text-muted-foreground mt-1">Never share your private key with anyone</p>
-        </div>
-
-        <Button type="button" variant="outline" class="w-full">
-          <Key class="h-4 w-4 mr-2" />
-          Export Wallet
-        </Button>
-      </div>
-    </form>
-  </Card>
   
   <!-- Password Modal -->
   {#if showPasswordModal}
     <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <Card class="p-6 w-96 max-w-full">
         <h3 class="text-lg font-semibold mb-4">
-          {#if passwordAction === 'create'}
-            Set Password for New Account
-          {:else if passwordAction === 'import'}
-            Set Password for Imported Account
-          {:else}
-            Enter Password to Unlock Account
-          {/if}
+          Enter Password to Unlock Account
         </h3>
         
         <div class="space-y-4">
-          {#if passwordAction === 'unlock'}
-            <div>
-              <Label for="unlock-password">Password</Label>
-              <Input
-                id="unlock-password"
-                type="password"
-                bind:value={unlockPassword}
-                placeholder="Enter your password"
-                class="mt-2"
-              />
-            </div>
-          {:else}
-            <div>
-              <Label for="password">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                bind:value={password}
-                placeholder="Enter a strong password"
-                class="mt-2"
-              />
-              <p class="text-xs text-muted-foreground mt-1">Minimum 8 characters</p>
-            </div>
-            
-            <div>
-              <Label for="confirm-password">Confirm Password</Label>
-              <Input
-                id="confirm-password"
-                type="password"
-                bind:value={confirmPassword}
-                placeholder="Confirm your password"
-                class="mt-2"
-              />
-            </div>
-          {/if}
+          <div>
+            <Label for="unlock-password">Password</Label>
+            <Input
+              id="unlock-password"
+              type="password"
+              bind:value={unlockPassword}
+              placeholder="Enter your password"
+              class="mt-2"
+            />
+          </div>
           
           <div class="flex gap-2">
             <Button
@@ -788,8 +697,6 @@
               class="flex-1"
               on:click={() => {
                 showPasswordModal = false
-                password = ''
-                confirmPassword = ''
                 unlockPassword = ''
               }}
             >
@@ -797,17 +704,9 @@
             </Button>
             <Button
               class="flex-1"
-              on:click={() => {
-                if (passwordAction === 'create') {
-                  confirmCreateAccount()
-                } else if (passwordAction === 'import') {
-                  confirmImportAccount()
-                } else {
-                  confirmUnlockAccount()
-                }
-              }}
+              on:click={confirmUnlockAccount}
             >
-              {passwordAction === 'unlock' ? 'Unlock' : 'Confirm'}
+              Unlock
             </Button>
           </div>
         </div>
