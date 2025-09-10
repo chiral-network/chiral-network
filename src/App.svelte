@@ -31,6 +31,7 @@
     }
     
     let currentPage = getPathName(window.location.pathname);
+    
     onMount(()=>{
       // set the currentPage var
       syncFromUrl();
@@ -234,4 +235,3 @@
       </div>
     </div>
   </div>
-  

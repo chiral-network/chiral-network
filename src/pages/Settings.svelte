@@ -19,6 +19,7 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { homeDir } from "@tauri-apps/api/path";
   import { getVersion } from "@tauri-apps/api/app";
+  import { userLocation } from "$lib/stores";
 
   // Settings state
   let settings = {
@@ -35,6 +36,7 @@
     port: 30303,
     enableUPnP: true,
     enableNAT: true,
+    userLocation: "US-East", // Geographic region for peer sorting
 
     // Privacy settings
     enableProxy: true,
@@ -69,35 +71,41 @@
     localStorage.setItem("chiralSettings", JSON.stringify(settings));
     savedSettings = { ...settings };
     hasChanges = false;
+    
+    // Sync user location with the global store
+    userLocation.set(settings.userLocation);
   }
 
   function resetSettings() {
-    settings = {
-      storagePath: "~/ChiralNetwork/Storage",
-      maxStorageSize: 100,
-      autoCleanup: true,
-      cleanupThreshold: 90,
-      maxConnections: 50,
-      uploadBandwidth: 0,
-      downloadBandwidth: 0,
-      port: 30303,
-      enableUPnP: true,
-      enableNAT: true,
-      enableProxy: true,
-      enableEncryption: true,
-      anonymousMode: false,
-      shareAnalytics: true,
-      enableNotifications: true,
-      notifyOnComplete: true,
-      notifyOnError: true,
-      soundAlerts: false,
-      enableDHT: true,
-      enableIPFS: false,
-      chunkSize: 256,
-      cacheSize: 1024,
-      logLevel: "info",
-      autoUpdate: true,
-    };
+    if(confirm("Are you sure you want to reset all settings to their default values?")) {
+      settings = {
+        storagePath: "~/ChiralNetwork/Storage",
+        maxStorageSize: 100,
+        autoCleanup: true,
+        cleanupThreshold: 90,
+        maxConnections: 50,
+        uploadBandwidth: 0,
+        downloadBandwidth: 0,
+        port: 30303,
+        enableUPnP: true,
+        enableNAT: true,
+        userLocation: "US-East",
+        enableProxy: true,
+        enableEncryption: true,
+        anonymousMode: false,
+        shareAnalytics: true,
+        enableNotifications: true,
+        notifyOnComplete: true,
+        notifyOnError: true,
+        soundAlerts: false,
+        enableDHT: true,
+        enableIPFS: false,
+        chunkSize: 256,
+        cacheSize: 1024,
+        logLevel: "info",
+        autoUpdate: true,
+      };
+    }
   }
 
   async function selectStoragePath() {
@@ -366,6 +374,24 @@
             <p class="mt-1 text-sm text-red-500">{errors.downloadBandwidth}</p>
           {/if}
         </div>
+      </div>
+
+      <!-- User Location -->
+      <div>
+        <Label for="user-location">Your Location</Label>
+        <select
+          id="user-location"
+          bind:value={settings.userLocation}
+          class="w-full px-3 py-2 mt-2 border rounded-md bg-white"
+        >
+          <option value="US-East">US East</option>
+          <option value="US-West">US West</option>
+          <option value="EU-West">Europe West</option>
+          <option value="Asia-Pacific">Asia Pacific</option>
+        </select>
+        <p class="text-xs text-muted-foreground mt-1">
+          Used to prioritize geographically closer peers for better performance
+        </p>
       </div>
 
       <div class="space-y-2">
