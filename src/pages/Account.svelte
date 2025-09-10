@@ -3,7 +3,6 @@
   import Card from '$lib/components/ui/card.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import Badge from '$lib/components/ui/badge.svelte'
   import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, Settings, Key, History, Coins } from 'lucide-svelte'
   import { wallet } from '$lib/stores'
   import { writable, derived } from 'svelte/store'
@@ -244,24 +243,24 @@
     <!-- Filter Controls -->
     <div class="flex flex-wrap gap-4 mb-4 items-end">
       <div>
-        <label class="block text-xs font-medium mb-1">Type</label>
-        <select bind:value={filterType} class="border rounded px-2 py-1 text-sm">
+        <label for="filter-type" class="block text-xs font-medium mb-1">Type</label>
+        <select id="filter-type" bind:value={filterType} class="border rounded px-2 py-1 text-sm">
           <option value="all">All</option>
           <option value="sent">Sent</option>
           <option value="received">Received</option>
         </select>
       </div>
       <div>
-        <label class="block text-xs font-medium mb-1">From</label>
-        <input type="date" bind:value={filterDateFrom} class="border rounded px-2 py-1 text-sm" />
+        <label for="filter-date-from" class="block text-xs font-medium mb-1">From</label>
+        <input id="filter-date-from" type="date" bind:value={filterDateFrom} class="border rounded px-2 py-1 text-sm" />
       </div>
       <div>
-        <label class="block text-xs font-medium mb-1">To</label>
-        <input type="date" bind:value={filterDateTo} class="border rounded px-2 py-1 text-sm" />
+        <label for="filter-date-to" class="block text-xs font-medium mb-1">To</label>
+        <input id="filter-date-to" type="date" bind:value={filterDateTo} class="border rounded px-2 py-1 text-sm" />
       </div>
       <div>
-        <label class="block text-xs font-medium mb-1">Sort</label>
-        <button type="button" class="border rounded px-3 py-1 text-sm bg-white hover:bg-gray-100 transition-colors w-full" on:click={() => { sortDescending = !sortDescending; }}>
+        <span class="block text-xs font-medium mb-1">Sort</span>
+        <button type="button" class="border rounded px-3 py-1 text-sm bg-white hover:bg-gray-100 transition-colors w-full" on:click={() => { sortDescending = !sortDescending; }} aria-pressed={sortDescending}>
           {sortDescending ? 'Newest → Oldest' : 'Oldest → Newest'}
         </button>
       </div>
