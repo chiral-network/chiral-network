@@ -317,7 +317,7 @@
     <p class="text-muted-foreground mt-2">Manage your wallet and account settings</p>
   </div>
   
-  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+  <div class="grid grid-cols-1 {$etcAccount ? 'md:grid-cols-2' : ''} gap-4">
     <Card class="p-6">
       <div class="flex items-center justify-between mb-4">
         <h2 class="text-lg font-semibold">Chiral Network Wallet</h2>
@@ -431,7 +431,9 @@
         {/if}
       </div>
     </Card>
-<Card class="p-6">
+    
+    {#if $etcAccount}
+    <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
       <h2 class="text-lg font-semibold">Send CN Tokens</h2>
       <Coins class="h-5 w-5 text-muted-foreground" />
@@ -516,8 +518,10 @@
       </div>
     </form>
   </Card>
+  {/if}
   </div>
   
+  {#if $etcAccount}
   <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
       <h2 class="text-lg font-semibold">Transaction History</h2>
@@ -586,4 +590,5 @@
       {/each}
     </div>
   </Card>
+  {/if}
 </div>
