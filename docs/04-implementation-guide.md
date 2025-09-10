@@ -3,13 +3,15 @@
 ## Development Setup
 
 ### Prerequisites
+
 - Node.js 18+ and npm
-- Rust 1.70+ and Cargo  
+- Rust 1.70+ and Cargo
 - Git
 - Python 3.8+ (for build scripts)
 - C++ compiler (for native modules)
 
 ### Repository Structure
+
 ```
 chiral-network/
 ├── blockchain/          # Ethereum-compatible implementation
@@ -34,6 +36,7 @@ chiral-network/
 ## Phase 1: Blockchain Setup
 
 ### Step 1: Setup Ethereum Node
+
 ```bash
 # Install Geth (Go-Ethereum)
 # macOS
@@ -52,7 +55,9 @@ make geth
 ```
 
 ### Step 2: Create Genesis Configuration
+
 Create `genesis.json` (Geth-compatible format):
+
 ```json
 {
   "config": {
@@ -81,6 +86,7 @@ Create `genesis.json` (Geth-compatible format):
 ```
 
 ### Step 3: Initialize Blockchain
+
 ```bash
 # Initialize the genesis block
 geth init genesis.json --datadir ./chiral-data
@@ -92,6 +98,7 @@ geth account new --datadir ./chiral-data
 ```
 
 ### Step 4: Start the Network
+
 ```bash
 # Start the first node (bootnode)
 geth --datadir ./chiral-data \
@@ -109,7 +116,9 @@ geth --datadir ./chiral-data \
 ## Phase 2: Storage Implementation
 
 ### Step 1: DHT Implementation
+
 Create `storage/dht/dht.rs`:
+
 ```rust
 use libp2p::{
     kad::{Kademlia, KademliaConfig, KademliaEvent},
@@ -126,24 +135,24 @@ impl DHTNode {
     pub fn new() -> Result<Self, Box<dyn Error>> {
         let local_key = identity::Keypair::generate_ed25519();
         let peer_id = PeerId::from(local_key.public());
-        
+
         let transport = libp2p::development_transport(local_key)?;
-        
+
         let mut cfg = KademliaConfig::default();
         cfg.set_query_timeout(Duration::from_secs(60));
-        
+
         let store = MemoryStore::new(peer_id);
         let kademlia = Kademlia::with_config(peer_id, store, cfg);
-        
+
         let swarm = SwarmBuilder::new(transport, kademlia, peer_id)
             .executor(Box::new(|fut| {
                 tokio::spawn(fut);
             }))
             .build();
-            
+
         Ok(DHTNode { swarm, peer_id })
     }
-    
+
     pub async fn store(&mut self, key: Vec<u8>, value: Vec<u8>) -> Result<(), Error> {
         self.swarm.behaviour_mut().put_record(
             Record::new(key, value),
@@ -151,7 +160,7 @@ impl DHTNode {
         )?;
         Ok(())
     }
-    
+
     pub async fn retrieve(&mut self, key: &[u8]) -> Result<Vec<u8>, Error> {
         let query_id = self.swarm.behaviour_mut().get_record(key.into());
         // Wait for result...
@@ -160,7 +169,9 @@ impl DHTNode {
 ```
 
 ### Step 2: Chunk Manager
+
 Create `storage/chunks/manager.rs`:
+
 ```rust
 use sha2::{Sha256, Digest};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
@@ -177,43 +188,43 @@ impl ChunkManager {
             storage_path,
         }
     }
-    
+
     pub fn chunk_file(&self, file_path: &Path) -> Result<Vec<ChunkInfo>, Error> {
         let mut file = File::open(file_path)?;
         let mut chunks = Vec::new();
         let mut buffer = vec![0u8; self.chunk_size];
         let mut index = 0;
-        
+
         loop {
             let bytes_read = file.read(&mut buffer)?;
             if bytes_read == 0 { break; }
-            
+
             let chunk_data = &buffer[..bytes_read];
             let chunk_hash = self.hash_chunk(chunk_data);
             let encrypted = self.encrypt_chunk(chunk_data)?;
-            
+
             chunks.push(ChunkInfo {
                 index,
                 hash: chunk_hash,
                 size: bytes_read,
                 encrypted_size: encrypted.len(),
             });
-            
+
             self.save_chunk(&chunk_hash, &encrypted)?;
             index += 1;
         }
-        
+
         Ok(chunks)
     }
-    
+
     fn encrypt_chunk(&self, data: &[u8]) -> Result<Vec<u8>, Error> {
         let key = Key::from_slice(b"encryption_key_32_bytes_long!!!!");
         let cipher = Aes256Gcm::new(key);
         let nonce = Nonce::from_slice(b"unique_nonce");
-        
+
         cipher.encrypt(nonce, data).map_err(|e| e.into())
     }
-    
+
     fn hash_chunk(&self, data: &[u8]) -> String {
         let mut hasher = Sha256::new();
         hasher.update(data);
@@ -223,7 +234,9 @@ impl ChunkManager {
 ```
 
 ### Step 3: Storage Node API
+
 Create `storage/api/server.rs`:
+
 ```rust
 use warp::{Filter, Reply};
 
@@ -263,7 +276,9 @@ fn retrieve_chunk() -> impl Filter<Extract = impl Reply> + Clone {
 ## Phase 3: Market Server
 
 ### Step 1: Database Schema
+
 Create `market/database/schema.sql`:
+
 ```sql
 CREATE DATABASE chiral_market;
 USE chiral_market;
@@ -309,40 +324,42 @@ CREATE TABLE transactions (
 ```
 
 ### Step 2: Market API Server
+
 Create `market/server/index.js`:
+
 ```javascript
-const express = require('express');
-const mysql = require('mysql2/promise');
+const express = require("express");
+const mysql = require("mysql2/promise");
 const app = express();
 
 // Database connection pool
 const pool = mysql.createPool({
-    host: 'localhost',
-    user: 'chiral',
-    password: 'password',
-    database: 'chiral_market',
-    waitForConnections: true,
-    connectionLimit: 10,
+  host: "localhost",
+  user: "chiral",
+  password: "password",
+  database: "chiral_market",
+  waitForConnections: true,
+  connectionLimit: 10,
 });
 
 // Register as supplier
-app.post('/api/v1/market/supply', async (req, res) => {
-    const { file_hash, ip, port, price, bandwidth } = req.body;
-    
-    try {
-        // Check if file exists
-        const [files] = await pool.execute(
-            'SELECT file_hash FROM files WHERE file_hash = ?',
-            [file_hash]
-        );
-        
-        if (files.length === 0) {
-            return res.status(404).json({ error: 'File not found' });
-        }
-        
-        // Insert or update supplier
-        await pool.execute(
-            `INSERT INTO suppliers 
+app.post("/api/v1/market/supply", async (req, res) => {
+  const { file_hash, ip, port, price, bandwidth } = req.body;
+
+  try {
+    // Check if file exists
+    const [files] = await pool.execute(
+      "SELECT file_hash FROM files WHERE file_hash = ?",
+      [file_hash],
+    );
+
+    if (files.length === 0) {
+      return res.status(404).json({ error: "File not found" });
+    }
+
+    // Insert or update supplier
+    await pool.execute(
+      `INSERT INTO suppliers 
              (supplier_id, file_hash, ip_address, port, price_per_mb, bandwidth_limit, expires_at)
              VALUES (?, ?, ?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 1 HOUR))
              ON DUPLICATE KEY UPDATE
@@ -352,42 +369,43 @@ app.post('/api/v1/market/supply', async (req, res) => {
              bandwidth_limit = VALUES(bandwidth_limit),
              last_seen = NOW(),
              expires_at = DATE_ADD(NOW(), INTERVAL 1 HOUR)`,
-            [req.user.id, file_hash, ip, port, price, bandwidth]
-        );
-        
-        res.json({ success: true, expires_in: 3600 });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
+      [req.user.id, file_hash, ip, port, price, bandwidth],
+    );
+
+    res.json({ success: true, expires_in: 3600 });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Query suppliers for file
-app.get('/api/v1/market/lookup/:hash', async (req, res) => {
-    const { hash } = req.params;
-    
-    try {
-        const [suppliers] = await pool.execute(
-            `SELECT supplier_id, ip_address, port, price_per_mb, bandwidth_limit, reputation
+app.get("/api/v1/market/lookup/:hash", async (req, res) => {
+  const { hash } = req.params;
+
+  try {
+    const [suppliers] = await pool.execute(
+      `SELECT supplier_id, ip_address, port, price_per_mb, bandwidth_limit, reputation
              FROM suppliers
              WHERE file_hash = ? AND expires_at > NOW()
              ORDER BY price_per_mb ASC, reputation DESC`,
-            [hash]
-        );
-        
-        res.json(suppliers);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
+      [hash],
+    );
+
+    res.json(suppliers);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 app.listen(3000, () => {
-    console.log('Market server running on port 3000');
+  console.log("Market server running on port 3000");
 });
 ```
 
 ## Phase 4: Desktop Application
 
 ### Step 1: Frontend Setup
+
 ```bash
 # Create Svelte + Tauri app
 npm create tauri-app@latest chiral-app
@@ -400,58 +418,62 @@ npm install tailwindcss lucide-svelte
 ```
 
 ### Step 2: File Service Implementation
+
 Create `src/lib/services/fileService.ts`:
+
 ```typescript
-import { invoke } from '@tauri-apps/api/tauri';
-import type { FileItem } from '../stores';
+import { invoke } from "@tauri-apps/api/tauri";
+import type { FileItem } from "../stores";
 
 export class FileService {
-    async uploadFile(file: File): Promise<string> {
-        // Read file as array buffer
-        const buffer = await file.arrayBuffer();
-        const bytes = new Uint8Array(buffer);
-        
-        // Call Rust backend to process file
-        const hash = await invoke<string>('upload_file', {
-            name: file.name,
-            data: Array.from(bytes),
-            size: file.size
-        });
-        
-        return hash;
+  async uploadFile(file: File): Promise<string> {
+    // Read file as array buffer
+    const buffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+
+    // Call Rust backend to process file
+    const hash = await invoke<string>("upload_file", {
+      name: file.name,
+      data: Array.from(bytes),
+      size: file.size,
+    });
+
+    return hash;
+  }
+
+  async downloadFile(hash: string): Promise<Blob> {
+    // Query market for suppliers
+    const suppliers = await this.queryMarket(hash);
+
+    if (suppliers.length === 0) {
+      throw new Error("File not found in network");
     }
-    
-    async downloadFile(hash: string): Promise<Blob> {
-        // Query market for suppliers
-        const suppliers = await this.queryMarket(hash);
-        
-        if (suppliers.length === 0) {
-            throw new Error('File not found in network');
-        }
-        
-        // Select best supplier (lowest price)
-        const supplier = suppliers[0];
-        
-        // Download chunks
-        const chunks = await invoke<Uint8Array[]>('download_file', {
-            hash,
-            supplier: supplier.id
-        });
-        
-        // Combine chunks into blob
-        const blob = new Blob(chunks);
-        return blob;
-    }
-    
-    private async queryMarket(hash: string): Promise<Supplier[]> {
-        const response = await fetch(`${MARKET_URL}/api/v1/market/lookup/${hash}`);
-        return response.json();
-    }
+
+    // Select best supplier (lowest price)
+    const supplier = suppliers[0];
+
+    // Download chunks
+    const chunks = await invoke<Uint8Array[]>("download_file", {
+      hash,
+      supplier: supplier.id,
+    });
+
+    // Combine chunks into blob
+    const blob = new Blob(chunks);
+    return blob;
+  }
+
+  private async queryMarket(hash: string): Promise<Supplier[]> {
+    const response = await fetch(`${MARKET_URL}/api/v1/market/lookup/${hash}`);
+    return response.json();
+  }
 }
 ```
 
 ### Step 3: Tauri Backend
+
 Create `src-tauri/src/file_handler.rs`:
+
 ```rust
 use tauri::command;
 
@@ -463,28 +485,28 @@ pub async fn upload_file(
 ) -> Result<String, String> {
     // Create chunk manager
     let chunk_manager = ChunkManager::new(get_storage_path());
-    
+
     // Save temporary file
     let temp_path = save_temp_file(&name, &data)?;
-    
+
     // Chunk the file
     let chunks = chunk_manager.chunk_file(&temp_path)
         .map_err(|e| e.to_string())?;
-    
+
     // Calculate file hash
     let file_hash = calculate_file_hash(&data);
-    
+
     // Upload chunks to storage nodes
     for chunk in chunks {
         upload_chunk_to_network(&chunk).await?;
     }
-    
+
     // Register in DHT
     register_in_dht(&file_hash, &chunks).await?;
-    
+
     // Register in market
     register_in_market(&file_hash, &name, size).await?;
-    
+
     Ok(file_hash)
 }
 
@@ -495,20 +517,20 @@ pub async fn download_file(
 ) -> Result<Vec<Vec<u8>>, String> {
     // Get file metadata from DHT
     let metadata = get_file_metadata(&hash).await?;
-    
+
     // Download chunks from supplier
     let mut chunks = Vec::new();
     for chunk_info in metadata.chunks {
         let chunk_data = download_chunk(&supplier, &chunk_info.hash).await?;
         chunks.push(chunk_data);
     }
-    
+
     // Verify and decrypt chunks
     let decrypted = decrypt_chunks(chunks)?;
-    
+
     // Make payment
     make_payment(&supplier, metadata.total_price).await?;
-    
+
     Ok(decrypted)
 }
 ```
@@ -516,6 +538,7 @@ pub async fn download_file(
 ## Phase 5: Integration Testing
 
 ### Test Network Setup
+
 ```bash
 # Start blockchain node
 chiral-node --chain chiral-spec.json --config chiral-config.toml
@@ -531,47 +554,50 @@ cd chiral-app && npm run tauri dev
 ```
 
 ### Integration Tests
+
 Create `tests/integration.test.ts`:
+
 ```typescript
-describe('Chiral Network Integration', () => {
-    let fileService: FileService;
-    let walletService: WalletService;
-    
-    beforeAll(async () => {
-        fileService = new FileService();
-        walletService = new WalletService();
-        await walletService.initialize();
-    });
-    
-    test('Upload and download file', async () => {
-        // Create test file
-        const content = 'Hello, Chiral Network!';
-        const file = new File([content], 'test.txt');
-        
-        // Upload file
-        const hash = await fileService.uploadFile(file);
-        expect(hash).toMatch(/^[a-f0-9]{64}$/);
-        
-        // Wait for propagation
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        
-        // Download file
-        const downloaded = await fileService.downloadFile(hash);
-        const text = await downloaded.text();
-        expect(text).toBe(content);
-    });
-    
-    test('Market discovery', async () => {
-        const suppliers = await fileService.queryMarket('test_hash');
-        expect(suppliers.length).toBeGreaterThan(0);
-        expect(suppliers[0]).toHaveProperty('price');
-    });
+describe("Chiral Network Integration", () => {
+  let fileService: FileService;
+  let walletService: WalletService;
+
+  beforeAll(async () => {
+    fileService = new FileService();
+    walletService = new WalletService();
+    await walletService.initialize();
+  });
+
+  test("Upload and download file", async () => {
+    // Create test file
+    const content = "Hello, Chiral Network!";
+    const file = new File([content], "test.txt");
+
+    // Upload file
+    const hash = await fileService.uploadFile(file);
+    expect(hash).toMatch(/^[a-f0-9]{64}$/);
+
+    // Wait for propagation
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+
+    // Download file
+    const downloaded = await fileService.downloadFile(hash);
+    const text = await downloaded.text();
+    expect(text).toBe(content);
+  });
+
+  test("Market discovery", async () => {
+    const suppliers = await fileService.queryMarket("test_hash");
+    expect(suppliers.length).toBeGreaterThan(0);
+    expect(suppliers[0]).toHaveProperty("price");
+  });
 });
 ```
 
 ## Deployment
 
 ### Production Build
+
 ```bash
 # Build blockchain
 cd blockchain && cargo build --release
@@ -587,9 +613,11 @@ cd chiral-app && npm run tauri build
 ```
 
 ### Docker Deployment
+
 Create `docker-compose.yml`:
+
 ```yaml
-version: '3.8'
+version: "3.8"
 
 services:
   blockchain:
@@ -600,7 +628,7 @@ services:
     volumes:
       - blockchain-data:/data
     command: --chain /config/chiral-spec.json --config /config/chiral-config.toml
-    
+
   storage:
     image: chiral/storage:latest
     ports:
@@ -610,7 +638,7 @@ services:
       - storage-data:/storage
     environment:
       - DHT_BOOTSTRAP=/ip4/bootstrap.chiral.network/tcp/4001
-      
+
   market:
     image: chiral/market:latest
     ports:
@@ -620,7 +648,7 @@ services:
       - DB_PASSWORD=${DB_PASSWORD}
     depends_on:
       - postgres
-      
+
   postgres:
     image: postgres:15
     environment:
@@ -638,25 +666,26 @@ volumes:
 ## Monitoring
 
 ### Metrics Collection
+
 ```javascript
 // Prometheus metrics
-const prometheus = require('prom-client');
+const prometheus = require("prom-client");
 
 const metrics = {
-    filesUploaded: new prometheus.Counter({
-        name: 'chiral_files_uploaded_total',
-        help: 'Total number of files uploaded'
-    }),
-    
-    bytesTransferred: new prometheus.Counter({
-        name: 'chiral_bytes_transferred_total',
-        help: 'Total bytes transferred'
-    }),
-    
-    activeNodes: new prometheus.Gauge({
-        name: 'chiral_active_nodes',
-        help: 'Number of active nodes'
-    })
+  filesUploaded: new prometheus.Counter({
+    name: "chiral_files_uploaded_total",
+    help: "Total number of files uploaded",
+  }),
+
+  bytesTransferred: new prometheus.Counter({
+    name: "chiral_bytes_transferred_total",
+    help: "Total bytes transferred",
+  }),
+
+  activeNodes: new prometheus.Gauge({
+    name: "chiral_active_nodes",
+    help: "Number of active nodes",
+  }),
 };
 ```
 
@@ -665,6 +694,7 @@ const metrics = {
 ### Common Issues
 
 #### Issue: Blockchain not syncing
+
 ```bash
 # Check peer connections
 curl -X POST -H "Content-Type: application/json" \
@@ -683,6 +713,7 @@ curl -X POST -H "Content-Type: application/json" \
 ```
 
 #### Issue: DHT lookup failures
+
 ```bash
 # Check DHT status
 curl http://localhost:8080/api/dht/status
@@ -695,6 +726,7 @@ curl http://localhost:8080/api/dht/peers
 ```
 
 #### Issue: File upload failures
+
 ```bash
 # Check storage node logs
 tail -f storage-node.log

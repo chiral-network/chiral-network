@@ -16,11 +16,10 @@
     ChevronsUpDown,
   } from "lucide-svelte";
   import { onMount } from "svelte";
-  import { open, save } from "@tauri-apps/plugin-dialog";
+  import { open } from "@tauri-apps/plugin-dialog";
   import { homeDir } from "@tauri-apps/api/path";
   import { getVersion } from "@tauri-apps/api/app";
   import { userLocation } from "$lib/stores";
-    import { event } from "@tauri-apps/api";
 
   let showResetConfirmModal = false;
   // Settings state
@@ -84,69 +83,48 @@
   function openResetConfirm() {
     showResetConfirmModal = true;
   }
-  // function resetSettings() {
-  //   const defaultSettings = {
-  //     // Storage settings
-  //     storagePath: "~/ChiralNetwork/Storage",
-  //     maxStorageSize: 100, // GB
-  //     autoCleanup: true,
-  //     cleanupThreshold: 90, // %
-
-  //     // Network settings
-  //     maxConnections: 50,
-  //     uploadBandwidth: 0, // 0 = unlimited
-  //     downloadBandwidth: 0, // 0 = unlimited
-  //     port: 30303,
-  //     enableUPnP: true,
-  //     enableNAT: true,
-  //     userLocation: "US-East", // Geographic region for peer sorting
-
-  //     // Privacy settings
-  //     enableProxy: true,
-  //     enableEncryption: true,
-  //     anonymousMode: false,
-  //     shareAnalytics: true,
-
-  //     // Notifications
-  //     enableNotifications: true,
-  //     notifyOnComplete: true,
-  //     notifyOnError: true,
-  //     soundAlerts: false,
-
-  //     // Advanced
-  //     enableDHT: true,
-  //     enableIPFS: false,
-  //     chunkSize: 256, // KB
-  //     cacheSize: 1024, // MB
-  //     logLevel: "info",
-  //     autoUpdate: true,
-  //   };
-  //   if(confirm("Are you sure you want to reset all settings to their default values?")) {
-  //     settings = { ...defaultSettings };
-  //     saveSettings();
-  //   }
-  // }
 
   async function selectStoragePath() {
-    try {
-      await getVersion(); // only works in Tauri
-      const home = await homeDir();
-      const result = await open({
-        directory: true,
-        multiple: false,
-        defaultPath: settings.storagePath.startsWith("~/")
-          ? settings.storagePath.replace("~", home)
-          : settings.storagePath,
-        title: "Select Storage Location",
-      });
+  try {
+    // Try Tauri first
+    await getVersion(); // only works in Tauri
+    const home = await homeDir();
+    const result = await open({
+      directory: true,
+      multiple: false,
+      defaultPath: settings.storagePath.startsWith("~/")
+        ? settings.storagePath.replace("~", home)
+        : settings.storagePath,
+      title: "Select Storage Location",
+    });
 
-      if (typeof result === "string") {
-        settings.storagePath = result.replace(home,"~");
+    if (typeof result === "string") {
+      settings.storagePath = result.replace(home, "~");
+    }
+  } catch {
+    // Fallback for browser environment
+    if (window.showDirectoryPicker) {
+      // Use File System Access API (Chrome/Edge)
+      try {
+        const directoryHandle = await window.showDirectoryPicker();
+        settings.storagePath = directoryHandle.name;
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          console.error('Directory picker error:', err);
+        }
       }
-    } catch {
-      alert("Please run with: npm run tauri dev")
+    } else {
+      // Fallback: let user type path manually
+      const newPath = prompt(
+        "Enter storage path (Tauri file picker not available in browser):", 
+        settings.storagePath
+      );
+      if (newPath) {
+        settings.storagePath = newPath;
+      }
     }
   }
+}
 
   function clearCache() {
     // Clear application cache

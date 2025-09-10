@@ -9,6 +9,7 @@ The Chiral Network implements a layered architecture that separates concerns and
 ### 1. Blockchain Infrastructure
 
 #### Ethereum Network Implementation
+
 ```
 Network Parameters:
 - Network ID: 98765
@@ -23,12 +24,14 @@ Network Parameters:
 ```
 
 #### Modifications from Ethereum Mainnet
+
 - **Bootstrap Nodes**: Custom seed nodes for network discovery
 - **Genesis Configuration**: Pre-allocated funds for initial distribution
 - **Network Isolation**: Separate network/chain ID (98765) to prevent mainnet connection
 - **Chain Parameters**: Adjusted block time and difficulty for network requirements
 
 #### Transaction Model
+
 ```
 Ethereum Transaction Structure:
 {
@@ -47,6 +50,7 @@ Ethereum Transaction Structure:
 ### 2. Distributed Storage System
 
 #### DHT Implementation
+
 The system uses a Kademlia-based DHT for distributed file indexing:
 
 ```
@@ -58,6 +62,7 @@ DHT Structure:
 ```
 
 #### File Storage Architecture
+
 ```
 File Processing Pipeline:
 1. File Input → SHA-256 Hash Generation
@@ -68,6 +73,7 @@ File Processing Pipeline:
 ```
 
 #### Storage Node Structure
+
 ```
 Storage Node:
 {
@@ -85,6 +91,7 @@ Storage Node:
 ### 3. Market Mechanism
 
 #### Centralized Market Server (Phase 1)
+
 Initial implementation uses a centralized discovery server:
 
 ```
@@ -107,6 +114,7 @@ Suppliers Table:
 ```
 
 #### Market Operations
+
 ```
 // Supplier Registration
 POST /market/supply
@@ -132,6 +140,7 @@ Response: [
 ```
 
 #### Decentralized Market (Phase 2)
+
 Future implementation using smart contracts:
 
 ```solidity
@@ -143,13 +152,13 @@ contract FileMarket {
     uint256 deposit;
     uint256 expiry;
   }
-  
+
   mapping(bytes32 => Listing[]) public listings;
-  
+
   function listFile(bytes32 _hash, uint256 _price) external payable {
     // Implementation
   }
-  
+
   function purchaseFile(bytes32 _hash, address _supplier) external payable {
     // Implementation
   }
@@ -159,6 +168,7 @@ contract FileMarket {
 ### 4. Network Communication
 
 #### P2P Protocol Stack
+
 ```
 Protocol Layers:
 ┌─────────────────────┐
@@ -173,6 +183,7 @@ Protocol Layers:
 ```
 
 #### Message Types
+
 ```protobuf
 // Protocol Buffer Definitions
 message FileRequest {
@@ -202,6 +213,7 @@ message PriceResponse {
 ### 5. Client Architecture
 
 #### Desktop Application Stack
+
 ```
 Frontend Layer:
 - Framework: Svelte + TypeScript
@@ -217,6 +229,7 @@ Backend Services:
 ```
 
 #### Client Operations Flow
+
 ```
 File Upload:
 1. Select File → Generate Hash
@@ -238,6 +251,7 @@ File Download:
 ### 6. Security Architecture
 
 #### Encryption Layers
+
 ```
 File Encryption:
 - Algorithm: AES-256-GCM
@@ -256,6 +270,7 @@ Transaction Security:
 ```
 
 #### Access Control
+
 ```
 Permission Model:
 - File Owner: Full control (read, write, delete, share)
@@ -267,6 +282,7 @@ Permission Model:
 ### 7. Data Flow Architecture
 
 #### Upload Data Flow
+
 ```mermaid
 sequenceDiagram
     Client->>+FileService: Upload File
@@ -284,6 +300,7 @@ sequenceDiagram
 ```
 
 #### Download Data Flow
+
 ```mermaid
 sequenceDiagram
     Client->>+FileService: Request File (Hash)
@@ -304,17 +321,20 @@ sequenceDiagram
 ### 8. Scalability Design
 
 #### Horizontal Scaling
+
 - **Storage**: Add more storage nodes
 - **Market**: Multiple market servers with load balancing
 - **Blockchain**: Increase block size or use sidechains
 - **DHT**: Automatic scaling with node count
 
 #### Vertical Scaling
+
 - **Node Capacity**: Increase individual storage limits
 - **Bandwidth**: Upgrade network connections
 - **Processing**: More powerful hardware for mining
 
 #### Optimization Strategies
+
 ```
 Caching:
 - L1: Memory cache (hot files)
@@ -331,6 +351,7 @@ Load Balancing:
 ### 9. Fault Tolerance
 
 #### Redundancy Mechanisms
+
 ```
 File Redundancy:
 - Replication Factor: 3 (minimum)
@@ -340,6 +361,7 @@ File Redundancy:
 ```
 
 #### Failure Recovery
+
 ```
 Node Failure:
 1. Detection: Heartbeat timeout (30 seconds)
@@ -358,6 +380,7 @@ Network Partition:
 ### 10. Performance Optimization
 
 #### Parallel Processing
+
 ```
 Concurrent Operations:
 - Multi-threaded chunking
@@ -367,6 +390,7 @@ Concurrent Operations:
 ```
 
 #### Network Optimization
+
 ```
 Techniques:
 - Connection pooling
@@ -379,18 +403,21 @@ Techniques:
 ## Implementation Priorities
 
 ### Phase 1: MVP
+
 1. Basic blockchain with wallet
 2. Simple file upload/download
 3. Centralized market server
 4. Desktop GUI
 
 ### Phase 2: Decentralization
+
 1. Full DHT implementation
 2. P2P market discovery
 3. Enhanced encryption
 4. Reputation system
 
 ### Phase 3: Optimization
+
 1. Performance improvements
 2. Mobile applications
 3. Advanced features
@@ -399,21 +426,25 @@ Techniques:
 ## Architecture Decisions Log
 
 ### Decision: Use Ethereum-Compatible Network
+
 **Rationale**: Account-based model suits storage payments, extensive tooling, smart contract capability
 **Alternative**: Build from scratch or use Bitcoin fork
 **Trade-off**: More complex but more flexible for application needs
 
 ### Decision: Centralized Market Initially
+
 **Rationale**: Faster development, easier debugging
 **Alternative**: Fully decentralized from start
 **Trade-off**: Temporary centralization for faster iteration
 
 ### Decision: 256KB Chunk Size
+
 **Rationale**: Balance between overhead and parallelism
 **Alternative**: Variable chunk sizes
 **Trade-off**: Simplicity over optimization
 
 ### Decision: Ethash Mining Algorithm
+
 **Rationale**: ASIC-resistant, proven by Ethereum, fair distribution
 **Alternative**: SHA-256, Scrypt, RandomX
 **Trade-off**: Memory-hard algorithm prevents centralization

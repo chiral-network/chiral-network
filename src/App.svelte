@@ -177,7 +177,14 @@
 <!-- Mobile Menu Overlay -->
 {#if mobileMenuOpen}
   <!-- Backdrop -->
-  <div class="fixed inset-0 bg-black bg-opacity-50 z-40 md:hidden" on:click={() => mobileMenuOpen = false}></div>
+  <div
+    class="fixed inset-0 bg-black bg-opacity-50 z-40 md:hidden"
+    role="button"
+    tabindex="0"
+    aria-label="Close mobile menu"
+    on:click={() => mobileMenuOpen = false}
+    on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { mobileMenuOpen = false } }}
+  ></div>
 
   <!-- Sidebar -->
   <div class="fixed top-0 right-0 h-full w-64 bg-white z-50 flex flex-col md:hidden">

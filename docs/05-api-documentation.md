@@ -7,12 +7,14 @@ The Chiral Network exposes RESTful and WebSocket APIs for client-server communic
 ## Base URLs
 
 ### Development
+
 - REST API: `http://localhost:3000/api/v1`
 - WebSocket: `ws://localhost:8547`
 - RPC: `http://localhost:8546`
 - P2P: `tcp://localhost:30304`
 
 ### Production
+
 - REST API: `https://api.chiralnetwork.org/v1`
 - WebSocket: `wss://ws.chiralnetwork.org`
 - RPC: `https://rpc.chiralnetwork.org`
@@ -21,11 +23,13 @@ The Chiral Network exposes RESTful and WebSocket APIs for client-server communic
 ## Authentication
 
 ### API Key Authentication
+
 ```http
 Authorization: Bearer <api_key>
 ```
 
 ### Ethereum Wallet Signature Authentication
+
 ```http
 X-Wallet-Address: 0x742d35Cc6634C0532925a3b8D0C9e0c8b346b983
 X-Signature: 0x8fe6d8ff73c51bc8f2f8f1f2c0db5a8b0d2c1e0f8e4d3c2b1a09876543210abcdef
@@ -37,12 +41,14 @@ X-Timestamp: 1234567890
 ### File Operations
 
 #### Upload File
+
 ```http
 POST /api/v1/files/upload
 Content-Type: multipart/form-data
 ```
 
 **Request Body:**
+
 ```
 file: binary
 encryption_key: string (optional)
@@ -50,6 +56,7 @@ replication_factor: integer (default: 3)
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -68,29 +75,35 @@ replication_factor: integer (default: 3)
 ```
 
 #### Download File
+
 ```http
 GET /api/v1/files/{file_hash}
 ```
 
 **Path Parameters:**
+
 - `file_hash`: SHA-256 hash of the file
 
 **Query Parameters:**
+
 - `chunk_start`: Starting chunk index (optional)
 - `chunk_end`: Ending chunk index (optional)
 - `stream`: Boolean for streaming response (optional)
 
 **Response:**
+
 ```
 Binary file data or chunked transfer encoding
 ```
 
 #### Get File Info
+
 ```http
 GET /api/v1/files/{file_hash}/info
 ```
 
 **Response:**
+
 ```json
 {
   "file_hash": "0xa7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456",
@@ -114,11 +127,13 @@ GET /api/v1/files/{file_hash}/info
 ```
 
 #### Delete File
+
 ```http
 DELETE /api/v1/files/{file_hash}
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -128,17 +143,20 @@ DELETE /api/v1/files/{file_hash}
 ```
 
 #### List User Files
+
 ```http
 GET /api/v1/files/list
 ```
 
 **Query Parameters:**
+
 - `page`: Page number (default: 1)
 - `limit`: Items per page (default: 20, max: 100)
 - `sort`: Sort field (name, size, date)
 - `order`: Sort order (asc, desc)
 
 **Response:**
+
 ```json
 {
   "files": [
@@ -162,11 +180,13 @@ GET /api/v1/files/list
 ### Storage Node Operations
 
 #### Register Storage Node
+
 ```http
 POST /api/v1/storage/register
 ```
 
 **Request Body:**
+
 ```json
 {
   "node_id": "peer_id_12345",
@@ -187,6 +207,7 @@ POST /api/v1/storage/register
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -197,11 +218,13 @@ POST /api/v1/storage/register
 ```
 
 #### Update Storage Node Status
+
 ```http
 PUT /api/v1/storage/status
 ```
 
 **Request Body:**
+
 ```json
 {
   "node_id": "peer_id_12345",
@@ -216,11 +239,13 @@ PUT /api/v1/storage/status
 ```
 
 #### Get Storage Statistics
+
 ```http
 GET /api/v1/storage/stats
 ```
 
 **Response:**
+
 ```json
 {
   "total_nodes": 1000,
@@ -240,16 +265,19 @@ GET /api/v1/storage/stats
 ### Peer Operations
 
 #### Discover Peers
+
 ```http
 GET /api/v1/peers/discover
 ```
 
 **Query Parameters:**
+
 - `limit`: Maximum number of peers (default: 20)
 - `country`: Filter by country code
 - `min_uptime`: Minimum uptime percentage
 
 **Response:**
+
 ```json
 {
   "peers": [
@@ -266,11 +294,13 @@ GET /api/v1/peers/discover
 ```
 
 #### Connect to Peer
+
 ```http
 POST /api/v1/peers/connect
 ```
 
 **Request Body:**
+
 ```json
 {
   "peer_id": "12D3KooWExample",
@@ -279,6 +309,7 @@ POST /api/v1/peers/connect
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -289,18 +320,17 @@ POST /api/v1/peers/connect
 ```
 
 #### Get Peer Info
+
 ```http
 GET /api/v1/peers/{peer_id}
 ```
 
 **Response:**
+
 ```json
 {
   "peer_id": "12D3KooWExample",
-  "addresses": [
-    "/ip4/192.168.1.100/tcp/30304",
-    "/ip6/::1/tcp/30304"
-  ],
+  "addresses": ["/ip4/192.168.1.100/tcp/30304", "/ip6/::1/tcp/30304"],
   "protocols": ["/ipfs/1.0.0", "/libp2p/circuit/relay/0.1.0"],
   "agent_version": "chiral-network/1.0.0",
   "reputation": {
@@ -316,11 +346,13 @@ GET /api/v1/peers/{peer_id}
 ### Blockchain Operations
 
 #### Get Block by Number
+
 ```http
 GET /api/v1/blockchain/block/{block_number}
 ```
 
 **Response:**
+
 ```json
 {
   "number": 12345,
@@ -346,11 +378,13 @@ GET /api/v1/blockchain/block/{block_number}
 ```
 
 #### Submit Transaction
+
 ```http
 POST /api/v1/blockchain/transaction
 ```
 
 **Request Body:**
+
 ```json
 {
   "from": "0x1234567890abcdef1234567890abcdef12345678",
@@ -367,6 +401,7 @@ POST /api/v1/blockchain/transaction
 ```
 
 **Response:**
+
 ```json
 {
   "transaction_hash": "0x...",
@@ -376,11 +411,13 @@ POST /api/v1/blockchain/transaction
 ```
 
 #### Get Balance
+
 ```http
 GET /api/v1/blockchain/balance/{address}
 ```
 
 **Response:**
+
 ```json
 {
   "address": "0x...",
@@ -394,11 +431,13 @@ GET /api/v1/blockchain/balance/{address}
 ### Mining Operations
 
 #### Start Mining
+
 ```http
 POST /api/v1/mining/start
 ```
 
 **Request Body:**
+
 ```json
 {
   "miner_address": "0x...",
@@ -408,6 +447,7 @@ POST /api/v1/mining/start
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -417,11 +457,13 @@ POST /api/v1/mining/start
 ```
 
 #### Get Mining Status
+
 ```http
 GET /api/v1/mining/status
 ```
 
 **Response:**
+
 ```json
 {
   "active": true,
@@ -436,11 +478,13 @@ GET /api/v1/mining/status
 ```
 
 #### Stop Mining
+
 ```http
 POST /api/v1/mining/stop
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -456,11 +500,13 @@ POST /api/v1/mining/stop
 ### DHT Operations
 
 #### DHT Put
+
 ```http
 PUT /api/v1/dht/{key}
 ```
 
 **Request Body:**
+
 ```json
 {
   "value": "arbitrary_data",
@@ -469,6 +515,7 @@ PUT /api/v1/dht/{key}
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -479,11 +526,13 @@ PUT /api/v1/dht/{key}
 ```
 
 #### DHT Get
+
 ```http
 GET /api/v1/dht/{key}
 ```
 
 **Response:**
+
 ```json
 {
   "key": "dht_key",
@@ -494,11 +543,13 @@ GET /api/v1/dht/{key}
 ```
 
 #### Find Providers
+
 ```http
 GET /api/v1/dht/providers/{content_hash}
 ```
 
 **Response:**
+
 ```json
 {
   "providers": [
@@ -515,19 +566,23 @@ GET /api/v1/dht/providers/{content_hash}
 ## WebSocket API
 
 ### Connection
+
 ```javascript
-const ws = new WebSocket('ws://localhost:8547');
+const ws = new WebSocket("ws://localhost:8547");
 ws.onopen = () => {
-  ws.send(JSON.stringify({
-    type: 'subscribe',
-    channels: ['blocks', 'transactions', 'peers', 'files']
-  }));
+  ws.send(
+    JSON.stringify({
+      type: "subscribe",
+      channels: ["blocks", "transactions", "peers", "files"],
+    }),
+  );
 };
 ```
 
 ### Event Types
 
 #### New Block Event
+
 ```json
 {
   "type": "block",
@@ -542,6 +597,7 @@ ws.onopen = () => {
 ```
 
 #### Transaction Event
+
 ```json
 {
   "type": "transaction",
@@ -557,6 +613,7 @@ ws.onopen = () => {
 ```
 
 #### Peer Event
+
 ```json
 {
   "type": "peer",
@@ -570,6 +627,7 @@ ws.onopen = () => {
 ```
 
 #### File Progress Event
+
 ```json
 {
   "type": "file_progress",
@@ -587,6 +645,7 @@ ws.onopen = () => {
 ### Commands
 
 #### Subscribe to Events
+
 ```json
 {
   "type": "subscribe",
@@ -598,6 +657,7 @@ ws.onopen = () => {
 ```
 
 #### Unsubscribe from Events
+
 ```json
 {
   "type": "unsubscribe",
@@ -606,6 +666,7 @@ ws.onopen = () => {
 ```
 
 #### Request File Chunk
+
 ```json
 {
   "type": "request_chunk",
@@ -620,6 +681,7 @@ ws.onopen = () => {
 ### Standard Methods
 
 #### eth_blockNumber
+
 ```json
 {
   "jsonrpc": "2.0",
@@ -630,6 +692,7 @@ ws.onopen = () => {
 ```
 
 #### eth_getBalance
+
 ```json
 {
   "jsonrpc": "2.0",
@@ -640,17 +703,20 @@ ws.onopen = () => {
 ```
 
 #### eth_sendTransaction
+
 ```json
 {
   "jsonrpc": "2.0",
   "method": "eth_sendTransaction",
-  "params": [{
-    "from": "0x...",
-    "to": "0x...",
-    "value": "0xde0b6b3a7640000",
-    "gas": "0x5208",
-    "gasPrice": "0x3b9aca00"
-  }],
+  "params": [
+    {
+      "from": "0x...",
+      "to": "0x...",
+      "value": "0xde0b6b3a7640000",
+      "gas": "0x5208",
+      "gasPrice": "0x3b9aca00"
+    }
+  ],
   "id": 1
 }
 ```
@@ -658,16 +724,20 @@ ws.onopen = () => {
 ### Custom Methods
 
 #### chiral_getFileInfo
+
 ```json
 {
   "jsonrpc": "2.0",
   "method": "chiral_getFileInfo",
-  "params": ["0xa7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456"],
+  "params": [
+    "0xa7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456"
+  ],
   "id": 1
 }
 ```
 
 #### chiral_getNodeStats
+
 ```json
 {
   "jsonrpc": "2.0",
@@ -680,42 +750,46 @@ ws.onopen = () => {
 ## Error Codes
 
 ### HTTP Status Codes
-| Code | Description |
-|------|-------------|
-| 200 | Success |
-| 201 | Created |
-| 400 | Bad Request |
-| 401 | Unauthorized |
-| 403 | Forbidden |
-| 404 | Not Found |
-| 409 | Conflict |
-| 429 | Too Many Requests |
-| 500 | Internal Server Error |
-| 503 | Service Unavailable |
+
+| Code | Description           |
+| ---- | --------------------- |
+| 200  | Success               |
+| 201  | Created               |
+| 400  | Bad Request           |
+| 401  | Unauthorized          |
+| 403  | Forbidden             |
+| 404  | Not Found             |
+| 409  | Conflict              |
+| 429  | Too Many Requests     |
+| 500  | Internal Server Error |
+| 503  | Service Unavailable   |
 
 ### Application Error Codes
-| Code | Name | Description |
-|------|------|-------------|
-| 1000 | NETWORK_ERROR | Network connectivity issue |
-| 1001 | TIMEOUT | Operation timed out |
-| 1002 | INVALID_HASH | Invalid file hash format |
-| 1003 | FILE_NOT_FOUND | File not in network |
-| 1004 | INSUFFICIENT_FUNDS | Not enough balance |
-| 1005 | PERMISSION_DENIED | Access not authorized |
-| 1006 | STORAGE_FULL | Node storage capacity reached |
-| 1007 | INVALID_CHUNK | Chunk verification failed |
-| 1008 | PEER_UNREACHABLE | Cannot connect to peer |
-| 1009 | INVALID_SIGNATURE | Transaction signature invalid |
-| 1010 | NONCE_TOO_LOW | Transaction nonce too low |
+
+| Code | Name               | Description                   |
+| ---- | ------------------ | ----------------------------- |
+| 1000 | NETWORK_ERROR      | Network connectivity issue    |
+| 1001 | TIMEOUT            | Operation timed out           |
+| 1002 | INVALID_HASH       | Invalid file hash format      |
+| 1003 | FILE_NOT_FOUND     | File not in network           |
+| 1004 | INSUFFICIENT_FUNDS | Not enough balance            |
+| 1005 | PERMISSION_DENIED  | Access not authorized         |
+| 1006 | STORAGE_FULL       | Node storage capacity reached |
+| 1007 | INVALID_CHUNK      | Chunk verification failed     |
+| 1008 | PEER_UNREACHABLE   | Cannot connect to peer        |
+| 1009 | INVALID_SIGNATURE  | Transaction signature invalid |
+| 1010 | NONCE_TOO_LOW      | Transaction nonce too low     |
 
 ## Rate Limiting
 
 ### Default Limits
+
 - Anonymous: 100 requests/minute
 - Authenticated: 1000 requests/minute
 - WebSocket: 100 messages/second
 
 ### Headers
+
 ```http
 X-RateLimit-Limit: 1000
 X-RateLimit-Remaining: 999
@@ -725,12 +799,14 @@ X-RateLimit-Reset: 1234567890
 ## Pagination
 
 ### Request Parameters
+
 - `page`: Page number (starts at 1)
 - `limit`: Items per page (max 100)
 - `sort`: Sort field
 - `order`: asc/desc
 
 ### Response Format
+
 ```json
 {
   "data": [...],
@@ -748,12 +824,14 @@ X-RateLimit-Reset: 1234567890
 ## Versioning
 
 ### API Version in URL
+
 ```
 https://api.chiralnetwork.org/v1/...
 https://api.chiralnetwork.org/v2/...
 ```
 
 ### Version Header
+
 ```http
 API-Version: 1.0.0
 ```
@@ -761,18 +839,19 @@ API-Version: 1.0.0
 ## SDK Examples
 
 ### JavaScript/TypeScript
+
 ```typescript
-import { ChiralClient } from '@chiral/sdk';
+import { ChiralClient } from "@chiral/sdk";
 
 const client = new ChiralClient({
-  apiKey: 'your_api_key',
-  network: 'mainnet'
+  apiKey: "your_api_key",
+  network: "mainnet",
 });
 
 // Upload file
 const result = await client.files.upload(file, {
   encryption: true,
-  replication: 3
+  replication: 3,
 });
 
 // Download file
@@ -781,11 +860,12 @@ const data = await client.files.download(fileHash);
 // Start mining
 await client.mining.start({
   threads: 4,
-  intensity: 75
+  intensity: 75,
 });
 ```
 
 ### Python
+
 ```python
 from chiral import ChiralClient
 
@@ -809,6 +889,7 @@ client.peers.connect(peer_id, multiaddr)
 ```
 
 ### Go
+
 ```go
 package main
 
@@ -816,13 +897,13 @@ import "github.com/chiral-network/go-sdk"
 
 func main() {
     client := chiral.NewClient("your_api_key", "mainnet")
-    
+
     // Upload file
     result, err := client.Files.Upload("document.pdf", &chiral.UploadOptions{
         Encryption:  true,
         Replication: 3,
     })
-    
+
     // Start mining
     err := client.Mining.Start(&chiral.MiningOptions{
         Threads:   4,
@@ -834,11 +915,13 @@ func main() {
 ## Testing
 
 ### Test Network
+
 - Endpoint: `https://testnet.chiralnetwork.org/api/v1`
 - Free test tokens available from faucet
 - Reset daily at 00:00 UTC
 
 ### API Testing Tools
+
 - Postman Collection: [Download](https://api.chiralnetwork.org/postman)
 - OpenAPI Spec: [Download](https://api.chiralnetwork.org/openapi.yaml)
 - GraphQL Playground: [Access](https://api.chiralnetwork.org/graphql)
@@ -846,11 +929,13 @@ func main() {
 ## Support
 
 ### Documentation
+
 - API Docs: https://docs.chiralnetwork.org/api
 - SDK Guides: https://docs.chiralnetwork.org/sdk
 - Examples: https://github.com/chiral-network/examples
 
 ### Community
+
 - Discord: https://discord.gg/chiralnetwork
 - Forum: https://forum.chiralnetwork.org
 - Stack Overflow: [chiral-network] tag

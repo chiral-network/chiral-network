@@ -9,24 +9,27 @@ This guide provides comprehensive instructions for deploying the Chiral Network 
 ### System Requirements
 
 #### Minimum Requirements
-| Component | Specification |
-|-----------|---------------|
-| CPU | 2 cores @ 2.0 GHz |
-| RAM | 4 GB |
-| Storage | 100 GB SSD |
-| Network | 10 Mbps symmetric |
-| OS | Ubuntu 20.04+ / Windows 10+ / macOS 10.15+ |
+
+| Component | Specification                              |
+| --------- | ------------------------------------------ |
+| CPU       | 2 cores @ 2.0 GHz                          |
+| RAM       | 4 GB                                       |
+| Storage   | 100 GB SSD                                 |
+| Network   | 10 Mbps symmetric                          |
+| OS        | Ubuntu 20.04+ / Windows 10+ / macOS 10.15+ |
 
 #### Recommended Production
-| Component | Specification |
-|-----------|---------------|
-| CPU | 8 cores @ 3.0 GHz |
-| RAM | 16 GB |
-| Storage | 1 TB NVMe SSD |
-| Network | 1 Gbps symmetric |
-| OS | Ubuntu 22.04 LTS |
+
+| Component | Specification     |
+| --------- | ----------------- |
+| CPU       | 8 cores @ 3.0 GHz |
+| RAM       | 16 GB             |
+| Storage   | 1 TB NVMe SSD     |
+| Network   | 1 Gbps symmetric  |
+| OS        | Ubuntu 22.04 LTS  |
 
 ### Software Dependencies
+
 ```bash
 # Core Dependencies
 - Node.js 18.x or higher
@@ -47,6 +50,7 @@ This guide provides comprehensive instructions for deploying the Chiral Network 
 ### 1. Binary Installation (Recommended)
 
 #### Download Pre-built Binaries
+
 ```bash
 # Linux/macOS
 curl -L https://github.com/chiral-network/releases/latest/download/chiral-linux-amd64.tar.gz | tar xz
@@ -63,18 +67,19 @@ cd chiral-network
 ### 2. Docker Installation
 
 #### Using Docker Compose
+
 ```yaml
 # docker-compose.yml
-version: '3.8'
+version: "3.8"
 
 services:
   blockchain:
     image: chiralnetwork/node:latest
     container_name: chiral-blockchain
     ports:
-      - "30304:30304"  # P2P
-      - "8546:8546"    # RPC
-      - "8547:8547"    # WebSocket
+      - "30304:30304" # P2P
+      - "8546:8546" # RPC
+      - "8547:8547" # WebSocket
     volumes:
       - blockchain-data:/data
       - ./config/blockchain.toml:/config/blockchain.toml
@@ -85,8 +90,8 @@ services:
     image: chiralnetwork/storage:latest
     container_name: chiral-storage
     ports:
-      - "8080:8080"    # File transfer
-      - "4001:4001"    # DHT
+      - "8080:8080" # File transfer
+      - "4001:4001" # DHT
     volumes:
       - storage-data:/storage
       - ./config/storage.toml:/config/storage.toml
@@ -99,7 +104,7 @@ services:
     image: chiralnetwork/market:latest
     container_name: chiral-market
     ports:
-      - "3000:3000"    # API
+      - "3000:3000" # API
     environment:
       - DATABASE_URL=postgresql://user:pass@postgres:5432/chiral
       - REDIS_URL=redis://redis:6379
@@ -134,6 +139,7 @@ volumes:
 ```
 
 #### Start Services
+
 ```bash
 # Start all services
 docker-compose up -d
@@ -148,12 +154,14 @@ docker-compose down
 ### 3. Building from Source
 
 #### Clone Repository
+
 ```bash
 git clone https://github.com/chiral-network/chiral-network.git
 cd chiral-network
 ```
 
 #### Build Blockchain Node
+
 ```bash
 cd blockchain
 cargo build --release
@@ -161,6 +169,7 @@ sudo cp target/release/chiral-node /usr/local/bin/
 ```
 
 #### Build Storage Node
+
 ```bash
 cd ../storage
 cargo build --release
@@ -168,6 +177,7 @@ sudo cp target/release/chiral-storage /usr/local/bin/
 ```
 
 #### Build Client Application
+
 ```bash
 cd ../chiral-app
 npm install
@@ -180,6 +190,7 @@ npm run tauri build
 ### 1. Blockchain Configuration
 
 #### blockchain.toml
+
 ```toml
 [network]
 chain_id = 9001
@@ -221,6 +232,7 @@ threads = 4
 ### 2. Storage Node Configuration
 
 #### storage.toml
+
 ```toml
 [node]
 id = "auto"
@@ -257,6 +269,7 @@ replication = 20
 ### 3. Market Server Configuration
 
 #### market.env
+
 ```bash
 # Database
 DATABASE_URL=postgresql://chiral:password@localhost:5432/chiral_market
@@ -285,6 +298,7 @@ METRICS_PORT=9090
 ### 1. Genesis Configuration
 
 #### Create Genesis Block
+
 ```bash
 # Generate genesis configuration for Ethereum network
 chiral-node tools genesis \
@@ -298,6 +312,7 @@ chiral-node tools genesis \
 ```
 
 #### accounts.json
+
 ```json
 {
   "0x1000000000000000000000000000000000000001": {
@@ -314,6 +329,7 @@ chiral-node tools genesis \
 ### 2. Bootstrap Nodes
 
 #### Deploy Bootstrap Node
+
 ```bash
 # Start bootstrap node with Geth
 geth --datadir ./bootnode-data \
@@ -329,6 +345,7 @@ geth attach ./bootnode-data/geth.ipc --exec admin.nodeInfo.enode
 ```
 
 #### Configure DNS Seeds
+
 ```
 # Add to DNS records
 _chiral._tcp.seed.example.com. IN SRV 0 0 30304 seed1.example.com.
@@ -338,6 +355,7 @@ _chiral._tcp.seed.example.com. IN SRV 0 0 30304 seed2.example.com.
 ### 3. Firewall Configuration
 
 #### Required Ports
+
 ```bash
 # Blockchain
 sudo ufw allow 30304/tcp comment 'Chiral P2P'
@@ -373,6 +391,7 @@ geth --datadir ./dev-data \
 ### 2. Multi-Node Test Network
 
 #### Node 1 (Full Node + Mining)
+
 ```bash
 geth --datadir ./node1 \
   --networkid 98765 \
@@ -384,6 +403,7 @@ geth --datadir ./node1 \
 ```
 
 #### Node 2 (Storage Node)
+
 ```bash
 # Start Geth node
 geth --datadir ./node2 \
@@ -401,6 +421,7 @@ chiral-storage \
 ```
 
 #### Node 3 (Light Client)
+
 ```bash
 geth --datadir ./node3 \
   --networkid 98765 \
@@ -414,6 +435,7 @@ geth --datadir ./node3 \
 ### 3. Production Cluster
 
 #### Kubernetes Deployment
+
 ```yaml
 # chiral-deployment.yaml
 apiVersion: apps/v1
@@ -432,34 +454,35 @@ spec:
         app: chiral
     spec:
       containers:
-      - name: chiral
-        image: chiralnetwork/node:latest
-        ports:
-        - containerPort: 30304
-          name: p2p
-        - containerPort: 8546
-          name: rpc
-        volumeMounts:
-        - name: data
-          mountPath: /data
+        - name: chiral
+          image: chiralnetwork/node:latest
+          ports:
+            - containerPort: 30304
+              name: p2p
+            - containerPort: 8546
+              name: rpc
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              memory: "4Gi"
+              cpu: "2"
+            limits:
+              memory: "8Gi"
+              cpu: "4"
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            memory: "4Gi"
-            cpu: "2"
-          limits:
-            memory: "8Gi"
-            cpu: "4"
-  volumeClaimTemplates:
-  - metadata:
-      name: data
-    spec:
-      accessModes: ["ReadWriteOnce"]
-      resources:
-        requests:
-          storage: 100Gi
+            storage: 100Gi
 ```
 
 #### Deploy to Kubernetes
+
 ```bash
 kubectl apply -f chiral-deployment.yaml
 kubectl apply -f chiral-service.yaml
@@ -471,27 +494,29 @@ kubectl apply -f chiral-ingress.yaml
 ### 1. Prometheus Metrics
 
 #### prometheus.yml
+
 ```yaml
 global:
   scrape_interval: 15s
 
 scrape_configs:
-  - job_name: 'chiral-blockchain'
+  - job_name: "chiral-blockchain"
     static_configs:
-      - targets: ['localhost:9090']
+      - targets: ["localhost:9090"]
         labels:
-          service: 'blockchain'
-  
-  - job_name: 'chiral-storage'
+          service: "blockchain"
+
+  - job_name: "chiral-storage"
     static_configs:
-      - targets: ['localhost:9091']
+      - targets: ["localhost:9091"]
         labels:
-          service: 'storage'
+          service: "storage"
 ```
 
 ### 2. Grafana Dashboard
 
 #### Key Metrics to Monitor
+
 ```json
 {
   "dashboard": {
@@ -521,14 +546,15 @@ scrape_configs:
 ### 3. Log Aggregation
 
 #### Filebeat Configuration
+
 ```yaml
 filebeat.inputs:
-- type: log
-  paths:
-    - /var/log/chiral/*.log
-  multiline.pattern: '^\d{4}-\d{2}-\d{2}'
-  multiline.negate: true
-  multiline.match: after
+  - type: log
+    paths:
+      - /var/log/chiral/*.log
+    multiline.pattern: '^\d{4}-\d{2}-\d{2}'
+    multiline.negate: true
+    multiline.match: after
 
 output.elasticsearch:
   hosts: ["elasticsearch:9200"]
@@ -538,27 +564,28 @@ output.elasticsearch:
 ### 4. Alerting Rules
 
 #### alerts.yml
+
 ```yaml
 groups:
-- name: chiral_alerts
-  rules:
-  - alert: NodeDown
-    expr: up{job="chiral"} == 0
-    for: 5m
-    annotations:
-      summary: "Node {{ $labels.instance }} is down"
-  
-  - alert: LowDiskSpace
-    expr: chiral_storage_bytes_free < 10737418240
-    for: 10m
-    annotations:
-      summary: "Low disk space on {{ $labels.instance }}"
-  
-  - alert: HighMemoryUsage
-    expr: chiral_memory_usage_percent > 90
-    for: 5m
-    annotations:
-      summary: "High memory usage on {{ $labels.instance }}"
+  - name: chiral_alerts
+    rules:
+      - alert: NodeDown
+        expr: up{job="chiral"} == 0
+        for: 5m
+        annotations:
+          summary: "Node {{ $labels.instance }} is down"
+
+      - alert: LowDiskSpace
+        expr: chiral_storage_bytes_free < 10737418240
+        for: 10m
+        annotations:
+          summary: "Low disk space on {{ $labels.instance }}"
+
+      - alert: HighMemoryUsage
+        expr: chiral_memory_usage_percent > 90
+        for: 5m
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
 ```
 
 ## Maintenance
@@ -566,6 +593,7 @@ groups:
 ### 1. Backup Procedures
 
 #### Automated Backup Script
+
 ```bash
 #!/bin/bash
 # backup.sh
@@ -590,6 +618,7 @@ find $BACKUP_DIR -mtime +30 -delete
 ```
 
 #### Restore Process
+
 ```bash
 # Stop services
 systemctl stop chiral-node
@@ -607,6 +636,7 @@ systemctl start chiral-node
 ### 2. Updates & Upgrades
 
 #### Rolling Update Process
+
 ```bash
 # 1. Update one node at a time
 kubectl set image statefulset/chiral-node chiral=chiralnetwork/node:v2.0.0
@@ -619,6 +649,7 @@ kubectl rollout status statefulset/chiral-node
 ```
 
 #### Database Migrations
+
 ```bash
 # Run migrations
 chiral-migrate up --database-url $DATABASE_URL
@@ -630,6 +661,7 @@ chiral-migrate down --steps 1
 ### 3. Performance Tuning
 
 #### System Optimization
+
 ```bash
 # Increase file descriptors
 echo "* soft nofile 65536" >> /etc/security/limits.conf
@@ -647,6 +679,7 @@ echo 0 > /sys/block/sda/queue/rotational
 ```
 
 #### Application Tuning
+
 ```toml
 # Optimize blockchain performance
 [performance]
@@ -667,6 +700,7 @@ compression = true
 ### Common Issues
 
 #### 1. Node Won't Sync
+
 ```bash
 # Check peer connections
 chiral-cli peers list
@@ -680,6 +714,7 @@ chiral-cli admin addPeer "enode://..."
 ```
 
 #### 2. Storage Issues
+
 ```bash
 # Check storage status
 chiral-cli storage status
@@ -692,6 +727,7 @@ chiral-cli storage reindex
 ```
 
 #### 3. High Resource Usage
+
 ```bash
 # Profile CPU usage
 perf record -F 99 -p $(pgrep chiral-node) -g -- sleep 30
@@ -705,6 +741,7 @@ lsof -p $(pgrep chiral-node) | wc -l
 ```
 
 ### Debug Commands
+
 ```bash
 # Enable debug logging
 chiral-node --log-level debug
@@ -722,6 +759,7 @@ kill -USR1 $(pgrep chiral-node)
 ## Security Hardening
 
 ### 1. Node Security
+
 ```bash
 # Run as non-root user
 useradd -m -s /bin/bash chiral
@@ -739,6 +777,7 @@ ReadWritePaths=/var/lib/chiral
 ```
 
 ### 2. Network Security
+
 ```bash
 # Enable fail2ban
 apt-get install fail2ban
@@ -752,19 +791,20 @@ chiral-node \
 ```
 
 ### 3. Access Control
+
 ```nginx
 # Nginx reverse proxy with auth
 server {
     listen 443 ssl;
     server_name rpc.chiral.network;
-    
+
     ssl_certificate /etc/ssl/certs/chiral.crt;
     ssl_certificate_key /etc/ssl/private/chiral.key;
-    
+
     location / {
         auth_basic "Restricted";
         auth_basic_user_file /etc/nginx/.htpasswd;
-        
+
         proxy_pass http://localhost:8546;
         proxy_set_header X-Real-IP $remote_addr;
     }
@@ -774,17 +814,20 @@ server {
 ## Disaster Recovery
 
 ### 1. Backup Strategy
+
 - **Daily:** Configuration files, database dumps
 - **Weekly:** Full blockchain snapshot
 - **Monthly:** Complete system backup
 - **Offsite:** Cloud storage replication
 
 ### 2. Recovery Time Objectives
+
 - **Critical Services:** < 1 hour
 - **Full Network:** < 4 hours
 - **Complete Data:** < 24 hours
 
 ### 3. Emergency Procedures
+
 ```bash
 # Emergency shutdown
 ansible all -m shell -a "systemctl stop chiral-node"
@@ -799,16 +842,19 @@ chiral-node --fork-block 12345 --override
 ## Support & Resources
 
 ### Documentation
+
 - Deployment Docs: https://docs.chiral.network/deployment
 - API Reference: https://docs.chiral.network/api
 - Troubleshooting: https://docs.chiral.network/troubleshooting
 
 ### Community Support
+
 - Discord: https://discord.gg/chiralnetwork
 - Forum: https://forum.chiral.network
 - Email: support@chiral.network
 
 ### Professional Support
+
 - Enterprise Support: enterprise@chiral.network
 - SLA Options: 24/7, 4-hour response
 - Training: Available on request
