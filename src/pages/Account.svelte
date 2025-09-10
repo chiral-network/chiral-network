@@ -205,10 +205,26 @@
   }
 
   async function fetchBalance() {
-    // Balance is now managed by wallet store, no need to fetch from blockchain
-    console.log('Balance is managed by wallet store')
+    if (!$etcAccount) return
+    
+    try {
+      if (isTauri && isGethRunning) {
+        // Desktop app with local geth node - get real blockchain balance
+        const balance = await invoke('get_account_balance', { address: $etcAccount.address }) as string
+        wallet.update(w => ({ ...w, balance: parseFloat(balance) }))
+      } else if (isTauri && !isGethRunning) {
+        // Desktop app but geth not running - use stored balance
+        console.log('Geth not running - using stored balance')
+      } else {
+        // Web environment - For now, simulate balance updates for demo purposes
+        const simulatedBalance = $wallet.balance + Math.random() * 10 // Small random changes
+        wallet.update(w => ({ ...w, balance: Math.max(0, simulatedBalance) }))
+      }
+    } catch (error) {
+      console.error('Failed to fetch balance:', error)
+      // Fallback to stored balance on error
+    }
   }
-
 
   async function createChiralAccount() {
     isCreatingAccount = true
@@ -301,7 +317,7 @@
     <p class="text-muted-foreground mt-2">Manage your wallet and account settings</p>
   </div>
   
-  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+  <div class="grid grid-cols-1 {$etcAccount ? 'md:grid-cols-2' : ''} gap-4">
     <Card class="p-6">
       <div class="flex items-center justify-between mb-4">
         <h2 class="text-lg font-semibold">Chiral Network Wallet</h2>
@@ -415,7 +431,9 @@
         {/if}
       </div>
     </Card>
-<Card class="p-6">
+    
+    {#if $etcAccount}
+    <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
       <h2 class="text-lg font-semibold">Send CN Tokens</h2>
       <Coins class="h-5 w-5 text-muted-foreground" />
@@ -500,8 +518,10 @@
       </div>
     </form>
   </Card>
+  {/if}
   </div>
   
+  {#if $etcAccount}
   <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
       <h2 class="text-lg font-semibold">Transaction History</h2>
@@ -570,4 +590,5 @@
       {/each}
     </div>
   </Card>
+  {/if}
 </div>
