@@ -5,7 +5,8 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, ChevronsUpDown, Thermometer } from 'lucide-svelte'
+  import MiningPoolDropdown from "$lib/components/ui/miningPoolDropdown.svelte";
+  import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer } from 'lucide-svelte'
   import { onDestroy } from 'svelte'
   
   // Mining state
@@ -18,6 +19,7 @@
   let miningPool = 'solo'
   let cpuThreads = navigator.hardwareConcurrency || 4
   let selectedThreads = Math.floor(cpuThreads / 2)
+  let activeThreads = Math.floor(cpuThreads / 2) // Threads actually being used for mining
   let miningIntensity = 50 // percentage
 
   // Statistics
@@ -39,190 +41,46 @@
   let miningInterval: number | null = null
   let statsInterval: number | null = null
 
-  // Errors from out-of-bounds values
+
+
+ // Bar or Line chart toggle
+  let chartType: 'bar' | 'line' = 'bar';
+
+  // Threads and intensity warnings
   let threadsWarning = '';
   let intensityWarning = '';
-  let threadsInputValue = '';
-  let intensityInputValue = '';
-  let miningValidationError = '';
 
-  // Initialize input values only once on mount
-  let initialized = false;
-  $: if (!initialized) {
-    threadsInputValue = selectedThreads.toString();
-    intensityInputValue = miningIntensity.toString();
-    initialized = true;
-  }
+  let validationError: string | null = null;
 
 
-  // Comprehensive validation for mining start
+  // Threads warning
   $: {
-    const threadsNum = parseInt(threadsInputValue) || 0;
-    const intensityNum = parseInt(intensityInputValue) || 0;
-    const maxThreads = Math.min(cpuThreads, 16);
-
-    const threadsEmpty = threadsInputValue === '';
-    const intensityEmpty = intensityInputValue === '';
-    const threadsInvalid = !threadsEmpty && (threadsNum < 1 || threadsNum > maxThreads);
-    const intensityInvalid = !intensityEmpty && (intensityNum < 10 || intensityNum > 100);
-
-    if (threadsEmpty && intensityEmpty) {
-      miningValidationError = 'Please enter CPU threads and mining intensity values';
-    } else if (threadsEmpty) {
-      miningValidationError = 'Please enter a value for CPU threads';
-    } else if (intensityEmpty) {
-      miningValidationError = 'Please enter a value for mining intensity';
-    } else if (threadsInvalid && intensityInvalid) {
-      miningValidationError = 'Invalid CPU threads and mining intensity values';
-    } else if (threadsInvalid) {
-      miningValidationError = `CPU threads must be between 1 and ${maxThreads}`;
-    } else if (intensityInvalid) {
-      miningValidationError = 'Mining intensity must be between 10% and 100%';
-    } else {
-      miningValidationError = '';
-    }
+    const numThreads = Number(selectedThreads);
+    threadsWarning = (numThreads < 1 || numThreads > cpuThreads)
+            ? `Threads must be between 1 and ${cpuThreads}`
+            : '';
   }
 
-  // Validate threads input
-  function validateThreads(value: string) {
-    if (value === '' || value === undefined) {
-      threadsWarning = '';
-      return;
-    }
-
-    const numValue = parseInt(value);
-    if (isNaN(numValue)) {
-      threadsWarning = 'Please enter a valid number';
-      return;
-    }
-
-    const maxThreads = Math.min(cpuThreads, 16);
-    if (numValue < 1) {
-      threadsWarning = 'Minimum threads is 1';
-      return;
-    }
-
-    if (numValue > maxThreads) {
-      threadsWarning = `Maximum threads is ${maxThreads}`;
-      return;
-    }
-
-    threadsWarning = '';
+  // Intensity warning
+  $: {
+    const numIntensity = Number(miningIntensity);
+    intensityWarning = (numIntensity < 1 || numIntensity > 100)
+            ? `Intensity must be between 1 and 100`
+            : '';
   }
 
-  // Validate intensity input
-  function validateIntensity(value: string) {
-    if (value === '' || value === undefined) {
-      intensityWarning = '';
-      return;
-    }
+  // Button disabled if either warning exists
+  $: isInvalid = !!threadsWarning || !!intensityWarning;
 
-    const numValue = parseInt(value);
-    if (isNaN(numValue)) {
-      intensityWarning = 'Please enter a valid number';
-      return;
-    }
-
-    if (numValue < 10) {
-      intensityWarning = 'Minimum intensity is 10%';
-      return;
-    }
-
-    if (numValue > 100) {
-      intensityWarning = 'Maximum intensity is 100%';
-      return;
-    }
-
-    intensityWarning = '';
-  }
-
-  // Handle threads input changes
-  function handleThreadsInput() {
-    let value = threadsInputValue; // Use the bound value
-
-    // Remove any non-numeric characters except empty string
-    if (value !== '' && !/^[0-9]*$/.test(value)) {
-      value = value.replace(/[^0-9]/g, '');
-    }
-
-    if (value === '') {
-      selectedThreads = 1;
-      validateThreads('');
-      return;
-    }
-
-    const numValue = parseInt(value);
-    const maxThreads = Math.min(cpuThreads, 16);
-
-    // Clamp to valid range
-    const clampedValue = Math.max(1, Math.min(numValue, maxThreads));
-
-    threadsInputValue = clampedValue.toString();
-    selectedThreads = clampedValue;
-    validateThreads(threadsInputValue);
-  }
-
-  // Clear mining validation error when inputs become valid
-  $: if (miningValidationError === '') {
-    // Inputs are valid, no action needed
-  }
-
-  // Handle threads keydown to prevent invalid characters
-  function handleThreadsKeydown(event: any) {
-    const allowedKeys = ['Backspace', 'Delete', 'Tab', 'Enter', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
-    const isNumber = /^[0-9]$/.test(event.key);
-    const isInvalidChar = /^[-+.e]$/.test(event.key); // Prevent minus, plus, dot, and scientific notation
-
-    if (isInvalidChar || (!isNumber && !allowedKeys.includes(event.key))) {
-      event.preventDefault();
-    }
-  }
-
-  // Handle intensity input changes
-  function handleIntensityInput() {
-    let value = intensityInputValue; // Use the bound value
-
-    // Remove any non-numeric characters except empty string
-    if (value !== '' && !/^[0-9]*$/.test(value)) {
-      value = value.replace(/[^0-9]/g, '');
-    }
-
-    if (value === '') {
-      miningIntensity = 50;
-      validateIntensity('');
-      return;
-    }
-
-    const numValue = parseInt(value);
-
-    // Clamp to valid range
-    const clampedValue = Math.max(10, Math.min(numValue, 100));
-
-    intensityInputValue = clampedValue.toString();
-    miningIntensity = clampedValue;
-    validateIntensity(intensityInputValue);
-  }
-
-  // Handle intensity keydown to prevent invalid characters
-  function handleIntensityKeydown(event: any) {
-    const allowedKeys = ['Backspace', 'Delete', 'Tab', 'Enter', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
-    const isNumber = /^[0-9]$/.test(event.key);
-    const isInvalidChar = /^[-+.e]$/.test(event.key); // Prevent minus, plus, dot, and scientific notation
-
-    if (isInvalidChar || (!isNumber && !allowedKeys.includes(event.key))) {
-      event.preventDefault();
-    }
-  }
   
   function startMining() {
-    // Values are already validated and clamped in the input handlers
-    // Just ensure they're within valid ranges as a final check
-    const maxThreads = Math.min(cpuThreads, 16);
-    selectedThreads = Math.max(1, Math.min(selectedThreads, maxThreads));
-    miningIntensity = Math.max(10, Math.min(miningIntensity, 100));
-
+    // clear previous errors if valid
+    validationError = null
     isMining = true
     sessionStartTime = Date.now()
+    
+    // Set active threads to the selected threads when mining starts
+    activeThreads = selectedThreads
 
     // start uptime ticker so UI updates every second
     uptimeNow = Date.now()
@@ -238,7 +96,7 @@
       
       // Update hash rate based on threads and intensity
       const baseHashRate = 50 // H/s per thread
-      hashRate = baseHashRate * selectedThreads * (miningIntensity / 100) + (Math.random() * 10 - 5)
+      hashRate = baseHashRate * activeThreads * (miningIntensity / 100) + (Math.random() * 10 - 5)
       totalHashes += hashRate
       
       // Simulate finding blocks
@@ -247,8 +105,8 @@
       }
       
       // Update stats
-      powerConsumption = selectedThreads * 25 * (miningIntensity / 100)
-      temperature = 45 + (selectedThreads * 3) + (miningIntensity / 10) + (Math.random() * 5)
+      powerConsumption = activeThreads * 25 * (miningIntensity / 100)
+      temperature = 45 + (activeThreads * 3) + (miningIntensity / 10) + (Math.random() * 5)
       efficiency = hashRate / powerConsumption
       
       // Estimate time to next block
@@ -337,6 +195,7 @@
   onDestroy(() => {
     stopMining()
   })
+
 </script>
 
 <div class="space-y-6">
@@ -353,7 +212,7 @@
           <p class="text-sm text-muted-foreground">Hash Rate</p>
           <p class="text-2xl font-bold">{formatHashRate(hashRate)}</p>
           <p class="text-xs text-muted-foreground mt-1">
-            {selectedThreads} threads
+            {activeThreads} threads
           </p>
         </div>
         <div class="p-2 bg-primary/10 rounded-lg">
@@ -426,60 +285,55 @@
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div class="relative">
           <Label for="pool-select">Mining Pool</Label>
-          <select
-            id="pool-select"
+          <MiningPoolDropdown
+            pools={pools}
             bind:value={miningPool}
             disabled={isMining}
-            class="w-full mt-2 px-3 py-2 border rounded-lg bg-background appearance-none"
-          >
-            {#each pools as pool}
-              <option value={pool.value}>{pool.label}</option>
-            {/each}
-          </select>
-          <ChevronsUpDown
-            class="pointer-events-none absolute right-2 mt-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
           />
+
         </div>
         
         <div>
           <Label for="thread-count">CPU Threads ({cpuThreads} available)</Label>
           <Input
-            id="thread-count"
-            type="number"
-            bind:value={threadsInputValue}
-            min="1"
-            max={Math.min(cpuThreads, 16)}
-            step="1"
-            inputmode="numeric"
-            pattern="[0-9]*"
-            on:input={handleThreadsInput}
-            on:keydown={handleThreadsKeydown}
-            disabled={isMining}
-            class="mt-2"
+                  id="thread-count"
+                  type="number"
+                  bind:value={selectedThreads}
+                  on:input={(e: Event) => {
+                      const target = e.currentTarget as HTMLInputElement;
+                      selectedThreads = Number(target.value);
+                    }}
+                  min="1"
+                  max={cpuThreads}
+                  disabled={isMining}
+                  class="mt-2"
           />
           {#if threadsWarning}
             <p class="text-xs text-red-500 mt-1">{threadsWarning}</p>
+
           {/if}
         </div>
         
         <div>
           <Label for="intensity">Mining Intensity (%)</Label>
           <Input
-            id="intensity"
-            type="number"
-            bind:value={intensityInputValue}
-            min="10"
-            max="100"
-            step="10"
-            inputmode="numeric"
-            pattern="[0-9]*"
-            on:input={handleIntensityInput}
-            on:keydown={handleIntensityKeydown}
-            disabled={isMining}
-            class="mt-2"
+                  id="intensity"
+                  type="number"
+                  bind:value={miningIntensity}
+                  on:input={(e: Event) => {
+                      const target = e.currentTarget as HTMLInputElement;
+                      miningIntensity = Number(target.value);
+                    }}
+                  min="1"
+                  max="100"
+                  step="1"
+                  disabled={isMining}
+                  class="mt-2"
           />
+
           {#if intensityWarning}
             <p class="text-xs text-red-500 mt-1">{intensityWarning}</p>
+
           {/if}
         </div>
       </div>
@@ -497,8 +351,8 @@
         <Button
           size="lg"
           on:click={() => isMining ? stopMining() : startMining()}
-          disabled={!isMining && miningValidationError !== ''}
           class="min-w-[150px]"
+          disabled={isInvalid}
         >
           {#if isMining}
             <Pause class="h-4 w-4 mr-2" />
@@ -509,11 +363,8 @@
           {/if}
         </Button>
       </div>
-
-      {#if miningValidationError}
-        <div class="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
-          <p class="text-sm text-red-600 font-medium">{miningValidationError}</p>
-        </div>
+      {#if validationError}
+        <p class="text-red-600 text-sm mt-2 text-right">{validationError}</p>
       {/if}
     </div>
   </Card>
@@ -643,15 +494,72 @@
   {#if miningHistory.length > 0}
     <Card class="p-6">
       <h2 class="text-lg font-semibold mb-4">Hash Rate History</h2>
-      <div class="h-32 flex items-end gap-1">
-        {#each miningHistory as point}
-          <div 
-            class="flex-1 bg-primary/20 hover:bg-primary/30 transition-colors rounded-t"
-            style="height: {(point.hashRate / Math.max(...miningHistory.map(h => h.hashRate))) * 100}%"
-            title="{formatHashRate(point.hashRate)}"
-          ></div>
-        {/each}
+
+      <!-- Chart Type Toggle -->
+      <div class="flex items-center gap-2 mb-2">
+        <span class="text-sm text-muted-foreground">Chart Type:</span>
+        <Button size="sm" variant={chartType === 'bar' ? 'default' : 'outline'} on:click={() => chartType = 'bar'}>Bar</Button>
+        <Button size="sm" variant={chartType === 'line' ? 'default' : 'outline'} on:click={() => chartType = 'line'}>Line</Button>
       </div>
+
+      <!-- Chart Rendering -->
+      {#if chartType === 'bar'}
+        <div class="h-32 flex items-end gap-1">
+          {#each miningHistory as point}
+            <div
+                    class="flex-1 bg-primary/20 hover:bg-primary/30 transition-all rounded-t"
+                    style="height: {(point.hashRate / Math.max(...miningHistory.map(h => h.hashRate))) * 100}%; transition: height 0.5s ease;"
+                    title="{formatHashRate(point.hashRate)}"
+            ></div>
+          {/each}
+        </div>
+      {:else}
+        <div class="relative w-full h-32">
+          <svg class="w-full h-full border border-border rounded" viewBox="0 0 400 128" preserveAspectRatio="xMinYMax meet">
+            <!-- Grid background -->
+            <defs>
+              <pattern id="hashRateGrid" width="40" height="32" patternUnits="userSpaceOnUse">
+                <path d="M 40 0 L 0 0 0 32" fill="none" stroke="hsl(var(--border))" stroke-width="0.5" opacity="0.3"/>
+              </pattern>
+            </defs>
+            <rect width="100%" height="100%" fill="url(#hashRateGrid)" />
+
+            <!-- Data line with proper scaling -->
+            <polyline
+                    fill="none"
+                    stroke="hsl(var(--primary))"
+                    stroke-width="3"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    points={miningHistory.map((point, i) => {
+        const x = (i / Math.max(miningHistory.length - 1, 1)) * 380 + 10; // 10px margin
+        const maxHash = Math.max(...miningHistory.map(h => h.hashRate)) || 1;
+        const y = 118 - ((point.hashRate / maxHash) * 100); // 10px margin top/bottom
+        return `${x},${y}`;
+      }).join(" ")}
+            />
+
+            <!-- Data points -->
+            {#each miningHistory as point, i}
+              {@const x = (i / Math.max(miningHistory.length - 1, 1)) * 380 + 10}
+              {@const maxHash = Math.max(...miningHistory.map(h => h.hashRate)) || 1}
+              {@const y = 118 - ((point.hashRate / maxHash) * 100)}
+              <circle
+                      cx={x}
+                      cy={y}
+                      r="4"
+                      fill="hsl(var(--primary))"
+                      stroke="hsl(var(--background))"
+                      stroke-width="2"
+                      class="hover:r-6 transition-all cursor-pointer"
+              >
+                <title>{formatHashRate(point.hashRate)} at {new Date(point.timestamp).toLocaleTimeString()}</title>
+              </circle>
+            {/each}
+          </svg>
+        </div>
+      {/if}
+
       <p class="text-xs text-muted-foreground text-center mt-2">Last 5 minutes</p>
     </Card>
   {/if}
