@@ -77,33 +77,35 @@
   }
 
   function resetSettings() {
-    settings = {
-      storagePath: "~/ChiralNetwork/Storage",
-      maxStorageSize: 100,
-      autoCleanup: true,
-      cleanupThreshold: 90,
-      maxConnections: 50,
-      uploadBandwidth: 0,
-      downloadBandwidth: 0,
-      port: 30303,
-      enableUPnP: true,
-      enableNAT: true,
-      userLocation: "US-East",
-      enableProxy: true,
-      enableEncryption: true,
-      anonymousMode: false,
-      shareAnalytics: true,
-      enableNotifications: true,
-      notifyOnComplete: true,
-      notifyOnError: true,
-      soundAlerts: false,
-      enableDHT: true,
-      enableIPFS: false,
-      chunkSize: 256,
-      cacheSize: 1024,
-      logLevel: "info",
-      autoUpdate: true,
-    };
+    if(confirm("Are you sure you want to reset all settings to their default values?")) {
+      settings = {
+        storagePath: "~/ChiralNetwork/Storage",
+        maxStorageSize: 100,
+        autoCleanup: true,
+        cleanupThreshold: 90,
+        maxConnections: 50,
+        uploadBandwidth: 0,
+        downloadBandwidth: 0,
+        port: 30303,
+        enableUPnP: true,
+        enableNAT: true,
+        userLocation: "US-East",
+        enableProxy: true,
+        enableEncryption: true,
+        anonymousMode: false,
+        shareAnalytics: true,
+        enableNotifications: true,
+        notifyOnComplete: true,
+        notifyOnError: true,
+        soundAlerts: false,
+        enableDHT: true,
+        enableIPFS: false,
+        chunkSize: 256,
+        cacheSize: 1024,
+        logLevel: "info",
+        autoUpdate: true,
+      };
+    }
   }
 
   async function selectStoragePath() {
