@@ -493,27 +493,30 @@
 
         <div>
           <Label for="amount">Amount (CN)</Label>
-          <Input
-            id="amount"
-            type="number"
-            bind:value={rawAmountInput}
-            placeholder=""
-            min="0.01"
-            step="0.01"
-            class="mt-2 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]"
-            data-form-type="other"
-            data-lpignore="true"
-            aria-autocomplete="none"
-          />
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            on:click={setMaxAmount}
-            disabled={$wallet.balance <= 0}
-          >
-            Max
-          </Button>
+          <div class="relative mt-2">
+            <Input
+              id="amount"
+              type="number"
+              bind:value={rawAmountInput}
+              placeholder=""
+              min="0.01"
+              step="0.01"
+              class="mt-2 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]"
+              data-form-type="other"
+              data-lpignore="true"
+              aria-autocomplete="none"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              class="absolute right-1 top-1/2 transform -translate-y-1/2 h-8 px-3"
+              on:click={setMaxAmount}
+              disabled={$wallet.balance <= 0}
+            >
+              Max
+            </Button>
+          </div>
           <div class="flex items-center justify-between mt-1">
             <p class="text-xs text-muted-foreground">
               Available: {$wallet.balance.toFixed(2)} CN
