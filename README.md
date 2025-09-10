@@ -118,7 +118,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 
 - **Tauri 2**: Rust-based desktop runtime for native performance
 - **Native File System**: Direct OS integration for file operations
-- **System Tray**: Background operation support (planned)
+- **System Tray**: Background operation support
 - **Auto-Updates**: Seamless application updates (planned)
 
 ### Data Management
