@@ -36,15 +36,21 @@ impl GethProcess {
             return Err("Geth is already running".to_string());
         }
 
-        // Use the project directory as base (works for both dev and production)
+        // Use the GethDownloader to get the correct path
+        let downloader = crate::geth_downloader::GethDownloader::new();
+        let geth_path = downloader.geth_path();
+        
+        if !geth_path.exists() {
+            return Err("Geth binary not found. Please download it first.".to_string());
+        }
+
+        // Use the project directory as base for genesis.json
         let project_dir = if cfg!(debug_assertions) {
-            // In development, use the workspace directory
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .parent()
                 .ok_or("Failed to get project dir")?
                 .to_path_buf()
         } else {
-            // In production, use relative to the executable
             std::env::current_exe()
                 .map_err(|e| format!("Failed to get exe path: {}", e))?
                 .parent()
@@ -56,7 +62,6 @@ impl GethProcess {
                 .to_path_buf()
         };
 
-        let geth_path = project_dir.join("src-tauri").join("bin").join("geth");
         let genesis_path = project_dir.join("genesis.json");
 
         // Check if datadir needs initialization
