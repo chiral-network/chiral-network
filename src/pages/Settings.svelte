@@ -19,6 +19,7 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { homeDir } from "@tauri-apps/api/path";
   import { getVersion } from "@tauri-apps/api/app";
+  import { userLocation } from "$lib/stores";
 
   // Settings state
   let settings = {
@@ -35,6 +36,7 @@
     port: 30303,
     enableUPnP: true,
     enableNAT: true,
+    userLocation: "US-East", // Geographic region for peer sorting
 
     // Privacy settings
     enableProxy: true,
@@ -69,6 +71,9 @@
     localStorage.setItem("chiralSettings", JSON.stringify(settings));
     savedSettings = { ...settings };
     hasChanges = false;
+    
+    // Sync user location with the global store
+    userLocation.set(settings.userLocation);
   }
 
   function resetSettings() {
@@ -83,6 +88,7 @@
       port: 30303,
       enableUPnP: true,
       enableNAT: true,
+      userLocation: "US-East",
       enableProxy: true,
       enableEncryption: true,
       anonymousMode: false,
@@ -366,6 +372,24 @@
             <p class="mt-1 text-sm text-red-500">{errors.downloadBandwidth}</p>
           {/if}
         </div>
+      </div>
+
+      <!-- User Location -->
+      <div>
+        <Label for="user-location">Your Location</Label>
+        <select
+          id="user-location"
+          bind:value={settings.userLocation}
+          class="w-full px-3 py-2 mt-2 border rounded-md bg-white"
+        >
+          <option value="US-East">US East</option>
+          <option value="US-West">US West</option>
+          <option value="EU-West">Europe West</option>
+          <option value="Asia-Pacific">Asia Pacific</option>
+        </select>
+        <p class="text-xs text-muted-foreground mt-1">
+          Used to prioritize geographically closer peers for better performance
+        </p>
       </div>
 
       <div class="space-y-2">
