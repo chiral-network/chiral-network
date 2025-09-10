@@ -3,7 +3,7 @@
   import Card from '$lib/components/ui/card.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, Key, History, Coins, Plus, Import } from 'lucide-svelte'
+  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import } from 'lucide-svelte'
   import { wallet, etcAccount } from '$lib/stores'
   import { writable, derived } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
@@ -30,10 +30,6 @@
   let importPrivateKey = ''
   let isCreatingAccount = false
   let isImportingAccount = false
-  let savedAccounts: string[] = []
-  let selectedSavedAccount = ''
-  let unlockPassword = ''
-  let showPasswordModal = false
   let isGethRunning = false
   
   // Demo transactions - in real app these will be fetched from blockchain
@@ -45,8 +41,7 @@
   ]);
 
   // Validation states
-  let amountWarning = '';
-  let balanceWarning = '';
+  let validationWarning = '';
   let isAmountValid = true;
 
   // Copy feedback message
@@ -82,32 +77,27 @@
   // Validation logic
   $: {
     if (rawAmountInput === '') {
-      amountWarning = '';
-      balanceWarning = '';
+      validationWarning = '';
       isAmountValid = false;
       sendAmount = 0;
     } else {
       const inputValue = parseFloat(rawAmountInput);
 
       if (isNaN(inputValue) || inputValue <= 0) {
-        amountWarning = 'Please enter a valid amount greater than 0.';
-        balanceWarning = '';
+        validationWarning = 'Please enter a valid amount greater than 0.';
         isAmountValid = false;
         sendAmount = 0;
       } else if (inputValue < 0.01) {
-        amountWarning = `Amount must be at least 0.01 CN.`;
-        balanceWarning = '';
+        validationWarning = `Amount must be at least 0.01 CN.`;
         isAmountValid = false;
         sendAmount = 0;
       } else if (inputValue > $wallet.balance) {
-        amountWarning = '';
-        balanceWarning = `Insufficient balance - Need ${(inputValue - $wallet.balance).toFixed(2)} more CN.`;
+        validationWarning = `Insufficient balance - Need ${(inputValue - $wallet.balance).toFixed(2)} more CN.`;
         isAmountValid = false;
         sendAmount = 0;
       } else {
         // Valid amount
-        amountWarning = '';
-        balanceWarning = '';
+        validationWarning = '';
         isAmountValid = true;
         sendAmount = inputValue;
       }
@@ -176,13 +166,11 @@
   // Ensure pendingCount is used (for linter)
   $: void $pendingCount;
 
-  // Load saved accounts on mount
   import { onMount } from 'svelte'
   
   let balanceInterval: number | undefined
   
   onMount(() => {
-    loadSavedAccounts()
     checkGethStatus()
 
     // Set up periodic balance refresh every 10 seconds
@@ -197,20 +185,6 @@
       if (balanceInterval) window.clearInterval(balanceInterval)
     }
   })
-
-  async function loadSavedAccounts() {
-    try {
-      if (isTauri) {
-        savedAccounts = await invoke('list_keystore_accounts') as string[]
-      } else {
-        // Fallback for web environment - no saved accounts
-        savedAccounts = []
-        console.log('Running in web mode - no saved accounts available')
-      }
-    } catch (error) {
-      console.error('Failed to load saved accounts:', error)
-    }
-  }
 
   async function checkGethStatus() {
     try {
@@ -319,49 +293,6 @@
     }
   }
 
-  async function unlockAccount() {
-    if (!selectedSavedAccount) {
-      alert('Please select an account to unlock')
-      return
-    }
-    showPasswordModal = true
-  }
-
-  async function confirmUnlockAccount() {
-    try {
-      let account: { address: string, private_key: string }
-      
-      if (isTauri) {
-        account = await invoke('load_account_from_keystore', {
-          address: selectedSavedAccount,
-          password: unlockPassword
-        }) as { address: string, private_key: string }
-      } else {
-        // Fallback for web environment - not available
-        alert('Account unlocking is not available in web mode. Please use the Tauri desktop app.')
-        return
-      }
-      
-      // Update the Chiral account store
-      etcAccount.set(account)
-      // Also update the wallet store
-      wallet.update(w => ({
-        ...w,
-        address: account.address
-      }))
-      
-      showPasswordModal = false
-      unlockPassword = ''
-      privateKeyVisible = false
-      
-      // Fetch balance for unlocked account
-      if (isGethRunning) {
-        await fetchBalance()
-      }
-    } catch (error) {
-      alert('Failed to unlock account: Incorrect password or corrupted keystore')
-    }
-  }
 </script>
 
 <div class="space-y-6">
@@ -382,38 +313,6 @@
           <div class="space-y-3">
             <p class="text-sm text-muted-foreground">Get started with Chiral Network by creating or importing an account:</p>
             
-            {#if savedAccounts.length > 0}
-              <div class="space-y-2">
-                <p class="text-sm text-muted-foreground">Saved Accounts:</p>
-                <select 
-                  bind:value={selectedSavedAccount}
-                  class="w-full p-2 border rounded"
-                >
-                  <option value="">Select an account</option>
-                  {#each savedAccounts as account}
-                    <option value={account}>{account.slice(0, 10)}...{account.slice(-8)}</option>
-                  {/each}
-                </select>
-                <Button 
-                  class="w-full" 
-                  variant="outline"
-                  on:click={unlockAccount}
-                  disabled={!selectedSavedAccount}
-                >
-                  <Key class="h-4 w-4 mr-2" />
-                  Unlock Selected Account
-                </Button>
-              </div>
-              
-              <div class="relative">
-                <div class="absolute inset-0 flex items-center">
-                  <span class="w-full border-t"></span>
-                </div>
-                <div class="relative flex justify-center text-xs uppercase">
-                  <span class="bg-background px-2 text-muted-foreground">Or</span>
-                </div>
-              </div>
-            {/if}
             
             <Button 
               class="w-full" 
@@ -550,10 +449,8 @@
             <p class="text-xs text-muted-foreground">
               Available: {$wallet.balance.toFixed(2)} CN
             </p>
-            {#if amountWarning}
-              <p class="text-xs text-red-500 font-medium">{amountWarning}</p>
-            {:else if balanceWarning}
-              <p class="text-xs text-red-500 font-medium">{balanceWarning}</p>
+            {#if validationWarning}
+              <p class="text-xs text-red-500 font-medium">{validationWarning}</p>
             {/if}
           </div>
         
@@ -669,48 +566,4 @@
       {/each}
     </div>
   </Card>
-  
-  
-  <!-- Password Modal -->
-  {#if showPasswordModal}
-    <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <Card class="p-6 w-96 max-w-full">
-        <h3 class="text-lg font-semibold mb-4">
-          Enter Password to Unlock Account
-        </h3>
-        
-        <div class="space-y-4">
-          <div>
-            <Label for="unlock-password">Password</Label>
-            <Input
-              id="unlock-password"
-              type="password"
-              bind:value={unlockPassword}
-              placeholder="Enter your password"
-              class="mt-2"
-            />
-          </div>
-          
-          <div class="flex gap-2">
-            <Button
-              variant="outline"
-              class="flex-1"
-              on:click={() => {
-                showPasswordModal = false
-                unlockPassword = ''
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              class="flex-1"
-              on:click={confirmUnlockAccount}
-            >
-              Unlock
-            </Button>
-          </div>
-        </div>
-      </Card>
-    </div>
-  {/if}
 </div>
