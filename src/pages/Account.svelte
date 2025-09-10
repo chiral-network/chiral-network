@@ -23,7 +23,6 @@
   }
   
   let recipientAddress = ''
-  let recipientError = ''
   let sendAmount = 0
   let rawAmountInput = '' // Track raw user input for validation
   let privateKeyVisible = false
@@ -44,6 +43,8 @@
   // Validation states
   let validationWarning = '';
   let isAmountValid = true;
+  let addressWarning = '';
+  let isAddressValid = false;
 
   // Copy feedback message
   let copyMessage = '';
@@ -77,6 +78,22 @@
 
   // Validation logic
   $: {
+    // Address validation
+    if (!recipientAddress) {
+      addressWarning = '';
+      isAddressValid = false;
+    } else if (!recipientAddress.startsWith('0x')) {
+      addressWarning = 'Address must start with 0x.';
+      isAddressValid = false;
+    } else if (recipientAddress.length !== 42) {
+      addressWarning = 'Address must be exactly 42 characters long.';
+      isAddressValid = false;
+    } else {
+      addressWarning = '';
+      isAddressValid = true;
+    }
+
+    // Amount validation
     if (rawAmountInput === '') {
       validationWarning = '';
       isAmountValid = false;
@@ -118,17 +135,9 @@
     setTimeout(() => privateKeyCopyMessage = '', 1500);
   }
   
-  function validateRecipient(address: string): string {
-    if (!address) return 'Recipient address is required.';
-    if (!address.startsWith('0x')) return 'Address must start with 0x.';
-    if (address.length !== 42) return 'Address must be 42 characters long.';
-    return '';
-  }
 
   function sendTransaction() {
-    recipientError = validateRecipient(recipientAddress);
-    if (recipientError || sendAmount <= 0) return;
-
+    if (!isAddressValid || !isAmountValid || sendAmount <= 0) return
 
     // Simulate transaction
     wallet.update(w => ({
@@ -139,18 +148,19 @@
     }))
 
     transactions.update(txs => [
-      {
-        id: Date.now(),
-        type: 'sent',
-        amount: sendAmount,
-        to: recipientAddress,
-        date: new Date(),
-        description: 'Manual transaction',
-        status: 'pending'
-      },
-      ...txs // prepend so latest is first
-    ])
+    {
+      id: Date.now(),
+      type: 'sent',
+      amount: sendAmount,
+      to: recipientAddress,
+      date: new Date(),
+      description: 'Manual transaction',
+      status: 'pending'
+    },
+    ...txs // prepend so latest is first
+  ])  
 
+    // Clear form
     recipientAddress = ''
     sendAmount = 0
     rawAmountInput = ''
@@ -460,6 +470,14 @@
             data-lpignore="true"
             aria-autocomplete="none"
           />
+          <div class="flex items-center justify-between mt-1">
+            <span class="text-xs text-muted-foreground">
+              {recipientAddress.length}/42 characters ({42 - recipientAddress.length} remaining)
+            </span>
+            {#if addressWarning}
+              <p class="text-xs text-red-500 font-medium">{addressWarning}</p>
+            {/if}
+          </div>
         </div>
 
         <div>
@@ -491,7 +509,7 @@
           type="button"
           class="w-full"
           on:click={sendTransaction}
-          disabled={!recipientAddress || !isAmountValid || rawAmountInput === ''}
+          disabled={!isAddressValid || !isAmountValid || rawAmountInput === ''}
         >
           <ArrowUpRight class="h-4 w-4 mr-2" />
           Send Transaction
@@ -525,71 +543,9 @@
           </div>
         {/if}
       </div>
-    </Card>
-    
-    <Card class="p-6">
-      <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold">Send CN Tokens</h2>
-        <Coins class="h-5 w-5 text-muted-foreground" />
-      </div>
-      <form autocomplete="off" data-form-type="other" data-lpignore="true">
-        <div class="space-y-4">
-          <div>
-            <Label for="recipient">Recipient Address</Label>
-            <Input
-              id="recipient"
-              bind:value={recipientAddress}
-              placeholder="0x..."
-              class="mt-2 w-full"
-              autocomplete="off"
-              data-form-type="other"
-              data-lpignore="true"
-              aria-autocomplete="none"
-              on:input={() => { recipientError = validateRecipient(recipientAddress); }}
-            />
-            {#if recipientError}
-              <p class="text-xs text-red-500 mt-1">{recipientError}</p>
-            {/if}
-          </div>
-
-          <div>
-            <Label for="amount">Amount (CN)</Label>
-            <Input
-              id="amount"
-              type="number"
-              bind:value={sendAmount}
-              placeholder="0.00"
-              max={$wallet.balance}
-              class="mt-2"
-              autocomplete="off"
-              data-form-type="other"
-              data-lpignore="true"
-              aria-autocomplete="none"
-            />
-            {#if amountWarning}
-              <p class="text-xs text-red-500 mt-1">{amountWarning}</p>
-            {/if}
-            <p class="text-xs text-muted-foreground mt-1">
-              Available: {$wallet.balance.toFixed(2)} CN
-            </p>
-          </div>
-
-          <Button
-            type="button"
-            class="w-full"
-            on:click={sendTransaction}
-            disabled={!recipientAddress || sendAmount <= 0 || sendAmount > $wallet.balance}
-          >
-            <ArrowUpRight class="h-4 w-4 mr-2" />
-            Send Transaction
-          </Button>
-        </div>
-      
-    </Card>
-    
-  
+    </form>
+  </Card>
   {/if}
-
   </div>
   
   {#if $etcAccount}
