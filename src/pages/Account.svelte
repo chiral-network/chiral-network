@@ -7,12 +7,22 @@
   import { wallet, etcAccount } from '$lib/stores'
   import { writable, derived } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
+
+  interface Transaction {
+    id: number;
+    type: 'sent' | 'received';
+    amount: number;
+    to?: string;
+    from?: string;
+    date: Date;
+    description: string;
+    status: 'pending' | 'completed';
+  }
   
   let recipientAddress = ''
   let sendAmount = 0
   let rawAmountInput = '' // Track raw user input for validation
   let privateKeyVisible = false
-  let showPending = false
   let importPrivateKey = ''
   let isCreatingAccount = false
   let isImportingAccount = false
@@ -28,7 +38,7 @@
   let isGethRunning = false
   
   // Real transactions will be fetched from blockchain in the future
-  const transactions = writable([]);
+  const transactions = writable<Transaction[]>([]);
 
   // Validation states
   let amountWarning = '';
@@ -159,24 +169,28 @@
   // Ensure wallet.pendingTransactions matches actual pending transactions
   const pendingCount = derived(transactions, $txs => $txs.filter(tx => tx.status === 'pending').length);
 
+  // Ensure pendingCount is used (for linter)
+  $: void $pendingCount;
+
   // Load saved accounts on mount
   import { onMount } from 'svelte'
   
   let balanceInterval: number | undefined
   
-  onMount(async () => {
-    await loadSavedAccounts()
-    await checkGethStatus()
-    
+  onMount(() => {
+    loadSavedAccounts()
+    checkGethStatus()
+
     // Set up periodic balance refresh every 10 seconds
-    balanceInterval = setInterval(() => {
+    balanceInterval = window.setInterval(() => {
       if ($etcAccount && isGethRunning) {
         fetchBalance()
       }
     }, 10000)
-    
+
+    // Cleanup function
     return () => {
-      if (balanceInterval) clearInterval(balanceInterval)
+      if (balanceInterval) window.clearInterval(balanceInterval)
     }
   })
 
@@ -528,7 +542,7 @@
             id="amount"
             type="number"
             bind:value={rawAmountInput}
-            placeholder="0.00"
+            placeholder=""
             min="0.01"
             step="0.01"
             class="mt-2"
@@ -546,22 +560,14 @@
               <p class="text-xs text-red-500 font-medium">{balanceWarning}</p>
             {/if}
           </div>
-          <Button
-            type="button"
-            class="w-full"
-            on:click={sendTransaction}
-            disabled={!recipientAddress || sendAmount <= 0 || sendAmount > parseFloat(accountBalance) || !$etcAccount || !isGethRunning}
-          >
-            <ArrowUpRight class="h-4 w-4 mr-2" />
-            Send Transaction
-          </Button>
+        
         </div>
 
         <Button
           type="button"
           class="w-full"
           on:click={sendTransaction}
-          disabled={!recipientAddress || !isAmountValid || rawAmountInput === ''}
+          disabled={!recipientAddress || !isAmountValid || sendAmount <= 0 || !$etcAccount || !isGethRunning}
         >
           <ArrowUpRight class="h-4 w-4 mr-2" />
           Send Transaction
