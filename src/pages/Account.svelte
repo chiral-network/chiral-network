@@ -383,7 +383,7 @@
               <p class="text-sm text-muted-foreground">Private Key</p>
               <div class="flex gap-2 mt-1">
                 <Input
-                  type={privateKeyVisible ? 'text' : 'password'}
+                  type="text"
                   value={$etcAccount.private_key}
                   readonly
                   class="flex-1 font-mono text-xs min-w-0"
