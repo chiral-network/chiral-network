@@ -6,28 +6,32 @@
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
   import MiningPoolDropdown from "$lib/components/ui/miningPoolDropdown.svelte";
-  import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer } from 'lucide-svelte'
-  import { onDestroy } from 'svelte'
+  import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw } from 'lucide-svelte'
+  import { onDestroy, onMount } from 'svelte'
+  import { invoke } from '@tauri-apps/api/core'
+  import { etcAccount, miningState } from '$lib/stores'
   
-  // Mining state
-  let isMining = false
-  let hashRate = 0
+  // Local UI state only
+  let isGethRunning = false
+  let currentBlock = 0
   let totalHashes = 0
-  let blocksFound = 0
-  let totalRewards = 0
   let currentDifficulty = 4
-  let miningPool = 'solo'
   let cpuThreads = navigator.hardwareConcurrency || 4
   let selectedThreads = Math.floor(cpuThreads / 2)
-  let activeThreads = Math.floor(cpuThreads / 2) // Threads actually being used for mining
-  let miningIntensity = 50 // percentage
+  let error = ''
+  
+  // Network statistics
+  let networkHashRate = '0 H/s'
+  let networkDifficulty = '0'
+  let blockReward = 5 // CN per block
+  let peerCount = 0
 
   // Statistics
   let sessionStartTime = Date.now()
   let estimatedTimeToBlock = 0
-  let powerConsumption = 0
-  let efficiency = 0
-  let temperature = 45
+  $: powerConsumption = $miningState.activeThreads * 15
+  $: efficiency = $miningState.hashRate === '0 H/s' ? 0 : parseHashRate($miningState.hashRate) / powerConsumption
+  $: temperature = 45 + ($miningState.activeThreads * 3.5)
 
   // Uptime tick (forces template to re-render every second while mining)
   let uptimeNow: number = Date.now()
@@ -40,6 +44,11 @@
   // Mock mining intervals
   let miningInterval: number | null = null
   let statsInterval: number | null = null
+  
+  // Logs
+  let showLogs = false
+  let logs: string[] = []
+  let logsInterval: number | null = null
 
 
 
@@ -51,6 +60,11 @@
   let intensityWarning = '';
 
   let validationError: string | null = null;
+  
+  // Computed values for actual threads based on intensity
+  const maxThreads = cpuThreads
+  $: actualThreads = Math.ceil(($miningState.minerIntensity / 100) * maxThreads)
+  // Don't directly modify store in reactive statement to avoid infinite loops
 
 
   // Threads warning
@@ -63,7 +77,7 @@
 
   // Intensity warning
   $: {
-    const numIntensity = Number(miningIntensity);
+    const numIntensity = Number($miningState.minerIntensity);
     intensityWarning = (numIntensity < 1 || numIntensity > 100)
             ? `Intensity must be between 1 and 100`
             : '';
@@ -72,85 +86,176 @@
   // Button disabled if either warning exists
   $: isInvalid = !!threadsWarning || !!intensityWarning;
 
-  
-  function startMining() {
-    // clear previous errors if valid
-    validationError = null
-    isMining = true
-    sessionStartTime = Date.now()
+  onMount(async () => {
+    await checkGethStatus()
+    await updateNetworkStats()
     
-    // Set active threads to the selected threads when mining starts
-    activeThreads = selectedThreads
-
-    // start uptime ticker so UI updates every second
+    // If mining is already active from before, update stats immediately
+    if ($miningState.isMining) {
+      await updateMiningStats()
+    }
+    
+    // Start polling for mining stats
+    statsInterval = setInterval(async () => {
+      if ($miningState.isMining) {
+        await updateMiningStats()
+      }
+      await updateNetworkStats()
+    }, 2000) as unknown as number
+  })
+  
+  async function checkGethStatus() {
+    try {
+      isGethRunning = await invoke('is_geth_running') as boolean
+      if (isGethRunning) {
+        // Only check backend status if we don't have a mining state already
+        // This prevents losing state when switching pages
+        if (!$miningState.isMining) {
+          const status = await invoke('get_miner_status') as boolean
+          if (status) {
+            $miningState.isMining = status
+            sessionStartTime = Date.now()
+            startUptimeTimer()
+          }
+        } else {
+          // If we already think we're mining, just restart the uptime timer
+          startUptimeTimer()
+        }
+      }
+    } catch (e) {
+      console.error('Failed to check geth status:', e)
+    }
+  }
+  
+  async function updateMiningStats() {
+    try {
+      const [rate, block] = await Promise.all([
+        invoke('get_miner_hashrate') as Promise<string>,
+        invoke('get_current_block') as Promise<number>
+      ])
+      $miningState.hashRate = rate
+      currentBlock = block
+      
+      // Convert hashRate string to number for chart
+      let hashRateNum = 0
+      if (rate.includes('GH/s')) {
+        hashRateNum = parseFloat(rate) * 1000000000
+      } else if (rate.includes('MH/s')) {
+        hashRateNum = parseFloat(rate) * 1000000
+      } else if (rate.includes('KH/s')) {
+        hashRateNum = parseFloat(rate) * 1000
+      } else {
+        hashRateNum = parseFloat(rate) || 0
+      }
+      
+      // Update mining history for chart
+      if ($miningState.isMining) {
+        miningHistory = [...miningHistory.slice(-29), {
+          timestamp: Date.now(),
+          hashRate: hashRateNum,
+          power: powerConsumption
+        }]
+      }
+    } catch (e) {
+      console.error('Failed to update mining stats:', e)
+    }
+  }
+  
+  async function updateNetworkStats() {
+    try {
+      if (isGethRunning) {
+        const [stats, block, peers] = await Promise.all([
+          invoke('get_network_stats') as Promise<[string, string]>,
+          invoke('get_current_block') as Promise<number>,
+          invoke('get_network_peer_count') as Promise<number>
+        ])
+        
+        networkDifficulty = stats[0]
+        networkHashRate = stats[1]
+        currentBlock = block
+        peerCount = peers
+      }
+    } catch (e) {
+      console.error('Failed to update network stats:', e)
+    }
+  }
+  
+  function startUptimeTimer() {
     uptimeNow = Date.now()
     if (!uptimeInterval) {
       uptimeInterval = setInterval(() => {
         uptimeNow = Date.now()
       }, 1000) as unknown as number
     }
-    
-    // Simulate mining
-    miningInterval = setInterval(() => {
-      if (!isMining) return
-      
-      // Update hash rate based on threads and intensity
-      const baseHashRate = 50 // H/s per thread
-      hashRate = baseHashRate * activeThreads * (miningIntensity / 100) + (Math.random() * 10 - 5)
-      totalHashes += hashRate
-      
-      // Simulate finding blocks
-      if (Math.random() < 0.0001 * (hashRate / 100)) {
-        findBlock()
-      }
-      
-      // Update stats
-      powerConsumption = activeThreads * 25 * (miningIntensity / 100)
-      temperature = 45 + (activeThreads * 3) + (miningIntensity / 10) + (Math.random() * 5)
-      efficiency = hashRate / powerConsumption
-      
-      // Estimate time to next block
-      const blockProbability = 0.0001 * (hashRate / 100)
-      estimatedTimeToBlock = Math.floor(1 / blockProbability)
-    }, 1000) as unknown as number
-
-    // Update mining history
-    statsInterval = setInterval(() => {
-      if (!isMining) return
-      
-      miningHistory = [...miningHistory.slice(-29), {
-        timestamp: Date.now(),
-        hashRate: hashRate,
-        power: powerConsumption
-      }]
-    }, 5000) as unknown as number
   }
   
-  function stopMining() {
-    isMining = false
-    hashRate = 0
-    
-    if (miningInterval) {
-      clearInterval(miningInterval)
-      miningInterval = null
+  async function startMining() {
+    if (!$etcAccount) {
+      error = 'Please create a Chiral Network account first in the Account page'
+      return
     }
     
-    if (statsInterval) {
-      clearInterval(statsInterval)
-      statsInterval = null
+    if (!isGethRunning) {
+      error = 'Chiral node is not running. Please start it from the Network page'
+      return
     }
-
-    // stop uptime ticker
-    if (uptimeInterval) {
-      clearInterval(uptimeInterval as unknown as number)
-      uptimeInterval = null
+    
+    error = ''
+    validationError = null
+    
+    try {
+      // Show message that we're starting mining
+      error = 'Starting mining... (may restart node if needed)'
+      
+      await invoke('start_miner', {
+        address: $etcAccount.address,
+        threads: selectedThreads,
+        dataDir: './geth-data'
+      })
+      
+      error = '' // Clear the status message
+      $miningState.isMining = true
+      sessionStartTime = Date.now()
+      $miningState.activeThreads = actualThreads  // Use computed actualThreads
+      startUptimeTimer()
+      
+      // Start updating stats
+      await updateMiningStats()
+      
+      // Update power and temperature estimates
+      powerConsumption = $miningState.activeThreads * 25 * ($miningState.minerIntensity / 100)
+      temperature = 45 + ($miningState.activeThreads * 3) + ($miningState.minerIntensity / 10)
+      
+      // Re-check geth status since it might have restarted
+      isGethRunning = true
+    } catch (e) {
+      error = String(e)
+      console.error('Failed to start mining:', e)
+    }
+  }
+  
+  async function stopMining() {
+    try {
+      await invoke('stop_miner')
+      $miningState.isMining = false
+      $miningState.hashRate = '0 H/s'
+      $miningState.activeThreads = 0
+      
+      // stop uptime ticker
+      if (uptimeInterval) {
+        clearInterval(uptimeInterval as unknown as number)
+        uptimeInterval = null
+      }
+    } catch (e) {
+      error = String(e)
+      console.error('Failed to stop mining:', e)
     }
   }
   
   function findBlock() {
-    blocksFound++
+    $miningState.blocksFound++
     const reward = 5 + Math.random() * 2
-    totalRewards += reward
+    $miningState.totalRewards += reward
     
     recentBlocks = [{
       id: `block-${Date.now()}`,
@@ -170,7 +275,24 @@
     return `${hours}h ${minutes}m ${seconds}s`
   }
   
-  function formatHashRate(rate: number): string {
+  function parseHashRate(rateStr: string): number {
+    const match = rateStr.match(/^([\d.]+)\s*([KMGT]?)H\/s$/i)
+    if (!match) return 0
+    
+    const value = parseFloat(match[1])
+    const unit = match[2].toUpperCase()
+    
+    switch (unit) {
+      case 'K': return value * 1000
+      case 'M': return value * 1000000
+      case 'G': return value * 1000000000
+      case 'T': return value * 1000000000000
+      default: return value
+    }
+  }
+
+  function formatHashRate(rate: number | string): string {
+    if (typeof rate === 'string') return rate
     if (rate < 1000) return `${rate.toFixed(1)} H/s`
     if (rate < 1000000) return `${(rate / 1000).toFixed(2)} KH/s`
     if (rate < 1000000000) return `${(rate / 1000000).toFixed(2)} MH/s`
@@ -184,6 +306,33 @@
     return `${(num / 1000000000).toFixed(1)}B`
   }
   
+  async function fetchLogs() {
+    try {
+      const result = await invoke('get_miner_logs', {
+        dataDir: './geth-data',
+        lines: 100
+      }) as string[]
+      logs = result
+    } catch (e) {
+      console.error('Failed to fetch logs:', e)
+    }
+  }
+  
+  function toggleLogs() {
+    showLogs = !showLogs
+    if (showLogs) {
+      fetchLogs()
+      // Start auto-refresh of logs
+      logsInterval = setInterval(fetchLogs, 2000) as unknown as number
+    } else {
+      // Stop auto-refresh
+      if (logsInterval) {
+        clearInterval(logsInterval)
+        logsInterval = null
+      }
+    }
+  }
+  
   // Mock pool options
   const pools = [
     { value: 'solo', label: 'Solo Mining' },
@@ -192,8 +341,19 @@
     { value: 'pool3', label: 'Community Pool' }
   ]
   
-  onDestroy(() => {
-    stopMining()
+  onDestroy(async () => {
+    if ($miningState.isMining) {
+      await stopMining()
+    }
+    if (statsInterval) {
+      clearInterval(statsInterval)
+    }
+    if (uptimeInterval) {
+      clearInterval(uptimeInterval)
+    }
+    if (logsInterval) {
+      clearInterval(logsInterval)
+    }
   })
 
 </script>
@@ -210,9 +370,9 @@
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">Hash Rate</p>
-          <p class="text-2xl font-bold">{formatHashRate(hashRate)}</p>
+          <p class="text-2xl font-bold">{$miningState.hashRate}</p>
           <p class="text-xs text-muted-foreground mt-1">
-            {activeThreads} threads
+            {$miningState.isMining ? `${$miningState.activeThreads} threads` : 'Not mining'}
           </p>
         </div>
         <div class="p-2 bg-primary/10 rounded-lg">
@@ -225,10 +385,10 @@
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">Total Rewards</p>
-          <p class="text-2xl font-bold">{totalRewards.toFixed(2)} CN</p>
+          <p class="text-2xl font-bold">{$miningState.totalRewards.toFixed(2)} CN</p>
           <p class="text-xs text-green-600 flex items-center gap-1 mt-1">
             <TrendingUp class="h-3 w-3" />
-            {blocksFound} blocks found
+            {$miningState.blocksFound} blocks found
           </p>
         </div>
         <div class="p-2 bg-yellow-500/10 rounded-lg">
@@ -276,8 +436,8 @@
   <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
       <h2 class="text-lg font-semibold">Mining Control</h2>
-      <Badge variant={isMining ? 'default' : 'secondary'}>
-        {isMining ? 'Mining Active' : 'Mining Stopped'}
+      <Badge variant={$miningState.isMining ? 'default' : 'secondary'}>
+        {$miningState.isMining ? 'Mining Active' : 'Mining Stopped'}
       </Badge>
     </div>
     
@@ -287,8 +447,8 @@
           <Label for="pool-select">Mining Pool</Label>
           <MiningPoolDropdown
             pools={pools}
-            bind:value={miningPool}
-            disabled={isMining}
+            bind:value={$miningState.selectedPool}
+            disabled={$miningState.isMining}
           />
 
         </div>
@@ -305,7 +465,7 @@
                     }}
                   min="1"
                   max={cpuThreads}
-                  disabled={isMining}
+                  disabled={$miningState.isMining}
                   class="mt-2"
           />
           {#if threadsWarning}
@@ -319,15 +479,15 @@
           <Input
                   id="intensity"
                   type="number"
-                  bind:value={miningIntensity}
+                  bind:value={$miningState.minerIntensity}
                   on:input={(e: Event) => {
                       const target = e.currentTarget as HTMLInputElement;
-                      miningIntensity = Number(target.value);
+                      $miningState.minerIntensity = Number(target.value);
                     }}
                   min="1"
                   max="100"
                   step="1"
-                  disabled={isMining}
+                  disabled={$miningState.isMining}
                   class="mt-2"
           />
 
@@ -341,30 +501,68 @@
       <div class="flex items-center justify-between pt-4">
         <div class="text-sm space-y-1">
           <p class="text-muted-foreground">
-            Session: <span class="font-medium">{isMining ? formatUptime(uptimeNow) : '0h 0m 0s'}</span>
+            Session: <span class="font-medium">{$miningState.isMining ? formatUptime(uptimeNow) : '0h 0m 0s'}</span>
           </p>
           <p class="text-muted-foreground">
             Total Hashes: <span class="font-medium">{formatNumber(totalHashes)}</span>
           </p>
         </div>
         
-        <Button
-          size="lg"
-          on:click={() => isMining ? stopMining() : startMining()}
-          class="min-w-[150px]"
-          disabled={isInvalid}
-        >
-          {#if isMining}
-            <Pause class="h-4 w-4 mr-2" />
-            Stop Mining
-          {:else}
-            <Play class="h-4 w-4 mr-2" />
-            Start Mining
-          {/if}
-        </Button>
+        <div class="flex gap-2">
+          <Button
+            size="lg"
+            on:click={() => $miningState.isMining ? stopMining() : startMining()}
+            class="min-w-[150px]"
+            disabled={isInvalid || !isGethRunning}
+          >
+            {#if $miningState.isMining}
+              <Pause class="h-4 w-4 mr-2" />
+              Stop Mining
+            {:else}
+              <Play class="h-4 w-4 mr-2" />
+              Start Mining
+            {/if}
+          </Button>
+          <Button
+            size="lg"
+            variant="outline"
+            on:click={toggleLogs}
+            title="Show mining logs"
+          >
+            <Terminal class="h-4 w-4" />
+          </Button>
+        </div>
       </div>
       {#if validationError}
         <p class="text-red-600 text-sm mt-2 text-right">{validationError}</p>
+      {/if}
+      {#if error}
+        <div class="bg-red-500/10 border border-red-500/20 rounded-lg p-3 mt-2">
+          <div class="flex items-center gap-2">
+            <AlertCircle class="h-4 w-4 text-red-500 flex-shrink-0" />
+            <p class="text-sm text-red-500">{error}</p>
+          </div>
+        </div>
+      {/if}
+      {#if !isGethRunning}
+        <div class="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-3 mt-2">
+          <div class="flex items-center gap-2">
+            <AlertCircle class="h-4 w-4 text-yellow-500 flex-shrink-0" />
+            <p class="text-sm text-yellow-600">
+              Chiral node is not running. Please start it from the <a href="/network" class="underline font-medium">Network page</a>
+            </p>
+          </div>
+        </div>
+      {/if}
+      {#if !$etcAccount && isGethRunning}
+        <div class="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 mt-2">
+          <div class="flex items-center gap-2">
+            <AlertCircle class="h-4 w-4 text-blue-500 flex-shrink-0" />
+            <p class="text-sm text-blue-600">
+              Please create a Chiral Network account from the <a href="/account" class="underline font-medium">Account page</a> to start mining
+            </p>
+          </div>
+        </div>
       {/if}
     </div>
   </Card>
@@ -376,19 +574,19 @@
       <div class="space-y-3">
         <div class="flex justify-between items-center">
           <span class="text-sm text-muted-foreground">Network Hash Rate</span>
-          <Badge variant="outline">2.4 GH/s</Badge>
+          <Badge variant="outline">{networkHashRate}</Badge>
         </div>
         <div class="flex justify-between items-center">
           <span class="text-sm text-muted-foreground">Network Difficulty</span>
-          <Badge variant="outline">{currentDifficulty}</Badge>
+          <Badge variant="outline">{networkDifficulty}</Badge>
         </div>
         <div class="flex justify-between items-center">
           <span class="text-sm text-muted-foreground">Block Height</span>
-          <Badge variant="outline">#{245789 + blocksFound}</Badge>
+          <Badge variant="outline">#{currentBlock}</Badge>
         </div>
         <div class="flex justify-between items-center">
           <span class="text-sm text-muted-foreground">Block Reward</span>
-          <Badge variant="outline">5 CN</Badge>
+          <Badge variant="outline">{blockReward} CN</Badge>
         </div>
         <div class="flex justify-between items-center">
           <span class="text-sm text-muted-foreground">Est. Time to Block</span>
@@ -398,14 +596,14 @@
         </div>
         <div class="flex justify-between items-center">
           <span class="text-sm text-muted-foreground">Active Miners</span>
-          <Badge variant="outline">1,247</Badge>
+          <Badge variant="outline">{peerCount}</Badge>
         </div>
       </div>
     </Card>
     
     <Card class="p-6">
       <h2 class="text-lg font-semibold mb-4">Pool Information</h2>
-      {#if miningPool === 'solo'}
+      {#if $miningState.selectedPool === 'solo'}
         <div class="space-y-3">
           <p class="text-sm text-muted-foreground">
             You are mining solo. All block rewards will be yours, but finding blocks may take longer.
@@ -437,7 +635,7 @@
           </div>
           <div class="flex justify-between">
             <span class="text-sm">Your Share</span>
-            <span class="text-sm font-medium">{(hashRate / 850000000 * 100).toFixed(4)}%</span>
+            <span class="text-sm font-medium">{($miningState.hashRate / 850000000 * 100).toFixed(4)}%</span>
           </div>
           <div class="flex justify-between">
             <span class="text-sm">Pool Fee</span>
@@ -518,11 +716,11 @@
           <svg class="w-full h-full border border-border rounded" viewBox="0 0 400 128" preserveAspectRatio="xMinYMax meet">
             <!-- Grid background -->
             <defs>
-              <pattern id="hashRateGrid" width="40" height="32" patternUnits="userSpaceOnUse">
+              <pattern id="$miningState.hashRateGrid" width="40" height="32" patternUnits="userSpaceOnUse">
                 <path d="M 40 0 L 0 0 0 32" fill="none" stroke="hsl(var(--border))" stroke-width="0.5" opacity="0.3"/>
               </pattern>
             </defs>
-            <rect width="100%" height="100%" fill="url(#hashRateGrid)" />
+            <rect width="100%" height="100%" fill="url(#$miningState.hashRateGrid)" />
 
             <!-- Data line with proper scaling -->
             <polyline
@@ -534,7 +732,7 @@
                     points={miningHistory.map((point, i) => {
         const x = (i / Math.max(miningHistory.length - 1, 1)) * 380 + 10; // 10px margin
         const maxHash = Math.max(...miningHistory.map(h => h.hashRate)) || 1;
-        const y = 118 - ((point.hashRate / maxHash) * 100); // 10px margin top/bottom
+        const y = 118 - ((point.$miningState.hashRate / maxHash) * 100); // 10px margin top/bottom
         return `${x},${y}`;
       }).join(" ")}
             />
@@ -543,7 +741,7 @@
             {#each miningHistory as point, i}
               {@const x = (i / Math.max(miningHistory.length - 1, 1)) * 380 + 10}
               {@const maxHash = Math.max(...miningHistory.map(h => h.hashRate)) || 1}
-              {@const y = 118 - ((point.hashRate / maxHash) * 100)}
+              {@const y = 118 - ((point.$miningState.hashRate / maxHash) * 100)}
               <circle
                       cx={x}
                       cy={y}
@@ -562,5 +760,42 @@
 
       <p class="text-xs text-muted-foreground text-center mt-2">Last 5 minutes</p>
     </Card>
+  {/if}
+
+  <!-- Logs Modal -->
+  {#if showLogs}
+    <div class="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <Card class="w-full max-w-4xl max-h-[80vh] flex flex-col">
+        <div class="p-4 border-b flex items-center justify-between">
+          <h2 class="text-lg font-semibold">Mining Logs</h2>
+          <Button size="sm" variant="ghost" on:click={toggleLogs}>
+            <X class="h-4 w-4" />
+          </Button>
+        </div>
+        <div class="flex-1 overflow-auto p-4 bg-black/90 font-mono text-xs">
+          {#if logs.length === 0}
+            <p class="text-gray-400">No logs available yet...</p>
+          {:else}
+            {#each logs as log}
+              <div class="text-green-400 whitespace-pre-wrap break-all">{log}</div>
+            {/each}
+          {/if}
+        </div>
+        <div class="p-4 border-t flex items-center justify-between">
+          <p class="text-sm text-muted-foreground">
+            Auto-refresh: {logsInterval ? 'ON' : 'OFF'}
+          </p>
+          <div class="flex gap-2">
+            <Button size="sm" variant="outline" on:click={fetchLogs}>
+              <RefreshCw class="h-3 w-3 mr-1" />
+              Refresh
+            </Button>
+            <Button size="sm" variant="outline" on:click={() => logs = []}>
+              Clear
+            </Button>
+          </div>
+        </div>
+      </Card>
+    </div>
   {/if}
 </div>
