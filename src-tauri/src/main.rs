@@ -5,24 +5,27 @@
 
 mod ethereum;
 mod keystore;
+mod geth_downloader;
 
-use ethereum::{create_new_account, get_account_from_private_key, EthAccount, GethProcess};
+use ethereum::{create_new_account, get_account_from_private_key, get_balance, get_peer_count, EthAccount, GethProcess};
 use keystore::Keystore;
-use std::sync::Mutex;
-use tauri::Manager;
+use geth_downloader::GethDownloader;
+use std::sync::{Arc, Mutex};
+use tauri::{Manager, Emitter};
 use tauri::State;
 
 struct AppState {
     geth: Mutex<GethProcess>,
+    downloader: Arc<GethDownloader>,
 }
 
 #[tauri::command]
-async fn create_etc_account() -> Result<EthAccount, String> {
+async fn create_chiral_account() -> Result<EthAccount, String> {
     create_new_account()
 }
 
 #[tauri::command]
-async fn import_etc_account(private_key: String) -> Result<EthAccount, String> {
+async fn import_chiral_account(private_key: String) -> Result<EthAccount, String> {
     get_account_from_private_key(&private_key)
 }
 
@@ -65,22 +68,59 @@ async fn remove_account_from_keystore(address: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+async fn get_account_balance(address: String) -> Result<String, String> {
+    get_balance(&address).await
+}
+
+#[tauri::command]
+async fn get_network_peer_count() -> Result<u32, String> {
+    get_peer_count().await
+}
+
+#[tauri::command]
+async fn is_geth_running(state: State<'_, AppState>) -> Result<bool, String> {
+    let geth = state.geth.lock().map_err(|e| e.to_string())?;
+    Ok(geth.is_running())
+}
+
+#[tauri::command]
+async fn check_geth_binary(state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(state.downloader.is_geth_installed())
+}
+
+#[tauri::command]
+async fn download_geth_binary(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let downloader = state.downloader.clone();
+    let app_handle = app.clone();
+    
+    downloader.download_geth(move |progress| {
+        let _ = app_handle.emit("geth-download-progress", progress);
+    }).await
+}
+
 fn main() {
     println!("Starting Chiral Network...");
 
     tauri::Builder::default()
         .manage(AppState {
             geth: Mutex::new(GethProcess::new()),
+            downloader: Arc::new(GethDownloader::new()),
         })
         .invoke_handler(tauri::generate_handler![
-            create_etc_account,
-            import_etc_account,
+            create_chiral_account,
+            import_chiral_account,
             start_geth_node,
             stop_geth_node,
             save_account_to_keystore,
             load_account_from_keystore,
             list_keystore_accounts,
-            remove_account_from_keystore
+            remove_account_from_keystore,
+            get_account_balance,
+            get_network_peer_count,
+            is_geth_running,
+            check_geth_binary,
+            download_geth_binary
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())

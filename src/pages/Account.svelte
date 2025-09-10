@@ -23,19 +23,23 @@
   let selectedSavedAccount = ''
   let showPasswordModal = false
   let passwordAction: 'create' | 'import' | 'unlock' = 'create'
+  let accountBalance = '0.000000'
+  let isLoadingBalance = false
+  let isGethRunning = false
   
-  const transactions = writable([
-  { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', date: new Date('2024-03-15'), description: 'File purchase', status: 'completed' },
-  { id: 2, type: 'sent', amount: 10.25, to: '0x1234...5678', date: new Date('2024-03-14'), description: 'Proxy service', status: 'completed' },
-  { id: 3, type: 'received', amount: 100, from: '0xabcd...ef12', date: new Date('2024-03-13'), description: 'Upload reward', status: 'completed' },
-  { id: 4, type: 'sent', amount: 5.5, to: '0x9876...5432', date: new Date('2024-03-12'), description: 'File download', status: 'completed' },
-  ]);
+  // Real transactions will be fetched from blockchain in the future
+  const transactions = writable([]);
 
   // Filtering state
   let filterType: 'all' | 'sent' | 'received' = 'all';
   let filterDateFrom: string = '';
   let filterDateTo: string = '';
   let sortDescending: boolean = true;
+  
+  // Fetch balance when account changes
+  $: if ($etcAccount && isGethRunning) {
+    fetchBalance()
+  }
 
   // Derived filtered transactions
   $: filteredTransactions = $transactions
@@ -60,10 +64,11 @@
   let copyMessage = ''
 
   $: {
+    const maxAmount = parseFloat(accountBalance) || 0
     const prevAmount = sendAmount
-    sendAmount = Math.max(0.01, Math.min(sendAmount, $wallet.balance))
+    sendAmount = Math.max(0.000001, Math.min(sendAmount, maxAmount))
     amountWarning = (prevAmount !== sendAmount)
-      ? `Amount cannot be ${prevAmount}. Allowed range: 0.01-${$wallet.balance.toFixed(2)} CN.`
+      ? `Amount cannot be ${prevAmount}. Allowed range: 0.000001-${accountBalance} CN.`
       : ''
   }
   
@@ -121,8 +126,22 @@
   // Load saved accounts on mount
   import { onMount } from 'svelte'
   
+  let balanceInterval: number | undefined
+  
   onMount(async () => {
     await loadSavedAccounts()
+    await checkGethStatus()
+    
+    // Set up periodic balance refresh every 10 seconds
+    balanceInterval = setInterval(() => {
+      if ($etcAccount && isGethRunning) {
+        fetchBalance()
+      }
+    }, 10000)
+    
+    return () => {
+      if (balanceInterval) clearInterval(balanceInterval)
+    }
   })
 
   async function loadSavedAccounts() {
@@ -133,7 +152,34 @@
     }
   }
 
-  async function createETCAccount() {
+  async function checkGethStatus() {
+    try {
+      isGethRunning = await invoke('is_geth_running') as boolean
+      // Fetch balance if account exists and geth is running
+      if ($etcAccount && isGethRunning) {
+        fetchBalance()
+      }
+    } catch (error) {
+      console.error('Failed to check geth status:', error)
+    }
+  }
+
+  async function fetchBalance() {
+    if (!$etcAccount || !isGethRunning) return
+    
+    isLoadingBalance = true
+    try {
+      accountBalance = await invoke('get_account_balance', { address: $etcAccount.address }) as string
+    } catch (error) {
+      console.error('Failed to fetch balance:', error)
+      accountBalance = '0.000000'
+    } finally {
+      isLoadingBalance = false
+    }
+  }
+
+
+  async function createChiralAccount() {
     passwordAction = 'create'
     showPasswordModal = true
   }
@@ -151,7 +197,7 @@
     isCreatingAccount = true
     showPasswordModal = false
     try {
-      const account = await invoke('create_etc_account') as { address: string, private_key: string }
+      const account = await invoke('create_chiral_account') as { address: string, private_key: string }
       
       // Save to encrypted keystore
       await invoke('save_account_to_keystore', {
@@ -160,9 +206,9 @@
         password: password
       })
       
-      // Update the ETC account store
+      // Update the Chiral account store
       etcAccount.set(account)
-      // Also update the wallet store with the new ETC address
+      // Also update the wallet store with the new Chiral address
       wallet.update(w => ({
         ...w,
         address: account.address
@@ -176,15 +222,20 @@
       // Clear password fields
       password = ''
       confirmPassword = ''
+      
+      // Fetch balance for new account
+      if (isGethRunning) {
+        await fetchBalance()
+      }
     } catch (error) {
-      console.error('Failed to create ETC account:', error)
+      console.error('Failed to create Chiral account:', error)
       alert('Failed to create account: ' + error)
     } finally {
       isCreatingAccount = false
     }
   }
 
-  async function importETCAccount() {
+  async function importChiralAccount() {
     if (!importPrivateKey) return
     passwordAction = 'import'
     showPasswordModal = true
@@ -203,7 +254,7 @@
     isImportingAccount = true
     showPasswordModal = false
     try {
-      const account = await invoke('import_etc_account', { privateKey: importPrivateKey }) as { address: string, private_key: string }
+      const account = await invoke('import_chiral_account', { privateKey: importPrivateKey }) as { address: string, private_key: string }
       
       // Save to encrypted keystore
       await invoke('save_account_to_keystore', {
@@ -212,9 +263,9 @@
         password: password
       })
       
-      // Update the ETC account store
+      // Update the Chiral account store
       etcAccount.set(account)
-      // Also update the wallet store with the imported ETC address
+      // Also update the wallet store with the imported Chiral address
       wallet.update(w => ({
         ...w,
         address: account.address
@@ -229,8 +280,13 @@
       // Clear password fields
       password = ''
       confirmPassword = ''
+      
+      // Fetch balance for imported account
+      if (isGethRunning) {
+        await fetchBalance()
+      }
     } catch (error) {
-      console.error('Failed to import ETC account:', error)
+      console.error('Failed to import Chiral account:', error)
       alert('Failed to import account: ' + error)
     } finally {
       isImportingAccount = false
@@ -253,7 +309,7 @@
         password: unlockPassword
       }) as { address: string, private_key: string }
       
-      // Update the ETC account store
+      // Update the Chiral account store
       etcAccount.set(account)
       // Also update the wallet store
       wallet.update(w => ({
@@ -264,6 +320,11 @@
       showPasswordModal = false
       unlockPassword = ''
       privateKeyVisible = false
+      
+      // Fetch balance for unlocked account
+      if (isGethRunning) {
+        await fetchBalance()
+      }
     } catch (error) {
       alert('Failed to unlock account: Incorrect password or corrupted keystore')
     }
@@ -279,7 +340,7 @@
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
     <Card class="p-6">
       <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold">ETC Wallet</h2>
+        <h2 class="text-lg font-semibold">Chiral Network Wallet</h2>
         <Wallet class="h-5 w-5 text-muted-foreground" />
       </div>
       
@@ -318,16 +379,16 @@
                 </div>
               </div>
             {:else}
-              <p class="text-sm text-muted-foreground">No ETC account yet. Create or import one:</p>
+              <p class="text-sm text-muted-foreground">No Chiral Network account yet. Create or import one:</p>
             {/if}
             
             <Button 
               class="w-full" 
-              on:click={createETCAccount}
+              on:click={createChiralAccount}
               disabled={isCreatingAccount}
             >
               <Plus class="h-4 w-4 mr-2" />
-              {isCreatingAccount ? 'Creating...' : 'Create New ETC Account'}
+              {isCreatingAccount ? 'Creating...' : 'Create New Chiral Account'}
             </Button>
             
             <div class="space-y-2">
@@ -340,17 +401,17 @@
               <Button 
                 class="w-full" 
                 variant="outline"
-                on:click={importETCAccount}
+                on:click={importChiralAccount}
                 disabled={!importPrivateKey || isImportingAccount}
               >
                 <Import class="h-4 w-4 mr-2" />
-                {isImportingAccount ? 'Importing...' : 'Import ETC Account'}
+                {isImportingAccount ? 'Importing...' : 'Import Chiral Account'}
               </Button>
             </div>
           </div>
         {:else}
           <div>
-            <p class="text-sm text-muted-foreground">ETC Address</p>
+            <p class="text-sm text-muted-foreground">Chiral Address</p>
             <div class="flex items-center gap-2 mt-1">
               <p class="font-mono text-sm">{$etcAccount.address.slice(0, 10)}...{$etcAccount.address.slice(-8)}</p>
               <div class="flex flex-col items-center">
@@ -359,6 +420,24 @@
                 </Button>
                 {#if copyMessage}
                   <span class="text-xs text-muted-foreground mt-1">{copyMessage}</span>
+                {/if}
+              </div>
+            </div>
+            
+            <div class="mt-3">
+              <p class="text-sm text-muted-foreground">Balance</p>
+              <div class="flex items-center gap-2 mt-1">
+                {#if isLoadingBalance}
+                  <p class="text-lg font-semibold">Loading...</p>
+                {:else}
+                  <p class="text-lg font-semibold">{accountBalance} CN</p>
+                {/if}
+                {#if isGethRunning}
+                  <Button size="sm" variant="ghost" on:click={fetchBalance}>
+                    <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                  </Button>
                 {/if}
               </div>
             </div>
@@ -385,52 +464,12 @@
           </div>
         {/if}
         
-        <div>
-          <p class="text-sm text-muted-foreground">Balance</p>
-          <p class="text-2xl font-bold">{$wallet.balance.toFixed(2)} CN</p>
-        </div>
-        
-        <div class="grid grid-cols-2 gap-4">
-          <div>
-            <p class="text-xs text-muted-foreground">Total Earned</p>
-            <p class="text-sm font-medium text-green-600">+{$wallet.totalEarned.toFixed(2)} CN</p>
-          </div>
-          <div>
-            <p class="text-xs text-muted-foreground">Total Spent</p>
-            <p class="text-sm font-medium text-red-600">-{$wallet.totalSpent.toFixed(2)} CN</p>
-          </div>
-        </div>
-        
-        <Button class="w-full justify-center bg-gray-100 hover:bg-gray-200 text-gray-800 rounded transition-colors py-2 font-normal" on:click={() => showPending = !showPending} aria-label="View pending transactions">
-          <span class="flex items-center gap-2">
-            <svg class="h-4 w-4 text-gray-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /></svg>
-            {#if $pendingCount > 0}
-              {$pendingCount} Pending Transaction{$pendingCount !== 1 ? 's' : ''}
-            {:else}
-              Pending Transactions
-            {/if}
-          </span>
-        </Button>
-        {#if showPending}
-          <div class="mt-2 p-3 bg-gray-50 rounded shadow">
-            <h3 class="text-sm mb-2 text-gray-700 font-normal">Pending Transactions</h3>
-            <ul class="space-y-1">
-              {#each $transactions.filter(tx => tx.status === 'pending') as tx}
-                <li class="text-xs text-gray-800 font-normal">
-                  {tx.description} ({tx.type === 'sent' ? 'To' : 'From'}: {tx.type === 'sent' ? tx.to : tx.from}) - {tx.amount} CN
-                </li>
-              {:else}
-                <li class="text-xs text-gray-500 font-normal">No pending transaction details available.</li>
-              {/each}
-            </ul>
-          </div>
-        {/if}
       </div>
     </Card>
     
     <Card class="p-6">
       <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold">Send CN Tokens</h2>
+        <h2 class="text-lg font-semibold">Send CN</h2>
         <Coins class="h-5 w-5 text-muted-foreground" />
       </div>
       <form autocomplete="off" data-form-type="other" data-lpignore="true">
@@ -456,7 +495,7 @@
               type="number"
               bind:value={sendAmount}
               placeholder="0.00"
-              max={$wallet.balance}
+              max={parseFloat(accountBalance)}
               class="mt-2"
               autocomplete="off"
               data-form-type="other"
@@ -467,7 +506,7 @@
               <p class="text-xs text-red-500 mt-1">{amountWarning}</p>
             {/if}
             <p class="text-xs text-muted-foreground mt-1">
-              Available: {$wallet.balance.toFixed(2)} CN
+              Available: {accountBalance} CN
             </p>
           </div>
 
@@ -475,7 +514,7 @@
             type="button"
             class="w-full"
             on:click={sendTransaction}
-            disabled={!recipientAddress || sendAmount <= 0 || sendAmount > $wallet.balance}
+            disabled={!recipientAddress || sendAmount <= 0 || sendAmount > parseFloat(accountBalance) || !$etcAccount || !isGethRunning}
           >
             <ArrowUpRight class="h-4 w-4 mr-2" />
             Send Transaction
@@ -544,6 +583,12 @@
             <p class="text-xs text-muted-foreground">{formatDate(tx.date)}</p>
           </div>
         </div>
+      {:else}
+        <div class="text-center py-8 text-muted-foreground">
+          <History class="h-12 w-12 mx-auto mb-2 opacity-20" />
+          <p>No transactions yet</p>
+          <p class="text-sm mt-1">Transactions will appear here once you send or receive CN</p>
+        </div>
       {/each}
     </div>
   </Card>
@@ -557,11 +602,11 @@
     <form autocomplete="off" data-form-type="other" data-lpignore="true">
       <div class="space-y-4">
         <div>
-          <Label>Private Key (ETC)</Label>
+          <Label>Private Key (Chiral)</Label>
           <div class="flex gap-2 mt-2">
             <Input
               type={privateKeyVisible ? 'text' : 'password'}
-              value={$etcAccount ? $etcAccount.private_key : 'No ETC account created yet'}
+              value={$etcAccount ? $etcAccount.private_key : 'No Chiral account created yet'}
               readonly
               class="flex-1 font-mono text-sm"
               autocomplete="off"
