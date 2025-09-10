@@ -538,16 +538,16 @@
         </select>
       </div>
       <div>
-        <label for="filter-from" class="block text-xs font-medium mb-1">From</label>
-        <input id="filter-from" type="date" bind:value={filterDateFrom} class="border rounded px-2 py-1 text-sm" />
+        <label for="filter-date-from" class="block text-xs font-medium mb-1">From</label>
+        <input id="filter-date-from" type="date" bind:value={filterDateFrom} class="border rounded px-2 py-1 text-sm" />
       </div>
       <div>
-        <label for="filter-to" class="block text-xs font-medium mb-1">To</label>
-        <input id="filter-to" type="date" bind:value={filterDateTo} class="border rounded px-2 py-1 text-sm" />
+        <label for="filter-date-to" class="block text-xs font-medium mb-1">To</label>
+        <input id="filter-date-to" type="date" bind:value={filterDateTo} class="border rounded px-2 py-1 text-sm" />
       </div>
       <div>
         <label for="sort-button" class="block text-xs font-medium mb-1">Sort</label>
-        <button id="sort-button" type="button" class="border rounded px-3 py-1 text-sm bg-white hover:bg-gray-100 transition-colors w-full" on:click={() => { sortDescending = !sortDescending; }}>
+        <button id="sort-button" type="button" class="border rounded px-3 py-1 text-sm bg-white hover:bg-gray-100 transition-colors w-full" on:click={() => { sortDescending = !sortDescending; }} aria-pressed={sortDescending}>
           {sortDescending ? 'Newest → Oldest' : 'Oldest → Newest'}
         </button>
       </div>
