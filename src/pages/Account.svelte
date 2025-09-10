@@ -464,8 +464,7 @@
         {/if}
       </div>
     </Card>
-    
-  <Card class="p-6">
+<Card class="p-6">
     <div class="flex items-center justify-between mb-4">
       <h2 class="text-lg font-semibold">Send CN Tokens</h2>
       <Coins class="h-5 w-5 text-muted-foreground" />
