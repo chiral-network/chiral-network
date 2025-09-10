@@ -4,14 +4,25 @@
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
-  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, Settings, Key, History, Coins } from 'lucide-svelte'
-  import { wallet } from '$lib/stores'
+  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, Settings, Key, History, Coins, Plus, Import } from 'lucide-svelte'
+  import { wallet, etcAccount } from '$lib/stores'
   import { writable, derived } from 'svelte/store'
+  import { invoke } from '@tauri-apps/api/core'
   
   let recipientAddress = ''
   let sendAmount = 0
   let privateKeyVisible = false
   let showPending = false
+  let importPrivateKey = ''
+  let isCreatingAccount = false
+  let isImportingAccount = false
+  let password = ''
+  let confirmPassword = ''
+  let unlockPassword = ''
+  let savedAccounts: string[] = []
+  let selectedSavedAccount = ''
+  let showPasswordModal = false
+  let passwordAction: 'create' | 'import' | 'unlock' = 'create'
   
   const transactions = writable([
   { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', date: new Date('2024-03-15'), description: 'File purchase', status: 'completed' },
@@ -57,7 +68,8 @@
   }
   
   function copyAddress() {
-    navigator.clipboard.writeText($wallet.address);
+    const addressToCopy = $etcAccount ? $etcAccount.address : $wallet.address;
+    navigator.clipboard.writeText(addressToCopy);
     copyMessage = 'Copied!';
     setTimeout(() => copyMessage = '', 1500);
   }
@@ -105,6 +117,157 @@
 
   // Ensure wallet.pendingTransactions matches actual pending transactions
   const pendingCount = derived(transactions, $txs => $txs.filter(tx => tx.status === 'pending').length);
+
+  // Load saved accounts on mount
+  import { onMount } from 'svelte'
+  
+  onMount(async () => {
+    await loadSavedAccounts()
+  })
+
+  async function loadSavedAccounts() {
+    try {
+      savedAccounts = await invoke('list_keystore_accounts') as string[]
+    } catch (error) {
+      console.error('Failed to load saved accounts:', error)
+    }
+  }
+
+  async function createETCAccount() {
+    passwordAction = 'create'
+    showPasswordModal = true
+  }
+
+  async function confirmCreateAccount() {
+    if (password !== confirmPassword) {
+      alert('Passwords do not match')
+      return
+    }
+    if (password.length < 8) {
+      alert('Password must be at least 8 characters')
+      return
+    }
+    
+    isCreatingAccount = true
+    showPasswordModal = false
+    try {
+      const account = await invoke('create_etc_account') as { address: string, private_key: string }
+      
+      // Save to encrypted keystore
+      await invoke('save_account_to_keystore', {
+        address: account.address,
+        privateKey: account.private_key,
+        password: password
+      })
+      
+      // Update the ETC account store
+      etcAccount.set(account)
+      // Also update the wallet store with the new ETC address
+      wallet.update(w => ({
+        ...w,
+        address: account.address
+      }))
+      // Show private key after creation
+      privateKeyVisible = true
+      
+      // Reload saved accounts
+      await loadSavedAccounts()
+      
+      // Clear password fields
+      password = ''
+      confirmPassword = ''
+    } catch (error) {
+      console.error('Failed to create ETC account:', error)
+      alert('Failed to create account: ' + error)
+    } finally {
+      isCreatingAccount = false
+    }
+  }
+
+  async function importETCAccount() {
+    if (!importPrivateKey) return
+    passwordAction = 'import'
+    showPasswordModal = true
+  }
+
+  async function confirmImportAccount() {
+    if (password !== confirmPassword) {
+      alert('Passwords do not match')
+      return
+    }
+    if (password.length < 8) {
+      alert('Password must be at least 8 characters')
+      return
+    }
+    
+    isImportingAccount = true
+    showPasswordModal = false
+    try {
+      const account = await invoke('import_etc_account', { privateKey: importPrivateKey }) as { address: string, private_key: string }
+      
+      // Save to encrypted keystore
+      await invoke('save_account_to_keystore', {
+        address: account.address,
+        privateKey: account.private_key,
+        password: password
+      })
+      
+      // Update the ETC account store
+      etcAccount.set(account)
+      // Also update the wallet store with the imported ETC address
+      wallet.update(w => ({
+        ...w,
+        address: account.address
+      }))
+      importPrivateKey = ''
+      // Show private key after import
+      privateKeyVisible = true
+      
+      // Reload saved accounts
+      await loadSavedAccounts()
+      
+      // Clear password fields
+      password = ''
+      confirmPassword = ''
+    } catch (error) {
+      console.error('Failed to import ETC account:', error)
+      alert('Failed to import account: ' + error)
+    } finally {
+      isImportingAccount = false
+    }
+  }
+
+  async function unlockAccount() {
+    if (!selectedSavedAccount) {
+      alert('Please select an account to unlock')
+      return
+    }
+    passwordAction = 'unlock'
+    showPasswordModal = true
+  }
+
+  async function confirmUnlockAccount() {
+    try {
+      const account = await invoke('load_account_from_keystore', {
+        address: selectedSavedAccount,
+        password: unlockPassword
+      }) as { address: string, private_key: string }
+      
+      // Update the ETC account store
+      etcAccount.set(account)
+      // Also update the wallet store
+      wallet.update(w => ({
+        ...w,
+        address: account.address
+      }))
+      
+      showPasswordModal = false
+      unlockPassword = ''
+      privateKeyVisible = false
+    } catch (error) {
+      alert('Failed to unlock account: Incorrect password or corrupted keystore')
+    }
+  }
 </script>
 
 <div class="space-y-6">
@@ -116,25 +279,111 @@
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
     <Card class="p-6">
       <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold">Wallet</h2>
+        <h2 class="text-lg font-semibold">ETC Wallet</h2>
         <Wallet class="h-5 w-5 text-muted-foreground" />
       </div>
       
       <div class="space-y-4">
-        <div>
-          <p class="text-sm text-muted-foreground">Address</p>
-          <div class="flex items-center gap-2 mt-1">
-            <p class="font-mono text-sm">{$wallet.address.slice(0, 10)}...{$wallet.address.slice(-8)}</p>
-            <div class="flex flex-col items-center">
-              <Button size="sm" variant="ghost" on:click={copyAddress}>
-                <Copy class="h-3 w-3" />
+        {#if !$etcAccount}
+          <div class="space-y-3">
+            {#if savedAccounts.length > 0}
+              <div class="space-y-2">
+                <p class="text-sm text-muted-foreground">Saved Accounts:</p>
+                <select 
+                  bind:value={selectedSavedAccount}
+                  class="w-full p-2 border rounded"
+                >
+                  <option value="">Select an account</option>
+                  {#each savedAccounts as account}
+                    <option value={account}>{account.slice(0, 10)}...{account.slice(-8)}</option>
+                  {/each}
+                </select>
+                <Button 
+                  class="w-full" 
+                  variant="outline"
+                  on:click={unlockAccount}
+                  disabled={!selectedSavedAccount}
+                >
+                  <Key class="h-4 w-4 mr-2" />
+                  Unlock Selected Account
+                </Button>
+              </div>
+              
+              <div class="relative">
+                <div class="absolute inset-0 flex items-center">
+                  <span class="w-full border-t" />
+                </div>
+                <div class="relative flex justify-center text-xs uppercase">
+                  <span class="bg-background px-2 text-muted-foreground">Or</span>
+                </div>
+              </div>
+            {:else}
+              <p class="text-sm text-muted-foreground">No ETC account yet. Create or import one:</p>
+            {/if}
+            
+            <Button 
+              class="w-full" 
+              on:click={createETCAccount}
+              disabled={isCreatingAccount}
+            >
+              <Plus class="h-4 w-4 mr-2" />
+              {isCreatingAccount ? 'Creating...' : 'Create New ETC Account'}
+            </Button>
+            
+            <div class="space-y-2">
+              <Input
+                type="password"
+                bind:value={importPrivateKey}
+                placeholder="Enter private key to import"
+                class="w-full"
+              />
+              <Button 
+                class="w-full" 
+                variant="outline"
+                on:click={importETCAccount}
+                disabled={!importPrivateKey || isImportingAccount}
+              >
+                <Import class="h-4 w-4 mr-2" />
+                {isImportingAccount ? 'Importing...' : 'Import ETC Account'}
               </Button>
-              {#if copyMessage}
-                <span class="text-xs text-muted-foreground mt-1">{copyMessage}</span>
-              {/if}
             </div>
           </div>
-        </div>
+        {:else}
+          <div>
+            <p class="text-sm text-muted-foreground">ETC Address</p>
+            <div class="flex items-center gap-2 mt-1">
+              <p class="font-mono text-sm">{$etcAccount.address.slice(0, 10)}...{$etcAccount.address.slice(-8)}</p>
+              <div class="flex flex-col items-center">
+                <Button size="sm" variant="ghost" on:click={copyAddress}>
+                  <Copy class="h-3 w-3" />
+                </Button>
+                {#if copyMessage}
+                  <span class="text-xs text-muted-foreground mt-1">{copyMessage}</span>
+                {/if}
+              </div>
+            </div>
+            
+            <div class="mt-4">
+              <p class="text-sm text-muted-foreground">Private Key</p>
+              <div class="flex gap-2 mt-1">
+                <Input
+                  type={privateKeyVisible ? 'text' : 'password'}
+                  value={$etcAccount.private_key}
+                  readonly
+                  class="flex-1 font-mono text-xs"
+                />
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  on:click={() => privateKeyVisible = !privateKeyVisible}
+                >
+                  {privateKeyVisible ? 'Hide' : 'Show'}
+                </Button>
+              </div>
+              <p class="text-xs text-red-500 mt-1">⚠️ Never share your private key!</p>
+            </div>
+          </div>
+        {/if}
         
         <div>
           <p class="text-sm text-muted-foreground">Balance</p>
@@ -308,11 +557,11 @@
     <form autocomplete="off" data-form-type="other" data-lpignore="true">
       <div class="space-y-4">
         <div>
-          <Label>Private Key</Label>
+          <Label>Private Key (ETC)</Label>
           <div class="flex gap-2 mt-2">
             <Input
               type={privateKeyVisible ? 'text' : 'password'}
-              value="your-private-key-here-do-not-share"
+              value={$etcAccount ? $etcAccount.private_key : 'No ETC account created yet'}
               readonly
               class="flex-1 font-mono text-sm"
               autocomplete="off"
@@ -339,4 +588,88 @@
       </div>
     </form>
   </Card>
+  
+  <!-- Password Modal -->
+  {#if showPasswordModal}
+    <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <Card class="p-6 w-96 max-w-full">
+        <h3 class="text-lg font-semibold mb-4">
+          {#if passwordAction === 'create'}
+            Set Password for New Account
+          {:else if passwordAction === 'import'}
+            Set Password for Imported Account
+          {:else}
+            Enter Password to Unlock Account
+          {/if}
+        </h3>
+        
+        <div class="space-y-4">
+          {#if passwordAction === 'unlock'}
+            <div>
+              <Label for="unlock-password">Password</Label>
+              <Input
+                id="unlock-password"
+                type="password"
+                bind:value={unlockPassword}
+                placeholder="Enter your password"
+                class="mt-2"
+              />
+            </div>
+          {:else}
+            <div>
+              <Label for="password">Password</Label>
+              <Input
+                id="password"
+                type="password"
+                bind:value={password}
+                placeholder="Enter a strong password"
+                class="mt-2"
+              />
+              <p class="text-xs text-muted-foreground mt-1">Minimum 8 characters</p>
+            </div>
+            
+            <div>
+              <Label for="confirm-password">Confirm Password</Label>
+              <Input
+                id="confirm-password"
+                type="password"
+                bind:value={confirmPassword}
+                placeholder="Confirm your password"
+                class="mt-2"
+              />
+            </div>
+          {/if}
+          
+          <div class="flex gap-2">
+            <Button
+              variant="outline"
+              class="flex-1"
+              on:click={() => {
+                showPasswordModal = false
+                password = ''
+                confirmPassword = ''
+                unlockPassword = ''
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              class="flex-1"
+              on:click={() => {
+                if (passwordAction === 'create') {
+                  confirmCreateAccount()
+                } else if (passwordAction === 'import') {
+                  confirmImportAccount()
+                } else {
+                  confirmUnlockAccount()
+                }
+              }}
+            >
+              {passwordAction === 'unlock' ? 'Unlock' : 'Confirm'}
+            </Button>
+          </div>
+        </div>
+      </Card>
+    </div>
+  {/if}
 </div>
