@@ -190,3 +190,4 @@ export const peers = writable<PeerInfo[]>(dummyPeers);
 export const chatMessages = writable<ChatMessage[]>([]);
 export const networkStats = writable<NetworkStats>(dummyNetworkStats);
 export const downloadQueue = writable<FileItem[]>([]);
+export const userLocation = writable<string>("US-East");

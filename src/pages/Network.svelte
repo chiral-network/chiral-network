@@ -5,7 +5,7 @@
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
   import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal } from 'lucide-svelte'
-  import { peers, networkStats, networkStatus } from '$lib/stores'
+  import { peers, networkStats, networkStatus, userLocation } from '$lib/stores'
   import { onMount } from 'svelte'
   
   let discoveryRunning = false
@@ -236,8 +236,23 @@
                     bVal = (b.nickname || 'zzzzz').toLowerCase()
                     break
                 case 'location':
-                    aVal = (a.location || 'zzzzz').toLowerCase() // Put empty locations at the end
-                    bVal = (b.location || 'zzzzz').toLowerCase()
+                    // Distance-based sorting: closer peers first
+                    const getLocationDistance = (peerLocation: string | undefined) => {
+                        if (!peerLocation) return 999; // Unknown locations go to the end
+                        
+                        // Distance map from user's location to other regions
+                        const distanceMap: Record<string, Record<string, number>> = {
+                            'US-East': { 'US-East': 0, 'US-West': 1, 'EU-West': 2, 'Asia-Pacific': 3 },
+                            'US-West': { 'US-West': 0, 'US-East': 1, 'EU-West': 3, 'Asia-Pacific': 2 },
+                            'EU-West': { 'EU-West': 0, 'US-East': 1, 'US-West': 3, 'Asia-Pacific': 2 },
+                            'Asia-Pacific': { 'Asia-Pacific': 0, 'US-West': 1, 'EU-West': 2, 'US-East': 3 }
+                        };
+                        
+                        return distanceMap[$userLocation]?.[peerLocation] ?? 999;
+                    };
+                    
+                    aVal = getLocationDistance(a.location);
+                    bVal = getLocationDistance(b.location);
                     break
                 case 'joinDate':
                     aVal = new Date(a.joinDate).getTime()
