@@ -10,6 +10,9 @@
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
   
+  // Check if running in Tauri environment
+  const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+  
   let discoveryRunning = false
   let newPeerAddress = ''
   let sortBy: 'reputation' | 'sharedFiles' | 'totalSize' | 'nickname' | 'location' | 'joinDate' | 'lastSeen' | 'status' = 'reputation'
@@ -103,6 +106,13 @@
   }
   
   async function checkGethStatus() {
+    if (!isTauri) {
+      // In web mode, simulate that geth is not installed
+      isGethInstalled = false
+      isGethRunning = false
+      return
+    }
+    
     try {
       // First check if geth is installed
       isGethInstalled = await invoke('check_geth_binary') as boolean
@@ -119,6 +129,11 @@
   }
   
   async function downloadGeth() {
+    if (!isTauri) {
+      downloadError = 'Chiral Node download is only available in the desktop app. Please download and run the Tauri desktop version.'
+      return
+    }
+    
     isDownloading = true
     downloadError = ''
     downloadProgress = {
@@ -145,10 +160,15 @@
       clearInterval(peerCountInterval)
     }
     fetchPeerCount()
-    peerCountInterval = setInterval(fetchPeerCount, 5000)
+    peerCountInterval = setInterval(fetchPeerCount, 5000) as unknown as number
   }
 
   async function startGethNode() {
+    if (!isTauri) {
+      console.log('Cannot start Chiral Node in web mode - desktop app required')
+      return
+    }
+    
     try {
       // Set miner address if we have an account
       if ($etcAccount) {
@@ -164,6 +184,11 @@
   }
 
   async function stopGethNode() {
+    if (!isTauri) {
+      console.log('Cannot stop Chiral Node in web mode - desktop app required')
+      return
+    }
+    
     try {
       await invoke('stop_geth_node')
       isGethRunning = false
@@ -179,6 +204,11 @@
 
   async function fetchPeerCount() {
     if (!isGethRunning) return
+    if (!isTauri) {
+      // Simulate peer count in web mode
+      peerCount = Math.floor(Math.random() * 10) + 5
+      return
+    }
     
     try {
       peerCount = await invoke('get_network_peer_count') as number
@@ -188,26 +218,37 @@
     }
   }
 
-  onMount(async () => {
+  onMount(() => {
     const interval = setInterval(refreshStats, 5000)
-    await checkGethStatus()
+    let unlistenProgress: (() => void) | null = null
     
-    // Listen for download progress updates
-    const unlistenProgress = await listen('geth-download-progress', (event) => {
-      downloadProgress = event.payload as typeof downloadProgress
-    })
-    
-    // Auto-start geth if installed but not running
-    if (isGethInstalled && !isGethRunning) {
-      await startGethNode()
+    // Initialize async operations
+    const initAsync = async () => {
+      await checkGethStatus()
+      
+      // Listen for download progress updates (only in Tauri)
+      if (isTauri) {
+        unlistenProgress = await listen('geth-download-progress', (event) => {
+          downloadProgress = event.payload as typeof downloadProgress
+        })
+      }
+      
+      // Auto-start geth if installed but not running
+      if (isGethInstalled && !isGethRunning) {
+        await startGethNode()
+      }
     }
+    
+    initAsync()
     
     return () => {
       clearInterval(interval)
       if (peerCountInterval) {
         clearInterval(peerCountInterval)
       }
-      unlistenProgress()
+      if (unlistenProgress) {
+        unlistenProgress()
+      }
     }
   })
 

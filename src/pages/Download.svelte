@@ -1,6 +1,3 @@
-B •543 lines
-•
-Formatting may be inconsistent from source
 <script lang="ts">
   import Button from '$lib/components/ui/button.svelte'
   import Card from '$lib/components/ui/card.svelte'
@@ -9,7 +6,7 @@ Formatting may be inconsistent from source
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
   import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, File } from 'lucide-svelte'
-  import { files, downloadQueue } from '$lib/stores'
+  import { files, downloadQueue, type FileItem } from '$lib/stores'
   
   let searchHash = ''
   let maxConcurrentDownloads = 3
@@ -46,9 +43,9 @@ Formatting may be inconsistent from source
         'seeding': 6
       }
       
-      const sortByStatus = (a, b) => {
-        const statusA = statusOrder[a.status] ?? 999
-        const statusB = statusOrder[b.status] ?? 999
+      const sortByStatus = (a: FileItem, b: FileItem) => {
+        const statusA = statusOrder[a.status as keyof typeof statusOrder] ?? 999
+        const statusB = statusOrder[b.status as keyof typeof statusOrder] ?? 999
         const statusDiff = statusA - statusB
         return statusDiff === 0 ? a.id.localeCompare(b.id) : statusDiff
       }
