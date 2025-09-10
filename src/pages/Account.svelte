@@ -3,7 +3,7 @@
   import Card from '$lib/components/ui/card.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import Badge from '$lib/components/ui/badge.svelte'
+  // import Badge from '$lib/components/ui/badge.svelte'
   import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, Settings, Key, History, Coins } from 'lucide-svelte'
   import { wallet } from '$lib/stores'
   import { writable, derived } from 'svelte/store'
@@ -47,6 +47,9 @@
 
   // Copy feedback message
   let copyMessage = ''
+  
+  // Export feedback message
+  let exportMessage = ''
 
   $: {
     const prevAmount = sendAmount
@@ -60,6 +63,69 @@
     navigator.clipboard.writeText($wallet.address);
     copyMessage = 'Copied!';
     setTimeout(() => copyMessage = '', 1500);
+  }
+  
+  async function exportWallet() {
+    try {
+      const walletData = {
+        address: $wallet.address,
+        privateKey: "your-private-key-here-do-not-share", // this should change to be the actual private key
+        balance: $wallet.balance,
+        totalEarned: $wallet.totalEarned,
+        totalSpent: $wallet.totalSpent,
+        pendingTransactions: $wallet.pendingTransactions,
+        exportDate: new Date().toISOString(),
+        version: "1.0"
+      };
+      
+      const dataStr = JSON.stringify(walletData, null, 2);
+      const dataBlob = new Blob([dataStr], { type: 'application/json' });
+      
+      // Check if the File System Access API is supported
+      if ('showSaveFilePicker' in window) {
+        try {
+          const fileHandle = await (window as any).showSaveFilePicker({
+            suggestedName: `chiral-wallet-export-${new Date().toISOString().split('T')[0]}.json`,
+            types: [{
+              description: 'JSON files',
+              accept: {
+                'application/json': ['.json'],
+              },
+            }],
+          });
+          
+          const writable = await fileHandle.createWritable();
+          await writable.write(dataBlob);
+          await writable.close();
+          
+          exportMessage = 'Wallet exported successfully!';
+        } catch (error: any) {
+          if (error.name !== 'AbortError') {
+            throw error;
+          }
+          // User cancelled, don't show error message
+          return;
+        }
+      } else {
+        // Fallback for browsers that don't support File System Access API
+        const url = URL.createObjectURL(dataBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `chiral-wallet-export-${new Date().toISOString().split('T')[0]}.json`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        
+        exportMessage = 'Wallet exported successfully!';
+      }
+      
+      setTimeout(() => exportMessage = '', 3000);
+    } catch (error) {
+      console.error('Export failed:', error);
+      exportMessage = 'Export failed. Please try again.';
+      setTimeout(() => exportMessage = '', 3000);
+    }
   }
   
   function sendTransaction() {
@@ -332,10 +398,15 @@
           <p class="text-xs text-muted-foreground mt-1">Never share your private key with anyone</p>
         </div>
 
-        <Button type="button" variant="outline" class="w-full">
-          <Key class="h-4 w-4 mr-2" />
-          Export Wallet
-        </Button>
+        <div class="space-y-2">
+          <Button type="button" variant="outline" class="w-full" on:click={exportWallet}>
+            <Key class="h-4 w-4 mr-2" />
+            Export Wallet
+          </Button>
+          {#if exportMessage}
+            <p class="text-xs text-green-600 text-center">{exportMessage}</p>
+          {/if}
+        </div>
       </div>
     </form>
   </Card>
