@@ -3,36 +3,74 @@
   import Card from '$lib/components/ui/card.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  // import Badge from '$lib/components/ui/badge.svelte'
-  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, Settings, Key, History, Coins } from 'lucide-svelte'
-  import { wallet } from '$lib/stores'
+  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, Settings, Key } from 'lucide-svelte'
+  import { wallet, etcAccount } from '$lib/stores'
   import { writable, derived } from 'svelte/store'
+  import { invoke } from '@tauri-apps/api/core'
+
+  // Check if running in Tauri environment
+  const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+
+  interface Transaction {
+    id: number;
+    type: 'sent' | 'received';
+    amount: number;
+    to?: string;
+    from?: string;
+    date: Date;
+    description: string;
+    status: 'pending' | 'completed';
+  }
   
   let recipientAddress = ''
   let sendAmount = 0
+  let rawAmountInput = '' // Track raw user input for validation
   let privateKeyVisible = false
   let showPending = false
+  let importPrivateKey = ''
+  let isCreatingAccount = false
+  let isImportingAccount = false
+  let isGethRunning = false
   
-  const transactions = writable([
-  { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', date: new Date('2024-03-15'), description: 'File purchase', status: 'completed' },
-  { id: 2, type: 'sent', amount: 10.25, to: '0x1234...5678', date: new Date('2024-03-14'), description: 'Proxy service', status: 'completed' },
-  { id: 3, type: 'received', amount: 100, from: '0xabcd...ef12', date: new Date('2024-03-13'), description: 'Upload reward', status: 'completed' },
-  { id: 4, type: 'sent', amount: 5.5, to: '0x9876...5432', date: new Date('2024-03-12'), description: 'File download', status: 'completed' },
+  // Demo transactions - in real app these will be fetched from blockchain
+  const transactions = writable<Transaction[]>([
+    { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', to: undefined, date: new Date('2024-03-15'), description: 'File purchase', status: 'completed' },
+    { id: 2, type: 'sent', amount: 10.25, to: '0x1234...5678', from: undefined, date: new Date('2024-03-14'), description: 'Proxy service', status: 'completed' },
+    { id: 3, type: 'received', amount: 100, from: '0xabcd...ef12', to: undefined, date: new Date('2024-03-13'), description: 'Upload reward', status: 'completed' },
+    { id: 4, type: 'sent', amount: 5.5, to: '0x9876...5432', from: undefined, date: new Date('2024-03-12'), description: 'File download', status: 'completed' },
   ]);
 
+  // Enhanced validation states
+  let validationWarning = '';
+  let isAmountValid = true;
+  let addressWarning = '';
+  let isAddressValid = false;
+
+
+   // Copy feedback message
+   let copyMessage = '';
+   let privateKeyCopyMessage = '';
+   
+   // Export feedback message
+   let exportMessage = '';
   // Filtering state
   let filterType: 'all' | 'sent' | 'received' = 'all';
   let filterDateFrom: string = '';
   let filterDateTo: string = '';
   let sortDescending: boolean = true;
+  
+  // Fetch balance when account changes
+  $: if ($etcAccount && isGethRunning) {
+    fetchBalance()
+  }
 
-  // Derived filtered transactions
+  // Derived filtered transactions 
   $: filteredTransactions = $transactions
     .filter(tx => {
       const matchesType = filterType === 'all' || tx.type === filterType;
       const txDate = tx.date instanceof Date ? tx.date : new Date(tx.date);
-      const fromOk = !filterDateFrom || txDate >= new Date(filterDateFrom);
-      const toOk = !filterDateTo || txDate <= new Date(filterDateTo);
+      const fromOk = !filterDateFrom || txDate >= new Date(filterDateFrom + 'T00:00:00'); // the start of day
+      const toOk = !filterDateTo || txDate <= new Date(filterDateTo + 'T23:59:59'); // and the end of day to include full date ranges
       return matchesType && fromOk && toOk;
     })
     .slice()
@@ -42,28 +80,89 @@
       return sortDescending ? dateB.getTime() - dateA.getTime() : dateA.getTime() - dateB.getTime();
     });
 
-  // Warning message for amount input
-  let amountWarning = ''
-
-  // Copy feedback message
-  let copyMessage = ''
-  
-  // Export feedback message
-  let exportMessage = ''
-
+  // Validation logic
   $: {
-    const prevAmount = sendAmount
-    sendAmount = Math.max(0.01, Math.min(sendAmount, $wallet.balance))
-    amountWarning = (prevAmount !== sendAmount)
-      ? `Amount cannot be ${prevAmount}. Allowed range: 0.01-${$wallet.balance.toFixed(2)} CN.`
-      : ''
+    // Address validation
+    if (!recipientAddress) {
+      addressWarning = '';
+      isAddressValid = false;
+    } else if (!recipientAddress.startsWith('0x')) {
+      addressWarning = 'Address must start with 0x.';
+      isAddressValid = false;
+    } else if (recipientAddress.length !== 42) {
+      addressWarning = 'Address must be exactly 42 characters long.';
+      isAddressValid = false;
+    } else {
+      addressWarning = '';
+      isAddressValid = true;
+    }
+
+    // Amount validation
+    if (rawAmountInput === '') {
+      validationWarning = '';
+      isAmountValid = false;
+      sendAmount = 0;
+    } else {
+      const inputValue = parseFloat(rawAmountInput);
+
+      if (isNaN(inputValue) || inputValue <= 0) {
+        validationWarning = 'Please enter a valid amount greater than 0.';
+        isAmountValid = false;
+        sendAmount = 0;
+      } else if (inputValue < 0.01) {
+        validationWarning = `Amount must be at least 0.01 CN.`;
+        isAmountValid = false;
+        sendAmount = 0;
+      } else if (inputValue > $wallet.balance) {
+        validationWarning = `Insufficient balance - Need ${(inputValue - $wallet.balance).toFixed(2)} more CN.`;
+        isAmountValid = false;
+        sendAmount = 0;
+      } else {
+        // Valid amount
+        validationWarning = '';
+        isAmountValid = true;
+        sendAmount = inputValue;
+      }
+    }
+  }
+
+  // Enhanced address validation with user feedback
+  $: {
+    if (recipientAddress.trim() === '') {
+      addressWarning = '';
+      isAddressValid = true;
+    } else if (!isValidAddress(recipientAddress)) {
+      addressWarning = 'Address must contain valid hexadecimal characters (0-9, a-f, A-F)';
+      isAddressValid = false;
+    } else {
+      addressWarning = '';
+      isAddressValid = true;
+    }
   }
   
+  // Enhanced address validation function
+  function isValidAddress(address: string): boolean {
+    // Check that everything after 0x is hexadecimal
+    const hexPart = address.slice(2);
+    if (hexPart.length === 0) return false;
+    
+    const hexRegex = /^[a-fA-F0-9]+$/;
+    return hexRegex.test(hexPart);
+  }
+
   function copyAddress() {
-    navigator.clipboard.writeText($wallet.address);
+    const addressToCopy = $etcAccount ? $etcAccount.address : $wallet.address;
+    navigator.clipboard.writeText(addressToCopy);
     copyMessage = 'Copied!';
     setTimeout(() => copyMessage = '', 1500);
   }
+
+  function copyPrivateKey() {
+    navigator.clipboard.writeText('your-private-key-here-do-not-share');
+    privateKeyCopyMessage = 'Copied!';
+    setTimeout(() => privateKeyCopyMessage = '', 1500);
+  }
+  
   
   async function exportWallet() {
     try {
@@ -127,10 +226,10 @@
       setTimeout(() => exportMessage = '', 3000);
     }
   }
-  
+
   function sendTransaction() {
-    if (!recipientAddress || sendAmount <= 0) return
-    
+    if (!isAddressValid || !isAmountValid || !isAddressValid || sendAmount <= 0) return
+
     // Simulate transaction
     wallet.update(w => ({
       ...w,
@@ -150,11 +249,13 @@
       status: 'pending'
     },
     ...txs // prepend so latest is first
-  ])
-    
+  ])  
+
+    // Clear form
     recipientAddress = ''
     sendAmount = 0
-    
+    rawAmountInput = ''
+
     // Simulate transaction completion
     setTimeout(() => {
       wallet.update(w => ({
@@ -171,6 +272,158 @@
 
   // Ensure wallet.pendingTransactions matches actual pending transactions
   const pendingCount = derived(transactions, $txs => $txs.filter(tx => tx.status === 'pending').length);
+
+  // Ensure pendingCount is used (for linter)
+  $: void $pendingCount;
+
+  import { onMount } from 'svelte'
+  
+  let balanceInterval: number | undefined
+  
+  onMount(() => {
+    checkGethStatus()
+
+    // Set up periodic balance refresh every 10 seconds
+    balanceInterval = window.setInterval(() => {
+      if ($etcAccount && isGethRunning) {
+        fetchBalance()
+      }
+    }, 10000)
+
+    // Cleanup function
+    return () => {
+      if (balanceInterval) window.clearInterval(balanceInterval)
+    }
+  })
+
+  async function checkGethStatus() {
+    try {
+      if (isTauri) {
+        isGethRunning = await invoke('is_geth_running') as boolean
+        // Fetch balance if account exists and geth is running
+        if ($etcAccount && isGethRunning) {
+          fetchBalance()
+        }
+      } else {
+        // Fallback for web environment - assume geth is not running
+        isGethRunning = false
+        console.log('Running in web mode - geth not available')
+      }
+    } catch (error) {
+      console.error('Failed to check geth status:', error)
+    }
+  }
+
+  async function fetchBalance() {
+    if (!$etcAccount) return
+    
+    try {
+      if (isTauri && isGethRunning) {
+        // Desktop app with local geth node - get real blockchain balance
+        const balance = await invoke('get_account_balance', { address: $etcAccount.address }) as string
+        wallet.update(w => ({ ...w, balance: parseFloat(balance) }))
+      } else if (isTauri && !isGethRunning) {
+        // Desktop app but geth not running - use stored balance
+        console.log('Geth not running - using stored balance')
+      } else {
+        // Web environment - For now, simulate balance updates for demo purposes
+        const simulatedBalance = $wallet.balance + Math.random() * 10 // Small random changes
+        wallet.update(w => ({ ...w, balance: Math.max(0, simulatedBalance) }))
+      }
+    } catch (error) {
+      console.error('Failed to fetch balance:', error)
+      // Fallback to stored balance on error
+    }
+  }
+
+  async function createChiralAccount() {
+    isCreatingAccount = true
+    try {
+      let account: { address: string, private_key: string }
+      
+      if (isTauri) {
+        // Use Tauri backend
+        account = await invoke('create_chiral_account') as { address: string, private_key: string }
+      } else {
+        // Fallback for web environment - generate demo account
+        const demoAddress = '0x' + Math.random().toString(16).substr(2, 40)
+        const demoPrivateKey = '0x' + Math.random().toString(16).substr(2, 64)
+        account = {
+          address: demoAddress,
+          private_key: demoPrivateKey
+        }
+        console.log('Running in web mode - using demo account')
+      }
+      
+      // Update the Chiral account store
+      etcAccount.set(account)
+      // Also update the wallet store with the new Chiral address
+      wallet.update(w => ({
+        ...w,
+        address: account.address
+      }))
+      // Private key stays hidden by default
+      
+      // Fetch balance for new account
+      if (isGethRunning) {
+        await fetchBalance()
+      }
+    } catch (error) {
+      console.error('Failed to create Chiral account:', error)
+      alert('Failed to create account: ' + error)
+    } finally {
+      isCreatingAccount = false
+    }
+  }
+
+  async function importChiralAccount() {
+    if (!importPrivateKey) return
+    
+    isImportingAccount = true
+    try {
+      let account: { address: string, private_key: string }
+      
+      if (isTauri) {
+        // Use Tauri backend
+        account = await invoke('import_chiral_account', { privateKey: importPrivateKey }) as { address: string, private_key: string }
+      } else {
+        // Fallback for web environment - use the provided private key
+        // In a real implementation, you'd derive the address from the private key
+        const demoAddress = '0x' + Math.random().toString(16).substr(2, 40)
+        account = {
+          address: demoAddress,
+          private_key: importPrivateKey
+        }
+        console.log('Running in web mode - using provided private key')
+      }
+      
+      // Update the Chiral account store
+      etcAccount.set(account)
+      // Also update the wallet store with the imported Chiral address
+      wallet.update(w => ({
+        ...w,
+        address: account.address
+      }))
+      importPrivateKey = ''
+      // Private key stays hidden by default
+      
+      // Fetch balance for imported account
+      if (isGethRunning) {
+        await fetchBalance()
+      }
+    } catch (error) {
+      console.error('Failed to import Chiral account:', error)
+      alert('Failed to import account: ' + error)
+    } finally {
+      isImportingAccount = false
+    }
+  }
+
+  
+  // Helper function to set max amount
+  function setMaxAmount() {
+    rawAmountInput = $wallet.balance.toString();
+  }
 </script>
 
 <div class="space-y-6">
@@ -179,48 +432,203 @@
     <p class="text-muted-foreground mt-2">Manage your wallet and account settings</p>
   </div>
   
-  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+  <div class="grid grid-cols-1 {$etcAccount ? 'md:grid-cols-2' : ''} gap-4">
     <Card class="p-6">
       <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold">Wallet</h2>
+        <h2 class="text-lg font-semibold">Chiral Network Wallet</h2>
         <Wallet class="h-5 w-5 text-muted-foreground" />
       </div>
       
       <div class="space-y-4">
-        <div>
-          <p class="text-sm text-muted-foreground">Address</p>
-          <div class="flex items-center gap-2 mt-1">
-            <p class="font-mono text-sm">{$wallet.address.slice(0, 10)}...{$wallet.address.slice(-8)}</p>
-            <div class="flex flex-col items-center">
-              <Button size="sm" variant="ghost" on:click={copyAddress}>
-                <Copy class="h-3 w-3" />
+        {#if !$etcAccount}
+          <div class="space-y-3">
+            <p class="text-sm text-muted-foreground">Get started with Chiral Network by creating or importing an account:</p>
+            
+            
+            <Button 
+              class="w-full" 
+              on:click={createChiralAccount}
+              disabled={isCreatingAccount}
+            >
+              <Plus class="h-4 w-4 mr-2" />
+              {isCreatingAccount ? 'Creating...' : 'Create New Account'}
+            </Button>
+            
+            <div class="space-y-2">
+              <Input
+                type="text"
+                bind:value={importPrivateKey}
+                placeholder="Enter private key to import"
+                class="w-full"
+                autocomplete="off"
+                data-form-type="other"
+                data-lpignore="true"
+                spellcheck="false"
+              />
+              <Button 
+                class="w-full" 
+                variant="outline"
+                on:click={importChiralAccount}
+                disabled={!importPrivateKey || isImportingAccount}
+              >
+                <Import class="h-4 w-4 mr-2" />
+                {isImportingAccount ? 'Importing...' : 'Import Existing Account'}
               </Button>
-              {#if copyMessage}
-                <span class="text-xs text-muted-foreground mt-1">{copyMessage}</span>
-              {/if}
             </div>
           </div>
-        </div>
-        
+        {:else}
+          <div>
+            <!-- Balance Display - Only when logged in -->
+            <div>
+              <p class="text-sm text-muted-foreground">Balance</p>
+              <p class="text-2xl font-bold">{$wallet.balance.toFixed(2)} CN</p>
+            </div>
+            
+            <div class="grid grid-cols-2 gap-4 mt-4">
+              <div>
+                <p class="text-xs text-muted-foreground">Total Earned</p>
+                <p class="text-sm font-medium text-green-600">+{$wallet.totalEarned.toFixed(2)} CN</p>
+              </div>
+              <div>
+                <p class="text-xs text-muted-foreground">Total Spent</p>
+                <p class="text-sm font-medium text-red-600">-{$wallet.totalSpent.toFixed(2)} CN</p>
+              </div>
+            </div>
+            
+            <div class="mt-6">
+              <p class="text-sm text-muted-foreground">Chiral Address</p>
+              <div class="flex items-center gap-2 mt-1">
+                <p class="font-mono text-sm">{$etcAccount.address.slice(0, 10)}...{$etcAccount.address.slice(-8)}</p>
+                <div class="relative">
+                  <Button size="sm" variant="outline" on:click={copyAddress}>
+                    <Copy class="h-3 w-3" />
+                  </Button>
+                  {#if copyMessage}
+                    <span class="absolute top-full left-1/2 transform -translate-x-1/2 text-xs text-green-600 mt-1 whitespace-nowrap">{copyMessage}</span>
+                  {/if}
+                </div>
+              </div>
+            </div>
+            
+            <div class="mt-4">
+              <p class="text-sm text-muted-foreground">Private Key</p>
+                <div class="flex gap-2 mt-1">
+                  <Input
+                    type="text"
+                    value={privateKeyVisible ? $etcAccount.private_key : '•'.repeat($etcAccount.private_key.length)}
+                    readonly
+                    class="flex-1 font-mono text-xs min-w-0"
+                  />
+                <div class="relative">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    on:click={copyPrivateKey}
+                  >
+                    <Copy class="h-3 w-3" />
+                  </Button>
+                  {#if privateKeyCopyMessage}
+                    <span class="absolute top-full left-1/2 transform -translate-x-1/2 text-xs text-green-600 mt-1 whitespace-nowrap">{privateKeyCopyMessage}</span>
+                  {/if}
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  class="w-16"
+                  on:click={() => privateKeyVisible = !privateKeyVisible}
+                >
+                  {privateKeyVisible ? 'Hide' : 'Show'}
+                </Button>
+              </div>
+              <p class="text-xs text-muted-foreground mt-1">Never share your private key with anyone</p>
+            </div>
+          </div>
+        {/if}
+      </div>
+    </Card>
+    
+    {#if $etcAccount}
+    <Card class="p-6">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-semibold">Send CN Tokens</h2>
+      <Coins class="h-5 w-5 text-muted-foreground" />
+    </div>
+    <form autocomplete="off" data-form-type="other" data-lpignore="true">
+      <div class="space-y-4">
         <div>
-          <p class="text-sm text-muted-foreground">Balance</p>
-          <p class="text-2xl font-bold">{$wallet.balance.toFixed(2)} CN</p>
-        </div>
-        
-        <div class="grid grid-cols-2 gap-4">
-          <div>
-            <p class="text-xs text-muted-foreground">Total Earned</p>
-            <p class="text-sm font-medium text-green-600">+{$wallet.totalEarned.toFixed(2)} CN</p>
+          <Label for="recipient">Recipient Address</Label>
+          <Input
+            id="recipient"
+            bind:value={recipientAddress}
+            placeholder="0x..."
+            class="mt-2 {addressWarning ? 'border-red-500' : ''}"
+            data-form-type="other"
+            data-lpignore="true"
+            aria-autocomplete="none"
+          />
+          <div class="flex items-center justify-between mt-1">
+            <span class="text-xs text-muted-foreground">
+              {recipientAddress.length}/42 characters ({42 - recipientAddress.length} remaining)
+            </span>
+            {#if addressWarning}
+              <p class="text-xs text-red-500 font-medium">{addressWarning}</p>
+            {/if}
           </div>
-          <div>
-            <p class="text-xs text-muted-foreground">Total Spent</p>
-            <p class="text-sm font-medium text-red-600">-{$wallet.totalSpent.toFixed(2)} CN</p>
-          </div>
         </div>
+
+        <div>
+          <Label for="amount">Amount (CN)</Label>
+          <div class="relative mt-2">
+            <Input
+              id="amount"
+              type="number"
+              bind:value={rawAmountInput}
+              placeholder=""
+              min="0.01"
+              step="0.01"
+              class="mt-2 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]"
+              data-form-type="other"
+              data-lpignore="true"
+              aria-autocomplete="none"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              class="absolute right-1 top-1/2 transform -translate-y-1/2 h-8 px-3"
+              on:click={setMaxAmount}
+              disabled={$wallet.balance <= 0}
+            >
+              Max
+            </Button>
+          </div>
+          <div class="flex items-center justify-between mt-1">
+            <p class="text-xs text-muted-foreground">
+              Available: {$wallet.balance.toFixed(2)} CN
+            </p>
+            {#if validationWarning}
+              <p class="text-xs text-red-500 font-medium">{validationWarning}</p>
+            {/if}
+          </div>
         
-        <Button class="w-full justify-center bg-gray-100 hover:bg-gray-200 text-gray-800 rounded transition-colors py-2 font-normal" on:click={() => showPending = !showPending} aria-label="View pending transactions">
+        </div>
+
+        <Button
+          type="button"
+          class="w-full"
+          on:click={sendTransaction}
+          disabled={!isAddressValid || !isAmountValid || !isAddressValid || rawAmountInput === ''}
+        >
+          <ArrowUpRight class="h-4 w-4 mr-2" />
+          Send Transaction
+        </Button>
+
+        <Button type="button" class="w-full justify-center bg-gray-100 hover:bg-gray-200 text-gray-800 rounded transition-colors py-2 font-normal" on:click={() => showPending = !showPending} aria-label="View pending transactions">
           <span class="flex items-center gap-2">
-            <svg class="h-4 w-4 text-gray-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /></svg>
+            <svg class="h-4 w-4 text-orange-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <circle cx="12" cy="10" r="8" />
+              <polyline points="12,6 12,10 16,14" />
+            </svg>
             {#if $pendingCount > 0}
               {$pendingCount} Pending Transaction{$pendingCount !== 1 ? 's' : ''}
             {:else}
@@ -243,65 +651,12 @@
           </div>
         {/if}
       </div>
-    </Card>
-    
-    <Card class="p-6">
-      <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold">Send CN Tokens</h2>
-        <Coins class="h-5 w-5 text-muted-foreground" />
-      </div>
-      <form autocomplete="off" data-form-type="other" data-lpignore="true">
-        <div class="space-y-4">
-          <div>
-            <Label for="recipient">Recipient Address</Label>
-            <Input
-              id="recipient"
-              bind:value={recipientAddress}
-              placeholder="0x..."
-              class="mt-2"
-              autocomplete="off"
-              data-form-type="other"
-              data-lpignore="true"
-              aria-autocomplete="none"
-            />
-          </div>
-
-          <div>
-            <Label for="amount">Amount (CN)</Label>
-            <Input
-              id="amount"
-              type="number"
-              bind:value={sendAmount}
-              placeholder="0.00"
-              max={$wallet.balance}
-              class="mt-2"
-              autocomplete="off"
-              data-form-type="other"
-              data-lpignore="true"
-              aria-autocomplete="none"
-            />
-            {#if amountWarning}
-              <p class="text-xs text-red-500 mt-1">{amountWarning}</p>
-            {/if}
-            <p class="text-xs text-muted-foreground mt-1">
-              Available: {$wallet.balance.toFixed(2)} CN
-            </p>
-          </div>
-
-          <Button
-            type="button"
-            class="w-full"
-            on:click={sendTransaction}
-            disabled={!recipientAddress || sendAmount <= 0 || sendAmount > $wallet.balance}
-          >
-            <ArrowUpRight class="h-4 w-4 mr-2" />
-            Send Transaction
-          </Button>
-        </div>
-      </form>
-    </Card>
+    </form>
+  </Card>
+  {/if}
   </div>
   
+  {#if $etcAccount}
   <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
       <h2 class="text-lg font-semibold">Transaction History</h2>
@@ -310,24 +665,24 @@
     <!-- Filter Controls -->
     <div class="flex flex-wrap gap-4 mb-4 items-end">
       <div>
-        <label class="block text-xs font-medium mb-1">Type</label>
-        <select bind:value={filterType} class="border rounded px-2 py-1 text-sm">
+        <label for="filter-type" class="block text-xs font-medium mb-1">Type</label>
+        <select id="filter-type" bind:value={filterType} class="border rounded px-2 py-1 text-sm">
           <option value="all">All</option>
           <option value="sent">Sent</option>
           <option value="received">Received</option>
         </select>
       </div>
       <div>
-        <label class="block text-xs font-medium mb-1">From</label>
-        <input type="date" bind:value={filterDateFrom} class="border rounded px-2 py-1 text-sm" />
+        <label for="filter-date-from" class="block text-xs font-medium mb-1">From</label>
+        <input id="filter-date-from" type="date" bind:value={filterDateFrom} class="border rounded px-2 py-1 text-sm" />
       </div>
       <div>
-        <label class="block text-xs font-medium mb-1">To</label>
-        <input type="date" bind:value={filterDateTo} class="border rounded px-2 py-1 text-sm" />
+        <label for="filter-date-to" class="block text-xs font-medium mb-1">To</label>
+        <input id="filter-date-to" type="date" bind:value={filterDateTo} class="border rounded px-2 py-1 text-sm" />
       </div>
       <div>
-        <label class="block text-xs font-medium mb-1">Sort</label>
-        <button type="button" class="border rounded px-3 py-1 text-sm bg-white hover:bg-gray-100 transition-colors w-full" on:click={() => { sortDescending = !sortDescending; }}>
+        <label for="sort-button" class="block text-xs font-medium mb-1">Sort</label>
+        <button id="sort-button" type="button" class="border rounded px-3 py-1 text-sm bg-white hover:bg-gray-100 transition-colors w-full" on:click={() => { sortDescending = !sortDescending; }} aria-pressed={sortDescending}>
           {sortDescending ? 'Newest → Oldest' : 'Oldest → Newest'}
         </button>
       </div>
@@ -362,6 +717,13 @@
           </div>
         </div>
       {/each}
+      {#if filteredTransactions.length === 0}
+        <div class="text-center py-8 text-muted-foreground">
+          <History class="h-12 w-12 mx-auto mb-2 opacity-20" />
+          <p>No transactions yet</p>
+          <p class="text-sm mt-1">Transactions will appear here once you send or receive CN</p>
+        </div>
+      {/if}
     </div>
   </Card>
   
@@ -410,4 +772,5 @@
       </div>
     </form>
   </Card>
+  {/if}
 </div>
