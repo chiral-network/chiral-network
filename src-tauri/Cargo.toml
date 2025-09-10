@@ -18,6 +18,15 @@ tauri-plugin-process = "2.0"
 tauri-plugin-os = "2.0"
 tauri-plugin-shell = "2.0"
 tauri-plugin-dialog = "2"
+secp256k1 = { version = "0.27", features = ["rand", "serde"] }
+rand = "0.8"
+hex = "0.4"
+sha3 = "0.10"
+pbkdf2 = "0.12"
+aes = "0.8"
+ctr = "0.9"
+hmac = "0.12"
+directories = "5.0"
 
 [features]
 default = ["custom-protocol"]
