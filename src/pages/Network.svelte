@@ -4,14 +4,22 @@
   import Button from '$lib/components/ui/button.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal } from 'lucide-svelte'
+  import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Play, Square } from 'lucide-svelte'
   import { peers, networkStats, networkStatus } from '$lib/stores'
-  import { onMount } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
+  import { invoke } from '@tauri-apps/api/core'
   
   let discoveryRunning = false
   let newPeerAddress = ''
   let sortBy: 'reputation' | 'sharedFiles' | 'totalSize' | 'nickname' | 'location' | 'joinDate' | 'lastSeen' | 'status' = 'reputation'
   let sortDirection: 'asc' | 'desc' = 'desc'
+  
+  // Chiral Network Node variables
+  let isGethRunning = false
+  let dataDir = './geth-data'
+  let peerCount = 0
+  let peerCountInterval: number | undefined
+  let chainId = 98765
   
   function formatSize(bytes: number): string {
     const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
@@ -84,9 +92,82 @@
     }))
   }
   
-  onMount(() => {
+  async function checkGethStatus() {
+    try {
+      isGethRunning = await invoke('is_geth_running') as boolean
+      if (isGethRunning) {
+        startPolling()
+      }
+    } catch (error) {
+      console.error('Failed to check geth status:', error)
+    }
+  }
+
+  function startPolling() {
+    if (peerCountInterval) {
+      clearInterval(peerCountInterval)
+    }
+    fetchPeerCount()
+    peerCountInterval = setInterval(fetchPeerCount, 5000)
+  }
+
+  async function startGethNode() {
+    try {
+      await invoke('start_geth_node', { dataDir })
+      isGethRunning = true
+      startPolling()
+    } catch (error) {
+      console.error('Failed to start geth node:', error)
+      alert('Failed to start Chiral node: ' + error)
+    }
+  }
+
+  async function stopGethNode() {
+    try {
+      await invoke('stop_geth_node')
+      isGethRunning = false
+      peerCount = 0
+      if (peerCountInterval) {
+        clearInterval(peerCountInterval)
+        peerCountInterval = undefined
+      }
+    } catch (error) {
+      console.error('Failed to stop geth node:', error)
+    }
+  }
+
+  async function fetchPeerCount() {
+    if (!isGethRunning) return
+    
+    try {
+      peerCount = await invoke('get_network_peer_count') as number
+    } catch (error) {
+      console.error('Failed to fetch peer count:', error)
+      peerCount = 0
+    }
+  }
+
+  onMount(async () => {
     const interval = setInterval(refreshStats, 5000)
-    return () => clearInterval(interval)
+    await checkGethStatus()
+    
+    // Auto-start geth if not running
+    if (!isGethRunning) {
+      await startGethNode()
+    }
+    
+    return () => {
+      clearInterval(interval)
+      if (peerCountInterval) {
+        clearInterval(peerCountInterval)
+      }
+    }
+  })
+
+  onDestroy(() => {
+    if (peerCountInterval) {
+      clearInterval(peerCountInterval)
+    }
   })
 </script>
 
@@ -95,6 +176,54 @@
     <h1 class="text-3xl font-bold">Network Overview</h1>
     <p class="text-muted-foreground mt-2">Monitor network health and discover peers</p>
   </div>
+  
+  <!-- Chiral Network Node Status Card -->
+  <Card class="p-6">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-semibold">Chiral Node Status</h2>
+      <div class="flex items-center gap-2">
+        {#if isGethRunning}
+          <div class="h-2 w-2 bg-green-500 rounded-full animate-pulse"></div>
+          <span class="text-sm text-green-600">Connected</span>
+        {:else}
+          <div class="h-2 w-2 bg-red-500 rounded-full"></div>
+          <span class="text-sm text-red-600">Disconnected</span>
+        {/if}
+      </div>
+    </div>
+    
+    <div class="space-y-3">
+      {#if !isGethRunning}
+        <div class="text-center py-4">
+          <Server class="h-12 w-12 text-muted-foreground mx-auto mb-2" />
+          <p class="text-sm text-muted-foreground mb-3">Chiral node is not running</p>
+          <Button on:click={startGethNode}>
+            <Play class="h-4 w-4 mr-2" />
+            Start Chiral Node
+          </Button>
+        </div>
+      {:else}
+        <div class="grid grid-cols-2 gap-4">
+          <div class="bg-secondary rounded-lg p-3">
+            <p class="text-sm text-muted-foreground">Chiral Peers</p>
+            <p class="text-2xl font-bold">{peerCount}</p>
+          </div>
+          <div class="bg-secondary rounded-lg p-3">
+            <p class="text-sm text-muted-foreground">Chain ID</p>
+            <p class="text-2xl font-bold">{chainId}</p>
+          </div>
+        </div>
+        <div class="pt-2">
+          <p class="text-sm text-muted-foreground mb-1">Node Address</p>
+          <p class="text-xs font-mono break-all">enode://277ac35977fc0a230e3ca4ccbf6df6da486fd2af9c129925b1193b25da6f013a301788fceed458f03c6c0d289dfcbf7a7ca5c0aef34b680fcbbc8c2ef79c0f71@127.0.0.1:30303</p>
+        </div>
+        <Button class="w-full" variant="outline" on:click={stopGethNode}>
+          <Square class="h-4 w-4 mr-2" />
+          Stop Chiral Node
+        </Button>
+      {/if}
+    </div>
+  </Card>
   
   <!-- Network Statistics Cards -->
   <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
