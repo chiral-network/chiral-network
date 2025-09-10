@@ -147,14 +147,14 @@
         <div class="space-y-2">
           {#each $files.filter(f => f.status === 'seeding' || f.status === 'uploaded') as file}
             <div class="flex flex-wrap items-center justify-between gap-2 p-3 bg-secondary rounded-lg hover:bg-secondary/80 transition-colors">
-              <div class="flex items-center gap-3">
+              <div class="flex items-center gap-3 min-w-0">
                 <File class="h-4 w-4 text-muted-foreground" />
-                <div class="flex-1">
+                <div class="flex-1 min-w-0">
                   <p class="text-sm font-medium truncate">{file.name}</p>
-                  <div class="flex flex-wrap items-center gap-3 mt-1">
+                  <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1">
                     <p class="text-xs text-muted-foreground truncate">Hash: {file.hash}</p>
                     <span class="text-xs text-muted-foreground">•</span>
-                    <p class="text-xs text-muted-foreground">{formatFileSize(file.size)}</p>
+                    <p class="text-xs text-muted-foreground truncate">{formatFileSize(file.size)}</p>
                     {#if file.seeders !== undefined}
                       <span class="text-xs text-muted-foreground">•</span>
                       <p class="text-xs text-green-600">{file.seeders || 1} seeder{(file.seeders || 1) !== 1 ? 's' : ''}</p>
