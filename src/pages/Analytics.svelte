@@ -303,17 +303,26 @@ function computeLatencyStats() {
         <div>
           <p class="text-sm text-muted-foreground">Reputation</p>
           <p class="text-2xl font-bold">{$wallet.reputation || 4.5}/5.0</p>
-          <div class="flex gap-0.5 mt-1">
-            {#each Array(5) as _, i}
-              {#if ($wallet.reputation ?? 4.5) >= i + 1}
-                <span class="text-yellow-500">★</span>
-              {:else if ($wallet.reputation ?? 4.5) >= i + 0.5}
-                <span class="text-yellow-500">⯨</span> <!-- Unicode half star -->
-              {:else}
-                <span class="text-yellow-500 opacity-30">★</span>
-              {/if}
-            {/each}
-          </div>
+          <!-- Stars (replaces your existing block) -->
+<div
+  class="flex gap-0.5 mt-1"
+  aria-label={"Reputation " + (($wallet.reputation ?? 4.5).toFixed(1)) + " out of 5"}
+>
+  {#each Array(5) as _, i}
+    <span class="relative inline-block leading-none align-middle" style="width: 1em">
+      <!-- empty star -->
+      <span class="text-yellow-500 opacity-30 select-none">★</span>
+
+      <!-- filled portion (handles full and partial stars without special glyphs) -->
+      <span
+        class="absolute inset-0 overflow-hidden"
+        style="width: {Math.max(0, Math.min(1, (($wallet.reputation ?? 4.5) - i))) * 100}%"
+      >
+        <span class="text-yellow-500 select-none">★</span>
+      </span>
+    </span>
+  {/each}
+</div>
         </div>
         <div class="p-2 bg-yellow-500/10 rounded-lg">
           <Award class="h-5 w-5 text-yellow-500" />
