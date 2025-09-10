@@ -63,6 +63,7 @@
   let savedSettings = { ...defaultSettings };
   let hasChanges = false;
   let fileInputEl: HTMLInputElement | null = null;
+  let selectedLanguage = 'en';
 
   // Check for changes
   $: hasChanges = JSON.stringify(settings) !== JSON.stringify(savedSettings);
@@ -424,6 +425,29 @@
             Enable DHT (Distributed Hash Table)
           </Label>
         </div>
+      </div>
+    </div>
+  </Card>
+
+  <!-- Language Settings -->
+  <Card class="p-6">
+    <div class="flex items-center gap-2 mb-4">
+      <h2 class="text-lg font-semibold">Language</h2>
+    </div>
+
+    <div class="space-y-4">
+      <div>
+        <Label for="language-select">Select Language</Label>
+        <select
+          id="language-select"
+          bind:value={selectedLanguage}
+          class="w-full px-3 py-2 mt-2 border rounded-md bg-white"
+        >
+          <option value="en">English</option>
+          <option value="es">Español</option>
+          <option value="zh">中文</option>
+          <option value="ko">한국어</option>
+        </select>
       </div>
     </div>
   </Card>
