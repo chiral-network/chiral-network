@@ -325,10 +325,14 @@
             
             <div class="space-y-2">
               <Input
-                type="password"
+                type="text"
                 bind:value={importPrivateKey}
                 placeholder="Enter private key to import"
                 class="w-full"
+                autocomplete="off"
+                data-form-type="other"
+                data-lpignore="true"
+                spellcheck="false"
               />
               <Button 
                 class="w-full" 
