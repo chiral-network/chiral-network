@@ -11,6 +11,22 @@
   import { invoke } from '@tauri-apps/api/core'
   import { etcAccount, miningState } from '$lib/stores'
   
+  // Interfaces
+  interface MiningHistoryPoint {
+    timestamp: number
+    hashRate: number
+    power: number
+  }
+  
+  interface RecentBlock {
+    id: string
+    hash: string
+    reward: number
+    timestamp: Date
+    difficulty: number
+    nonce: number
+  }
+  
   // Local UI state only
   let isGethRunning = false
   let currentBlock = 0
@@ -38,11 +54,10 @@
   let uptimeInterval: number | null = null
   
   // Mining history
-  let miningHistory: any[] = []
-  let recentBlocks: any[] = []
+  let miningHistory: MiningHistoryPoint[] = []
+  let recentBlocks: RecentBlock[] = []
   
-  // Mock mining intervals
-  let miningInterval: number | null = null
+  // Mock mining intervals  
   let statsInterval: number | null = null
   
   // Logs
@@ -155,6 +170,11 @@
           hashRate: hashRateNum,
           power: powerConsumption
         }]
+        
+        // Simulate finding blocks occasionally (very low probability)
+        if (Math.random() < 0.001) {
+          findBlock()
+        }
       }
     } catch (e) {
       console.error('Failed to update mining stats:', e)
@@ -635,7 +655,7 @@
           </div>
           <div class="flex justify-between">
             <span class="text-sm">Your Share</span>
-            <span class="text-sm font-medium">{($miningState.hashRate / 850000000 * 100).toFixed(4)}%</span>
+            <span class="text-sm font-medium">{(parseHashRate($miningState.hashRate) / 850000000 * 100).toFixed(4)}%</span>
           </div>
           <div class="flex justify-between">
             <span class="text-sm">Pool Fee</span>
@@ -732,7 +752,7 @@
                     points={miningHistory.map((point, i) => {
         const x = (i / Math.max(miningHistory.length - 1, 1)) * 380 + 10; // 10px margin
         const maxHash = Math.max(...miningHistory.map(h => h.hashRate)) || 1;
-        const y = 118 - ((point.$miningState.hashRate / maxHash) * 100); // 10px margin top/bottom
+        const y = 118 - ((point.hashRate / maxHash) * 100); // 10px margin top/bottom
         return `${x},${y}`;
       }).join(" ")}
             />
@@ -741,7 +761,7 @@
             {#each miningHistory as point, i}
               {@const x = (i / Math.max(miningHistory.length - 1, 1)) * 380 + 10}
               {@const maxHash = Math.max(...miningHistory.map(h => h.hashRate)) || 1}
-              {@const y = 118 - ((point.$miningState.hashRate / maxHash) * 100)}
+              {@const y = 118 - ((point.hashRate / maxHash) * 100)}
               <circle
                       cx={x}
                       cy={y}
