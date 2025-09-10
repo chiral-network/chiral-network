@@ -584,10 +584,10 @@
             Send Transaction
           </Button>
         </div>
-      </form>
+      
     </Card>
-    </form>
-  </Card>
+    
+  
   {/if}
 
   </div>
