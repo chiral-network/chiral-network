@@ -8,6 +8,7 @@
   import { writable, derived } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
 
+  let showClearHistoryModal = false;
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
@@ -115,6 +116,11 @@
     navigator.clipboard.writeText('your-private-key-here-do-not-share');
     privateKeyCopyMessage = 'Copied!';
     setTimeout(() => privateKeyCopyMessage = '', 1500);
+  }
+
+  function handleConfirmClear(){
+    transactions.set([]);
+    showClearHistoryModal = false;
   }
   
   function sendTransaction() {
@@ -552,10 +558,37 @@
         </button>
       </div>
       <div class="flex-1"></div>
-      <div class="flex flex-col gap-1 items-end">
+      <div class="flex flex-row gap-1 items-end">
         <button type="button" class="border rounded px-3 py-1 text-sm bg-muted hover:bg-muted/70 transition-colors" on:click={() => { filterType = 'all'; filterDateFrom = ''; filterDateTo = ''; sortDescending = true; }}>
           Reset
         </button>
+        <button type="button" class="border rounded px-3 py-1 text-sm bg-red-50 text-red-700 hover:bg-red-100 transition-colors" on:click={() => showClearHistoryModal = true}>
+          Clear History
+        </button>
+        {#if showClearHistoryModal}
+        <div
+          class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+          role="button"
+          tabindex="0"
+          on:click={() => showClearHistoryModal = false}
+          on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') showClearHistoryModal = false; }}
+        >
+          <div class="bg-white p-6 rounded-lg shadow-xl w-full max-w-sm" role="dialog" aria-modal="true">
+            <h3 class="text-lg font-bold mb-2">Are you sure?</h3>
+            <p class="text-sm text-gray-600 mb-6">
+              All transaction history will be permanently deleted. This action cannot be undone.
+            </p>
+            <div class="flex justify-end gap-3">
+              <button type="button"  class="px-4 py-2 rounded border" on:click={() => showClearHistoryModal = false}>
+                Cancel
+              </button>
+              <button type="button"  class="px-4 py-2 rounded border bg-red-600 text-white" on:click={handleConfirmClear}>
+                Confirm Clear
+              </button>
+            </div>
+          </div>
+        </div>
+      {/if}
       </div>
     </div>
     <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
