@@ -529,7 +529,7 @@ function computeLatencyStats() {
   
   <Card class="p-6">
     <h2 class="text-lg font-semibold mb-4">Earnings History</h2>
-    <div class="flex gap-2 mb-4">
+    <div class="flex flex-wrap gap-2 mb-4">
       {#each periodPresets as preset}
         <button
           type="button"

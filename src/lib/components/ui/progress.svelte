@@ -10,7 +10,7 @@
 </script>
 
 <div
-  class={cn('relative h-4 w-full overflow-hidden rounded-full bg-secondary', className)}
+  class={cn('relative h-4 w-full overflow-hidden rounded-full bg-white', className)}
   {...$$restProps}
 >
   <div
