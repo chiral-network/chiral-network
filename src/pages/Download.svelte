@@ -486,7 +486,7 @@ function clearSearch() {
                 <div class="flex items-center text-sm">
                   <span>Progress: {(file.progress || 0).toFixed(2)}%</span>
                 </div>
-                <Progress value={file.progress || 0} max={100} />
+                <Progress value={file.progress || 0} max={100} class="bg-gray-200" />
               </div>
             {/if}
             
@@ -521,8 +521,7 @@ function clearSearch() {
             {/if}
             
             {#if file.status === 'completed'}
-              <div class="flex items-center gap-2 mt-3">
-                <span>Download complete!</span>
+              <div class="flex flex-wrap gap-2 mt-3">
                 <Button
                         size="sm"
                         variant="outline"

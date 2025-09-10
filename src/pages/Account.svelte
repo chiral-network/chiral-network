@@ -3,7 +3,6 @@
   import Card from '$lib/components/ui/card.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import Badge from '$lib/components/ui/badge.svelte'
   import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, Settings, Key, History, Coins, Plus, Import } from 'lucide-svelte'
   import { wallet, etcAccount } from '$lib/stores'
   import { writable, derived } from 'svelte/store'
@@ -11,6 +10,7 @@
   
   let recipientAddress = ''
   let sendAmount = 0
+  let rawAmountInput = '' // Track raw user input for validation
   let privateKeyVisible = false
   let showPending = false
   let importPrivateKey = ''
@@ -30,6 +30,14 @@
   // Real transactions will be fetched from blockchain in the future
   const transactions = writable([]);
 
+  // Validation states
+  let amountWarning = '';
+  let balanceWarning = '';
+  let isAmountValid = true;
+
+  // Copy feedback message
+  let copyMessage = '';
+  let privateKeyCopyMessage = '';
   // Filtering state
   let filterType: 'all' | 'sent' | 'received' = 'all';
   let filterDateFrom: string = '';
@@ -57,19 +65,39 @@
       return sortDescending ? dateB.getTime() - dateA.getTime() : dateA.getTime() - dateB.getTime();
     });
 
-  // Warning message for amount input
-  let amountWarning = ''
-
-  // Copy feedback message
-  let copyMessage = ''
-
+  // Validation logic - similar to mining page
   $: {
-    const maxAmount = parseFloat(accountBalance) || 0
-    const prevAmount = sendAmount
-    sendAmount = Math.max(0.000001, Math.min(sendAmount, maxAmount))
-    amountWarning = (prevAmount !== sendAmount)
-      ? `Amount cannot be ${prevAmount}. Allowed range: 0.000001-${accountBalance} CN.`
-      : ''
+    if (rawAmountInput === '') {
+      amountWarning = '';
+      balanceWarning = '';
+      isAmountValid = true;
+      sendAmount = 0;
+    } else {
+      const inputValue = parseFloat(rawAmountInput);
+
+      if (isNaN(inputValue) || inputValue <= 0) {
+        amountWarning = 'Please enter a valid amount greater than 0.';
+        balanceWarning = '';
+        isAmountValid = false;
+        sendAmount = 0;
+      } else if (inputValue < 0.01) {
+        amountWarning = `Amount must be at least 0.01 CN.`;
+        balanceWarning = '';
+        isAmountValid = false;
+        sendAmount = 0;
+      } else if (inputValue > $wallet.balance) {
+        amountWarning = '';
+        balanceWarning = `Insufficient balance - Need ${(inputValue - $wallet.balance).toFixed(2)} more CN.`;
+        isAmountValid = false;
+        sendAmount = 0;
+      } else {
+        // Valid amount
+        amountWarning = '';
+        balanceWarning = '';
+        isAmountValid = true;
+        sendAmount = inputValue;
+      }
+    }
   }
   
   function copyAddress() {
@@ -78,10 +106,16 @@
     copyMessage = 'Copied!';
     setTimeout(() => copyMessage = '', 1500);
   }
+
+  function copyPrivateKey() {
+    navigator.clipboard.writeText('your-private-key-here-do-not-share');
+    privateKeyCopyMessage = 'Copied!';
+    setTimeout(() => privateKeyCopyMessage = '', 1500);
+  }
   
   function sendTransaction() {
-    if (!recipientAddress || sendAmount <= 0) return
-    
+    if (!recipientAddress || !isAmountValid || sendAmount <= 0) return
+
     // Simulate transaction
     wallet.update(w => ({
       ...w,
@@ -101,11 +135,13 @@
       status: 'pending'
     },
     ...txs // prepend so latest is first
-  ])
-    
+  ])  
+
+    // Clear form
     recipientAddress = ''
     sendAmount = 0
-    
+    rawAmountInput = ''
+
     // Simulate transaction completion
     setTimeout(() => {
       wallet.update(w => ({
@@ -372,7 +408,7 @@
               
               <div class="relative">
                 <div class="absolute inset-0 flex items-center">
-                  <span class="w-full border-t" />
+                  <span class="w-full border-t"></span>
                 </div>
                 <div class="relative flex justify-center text-xs uppercase">
                   <span class="bg-background px-2 text-muted-foreground">Or</span>
@@ -466,50 +502,50 @@
         
       </div>
     </Card>
-    
-    <Card class="p-6">
-      <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold">Send CN</h2>
-        <Coins class="h-5 w-5 text-muted-foreground" />
-      </div>
-      <form autocomplete="off" data-form-type="other" data-lpignore="true">
-        <div class="space-y-4">
-          <div>
-            <Label for="recipient">Recipient Address</Label>
-            <Input
-              id="recipient"
-              bind:value={recipientAddress}
-              placeholder="0x..."
-              class="mt-2"
-              autocomplete="off"
-              data-form-type="other"
-              data-lpignore="true"
-              aria-autocomplete="none"
-            />
-          </div>
+<Card class="p-6">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-semibold">Send CN Tokens</h2>
+      <Coins class="h-5 w-5 text-muted-foreground" />
+    </div>
+    <form autocomplete="off" data-form-type="other" data-lpignore="true">
+      <div class="space-y-4">
+        <div>
+          <Label for="recipient">Recipient Address</Label>
+          <Input
+            id="recipient"
+            bind:value={recipientAddress}
+            placeholder="0x..."
+            class="mt-2"
+            data-form-type="other"
+            data-lpignore="true"
+            aria-autocomplete="none"
+          />
+        </div>
 
-          <div>
-            <Label for="amount">Amount (CN)</Label>
-            <Input
-              id="amount"
-              type="number"
-              bind:value={sendAmount}
-              placeholder="0.00"
-              max={parseFloat(accountBalance)}
-              class="mt-2"
-              autocomplete="off"
-              data-form-type="other"
-              data-lpignore="true"
-              aria-autocomplete="none"
-            />
-            {#if amountWarning}
-              <p class="text-xs text-red-500 mt-1">{amountWarning}</p>
-            {/if}
-            <p class="text-xs text-muted-foreground mt-1">
-              Available: {accountBalance} CN
+        <div>
+          <Label for="amount">Amount (CN)</Label>
+          <Input
+            id="amount"
+            type="number"
+            bind:value={rawAmountInput}
+            placeholder="0.00"
+            min="0.01"
+            step="0.01"
+            class="mt-2"
+            data-form-type="other"
+            data-lpignore="true"
+            aria-autocomplete="none"
+          />
+          <div class="flex items-center justify-between mt-1">
+            <p class="text-xs text-muted-foreground">
+              Available: {$wallet.balance.toFixed(2)} CN
             </p>
+            {#if amountWarning}
+              <p class="text-xs text-red-500 font-medium">{amountWarning}</p>
+            {:else if balanceWarning}
+              <p class="text-xs text-red-500 font-medium">{balanceWarning}</p>
+            {/if}
           </div>
-
           <Button
             type="button"
             class="w-full"
@@ -520,8 +556,19 @@
             Send Transaction
           </Button>
         </div>
-      </form>
-    </Card>
+
+        <Button
+          type="button"
+          class="w-full"
+          on:click={sendTransaction}
+          disabled={!recipientAddress || !isAmountValid || rawAmountInput === ''}
+        >
+          <ArrowUpRight class="h-4 w-4 mr-2" />
+          Send Transaction
+        </Button>
+      </div>
+    </form>
+  </Card>
   </div>
   
   <Card class="p-6">
@@ -532,24 +579,24 @@
     <!-- Filter Controls -->
     <div class="flex flex-wrap gap-4 mb-4 items-end">
       <div>
-        <label class="block text-xs font-medium mb-1">Type</label>
-        <select bind:value={filterType} class="border rounded px-2 py-1 text-sm">
+        <label for="filter-type" class="block text-xs font-medium mb-1">Type</label>
+        <select id="filter-type" bind:value={filterType} class="border rounded px-2 py-1 text-sm">
           <option value="all">All</option>
           <option value="sent">Sent</option>
           <option value="received">Received</option>
         </select>
       </div>
       <div>
-        <label class="block text-xs font-medium mb-1">From</label>
-        <input type="date" bind:value={filterDateFrom} class="border rounded px-2 py-1 text-sm" />
+        <label for="filter-from" class="block text-xs font-medium mb-1">From</label>
+        <input id="filter-from" type="date" bind:value={filterDateFrom} class="border rounded px-2 py-1 text-sm" />
       </div>
       <div>
-        <label class="block text-xs font-medium mb-1">To</label>
-        <input type="date" bind:value={filterDateTo} class="border rounded px-2 py-1 text-sm" />
+        <label for="filter-to" class="block text-xs font-medium mb-1">To</label>
+        <input id="filter-to" type="date" bind:value={filterDateTo} class="border rounded px-2 py-1 text-sm" />
       </div>
       <div>
-        <label class="block text-xs font-medium mb-1">Sort</label>
-        <button type="button" class="border rounded px-3 py-1 text-sm bg-white hover:bg-gray-100 transition-colors w-full" on:click={() => { sortDescending = !sortDescending; }}>
+        <label for="sort-button" class="block text-xs font-medium mb-1">Sort</label>
+        <button id="sort-button" type="button" class="border rounded px-3 py-1 text-sm bg-white hover:bg-gray-100 transition-colors w-full" on:click={() => { sortDescending = !sortDescending; }}>
           {sortDescending ? 'Newest → Oldest' : 'Oldest → Newest'}
         </button>
       </div>
@@ -605,10 +652,10 @@
           <Label>Private Key (Chiral)</Label>
           <div class="flex gap-2 mt-2">
             <Input
-              type={privateKeyVisible ? 'text' : 'password'}
-              value={$etcAccount ? $etcAccount.private_key : 'No Chiral account created yet'}
+              type="text"
+              value="your-private-key-here-do-not-share"
               readonly
-              class="flex-1 font-mono text-sm"
+              class="flex-1 font-mono text-sm {!privateKeyVisible ? 'obscure-text' : ''}"
               autocomplete="off"
               data-form-type="other"
               data-lpignore="true"
@@ -618,11 +665,22 @@
               type="button"
               variant="outline"
               size="sm"
+              on:click={copyPrivateKey}
+            >
+              <Copy class="h-3 w-3" />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
               on:click={() => privateKeyVisible = !privateKeyVisible}
             >
               {privateKeyVisible ? 'Hide' : 'Show'}
             </Button>
           </div>
+          {#if privateKeyCopyMessage}
+            <p class="text-xs text-green-600 mt-1">{privateKeyCopyMessage}</p>
+          {/if}
           <p class="text-xs text-muted-foreground mt-1">Never share your private key with anyone</p>
         </div>
 
