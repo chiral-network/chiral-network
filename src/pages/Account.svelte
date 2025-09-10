@@ -43,6 +43,8 @@
   // Validation states
   let validationWarning = '';
   let isAmountValid = true;
+  let addressWarning = '';
+  let isAddressValid = false;
 
   // Copy feedback message
   let copyMessage = '';
@@ -76,6 +78,22 @@
 
   // Validation logic
   $: {
+    // Address validation
+    if (!recipientAddress) {
+      addressWarning = '';
+      isAddressValid = false;
+    } else if (!recipientAddress.startsWith('0x')) {
+      addressWarning = 'Address must start with 0x.';
+      isAddressValid = false;
+    } else if (recipientAddress.length !== 42) {
+      addressWarning = 'Address must be exactly 42 characters long.';
+      isAddressValid = false;
+    } else {
+      addressWarning = '';
+      isAddressValid = true;
+    }
+
+    // Amount validation
     if (rawAmountInput === '') {
       validationWarning = '';
       isAmountValid = false;
@@ -117,8 +135,9 @@
     setTimeout(() => privateKeyCopyMessage = '', 1500);
   }
   
+
   function sendTransaction() {
-    if (!recipientAddress || !isAmountValid || sendAmount <= 0) return
+    if (!isAddressValid || !isAmountValid || sendAmount <= 0) return
 
     // Simulate transaction
     wallet.update(w => ({
@@ -451,6 +470,14 @@
             data-lpignore="true"
             aria-autocomplete="none"
           />
+          <div class="flex items-center justify-between mt-1">
+            <span class="text-xs text-muted-foreground">
+              {recipientAddress.length}/42 characters ({42 - recipientAddress.length} remaining)
+            </span>
+            {#if addressWarning}
+              <p class="text-xs text-red-500 font-medium">{addressWarning}</p>
+            {/if}
+          </div>
         </div>
 
         <div>
@@ -482,7 +509,7 @@
           type="button"
           class="w-full"
           on:click={sendTransaction}
-          disabled={!recipientAddress || !isAmountValid || rawAmountInput === ''}
+          disabled={!isAddressValid || !isAmountValid || rawAmountInput === ''}
         >
           <ArrowUpRight class="h-4 w-4 mr-2" />
           Send Transaction
