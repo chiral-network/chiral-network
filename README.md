@@ -118,7 +118,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 
 - **Tauri 2**: Rust-based desktop runtime for native performance
 - **Native File System**: Direct OS integration for file operations
-- **System Tray**: Background operation support (planned)
+- **System Tray**: Background operation support
 - **Auto-Updates**: Seamless application updates (planned)
 
 ### Data Management
@@ -133,27 +133,23 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 ### Why These Design Choices?
 
 1. **Non-Commercial BitTorrent Model**
-
    - No marketplace or monetary transactions
    - Pure P2P file sharing for legitimate use
    - Continuous seeding model like BitTorrent
    - Suitable for personal, educational, and organizational use
 
 2. **Privacy-Focused Architecture**
-
    - No transaction tracking or marketplace analytics
    - Anonymous routing options through proxy nodes
    - Local-first data storage
 
 3. **Community Resource Sharing**
-
    - Contribute storage space to help others
    - Share bandwidth for network resilience
    - Mine blocks to secure the network
    - Build reputation through reliable service
 
 4. **Proof-of-Work Security**
-
    - CPU-friendly mining algorithm
    - Decentralized consensus mechanism
    - Fair reward distribution
@@ -372,7 +368,7 @@ For issues, questions, or suggestions:
 
 - GitHub Issues: [Report bugs or request features]
 - Documentation: [Comprehensive guides]
-- Community: Using Zulip 
+- Community: Using Zulip
 
 ## Disclaimer
 

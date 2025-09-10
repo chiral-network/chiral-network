@@ -18,6 +18,21 @@
   let sortBy: 'reputation' | 'sharedFiles' | 'totalSize' | 'nickname' | 'location' | 'joinDate' | 'lastSeen' | 'status' = 'reputation'
   let sortDirection: 'asc' | 'desc' = 'desc'
   
+  // Update sort direction when category changes to match the default
+  $: if (sortBy) {
+    const defaults: Record<typeof sortBy, 'asc' | 'desc'> = {
+      reputation: 'desc',     // Highest first
+      sharedFiles: 'desc',    // Most first
+      totalSize: 'desc',      // Largest first
+      joinDate: 'desc',       // Newest first
+      lastSeen: 'desc',       // Most Recent first
+      location: 'asc',        // Closest first
+      status: 'asc',          // Online first
+      nickname: 'asc'         // A → Z first
+    }
+    sortDirection = defaults[sortBy]
+  }
+  
   // Chiral Network Node variables
   let isGethRunning = false
   let isGethInstalled = false
@@ -477,8 +492,31 @@
                       bind:value={sortDirection}
                       class="border rounded px-2 py-1 text-sm"
               >
-                  <option value="asc">↑ Ascending</option>
-                  <option value="desc">↓ Descending</option>
+                  {#if sortBy === 'reputation'}
+                      <option value="desc">Highest</option>
+                      <option value="asc">Lowest</option>
+                  {:else if sortBy === 'sharedFiles'}
+                      <option value="desc">Most</option>
+                      <option value="asc">Least</option>
+                  {:else if sortBy === 'totalSize'}
+                      <option value="desc">Largest</option>
+                      <option value="asc">Smallest</option>
+                  {:else if sortBy === 'joinDate'}
+                      <option value="desc">Newest</option>
+                      <option value="asc">Oldest</option>
+                  {:else if sortBy === 'lastSeen'}
+                      <option value="desc">Most Recent</option>
+                      <option value="asc">Least Recent</option>
+                  {:else if sortBy === 'location'}
+                      <option value="asc">Closest</option>
+                      <option value="desc">Farthest</option>
+                  {:else if sortBy === 'status'}
+                      <option value="asc">Online</option>
+                      <option value="desc">Offline</option>
+                  {:else if sortBy === 'nickname'}
+                      <option value="asc">A → Z</option>
+                      <option value="desc">Z → A</option>
+                  {/if}
               </select>
           </div>
       </div>

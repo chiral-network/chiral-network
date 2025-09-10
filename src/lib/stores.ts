@@ -1,23 +1,30 @@
 import { writable } from "svelte/store";
 
 export interface FileItem {
-  id: string
-  name: string
-  hash: string
-  size: number
-  status: 'downloading' | 'paused' | 'completed' | 'failed' | 'uploaded' | 'queued' | 'seeding'
-  progress?: number
-  uploadDate?: Date
-  owner?: string
-  description?: string
-  seeders?: number
-  leechers?: number
-  encrypted?: boolean
-  priority?: 'low' | 'normal' | 'high'
-  downloadSpeed?: number
-  uploadSpeed?: number
-  timeRemaining?: number
-  visualOrder?: number // For maintaining user's intended visual order
+  id: string;
+  name: string;
+  hash: string;
+  size: number;
+  status:
+    | "downloading"
+    | "paused"
+    | "completed"
+    | "failed"
+    | "uploaded"
+    | "queued"
+    | "seeding";
+  progress?: number;
+  uploadDate?: Date;
+  owner?: string;
+  description?: string;
+  seeders?: number;
+  leechers?: number;
+  encrypted?: boolean;
+  priority?: "low" | "normal" | "high";
+  downloadSpeed?: number;
+  uploadSpeed?: number;
+  timeRemaining?: number;
+  visualOrder?: number; // For maintaining user's intended visual order
 }
 
 export interface ProxyNode {
@@ -84,11 +91,43 @@ export interface NetworkStats {
 
 // Sample dummy data
 const dummyFiles: FileItem[] = [
-  { id: '0', name: 'Image.jpg', hash: 'QmZ4tDuvesekqME', size: 1024000, status: 'downloading', progress: 50, visualOrder: 0 },
-  { id: '1', name: 'Video.mp4', hash: 'QmZ4tDuvesekqMF', size: 50331648, status: 'paused', progress: 30, visualOrder: 1 },
-  { id: '2', name: 'Document.pdf', hash: 'QmZ4tDuvesekqMD', size: 2048576, status: 'completed', progress: 100, visualOrder: 2 },
-  { id: '3', name: 'Archive.zip', hash: 'QmZ4tDuvesekqMG', size: 10485760, status: 'uploaded', progress: 100, visualOrder: 3 },
-]
+  {
+    id: "0",
+    name: "Image.jpg",
+    hash: "QmZ4tDuvesekqME",
+    size: 1024000,
+    status: "downloading",
+    progress: 50,
+    visualOrder: 0,
+  },
+  {
+    id: "1",
+    name: "Video.mp4",
+    hash: "QmZ4tDuvesekqMF",
+    size: 50331648,
+    status: "paused",
+    progress: 30,
+    visualOrder: 1,
+  },
+  {
+    id: "2",
+    name: "Document.pdf",
+    hash: "QmZ4tDuvesekqMD",
+    size: 2048576,
+    status: "completed",
+    progress: 100,
+    visualOrder: 2,
+  },
+  {
+    id: "3",
+    name: "Archive.zip",
+    hash: "QmZ4tDuvesekqMG",
+    size: 10485760,
+    status: "uploaded",
+    progress: 100,
+    visualOrder: 3,
+  },
+];
 
 const dummyProxyNodes: ProxyNode[] = [
   {
@@ -189,7 +228,7 @@ export const proxyNodes = writable<ProxyNode[]>(dummyProxyNodes);
 export const wallet = writable<WalletInfo>(dummyWallet);
 export const activeDownloads = writable<number>(2);
 export const networkStatus = writable<"connected" | "disconnected">(
-  "connected"
+  "connected",
 );
 export const peers = writable<PeerInfo[]>(dummyPeers);
 export const chatMessages = writable<ChatMessage[]>([]);
@@ -211,10 +250,10 @@ export interface MiningState {
 
 export const miningState = writable<MiningState>({
   isMining: false,
-  hashRate: '0 H/s',
+  hashRate: "0 H/s",
   totalRewards: 0,
   blocksFound: 0,
   activeThreads: 1,
   minerIntensity: 50,
-  selectedPool: 'solo',
+  selectedPool: "solo",
 });

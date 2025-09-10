@@ -5,33 +5,39 @@ This repository contains the Chiral Network application - a decentralized P2P fi
 ## Quick Setup
 
 1. **Initialize the repository** (if not already done):
+
 ```bash
 cd /Users/shuai/workspace/brooknet/chiral-network/chiral-app
 git init
 ```
 
 2. **Configure your git identity**:
+
 ```bash
 git config user.name "Your Name"
 git config user.email "your.email@example.com"
 ```
 
 3. **Add all files to staging**:
+
 ```bash
 git add .
 ```
 
 4. **Create the initial commit**:
+
 ```bash
 git commit -m "Initial commit: Chiral Network - Decentralized P2P File Sharing Platform"
 ```
 
 5. **Add the GitHub remote**:
+
 ```bash
 git remote add origin git@github.com:chiral-network/chiral-network.git
 ```
 
 6. **Push to GitHub**:
+
 ```bash
 git branch -M main
 git push -u origin main
@@ -47,6 +53,7 @@ chmod +x setup-git.sh
 ```
 
 Then push to GitHub:
+
 ```bash
 git push -u origin main
 ```

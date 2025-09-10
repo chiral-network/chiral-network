@@ -1,1 +1,14 @@
-{"default":{"identifier":"default","description":"Default permissions","local":true,"windows":["main"],"permissions":["core:default","shell:allow-open","os:default","dialog:default"]}}
+{
+  "default": {
+    "identifier": "default",
+    "description": "Default permissions",
+    "local": true,
+    "windows": ["main"],
+    "permissions": [
+      "core:default",
+      "shell:allow-open",
+      "os:default",
+      "dialog:default"
+    ]
+  }
+}
