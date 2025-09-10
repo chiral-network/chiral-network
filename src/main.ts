@@ -2,9 +2,15 @@ import { mount } from "svelte";
 import App from "./App.svelte";
 import "./styles/globals.css";
 
+if (import.meta.env.MODE === "development") {
+  console.log("Main.ts loading...");
+}
 console.log("Main.ts loading...");
 
 const target = document.getElementById("app");
+if (import.meta.env.MODE === "development") {
+  console.log("Target element:", target);
+}
 console.log("Target element:", target);
 
 let app: any = null;
@@ -18,6 +24,9 @@ if (!target) {
     app = mount(App, {
       target: target,
     });
+    if (import.meta.env.MODE === "development") {
+      console.log("App mounted successfully");
+    }
     console.log("App mounted successfully");
   } catch (error) {
     console.error("Error mounting app:", error);
