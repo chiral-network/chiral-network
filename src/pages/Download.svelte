@@ -21,7 +21,7 @@ Formatting may be inconsistent from source
   $: maxConcurrentDownloads = Math.max(1, Number(maxConcurrentDownloads) || 3)
   
   // Combine all files and queue into single list with stable sorting
-   $: allDownloads = (() => {
+  $: allDownloads = (() => {
     const combined = [...$files, ...$downloadQueue]
 
     // If there's a search hash, prioritize matching files
@@ -291,12 +291,7 @@ function clearSearch() {
     return (bytes / 1048576).toFixed(2) + ' MB'
   }
 
-  // Check if a file matches the current search
-function isSearchMatch(file: any): boolean {
-  if (!searchHash.trim()) return false
-  return file.hash.toLowerCase().includes(searchHash.toLowerCase()) ||
-         file.name.toLowerCase().includes(searchHash.toLowerCase())
-}
+
 </script>
 
 <div class="space-y-6">
