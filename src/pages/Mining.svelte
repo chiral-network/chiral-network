@@ -6,8 +6,6 @@
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
   import MiningPoolDropdown from "$lib/components/ui/miningPoolDropdown.svelte";
-
-
   import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer } from 'lucide-svelte'
   import { onDestroy } from 'svelte'
   
@@ -21,6 +19,7 @@
   let miningPool = 'solo'
   let cpuThreads = navigator.hardwareConcurrency || 4
   let selectedThreads = Math.floor(cpuThreads / 2)
+  let activeThreads = Math.floor(cpuThreads / 2) // Threads actually being used for mining
   let miningIntensity = 50 // percentage
 
   // Statistics
@@ -79,6 +78,9 @@
     validationError = null
     isMining = true
     sessionStartTime = Date.now()
+    
+    // Set active threads to the selected threads when mining starts
+    activeThreads = selectedThreads
 
     // start uptime ticker so UI updates every second
     uptimeNow = Date.now()
@@ -94,7 +96,7 @@
       
       // Update hash rate based on threads and intensity
       const baseHashRate = 50 // H/s per thread
-      hashRate = baseHashRate * selectedThreads * (miningIntensity / 100) + (Math.random() * 10 - 5)
+      hashRate = baseHashRate * activeThreads * (miningIntensity / 100) + (Math.random() * 10 - 5)
       totalHashes += hashRate
       
       // Simulate finding blocks
@@ -103,8 +105,8 @@
       }
       
       // Update stats
-      powerConsumption = selectedThreads * 25 * (miningIntensity / 100)
-      temperature = 45 + (selectedThreads * 3) + (miningIntensity / 10) + (Math.random() * 5)
+      powerConsumption = activeThreads * 25 * (miningIntensity / 100)
+      temperature = 45 + (activeThreads * 3) + (miningIntensity / 10) + (Math.random() * 5)
       efficiency = hashRate / powerConsumption
       
       // Estimate time to next block
@@ -210,7 +212,7 @@
           <p class="text-sm text-muted-foreground">Hash Rate</p>
           <p class="text-2xl font-bold">{formatHashRate(hashRate)}</p>
           <p class="text-xs text-muted-foreground mt-1">
-            {selectedThreads} threads
+            {activeThreads} threads
           </p>
         </div>
         <div class="p-2 bg-primary/10 rounded-lg">
