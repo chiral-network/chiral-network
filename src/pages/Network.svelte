@@ -5,7 +5,7 @@
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
   import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Play, Square, Download, AlertCircle } from 'lucide-svelte'
-  import { peers, networkStats, networkStatus, userLocation } from '$lib/stores'
+  import { peers, networkStats, networkStatus, userLocation, etcAccount } from '$lib/stores'
   import { onMount, onDestroy } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
@@ -150,6 +150,10 @@
 
   async function startGethNode() {
     try {
+      // Set miner address if we have an account
+      if ($etcAccount) {
+        await invoke('set_miner_address', { address: $etcAccount.address })
+      }
       await invoke('start_geth_node', { dataDir })
       isGethRunning = true
       startPolling()
