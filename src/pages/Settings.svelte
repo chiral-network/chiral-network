@@ -16,11 +16,10 @@
     ChevronsUpDown,
   } from "lucide-svelte";
   import { onMount } from "svelte";
-  import { open, save } from "@tauri-apps/plugin-dialog";
+  import { open } from "@tauri-apps/plugin-dialog";
   import { homeDir } from "@tauri-apps/api/path";
   import { getVersion } from "@tauri-apps/api/app";
   import { userLocation } from "$lib/stores";
-    import { event } from "@tauri-apps/api";
 
   let showResetConfirmModal = false;
   // Settings state
@@ -84,48 +83,6 @@
   function openResetConfirm() {
     showResetConfirmModal = true;
   }
-  // function resetSettings() {
-  //   const defaultSettings = {
-  //     // Storage settings
-  //     storagePath: "~/ChiralNetwork/Storage",
-  //     maxStorageSize: 100, // GB
-  //     autoCleanup: true,
-  //     cleanupThreshold: 90, // %
-
-  //     // Network settings
-  //     maxConnections: 50,
-  //     uploadBandwidth: 0, // 0 = unlimited
-  //     downloadBandwidth: 0, // 0 = unlimited
-  //     port: 30303,
-  //     enableUPnP: true,
-  //     enableNAT: true,
-  //     userLocation: "US-East", // Geographic region for peer sorting
-
-  //     // Privacy settings
-  //     enableProxy: true,
-  //     enableEncryption: true,
-  //     anonymousMode: false,
-  //     shareAnalytics: true,
-
-  //     // Notifications
-  //     enableNotifications: true,
-  //     notifyOnComplete: true,
-  //     notifyOnError: true,
-  //     soundAlerts: false,
-
-  //     // Advanced
-  //     enableDHT: true,
-  //     enableIPFS: false,
-  //     chunkSize: 256, // KB
-  //     cacheSize: 1024, // MB
-  //     logLevel: "info",
-  //     autoUpdate: true,
-  //   };
-  //   if(confirm("Are you sure you want to reset all settings to their default values?")) {
-  //     settings = { ...defaultSettings };
-  //     saveSettings();
-  //   }
-  // }
 
   async function selectStoragePath() {
     try {
