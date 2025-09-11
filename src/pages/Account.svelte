@@ -110,11 +110,11 @@
         isAmountValid = false;
         sendAmount = 0;
       } else if (inputValue < 0.01) {
-        validationWarning = `Amount must be at least 0.01 CN.`;
+        validationWarning = `Amount must be at least 0.01 Chiral.`;
         isAmountValid = false;
         sendAmount = 0;
       } else if (inputValue > $wallet.balance) {
-        validationWarning = `Insufficient balance - Need ${(inputValue - $wallet.balance).toFixed(2)} more CN.`;
+        validationWarning = `Insufficient balance - Need ${(inputValue - $wallet.balance).toFixed(2)} more Chiral.`;
         isAmountValid = false;
         sendAmount = 0;
       } else {
@@ -482,17 +482,17 @@
             <!-- Balance Display - Only when logged in -->
         <div>
           <p class="text-sm text-muted-foreground">Balance</p>
-          <p class="text-2xl font-bold">{$wallet.balance.toFixed(2)} CN</p>
+          <p class="text-2xl font-bold">{$wallet.balance.toFixed(2)} Chiral</p>
         </div>
         
             <div class="grid grid-cols-2 gap-4 mt-4">
           <div>
             <p class="text-xs text-muted-foreground">Total Earned</p>
-            <p class="text-sm font-medium text-green-600">+{$wallet.totalEarned.toFixed(2)} CN</p>
+            <p class="text-sm font-medium text-green-600">+{$wallet.totalEarned.toFixed(2)} Chiral</p>
           </div>
           <div>
             <p class="text-xs text-muted-foreground">Total Spent</p>
-            <p class="text-sm font-medium text-red-600">-{$wallet.totalSpent.toFixed(2)} CN</p>
+            <p class="text-sm font-medium text-red-600">-{$wallet.totalSpent.toFixed(2)} Chiral</p>
           </div>
         </div>
         
@@ -560,7 +560,7 @@
     {#if $etcAccount}
     <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold">Send CN Tokens</h2>
+      <h2 class="text-lg font-semibold">Send Chiral Coins</h2>
       <Coins class="h-5 w-5 text-muted-foreground" />
     </div>
     <form autocomplete="off" data-form-type="other" data-lpignore="true">
@@ -587,7 +587,7 @@
         </div>
 
         <div>
-          <Label for="amount">Amount (CN)</Label>
+          <Label for="amount">Amount (Chiral)</Label>
           <div class="relative mt-2">
             <Input
               id="amount"
@@ -614,7 +614,7 @@
           </div>
           <div class="flex items-center justify-between mt-1">
             <p class="text-xs text-muted-foreground">
-              Available: {$wallet.balance.toFixed(2)} CN
+              Available: {$wallet.balance.toFixed(2)} Chiral
             </p>
             {#if validationWarning}
               <p class="text-xs text-red-500 font-medium">{validationWarning}</p>
@@ -652,7 +652,7 @@
             <ul class="space-y-1">
               {#each $transactions.filter(tx => tx.status === 'pending') as tx}
                 <li class="text-xs text-gray-800 font-normal">
-                  {tx.description} ({tx.type === 'sent' ? 'To' : 'From'}: {tx.type === 'sent' ? tx.to : tx.from}) - {tx.amount} CN
+                  {tx.description} ({tx.type === 'sent' ? 'To' : 'From'}: {tx.type === 'sent' ? tx.to : tx.from}) - {tx.amount} Chiral
                 </li>
               {:else}
                 <li class="text-xs text-gray-500 font-normal">No pending transaction details available.</li>
@@ -721,7 +721,7 @@
           </div>
           <div class="text-right">
             <p class="text-sm font-medium {tx.type === 'received' ? 'text-green-600' : 'text-red-600'}">
-              {tx.type === 'received' ? '+' : '-'}{tx.amount} CN
+              {tx.type === 'received' ? '+' : '-'}{tx.amount} Chiral
             </p>
             <p class="text-xs text-muted-foreground">{formatDate(tx.date)}</p>
           </div>
@@ -731,7 +731,7 @@
         <div class="text-center py-8 text-muted-foreground">
           <History class="h-12 w-12 mx-auto mb-2 opacity-20" />
           <p>No transactions yet</p>
-          <p class="text-sm mt-1">Transactions will appear here once you send or receive CN</p>
+          <p class="text-sm mt-1">Transactions will appear here once you send or receive Chiral</p>
         </div>
       {/if}
     </div>
