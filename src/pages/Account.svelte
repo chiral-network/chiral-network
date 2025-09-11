@@ -31,7 +31,8 @@
   let isCreatingAccount = false
   let isImportingAccount = false
   let isGethRunning = false
-  
+  let showSendConfirmModal = false;
+
   // Demo transactions - in real app these will be fetched from blockchain
   const transactions = writable<Transaction[]>([
     { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', to: undefined, date: new Date('2024-03-15'), description: 'File purchase', status: 'completed' },
@@ -652,9 +653,8 @@
         <Button
           type="button"
           class="w-full"
-          on:click={sendTransaction}
-          disabled={!isAddressValid || !isAmountValid || !isAddressValid || rawAmountInput === ''}
-        >
+          on:click={() => showSendConfirmModal = true}
+          disabled={!isAddressValid || !isAmountValid || !isAddressValid || rawAmountInput === ''}>
           <ArrowUpRight class="h-4 w-4 mr-2" />
           Send Transaction
         </Button>
@@ -688,6 +688,52 @@
         {/if}
         </div>
       </form>
+      {#if showSendConfirmModal}
+        <div
+          class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+          role="button"
+          tabindex="0"
+          on:click={() => showSendConfirmModal = false}
+          on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') showSendConfirmModal = false; }}
+        >
+          <div
+            class="bg-white p-6 rounded-lg shadow-xl w-full max-w-sm"
+            role="dialog"
+            tabindex="0"
+            aria-modal="true"
+            on:click|stopPropagation
+            on:keydown={(e) => {
+              if (e.key === 'Escape') showSendConfirmModal = false;
+            }}
+          >
+            <h3 class="text-lg font-bold mb-2">Confirm Transaction</h3>
+            <p class="text-sm text-gray-600 mb-4">
+              Please confirm you want to send <span class="font-semibold">{sendAmount} Chiral</span> to:
+            </p>
+            <div class="mb-4">
+              <span class="block text-xs text-muted-foreground mb-1">Recipient Address</span>
+              <span class="font-mono text-sm break-all">{recipientAddress}</span>
+            </div>
+            <div class="flex justify-end gap-3">
+              <Button
+                variant="outline"
+                on:click={() => showSendConfirmModal = false}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                on:click={() => {
+                  showSendConfirmModal = false;
+                  sendTransaction();
+                }}
+              >
+                Confirm & Send
+              </Button>
+            </div>
+          </div>
+        </div>
+      {/if}
     </Card>
   {/if}
   </div>
