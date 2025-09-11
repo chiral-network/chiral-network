@@ -478,11 +478,17 @@
     <div class="space-y-4">
       <div>
         <Label for="language-select">{$t("language.select")}</Label>
-        <DropDown
+        <select
           id="language-select"
-          options={languages}
-          bind:value={selectedLanguage}  
-        />
+          bind:value={selectedLanguage}
+          on:change={(e) => onLanguageChange((e.target as HTMLSelectElement).value)}
+          class="w-full px-3 py-2 mt-2 border rounded-md bg-white"
+        >
+          <option value="en">{$t("language.english")}</option>
+          <option value="es">{$t("language.spanish")}</option>
+          <option value="zh">{$t("language.chinese")}</option>
+          <option value="ko">{$t("language.korean")}</option>
+        </select>
       </div>
     </div>
   </Card>
