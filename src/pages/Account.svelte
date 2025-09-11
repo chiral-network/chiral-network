@@ -763,10 +763,9 @@
       <BadgeX class="h-5 w-5 text-muted-foreground" />
     </div>
 
-
     <div class="space-y-4">
       <div>
-        <Label for="blacklist-address">Chrial Address to Blacklist</Label>
+        <Label for="blacklist-address">Chiral Address to Blacklist</Label>
         <Input
           id="blacklist-address"
           bind:value={newBlacklistEntry.chiral_address}
@@ -786,7 +785,6 @@
       <Button type="button" class="w-full" disabled={!isBlacklistFormValid} on:click={addBlacklistEntry}>
         Add to Blacklist
       </Button>
-
 
       <h3 class="text-md font-semibold mt-6 mb-3">Blacklisted Addresses</h3>
       {#if $blacklist.length === 0}
@@ -808,7 +806,5 @@
       {/if}
     </div>
   </Card>
-
   {/if}
-
 </div>
