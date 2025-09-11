@@ -89,6 +89,12 @@ export interface NetworkStats {
   totalTransactions: number;
 }
 
+export interface BlacklistEntry {
+  chiral_address: string;
+  reason: string;
+  timestamp: Date;
+}
+
 // Sample dummy data
 const dummyFiles: FileItem[] = [
   {
@@ -212,6 +218,14 @@ const dummyPeers: PeerInfo[] = [
   },
 ];
 
+const blacklistedPeers: BlacklistEntry[] = [
+  {
+    chiral_address: "0x702f05Cc6634C599fj293b844Bc9e759jw04989",
+    reason: "Unfufilled requests",
+    timestamp: new Date("2024-05-01T10:00:00Z"),
+  }
+];
+
 const dummyNetworkStats: NetworkStats = {
   totalPeers: 1247,
   onlinePeers: 892,
@@ -236,6 +250,7 @@ export const networkStats = writable<NetworkStats>(dummyNetworkStats);
 export const downloadQueue = writable<FileItem[]>([]);
 export const userLocation = writable<string>("US-East");
 export const etcAccount = writable<ETCAccount | null>(null);
+export const blacklist = writable<BlacklistEntry[]>(blacklistedPeers);
 
 // Mining state
 export interface MiningState {

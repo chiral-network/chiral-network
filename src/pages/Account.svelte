@@ -3,8 +3,8 @@
   import Card from '$lib/components/ui/card.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import} from 'lucide-svelte'
-  import { wallet, etcAccount } from '$lib/stores'
+  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX } from 'lucide-svelte'
+  import { wallet, etcAccount, blacklist } from '$lib/stores'
   import { writable, derived } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
 
@@ -340,18 +340,21 @@
   async function createChiralAccount() {
     isCreatingAccount = true
     try {
-      let account: { address: string, private_key: string }
-      
+
+      let account: { address: string, private_key: string, blacklist: Object[] }
+
       if (isTauri) {
         // Use Tauri backend
-        account = await invoke('create_chiral_account') as { address: string, private_key: string }
+        account = await invoke('create_chiral_account') as { address: string, private_key: string, blacklist: Object[] }
       } else {
         // Fallback for web environment - generate demo account
         const demoAddress = '0x' + Math.random().toString(16).substr(2, 40)
         const demoPrivateKey = '0x' + Math.random().toString(16).substr(2, 64)
+        const demoBlackList = [{node_id: 169245, name: "Jane"}]
         account = {
           address: demoAddress,
-          private_key: demoPrivateKey
+          private_key: demoPrivateKey,
+          blacklist: demoBlackList
         }
         console.log('Running in web mode - using demo account')
       }
@@ -418,6 +421,32 @@
     } finally {
       isImportingAccount = false
     }
+  }
+
+  let newBlacklistEntry = {
+    chiral_address: "",
+    description: ""
+  }
+
+  $: isBlacklistFormValid = 
+    newBlacklistEntry.description.trim() !== '' &&
+    newBlacklistEntry.chiral_address.startsWith('0x') &&
+    newBlacklistEntry.chiral_address.length === 42;
+  
+  function addBlacklistEntry() {
+    if (newBlacklistEntry.chiral_address && newBlacklistEntry.description) {
+      blacklist.update(entries => [...entries,
+        { chiral_address: newBlacklistEntry.chiral_address, reason: newBlacklistEntry.description, timestamp: new Date() }
+      ]);
+      newBlacklistEntry = { chiral_address: "", description: "" }; // Clear input fields
+    }
+  }
+
+
+  function removeBlacklistEntry(chiral_address: string) {
+    blacklist.update(entries => {
+      return entries.filter(entry => entry.chiral_address !== chiral_address);
+    });
   }
 
   
@@ -737,5 +766,57 @@
     </div>
   </Card>
 
+  <Card class="p-6">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-semibold">Blacklist Management</h2>
+      <BadgeX class="h-5 w-5 text-muted-foreground" />
+    </div>
+
+
+    <div class="space-y-4">
+      <div>
+        <Label for="blacklist-address">Chrial Address to Blacklist</Label>
+        <Input
+          id="blacklist-address"
+          bind:value={newBlacklistEntry.chiral_address}
+          placeholder="e.g., 0x1234...5678 (42 characters)"
+          class="mt-2"
+        />
+      </div>
+      <div>
+        <Label for="blacklist-name">Reason</Label>
+        <Input
+          id="blacklist-name"
+          bind:value={newBlacklistEntry.description}
+          placeholder="e.g., Malicious Peer"
+          class="mt-2"
+        />
+      </div>
+      <Button type="button" class="w-full" disabled={!isBlacklistFormValid} on:click={addBlacklistEntry}>
+        Add to Blacklist
+      </Button>
+
+
+      <h3 class="text-md font-semibold mt-6 mb-3">Blacklisted Addresses</h3>
+      {#if $blacklist.length === 0}
+        <p class="text-sm text-muted-foreground">No addresses blacklisted yet.</p>
+      {:else}
+        <div class="space-y-2">
+          {#each $blacklist as entry (entry.chiral_address)}
+            <div class="flex items-center justify-between p-3 bg-secondary rounded-lg">
+              <div>
+                <p class="text-sm font-medium">{entry.chiral_address}</p>
+                <p class="text-xs text-muted-foreground">{entry.reason}</p>
+              </div>
+              <Button size="sm" variant="destructive" on:click={() => removeBlacklistEntry(entry.chiral_address)}>
+                Remove
+              </Button>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  </Card>
   {/if}
+
 </div>
