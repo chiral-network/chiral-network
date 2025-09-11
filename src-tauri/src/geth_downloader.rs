@@ -51,9 +51,9 @@ impl GethDownloader {
         // Core-Geth v1.12.20 URLs for different platforms
         let url = match (std::env::consts::OS, std::env::consts::ARCH) {
             ("macos", "aarch64") => "https://github.com/etclabscore/core-geth/releases/download/v1.12.20/core-geth-osx-v1.12.20.zip",            
-            ("macos", "x86_64") => "https://github.com/etclabscore/core-geth/releases/download/v1.12.20/core-geth-darwin-amd64-v1.12.20.tar.gz",
-            ("linux", "x86_64") => "https://github.com/etclabscore/core-geth/releases/download/v1.12.20/core-geth-linux-amd64-v1.12.20.tar.gz",
-            ("linux", "aarch64") => "https://github.com/etclabscore/core-geth/releases/download/v1.12.20/core-geth-linux-arm64-v1.12.20.tar.gz",
+            ("macos", "x86_64") => "https://github.com/etclabscore/core-geth/releases/download/v1.12.20/core-geth-win64-v1.12.20.zip",
+            ("linux", "x86_64") => "https://github.com/etclabscore/core-geth/releases/download/v1.12.20/core-geth-linux-v1.12.20.zip",
+            ("linux", "aarch64") => "https://github.com/etclabscore/core-geth/releases/download/v1.12.20/core-geth-arm64-v1.12.20.zip",
             ("windows", "x86_64") => "https://github.com/etclabscore/core-geth/releases/download/v1.12.20/core-geth-win64-v1.12.20.zip",
             _ => return Err(format!("Unsupported platform: {} {}", std::env::consts::OS, std::env::consts::ARCH)),
         };
