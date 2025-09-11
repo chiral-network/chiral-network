@@ -437,7 +437,7 @@ function computeLatencyStats() {
     <div class="h-48 flex items-end gap-1">
       {#each latencyHistory as p}
         <div
-          class="flex-1 bg-primary/20 hover:bg-primary/30 transition-colors rounded-t"
+          class="flex-1 bg-gradient-to-t from-green-400/30 to-red-500/60 hover:from-green-500/60 hover:to-red-600/90 transition-all rounded-t shadow-sm"
           style="height: {(Math.min(p.latency, 300) / 300) * 100}%"
           title="{p.date}: {p.latency.toFixed(0)} ms"
         ></div>
