@@ -80,24 +80,34 @@
       return sortDescending ? dateB.getTime() - dateA.getTime() : dateA.getTime() - dateB.getTime();
     });
 
-  // Validation logic
+  // Enhanced address validation with immediate feedback
   $: {
-    // Address validation
-    if (!recipientAddress) {
+    if (recipientAddress === '') {
       addressWarning = '';
       isAddressValid = false;
     } else if (!recipientAddress.startsWith('0x')) {
-      addressWarning = 'Address must start with 0x.';
+      addressWarning = 'Address must start with 0x';
       isAddressValid = false;
-    } else if (recipientAddress.length !== 42) {
-      addressWarning = 'Address must be exactly 42 characters long.';
+    } else if (recipientAddress.length > 42) {
+      addressWarning = 'Address is too long (max 42 characters)';
       isAddressValid = false;
-    } else {
+    }
+    else if (!isValidHexAddress(recipientAddress)) {
+      addressWarning = 'Address must contain valid hexadecimal characters (0-9, a-f, A-F)';
+      isAddressValid = false;
+    }
+    else if (recipientAddress.length < 42) {
+      addressWarning = 'Address must be exactly 42 characters long';
+      isAddressValid = false;
+    }
+    else {
       addressWarning = '';
       isAddressValid = true;
     }
+  }
 
-    // Amount validation
+  // Amount validation
+  $: {
     if (rawAmountInput === '') {
       validationWarning = '';
       isAmountValid = false;
@@ -110,11 +120,11 @@
         isAmountValid = false;
         sendAmount = 0;
       } else if (inputValue < 0.01) {
-        validationWarning = `Amount must be at least 0.01 Chiral.`;
+        validationWarning = `Amount must be at least 0.01 CN.`;
         isAmountValid = false;
         sendAmount = 0;
       } else if (inputValue > $wallet.balance) {
-        validationWarning = `Insufficient balance - Need ${(inputValue - $wallet.balance).toFixed(2)} more Chiral.`;
+        validationWarning = `Insufficient balance - Need ${(inputValue - $wallet.balance).toFixed(2)} more CN.`;
         isAmountValid = false;
         sendAmount = 0;
       } else {
@@ -126,26 +136,12 @@
     }
   }
 
-  // Enhanced address validation with user feedback
-  $: {
-    if (recipientAddress.trim() === '') {
-      addressWarning = '';
-      isAddressValid = true;
-    } else if (!isValidAddress(recipientAddress)) {
-      addressWarning = 'Address must contain valid hexadecimal characters (0-9, a-f, A-F)';
-      isAddressValid = false;
-    } else {
-      addressWarning = '';
-      isAddressValid = true;
-    }
-  }
-  
   // Enhanced address validation function
-  function isValidAddress(address: string): boolean {
+  function isValidHexAddress(address: string): boolean {
     // Check that everything after 0x is hexadecimal
     const hexPart = address.slice(2);
     if (hexPart.length === 0) return false;
-    
+
     const hexRegex = /^[a-fA-F0-9]+$/;
     return hexRegex.test(hexPart);
   }
