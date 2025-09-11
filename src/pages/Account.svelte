@@ -92,6 +92,9 @@
     } else if (recipientAddress.length !== 42) {
       addressWarning = 'Address must be exactly 42 characters long.';
       isAddressValid = false;
+    } else if (!isValidAddress(recipientAddress)) {
+      addressWarning = 'Address must contain valid hexadecimal characters (0-9, a-f, A-F)';
+      isAddressValid = false;
     } else {
       addressWarning = '';
       isAddressValid = true;
@@ -125,20 +128,6 @@
       }
     }
   }
-
-  // Enhanced address validation with user feedback
-  $: {
-    if (recipientAddress.trim() === '') {
-      addressWarning = '';
-      isAddressValid = true;
-    } else if (!isValidAddress(recipientAddress)) {
-      addressWarning = 'Address must contain valid hexadecimal characters (0-9, a-f, A-F)';
-      isAddressValid = false;
-    } else {
-      addressWarning = '';
-      isAddressValid = true;
-    }
-  }
   
   // Enhanced address validation function
   function isValidAddress(address: string): boolean {
@@ -162,11 +151,9 @@
     privateKeyCopyMessage = 'Copied!';
     setTimeout(() => privateKeyCopyMessage = '', 1500);
   }
-  
-  
+
   async function exportWallet() {
     try {
-      throw new Error('Test error message');
       const walletData = {
         address: $wallet.address,
         privateKey: "your-private-key-here-do-not-share", // this should change to be the actual private key
@@ -452,7 +439,7 @@
   
   // Helper function to set max amount
   function setMaxAmount() {
-    rawAmountInput = $wallet.balance.toString();
+    rawAmountInput = $wallet.balance.toFixed(2);
   }
 </script>
 
@@ -600,14 +587,19 @@
             id="recipient"
             bind:value={recipientAddress}
             placeholder="0x..."
-            class="mt-2 {addressWarning ? 'border-red-500' : ''}"
+            class="mt-2"
             data-form-type="other"
             data-lpignore="true"
             aria-autocomplete="none"
           />
           <div class="flex items-center justify-between mt-1">
             <span class="text-xs text-muted-foreground">
-              {recipientAddress.length}/42 characters ({42 - recipientAddress.length} remaining)
+              {recipientAddress.length}/42 characters 
+              {#if recipientAddress.length <= 42}
+                ({42 - recipientAddress.length} remaining)
+              {:else}
+                ({recipientAddress.length - 42} over)
+              {/if}
             </span>
             {#if addressWarning}
               <p class="text-xs text-red-500 font-medium">{addressWarning}</p>
@@ -620,12 +612,11 @@
           <div class="relative mt-2">
             <Input
               id="amount"
-              type="number"
+              type="text"
+              inputmode="decimal"
               bind:value={rawAmountInput}
               placeholder=""
-              min="0.01"
-              step="0.01"
-              class="mt-2 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]"
+              class="mt-2"
               data-form-type="other"
               data-lpignore="true"
               aria-autocomplete="none"
@@ -772,10 +763,9 @@
       <BadgeX class="h-5 w-5 text-muted-foreground" />
     </div>
 
-
     <div class="space-y-4">
       <div>
-        <Label for="blacklist-address">Chrial Address to Blacklist</Label>
+        <Label for="blacklist-address">Chiral Address to Blacklist</Label>
         <Input
           id="blacklist-address"
           bind:value={newBlacklistEntry.chiral_address}
@@ -795,7 +785,6 @@
       <Button type="button" class="w-full" disabled={!isBlacklistFormValid} on:click={addBlacklistEntry}>
         Add to Blacklist
       </Button>
-
 
       <h3 class="text-md font-semibold mt-6 mb-3">Blacklisted Addresses</h3>
       {#if $blacklist.length === 0}
@@ -818,5 +807,4 @@
     </div>
   </Card>
   {/if}
-
 </div>
