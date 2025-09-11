@@ -10,7 +10,7 @@
   import { onDestroy, onMount } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { etcAccount, miningState } from '$lib/stores'
-  
+    import { getVersion } from "@tauri-apps/api/app";
   // Interfaces
   interface MiningHistoryPoint {
     timestamp: number
@@ -28,6 +28,7 @@
   }
   
   // Local UI state only
+  let isTauri = false
   let isGethRunning = false
   let currentBlock = 0
   let totalHashes = 0
@@ -47,7 +48,10 @@
   let estimatedTimeToBlock = 0
   $: powerConsumption = $miningState.activeThreads * 15
   $: efficiency = $miningState.hashRate === '0 H/s' ? 0 : parseHashRate($miningState.hashRate) / powerConsumption
-  $: temperature = 45 + ($miningState.activeThreads * 3.5)
+  let temperature = 45.0
+  $: if (!isTauri) {
+    temperature = 45 + ($miningState.activeThreads * 3.5)
+  }
 
   // Uptime tick (forces template to re-render every second while mining)
   let uptimeNow: number = Date.now()
@@ -102,12 +106,23 @@
   $: isInvalid = !!threadsWarning || !!intensityWarning;
 
   onMount(async () => {
+    try{
+      getVersion()
+      isTauri = true
+    }
+    catch{
+      isTauri = false
+    }
+
     await checkGethStatus()
     await updateNetworkStats()
     
     // If mining is already active from before, update stats immediately
     if ($miningState.isMining) {
       await updateMiningStats()
+    }
+    if (isTauri) {
+      await updateCpuTemperature()
     }
     
     // Start polling for mining stats
@@ -116,7 +131,10 @@
         await updateMiningStats()
       }
       await updateNetworkStats()
-    }, 2000) as unknown as number
+      if (isTauri) {
+        await updateCpuTemperature()
+      }
+    }, 500) as unknown as number
   })
   
   async function checkGethStatus() {
@@ -199,6 +217,18 @@
       console.error('Failed to update network stats:', e)
     }
   }
+
+  async function updateCpuTemperature() {
+    try {
+      const temp = await invoke('get_cpu_temperature') as number
+      console.log(temp)
+      if (temp > 0) {
+        temperature = temp
+      }
+    } catch (e) {
+      console.error('Failed to get CPU temperature:', e)
+    }
+  }
   
   function startUptimeTimer() {
     uptimeNow = Date.now()
@@ -244,7 +274,9 @@
       
       // Update power and temperature estimates
       powerConsumption = $miningState.activeThreads * 25 * ($miningState.minerIntensity / 100)
-      temperature = 45 + ($miningState.activeThreads * 3) + ($miningState.minerIntensity / 10)
+      if (!isTauri) {
+        temperature = 45 + ($miningState.activeThreads * 3) + ($miningState.minerIntensity / 10)
+      }
       
       // Re-check geth status since it might have restarted
       isGethRunning = true

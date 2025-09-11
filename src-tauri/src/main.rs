@@ -15,7 +15,9 @@ use ethereum::{
 };
 use keystore::Keystore;
 use geth_downloader::GethDownloader;
-use std::sync::{Arc, Mutex};
+use sysinfo::{Components, System, MINIMUM_CPU_UPDATE_INTERVAL};
+use systemstat::{Platform, System as SystemStat};
+use std::{sync::{Arc, Mutex}, time::Instant};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -215,6 +217,46 @@ async fn get_miner_logs(data_dir: String, lines: usize) -> Result<Vec<String>, S
     get_mining_logs(&data_dir, lines)
 }
 
+#[tauri::command]
+fn get_cpu_temperature() -> Option<f32> {
+    static mut LAST_UPDATE: Option<Instant> = None;
+    unsafe {
+        if let Some(last) = LAST_UPDATE {
+            if last.elapsed() < MINIMUM_CPU_UPDATE_INTERVAL {
+                return None;
+            }
+        }
+        LAST_UPDATE = Some(Instant::now());
+    }
+    // Try sysinfo first (works on some platforms including M1 macs)
+    let mut sys = System::new_all();
+    sys.refresh_cpu_all();
+    let components = Components::new_with_refreshed_list();
+
+    let mut core_count = 0;
+
+    let sum: f32 = components
+        .iter()
+        .filter(|c| {
+            let label = c.label().to_lowercase();
+            label.contains("cpu") || label.contains("package") || label.contains("tdie")
+        })
+        .map(|c| {
+            core_count += 1;
+            c.temperature().unwrap_or(0.0)
+        })
+        .sum();
+    if core_count > 0 {
+        return Some(sum / core_count as f32);
+    }
+    // handles Windows case?
+    let stat_sys = SystemStat::new();
+    if let Ok(temp) = stat_sys.cpu_temp() {
+        return Some(temp);
+    }
+
+    None
+}
 fn main() {
     println!("Starting Chiral Network...");
 
@@ -245,7 +287,8 @@ fn main() {
             get_miner_hashrate,
             get_current_block,
             get_network_stats,
-            get_miner_logs
+            get_miner_logs,
+            get_cpu_temperature
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
