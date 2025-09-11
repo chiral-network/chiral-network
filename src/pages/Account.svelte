@@ -3,8 +3,8 @@
   import Card from '$lib/components/ui/card.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import} from 'lucide-svelte'
-  import { wallet, etcAccount } from '$lib/stores'
+  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX } from 'lucide-svelte'
+  import { wallet, etcAccount, blacklist } from '$lib/stores'
   import { writable, derived } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
 
@@ -113,11 +113,11 @@
         isAmountValid = false;
         sendAmount = 0;
       } else if (inputValue < 0.01) {
-        validationWarning = `Amount must be at least 0.01 CN.`;
+        validationWarning = `Amount must be at least 0.01 Chiral.`;
         isAmountValid = false;
         sendAmount = 0;
       } else if (inputValue > $wallet.balance) {
-        validationWarning = `Insufficient balance - Need ${(inputValue - $wallet.balance).toFixed(2)} more CN.`;
+        validationWarning = `Insufficient balance - Need ${(inputValue - $wallet.balance).toFixed(2)} more Chiral.`;
         isAmountValid = false;
         sendAmount = 0;
       } else {
@@ -327,18 +327,21 @@
   async function createChiralAccount() {
     isCreatingAccount = true
     try {
-      let account: { address: string, private_key: string }
-      
+
+      let account: { address: string, private_key: string, blacklist: Object[] }
+
       if (isTauri) {
         // Use Tauri backend
-        account = await invoke('create_chiral_account') as { address: string, private_key: string }
+        account = await invoke('create_chiral_account') as { address: string, private_key: string, blacklist: Object[] }
       } else {
         // Fallback for web environment - generate demo account
         const demoAddress = '0x' + Math.random().toString(16).substr(2, 40)
         const demoPrivateKey = '0x' + Math.random().toString(16).substr(2, 64)
+        const demoBlackList = [{node_id: 169245, name: "Jane"}]
         account = {
           address: demoAddress,
-          private_key: demoPrivateKey
+          private_key: demoPrivateKey,
+          blacklist: demoBlackList
         }
         console.log('Running in web mode - using demo account')
       }
@@ -405,6 +408,32 @@
     } finally {
       isImportingAccount = false
     }
+  }
+
+  let newBlacklistEntry = {
+    chiral_address: "",
+    description: ""
+  }
+
+  $: isBlacklistFormValid = 
+    newBlacklistEntry.description.trim() !== '' &&
+    newBlacklistEntry.chiral_address.startsWith('0x') &&
+    newBlacklistEntry.chiral_address.length === 42;
+  
+  function addBlacklistEntry() {
+    if (newBlacklistEntry.chiral_address && newBlacklistEntry.description) {
+      blacklist.update(entries => [...entries,
+        { chiral_address: newBlacklistEntry.chiral_address, reason: newBlacklistEntry.description, timestamp: new Date() }
+      ]);
+      newBlacklistEntry = { chiral_address: "", description: "" }; // Clear input fields
+    }
+  }
+
+
+  function removeBlacklistEntry(chiral_address: string) {
+    blacklist.update(entries => {
+      return entries.filter(entry => entry.chiral_address !== chiral_address);
+    });
   }
 
   
@@ -547,7 +576,7 @@
     {#if $etcAccount}
     <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold">Send CN Tokens</h2>
+      <h2 class="text-lg font-semibold">Send Chiral Coins</h2>
       <Coins class="h-5 w-5 text-muted-foreground" />
     </div>
     <form autocomplete="off" data-form-type="other" data-lpignore="true">
@@ -579,7 +608,7 @@
         </div>
 
         <div>
-          <Label for="amount">Amount (CN)</Label>
+          <Label for="amount">Amount (Chiral)</Label>
           <div class="relative mt-2">
             <Input
               id="amount"
@@ -605,7 +634,7 @@
           </div>
           <div class="flex items-center justify-between mt-1">
             <p class="text-xs text-muted-foreground">
-              Available: {$wallet.balance.toFixed(2)} CN
+              Available: {$wallet.balance.toFixed(2)} Chiral
             </p>
             {#if validationWarning}
               <p class="text-xs text-red-500 font-medium">{validationWarning}</p>
@@ -643,7 +672,7 @@
             <ul class="space-y-1">
               {#each $transactions.filter(tx => tx.status === 'pending') as tx}
                 <li class="text-xs text-gray-800 font-normal">
-                  {tx.description} ({tx.type === 'sent' ? 'To' : 'From'}: {tx.type === 'sent' ? tx.to : tx.from}) - {tx.amount} CN
+                  {tx.description} ({tx.type === 'sent' ? 'To' : 'From'}: {tx.type === 'sent' ? tx.to : tx.from}) - {tx.amount} Chiral
                 </li>
               {:else}
                 <li class="text-xs text-gray-500 font-normal">No pending transaction details available.</li>
@@ -712,7 +741,7 @@
           </div>
           <div class="text-right">
             <p class="text-sm font-medium {tx.type === 'received' ? 'text-green-600' : 'text-red-600'}">
-              {tx.type === 'received' ? '+' : '-'}{tx.amount} CN
+              {tx.type === 'received' ? '+' : '-'}{tx.amount} Chiral
             </p>
             <p class="text-xs text-muted-foreground">{formatDate(tx.date)}</p>
           </div>
@@ -722,11 +751,64 @@
         <div class="text-center py-8 text-muted-foreground">
           <History class="h-12 w-12 mx-auto mb-2 opacity-20" />
           <p>No transactions yet</p>
-          <p class="text-sm mt-1">Transactions will appear here once you send or receive CN</p>
+          <p class="text-sm mt-1">Transactions will appear here once you send or receive Chiral</p>
+        </div>
+      {/if}
+    </div>
+  </Card>
+
+  <Card class="p-6">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-semibold">Blacklist Management</h2>
+      <BadgeX class="h-5 w-5 text-muted-foreground" />
+    </div>
+
+
+    <div class="space-y-4">
+      <div>
+        <Label for="blacklist-address">Chrial Address to Blacklist</Label>
+        <Input
+          id="blacklist-address"
+          bind:value={newBlacklistEntry.chiral_address}
+          placeholder="e.g., 0x1234...5678 (42 characters)"
+          class="mt-2"
+        />
+      </div>
+      <div>
+        <Label for="blacklist-name">Reason</Label>
+        <Input
+          id="blacklist-name"
+          bind:value={newBlacklistEntry.description}
+          placeholder="e.g., Malicious Peer"
+          class="mt-2"
+        />
+      </div>
+      <Button type="button" class="w-full" disabled={!isBlacklistFormValid} on:click={addBlacklistEntry}>
+        Add to Blacklist
+      </Button>
+
+
+      <h3 class="text-md font-semibold mt-6 mb-3">Blacklisted Addresses</h3>
+      {#if $blacklist.length === 0}
+        <p class="text-sm text-muted-foreground">No addresses blacklisted yet.</p>
+      {:else}
+        <div class="space-y-2">
+          {#each $blacklist as entry (entry.chiral_address)}
+            <div class="flex items-center justify-between p-3 bg-secondary rounded-lg">
+              <div>
+                <p class="text-sm font-medium">{entry.chiral_address}</p>
+                <p class="text-xs text-muted-foreground">{entry.reason}</p>
+              </div>
+              <Button size="sm" variant="destructive" on:click={() => removeBlacklistEntry(entry.chiral_address)}>
+                Remove
+              </Button>
+            </div>
+          {/each}
         </div>
       {/if}
     </div>
   </Card>
 
   {/if}
+
 </div>

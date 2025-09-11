@@ -39,7 +39,7 @@
   // Network statistics
   let networkHashRate = '0 H/s'
   let networkDifficulty = '0'
-  let blockReward = 5 // CN per block
+  let blockReward = 5 // Chiral per block
   let peerCount = 0
 
   // Statistics
@@ -405,7 +405,7 @@
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">Total Rewards</p>
-          <p class="text-2xl font-bold">{$miningState.totalRewards.toFixed(2)} CN</p>
+          <p class="text-2xl font-bold">{$miningState.totalRewards.toFixed(2)} Chiral</p>
           <p class="text-xs text-green-600 flex items-center gap-1 mt-1">
             <TrendingUp class="h-3 w-3" />
             {$miningState.blocksFound} blocks found
@@ -606,7 +606,7 @@
         </div>
         <div class="flex justify-between items-center">
           <span class="text-sm text-muted-foreground">Block Reward</span>
-          <Badge variant="outline">{blockReward} CN</Badge>
+          <Badge variant="outline">{blockReward} Chiral</Badge>
         </div>
         <div class="flex justify-between items-center">
           <span class="text-sm text-muted-foreground">Est. Time to Block</span>
@@ -663,7 +663,7 @@
           </div>
           <div class="flex justify-between">
             <span class="text-sm">Min Payout</span>
-            <span class="text-sm font-medium">10 CN</span>
+            <span class="text-sm font-medium">10 Chiral</span>
           </div>
           <div class="flex justify-between">
             <span class="text-sm">Payment Method</span>
@@ -696,7 +696,7 @@
             </div>
             <div class="text-right">
               <Badge variant="outline" class="text-green-600">
-                +{block.reward.toFixed(2)} CN
+                +{block.reward.toFixed(2)} Chiral
               </Badge>
               <p class="text-xs text-muted-foreground mt-1">
                 {block.timestamp.toLocaleTimeString()}
