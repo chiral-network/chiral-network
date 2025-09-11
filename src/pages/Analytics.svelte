@@ -434,7 +434,24 @@ function computeLatencyStats() {
 
   <Card class="p-6">
     <h3 class="text-md font-medium mb-4">Latency (recent)</h3>
-    <div class="h-48 flex items-end gap-1">
+    <div class="flex h-48 gap-2">
+    <!-- Y-axis labels -->
+    <div class="flex flex-col justify-between text-xs text-muted-foreground pr-2">
+      <span>300 ms</span>
+      <span>150 ms</span>
+      <span>0</span>
+    </div>
+    
+    <!-- Bars + gridlines -->
+    <div class="relative flex-1 flex items-end gap-1">
+      <!-- Gridlines -->
+      <div class="absolute inset-0 flex flex-col justify-between">
+        <div class="border-t border-muted-foreground/20"></div>
+        <div class="border-t border-muted-foreground/20"></div>
+        <div class="border-t border-muted-foreground/20"></div>
+      </div>
+
+      <!-- Bars -->
       {#each latencyHistory as p}
         <div
           class="flex-1 bg-gradient-to-t from-green-400/30 to-red-500/60 hover:from-green-500/60 hover:to-red-600/90 transition-all rounded-t shadow-sm"
@@ -443,6 +460,8 @@ function computeLatencyStats() {
         ></div>
       {/each}
     </div>
+  </div>
+   
     <div class="flex justify-between mt-2 text-xs text-muted-foreground">
       <span>{latencyHistory[0]?.date}</span>
       <span>{latencyHistory[latencyHistory.length - 1]?.date}</span>
@@ -450,9 +469,6 @@ function computeLatencyStats() {
     <div class="flex gap-4 mt-2 text-xs text-muted-foreground">
     <span>Min: {Math.min(...latencyHistory.map(p => p.latency)).toFixed(0)} ms</span>
     <span>Max: {Math.max(...latencyHistory.map(p => p.latency)).toFixed(0)} ms</span>
-    <span>Avg: {(
-      latencyHistory.reduce((s, p) => s + p.latency, 0) / latencyHistory.length
-    ).toFixed(0)} ms</span>
   </div>
   </Card>
 </div>
