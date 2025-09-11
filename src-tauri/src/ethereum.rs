@@ -314,6 +314,39 @@ pub async fn get_peer_count() -> Result<u32, String> {
 pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), String> {
     let client = reqwest::Client::new();
     
+    // First, ensure geth is ready to accept RPC calls
+    let mut attempts = 0;
+    let max_attempts = 10; // 10 seconds max wait
+    loop {
+        // Check if geth is responding to RPC calls
+        if let Ok(response) = client
+            .post("http://127.0.0.1:8545")
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "net_version",
+                "params": [],
+                "id": 1
+            }))
+            .send()
+            .await
+        {
+            if response.status().is_success() {
+                if let Ok(json) = response.json::<serde_json::Value>().await {
+                    if json.get("result").is_some() {
+                        break; // Geth is ready
+                    }
+                }
+            }
+        }
+        
+        attempts += 1;
+        if attempts >= max_attempts {
+            return Err("Geth RPC endpoint is not responding. Please ensure the Chiral node is running.".to_string());
+        }
+        
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    }
+    
     // First try to set the etherbase using miner_setEtherbase
     let set_etherbase = json!({
         "jsonrpc": "2.0",

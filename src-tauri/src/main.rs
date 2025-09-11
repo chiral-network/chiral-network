@@ -151,8 +151,41 @@ async fn start_miner(state: State<'_, AppState>, address: String, threads: u32, 
                 geth.start(&data_dir, miner_address.as_deref())?;
             }
             
-            // Wait for geth to start up
-            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            // Wait for geth to start up and be ready to accept RPC connections
+            let mut attempts = 0;
+            let max_attempts = 30; // 30 seconds max wait
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                attempts += 1;
+                
+                // Check if geth is responding to RPC calls
+                if let Ok(response) = reqwest::Client::new()
+                    .post("http://127.0.0.1:8545")
+                    .json(&serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "method": "net_version",
+                        "params": [],
+                        "id": 1
+                    }))
+                    .send()
+                    .await
+                {
+                    if response.status().is_success() {
+                        if let Ok(json) = response.json::<serde_json::Value>().await {
+                            if json.get("result").is_some() {
+                                println!("Geth is ready for RPC calls");
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                if attempts >= max_attempts {
+                    return Err("Geth failed to start up within 30 seconds".to_string());
+                }
+                
+                println!("Waiting for geth to start up... (attempt {}/{})", attempts, max_attempts);
+            }
             
             // Try mining again without setting etherbase (it's set via command line now)
             let client = reqwest::Client::new();
