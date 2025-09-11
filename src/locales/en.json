@@ -1,0 +1,76 @@
+{
+  "settings.title": "Settings",
+  "settings.subtitle": "Configure your Chiral Network preferences",
+
+  "badges.unsaved": "Unsaved changes",
+
+  "storage.title": "Storage",
+  "storage.location": "Storage Location",
+  "storage.locationPick": "Pick storage location",
+  "storage.selectLocationTitle": "Select Storage Location",
+  "storage.enterPathPrompt": "Enter storage path",
+  "storage.browserNoPicker": "Tauri file picker not available in browser",
+  "storage.maxSize": "Max Storage Size (GB)",
+  "storage.cleanupThreshold": "Auto-Cleanup Threshold (%)",
+  "storage.enableCleanup": "Enable automatic cleanup when storage is full",
+
+  "network.title": "Network",
+  "network.maxConnections": "Max Connections",
+  "network.port": "Port",
+  "network.uploadLimit": "Upload Limit (MB/s, 0=unlimited)",
+  "network.downloadLimit": "Download Limit (MB/s, 0=unlimited)",
+  "network.userLocation": "Your Location",
+  "network.locationHint": "Used to prioritize geographically closer peers for better performance",
+  "network.enableUpnp": "Enable UPnP port mapping",
+  "network.enableNat": "Enable NAT traversal",
+  "network.enableDht": "Enable DHT (Distributed Hash Table)",
+
+  "regions.usEast": "US East",
+  "regions.usWest": "US West",
+  "regions.euWest": "Europe West",
+  "regions.apac": "Asia Pacific",
+
+  "language.title": "Language",
+  "language.select": "Select Language",
+  "language.english": "English",
+  "language.spanish": "Español",
+  "language.chinese": "中文",
+  "language.korean": "한국어",
+
+  "privacy.title": "Privacy & Security",
+  "privacy.enableProxy": "Enable proxy routing for anonymity",
+  "privacy.enableEncryption": "Enable end-to-end encryption",
+  "privacy.anonymousMode": "Anonymous mode (hide all identifying information)",
+  "privacy.shareAnalytics": "Share anonymous usage analytics",
+
+  "notifications.title": "Notifications",
+  "notifications.enable": "Enable desktop notifications",
+  "notifications.notifyComplete": "Notify when downloads complete",
+  "notifications.notifyError": "Notify on errors",
+  "notifications.soundAlerts": "Play sound alerts",
+
+  "advanced.title": "Advanced",
+  "advanced.chunkSize": "Chunk Size (KB)",
+  "advanced.cacheSize": "Cache Size (MB)",
+  "advanced.logLevel": "Log Level",
+  "advanced.logError": "Error",
+  "advanced.logWarn": "Warning",
+  "advanced.logInfo": "Info",
+  "advanced.logDebug": "Debug",
+  "advanced.autoUpdate": "Automatically install updates",
+  "advanced.clearCache": "Clear Cache",
+  "advanced.exportSettings": "Export Settings",
+  "advanced.importSettings": "Import Settings",
+  "advanced.invalidJsonAlert": "Invalid JSON file. Please select a valid export.",
+
+  "actions.resetDefaults": "Reset to Defaults",
+  "actions.cancel": "Cancel",
+  "actions.save": "Save Settings",
+  "actions.confirm": "Confirm Reset",
+
+  "confirm.title": "Are you sure?",
+  "confirm.resetBody": "All settings will be reset to their default values. This action will be saved immediately.",
+
+  "validation.min": "{label} must be ≥ {min}.",
+  "validation.between": "{label} must be between {min} and {max}."
+}

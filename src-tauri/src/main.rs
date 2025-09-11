@@ -401,6 +401,11 @@ fn get_cpu_temperature() -> Option<f32> {
 
     None
 }
+#[tauri::command]
+fn detect_locale() -> String {
+    sys_locale::get_locale().unwrap_or_else(|| "en-US".into())
+}
+
 fn main() {
     // Parse command line arguments
     use clap::Parser;
@@ -460,12 +465,14 @@ fn main() {
             publish_file_metadata,
             search_file_metadata,
             connect_to_peer,
-            get_dht_events
+            get_dht_events,
+            detect_locale
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_store::Builder::default().build())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 // When window is destroyed, stop geth

@@ -1,0 +1,76 @@
+{
+  "settings.title": "설정",
+  "settings.subtitle": "Chiral Network 환경을 구성하세요.",
+
+  "badges.unsaved": "저장되지 않은 변경사항",
+
+  "storage.title": "스토리지",
+  "storage.location": "저장 위치",
+  "storage.locationPick": "저장 위치 선택",
+  "storage.selectLocationTitle": "저장 위치 선택",
+  "storage.enterPathPrompt": "저장 경로를 입력하세요",
+  "storage.browserNoPicker": "브라우저에서는 Tauri 파일 선택기를 사용할 수 없습니다",
+  "storage.maxSize": "최대 저장 용량 (GB)",
+  "storage.cleanupThreshold": "자동 정리 임계값 (%)",
+  "storage.enableCleanup": "저장 공간 부족 시 자동 정리 활성화",
+
+  "network.title": "네트워크",
+  "network.maxConnections": "최대 연결 수",
+  "network.port": "포트",
+  "network.uploadLimit": "업로드 제한 (MB/s, 0=무제한)",
+  "network.downloadLimit": "다운로드 제한 (MB/s, 0=무제한)",
+  "network.userLocation": "사용자 위치",
+  "network.locationHint": "더 나은 성능을 위해 지리적으로 가까운 피어를 우선합니다",
+  "network.enableUpnp": "UPnP 포트 매핑 사용",
+  "network.enableNat": "NAT 트래버설 사용",
+  "network.enableDht": "DHT(분산 해시 테이블) 사용",
+
+  "regions.usEast": "미국 동부",
+  "regions.usWest": "미국 서부",
+  "regions.euWest": "유럽 서부",
+  "regions.apac": "아시아 태평양",
+
+  "language.title": "언어",
+  "language.select": "언어 선택",
+  "language.english": "English",
+  "language.spanish": "Español",
+  "language.chinese": "中文",
+  "language.korean": "한국어",
+
+  "privacy.title": "프라이버시 & 보안",
+  "privacy.enableProxy": "익명성을 위한 프록시 라우팅 사용",
+  "privacy.enableEncryption": "종단간 암호화 사용",
+  "privacy.anonymousMode": "익명 모드(식별 정보 숨김)",
+  "privacy.shareAnalytics": "익명 사용 분석 공유",
+
+  "notifications.title": "알림",
+  "notifications.enable": "데스크톱 알림 사용",
+  "notifications.notifyComplete": "다운로드 완료 시 알림",
+  "notifications.notifyError": "오류 발생 시 알림",
+  "notifications.soundAlerts": "사운드 알림",
+
+  "advanced.title": "고급",
+  "advanced.chunkSize": "청크 크기 (KB)",
+  "advanced.cacheSize": "캐시 크기 (MB)",
+  "advanced.logLevel": "로그 레벨",
+  "advanced.logError": "오류",
+  "advanced.logWarn": "경고",
+  "advanced.logInfo": "정보",
+  "advanced.logDebug": "디버그",
+  "advanced.autoUpdate": "업데이트 자동 설치",
+  "advanced.clearCache": "캐시 비우기",
+  "advanced.exportSettings": "설정 내보내기",
+  "advanced.importSettings": "설정 가져오기",
+  "advanced.invalidJsonAlert": "잘못된 JSON 파일입니다. 올바른 내보내기 파일을 선택하세요.",
+
+  "actions.resetDefaults": "기본값으로 재설정",
+  "actions.cancel": "취소",
+  "actions.save": "설정 저장",
+  "actions.confirm": "재설정 확인",
+
+  "confirm.title": "확실합니까?",
+  "confirm.resetBody": "모든 설정이 기본값으로 초기화됩니다. 이 작업은 즉시 저장됩니다.",
+
+  "validation.min": "{label} 값은 {min} 이상이어야 합니다.",
+  "validation.between": "{label} 값은 {min} ~ {max} 범위여야 합니다."
+}
