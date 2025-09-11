@@ -302,30 +302,28 @@ function clearSearch() {
       <div>
         <Label for="hash-input">File Hash</Label>
         <div class="flex flex-col sm:flex-row gap-2 mt-2">
-            <Input
-              id="hash-input"
-              bind:value={searchHash}
-              placeholder="Enter file hash (e.g., QmZ4tDuvesekqMD...)"
-              class="flex-1"
-            />
-            <div class="flex gap-2">
-              <Button on:click={startDownload} disabled={!searchHash}>
-                <Search class="h-4 w-4 mr-2" />
-                Search & Download
-              </Button>
+            <div class="relative flex-1">
+              <Input
+                id="hash-input"
+                bind:value={searchHash}
+                placeholder="Enter file hash (e.g., QmZ4tDuvesekqMD...)"
+                class="pr-10"
+              />
               {#if searchHash}
-                <Button variant="outline" on:click={clearSearch}>
-                  <X class="h-4 w-4 mr-2" />
-                  Clear
-                </Button>
+                <button
+                  on:click={clearSearch}
+                  class="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 hover:bg-gray-100 rounded-full transition-colors"
+                  type="button"
+                >
+                  <X class="h-4 w-4 text-gray-500 hover:text-gray-700" />
+                </button>
               {/if}
             </div>
+            <Button on:click={startDownload} disabled={!searchHash}>
+              <Search class="h-4 w-4 mr-2" />
+              Search & Download
+            </Button>
           </div>
-          {#if searchHash}
-            <p class="text-xs text-muted-foreground mt-1">
-              Searching for: <span class="font-mono">{searchHash}</span>
-            </p>
-          {/if}
       </div>
     </div>
   </Card>
