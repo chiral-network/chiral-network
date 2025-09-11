@@ -4,6 +4,7 @@
   import Input from "$lib/components/ui/input.svelte";
   import Label from "$lib/components/ui/label.svelte";
   import Badge from "$lib/components/ui/badge.svelte";
+  import DropDown from "$lib/components/ui/dropDown.svelte";
   import {
     Save,
     FolderOpen,
@@ -64,6 +65,20 @@
   let hasChanges = false;
   let fileInputEl: HTMLInputElement | null = null;
   let selectedLanguage = 'en';
+
+  const locations = [
+    { value: 'US-East', label: 'US East' },
+    { value: 'US-West', label: 'US West' },
+    { value: 'EU-West', label: 'Europe West' },
+    { value: 'Asia-Pacific', label: 'Asia Pacific' }
+  ];
+
+  const languages = [
+    { value: 'en', label: 'English' },
+    { value: 'es', label: 'Español' },
+    { value: 'zh', label: '中文' },
+    { value: 'ko', label: '한국어' }
+  ];
 
   // Check for changes
   $: hasChanges = JSON.stringify(settings) !== JSON.stringify(savedSettings);
@@ -376,17 +391,12 @@
 
       <!-- User Location -->
       <div>
-        <Label for="user-location">Your Location</Label>
-        <select
+       <Label for="user-location">Your Location</Label>
+        <DropDown
           id="user-location"
-          bind:value={settings.userLocation}
-          class="w-full px-3 py-2 mt-2 border rounded-md bg-white"
-        >
-          <option value="US-East">US East</option>
-          <option value="US-West">US West</option>
-          <option value="EU-West">Europe West</option>
-          <option value="Asia-Pacific">Asia Pacific</option>
-        </select>
+          options={locations}
+          bind:value={settings.userLocation}  
+        />
         <p class="text-xs text-muted-foreground mt-1">
           Used to prioritize geographically closer peers for better performance
         </p>
@@ -438,16 +448,11 @@
     <div class="space-y-4">
       <div>
         <Label for="language-select">Select Language</Label>
-        <select
+        <DropDown
           id="language-select"
-          bind:value={selectedLanguage}
-          class="w-full px-3 py-2 mt-2 border rounded-md bg-white"
-        >
-          <option value="en">English</option>
-          <option value="es">Español</option>
-          <option value="zh">中文</option>
-          <option value="ko">한국어</option>
-        </select>
+          options={languages}
+          bind:value={selectedLanguage}  
+        />
       </div>
     </div>
   </Card>

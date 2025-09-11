@@ -5,7 +5,7 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import MiningPoolDropdown from "$lib/components/ui/miningPoolDropdown.svelte";
+  import DropDown from "$lib/components/ui/Dropdown.svelte";
   import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw } from 'lucide-svelte'
   import { onDestroy, onMount } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
@@ -497,8 +497,9 @@
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div class="relative">
           <Label for="pool-select">Mining Pool</Label>
-          <MiningPoolDropdown
-            pools={pools}
+          <DropDown
+            id="pool-select"
+            options={pools}
             bind:value={$miningState.selectedPool}
             disabled={$miningState.isMining}
           />
