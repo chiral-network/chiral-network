@@ -40,15 +40,19 @@
     { id: 4, type: 'sent', amount: 5.5, to: '0x9876...5432', from: undefined, date: new Date('2024-03-12'), description: 'File download', status: 'completed' },
   ]);
 
-  // Validation states
+  // Enhanced validation states
   let validationWarning = '';
   let isAmountValid = true;
   let addressWarning = '';
   let isAddressValid = false;
 
-  // Copy feedback message
-  let copyMessage = '';
-  let privateKeyCopyMessage = '';
+
+   // Copy feedback message
+   let copyMessage = '';
+   let privateKeyCopyMessage = '';
+   
+   // Export feedback message
+   let exportMessage = '';
   // Filtering state
   let filterType: 'all' | 'sent' | 'received' = 'all';
   let filterDateFrom: string = '';
@@ -65,8 +69,8 @@
     .filter(tx => {
       const matchesType = filterType === 'all' || tx.type === filterType;
       const txDate = tx.date instanceof Date ? tx.date : new Date(tx.date);
-      const fromOk = !filterDateFrom || txDate >= new Date(filterDateFrom);
-      const toOk = !filterDateTo || txDate <= new Date(filterDateTo);
+      const fromOk = !filterDateFrom || txDate >= new Date(filterDateFrom + 'T00:00:00'); // the start of day
+      const toOk = !filterDateTo || txDate <= new Date(filterDateTo + 'T23:59:59'); // and the end of day to include full date ranges
       return matchesType && fromOk && toOk;
     })
     .slice()
@@ -106,11 +110,11 @@
         isAmountValid = false;
         sendAmount = 0;
       } else if (inputValue < 0.01) {
-        validationWarning = `Amount must be at least 0.01 CN.`;
+        validationWarning = `Amount must be at least 0.01 Chiral.`;
         isAmountValid = false;
         sendAmount = 0;
       } else if (inputValue > $wallet.balance) {
-        validationWarning = `Insufficient balance - Need ${(inputValue - $wallet.balance).toFixed(2)} more CN.`;
+        validationWarning = `Insufficient balance - Need ${(inputValue - $wallet.balance).toFixed(2)} more Chiral.`;
         isAmountValid = false;
         sendAmount = 0;
       } else {
@@ -121,6 +125,31 @@
       }
     }
   }
+
+  // Enhanced address validation with user feedback
+  $: {
+    if (recipientAddress.trim() === '') {
+      addressWarning = '';
+      isAddressValid = true;
+    } else if (!isValidAddress(recipientAddress)) {
+      addressWarning = 'Address must contain valid hexadecimal characters (0-9, a-f, A-F)';
+      isAddressValid = false;
+    } else {
+      addressWarning = '';
+      isAddressValid = true;
+    }
+  }
+  
+  // Enhanced address validation function
+  function isValidAddress(address: string): boolean {
+    // Check that everything after 0x is hexadecimal
+    const hexPart = address.slice(2);
+    if (hexPart.length === 0) return false;
+    
+    const hexRegex = /^[a-fA-F0-9]+$/;
+    return hexRegex.test(hexPart);
+  }
+  
   function copyAddress() {
     const addressToCopy = $etcAccount ? $etcAccount.address : $wallet.address;
     navigator.clipboard.writeText(addressToCopy);
@@ -134,10 +163,74 @@
     setTimeout(() => privateKeyCopyMessage = '', 1500);
   }
   
-
+  
+  async function exportWallet() {
+    try {
+      throw new Error('Test error message');
+      const walletData = {
+        address: $wallet.address,
+        privateKey: "your-private-key-here-do-not-share", // this should change to be the actual private key
+        balance: $wallet.balance,
+        totalEarned: $wallet.totalEarned,
+        totalSpent: $wallet.totalSpent,
+        pendingTransactions: $wallet.pendingTransactions,
+        exportDate: new Date().toISOString(),
+        version: "1.0"
+      };
+      
+      const dataStr = JSON.stringify(walletData, null, 2);
+      const dataBlob = new Blob([dataStr], { type: 'application/json' });
+      
+      // Check if the File System Access API is supported
+      if ('showSaveFilePicker' in window) {
+        try {
+          const fileHandle = await (window as any).showSaveFilePicker({
+            suggestedName: `chiral-wallet-export-${new Date().toISOString().split('T')[0]}.json`,
+            types: [{
+              description: 'JSON files',
+              accept: {
+                'application/json': ['.json'],
+              },
+            }],
+          });
+          
+          const writable = await fileHandle.createWritable();
+          await writable.write(dataBlob);
+          await writable.close();
+          
+          exportMessage = 'Wallet exported successfully!';
+        } catch (error: any) {
+          if (error.name !== 'AbortError') {
+            throw error;
+          }
+          // User cancelled, don't show error message
+          return;
+        }
+      } else {
+        // Fallback for browsers that don't support File System Access API
+        const url = URL.createObjectURL(dataBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `chiral-wallet-export-${new Date().toISOString().split('T')[0]}.json`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        
+        exportMessage = 'Wallet exported successfully!';
+      }
+      
+      setTimeout(() => exportMessage = '', 3000);
+    } catch (error) {
+      console.error('Export failed:', error);
+      exportMessage = 'Export failed. Please try again.';
+      setTimeout(() => exportMessage = '', 3000);
+    }
+  }
+  
   function sendTransaction() {
-    if (!isAddressValid || !isAmountValid || sendAmount <= 0) return
-
+    if (!isAddressValid || !isAmountValid || !isAddressValid || sendAmount <= 0) return
+    
     // Simulate transaction
     wallet.update(w => ({
       ...w,
@@ -157,13 +250,13 @@
       status: 'pending'
     },
     ...txs // prepend so latest is first
-  ])  
-
+  ])
+    
     // Clear form
     recipientAddress = ''
     sendAmount = 0
     rawAmountInput = ''
-
+    
     // Simulate transaction completion
     setTimeout(() => {
       wallet.update(w => ({
@@ -356,6 +449,11 @@
     });
   }
 
+  
+  // Helper function to set max amount
+  function setMaxAmount() {
+    rawAmountInput = $wallet.balance.toString();
+  }
 </script>
 
 <div class="space-y-6">
@@ -411,22 +509,22 @@
         {:else}
           <div>
             <!-- Balance Display - Only when logged in -->
-            <div>
-              <p class="text-sm text-muted-foreground">Balance</p>
-              <p class="text-2xl font-bold">{$wallet.balance.toFixed(2)} CN</p>
-            </div>
-            
+        <div>
+          <p class="text-sm text-muted-foreground">Balance</p>
+          <p class="text-2xl font-bold">{$wallet.balance.toFixed(2)} Chiral</p>
+        </div>
+        
             <div class="grid grid-cols-2 gap-4 mt-4">
-              <div>
-                <p class="text-xs text-muted-foreground">Total Earned</p>
-                <p class="text-sm font-medium text-green-600">+{$wallet.totalEarned.toFixed(2)} CN</p>
-              </div>
-              <div>
-                <p class="text-xs text-muted-foreground">Total Spent</p>
-                <p class="text-sm font-medium text-red-600">-{$wallet.totalSpent.toFixed(2)} CN</p>
-              </div>
-            </div>
-            
+          <div>
+            <p class="text-xs text-muted-foreground">Total Earned</p>
+            <p class="text-sm font-medium text-green-600">+{$wallet.totalEarned.toFixed(2)} Chiral</p>
+          </div>
+          <div>
+            <p class="text-xs text-muted-foreground">Total Spent</p>
+            <p class="text-sm font-medium text-red-600">-{$wallet.totalSpent.toFixed(2)} Chiral</p>
+          </div>
+        </div>
+        
             <div class="mt-6">
               <p class="text-sm text-muted-foreground">Chiral Address</p>
               <div class="flex items-center gap-2 mt-1">
@@ -472,17 +570,26 @@
                   {privateKeyVisible ? 'Hide' : 'Show'}
                 </Button>
               </div>
-              <p class="text-xs text-muted-foreground mt-1">Never share your private key with anyone</p>
-            </div>
-          </div>
-        {/if}
+               <p class="text-xs text-muted-foreground mt-1">Never share your private key with anyone</p>
+             </div>
+             
+             <div class="mt-4">
+               <Button type="button" variant="outline" class="w-full" on:click={exportWallet}>
+                 Export Wallet
+               </Button>
+               {#if exportMessage}
+                 <p class="text-xs text-center mt-2 {exportMessage.includes('successfully') ? 'text-green-600' : 'text-red-600'}">{exportMessage}</p>
+               {/if}
+             </div>
+           </div>
+         {/if}
       </div>
     </Card>
     
     {#if $etcAccount}
     <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold">Send CN Tokens</h2>
+      <h2 class="text-lg font-semibold">Send Chiral Coins</h2>
       <Coins class="h-5 w-5 text-muted-foreground" />
     </div>
     <form autocomplete="off" data-form-type="other" data-lpignore="true">
@@ -493,7 +600,7 @@
             id="recipient"
             bind:value={recipientAddress}
             placeholder="0x..."
-            class="mt-2"
+            class="mt-2 {addressWarning ? 'border-red-500' : ''}"
             data-form-type="other"
             data-lpignore="true"
             aria-autocomplete="none"
@@ -509,22 +616,34 @@
         </div>
 
         <div>
-          <Label for="amount">Amount (CN)</Label>
-          <Input
-            id="amount"
-            type="number"
-            bind:value={rawAmountInput}
-            placeholder=""
-            min="0.01"
-            step="0.01"
-            class="mt-2 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]"
-            data-form-type="other"
-            data-lpignore="true"
-            aria-autocomplete="none"
-          />
+          <Label for="amount">Amount (Chiral)</Label>
+          <div class="relative mt-2">
+            <Input
+              id="amount"
+              type="number"
+              bind:value={rawAmountInput}
+              placeholder=""
+              min="0.01"
+              step="0.01"
+              class="mt-2 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]"
+              data-form-type="other"
+              data-lpignore="true"
+              aria-autocomplete="none"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              class="absolute right-1 top-1/2 transform -translate-y-1/2 h-8 px-3"
+              on:click={setMaxAmount}
+              disabled={$wallet.balance <= 0}
+            >
+              Max
+            </Button>
+          </div>
           <div class="flex items-center justify-between mt-1">
             <p class="text-xs text-muted-foreground">
-              Available: {$wallet.balance.toFixed(2)} CN
+              Available: {$wallet.balance.toFixed(2)} Chiral
             </p>
             {#if validationWarning}
               <p class="text-xs text-red-500 font-medium">{validationWarning}</p>
@@ -537,7 +656,7 @@
           type="button"
           class="w-full"
           on:click={sendTransaction}
-          disabled={!isAddressValid || !isAmountValid || rawAmountInput === ''}
+          disabled={!isAddressValid || !isAmountValid || !isAddressValid || rawAmountInput === ''}
         >
           <ArrowUpRight class="h-4 w-4 mr-2" />
           Send Transaction
@@ -562,7 +681,7 @@
             <ul class="space-y-1">
               {#each $transactions.filter(tx => tx.status === 'pending') as tx}
                 <li class="text-xs text-gray-800 font-normal">
-                  {tx.description} ({tx.type === 'sent' ? 'To' : 'From'}: {tx.type === 'sent' ? tx.to : tx.from}) - {tx.amount} CN
+                  {tx.description} ({tx.type === 'sent' ? 'To' : 'From'}: {tx.type === 'sent' ? tx.to : tx.from}) - {tx.amount} Chiral
                 </li>
               {:else}
                 <li class="text-xs text-gray-500 font-normal">No pending transaction details available.</li>
@@ -570,9 +689,9 @@
             </ul>
           </div>
         {/if}
-      </div>
-    </form>
-  </Card>
+        </div>
+      </form>
+    </Card>
   {/if}
   </div>
   
@@ -631,18 +750,19 @@
           </div>
           <div class="text-right">
             <p class="text-sm font-medium {tx.type === 'received' ? 'text-green-600' : 'text-red-600'}">
-              {tx.type === 'received' ? '+' : '-'}{tx.amount} CN
+              {tx.type === 'received' ? '+' : '-'}{tx.amount} Chiral
             </p>
             <p class="text-xs text-muted-foreground">{formatDate(tx.date)}</p>
           </div>
         </div>
-      {:else}
+      {/each}
+      {#if filteredTransactions.length === 0}
         <div class="text-center py-8 text-muted-foreground">
           <History class="h-12 w-12 mx-auto mb-2 opacity-20" />
           <p>No transactions yet</p>
-          <p class="text-sm mt-1">Transactions will appear here once you send or receive CN</p>
+          <p class="text-sm mt-1">Transactions will appear here once you send or receive Chiral</p>
         </div>
-      {/each}
+      {/if}
     </div>
   </Card>
 

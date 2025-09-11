@@ -422,7 +422,7 @@ GET /api/v1/blockchain/balance/{address}
 {
   "address": "0x...",
   "balance": "10000000000000000000",
-  "balance_formatted": "10.0 CN",
+  "balance_formatted": "10.0 Chiral",
   "pending_transactions": 2,
   "nonce": 5
 }
@@ -917,7 +917,7 @@ func main() {
 ### Test Network
 
 - Endpoint: `https://testnet.chiralnetwork.org/api/v1`
-- Free test tokens available from faucet
+- Free test coins available from faucet
 - Reset daily at 00:00 UTC
 
 ### API Testing Tools

@@ -258,7 +258,7 @@ function computeLatencyStats() {
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">Total Earnings</p>
-          <p class="text-2xl font-bold">{$wallet.totalEarned.toFixed(2)} CN</p>
+          <p class="text-2xl font-bold">{$wallet.totalEarned.toFixed(2)} Chiral</p>
           <p class="text-xs text-green-600 flex items-center gap-1 mt-1">
             <TrendingUp class="h-3 w-3" />
             +12.5% this week
@@ -303,17 +303,26 @@ function computeLatencyStats() {
         <div>
           <p class="text-sm text-muted-foreground">Reputation</p>
           <p class="text-2xl font-bold">{$wallet.reputation || 4.5}/5.0</p>
-          <div class="flex gap-0.5 mt-1">
-            {#each Array(5) as _, i}
-              {#if ($wallet.reputation ?? 4.5) >= i + 1}
-                <span class="text-yellow-500">★</span>
-              {:else if ($wallet.reputation ?? 4.5) >= i + 0.5}
-                <span class="text-yellow-500">⯨</span> <!-- Unicode half star -->
-              {:else}
-                <span class="text-yellow-500 opacity-30">★</span>
-              {/if}
-            {/each}
-          </div>
+          <!-- Stars (replaces your existing block) -->
+<div
+  class="flex gap-0.5 mt-1"
+  aria-label={"Reputation " + (($wallet.reputation ?? 4.5).toFixed(1)) + " out of 5"}
+>
+  {#each Array(5) as _, i}
+    <span class="relative inline-block leading-none align-middle" style="width: 1em">
+      <!-- empty star -->
+      <span class="text-yellow-500 opacity-30 select-none">★</span>
+
+      <!-- filled portion (handles full and partial stars without special glyphs) -->
+      <span
+        class="absolute inset-0 overflow-hidden"
+        style="width: {Math.max(0, Math.min(1, (($wallet.reputation ?? 4.5) - i))) * 100}%"
+      >
+        <span class="text-yellow-500 select-none">★</span>
+      </span>
+    </span>
+  {/each}
+</div>
         </div>
         <div class="p-2 bg-yellow-500/10 rounded-lg">
           <Award class="h-5 w-5 text-yellow-500" />
@@ -573,8 +582,8 @@ function computeLatencyStats() {
     <div class="flex h-48 gap-2">
       <!-- Y-axis labels -->
       <div class="flex flex-col justify-between text-xs text-muted-foreground pr-2">
-        <span>{chartMax.toFixed(0)} CN</span>
-        <span>{(chartMax / 2).toFixed(0)} CN</span>
+        <span>{chartMax.toFixed(0)} Chiral</span>
+        <span>{(chartMax / 2).toFixed(0)} Chiral</span>
         <span>0</span>
       </div>
 
@@ -593,17 +602,17 @@ function computeLatencyStats() {
             tabindex="0"
             class="flex-1 bg-gradient-to-t from-blue-400/40 to-blue-500/80 hover:from-blue-500/60 hover:to-blue-600/90 transition-all rounded-t-md shadow-sm relative group"
             style="height: {(day.earnings / chartMax) * 100}%"
-            title="{day.date}: {day.earnings.toFixed(2)} CN"
+            title="{day.date}: {day.earnings.toFixed(2)} Chiral"
             on:mouseenter={() => { hoveredDay = day; hoveredIndex = i; }}
             on:mouseleave={() => { hoveredDay = null; hoveredIndex = null; }}
-            aria-label="{day.date}: {day.earnings.toFixed(2)} CN"
+            aria-label="{day.date}: {day.earnings.toFixed(2)} Chiral"
           >
             {#if hoveredIndex === i && hoveredDay}
               <div
                 class="absolute left-1/2 -translate-x-1/2 -top-8 z-10 px-2 py-1 rounded bg-primary text-white text-xs shadow-lg pointer-events-none"
                 style="white-space:nowrap;"
               >
-                {hoveredDay.date}: {hoveredDay.earnings.toFixed(2)} CN
+                {hoveredDay.date}: {hoveredDay.earnings.toFixed(2)} Chiral
                 <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-6 border-l-transparent border-r-6 border-r-transparent border-t-6 border-t-primary"></span>
               </div>
             {/if}
