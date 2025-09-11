@@ -415,28 +415,168 @@
     description: ""
   }
 
+  // Enhanced validation
   $: isBlacklistFormValid = 
     newBlacklistEntry.description.trim() !== '' &&
-    newBlacklistEntry.chiral_address.startsWith('0x') &&
-    newBlacklistEntry.chiral_address.length === 42;
+    isValidBlacklistAddress(newBlacklistEntry.chiral_address) &&
+    !isAddressAlreadyBlacklisted(newBlacklistEntry.chiral_address) &&
+    !isOwnAddress(newBlacklistEntry.chiral_address);
   
+  // function addBlacklistEntry() {
+  //   if (newBlacklistEntry.chiral_address && newBlacklistEntry.description) {
+  //     blacklist.update(entries => [...entries,
+  //       { chiral_address: newBlacklistEntry.chiral_address, reason: newBlacklistEntry.description, timestamp: new Date() }
+  //     ]);
+  //     newBlacklistEntry = { chiral_address: "", description: "" }; // Clear input fields
+  //   }
+  // }
   function addBlacklistEntry() {
-    if (newBlacklistEntry.chiral_address && newBlacklistEntry.description) {
-      blacklist.update(entries => [...entries,
-        { chiral_address: newBlacklistEntry.chiral_address, reason: newBlacklistEntry.description, timestamp: new Date() }
-      ]);
-      newBlacklistEntry = { chiral_address: "", description: "" }; // Clear input fields
+    if (!isBlacklistFormValid) return;
+
+    blacklist.update(entries => [...entries, {
+      chiral_address: newBlacklistEntry.chiral_address,
+      reason: newBlacklistEntry.description.trim(),
+      timestamp: new Date(),
+      notes: '' // For future use
+    }]);
+
+    // Clear form
+    newBlacklistEntry = { chiral_address: "", description: "" };
+    
+    // Show success message briefly
+    setTimeout(() => {
+      // Could show a toast notification here
+    }, 100);
+  }
+
+
+  // function removeBlacklistEntry(chiral_address: string) {
+  //   blacklist.update(entries => {
+  //     return entries.filter(entry => entry.chiral_address !== chiral_address);
+  //   });
+  // }
+
+  function removeBlacklistEntry(chiral_address: string) {
+    if (confirm(`Remove ${chiral_address} from blacklist?`)) {
+      blacklist.update(entries => 
+        entries.filter(entry => entry.chiral_address !== chiral_address)
+      );
     }
   }
 
-
-  function removeBlacklistEntry(chiral_address: string) {
-    blacklist.update(entries => {
-      return entries.filter(entry => entry.chiral_address !== chiral_address);
-    });
-  }
+  // Additional variables for enhanced blacklist functionality
+  let blacklistSearch = '';
+  let importFileInput: HTMLInputElement;
 
   
+
+  // Filtered blacklist for search
+  $: filteredBlacklist = $blacklist.filter(entry => 
+    entry.chiral_address.toLowerCase().includes(blacklistSearch.toLowerCase()) ||
+    entry.reason.toLowerCase().includes(blacklistSearch.toLowerCase())
+  );
+
+  function isValidBlacklistAddress(address: string) {
+    if (!address) return false;
+    return address.startsWith('0x') && 
+           address.length === 42 && 
+           /^[a-fA-F0-9]+$/.test(address.slice(2));
+  }
+
+  function isAddressAlreadyBlacklisted(address: string) {
+    if (!address) return false;
+    return $blacklist.some(entry => 
+      entry.chiral_address.toLowerCase() === address.toLowerCase()
+    );
+  }
+
+  function isOwnAddress(address:string) {
+    if (!address || !$etcAccount) return false;
+    return address.toLowerCase() === $etcAccount.address.toLowerCase();
+  }
+
+
+  function editBlacklistEntry(index) {
+    const entry = $blacklist[index];
+    const newReason = prompt('Edit reason:', entry.reason);
+    
+    if (newReason !== null && newReason.trim() !== '') {
+      blacklist.update(entries => {
+        const updated = [...entries];
+        updated[index] = { ...updated[index], reason: newReason.trim() };
+        return updated;
+      });
+    }
+  }
+
+  function clearAllBlacklist() {
+    if (confirm(`Remove all ${$blacklist.length} blacklisted addresses?`)) {
+      blacklist.set([]);
+      blacklistSearch = '';
+    }
+  }
+
+  function copyToClipboard(text: string) {
+    navigator.clipboard.writeText(text);
+    // Could show a brief "Copied!" message
+  }
+
+  function exportBlacklist() {
+    const data = {
+      version: "1.0",
+      exported: new Date().toISOString(),
+      blacklist: $blacklist
+    };
+    
+    const blob = new Blob([JSON.stringify(data, null, 2)], { 
+      type: 'application/json' 
+    });
+    
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `chiral-blacklist-${new Date().toISOString().split('T')[0]}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function handleImportFile(event: Event) {
+    const target = event.target as HTMLInputElement;
+    const file = target?.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const result = e.target?.result;
+        if (typeof result !== 'string') return;
+        
+        const data = JSON.parse(result);
+        
+        if (data.blacklist && Array.isArray(data.blacklist)) {
+          const imported = data.blacklist.filter((entry: { chiral_address?: string; reason?: string; timestamp?: Date; notes?: string }) => 
+            entry.chiral_address && 
+            entry.reason &&
+            isValidBlacklistAddress(entry.chiral_address) &&
+            !isAddressAlreadyBlacklisted(entry.chiral_address)
+          );
+          
+          if (imported.length > 0) {
+            blacklist.update(entries => [...entries, ...imported]);
+            alert(`Imported ${imported.length} entries successfully`);
+          } else {
+            alert('No valid new entries found to import');
+          }
+        }
+      } catch (error) {
+        alert('Invalid file format');
+      }
+    };
+    
+    reader.readAsText(file);
+    target.value = ''; // Reset input
+  }
+
   // Helper function to set max amount
   function setMaxAmount() {
     rawAmountInput = $wallet.balance.toFixed(2);
@@ -763,48 +903,216 @@
       <BadgeX class="h-5 w-5 text-muted-foreground" />
     </div>
 
-    <div class="space-y-4">
-      <div>
-        <Label for="blacklist-address">Chiral Address to Blacklist</Label>
-        <Input
-          id="blacklist-address"
-          bind:value={newBlacklistEntry.chiral_address}
-          placeholder="e.g., 0x1234...5678 (42 characters)"
-          class="mt-2"
-        />
-      </div>
-      <div>
-        <Label for="blacklist-name">Reason</Label>
-        <Input
-          id="blacklist-name"
-          bind:value={newBlacklistEntry.description}
-          placeholder="e.g., Malicious Peer"
-          class="mt-2"
-        />
-      </div>
-      <Button type="button" class="w-full" disabled={!isBlacklistFormValid} on:click={addBlacklistEntry}>
-        Add to Blacklist
-      </Button>
+    <div class="space-y-6">
+    <!-- Add to Blacklist Form -->
+    <div class="border rounded-lg p-4 bg-gray-50/50">
+      <h3 class="text-md font-medium mb-3">Add New Entry</h3>
+      <div class="space-y-4">
+        <div>
+          <Label for="blacklist-address">Chiral Address</Label>
+          <Input
+            id="blacklist-address"
+            bind:value={newBlacklistEntry.chiral_address}
+            placeholder="0x1234567890abcdef..."
+            class="mt-2 font-mono text-sm {newBlacklistEntry.chiral_address && !isValidBlacklistAddress(newBlacklistEntry.chiral_address) ? 'border-red-300' : ''} {isValidBlacklistAddress(newBlacklistEntry.chiral_address) ? 'border-green-300' : ''}"
+          />
+          {#if newBlacklistEntry.chiral_address && !isValidBlacklistAddress(newBlacklistEntry.chiral_address)}
+            <p class="text-xs text-red-500 mt-1">
+              {!newBlacklistEntry.chiral_address.startsWith('0x') ? 'Address must start with 0x' :
+               newBlacklistEntry.chiral_address.length !== 42 ? `Address must be 42 characters (currently ${newBlacklistEntry.chiral_address.length})` :
+               'Invalid hexadecimal characters'}
+            </p>
+          {/if}
+          {#if isAddressAlreadyBlacklisted(newBlacklistEntry.chiral_address)}
+            <p class="text-xs text-orange-500 mt-1">This address is already blacklisted</p>
+          {/if}
+          {#if isOwnAddress(newBlacklistEntry.chiral_address)}
+            <p class="text-xs text-red-500 mt-1">Cannot blacklist your own address</p>
+          {/if}
+        </div>
+        
+        <div>
+          <Label for="blacklist-reason">Reason for Blacklisting</Label>
+          <div class="relative mt-2">
+            <Input
+              id="blacklist-reason"
+              bind:value={newBlacklistEntry.description}
+              placeholder="Enter reason (e.g., spam, fraud, malicious activity)"
+              maxlength="200"
+            />
+            <span class="absolute right-3 top-1/2 transform -translate-y-1/2 text-xs text-muted-foreground">
+              {newBlacklistEntry.description.length}/200
+            </span>
+          </div>
+          {#if newBlacklistEntry.description.length > 150}
+            <p class="text-xs text-orange-500 mt-1">
+              {200 - newBlacklistEntry.description.length} characters remaining
+            </p>
+          {/if}
+        </div>
 
-      <h3 class="text-md font-semibold mt-6 mb-3">Blacklisted Addresses</h3>
-      {#if $blacklist.length === 0}
-        <p class="text-sm text-muted-foreground">No addresses blacklisted yet.</p>
+        <!-- Quick reason buttons -->
+        <div class="flex flex-wrap gap-2">
+          <span class="text-xs text-muted-foreground mr-2">Quick reasons:</span>
+          {#each ['Spam', 'Fraud', 'Malicious Activity', 'Harassment', 'Scam'] as reason}
+            <button
+              type="button"
+              class="px-2 py-1 text-xs border rounded hover:bg-gray-100 transition-colors"
+              on:click={() => newBlacklistEntry.description = reason}
+            >
+              {reason}
+            </button>
+          {/each}
+        </div>
+
+        <Button 
+          type="button" 
+          class="w-full" 
+          disabled={!isBlacklistFormValid} 
+          on:click={addBlacklistEntry}
+        >
+          <BadgeX class="h-4 w-4 mr-2" />
+          Add to Blacklist
+        </Button>
+      </div>
+    </div>
+
+    <!-- Blacklist Display -->
+    <div>
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-md font-medium">
+          Blacklisted Addresses
+          {#if $blacklist.length > 0}
+            <span class="text-sm text-muted-foreground ml-2">({$blacklist.length})</span>
+          {/if}
+        </h3>
+        
+        {#if $blacklist.length > 0}
+          <div class="flex gap-2">
+            <!-- Search/Filter -->
+            <Input
+              bind:value={blacklistSearch}
+              placeholder="Search blacklist..."
+              class="w-48 text-sm"
+            />
+            
+            <!-- Clear all button -->
+            <Button 
+              size="sm" 
+              variant="outline" 
+              on:click={clearAllBlacklist}
+              class="text-red-600 hover:text-red-700"
+            >
+              Clear All
+            </Button>
+          </div>
+        {/if}
+      </div>
+
+      {#if filteredBlacklist.length === 0 && $blacklist.length === 0}
+        <div class="text-center py-8 text-muted-foreground border-2 border-dashed border-gray-200 rounded-lg">
+          <BadgeX class="h-12 w-12 mx-auto mb-2 opacity-20" />
+          <p class="font-medium">No addresses blacklisted</p>
+          <p class="text-sm mt-1">Add addresses above to block transactions and interactions</p>
+        </div>
+      {:else if filteredBlacklist.length === 0 && blacklistSearch}
+        <div class="text-center py-6 text-muted-foreground">
+          <p>No blacklisted addresses match "{blacklistSearch}"</p>
+        </div>
       {:else}
-        <div class="space-y-2">
-          {#each $blacklist as entry (entry.chiral_address)}
-            <div class="flex items-center justify-between p-3 bg-secondary rounded-lg">
-              <div>
-                <p class="text-sm font-medium">{entry.chiral_address}</p>
-                <p class="text-xs text-muted-foreground">{entry.reason}</p>
+        <div class="space-y-2 max-h-64 overflow-y-auto">
+          {#each filteredBlacklist as entry, index (entry.chiral_address)}
+            <div class="flex items-center justify-between p-3 bg-red-50 border border-red-100 rounded-lg group hover:bg-red-100/50 transition-colors">
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-1">
+                  <p class="text-sm font-mono font-medium truncate">
+                    {entry.chiral_address}
+                  </p>
+                  <button
+                    type="button"
+                    class="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-200 rounded"
+                    on:click={() => copyToClipboard(entry.chiral_address)}
+                    title="Copy address"
+                  >
+                    <Copy class="h-3 w-3" />
+                  </button>
+                </div>
+                <p class="text-xs text-muted-foreground mb-1">{entry.reason}</p>
+                <p class="text-xs text-muted-foreground">
+                  Added {formatDate(entry.timestamp)} 
+                  {#if entry.notes}
+                    • {entry.notes}
+                  {/if}
+                </p>
               </div>
-              <Button size="sm" variant="destructive" on:click={() => removeBlacklistEntry(entry.chiral_address)}>
-                Remove
-              </Button>
+              
+              <div class="flex items-center gap-2 ml-4">
+                <!-- Edit reason button -->
+                <Button 
+                  size="sm" 
+                  variant="outline"
+                  on:click={() => editBlacklistEntry(index)}
+                  class="opacity-0 group-hover:opacity-100 transition-opacity"
+                >
+                  Edit
+                </Button>
+                
+                <!-- Remove button -->
+                <Button 
+                  size="sm" 
+                  variant="destructive"
+                  on:click={() => removeBlacklistEntry(entry.chiral_address)}
+                >
+                  Remove
+                </Button>
+              </div>
             </div>
           {/each}
         </div>
+        
+        {#if $blacklist.length > 5}
+          <div class="text-center mt-3">
+            <p class="text-xs text-muted-foreground">
+              Showing {filteredBlacklist.length} of {$blacklist.length} blacklisted addresses
+            </p>
+          </div>
+        {/if}
       {/if}
     </div>
+
+    <!-- Export/Import Blacklist -->
+    {#if $blacklist.length > 0}
+      <div class="border-t pt-4">
+        <div class="flex gap-2">
+          <Button 
+            variant="outline" 
+            size="sm" 
+            on:click={exportBlacklist}
+            class="flex-1"
+          >
+            Export Blacklist
+          </Button>
+          <Button 
+            variant="outline" 
+            size="sm" 
+            on:click={() => importFileInput.click()}
+            class="flex-1"
+          >
+            Import Blacklist
+          </Button>
+        </div>
+        
+        <!-- Hidden file input for import -->
+        <input
+          bind:this={importFileInput}
+          type="file"
+          accept=".json,.csv"
+          class="hidden"
+          on:change={handleImportFile}
+        />
+      </div>
+    {/if}
+  </div>
   </Card>
   {/if}
 </div>
