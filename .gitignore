@@ -41,6 +41,7 @@ src-tauri/target/
 src-tauri/WixTools/
 src-tauri/bin/
 src-tauri/gen/schemas/
+src-tauri/geth-data/
 
 # Tauri executables
 *.exe
