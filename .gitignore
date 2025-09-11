@@ -39,6 +39,16 @@ lerna-debug.log*
 # Tauri
 src-tauri/target/
 src-tauri/WixTools/
+src-tauri/bin/
+src-tauri/gen/schemas/
+
+# Tauri executables
+*.exe
+*.app
+*.dmg
+*.deb
+*.rpm
+*.AppImage
 
 # Testing
 coverage/
