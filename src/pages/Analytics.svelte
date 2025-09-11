@@ -447,6 +447,13 @@ function computeLatencyStats() {
       <span>{latencyHistory[0]?.date}</span>
       <span>{latencyHistory[latencyHistory.length - 1]?.date}</span>
     </div>
+    <div class="flex gap-4 mt-2 text-xs text-muted-foreground">
+    <span>Min: {Math.min(...latencyHistory.map(p => p.latency)).toFixed(0)} ms</span>
+    <span>Max: {Math.max(...latencyHistory.map(p => p.latency)).toFixed(0)} ms</span>
+    <span>Avg: {(
+      latencyHistory.reduce((s, p) => s + p.latency, 0) / latencyHistory.length
+    ).toFixed(0)} ms</span>
+  </div>
   </Card>
 </div>
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
