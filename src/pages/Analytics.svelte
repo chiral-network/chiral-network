@@ -461,7 +461,7 @@ function computeLatencyStats() {
         <div
           role="button"
           tabindex="0"
-          class="flex-1 relative bg-gradient-to-t from-green-400/30 to-red-500/60 hover:from-green-500/60 hover:to-red-600/90 transition-all rounded-t shadow-sm"
+          class="flex-1 bg-gradient-to-t from-blue-400/40 to-blue-500/80 hover:from-blue-500/60 hover:to-blue-600/90 transition-all rounded-t-md shadow-sm relative"
           style="height: {(Math.min(p.latency, 300) / 300) * 100}%"
           aria-label="{p.date}: {p.latency.toFixed(0)} ms"
           on:mouseenter={() => { hoveredLatency = p; hoveredIndex = i; }}
