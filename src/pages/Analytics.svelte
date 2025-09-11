@@ -432,6 +432,11 @@ function computeLatencyStats() {
     </div>
   </Card>
 
+  <script>
+    let hoveredLatency = null;
+    let hoveredIndex = null;
+  </script>
+
   <Card class="p-6">
     <h3 class="text-md font-medium mb-4">Latency (recent)</h3>
     <div class="flex h-48 gap-2">
@@ -452,12 +457,28 @@ function computeLatencyStats() {
       </div>
 
       <!-- Bars -->
-      {#each latencyHistory as p}
+      {#each latencyHistory as p, i}
         <div
-          class="flex-1 bg-gradient-to-t from-green-400/30 to-red-500/60 hover:from-green-500/60 hover:to-red-600/90 transition-all rounded-t shadow-sm"
+          role="button"
+          tabindex="0"
+          class="flex-1 relative bg-gradient-to-t from-green-400/30 to-red-500/60 hover:from-green-500/60 hover:to-red-600/90 transition-all rounded-t shadow-sm"
           style="height: {(Math.min(p.latency, 300) / 300) * 100}%"
-          title="{p.date}: {p.latency.toFixed(0)} ms"
-        ></div>
+          aria-label="{p.date}: {p.latency.toFixed(0)} ms"
+          on:mouseenter={() => { hoveredLatency = p; hoveredIndex = i; }}
+          on:mouseleave={() => { hoveredLatency = null; hoveredIndex = null; }}
+        >
+          {#if hoveredIndex === i && hoveredLatency}
+            <div
+              class="absolute left-1/2 -translate-x-1/2 -top-8 z-10 px-2 py-1 rounded bg-primary text-white text-xs shadow-lg pointer-events-none"
+              style="white-space:nowrap;"
+            >
+              {hoveredLatency.date}: {hoveredLatency.latency.toFixed(0)} ms
+              <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 
+                border-l-6 border-l-transparent border-r-6 border-r-transparent 
+                border-t-6 border-t-primary"></span>
+            </div>
+          {/if}
+        </div>
       {/each}
     </div>
   </div>
