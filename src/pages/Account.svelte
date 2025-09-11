@@ -498,17 +498,17 @@
             <!-- Balance Display - Only when logged in -->
         <div>
           <p class="text-sm text-muted-foreground">Balance</p>
-          <p class="text-2xl font-bold">{$wallet.balance.toFixed(2)} CN</p>
+          <p class="text-2xl font-bold">{$wallet.balance.toFixed(2)} Chiral</p>
         </div>
         
             <div class="grid grid-cols-2 gap-4 mt-4">
           <div>
             <p class="text-xs text-muted-foreground">Total Earned</p>
-            <p class="text-sm font-medium text-green-600">+{$wallet.totalEarned.toFixed(2)} CN</p>
+            <p class="text-sm font-medium text-green-600">+{$wallet.totalEarned.toFixed(2)} Chiral</p>
           </div>
           <div>
             <p class="text-xs text-muted-foreground">Total Spent</p>
-            <p class="text-sm font-medium text-red-600">-{$wallet.totalSpent.toFixed(2)} CN</p>
+            <p class="text-sm font-medium text-red-600">-{$wallet.totalSpent.toFixed(2)} Chiral</p>
           </div>
         </div>
         
