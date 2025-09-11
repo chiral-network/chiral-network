@@ -133,13 +133,16 @@ impl GethProcess {
             .arg("--http.port")
             .arg("8545")
             .arg("--http.api")
-            .arg("eth,net,web3,personal,debug,miner")
+            .arg("eth,net,web3,personal,debug,miner,admin")
             .arg("--http.corsdomain")
             .arg("*")
             .arg("--syncmode")
             .arg("full")
             .arg("--maxpeers")
-            .arg("50");
+            .arg("50")
+            // P2P discovery settings
+            .arg("--port")
+            .arg("30303");  // P2P listening port
         
         // Add miner address if provided
         if let Some(address) = miner_address {
