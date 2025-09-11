@@ -158,12 +158,17 @@
   }
 
   function copyPrivateKey() {
-    navigator.clipboard.writeText('your-private-key-here-do-not-share');
-    privateKeyCopyMessage = 'Copied!';
+    const privateKeyToCopy = $etcAccount ? $etcAccount.private_key : '';
+    if (privateKeyToCopy) {
+      navigator.clipboard.writeText(privateKeyToCopy);
+      privateKeyCopyMessage = 'Copied!';
+    }
+    else {
+      privateKeyCopyMessage = 'Failed!'
+    }
     setTimeout(() => privateKeyCopyMessage = '', 1500);
   }
-  
-  
+    
   async function exportWallet() {
     try {
       throw new Error('Test error message');
