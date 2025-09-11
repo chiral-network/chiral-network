@@ -516,9 +516,17 @@
   }
 
   function clearAllBlacklist() {
-    if (confirm(`Remove all ${$blacklist.length} blacklisted addresses?`)) {
+    const count = $blacklist.length;
+    const confirmed = window.confirm(
+      `Are you sure you want to remove all ${count} blacklisted addresses?\n\nThis action cannot be undone.`
+    );
+
+    if (confirmed === true) {
       blacklist.set([]);
       blacklistSearch = '';
+      console.log('Blacklist cleared successfully');
+    } else {
+      console.log('Clear all cancelled by user');
     }
   }
 
