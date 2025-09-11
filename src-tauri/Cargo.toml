@@ -33,6 +33,8 @@ flate2 = "1.0"
 tar = "0.4"
 zip = "0.6"
 futures-util = "0.3"
+systemstat = "0.2.5"
+sysinfo = "0.37.0"
 
 [features]
 default = ["custom-protocol"]
