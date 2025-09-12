@@ -264,6 +264,7 @@ export interface MiningState {
   realTemperature: number | undefined;
   realPowerUsage: number | undefined;
   cpuUsage: number;
+  sessionStartTime?: number; // Track mining session start time for persistence
 }
 
 export const miningState = writable<MiningState>({
@@ -277,4 +278,5 @@ export const miningState = writable<MiningState>({
   realTemperature: undefined,
   realPowerUsage: undefined,
   cpuUsage: 0,
+  sessionStartTime: undefined,
 });

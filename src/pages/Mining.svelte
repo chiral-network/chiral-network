@@ -43,8 +43,10 @@
   let blockReward = 5 // Chiral per block
   let peerCount = 0
 
-  // Statistics
-  let sessionStartTime = Date.now()
+  // Statistics - preserve across page navigation
+  let sessionStartTime = $miningState.isMining ? 
+    $miningState.sessionStartTime || Date.now() : 
+    Date.now()
   let estimatedTimeToBlock = 0
   $: powerConsumption = $miningState.realPowerUsage ?? ($miningState.activeThreads * 15)
   $: efficiency = $miningState.hashRate === '0 H/s' || powerConsumption <= 0 ? 0 : parseHashRate($miningState.hashRate) / powerConsumption
@@ -119,8 +121,13 @@
     await checkGethStatus()
     await updateNetworkStats()
     
-    // If mining is already active from before, update stats immediately
+    // If mining is already active from before, restore session and update stats
     if ($miningState.isMining) {
+      // Restore session start time if it exists
+      if ($miningState.sessionStartTime) {
+        sessionStartTime = $miningState.sessionStartTime
+      }
+      startUptimeTimer()
       await updateMiningStats()
     }
     if (isTauri) {
@@ -283,6 +290,8 @@
       error = '' // Clear the status message
       $miningState.isMining = true
       sessionStartTime = Date.now()
+      // Store session start time in the store for persistence
+      $miningState.sessionStartTime = sessionStartTime
       $miningState.activeThreads = actualThreads  // Use computed actualThreads
       startUptimeTimer()
       
@@ -304,6 +313,8 @@
       $miningState.isMining = false
       $miningState.hashRate = '0 H/s'
       $miningState.activeThreads = 0
+      // Clear session start time
+      $miningState.sessionStartTime = undefined
       
       // stop uptime ticker
       if (uptimeInterval) {
@@ -406,9 +417,8 @@
   ]
   
   onDestroy(async () => {
-    if ($miningState.isMining) {
-      await stopMining()
-    }
+    // Don't stop mining when leaving the page - preserve state
+    // Only clean up intervals
     if (statsInterval) {
       clearInterval(statsInterval)
     }
