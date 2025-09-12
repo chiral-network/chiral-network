@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha3::{Digest, Keccak256};
 use std::process::{Child, Command, Stdio};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufRead};
 
@@ -466,6 +466,7 @@ pub async fn get_mining_status() -> Result<bool, String> {
 pub async fn get_hashrate() -> Result<String, String> {
     let client = reqwest::Client::new();
     
+    // First try eth_hashrate
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "eth_hashrate",
@@ -486,6 +487,56 @@ pub async fn get_hashrate() -> Result<String, String> {
         .map_err(|e| format!("Failed to parse response: {}", e))?;
     
     if let Some(error) = json_response.get("error") {
+        // If eth_hashrate fails, try miner_hashrate as fallback
+        let miner_payload = json!({
+            "jsonrpc": "2.0",
+            "method": "miner_hashrate",
+            "params": [],
+            "id": 1
+        });
+        
+        if let Ok(miner_response) = client
+            .post("http://127.0.0.1:8545")
+            .json(&miner_payload)
+            .send()
+            .await
+        {
+            if let Ok(miner_json) = miner_response.json::<serde_json::Value>().await {
+                if miner_json.get("error").is_none() {
+                    // Use miner_hashrate result instead
+                    if let Some(result) = miner_json.get("result") {
+                        if let Some(hashrate_hex) = result.as_str() {
+                            // Process with the same logic below
+                            let hex_str = if hashrate_hex.starts_with("0x") || hashrate_hex.starts_with("0X") {
+                                &hashrate_hex[2..]
+                            } else {
+                                hashrate_hex
+                            };
+                            
+                            let hashrate = if hex_str.is_empty() || hex_str == "0" {
+                                0
+                            } else {
+                                u64::from_str_radix(hex_str, 16).unwrap_or(0)
+                            };
+                            
+                            let formatted = if hashrate >= 1_000_000_000 {
+                                format!("{:.2} GH/s", hashrate as f64 / 1_000_000_000.0)
+                            } else if hashrate >= 1_000_000 {
+                                format!("{:.2} MH/s", hashrate as f64 / 1_000_000.0)
+                            } else if hashrate >= 1_000 {
+                                format!("{:.2} KH/s", hashrate as f64 / 1_000.0)
+                            } else {
+                                format!("{} H/s", hashrate)
+                            };
+                            
+                            return Ok(formatted);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // If both fail, return original error
         return Err(format!("RPC error: {}", error));
     }
     
@@ -493,9 +544,20 @@ pub async fn get_hashrate() -> Result<String, String> {
         .as_str()
         .ok_or("Invalid hashrate response")?;
     
-    // Convert hex to decimal
-    let hashrate = u64::from_str_radix(&hashrate_hex[2..], 16)
-        .map_err(|e| format!("Failed to parse hashrate: {}", e))?;
+    // Handle edge cases where hashrate might be "0x0" or invalid
+    let hex_str = if hashrate_hex.starts_with("0x") || hashrate_hex.starts_with("0X") {
+        &hashrate_hex[2..]
+    } else {
+        hashrate_hex
+    };
+    
+    // Convert hex to decimal, handle empty string or just "0"
+    let hashrate = if hex_str.is_empty() || hex_str == "0" {
+        0
+    } else {
+        u64::from_str_radix(hex_str, 16)
+            .map_err(|e| format!("Failed to parse hashrate: {}", e))?
+    };
     
     // Convert to human-readable format (H/s, KH/s, MH/s, GH/s)
     let formatted = if hashrate >= 1_000_000_000 {
@@ -597,6 +659,104 @@ pub async fn get_network_difficulty() -> Result<String, String> {
     };
     
     Ok(formatted)
+}
+
+pub fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String> {
+    // Parse logs to get blocks mined and calculate hash rate
+    let log_path = Path::new(data_dir).join("geth.log");
+    
+    if !log_path.exists() {
+        return Ok((0, 0.0));
+    }
+    
+    let file = File::open(&log_path).map_err(|e| format!("Failed to open log file: {}", e))?;
+    let reader = BufReader::new(file);
+    
+    let mut blocks_mined = 0u64;
+    let mut recent_hashrates = Vec::new();
+    
+    // Read last 2000 lines to get recent mining performance
+    let lines: Vec<String> = reader.lines()
+        .filter_map(Result::ok)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .take(2000)
+        .collect();
+    
+    for line in &lines {
+        if line.contains("Successfully sealed new block") {
+            blocks_mined += 1;
+        }
+        
+        // Look for mining stats in logs
+        // Geth may log lines like "Generating DAG" or mining-related performance
+        if line.contains("Mining") && line.contains("hashrate") {
+            // Try to extract hashrate if it's explicitly logged
+            if let Some(hr_pos) = line.find("hashrate=") {
+                let hr_str = &line[hr_pos + 9..];
+                if let Some(end_pos) = hr_str.find(|c: char| c == ' ' || c == '\n') {
+                    let rate_str = &hr_str[..end_pos];
+                    if let Ok(rate) = rate_str.parse::<f64>() {
+                        recent_hashrates.push(rate);
+                    }
+                }
+            }
+        }
+    }
+    
+    // If we found explicit hashrates in logs, use the average
+    if !recent_hashrates.is_empty() {
+        let avg_hashrate = recent_hashrates.iter().sum::<f64>() / recent_hashrates.len() as f64;
+        return Ok((blocks_mined, avg_hashrate));
+    }
+    
+    // Otherwise, estimate based on blocks found and difficulty
+    // Look for the most recent block difficulty
+    let mut last_difficulty = 0u64;
+    for line in &lines {
+        if line.contains("Successfully sealed new block") && line.contains("diff=") {
+            if let Some(diff_pos) = line.find("diff=") {
+                let diff_str = &line[diff_pos + 5..];
+                if let Some(end_pos) = diff_str.find(|c: char| c == ' ' || c == '\n') {
+                    let diff_val_str = &diff_str[..end_pos];
+                    if let Ok(diff) = diff_val_str.parse::<u64>() {
+                        last_difficulty = diff;
+                        break; // Use the most recent
+                    }
+                }
+            }
+        }
+    }
+    
+    // If we have blocks mined and difficulty, estimate hashrate
+    // Hash rate ≈ (blocks_found * difficulty) / time_period
+    // Since we're looking at recent logs, assume last ~10 minutes
+    if blocks_mined > 0 && last_difficulty > 0 {
+        let time_window = 600.0; // 10 minutes in seconds
+        let estimated_hashrate = (blocks_mined as f64 * last_difficulty as f64) / time_window;
+        return Ok((blocks_mined, estimated_hashrate));
+    }
+    
+    // If still no data, check for CPU miner initialization
+    for line in &lines {
+        if line.contains("Updated mining threads") || line.contains("Starting mining operation") {
+            // Look for thread count
+            if let Some(threads_pos) = line.find("threads=") {
+                let threads_str = &line[threads_pos + 8..];
+                if let Some(end_pos) = threads_str.find(|c: char| c == ' ' || c == '\n') {
+                    let thread_count_str = &threads_str[..end_pos];
+                    if let Ok(threads) = thread_count_str.parse::<u32>() {
+                        // Estimate ~85KH/s per thread for CPU mining
+                        let estimated_hashrate = threads as f64 * 85000.0;
+                        return Ok((blocks_mined, estimated_hashrate));
+                    }
+                }
+            }
+        }
+    }
+    
+    Ok((blocks_mined, 0.0))
 }
 
 pub fn get_mining_logs(data_dir: &str, lines: usize) -> Result<Vec<String>, String> {

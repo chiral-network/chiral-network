@@ -10,7 +10,7 @@ mod geth_downloader;
 use ethereum::{
     create_new_account, get_account_from_private_key, get_balance, get_peer_count,
     start_mining, stop_mining, get_mining_status, get_hashrate, get_block_number,
-    get_network_difficulty, get_network_hashrate, get_mining_logs,
+    get_network_difficulty, get_network_hashrate, get_mining_logs, get_mining_performance,
     EthAccount, GethProcess
 };
 use keystore::Keystore;
@@ -251,6 +251,11 @@ async fn get_miner_logs(data_dir: String, lines: usize) -> Result<Vec<String>, S
 }
 
 #[tauri::command]
+async fn get_miner_performance(data_dir: String) -> Result<(u64, f64), String> {
+    get_mining_performance(&data_dir)
+}
+
+#[tauri::command]
 fn get_cpu_temperature() -> Option<f32> {
     static mut LAST_UPDATE: Option<Instant> = None;
     unsafe {
@@ -321,6 +326,7 @@ fn main() {
             get_current_block,
             get_network_stats,
             get_miner_logs,
+            get_miner_performance,
             get_cpu_temperature
         ])
         .plugin(tauri_plugin_process::init())
