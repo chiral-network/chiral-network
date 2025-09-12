@@ -134,7 +134,7 @@
           >
           <span
             class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform
-               {proxyEnabled ? 'translate-x-6' : 'translate-x-1'}"
+              {proxyEnabled ? 'translate-x-6' : 'translate-x-1'}"
           />
         </button>
       </div>
