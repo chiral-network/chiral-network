@@ -261,6 +261,9 @@ export interface MiningState {
   activeThreads: number;
   minerIntensity: number;
   selectedPool: string;
+  realTemperature: number | undefined;
+  realPowerUsage: number | undefined;
+  cpuUsage: number;
 }
 
 export const miningState = writable<MiningState>({
@@ -271,4 +274,7 @@ export const miningState = writable<MiningState>({
   activeThreads: 1,
   minerIntensity: 50,
   selectedPool: "solo",
+  realTemperature: undefined,
+  realPowerUsage: undefined,
+  cpuUsage: 0,
 });

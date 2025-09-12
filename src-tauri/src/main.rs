@@ -17,7 +17,7 @@ use keystore::Keystore;
 use geth_downloader::GethDownloader;
 use sysinfo::{Components, System, MINIMUM_CPU_UPDATE_INTERVAL};
 use systemstat::{Platform, System as SystemStat};
-use std::{sync::{Arc, Mutex}, time::Instant};
+use std::{sync::{Arc, Mutex}, time::Instant, fs, io::{self, Read}, time::Duration};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -261,13 +261,13 @@ fn get_cpu_temperature() -> Option<f32> {
         }
         LAST_UPDATE = Some(Instant::now());
     }
+    
     // Try sysinfo first (works on some platforms including M1 macs)
     let mut sys = System::new_all();
     sys.refresh_cpu_all();
     let components = Components::new_with_refreshed_list();
 
     let mut core_count = 0;
-
     let sum: f32 = components
         .iter()
         .filter(|c| {
@@ -282,14 +282,183 @@ fn get_cpu_temperature() -> Option<f32> {
     if core_count > 0 {
         return Some(sum / core_count as f32);
     }
-    // handles Windows case?
+    
+    // Try systemstat for additional platforms
     let stat_sys = SystemStat::new();
     if let Ok(temp) = stat_sys.cpu_temp() {
         return Some(temp);
     }
 
+    // Platform-specific fallbacks
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(temp) = get_cpu_temperature_linux_sync() {
+            return Some(temp);
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(temp) = get_cpu_temperature_windows_sync() {
+            return Some(temp);
+        }
+    }
+
     None
 }
+
+// ---------------- PLATFORM-SPECIFIC TEMPERATURE IMPLEMENTATIONS ----------------
+#[cfg(target_os = "linux")]
+fn get_cpu_temperature_linux_sync() -> Result<f32, String> {
+    // Search hwmon devices for CPU package temperature
+    let hwmon_root = "/sys/class/hwmon";
+    let dirs = fs::read_dir(hwmon_root).map_err(|e| format!("read_dir hwmon failed: {}", e))?;
+    for entry in dirs {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        // Try to read name to identify sensor
+        let name_path = path.join("name");
+        let name = fs::read_to_string(&name_path).unwrap_or_default().to_lowercase();
+        if !(name.contains("coretemp") || name.contains("k10temp") || name.contains("cpu") || name.contains("zenpower")) {
+            // still scan labels below
+        }
+        // Iterate temp*_label to find package/core label
+        if let Ok(dir_iter) = fs::read_dir(&path) {
+            for file in dir_iter.flatten() {
+                let fname = file.file_name();
+                let fname = fname.to_string_lossy();
+                if fname.starts_with("temp") && fname.ends_with("_label") {
+                    let label = fs::read_to_string(file.path()).unwrap_or_default().to_lowercase();
+                    if label.contains("package") || label.contains("tdie") || label.contains("tctl") || label.contains("cpu") {
+                        let input_path = file.path().with_file_name(fname.replace("_label", "_input"));
+                        if let Ok(raw) = fs::read_to_string(&input_path) {
+                            if let Ok(millideg) = raw.trim().parse::<i64>() {
+                                return Ok(millideg as f32 / 1000.0);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Fallback: any temp*_input
+        if let Ok(dir_iter) = fs::read_dir(&path) {
+            for file in dir_iter.flatten() {
+                let fname = file.file_name();
+                let fname = fname.to_string_lossy();
+                if fname.starts_with("temp") && fname.ends_with("_input") {
+                    if let Ok(raw) = fs::read_to_string(file.path()) {
+                        if let Ok(millideg) = raw.trim().parse::<i64>() {
+                            return Ok(millideg as f32 / 1000.0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Err("No temperature sensor found".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn get_cpu_temperature_windows_sync() -> Result<f32, String> {
+    use wmi::{COMLibrary, WMIConnection};
+    use serde::Deserialize;
+
+    #[derive(Deserialize, Debug)]
+    struct Temp { CurrentTemperature: Option<i64> }
+
+    let com_con = COMLibrary::new().map_err(|e| format!("COM init failed: {}", e))?;
+    let wmi_con = WMIConnection::new(com_con).map_err(|e| format!("WMI connect failed: {}", e))?;
+    let results: Vec<Temp> = wmi_con.query().map_err(|e| format!("WMI query failed: {}", e))?;
+    // MSAcpi_ThermalZoneTemperature returns tenths of Kelvin
+    for t in results {
+        if let Some(val) = t.CurrentTemperature {
+            if val > 0 {
+                let c = (val as f32 / 10.0) - 273.15;
+                return Ok(c);
+            }
+        }
+    }
+    Err("No temperature sensor found".to_string())
+}
+
+// CPU usage command
+#[tauri::command]
+async fn get_cpu_usage() -> Result<f32, String> {
+    let mut sys = System::new_all();
+    sys.refresh_cpu_all();
+    Ok(sys.global_cpu_usage())
+}
+
+// Platform-specific: CPU package power (watts)
+#[tauri::command]
+async fn get_cpu_package_power() -> Result<Option<f32>, String> {
+    #[cfg(target_os = "linux")]
+    {
+        return get_cpu_power_linux().await;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // Windows requires vendor/tooling (e.g., Intel Power Gadget, LibreHardwareMonitor). Not bundled.
+        return Ok(None);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // macOS power requires powermetrics with elevated privileges. Not used here.
+        return Ok(None);
+    }
+}
+
+// ---------------- LINUX IMPLEMENTATIONS ----------------
+#[cfg(target_os = "linux")]
+async fn get_cpu_power_linux() -> Result<Option<f32>, String> {
+    // Intel RAPL energy counter in microjoules
+    // Typical path: /sys/devices/virtual/powercap/intel-rapl:0/energy_uj
+    let rapl_root = "/sys/devices/virtual/powercap";
+    let mut energy_file: Option<String> = None;
+    if let Ok(entries) = fs::read_dir(rapl_root) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if name.starts_with("intel-rapl:") {
+                let ef = p.join("energy_uj");
+                if ef.exists() {
+                    energy_file = Some(ef.to_string_lossy().to_string());
+                    break;
+                }
+            }
+        }
+    }
+    let energy_path = match energy_file { Some(p) => p, None => return Ok(None) };
+
+    // Read two samples and compute watts = dE/dt
+    let e1 = read_u64_from_file(&energy_path).map_err(|e| e.to_string())?;
+    let t1 = std::time::Instant::now();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let e2 = read_u64_from_file(&energy_path).map_err(|e| e.to_string())?;
+    let dt = t1.elapsed().as_secs_f32();
+    if dt <= 0.0 { return Ok(None); }
+
+    // Handle wrap using max_energy_range_uj if present
+    let mut de = if e2 >= e1 { e2 - e1 } else { 0 } as f64;
+    if e2 < e1 {
+        let max_path = std::path::Path::new(&energy_path).with_file_name("max_energy_range_uj");
+        if let Ok(max) = read_u64_from_file(max_path.to_string_lossy().as_ref()) {
+            de = (e2 as u128 + max as u128 - e1 as u128) as f64;
+        }
+    }
+    // microjoules to joules
+    let joules = de / 1_000_000.0;
+    let watts = (joules as f32) / dt;
+    Ok(Some(watts))
+}
+
+#[cfg(target_os = "linux")]
+fn read_u64_from_file(path: &str) -> io::Result<u64> {
+    let mut s = String::new();
+    fs::File::open(path)?.read_to_string(&mut s)?;
+    let v = s.trim().parse::<u64>().map_err(|_e| io::Error::new(io::ErrorKind::Other, "parse u64"))?;
+    Ok(v)
+}
+
 fn main() {
     println!("Starting Chiral Network...");
 
@@ -321,7 +490,9 @@ fn main() {
             get_current_block,
             get_network_stats,
             get_miner_logs,
-            get_cpu_temperature
+            get_cpu_usage,
+            get_cpu_temperature,
+            get_cpu_package_power
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())

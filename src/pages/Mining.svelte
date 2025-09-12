@@ -46,10 +46,12 @@
   // Statistics
   let sessionStartTime = Date.now()
   let estimatedTimeToBlock = 0
-  $: powerConsumption = $miningState.activeThreads * 15
-  $: efficiency = $miningState.hashRate === '0 H/s' ? 0 : parseHashRate($miningState.hashRate) / powerConsumption
+  $: powerConsumption = $miningState.realPowerUsage ?? ($miningState.activeThreads * 15)
+  $: efficiency = $miningState.hashRate === '0 H/s' || powerConsumption <= 0 ? 0 : parseHashRate($miningState.hashRate) / powerConsumption
   let temperature = 45.0
-  $: if (!isTauri) {
+  $: if (isTauri) {
+    temperature = $miningState.realTemperature ?? 0
+  } else {
     temperature = 45 + ($miningState.activeThreads * 3.5)
   }
 
@@ -124,6 +126,7 @@
     if (isTauri) {
       await updateCpuTemperature()
     }
+    await updateSystemStats() // Initial call
     
     // Start polling for mining stats
     statsInterval = setInterval(async () => {
@@ -131,10 +134,11 @@
         await updateMiningStats()
       }
       await updateNetworkStats()
+      await updateSystemStats()
       if (isTauri) {
         await updateCpuTemperature()
       }
-    }, 500) as unknown as number
+    }, 2000) as unknown as number
   })
   
   async function checkGethStatus() {
@@ -218,15 +222,28 @@
     }
   }
 
+  async function updateSystemStats() {
+    try {
+      const [powerUsage, cpuUsage] = await Promise.all([
+        invoke('get_cpu_package_power') as Promise<number | null>,
+        invoke('get_cpu_usage') as Promise<number>
+      ])
+      
+      $miningState.realPowerUsage = powerUsage ?? undefined
+      $miningState.cpuUsage = cpuUsage
+    } catch (e) {
+      console.error('Failed to update system stats:', e)
+      $miningState.realPowerUsage = undefined
+    }
+  }
+
   async function updateCpuTemperature() {
     try {
-      const temp = await invoke('get_cpu_temperature') as number
-      console.log(temp)
-      if (temp > 0) {
-        temperature = temp
-      }
+      const temp = await invoke('get_cpu_temperature') as number | null
+      $miningState.realTemperature = temp ?? undefined
     } catch (e) {
       console.error('Failed to get CPU temperature:', e)
+      $miningState.realTemperature = undefined
     }
   }
   
@@ -271,12 +288,7 @@
       
       // Start updating stats
       await updateMiningStats()
-      
-      // Update power and temperature estimates
-      powerConsumption = $miningState.activeThreads * 25 * ($miningState.minerIntensity / 100)
-      if (!isTauri) {
-        temperature = 45 + ($miningState.activeThreads * 3) + ($miningState.minerIntensity / 10)
-      }
+      await updateSystemStats() // Get real system data
       
       // Re-check geth status since it might have restarted
       isGethRunning = true
@@ -453,9 +465,11 @@
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">Power Usage</p>
-          <p class="text-2xl font-bold">{powerConsumption.toFixed(0)}W</p>
+          <p class="text-2xl font-bold">
+            {$miningState.realPowerUsage !== undefined ? $miningState.realPowerUsage.toFixed(0) + 'W' : 'N/A'}
+          </p>
           <p class="text-xs text-muted-foreground mt-1">
-            {efficiency.toFixed(2)} H/W
+            {$miningState.realPowerUsage !== undefined ? efficiency.toFixed(2) + ' H/W' : 'N/A'}
           </p>
         </div>
         <div class="p-2 bg-amber-500/10 rounded-lg">
@@ -468,12 +482,14 @@
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">Temperature</p>
-          <p class="text-2xl font-bold">{temperature.toFixed(1)}°C</p>
+          <p class="text-2xl font-bold">
+            {$miningState.realTemperature !== undefined ? $miningState.realTemperature.toFixed(1) + '°C' : (isTauri ? 'N/A' : temperature.toFixed(1) + '°C')}
+          </p>
           <div class="mt-1">
             <Progress 
-              value={temperature} 
+              value={$miningState.realTemperature !== undefined ? $miningState.realTemperature : temperature} 
               max={100} 
-              class="h-1 {temperature > 80 ? 'bg-red-500' : temperature > 60 ? 'bg-yellow-500' : ''}"
+              class="h-1 {($miningState.realTemperature !== undefined ? $miningState.realTemperature : temperature) > 80 ? 'bg-red-500' : ($miningState.realTemperature !== undefined ? $miningState.realTemperature : temperature) > 60 ? 'bg-yellow-500' : ''}"
             />
           </div>
         </div>

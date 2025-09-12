@@ -36,6 +36,9 @@ futures-util = "0.3"
 systemstat = "0.2.5"
 sysinfo = "0.31"
 
+[target.'cfg(windows)'.dependencies]
+wmi = "0.13"
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
