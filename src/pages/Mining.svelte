@@ -18,14 +18,14 @@
     power: number
   }
   
-  interface RecentBlock {
-    id: string
-    hash: string
-    reward: number
-    timestamp: Date
-    difficulty: number
-    nonce: number
-  }
+  // interface RecentBlock {
+  //   id: string
+  //   hash: string
+  //   reward: number
+  //   timestamp: Date
+  //   difficulty: number
+  //   nonce: number
+  // }
   
   // Local UI state only
   let isTauri = false
@@ -62,7 +62,7 @@
   
   // Mining history
   let miningHistory: MiningHistoryPoint[] = []
-  let recentBlocks: RecentBlock[] = []
+  // let recentBlocks: RecentBlock[] = []
   
   // Mock mining intervals  
   let statsInterval: number | null = null
@@ -408,14 +408,14 @@
     const reward = 5 + Math.random() * 2
     $miningState.totalRewards += reward
     
-    recentBlocks = [{
+    $miningState.recentBlocks = [{
       id: `block-${Date.now()}`,
       hash: `0x${Math.random().toString(16).substring(2, 10)}...${Math.random().toString(16).substring(2, 6)}`,
       reward: reward,
       timestamp: new Date(),
       difficulty: currentDifficulty,
       nonce: Math.floor(Math.random() * 1000000)
-    }, ...recentBlocks.slice(0, 4)]
+    }, ...($miningState.recentBlocks ?? []).slice(0, 4)]
   }
   
   function formatUptime(now: number = Date.now()) {
@@ -808,13 +808,13 @@
   <!-- Recent Blocks -->
   <Card class="p-6">
     <h2 class="text-lg font-semibold mb-4">Recent Blocks Found</h2>
-    {#if recentBlocks.length === 0}
+    {#if (!$miningState.recentBlocks || $miningState.recentBlocks.length === 0)}
       <p class="text-sm text-muted-foreground text-center py-8">
         No blocks found yet. Start mining to earn rewards!
       </p>
     {:else}
       <div class="space-y-2">
-        {#each recentBlocks as block}
+        {#each $miningState.recentBlocks ?? [] as block}
           <div class="flex items-center justify-between p-3 bg-secondary rounded-lg">
             <div class="flex items-center gap-3">
               <Award class="h-4 w-4 text-yellow-500" />
