@@ -31,7 +31,7 @@
   let isCreatingAccount = false
   let isImportingAccount = false
   let isGethRunning = false
-  
+
   // Demo transactions - in real app these will be fetched from blockchain
   const transactions = writable<Transaction[]>([
     { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', to: undefined, date: new Date('2024-03-15'), description: 'File purchase', status: 'completed' },
@@ -47,18 +47,24 @@
   let isAddressValid = false;
 
 
-   // Copy feedback message
-   let copyMessage = '';
-   let privateKeyCopyMessage = '';
+  // Copy feedback message
+  let copyMessage = '';
+  let privateKeyCopyMessage = '';
    
-   // Export feedback message
-   let exportMessage = '';
+  // Export feedback message
+  let exportMessage = '';
+  
   // Filtering state
   let filterType: 'all' | 'sent' | 'received' = 'all';
   let filterDateFrom: string = '';
   let filterDateTo: string = '';
   let sortDescending: boolean = true;
   
+  // Confirmation for sending transaction
+  let isConfirming = false
+  let countdown = 0
+  let intervalId: number | null = null
+
   // Fetch balance when account changes
   $: if ($etcAccount && isGethRunning) {
     fetchBalance()
@@ -221,6 +227,42 @@
     }
   }
   
+  function handleSendClick() {
+    if (!isAddressValid || !isAmountValid || sendAmount <= 0) return
+
+    if (isConfirming) {
+      // Cancel if user taps again during countdown
+      cancelCountdown()
+      return
+    }
+
+    startCountdown()
+  }
+
+  function startCountdown() {
+    isConfirming = true
+    countdown = 5
+
+    intervalId = window.setInterval(() => {
+      countdown--
+      if (countdown <= 0) {
+        clearInterval(intervalId!)
+        intervalId = null
+        isConfirming = false
+        sendTransaction() 
+      }
+    }, 1000)
+  }
+
+  function cancelCountdown() {
+    if (intervalId) {
+      clearInterval(intervalId)
+      intervalId = null
+    }
+    isConfirming = false
+    countdown = 0
+  }
+
   function sendTransaction() {
     if (!isAddressValid || !isAmountValid || !isAddressValid || sendAmount <= 0) return
     
@@ -652,11 +694,14 @@
         <Button
           type="button"
           class="w-full"
-          on:click={sendTransaction}
-          disabled={!isAddressValid || !isAmountValid || !isAddressValid || rawAmountInput === ''}
-        >
+          on:click={handleSendClick}
+          disabled={!isAddressValid || !isAmountValid || rawAmountInput === ''}>
           <ArrowUpRight class="h-4 w-4 mr-2" />
-          Send Transaction
+          {#if isConfirming}
+            Sending in {countdown}s (Tap to Cancel)
+          {:else}
+            Send Transaction
+          {/if}
         </Button>
 
         <Button type="button" class="w-full justify-center bg-gray-100 hover:bg-gray-200 text-gray-800 rounded transition-colors py-2 font-normal" on:click={() => showPending = !showPending} aria-label="View pending transactions">
