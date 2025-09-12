@@ -355,29 +355,27 @@
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
     <Card class="p-6">
       <h2 class="text-lg font-semibold mb-4">Bandwidth Usage (Today)</h2>
-      <div class="space-y-4">
-        <div>
-          <div class="flex justify-between mb-2">
-            <span class="text-sm">Upload</span>
-            <span class="text-sm font-medium">{formatSize(bandwidthUsed.upload * 1048576)}</span>
-          </div>
-          <Progress value={bandwidthUsed.upload} max={1000} />
-        </div>
-        <div>
-          <div class="flex justify-between mb-2">
-            <span class="text-sm">Download</span>
-            <span class="text-sm font-medium">{formatSize(bandwidthUsed.download * 1048576)}</span>
-          </div>
-          <Progress value={bandwidthUsed.download} max={1000} />
-        </div>
-        <div class="pt-2 border-t">
-          <div class="flex justify-between text-sm">
-            <span class="text-muted-foreground">Total</span>
-            <span class="font-medium">
-              {formatSize((bandwidthUsed.upload + bandwidthUsed.download) * 1048576)}
-            </span>
-          </div>
-        </div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div class="bg-blue-50 rounded-lg p-4 flex flex-col items-center">
+        <span class="text-sm text-muted-foreground mb-1">Upload</span>
+        <span class="text-2xl font-bold text-blue-600">{formatSize(bandwidthUsed.upload * 1048576)}</span>
+      </div>
+      <div class="bg-green-50 rounded-lg p-4 flex flex-col items-center">
+        <span class="text-sm text-muted-foreground mb-1">Download</span>
+        <span class="text-2xl font-bold text-green-600">{formatSize(bandwidthUsed.download * 1048576)}</span>
+      </div>
+      </div>
+      <div class="pt-4 border-t mt-4 flex items-center justify-between text-sm">
+        <span class="text-muted-foreground flex items-center gap-1">
+          <BarChart3 class="h-4 w-4 text-blue-500" />
+          Total Bandwidth Used
+        </span>
+        <span class="font-bold text-blue-700 text-lg flex items-center gap-1">
+          {formatSize((bandwidthUsed.upload + bandwidthUsed.download) * 1048576)}
+          <span class="ml-1 px-2 py-0.5 rounded-full bg-blue-100 text-xs text-blue-600 font-semibold">
+        {((bandwidthUsed.upload + bandwidthUsed.download) > 1024 ? 'GB' : 'MB')}
+          </span>
+        </span>
       </div>
     </Card>
 

@@ -6,15 +6,19 @@
 mod ethereum;
 mod keystore;
 mod geth_downloader;
+mod dht_simple;
+mod headless;
+use dht_simple as dht;
 
 use ethereum::{
     create_new_account, get_account_from_private_key, get_balance, get_peer_count,
     start_mining, stop_mining, get_mining_status, get_hashrate, get_block_number,
-    get_network_difficulty, get_network_hashrate, get_mining_logs,
-    EthAccount, GethProcess
+    get_network_difficulty, get_network_hashrate, get_mining_logs, get_mining_performance,
+    get_mined_blocks_count, EthAccount, GethProcess
 };
 use keystore::Keystore;
 use geth_downloader::GethDownloader;
+use dht::{DhtService, FileMetadata};
 use sysinfo::{Components, System, MINIMUM_CPU_UPDATE_INTERVAL};
 use systemstat::{Platform, System as SystemStat};
 use std::{sync::{Arc, Mutex}, time::Instant};
@@ -28,6 +32,7 @@ struct AppState {
     geth: Mutex<GethProcess>,
     downloader: Arc<GethDownloader>,
     miner_address: Mutex<Option<String>>,
+    dht: Mutex<Option<Arc<DhtService>>>,
 }
 
 #[tauri::command]
@@ -251,6 +256,112 @@ async fn get_miner_logs(data_dir: String, lines: usize) -> Result<Vec<String>, S
 }
 
 #[tauri::command]
+async fn get_miner_performance(data_dir: String) -> Result<(u64, f64), String> {
+    get_mining_performance(&data_dir)
+}
+
+#[tauri::command]
+async fn get_blocks_mined(address: String) -> Result<u64, String> {
+    get_mined_blocks_count(&address).await
+}
+
+#[tauri::command]
+async fn start_dht_node(state: State<'_, AppState>, port: u16, bootstrap_nodes: Vec<String>) -> Result<String, String> {
+    {
+        let dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
+        if dht_guard.is_some() {
+            return Err("DHT node is already running".to_string());
+        }
+    }
+    
+    let dht_service = DhtService::new(port, bootstrap_nodes)
+        .await
+        .map_err(|e| format!("Failed to start DHT: {}", e))?;
+    
+    let peer_id = dht_service.get_peer_id();
+    
+    {
+        let mut dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
+        *dht_guard = Some(Arc::new(dht_service));
+    }
+    
+    Ok(peer_id)
+}
+
+#[tauri::command]
+async fn stop_dht_node(state: State<'_, AppState>) -> Result<(), String> {
+    let mut dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
+    *dht_guard = None;
+    Ok(())
+}
+
+#[tauri::command]
+async fn publish_file_metadata(
+    state: State<'_, AppState>,
+    file_hash: String,
+    file_name: String,
+    file_size: u64,
+    mime_type: Option<String>,
+) -> Result<(), String> {
+    let dht = {
+        let dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
+        dht_guard.as_ref().cloned()
+    };
+    
+    if let Some(dht) = dht {
+        let metadata = FileMetadata {
+            file_hash,
+            file_name,
+            file_size,
+            seeders: vec![],
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            mime_type,
+        };
+        
+        dht.publish_file(metadata).await
+    } else {
+        Err("DHT node is not running".to_string())
+    }
+}
+
+#[tauri::command]
+async fn search_file_metadata(state: State<'_, AppState>, file_hash: String) -> Result<(), String> {
+    let dht = {
+        let dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
+        dht_guard.as_ref().cloned()
+    };
+    
+    if let Some(dht) = dht {
+        dht.get_file(file_hash).await
+    } else {
+        Err("DHT node is not running".to_string())
+    }
+}
+
+#[tauri::command]
+async fn connect_to_peer(state: State<'_, AppState>, peer_address: String) -> Result<(), String> {
+    let dht = {
+        let dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
+        dht_guard.as_ref().cloned()
+    };
+    
+    if let Some(dht) = dht {
+        dht.connect_peer(peer_address).await
+    } else {
+        Err("DHT node is not running".to_string())
+    }
+}
+
+#[tauri::command]
+async fn get_dht_events(_state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    // Simplified version returns empty events for now
+    Ok(vec![])
+}
+
+#[tauri::command]
 fn get_cpu_temperature() -> Option<f32> {
     static mut LAST_UPDATE: Option<Instant> = None;
     unsafe {
@@ -291,6 +402,25 @@ fn get_cpu_temperature() -> Option<f32> {
     None
 }
 fn main() {
+    // Parse command line arguments
+    use clap::Parser;
+    let args = headless::CliArgs::parse();
+    
+    // If running in headless mode, don't start the GUI
+    if args.headless {
+        println!("Running in headless mode...");
+        
+        // Create a tokio runtime for async operations
+        let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+        
+        // Run the headless mode
+        if let Err(e) = runtime.block_on(headless::run_headless(args)) {
+            eprintln!("Error in headless mode: {}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
+    
     println!("Starting Chiral Network...");
 
     tauri::Builder::default()
@@ -298,6 +428,7 @@ fn main() {
             geth: Mutex::new(GethProcess::new()),
             downloader: Arc::new(GethDownloader::new()),
             miner_address: Mutex::new(None),
+            dht: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
@@ -321,13 +452,45 @@ fn main() {
             get_current_block,
             get_network_stats,
             get_miner_logs,
-            get_cpu_temperature
+            get_miner_performance,
+            get_blocks_mined,
+            get_cpu_temperature,
+            start_dht_node,
+            stop_dht_node,
+            publish_file_metadata,
+            search_file_metadata,
+            connect_to_peer,
+            get_dht_events
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                // When window is destroyed, stop geth
+                if let Some(state) = window.app_handle().try_state::<AppState>() {
+                    if let Ok(mut geth) = state.geth.lock() {
+                        let _ = geth.stop();
+                        println!("Geth node stopped on window destroy");
+                    }
+                }
+            }
+        })
         .setup(|app| {
+            // Clean up any orphaned geth processes on startup
+            println!("Cleaning up any orphaned geth processes from previous sessions...");
+            #[cfg(unix)]
+            {
+                use std::process::Command;
+                // Kill any geth processes that might be running from previous sessions
+                let _ = Command::new("pkill")
+                    .arg("-9")
+                    .arg("-f")
+                    .arg("geth.*--datadir.*geth-data")
+                    .output();
+            }
+            
             println!("App setup complete");
             println!("Window should be visible now!");
 
@@ -373,6 +536,13 @@ fn main() {
                     }
                     "quit" => {
                         println!("Quit menu item clicked");
+                        // Stop geth before exiting
+                        if let Some(state) = app.try_state::<AppState>() {
+                            if let Ok(mut geth) = state.geth.lock() {
+                                let _ = geth.stop();
+                                println!("Geth node stopped");
+                            }
+                        }
                         app.exit(0);
                     }
                     _ => {}
@@ -401,6 +571,23 @@ fn main() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| match event {
+            tauri::RunEvent::ExitRequested { .. } => {
+                println!("Exit requested event received");
+                // Don't prevent exit, let it proceed naturally
+            }
+            tauri::RunEvent::Exit => {
+                println!("App exiting, cleaning up geth...");
+                // Stop geth before exiting
+                if let Some(state) = app_handle.try_state::<AppState>() {
+                    if let Ok(mut geth) = state.geth.lock() {
+                        let _ = geth.stop();
+                        println!("Geth node stopped on exit");
+                    }
+                }
+            }
+            _ => {}
+        });
 }

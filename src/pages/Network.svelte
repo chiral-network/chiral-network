@@ -44,7 +44,7 @@
     status: ''
   }
   let downloadError = ''
-  let dataDir = './geth-data'
+  let dataDir = './bin/geth-data'
   let peerCount = 0
   let peerCountInterval: number | undefined
   let chainId = 98765
@@ -618,9 +618,10 @@
                 <Badge variant={peer.status === 'online' ? 'default' : 'secondary'}
                        class={
                           peer.status === 'online' ? 'bg-green-500 text-white' :
-                          peer.status === 'away' ? 'bg-yellow-500 text-black' :
+                          peer.status === 'away' ? 'bg-yellow-500 text-white' :
                           'bg-red-500 text-white'
                         }
+                        style="pointer-events: none;"
                 >
                 {peer.status}
               </Badge>

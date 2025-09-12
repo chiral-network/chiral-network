@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha3::{Digest, Keccak256};
 use std::process::{Child, Command, Stdio};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufRead};
 
@@ -65,11 +65,64 @@ impl GethProcess {
             return Ok(()); // Already running, no need to start again
         }
         
-        // Check if geth is already running on the system (from a previous session)
+        // Always kill any existing geth processes before starting
+        // This ensures we don't have multiple instances running
+        println!("Cleaning up any existing geth processes...");
+        
+        // First try to stop via HTTP if it's running
         if self.is_running() {
-            println!("Geth is already running from a previous session");
-            return Ok(()); // Already running externally
+            let _ = Command::new("curl")
+                .arg("-s")
+                .arg("-X")
+                .arg("POST")
+                .arg("-H")
+                .arg("Content-Type: application/json")
+                .arg("--data")
+                .arg(r#"{"jsonrpc":"2.0","method":"admin_stopRPC","params":[],"id":1}"#)
+                .arg("http://127.0.0.1:8545")
+                .output();
+            std::thread::sleep(std::time::Duration::from_millis(500));
         }
+        
+        // Force kill any remaining geth processes
+        #[cfg(unix)]
+        {
+            // Kill by name pattern
+            let _ = Command::new("pkill")
+                .arg("-9")  // Force kill
+                .arg("-f")
+                .arg("geth.*--datadir.*geth-data")
+                .output();
+                
+            // Also try to kill by port usage (macOS compatible)
+            let _ = Command::new("sh")
+                .arg("-c")
+                .arg("lsof -ti:8545,30303 | xargs kill -9 2>/dev/null || true")
+                .output();
+                
+            // Give it a moment to clean up
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+        
+        // Final check - if still running, we have a problem
+        if self.is_running() {
+            println!("Error: Could not stop existing geth process");
+            // Try one more aggressive kill
+            #[cfg(unix)]
+            {
+                let _ = Command::new("sh")
+                    .arg("-c")
+                    .arg("ps aux | grep -E 'geth.*--datadir' | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null || true")
+                    .output();
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            
+            if self.is_running() {
+                return Err("Cannot stop existing geth process. Please manually kill it and try again.".to_string());
+            }
+        }
+        
+        println!("Geth cleanup complete, starting new instance...");
 
         // Use the GethDownloader to get the correct path
         let downloader = crate::geth_downloader::GethDownloader::new();
@@ -142,7 +195,10 @@ impl GethProcess {
             .arg("50")
             // P2P discovery settings
             .arg("--port")
-            .arg("30303");  // P2P listening port
+            .arg("30303")  // P2P listening port
+            // Network address configuration
+            .arg("--nat")
+            .arg("any");  // Allow NAT traversal and external connections
         
         // Add miner address if provided
         if let Some(address) = miner_address {
@@ -172,11 +228,58 @@ impl GethProcess {
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
+        println!("Stopping geth process...");
+        
+        // First try to kill the tracked child process
         if let Some(mut child) = self.child.take() {
-            child
-                .kill()
-                .map_err(|e| format!("Failed to stop geth: {}", e))?;
+            // Try to kill the process
+            match child.kill() {
+                Ok(_) => {
+                    // Wait for the process to actually exit
+                    let _ = child.wait();
+                    println!("Tracked geth process terminated successfully");
+                },
+                Err(e) => {
+                    println!("Failed to kill tracked geth process: {}", e);
+                }
+            }
+        } else {
+            println!("No tracked child process, will kill by pattern");
         }
+        
+        // Always kill any geth processes by name as a fallback
+        // This handles orphaned processes
+        #[cfg(unix)]
+        {
+            println!("Killing any geth processes by pattern...");
+            
+            // Kill by process name
+            let result = Command::new("pkill")
+                .arg("-9")
+                .arg("-f")
+                .arg("geth.*--datadir.*geth-data")
+                .output();
+                
+            match result {
+                Ok(output) => {
+                    if output.status.success() {
+                        println!("Successfully killed geth processes");
+                    } else {
+                        println!("pkill returned non-zero (no processes found or error)");
+                    }
+                },
+                Err(e) => println!("Failed to run pkill: {}", e)
+            }
+            
+            // Also kill by port usage
+            let _ = Command::new("sh")
+                .arg("-c")
+                .arg("lsof -ti:8545,30303 | xargs kill -9 2>/dev/null || true")
+                .output();
+                
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        
         Ok(())
     }
 }
@@ -466,6 +569,7 @@ pub async fn get_mining_status() -> Result<bool, String> {
 pub async fn get_hashrate() -> Result<String, String> {
     let client = reqwest::Client::new();
     
+    // First try eth_hashrate
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "eth_hashrate",
@@ -486,6 +590,56 @@ pub async fn get_hashrate() -> Result<String, String> {
         .map_err(|e| format!("Failed to parse response: {}", e))?;
     
     if let Some(error) = json_response.get("error") {
+        // If eth_hashrate fails, try miner_hashrate as fallback
+        let miner_payload = json!({
+            "jsonrpc": "2.0",
+            "method": "miner_hashrate",
+            "params": [],
+            "id": 1
+        });
+        
+        if let Ok(miner_response) = client
+            .post("http://127.0.0.1:8545")
+            .json(&miner_payload)
+            .send()
+            .await
+        {
+            if let Ok(miner_json) = miner_response.json::<serde_json::Value>().await {
+                if miner_json.get("error").is_none() {
+                    // Use miner_hashrate result instead
+                    if let Some(result) = miner_json.get("result") {
+                        if let Some(hashrate_hex) = result.as_str() {
+                            // Process with the same logic below
+                            let hex_str = if hashrate_hex.starts_with("0x") || hashrate_hex.starts_with("0X") {
+                                &hashrate_hex[2..]
+                            } else {
+                                hashrate_hex
+                            };
+                            
+                            let hashrate = if hex_str.is_empty() || hex_str == "0" {
+                                0
+                            } else {
+                                u64::from_str_radix(hex_str, 16).unwrap_or(0)
+                            };
+                            
+                            let formatted = if hashrate >= 1_000_000_000 {
+                                format!("{:.2} GH/s", hashrate as f64 / 1_000_000_000.0)
+                            } else if hashrate >= 1_000_000 {
+                                format!("{:.2} MH/s", hashrate as f64 / 1_000_000.0)
+                            } else if hashrate >= 1_000 {
+                                format!("{:.2} KH/s", hashrate as f64 / 1_000.0)
+                            } else {
+                                format!("{} H/s", hashrate)
+                            };
+                            
+                            return Ok(formatted);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // If both fail, return original error
         return Err(format!("RPC error: {}", error));
     }
     
@@ -493,9 +647,20 @@ pub async fn get_hashrate() -> Result<String, String> {
         .as_str()
         .ok_or("Invalid hashrate response")?;
     
-    // Convert hex to decimal
-    let hashrate = u64::from_str_radix(&hashrate_hex[2..], 16)
-        .map_err(|e| format!("Failed to parse hashrate: {}", e))?;
+    // Handle edge cases where hashrate might be "0x0" or invalid
+    let hex_str = if hashrate_hex.starts_with("0x") || hashrate_hex.starts_with("0X") {
+        &hashrate_hex[2..]
+    } else {
+        hashrate_hex
+    };
+    
+    // Convert hex to decimal, handle empty string or just "0"
+    let hashrate = if hex_str.is_empty() || hex_str == "0" {
+        0
+    } else {
+        u64::from_str_radix(hex_str, 16)
+            .map_err(|e| format!("Failed to parse hashrate: {}", e))?
+    };
     
     // Convert to human-readable format (H/s, KH/s, MH/s, GH/s)
     let formatted = if hashrate >= 1_000_000_000 {
@@ -599,6 +764,111 @@ pub async fn get_network_difficulty() -> Result<String, String> {
     Ok(formatted)
 }
 
+pub fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String> {
+    // Try to get blocks mined from logs first
+    let log_path = Path::new(data_dir).join("geth.log");
+    
+    // If log doesn't exist, return defaults (blocks will be calculated from balance in frontend)
+    if !log_path.exists() {
+        // Return 0 blocks but a reasonable hashrate estimate based on CPU mining
+        // Frontend will calculate blocks from actual balance
+        return Ok((0, 85000.0)); // Default ~85KH/s for single thread CPU mining
+    }
+    
+    let file = File::open(&log_path).map_err(|e| format!("Failed to open log file: {}", e))?;
+    let reader = BufReader::new(file);
+    
+    let mut blocks_mined = 0u64;
+    let mut recent_hashrates = Vec::new();
+    
+    // Read last 2000 lines to get recent mining performance
+    let lines: Vec<String> = reader.lines()
+        .filter_map(Result::ok)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .take(2000)
+        .collect();
+    
+    for line in &lines {
+        // Look for various block mining success patterns
+        if line.contains("Successfully sealed new block") 
+            || line.contains("🔨 mined potential block")
+            || line.contains("Block mined")
+            || (line.contains("mined") && line.contains("block")) {
+            blocks_mined += 1;
+        }
+        
+        // Look for mining stats in logs
+        // Geth may log lines like "Generating DAG" or mining-related performance
+        if line.contains("Mining") && line.contains("hashrate") {
+            // Try to extract hashrate if it's explicitly logged
+            if let Some(hr_pos) = line.find("hashrate=") {
+                let hr_str = &line[hr_pos + 9..];
+                if let Some(end_pos) = hr_str.find(|c: char| c == ' ' || c == '\n') {
+                    let rate_str = &hr_str[..end_pos];
+                    if let Ok(rate) = rate_str.parse::<f64>() {
+                        recent_hashrates.push(rate);
+                    }
+                }
+            }
+        }
+    }
+    
+    // If we found explicit hashrates in logs, use the average
+    if !recent_hashrates.is_empty() {
+        let avg_hashrate = recent_hashrates.iter().sum::<f64>() / recent_hashrates.len() as f64;
+        return Ok((blocks_mined, avg_hashrate));
+    }
+    
+    // Otherwise, estimate based on blocks found and difficulty
+    // Look for the most recent block difficulty
+    let mut last_difficulty = 0u64;
+    for line in &lines {
+        if line.contains("Successfully sealed new block") && line.contains("diff=") {
+            if let Some(diff_pos) = line.find("diff=") {
+                let diff_str = &line[diff_pos + 5..];
+                if let Some(end_pos) = diff_str.find(|c: char| c == ' ' || c == '\n') {
+                    let diff_val_str = &diff_str[..end_pos];
+                    if let Ok(diff) = diff_val_str.parse::<u64>() {
+                        last_difficulty = diff;
+                        break; // Use the most recent
+                    }
+                }
+            }
+        }
+    }
+    
+    // If we have blocks mined and difficulty, estimate hashrate
+    // Hash rate ≈ (blocks_found * difficulty) / time_period
+    // Since we're looking at recent logs, assume last ~10 minutes
+    if blocks_mined > 0 && last_difficulty > 0 {
+        let time_window = 600.0; // 10 minutes in seconds
+        let estimated_hashrate = (blocks_mined as f64 * last_difficulty as f64) / time_window;
+        return Ok((blocks_mined, estimated_hashrate));
+    }
+    
+    // If still no data, check for CPU miner initialization
+    for line in &lines {
+        if line.contains("Updated mining threads") || line.contains("Starting mining operation") {
+            // Look for thread count
+            if let Some(threads_pos) = line.find("threads=") {
+                let threads_str = &line[threads_pos + 8..];
+                if let Some(end_pos) = threads_str.find(|c: char| c == ' ' || c == '\n') {
+                    let thread_count_str = &threads_str[..end_pos];
+                    if let Ok(threads) = thread_count_str.parse::<u32>() {
+                        // Estimate ~85KH/s per thread for CPU mining
+                        let estimated_hashrate = threads as f64 * 85000.0;
+                        return Ok((blocks_mined, estimated_hashrate));
+                    }
+                }
+            }
+        }
+    }
+    
+    Ok((blocks_mined, 0.0))
+}
+
 pub fn get_mining_logs(data_dir: &str, lines: usize) -> Result<Vec<String>, String> {
     let log_path = PathBuf::from(data_dir).join("geth.log");
     
@@ -625,14 +895,133 @@ pub fn get_mining_logs(data_dir: &str, lines: usize) -> Result<Vec<String>, Stri
     Ok(all_lines[start..].to_vec())
 }
 
+pub async fn get_mined_blocks_count(miner_address: &str) -> Result<u64, String> {
+    let client = reqwest::Client::new();
+    let mut blocks_mined = 0u64;
+    
+    // Get the current block number
+    let block_number_payload = json!({
+        "jsonrpc": "2.0",
+        "method": "eth_blockNumber",
+        "params": [],
+        "id": 1
+    });
+    
+    let response = client
+        .post("http://127.0.0.1:8545")
+        .json(&block_number_payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get block number: {}", e))?;
+    
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error: {}", error));
+    }
+    
+    let block_hex = json_response["result"]
+        .as_str()
+        .ok_or("Invalid block number response")?;
+    
+    let current_block = u64::from_str_radix(&block_hex[2..], 16)
+        .map_err(|e| format!("Failed to parse block number: {}", e))?;
+    
+    // Check recent blocks (last 100 or current block count, whichever is smaller)
+    let blocks_to_check = std::cmp::min(100, current_block);
+    let start_block = current_block.saturating_sub(blocks_to_check);
+    
+    // Normalize the miner address for comparison
+    let normalized_miner = miner_address.to_lowercase();
+    
+    for block_num in start_block..=current_block {
+        let block_payload = json!({
+            "jsonrpc": "2.0",
+            "method": "eth_getBlockByNumber",
+            "params": [format!("0x{:x}", block_num), false],
+            "id": 1
+        });
+        
+        if let Ok(response) = client
+            .post("http://127.0.0.1:8545")
+            .json(&block_payload)
+            .send()
+            .await
+        {
+            if let Ok(json_response) = response.json::<serde_json::Value>().await {
+                if let Some(block) = json_response.get("result") {
+                    if let Some(miner) = block.get("miner").and_then(|m| m.as_str()) {
+                        if miner.to_lowercase() == normalized_miner {
+                            blocks_mined += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    Ok(blocks_mined)
+}
+
 pub async fn get_network_hashrate() -> Result<String, String> {
     let client = reqwest::Client::new();
     
-    // Get the latest block and previous block to calculate network hashrate
+    // First, try to get the actual network hashrate from eth_hashrate
+    // This will return the sum of all miners that have submitted their hashrate
+    let hashrate_payload = json!({
+        "jsonrpc": "2.0",
+        "method": "eth_hashrate",
+        "params": [],
+        "id": 1
+    });
+    
+    if let Ok(response) = client
+        .post("http://127.0.0.1:8545")
+        .json(&hashrate_payload)
+        .send()
+        .await
+    {
+        if let Ok(json_response) = response.json::<serde_json::Value>().await {
+            if json_response.get("error").is_none() {
+                if let Some(hashrate_hex) = json_response["result"].as_str() {
+                    // Parse the hashrate
+                    let hex_str = if hashrate_hex.starts_with("0x") {
+                        &hashrate_hex[2..]
+                    } else {
+                        hashrate_hex
+                    };
+                    
+                    if !hex_str.is_empty() && hex_str != "0" {
+                        if let Ok(hashrate) = u64::from_str_radix(hex_str, 16) {
+                            if hashrate > 0 {
+                                // We have actual reported hashrate, use it
+                                let formatted = if hashrate >= 1_000_000_000 {
+                                    format!("{:.2} GH/s", hashrate as f64 / 1_000_000_000.0)
+                                } else if hashrate >= 1_000_000 {
+                                    format!("{:.2} MH/s", hashrate as f64 / 1_000_000.0)
+                                } else if hashrate >= 1_000 {
+                                    format!("{:.2} KH/s", hashrate as f64 / 1_000.0)
+                                } else {
+                                    format!("{} H/s", hashrate)
+                                };
+                                return Ok(formatted);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // If eth_hashrate returns 0 or fails, estimate from difficulty
+    // For private networks, get the latest two blocks to calculate actual block time
     let latest_block = json!({
         "jsonrpc": "2.0",
         "method": "eth_getBlockByNumber",
-        "params": ["latest", false],
+        "params": ["latest", true],
         "id": 1
     });
     
@@ -660,21 +1049,25 @@ pub async fn get_network_hashrate() -> Result<String, String> {
     let difficulty = u128::from_str_radix(&difficulty_hex[2..], 16)
         .map_err(|e| format!("Failed to parse difficulty: {}", e))?;
     
-    // Estimate network hashrate (difficulty / block time)
-    // Assuming 15 second block time for ETC
-    let hashrate = difficulty / 15;
+    // For Chiral private network, estimate network hashrate from difficulty
+    // The relationship between hashrate and difficulty depends on the algorithm
+    // For Ethash on a private network with CPU mining:
+    // Network Hashrate ≈ Difficulty / Block Time
+    // This gives us the hash rate needed to mine a block at this difficulty
+    let estimated_block_time = 15.0; // seconds (Ethereum default)
+    let hashrate = difficulty as f64 / estimated_block_time;
     
     // Convert to human-readable format
-    let formatted = if hashrate >= 1_000_000_000_000 {
-        format!("{:.2} TH/s", hashrate as f64 / 1_000_000_000_000.0)
-    } else if hashrate >= 1_000_000_000 {
-        format!("{:.2} GH/s", hashrate as f64 / 1_000_000_000.0)
-    } else if hashrate >= 1_000_000 {
-        format!("{:.2} MH/s", hashrate as f64 / 1_000_000.0)
-    } else if hashrate >= 1_000 {
-        format!("{:.2} KH/s", hashrate as f64 / 1_000.0)
+    let formatted = if hashrate >= 1_000_000_000_000.0 {
+        format!("{:.2} TH/s", hashrate / 1_000_000_000_000.0)
+    } else if hashrate >= 1_000_000_000.0 {
+        format!("{:.2} GH/s", hashrate / 1_000_000_000.0)
+    } else if hashrate >= 1_000_000.0 {
+        format!("{:.2} MH/s", hashrate / 1_000_000.0)
+    } else if hashrate >= 1_000.0 {
+        format!("{:.2} KH/s", hashrate / 1_000.0)
     } else {
-        format!("{} H/s", hashrate)
+        format!("{:.0} H/s", hashrate)
     };
     
     Ok(formatted)

@@ -17,8 +17,13 @@ pub struct GethDownloader {
 impl GethDownloader {
     pub fn new() -> Self {
         let base_dir = if cfg!(debug_assertions) {
+            // In development, use the project root directory
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .to_path_buf()
         } else {
+            // In production, the app bundle structure may differ
             std::env::current_exe()
                 .unwrap()
                 .parent()

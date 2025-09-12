@@ -261,6 +261,7 @@ export interface MiningState {
   activeThreads: number;
   minerIntensity: number;
   selectedPool: string;
+  sessionStartTime?: number; // Track mining session start time for persistence
 }
 
 export const miningState = writable<MiningState>({
@@ -271,4 +272,5 @@ export const miningState = writable<MiningState>({
   activeThreads: 1,
   minerIntensity: 50,
   selectedPool: "solo",
+  sessionStartTime: undefined,
 });
