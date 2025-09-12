@@ -7,6 +7,7 @@ mod ethereum;
 mod keystore;
 mod geth_downloader;
 mod dht_simple;
+mod headless;
 use dht_simple as dht;
 
 use ethereum::{
@@ -401,6 +402,25 @@ fn get_cpu_temperature() -> Option<f32> {
     None
 }
 fn main() {
+    // Parse command line arguments
+    use clap::Parser;
+    let args = headless::CliArgs::parse();
+    
+    // If running in headless mode, don't start the GUI
+    if args.headless {
+        println!("Running in headless mode...");
+        
+        // Create a tokio runtime for async operations
+        let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+        
+        // Run the headless mode
+        if let Err(e) = runtime.block_on(headless::run_headless(args)) {
+            eprintln!("Error in headless mode: {}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
+    
     println!("Starting Chiral Network...");
 
     tauri::Builder::default()
