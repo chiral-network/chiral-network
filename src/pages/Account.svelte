@@ -31,7 +31,6 @@
   let isCreatingAccount = false
   let isImportingAccount = false
   let isGethRunning = false
-  let showSendConfirmModal = false;
 
   // Demo transactions - in real app these will be fetched from blockchain
   const transactions = writable<Transaction[]>([
@@ -48,18 +47,24 @@
   let isAddressValid = false;
 
 
-   // Copy feedback message
-   let copyMessage = '';
-   let privateKeyCopyMessage = '';
+  // Copy feedback message
+  let copyMessage = '';
+  let privateKeyCopyMessage = '';
    
-   // Export feedback message
-   let exportMessage = '';
+  // Export feedback message
+  let exportMessage = '';
+  
   // Filtering state
   let filterType: 'all' | 'sent' | 'received' = 'all';
   let filterDateFrom: string = '';
   let filterDateTo: string = '';
   let sortDescending: boolean = true;
   
+  // Confirmation for sending transaction
+  let isConfirming = false
+  let countdown = 0
+  let intervalId: number | null = null
+
   // Fetch balance when account changes
   $: if ($etcAccount && isGethRunning) {
     fetchBalance()
@@ -222,6 +227,42 @@
     }
   }
   
+  function handleSendClick() {
+    if (!isAddressValid || !isAmountValid || sendAmount <= 0) return
+
+    if (isConfirming) {
+      // Cancel if user taps again during countdown
+      cancelCountdown()
+      return
+    }
+
+    startCountdown()
+  }
+
+  function startCountdown() {
+    isConfirming = true
+    countdown = 5
+
+    intervalId = window.setInterval(() => {
+      countdown--
+      if (countdown <= 0) {
+        clearInterval(intervalId!)
+        intervalId = null
+        isConfirming = false
+        sendTransaction() 
+      }
+    }, 1000)
+  }
+
+  function cancelCountdown() {
+    if (intervalId) {
+      clearInterval(intervalId)
+      intervalId = null
+    }
+    isConfirming = false
+    countdown = 0
+  }
+
   function sendTransaction() {
     if (!isAddressValid || !isAmountValid || !isAddressValid || sendAmount <= 0) return
     
@@ -653,10 +694,14 @@
         <Button
           type="button"
           class="w-full"
-          on:click={() => showSendConfirmModal = true}
-          disabled={!isAddressValid || !isAmountValid || !isAddressValid || rawAmountInput === ''}>
+          on:click={handleSendClick}
+          disabled={!isAddressValid || !isAmountValid || rawAmountInput === ''}>
           <ArrowUpRight class="h-4 w-4 mr-2" />
-          Send Transaction
+          {#if isConfirming}
+            Sending in {countdown}s (Tap to Cancel)
+          {:else}
+            Send Transaction
+          {/if}
         </Button>
 
         <Button type="button" class="w-full justify-center bg-gray-100 hover:bg-gray-200 text-gray-800 rounded transition-colors py-2 font-normal" on:click={() => showPending = !showPending} aria-label="View pending transactions">
@@ -688,52 +733,6 @@
         {/if}
         </div>
       </form>
-      {#if showSendConfirmModal}
-        <div
-          class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
-          role="button"
-          tabindex="0"
-          on:click={() => showSendConfirmModal = false}
-          on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') showSendConfirmModal = false; }}
-        >
-          <div
-            class="bg-white p-6 rounded-lg shadow-xl w-full max-w-sm"
-            role="dialog"
-            tabindex="0"
-            aria-modal="true"
-            on:click|stopPropagation
-            on:keydown={(e) => {
-              if (e.key === 'Escape') showSendConfirmModal = false;
-            }}
-          >
-            <h3 class="text-lg font-bold mb-2">Confirm Transaction</h3>
-            <p class="text-sm text-gray-600 mb-4">
-              Please confirm you want to send <span class="font-semibold">{sendAmount} Chiral</span> to:
-            </p>
-            <div class="mb-4">
-              <span class="block text-xs text-muted-foreground mb-1">Recipient Address</span>
-              <span class="font-mono text-sm break-all">{recipientAddress}</span>
-            </div>
-            <div class="flex justify-end gap-3">
-              <Button
-                variant="outline"
-                on:click={() => showSendConfirmModal = false}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="destructive"
-                on:click={() => {
-                  showSendConfirmModal = false;
-                  sendTransaction();
-                }}
-              >
-                Confirm & Send
-              </Button>
-            </div>
-          </div>
-        </div>
-      {/if}
     </Card>
   {/if}
   </div>
