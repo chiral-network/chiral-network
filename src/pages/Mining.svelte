@@ -189,11 +189,14 @@
             // Use actual hash rate from logs
             $miningState.hashRate = formatHashRate(hashRateFromLogs)
             if (blocksFound > $miningState.blocksFound) {
-              // Calculate rewards for new blocks found
-              const newBlocks = blocksFound - $miningState.blocksFound
-              const rewardPerBlock = 5.0 // Standard block reward for private network
-              $miningState.totalRewards += newBlocks * rewardPerBlock
-              $miningState.blocksFound = blocksFound
+              const newBlocks = blocksFound - $miningState.blocksFound;
+              const rewardPerBlock = 5.0;
+              $miningState.totalRewards += newBlocks * rewardPerBlock;
+              $miningState.blocksFound = blocksFound;
+              // Add each new block to recentBlocks
+              for (let i = 0; i < newBlocks; i++) {
+                findBlock();
+              }
             }
           } else if ($miningState.activeThreads > 0) {
             // Fall back to simulation if no log data yet
@@ -293,9 +296,13 @@
         
         // Update blocks mined from blockchain query
         if (results[4] !== undefined) {
-          const blocksMined = results[4] as number
+          const blocksMined = results[4] as number;
           if (blocksMined > $miningState.blocksFound) {
-            $miningState.blocksFound = blocksMined
+            const newBlocks = blocksMined - $miningState.blocksFound;
+            $miningState.blocksFound = blocksMined;
+            for (let i = 0; i < newBlocks; i++) {
+              findBlock();
+            }
           }
         }
       }
