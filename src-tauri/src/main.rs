@@ -276,7 +276,7 @@ fn get_cpu_temperature() -> Option<f32> {
         })
         .map(|c| {
             core_count += 1;
-            c.temperature().unwrap_or(0.0)
+            c.temperature()
         })
         .sum();
     if core_count > 0 {
