@@ -44,7 +44,7 @@
     status: ''
   }
   let downloadError = ''
-  let dataDir = './geth-data'
+  let dataDir = './bin/geth-data'
   let peerCount = 0
   let peerCountInterval: number | undefined
   let chainId = 98765

@@ -182,7 +182,7 @@
         try {
           // Get mining performance from logs
           const [blocksFound, hashRateFromLogs] = await invoke('get_miner_performance', { 
-            dataDir: './geth-data' 
+            dataDir: './bin/geth-data' 
           }) as [number, number]
           
           if (hashRateFromLogs > 0) {
@@ -346,7 +346,7 @@
       await invoke('start_miner', {
         address: $etcAccount.address,
         threads: selectedThreads,
-        dataDir: './geth-data'
+        dataDir: './bin/geth-data'
       })
       
       error = '' // Clear the status message
@@ -453,7 +453,7 @@
   async function fetchLogs() {
     try {
       const result = await invoke('get_miner_logs', {
-        dataDir: './geth-data',
+        dataDir: './bin/geth-data',
         lines: 100
       }) as string[]
       logs = result
