@@ -4,11 +4,12 @@
   import Button from '$lib/components/ui/button.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Play, Square, Download, AlertCircle } from 'lucide-svelte'
+  import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Play, Square, Download, AlertCircle, Wifi } from 'lucide-svelte'
   import { peers, networkStats, networkStatus, userLocation, etcAccount } from '$lib/stores'
   import { onMount, onDestroy } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
+  import { dhtService, DEFAULT_BOOTSTRAP_NODE } from '$lib/dht'
   
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -49,6 +50,13 @@
   let peerCountInterval: number | undefined
   let chainId = 98765
   
+  // DHT variables
+  let dhtStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
+  let dhtPeerId: string | null = null
+  let dhtPort = 4001
+  let dhtBootstrapNode = DEFAULT_BOOTSTRAP_NODE
+  let dhtEvents: string[] = []
+  
   function formatSize(bytes: number): string {
     const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
     let size = bytes
@@ -62,6 +70,57 @@
     return `${size.toFixed(2)} ${units[unitIndex]}`
   }
   
+  async function startDht() {
+    if (!isTauri) {
+      // Mock DHT connection for web
+      dhtStatus = 'connecting'
+      setTimeout(() => {
+        dhtStatus = 'connected'
+        dhtPeerId = '12D3KooWMockPeerIdForWebDemo123456789'
+      }, 1000)
+      return
+    }
+    
+    try {
+      dhtStatus = 'connecting'
+      const peerId = await dhtService.start({
+        port: dhtPort,
+        bootstrapNodes: [dhtBootstrapNode]
+      })
+      dhtPeerId = peerId
+      dhtStatus = 'connected'
+      
+      // Start polling for DHT events
+      setInterval(async () => {
+        try {
+          const events = await dhtService.getEvents()
+          dhtEvents = events
+        } catch (error) {
+          console.error('Failed to get DHT events:', error)
+        }
+      }, 5000)
+    } catch (error) {
+      console.error('Failed to start DHT:', error)
+      dhtStatus = 'disconnected'
+    }
+  }
+  
+  async function stopDht() {
+    if (!isTauri) {
+      dhtStatus = 'disconnected'
+      dhtPeerId = null
+      return
+    }
+    
+    try {
+      await dhtService.stop()
+      dhtStatus = 'disconnected'
+      dhtPeerId = null
+    } catch (error) {
+      console.error('Failed to stop DHT:', error)
+    }
+  }
+
   function runDiscovery() {
     discoveryRunning = true
     
@@ -252,6 +311,9 @@
       if (isGethInstalled && !isGethRunning) {
         await startGethNode()
       }
+      
+      // Auto-start DHT
+      await startDht()
     }
     
     initAsync()
@@ -375,6 +437,83 @@
           <Square class="h-4 w-4 mr-2" />
           Stop Chiral Node
         </Button>
+      {/if}
+    </div>
+  </Card>
+  
+  <!-- DHT Network Status Card -->
+  <Card class="p-6">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-semibold">DHT Network</h2>
+      <div class="flex items-center gap-2">
+        {#if dhtStatus === 'connected'}
+          <div class="h-2 w-2 bg-green-500 rounded-full animate-pulse"></div>
+          <span class="text-sm text-green-600">Connected</span>
+        {:else if dhtStatus === 'connecting'}
+          <div class="h-2 w-2 bg-yellow-500 rounded-full animate-pulse"></div>
+          <span class="text-sm text-yellow-600">Connecting...</span>
+        {:else}
+          <div class="h-2 w-2 bg-red-500 rounded-full"></div>
+          <span class="text-sm text-red-600">Disconnected</span>
+        {/if}
+      </div>
+    </div>
+    
+    <div class="space-y-3">
+      {#if dhtStatus === 'disconnected'}
+        <div class="text-center py-4">
+          <Wifi class="h-12 w-12 text-muted-foreground mx-auto mb-2" />
+          <p class="text-sm text-muted-foreground mb-3">DHT is not connected</p>
+          <Button on:click={startDht}>
+            <Wifi class="h-4 w-4 mr-2" />
+            Connect to DHT Network
+          </Button>
+        </div>
+      {:else if dhtStatus === 'connecting'}
+        <div class="text-center py-4">
+          <Wifi class="h-12 w-12 text-yellow-500 mx-auto mb-2 animate-pulse" />
+          <p class="text-sm text-muted-foreground">Connecting to bootstrap node...</p>
+          <p class="text-xs text-muted-foreground mt-1">{dhtBootstrapNode}</p>
+        </div>
+      {:else}
+        <div class="space-y-3">
+          <div class="grid grid-cols-2 gap-4">
+            <div class="bg-secondary rounded-lg p-3">
+              <p class="text-sm text-muted-foreground">DHT Port</p>
+              <p class="text-2xl font-bold">{dhtPort}</p>
+            </div>
+            <div class="bg-secondary rounded-lg p-3">
+              <p class="text-sm text-muted-foreground">Bootstrap</p>
+              <p class="text-sm font-medium">Connected</p>
+            </div>
+          </div>
+          
+          <div class="pt-2">
+            <p class="text-sm text-muted-foreground mb-1">Peer ID</p>
+            <p class="text-xs font-mono break-all">{dhtPeerId}</p>
+          </div>
+          
+          <div class="pt-2">
+            <p class="text-sm text-muted-foreground mb-1">Bootstrap Node</p>
+            <p class="text-xs font-mono break-all">{dhtBootstrapNode}</p>
+          </div>
+          
+          {#if dhtEvents.length > 0}
+            <div class="pt-2">
+              <p class="text-sm text-muted-foreground mb-2">Recent Events</p>
+              <div class="bg-secondary rounded-lg p-2 max-h-32 overflow-y-auto">
+                {#each dhtEvents.slice(-5) as event}
+                  <p class="text-xs font-mono text-muted-foreground">{event}</p>
+                {/each}
+              </div>
+            </div>
+          {/if}
+          
+          <Button class="w-full" variant="outline" on:click={stopDht}>
+            <Square class="h-4 w-4 mr-2" />
+            Disconnect from DHT
+          </Button>
+        </div>
       {/if}
     </div>
   </Card>
