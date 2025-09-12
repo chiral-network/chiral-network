@@ -17,8 +17,10 @@
     "@tauri-apps/plugin-shell": "^2.3.1",
     "bits-ui": "^1.0.0",
     "clsx": "^2.1.1",
+    "html5-qrcode": "^2.3.8",
     "lucide-svelte": "^0.468.0",
     "mode-watcher": "^0.4.1",
+    "qrcode": "^1.5.4",
     "svelte-sonner": "^0.3.19",
     "tailwind-merge": "^2.5.5",
     "tailwind-variants": "^0.3.0"
@@ -28,6 +30,7 @@
     "@tauri-apps/cli": "^2.1.0",
     "@tsconfig/svelte": "^5.0.4",
     "@types/node": "^22.10.2",
+    "@types/qrcode": "^1.5.5",
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.49",
     "prettier": "^3.6.2",

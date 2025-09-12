@@ -7,6 +7,9 @@
   import { wallet, etcAccount, blacklist } from '$lib/stores'
   import { writable, derived } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
+  import QRCode from 'qrcode'
+  import { Html5QrcodeScanner as Html5QrcodeScannerClass } from 'html5-qrcode'
+  import { tick } from 'svelte'
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -31,7 +34,12 @@
   let isCreatingAccount = false
   let isImportingAccount = false
   let isGethRunning = false
+  let showQrCodeModal = false;
+  let qrCodeDataUrl = ''
+  let showScannerModal = false;
 
+  let Html5QrcodeScanner: InstanceType<typeof Html5QrcodeScannerClass> | null = null;
+  
   // Demo transactions - in real app these will be fetched from blockchain
   const transactions = writable<Transaction[]>([
     { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', to: undefined, date: new Date('2024-03-15'), description: 'File purchase', status: 'completed' },
@@ -313,6 +321,7 @@
   $: void $pendingCount;
 
   import { onMount } from 'svelte'
+    import Progress from '$lib/components/ui/progress.svelte';
   
   let balanceInterval: number | undefined
   
@@ -415,6 +424,50 @@
     }
   }
 
+  async function scanQrCode() {
+    // 1. Show the modal
+    showScannerModal = true;
+
+    // 2. Wait for Svelte to render the modal in the DOM
+    await tick();
+
+    // 3. This function runs when a QR code is successfully scanned
+    function onScanSuccess(decodedText: string, decodedResult: any) {
+      // Handle the scanned code
+      console.log(`Code matched = ${decodedText}`, decodedResult);
+      
+      // Paste the address into the input field
+      recipientAddress = decodedText;
+      
+      // Stop the scanner and close the modal
+      if (Html5QrcodeScanner) {
+        Html5QrcodeScanner.clear();
+        Html5QrcodeScanner = null;
+      }
+      showScannerModal = false;
+    }
+
+    // 4. This function can handle errors (optional)
+    function onScanFailure() {
+      // handle scan failure, usually better to ignore and let the user keep trying
+      // console.warn(`Code scan error`);
+    }
+
+    // 5. Create and render the scanner
+    Html5QrcodeScanner = new Html5QrcodeScannerClass(
+      "qr-reader", // The ID of the div we created in the HTML
+      { fps: 10, qrbox: { width: 250, height: 250 } },
+      /* verbose= */ false);
+    Html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+  }
+
+  // --- We also need a way to stop the scanner if the user just clicks "Cancel" ---
+  // We can use a reactive statement for this.
+  $: if (!showScannerModal && Html5QrcodeScanner) {
+    Html5QrcodeScanner.clear();
+    Html5QrcodeScanner = null;
+  }
+
   async function importChiralAccount() {
     if (!importPrivateKey) return
     
@@ -488,6 +541,28 @@
   // Helper function to set max amount
   function setMaxAmount() {
     rawAmountInput = $wallet.balance.toFixed(2);
+  }
+
+  async function generateAndShowQrCode(){
+    const address = $etcAccount?.address;
+    if(!address) return;
+    try{
+      qrCodeDataUrl = await QRCode.toDataURL(address, {
+        errorCorrectionLevel: 'H',
+        type: 'image/png',
+        width: 200,
+        margin: 2,
+        color: {
+          dark: '#000000',
+          light: '#FFFFFF'
+        }
+      });
+      showQrCodeModal = true;
+    }
+    catch(err){
+      console.error('Failed to generate QR code', err);
+      alert('Could not generate the QR code.');
+    }
   }
 </script>
 
@@ -572,6 +647,39 @@
                     <span class="absolute top-full left-1/2 transform -translate-x-1/2 text-xs text-green-600 mt-1 whitespace-nowrap">{copyMessage}</span>
                   {/if}
                 </div>
+                <Button size = "sm" variant = "outline" on:click={generateAndShowQrCode} title = "Show QR Code">
+                  <svg xmlns = "http://www.w3.org/2000/svg" width = "12" height = "12" viewBox = "0 0 24 24" fill = "none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5h3v3H5zM5 16h3v3H5zM16 5h3v3h-3zM16 16h3v3h-3zM10.5 5h3M10.5 19h3M5 10.5v3M19 10.5v3M10.5 10.5h3v3h-3z"/></svg>
+                </Button>
+                {#if showQrCodeModal}
+                  <div
+                    class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+                    role="button"
+                    tabindex="0"
+                    on:click={() => showQrCodeModal = false}
+                    on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') showQrCodeModal = false; }}
+                  >
+                    <div
+                      class="bg-white p-8 rounded-lg shadow-xl w-full max-w-xs text-center"
+                      on:click|stopPropagation
+                      role="dialog"
+                      tabindex="0"
+                      aria-modal="true"
+                      on:keydown={(e) => { if (e.key === 'Escape') showQrCodeModal = false; }}
+                    >
+                      <h3 class="text-lg font-semibold mb-4">Your Chiral Address</h3>
+                      
+                      <img src={qrCodeDataUrl} alt="Chiral Address QR Code" class="mx-auto rounded-md border" />
+                      
+                      <p class="text-xs text-gray-600 mt-4 break-all font-mono">
+                        {$etcAccount?.address}
+                      </p>
+
+                      <Button class="mt-6 w-full" variant="outline" on:click={() => showQrCodeModal = false}>
+                        Close
+                      </Button>
+                    </div>
+                  </div>
+                {/if}
               </div>
             </div>
             
@@ -631,15 +739,40 @@
       <div class="space-y-4">
         <div>
           <Label for="recipient">Recipient Address</Label>
-          <Input
-            id="recipient"
-            bind:value={recipientAddress}
-            placeholder="0x..."
-            class="mt-2"
-            data-form-type="other"
-            data-lpignore="true"
-            aria-autocomplete="none"
-          />
+          <div class="relative mt-2">
+            <Input
+              id="recipient"
+              bind:value={recipientAddress}
+              placeholder="0x..."
+              class="pr-10" 
+              data-form-type="other"
+              data-lpignore="true"
+              aria-autocomplete="none"
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              class="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8 p-0"
+              on:click={scanQrCode}
+              aria-label="Scan QR Code"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect><line x1="14" x2="14" y1="14" y2="21"></line><line x1="21" x2="21" y1="14" y2="21"></line><line x1="21" x2="14" y1="21" y2="21"></line></svg>
+            </Button>
+          </div>
+          {#if showScannerModal}
+            <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+              <div class="bg-white p-6 rounded-lg shadow-xl w-full max-w-md">
+                <h3 class="text-lg font-semibold mb-4 text-center">Scan QR Code</h3>
+                
+                <div id="qr-reader" class="w-full"></div>
+                
+                <Button class="mt-4 w-full" variant="outline" on:click={() => showScannerModal = false}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          {/if}
           <div class="flex items-center justify-between mt-1">
             <span class="text-xs text-muted-foreground">
               {recipientAddress.length}/42 characters 
