@@ -99,7 +99,6 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 
 ### 9. User Experience Enhancements
 
-- **Dark/Light Theme**: Toggle between themes for comfort
 - **Drag & Drop Upload**: Intuitive file upload interface
 - **Real-Time Notifications**: Status updates via toast messages
 - **Responsive Design**: Adaptive layout for different screen sizes
@@ -111,7 +110,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 
 - **Svelte 5**: Reactive UI framework for efficient updates
 - **TypeScript**: Type-safe development with better IDE support
-- **Tailwind CSS**: Utility-first styling with dark mode support
+- **Tailwind CSS**: Utility-first styling
 - **Lucide Icons**: Consistent, customizable icon system
 - **Bits UI**: Accessible component primitives
 
@@ -119,7 +118,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 
 - **Tauri 2**: Rust-based desktop runtime for native performance
 - **Native File System**: Direct OS integration for file operations
-- **System Tray**: Background operation support (planned)
+- **System Tray**: Background operation support
 - **Auto-Updates**: Seamless application updates (planned)
 
 ### Data Management
@@ -134,27 +133,23 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 ### Why These Design Choices?
 
 1. **Non-Commercial BitTorrent Model**
-
    - No marketplace or monetary transactions
    - Pure P2P file sharing for legitimate use
    - Continuous seeding model like BitTorrent
    - Suitable for personal, educational, and organizational use
 
 2. **Privacy-Focused Architecture**
-
    - No transaction tracking or marketplace analytics
    - Anonymous routing options through proxy nodes
    - Local-first data storage
 
 3. **Community Resource Sharing**
-
    - Contribute storage space to help others
    - Share bandwidth for network resilience
    - Mine blocks to secure the network
    - Build reputation through reliable service
 
 4. **Proof-of-Work Security**
-
    - CPU-friendly mining algorithm
    - Decentralized consensus mechanism
    - Fair reward distribution
@@ -262,7 +257,6 @@ npm run tauri build # Desktop production build
 - ✅ Analytics dashboard
 - ✅ CPU mining with pool support
 - ✅ Comprehensive settings management
-- ✅ Dark/Light theme switching
 
 ### Phase 2: P2P Integration (Next)
 
@@ -364,7 +358,6 @@ MIT License - See LICENSE file for details
 
 Special thanks to all design teams whose concepts shaped this implementation:
 
-- Teams: Beluga, Dolphin, Otter, Seal, Seawolf, Squid, Amoeba, Tuna, Walrus, Whale
 - Focus on legitimate P2P use cases
 - BitTorrent-inspired continuous seeding model
 - Privacy-first architecture
@@ -375,7 +368,7 @@ For issues, questions, or suggestions:
 
 - GitHub Issues: [Report bugs or request features]
 - Documentation: [Comprehensive guides]
-- Community: [Join our Discord]
+- Community: Using Zulip
 
 ## Disclaimer
 

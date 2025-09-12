@@ -7,23 +7,26 @@ The Chiral Network implements multiple layers of security to protect data integr
 ## Cryptographic Foundations
 
 ### Hash Functions
-| Algorithm | Purpose | Security Level |
-|-----------|---------|----------------|
-| SHA-256 | File hashing, chunk verification | 256-bit |
-| SHA-3 | Alternative hashing (future) | 256-bit |
-| BLAKE2b | Fast hashing for non-critical ops | 256-bit |
-| Keccak-256 | Ethereum compatibility | 256-bit |
+
+| Algorithm  | Purpose                           | Security Level |
+| ---------- | --------------------------------- | -------------- |
+| SHA-256    | File hashing, chunk verification  | 256-bit        |
+| SHA-3      | Alternative hashing (future)      | 256-bit        |
+| BLAKE2b    | Fast hashing for non-critical ops | 256-bit        |
+| Keccak-256 | Ethereum compatibility            | 256-bit        |
 
 ### Encryption Algorithms
-| Algorithm | Purpose | Key Size |
-|-----------|---------|----------|
-| AES-256-GCM | File encryption | 256-bit |
-| ChaCha20-Poly1305 | Stream cipher alternative | 256-bit |
-| RSA-4096 | Key exchange (legacy) | 4096-bit |
-| Ed25519 | Digital signatures | 256-bit |
-| X25519 | Key agreement | 256-bit |
+
+| Algorithm         | Purpose                   | Key Size |
+| ----------------- | ------------------------- | -------- |
+| AES-256-GCM       | File encryption           | 256-bit  |
+| ChaCha20-Poly1305 | Stream cipher alternative | 256-bit  |
+| RSA-4096          | Key exchange (legacy)     | 4096-bit |
+| Ed25519           | Digital signatures        | 256-bit  |
+| X25519            | Key agreement             | 256-bit  |
 
 ### Key Derivation
+
 ```
 Master Seed (BIP39 Mnemonic)
     │
@@ -39,6 +42,7 @@ Master Seed (BIP39 Mnemonic)
 ## File Security
 
 ### Encryption Process
+
 ```
 1. File Input
     ↓
@@ -57,6 +61,7 @@ Master Seed (BIP39 Mnemonic)
 ```
 
 ### File Integrity Verification
+
 ```
 Merkle Tree Structure:
                 Root Hash
@@ -67,6 +72,7 @@ Merkle Tree Structure:
 ```
 
 **Verification Steps:**
+
 1. Download chunk and Merkle proof
 2. Verify chunk hash
 3. Verify Merkle path to root
@@ -76,15 +82,17 @@ Merkle Tree Structure:
 ### Access Control
 
 #### Permission Levels
-| Level | Description | Capabilities |
-|-------|-------------|--------------|
-| Owner | File creator | Full control |
-| Admin | Delegated admin | Modify permissions |
-| Write | Can modify | Update file content |
-| Read | View only | Download and decrypt |
-| None | No access | Cannot access file |
+
+| Level | Description     | Capabilities         |
+| ----- | --------------- | -------------------- |
+| Owner | File creator    | Full control         |
+| Admin | Delegated admin | Modify permissions   |
+| Write | Can modify      | Update file content  |
+| Read  | View only       | Download and decrypt |
+| None  | No access       | Cannot access file   |
 
 #### Access Control Implementation
+
 ```javascript
 interface AccessControl {
   owner: Address;
@@ -104,6 +112,7 @@ interface AccessControl {
 ## Network Security
 
 ### Peer Authentication
+
 ```
 Handshake Protocol:
 1. Client → Server: Hello + Public Key
@@ -116,6 +125,7 @@ Handshake Protocol:
 ### Transport Security
 
 #### TLS Configuration
+
 ```
 Minimum Version: TLS 1.3
 Cipher Suites:
@@ -130,6 +140,7 @@ Key Exchange:
 ```
 
 #### libp2p Security
+
 ```
 Security Protocols:
 - Noise Protocol Framework
@@ -150,15 +161,17 @@ Transport:
 ### DDoS Protection
 
 #### Rate Limiting
-| Endpoint | Limit | Window |
-|----------|-------|--------|
-| File Upload | 10/min | Sliding |
-| File Download | 100/min | Sliding |
-| DHT Queries | 50/min | Fixed |
-| Peer Connections | 100/hour | Fixed |
-| API Calls | 1000/hour | Sliding |
+
+| Endpoint         | Limit     | Window  |
+| ---------------- | --------- | ------- |
+| File Upload      | 10/min    | Sliding |
+| File Download    | 100/min   | Sliding |
+| DHT Queries      | 50/min    | Fixed   |
+| Peer Connections | 100/hour  | Fixed   |
+| API Calls        | 1000/hour | Sliding |
 
 #### Connection Management
+
 ```
 Max Connections: 1000
 Max Connections per IP: 10
@@ -172,12 +185,14 @@ Blacklist Duration: 1 hour
 ### Transaction Security
 
 #### Double-Spend Prevention
+
 1. Account-based model tracks balances
 2. Transaction ordering via blockchain
 3. Confirmation requirements (12 blocks recommended)
 4. Nonce-based replay protection
 
 #### Transaction Validation
+
 ```
 Validation Steps:
 1. Verify ECDSA signature (secp256k1)
@@ -191,12 +206,14 @@ Validation Steps:
 ### Mining Security
 
 #### 51% Attack Mitigation
+
 - Ethash ASIC resistance
 - Dynamic difficulty adjustment per block
 - Network monitoring for hash rate changes
 - Community checkpointing for critical blocks
 
 #### Selfish Mining Prevention
+
 - Random block propagation delays
 - Peer reputation scoring
 - Multiple mining pools encouraged
@@ -207,6 +224,7 @@ Validation Steps:
 ### Anonymous Routing
 
 #### Onion Routing
+
 ```
 Client → Proxy 1 → Proxy 2 → Proxy 3 → Destination
   ↓         ↓         ↓         ↓
@@ -215,6 +233,7 @@ Encrypted Encrypted Encrypted Plain
 ```
 
 #### Mix Networks
+
 - Random delays (0-5 seconds)
 - Packet padding to fixed size
 - Traffic mixing at nodes
@@ -223,12 +242,14 @@ Encrypted Encrypted Encrypted Plain
 ### Metadata Protection
 
 #### What's Hidden
+
 - Real IP addresses (via proxies)
 - Download patterns (via caching)
 - File associations (via encryption)
 - Transaction linkability (via mixing)
 
 #### What's Visible
+
 - Encrypted file sizes (approximate)
 - Connection times
 - Total bandwidth usage
@@ -237,6 +258,7 @@ Encrypted Encrypted Encrypted Plain
 ### Private Transactions
 
 #### Confidential Transfers
+
 ```
 Using Pedersen Commitments:
 - Hide transaction amounts
@@ -245,6 +267,7 @@ Using Pedersen Commitments:
 ```
 
 #### Ring Signatures (Future)
+
 ```
 Sign transaction with group:
 - Actual signer unknown
@@ -257,46 +280,54 @@ Sign transaction with group:
 ### Threat Categories
 
 #### External Threats
-| Threat | Impact | Mitigation |
-|--------|--------|------------|
-| DDoS Attack | Service disruption | Rate limiting, CDN |
-| Man-in-the-Middle | Data theft | TLS, certificate pinning |
-| Sybil Attack | Network takeover | Proof-of-work, reputation |
-| Eclipse Attack | Isolation | Peer diversity |
-| Routing Attack | Traffic hijacking | Multiple paths |
+
+| Threat            | Impact             | Mitigation                |
+| ----------------- | ------------------ | ------------------------- |
+| DDoS Attack       | Service disruption | Rate limiting, CDN        |
+| Man-in-the-Middle | Data theft         | TLS, certificate pinning  |
+| Sybil Attack      | Network takeover   | Proof-of-work, reputation |
+| Eclipse Attack    | Isolation          | Peer diversity            |
+| Routing Attack    | Traffic hijacking  | Multiple paths            |
 
 #### Internal Threats
-| Threat | Impact | Mitigation |
-|--------|--------|------------|
-| Malicious Node | Data corruption | Redundancy, verification |
-| Free Riding | Resource drain | Incentive system |
-| Collusion | Market manipulation | Economic penalties |
-| Data Mining | Privacy breach | Encryption, anonymity |
+
+| Threat         | Impact              | Mitigation               |
+| -------------- | ------------------- | ------------------------ |
+| Malicious Node | Data corruption     | Redundancy, verification |
+| Free Riding    | Resource drain      | Incentive system         |
+| Collusion      | Market manipulation | Economic penalties       |
+| Data Mining    | Privacy breach      | Encryption, anonymity    |
 
 ### Attack Scenarios
 
 #### Scenario 1: Storage Node Compromise
+
 **Attack:** Attacker gains control of storage node
 **Impact:** Access to encrypted chunks
 **Mitigation:**
+
 - Client-side encryption
 - Chunk distribution
 - Regular integrity checks
 - Node reputation system
 
 #### Scenario 2: Network Partition
+
 **Attack:** Split network into isolated segments
 **Impact:** Double-spending, data unavailability
 **Mitigation:**
+
 - Multiple bootstrap nodes
 - Cross-region connections
 - Consensus checkpoints
 - Automatic reconnection
 
 #### Scenario 3: Timing Analysis
+
 **Attack:** Correlate traffic patterns
 **Impact:** De-anonymization
 **Mitigation:**
+
 - Random delays
 - Cover traffic
 - Batch processing
@@ -307,6 +338,7 @@ Sign transaction with group:
 ### For Users
 
 #### Key Management
+
 1. **Use Hardware Wallets:** Store keys offline
 2. **Backup Mnemonics:** Secure physical copies
 3. **Password Strength:** Minimum 12 characters
@@ -314,6 +346,7 @@ Sign transaction with group:
 5. **Regular Rotation:** Change keys periodically
 
 #### Safe File Sharing
+
 1. **Verify Recipients:** Check Ethereum addresses (0x format)
 2. **Encrypt Sensitive Files:** Always use encryption
 3. **Set Expiration:** Time-limit access
@@ -321,6 +354,7 @@ Sign transaction with group:
 5. **Revoke When Needed:** Remove permissions
 
 #### Network Safety
+
 1. **Use VPN/Tor:** Additional privacy layer
 2. **Verify Certificates:** Check TLS certs
 3. **Update Software:** Latest security patches
@@ -330,6 +364,7 @@ Sign transaction with group:
 ### For Node Operators
 
 #### System Security
+
 ```bash
 # Firewall Configuration
 iptables -A INPUT -p tcp --dport 30304 -j ACCEPT  # P2P
@@ -350,6 +385,7 @@ docker run --security-opt no-new-privileges \
 ```
 
 #### Monitoring
+
 ```yaml
 # Prometheus Metrics
 metrics_to_monitor:
@@ -363,6 +399,7 @@ metrics_to_monitor:
 ```
 
 #### Backup Strategy
+
 1. **Regular Backups:** Daily automated backups
 2. **Offsite Storage:** Geographic redundancy
 3. **Encryption:** Backup encryption
@@ -372,6 +409,7 @@ metrics_to_monitor:
 ### For Developers
 
 #### Secure Coding
+
 ```typescript
 // Input Validation
 function validateFileHash(hash: string): boolean {
@@ -393,20 +431,25 @@ function secureCompare(a: string, b: string): boolean {
 const rateLimiter = new RateLimiter({
   windowMs: 60 * 1000,
   max: 100,
-  message: 'Too many requests'
+  message: "Too many requests",
 });
 ```
 
 #### Security Headers
+
 ```typescript
 app.use((req, res, next) => {
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('X-XSS-Protection', '1; mode=block');
-  res.setHeader('Content-Security-Policy', 
-    "default-src 'self'; script-src 'self' 'unsafe-inline'");
-  res.setHeader('Strict-Transport-Security', 
-    'max-age=31536000; includeSubDomains');
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("X-XSS-Protection", "1; mode=block");
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'self'; script-src 'self' 'unsafe-inline'",
+  );
+  res.setHeader(
+    "Strict-Transport-Security",
+    "max-age=31536000; includeSubDomains",
+  );
   next();
 });
 ```
@@ -416,36 +459,42 @@ app.use((req, res, next) => {
 ### Response Plan
 
 #### Phase 1: Detection
+
 - Automated alerts
 - User reports
 - Monitoring anomalies
 - Security scans
 
 #### Phase 2: Containment
+
 - Isolate affected systems
 - Block malicious actors
 - Preserve evidence
 - Notify stakeholders
 
 #### Phase 3: Eradication
+
 - Remove malicious code
 - Patch vulnerabilities
 - Update signatures
 - Reset credentials
 
 #### Phase 4: Recovery
+
 - Restore services
 - Verify integrity
 - Monitor closely
 - Update documentation
 
 #### Phase 5: Lessons Learned
+
 - Post-mortem analysis
 - Update procedures
 - Improve monitoring
 - Share knowledge
 
 ### Contact Information
+
 ```
 Security Team Email: security@chiralnetwork.org
 Bug Bounty Program: https://chiralnetwork.org/security/bounty
@@ -458,6 +507,7 @@ PGP Key: https://chiralnetwork.org/security/pgp
 ### Data Protection
 
 #### GDPR Compliance
+
 - Right to erasure (file deletion)
 - Data portability (export)
 - Privacy by design
@@ -465,16 +515,18 @@ PGP Key: https://chiralnetwork.org/security/pgp
 - Data minimization
 
 #### Regional Requirements
-| Region | Requirement | Implementation |
-|--------|------------|----------------|
-| EU | GDPR | Full compliance |
-| California | CCPA | Privacy controls |
-| China | PIPL | Data localization |
-| Russia | 152-FZ | Local storage |
+
+| Region     | Requirement | Implementation    |
+| ---------- | ----------- | ----------------- |
+| EU         | GDPR        | Full compliance   |
+| California | CCPA        | Privacy controls  |
+| China      | PIPL        | Data localization |
+| Russia     | 152-FZ      | Local storage     |
 
 ### Audit Logging
 
 #### What to Log
+
 ```json
 {
   "timestamp": "2024-01-01T00:00:00Z",
@@ -492,6 +544,7 @@ PGP Key: https://chiralnetwork.org/security/pgp
 ```
 
 #### Log Retention
+
 - Access logs: 90 days
 - Transaction logs: 1 year
 - Security events: 2 years
@@ -500,6 +553,7 @@ PGP Key: https://chiralnetwork.org/security/pgp
 ## Security Roadmap
 
 ### Current Implementation
+
 - ✅ AES-256 file encryption
 - ✅ TLS 1.3 transport security
 - ✅ Basic access control
@@ -507,18 +561,21 @@ PGP Key: https://chiralnetwork.org/security/pgp
 - ✅ Input validation
 
 ### Phase 1: Enhanced Privacy (Q1 2024)
+
 - [ ] Onion routing
 - [ ] Mix networks
 - [ ] Private transactions
 - [ ] Metadata obfuscation
 
 ### Phase 2: Advanced Security (Q2 2024)
+
 - [ ] Zero-knowledge proofs
 - [ ] Homomorphic encryption
 - [ ] Secure multi-party computation
 - [ ] Threshold signatures
 
 ### Phase 3: Quantum Resistance (Q3 2024)
+
 - [ ] Post-quantum algorithms
 - [ ] Lattice-based crypto
 - [ ] Hash-based signatures
@@ -527,18 +584,21 @@ PGP Key: https://chiralnetwork.org/security/pgp
 ## Security Resources
 
 ### Documentation
+
 - Security Whitepaper: [Link]
 - Threat Model Analysis: [Link]
 - Penetration Test Reports: [Link]
 - Audit Reports: [Link]
 
 ### Tools
+
 - Security Scanner: `chiral-scan`
 - Vulnerability Database: CVE tracking
 - Security Updates: RSS feed
 - Incident Reports: Public disclosure
 
 ### Community
+
 - Security Working Group
 - Bug Bounty Program
 - Responsible Disclosure
