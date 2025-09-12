@@ -162,7 +162,9 @@
     }
     
     downloadQueue.update(q => [...q, newFile])
-    processQueue()
+    if (autoStartQueue) {
+      processQueue()
+    }
   }
 
   // Function to clear search
@@ -487,7 +489,17 @@ function clearSearch() {
             
             {#if file.status === 'downloading' || file.status === 'paused' || file.status === 'queued'}
               <div class="flex flex-wrap gap-2 mt-3">
-                {#if file.status !== 'queued'}
+                {#if file.status === 'queued'}
+                  <Button
+                    size="sm"
+                    variant="default"
+                    on:click={() => startQueuedDownload(file.id)}
+                    class="flex-1 min-w-[100px] sm:flex-none"
+                  >
+                    <Play class="h-3 w-3 mr-1" />
+                    Start Download
+                  </Button>
+                {:else}
                   <Button
                     size="sm"
                     variant="outline"
