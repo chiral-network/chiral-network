@@ -394,13 +394,23 @@ function clearSearch() {
             placeholder="3"
           />
         </div>
-        <Button
-          size="sm"
-          variant="outline"
-          on:click={() => autoStartQueue = !autoStartQueue}
-        >
-          {autoStartQueue ? 'Auto-Start ON' : 'Auto-Start OFF'}
-        </Button>
+        <div class="flex items-center gap-2">
+          <span class="text-sm font-medium">Auto-Start</span>
+          <button
+              type="button"
+              on:click={() => autoStartQueue = !autoStartQueue}
+              class="relative inline-flex h-6 w-12 items-center rounded-full transition-colors focus:outline-none"
+              class:bg-green-500={autoStartQueue}
+              class:bg-red-500={!autoStartQueue}
+            >
+              <span
+                class="inline-block h-5 w-5 transform rounded-full bg-white transition-transform"
+                class:translate-x-6={autoStartQueue}
+                class:translate-x-1={!autoStartQueue}
+              />
+          </button>
+        </div>
+
       </div>
     </div>
     
