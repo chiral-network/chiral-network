@@ -470,10 +470,13 @@ function clearSearch() {
                 <Badge class={
                   file.status === 'downloading' ? 'bg-green-500 text-white border-green-500' :
                   file.status === 'completed' ? 'bg-blue-500 text-white border-blue-500' :
-                  file.status === 'paused' ? 'bg-yellow-500 text-black border-yellow-500' :
-                  file.status === 'queued' ? 'bg-gray-500 text-white border-gray-500' : 'bg-red-500 text-white border-red-500'
-                }>
-                  {file.status === 'queued' ? `Queued #${filteredDownloads.filter(f => f.status === 'queued').indexOf(file) + 1}` : file.status}
+                  file.status === 'paused' ? 'bg-yellow-500 text-white border-yellow-500' :
+                  file.status === 'queued' ? 'bg-gray-500 text-white border-gray-500' :
+                  'bg-red-500 text-white border-red-500'
+                            }>
+                      {file.status === 'queued'
+                          ? `Queued #${filteredDownloads.filter(f => f.status === 'queued').indexOf(file) + 1}`
+                              : file.status}
                 </Badge>
               </div>
             </div>
