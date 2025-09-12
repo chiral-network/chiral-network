@@ -182,13 +182,17 @@
         try {
           // Get mining performance from logs
           const [blocksFound, hashRateFromLogs] = await invoke('get_miner_performance', { 
-            dataDir: getDataDir() 
+            dataDir: './geth-data' 
           }) as [number, number]
           
           if (hashRateFromLogs > 0) {
             // Use actual hash rate from logs
             $miningState.hashRate = formatHashRate(hashRateFromLogs)
             if (blocksFound > $miningState.blocksFound) {
+              // Calculate rewards for new blocks found
+              const newBlocks = blocksFound - $miningState.blocksFound
+              const rewardPerBlock = 5.0 // Standard block reward for private network
+              $miningState.totalRewards += newBlocks * rewardPerBlock
               $miningState.blocksFound = blocksFound
             }
           } else if ($miningState.activeThreads > 0) {
@@ -255,16 +259,45 @@
   async function updateNetworkStats() {
     try {
       if (isGethRunning) {
-        const [stats, block, peers] = await Promise.all([
+        const promises: Promise<any>[] = [
           invoke('get_network_stats') as Promise<[string, string]>,
           invoke('get_current_block') as Promise<number>,
           invoke('get_network_peer_count') as Promise<number>
-        ])
+        ]
         
-        networkDifficulty = stats[0]
-        networkHashRate = stats[1]
-        currentBlock = block
-        peerCount = peers
+        // Also fetch account balance and blocks mined if we have an account and are mining
+        if ($etcAccount && $miningState.isMining) {
+          promises.push(invoke('get_account_balance', { 
+            address: $etcAccount.address 
+          }) as Promise<string>)
+          promises.push(invoke('get_blocks_mined', { 
+            address: $etcAccount.address 
+          }) as Promise<number>)
+        }
+        
+        const results = await Promise.all(promises)
+        
+        networkDifficulty = results[0][0]
+        networkHashRate = results[0][1]
+        currentBlock = results[1]
+        peerCount = results[2]
+        
+        // Update total rewards from actual balance
+        if (results[3] !== undefined) {
+          const balance = parseFloat(results[3])
+          if (!isNaN(balance) && balance > 0) {
+            // Use actual balance as total rewards
+            $miningState.totalRewards = balance
+          }
+        }
+        
+        // Update blocks mined from blockchain query
+        if (results[4] !== undefined) {
+          const blocksMined = results[4] as number
+          if (blocksMined > $miningState.blocksFound) {
+            $miningState.blocksFound = blocksMined
+          }
+        }
       }
     } catch (e) {
       console.error('Failed to update network stats:', e)
