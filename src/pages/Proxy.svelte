@@ -179,9 +179,10 @@
                       class={
                         node.status === 'online' ? 'bg-green-500 text-white' :
                         node.status === 'offline' ? 'bg-red-500 text-white' :
-                        node.status === 'connecting' ? 'bg-yellow-500 text-black' :
+                        node.status === 'connecting' ? 'bg-yellow-500 text-white' :
                         'bg-gray-500 text-white'
                       }
+                      style="pointer-events: none;"
               >
               {node.status}
             </Badge>
