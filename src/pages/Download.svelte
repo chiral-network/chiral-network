@@ -162,7 +162,9 @@
     }
     
     downloadQueue.update(q => [...q, newFile])
-    processQueue()
+    if (autoStartQueue) {
+      processQueue()
+    }
   }
 
   // Function to clear search
@@ -468,10 +470,13 @@ function clearSearch() {
                 <Badge class={
                   file.status === 'downloading' ? 'bg-green-500 text-white border-green-500' :
                   file.status === 'completed' ? 'bg-blue-500 text-white border-blue-500' :
-                  file.status === 'paused' ? 'bg-yellow-500 text-black border-yellow-500' :
-                  file.status === 'queued' ? 'bg-gray-500 text-white border-gray-500' : 'bg-red-500 text-white border-red-500'
-                }>
-                  {file.status === 'queued' ? `Queued #${filteredDownloads.filter(f => f.status === 'queued').indexOf(file) + 1}` : file.status}
+                  file.status === 'paused' ? 'bg-yellow-500 text-white border-yellow-500' :
+                  file.status === 'queued' ? 'bg-gray-500 text-white border-gray-500' :
+                  'bg-red-500 text-white border-red-500'
+                            }>
+                      {file.status === 'queued'
+                          ? `Queued #${filteredDownloads.filter(f => f.status === 'queued').indexOf(file) + 1}`
+                              : file.status}
                 </Badge>
               </div>
             </div>
@@ -487,7 +492,17 @@ function clearSearch() {
             
             {#if file.status === 'downloading' || file.status === 'paused' || file.status === 'queued'}
               <div class="flex flex-wrap gap-2 mt-3">
-                {#if file.status !== 'queued'}
+                {#if file.status === 'queued'}
+                  <Button
+                    size="sm"
+                    variant="default"
+                    on:click={() => startQueuedDownload(file.id)}
+                    class="flex-1 min-w-[100px] sm:flex-none"
+                  >
+                    <Play class="h-3 w-3 mr-1" />
+                    Start Download
+                  </Button>
+                {:else}
                   <Button
                     size="sm"
                     variant="outline"

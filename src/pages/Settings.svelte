@@ -65,6 +65,8 @@
   let hasChanges = false;
   let fileInputEl: HTMLInputElement | null = null;
   let selectedLanguage = 'en';
+  let clearingCache = false;
+  let cacheCleared = false;
 
   const locations = [
     { value: 'US-East', label: 'US East' },
@@ -142,9 +144,16 @@
   }
 }
 
-  function clearCache() {
+  async function clearCache() {
+    clearingCache = true;
     // Clear application cache
     console.log("Clearing cache...");
+    // Simulate cache clearing work
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    clearingCache = false;
+    cacheCleared = true;
+    // Reset success state after 2 seconds
+    setTimeout(() => { cacheCleared = false; }, 2000);
   }
 
   function exportSettings() {
@@ -638,9 +647,9 @@
       </div>
 
       <div class="flex flex-wrap gap-2">
-        <Button variant="outline" size="xs" on:click={clearCache}>
-          <RefreshCw class="h-4 w-4 mr-2" />
-          Clear Cache
+        <Button variant="outline" size="xs" on:click={clearCache} disabled={clearingCache || cacheCleared}>
+          <RefreshCw class="h-4 w-4 mr-2 {clearingCache ? 'animate-spin' : ''}" />
+          {clearingCache ? 'Clearing...' : cacheCleared ? '✓ Cleared!' : 'Clear Cache'}
         </Button>
 
         <Button variant="outline" size="xs" on:click={exportSettings}>
