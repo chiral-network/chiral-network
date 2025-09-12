@@ -6,6 +6,9 @@
 mod ethereum;
 mod keystore;
 mod geth_downloader;
+mod dht_simple;
+mod headless;
+use dht_simple as dht;
 
 use ethereum::{
     create_new_account, get_account_from_private_key, get_balance, get_peer_count,
@@ -15,6 +18,7 @@ use ethereum::{
 };
 use keystore::Keystore;
 use geth_downloader::GethDownloader;
+use dht::{DhtService, FileMetadata};
 use sysinfo::{Components, System, MINIMUM_CPU_UPDATE_INTERVAL};
 use systemstat::{Platform, System as SystemStat};
 use std::{sync::{Arc, Mutex}, time::Instant};
@@ -28,6 +32,7 @@ struct AppState {
     geth: Mutex<GethProcess>,
     downloader: Arc<GethDownloader>,
     miner_address: Mutex<Option<String>>,
+    dht: Mutex<Option<Arc<DhtService>>>,
 }
 
 #[tauri::command]
@@ -261,6 +266,102 @@ async fn get_blocks_mined(address: String) -> Result<u64, String> {
 }
 
 #[tauri::command]
+async fn start_dht_node(state: State<'_, AppState>, port: u16, bootstrap_nodes: Vec<String>) -> Result<String, String> {
+    {
+        let dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
+        if dht_guard.is_some() {
+            return Err("DHT node is already running".to_string());
+        }
+    }
+    
+    let dht_service = DhtService::new(port, bootstrap_nodes)
+        .await
+        .map_err(|e| format!("Failed to start DHT: {}", e))?;
+    
+    let peer_id = dht_service.get_peer_id();
+    
+    {
+        let mut dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
+        *dht_guard = Some(Arc::new(dht_service));
+    }
+    
+    Ok(peer_id)
+}
+
+#[tauri::command]
+async fn stop_dht_node(state: State<'_, AppState>) -> Result<(), String> {
+    let mut dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
+    *dht_guard = None;
+    Ok(())
+}
+
+#[tauri::command]
+async fn publish_file_metadata(
+    state: State<'_, AppState>,
+    file_hash: String,
+    file_name: String,
+    file_size: u64,
+    mime_type: Option<String>,
+) -> Result<(), String> {
+    let dht = {
+        let dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
+        dht_guard.as_ref().cloned()
+    };
+    
+    if let Some(dht) = dht {
+        let metadata = FileMetadata {
+            file_hash,
+            file_name,
+            file_size,
+            seeders: vec![],
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            mime_type,
+        };
+        
+        dht.publish_file(metadata).await
+    } else {
+        Err("DHT node is not running".to_string())
+    }
+}
+
+#[tauri::command]
+async fn search_file_metadata(state: State<'_, AppState>, file_hash: String) -> Result<(), String> {
+    let dht = {
+        let dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
+        dht_guard.as_ref().cloned()
+    };
+    
+    if let Some(dht) = dht {
+        dht.get_file(file_hash).await
+    } else {
+        Err("DHT node is not running".to_string())
+    }
+}
+
+#[tauri::command]
+async fn connect_to_peer(state: State<'_, AppState>, peer_address: String) -> Result<(), String> {
+    let dht = {
+        let dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
+        dht_guard.as_ref().cloned()
+    };
+    
+    if let Some(dht) = dht {
+        dht.connect_peer(peer_address).await
+    } else {
+        Err("DHT node is not running".to_string())
+    }
+}
+
+#[tauri::command]
+async fn get_dht_events(_state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    // Simplified version returns empty events for now
+    Ok(vec![])
+}
+
+#[tauri::command]
 fn get_cpu_temperature() -> Option<f32> {
     static mut LAST_UPDATE: Option<Instant> = None;
     unsafe {
@@ -301,6 +402,25 @@ fn get_cpu_temperature() -> Option<f32> {
     None
 }
 fn main() {
+    // Parse command line arguments
+    use clap::Parser;
+    let args = headless::CliArgs::parse();
+    
+    // If running in headless mode, don't start the GUI
+    if args.headless {
+        println!("Running in headless mode...");
+        
+        // Create a tokio runtime for async operations
+        let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+        
+        // Run the headless mode
+        if let Err(e) = runtime.block_on(headless::run_headless(args)) {
+            eprintln!("Error in headless mode: {}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
+    
     println!("Starting Chiral Network...");
 
     tauri::Builder::default()
@@ -308,6 +428,7 @@ fn main() {
             geth: Mutex::new(GethProcess::new()),
             downloader: Arc::new(GethDownloader::new()),
             miner_address: Mutex::new(None),
+            dht: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
@@ -333,7 +454,13 @@ fn main() {
             get_miner_logs,
             get_miner_performance,
             get_blocks_mined,
-            get_cpu_temperature
+            get_cpu_temperature,
+            start_dht_node,
+            stop_dht_node,
+            publish_file_metadata,
+            search_file_metadata,
+            connect_to_peer,
+            get_dht_events
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())

@@ -35,6 +35,12 @@ zip = "0.6"
 futures-util = "0.3"
 systemstat = "0.2.5"
 sysinfo = "0.31"
+libp2p = { version = "0.54", features = ["kad", "mdns", "noise", "tcp", "yamux", "identify", "gossipsub", "macros", "tokio"] }
+async-std = { version = "1.12", features = ["attributes"] }
+async-trait = "0.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4.4", features = ["derive"] }
 
 [features]
 default = ["custom-protocol"]
