@@ -122,15 +122,24 @@
   <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
       <h2 class="text-lg font-semibold">Proxy Settings</h2>
-      <Button
-        variant={proxyEnabled ? 'default' : 'outline'}
-        size="sm"
-        on:click={() => proxyEnabled = !proxyEnabled}
-      >
-        <Power class="h-4 w-4 mr-2" />
-        {proxyEnabled ? 'Disable' : 'Enable'} Proxy
-      </Button>
+      <div class="flex items-center gap-2">
+        <span class="text-sm text-muted-foreground">Proxy</span>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={proxyEnabled}
+          on:click={() => (proxyEnabled = !proxyEnabled)}
+          class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none 
+             {proxyEnabled ? 'bg-green-500' : 'bg-gray-300'}"
+          >
+          <span
+            class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform
+               {proxyEnabled ? 'translate-x-6' : 'translate-x-1'}"
+          />
+        </button>
+      </div>
     </div>
+
     
     <div class="space-y-4">
         <div>
