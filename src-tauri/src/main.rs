@@ -10,7 +10,7 @@ mod geth_downloader;
 use ethereum::{
     create_new_account, get_account_from_private_key, get_balance, get_peer_count,
     start_mining, stop_mining, get_mining_status, get_hashrate, get_block_number,
-    get_network_difficulty, get_network_hashrate, get_mining_logs,
+    get_network_difficulty, get_network_hashrate, get_mining_logs, get_mining_performance,
     EthAccount, GethProcess
 };
 use keystore::Keystore;
@@ -151,8 +151,41 @@ async fn start_miner(state: State<'_, AppState>, address: String, threads: u32, 
                 geth.start(&data_dir, miner_address.as_deref())?;
             }
             
-            // Wait for geth to start up
-            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            // Wait for geth to start up and be ready to accept RPC connections
+            let mut attempts = 0;
+            let max_attempts = 30; // 30 seconds max wait
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                attempts += 1;
+                
+                // Check if geth is responding to RPC calls
+                if let Ok(response) = reqwest::Client::new()
+                    .post("http://127.0.0.1:8545")
+                    .json(&serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "method": "net_version",
+                        "params": [],
+                        "id": 1
+                    }))
+                    .send()
+                    .await
+                {
+                    if response.status().is_success() {
+                        if let Ok(json) = response.json::<serde_json::Value>().await {
+                            if json.get("result").is_some() {
+                                println!("Geth is ready for RPC calls");
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                if attempts >= max_attempts {
+                    return Err("Geth failed to start up within 30 seconds".to_string());
+                }
+                
+                println!("Waiting for geth to start up... (attempt {}/{})", attempts, max_attempts);
+            }
             
             // Try mining again without setting etherbase (it's set via command line now)
             let client = reqwest::Client::new();
@@ -218,6 +251,11 @@ async fn get_miner_logs(data_dir: String, lines: usize) -> Result<Vec<String>, S
 }
 
 #[tauri::command]
+async fn get_miner_performance(data_dir: String) -> Result<(u64, f64), String> {
+    get_mining_performance(&data_dir)
+}
+
+#[tauri::command]
 fn get_cpu_temperature() -> Option<f32> {
     static mut LAST_UPDATE: Option<Instant> = None;
     unsafe {
@@ -243,7 +281,7 @@ fn get_cpu_temperature() -> Option<f32> {
         })
         .map(|c| {
             core_count += 1;
-            c.temperature().unwrap_or(0.0)
+            c.temperature()
         })
         .sum();
     if core_count > 0 {
@@ -288,6 +326,7 @@ fn main() {
             get_current_block,
             get_network_stats,
             get_miner_logs,
+            get_miner_performance,
             get_cpu_temperature
         ])
         .plugin(tauri_plugin_process::init())
