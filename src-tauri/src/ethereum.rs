@@ -65,11 +65,64 @@ impl GethProcess {
             return Ok(()); // Already running, no need to start again
         }
         
-        // Check if geth is already running on the system (from a previous session)
+        // Always kill any existing geth processes before starting
+        // This ensures we don't have multiple instances running
+        println!("Cleaning up any existing geth processes...");
+        
+        // First try to stop via HTTP if it's running
         if self.is_running() {
-            println!("Geth is already running from a previous session");
-            return Ok(()); // Already running externally
+            let _ = Command::new("curl")
+                .arg("-s")
+                .arg("-X")
+                .arg("POST")
+                .arg("-H")
+                .arg("Content-Type: application/json")
+                .arg("--data")
+                .arg(r#"{"jsonrpc":"2.0","method":"admin_stopRPC","params":[],"id":1}"#)
+                .arg("http://127.0.0.1:8545")
+                .output();
+            std::thread::sleep(std::time::Duration::from_millis(500));
         }
+        
+        // Force kill any remaining geth processes
+        #[cfg(unix)]
+        {
+            // Kill by name pattern
+            let _ = Command::new("pkill")
+                .arg("-9")  // Force kill
+                .arg("-f")
+                .arg("geth.*--datadir.*geth-data")
+                .output();
+                
+            // Also try to kill by port usage (macOS compatible)
+            let _ = Command::new("sh")
+                .arg("-c")
+                .arg("lsof -ti:8545,30303 | xargs kill -9 2>/dev/null || true")
+                .output();
+                
+            // Give it a moment to clean up
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+        
+        // Final check - if still running, we have a problem
+        if self.is_running() {
+            println!("Error: Could not stop existing geth process");
+            // Try one more aggressive kill
+            #[cfg(unix)]
+            {
+                let _ = Command::new("sh")
+                    .arg("-c")
+                    .arg("ps aux | grep -E 'geth.*--datadir' | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null || true")
+                    .output();
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            
+            if self.is_running() {
+                return Err("Cannot stop existing geth process. Please manually kill it and try again.".to_string());
+            }
+        }
+        
+        println!("Geth cleanup complete, starting new instance...");
 
         // Use the GethDownloader to get the correct path
         let downloader = crate::geth_downloader::GethDownloader::new();
@@ -142,7 +195,10 @@ impl GethProcess {
             .arg("50")
             // P2P discovery settings
             .arg("--port")
-            .arg("30303");  // P2P listening port
+            .arg("30303")  // P2P listening port
+            // Network address configuration
+            .arg("--nat")
+            .arg("any");  // Allow NAT traversal and external connections
         
         // Add miner address if provided
         if let Some(address) = miner_address {
@@ -172,11 +228,58 @@ impl GethProcess {
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
+        println!("Stopping geth process...");
+        
+        // First try to kill the tracked child process
         if let Some(mut child) = self.child.take() {
-            child
-                .kill()
-                .map_err(|e| format!("Failed to stop geth: {}", e))?;
+            // Try to kill the process
+            match child.kill() {
+                Ok(_) => {
+                    // Wait for the process to actually exit
+                    let _ = child.wait();
+                    println!("Tracked geth process terminated successfully");
+                },
+                Err(e) => {
+                    println!("Failed to kill tracked geth process: {}", e);
+                }
+            }
+        } else {
+            println!("No tracked child process, will kill by pattern");
         }
+        
+        // Always kill any geth processes by name as a fallback
+        // This handles orphaned processes
+        #[cfg(unix)]
+        {
+            println!("Killing any geth processes by pattern...");
+            
+            // Kill by process name
+            let result = Command::new("pkill")
+                .arg("-9")
+                .arg("-f")
+                .arg("geth.*--datadir.*geth-data")
+                .output();
+                
+            match result {
+                Ok(output) => {
+                    if output.status.success() {
+                        println!("Successfully killed geth processes");
+                    } else {
+                        println!("pkill returned non-zero (no processes found or error)");
+                    }
+                },
+                Err(e) => println!("Failed to run pkill: {}", e)
+            }
+            
+            // Also kill by port usage
+            let _ = Command::new("sh")
+                .arg("-c")
+                .arg("lsof -ti:8545,30303 | xargs kill -9 2>/dev/null || true")
+                .output();
+                
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        
         Ok(())
     }
 }

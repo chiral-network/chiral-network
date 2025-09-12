@@ -339,7 +339,31 @@ fn main() {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                // When window is destroyed, stop geth
+                if let Some(state) = window.app_handle().try_state::<AppState>() {
+                    if let Ok(mut geth) = state.geth.lock() {
+                        let _ = geth.stop();
+                        println!("Geth node stopped on window destroy");
+                    }
+                }
+            }
+        })
         .setup(|app| {
+            // Clean up any orphaned geth processes on startup
+            println!("Cleaning up any orphaned geth processes from previous sessions...");
+            #[cfg(unix)]
+            {
+                use std::process::Command;
+                // Kill any geth processes that might be running from previous sessions
+                let _ = Command::new("pkill")
+                    .arg("-9")
+                    .arg("-f")
+                    .arg("geth.*--datadir.*geth-data")
+                    .output();
+            }
+            
             println!("App setup complete");
             println!("Window should be visible now!");
 
@@ -385,6 +409,13 @@ fn main() {
                     }
                     "quit" => {
                         println!("Quit menu item clicked");
+                        // Stop geth before exiting
+                        if let Some(state) = app.try_state::<AppState>() {
+                            if let Ok(mut geth) = state.geth.lock() {
+                                let _ = geth.stop();
+                                println!("Geth node stopped");
+                            }
+                        }
                         app.exit(0);
                     }
                     _ => {}
@@ -413,6 +444,23 @@ fn main() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| match event {
+            tauri::RunEvent::ExitRequested { .. } => {
+                println!("Exit requested event received");
+                // Don't prevent exit, let it proceed naturally
+            }
+            tauri::RunEvent::Exit => {
+                println!("App exiting, cleaning up geth...");
+                // Stop geth before exiting
+                if let Some(state) = app_handle.try_state::<AppState>() {
+                    if let Ok(mut geth) = state.geth.lock() {
+                        let _ = geth.stop();
+                        println!("Geth node stopped on exit");
+                    }
+                }
+            }
+            _ => {}
+        });
 }
