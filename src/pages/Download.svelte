@@ -6,7 +6,7 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
   import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, File } from 'lucide-svelte'
-  import { files, downloadQueue, type FileItem } from '$lib/stores'
+  import { files, downloadQueue } from '$lib/stores'
   
   let searchHash = ''  // For downloading new files
   let searchFilter = ''  // For searching existing downloads
@@ -29,9 +29,11 @@
       'completed': 2,
       'queued': 3,
       'failed': 4,
-      'uploaded': 5,
-      'seeding': 6
+      'canceled': 5,
+      'uploaded': 6,
+      'seeding': 7
     }
+
 
     return combined.sort((a, b) => {
       const statusA = statusOrder[a.status] ?? 999
@@ -62,19 +64,22 @@
 
     // Then apply status filter
     switch (filterStatus) {
-      case 'active':
-        return filtered.filter(f => f.status === 'downloading')
-      case 'paused':
-        return filtered.filter(f => f.status === 'paused')
-      case 'queued':
-        return filtered.filter(f => f.status === 'queued')
-      case 'completed':
-        return filtered.filter(f => f.status === 'completed')
-      case 'failed':
-        return filtered.filter(f => f.status === 'failed')
-      default:
-        return filtered
-    }
+  case 'active':
+    return filtered.filter(f => f.status === 'downloading')
+  case 'paused':
+    return filtered.filter(f => f.status === 'paused')
+  case 'queued':
+    return filtered.filter(f => f.status === 'queued')
+  case 'completed':
+    return filtered.filter(f => f.status === 'completed')
+  case 'failed':
+    return filtered.filter(f => f.status === 'failed')
+  case 'canceled':
+    return filtered.filter(f => f.status === 'canceled')
+  default:
+    return filtered
+}
+
   })()
   
   // Calculate counts from the filtered set (excluding uploaded/seeding)
@@ -183,11 +188,15 @@ function clearSearch() {
   }
   
   function cancelDownload(fileId: string) {
-    files.update(f => f.filter(file => file.id !== fileId))
-    downloadQueue.update(q => q.filter(file => file.id !== fileId))
-    // Clean up simulation tracking
-    activeSimulations.delete(fileId)
-  }
+  files.update(f => f.map(file => 
+    file.id === fileId 
+      ? { ...file, status: 'canceled' }
+      : file
+  ))
+  downloadQueue.update(q => q.filter(file => file.id !== fileId))
+  activeSimulations.delete(fileId)
+}
+
   
   function startQueuedDownload(fileId: string) {
     downloadQueue.update(queue => {
@@ -364,6 +373,16 @@ function clearSearch() {
           >
             Queued ({queuedCount})
           </Button>
+
+          <Button
+            size="sm"
+            variant={filterStatus === 'canceled' ? 'default' : 'outline'}
+            on:click={() => filterStatus = 'canceled'}
+            >
+            Canceled ({allFilteredDownloads.filter(f => f.status === 'canceled').length})
+          </Button>
+
+
           <Button
             size="sm"
             variant={filterStatus === 'failed' ? 'default' : 'outline'}
@@ -391,6 +410,7 @@ function clearSearch() {
           <span class="text-sm font-medium">Auto-Start</span>
           <button
               type="button"
+              aria-label="Toggle auto-start queue {autoStartQueue ? 'off' : 'on'}"
               on:click={() => autoStartQueue = !autoStartQueue}
               class="relative inline-flex h-6 w-12 items-center rounded-full transition-colors focus:outline-none"
               class:bg-green-500={autoStartQueue}
@@ -400,7 +420,7 @@ function clearSearch() {
                 class="inline-block h-5 w-5 transform rounded-full bg-white transition-transform"
                 class:translate-x-6={autoStartQueue}
                 class:translate-x-1={!autoStartQueue}
-              />
+              ></span>
           </button>
         </div>
 
@@ -474,7 +494,9 @@ function clearSearch() {
                   file.status === 'downloading' ? 'bg-green-500 text-white border-green-500' :
                   file.status === 'completed' ? 'bg-blue-500 text-white border-blue-500' :
                   file.status === 'paused' ? 'bg-yellow-500 text-black border-yellow-500' :
-                  file.status === 'queued' ? 'bg-gray-500 text-white border-gray-500' : 'bg-red-500 text-white border-red-500'
+                  file.status === 'queued' ? 'bg-gray-500 text-white border-gray-500' :
+                  file.status === 'canceled' ? 'bg-gray-700 text-white border-gray-700' :
+                  'bg-red-500 text-white border-red-500'
                 }>
                   {file.status === 'queued' ? `Queued #${$downloadQueue.indexOf(file) + 1}` : file.status}
                 </Badge>

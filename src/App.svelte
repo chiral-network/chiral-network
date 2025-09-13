@@ -13,7 +13,8 @@
     import { networkStatus } from '$lib/stores'
     import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
     import {onMount} from 'svelte';
-    import { tick } from 'svelte'
+    import { tick } from 'svelte';
+    import { setupI18n } from '../src/i18n/i18n';
 
     // gets path name not entire url:
     // ex: http://locatlhost:1420/download -> /download
@@ -33,6 +34,9 @@
     let currentPage = getPathName(window.location.pathname);
     
     onMount(()=>{
+      // setup i18n
+      setupI18n();
+
       // set the currentPage var
       syncFromUrl();
 

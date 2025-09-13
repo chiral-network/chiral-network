@@ -372,6 +372,20 @@ async fn get_dht_peer_count(state: State<'_, AppState>) -> Result<usize, String>
 }
 
 #[tauri::command]
+async fn get_dht_peer_id(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let dht = {
+        let dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
+        dht_guard.as_ref().cloned()
+    };
+    
+    if let Some(dht) = dht {
+        Ok(Some(dht.get_peer_id().await))
+    } else {
+        Ok(None) // Return None if DHT is not running
+    }
+}
+
+#[tauri::command]
 async fn get_dht_events(_state: State<'_, AppState>) -> Result<Vec<String>, String> {
     // Simplified version returns empty events for now
     Ok(vec![])
@@ -417,6 +431,11 @@ fn get_cpu_temperature() -> Option<f32> {
 
     None
 }
+#[tauri::command]
+fn detect_locale() -> String {
+    sys_locale::get_locale().unwrap_or_else(|| "en-US".into())
+}
+
 fn main() {
     // Initialize logging for debug builds
     #[cfg(debug_assertions)]
@@ -491,12 +510,15 @@ fn main() {
             search_file_metadata,
             connect_to_peer,
             get_dht_events,
-            get_dht_peer_count
+            detect_locale,
+            get_dht_peer_count,
+            get_dht_peer_id
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_store::Builder::default().build())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 // When window is destroyed, stop geth

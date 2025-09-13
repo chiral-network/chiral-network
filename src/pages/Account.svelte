@@ -10,6 +10,8 @@
   import QRCode from 'qrcode'
   import { Html5QrcodeScanner as Html5QrcodeScannerClass } from 'html5-qrcode'
   import { tick } from 'svelte'
+  import { onMount } from 'svelte'
+
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
@@ -63,6 +65,9 @@
   let addressWarning = '';
   let isAddressValid = false;
 
+  // Blacklist validation state
+  let blacklistAddressWarning = '';
+  let isBlacklistAddressValid = false;
 
   // Copy feedback message
   let copyMessage = '';
@@ -149,6 +154,28 @@
         isAmountValid = true;
         sendAmount = inputValue;
       }
+    }
+  }
+
+  //Blacklist address validation (mirror of Send Coins)
+  $: {
+    const addr = newBlacklistEntry.chiral_address;
+
+    if (!addr) {
+      blacklistAddressWarning = '';
+      isBlacklistAddressValid = false;
+    } else if (!addr.startsWith('0x')) {
+      blacklistAddressWarning = 'Address must start with 0x.';
+      isBlacklistAddressValid = false;
+    } else if (addr.length !== 42) {
+      blacklistAddressWarning = 'Address must be exactly 42 characters long.';
+      isBlacklistAddressValid = false;
+    } else if (!isValidAddress(addr)) {
+      blacklistAddressWarning = 'Address must contain valid hexadecimal characters (0-9, a-f, A-F)';
+      isBlacklistAddressValid = false;
+    } else {
+      blacklistAddressWarning = '';
+      isBlacklistAddressValid = true;
     }
   }
   
@@ -329,8 +356,6 @@
   // Ensure pendingCount is used (for linter)
   $: void $pendingCount;
 
-  import { onMount } from 'svelte'
-  
   let balanceInterval: number | undefined
   
   onMount(() => {
@@ -554,26 +579,18 @@
     description: ""
   }
 
+  //Use the new validity flag computed above
+  $: isBlacklistFormValid =
+    newBlacklistEntry.description.trim() !== '' && isBlacklistAddressValid;
   
+  //Guard add with validity check
   function addBlacklistEntry() {
     if (!isBlacklistFormValid) return;
-
-    blacklist.update(entries => [...entries, {
-      chiral_address: newBlacklistEntry.chiral_address,
-      reason: newBlacklistEntry.description.trim(),
-      timestamp: new Date(),
-      notes: '' // For future use
-    }]);
-
-    // Clear form
-    newBlacklistEntry = { chiral_address: "", description: "" };
-    
-    // Show success message briefly
-    setTimeout(() => {
-      // Could show a toast notification here
-    }, 100);
+    blacklist.update(entries => [...entries,
+      { chiral_address: newBlacklistEntry.chiral_address, reason: newBlacklistEntry.description, timestamp: new Date() }
+    ]);
+    newBlacklistEntry = { chiral_address: "", description: "" }; // Clear input fields
   }
-
 
   function removeBlacklistEntry(chiral_address: string) {
     if (confirm(`Remove ${chiral_address} from blacklist?`)) {
