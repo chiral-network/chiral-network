@@ -72,5 +72,11 @@
   "confirm.resetBody": "All settings will be reset to their default values. This action will be saved immediately.",
 
   "validation.min": "{label} must be ≥ {min}.",
-  "validation.between": "{label} must be between {min} and {max}."
+  "validation.between": "{label} must be between {min} and {max}.",
+
+  "button": {
+    "clearCache": "Clear Cache",
+    "clearing": "Clearing...",
+    "cleared": "✓ Cleared!"
+  }
 }

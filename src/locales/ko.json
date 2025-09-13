@@ -72,5 +72,11 @@
   "confirm.resetBody": "모든 설정이 기본값으로 초기화됩니다. 이 작업은 즉시 저장됩니다.",
 
   "validation.min": "{label} 값은 {min} 이상이어야 합니다.",
-  "validation.between": "{label} 값은 {min} ~ {max} 범위여야 합니다."
+  "validation.between": "{label} 값은 {min} ~ {max} 범위여야 합니다.",
+
+  "button": {
+    "clearCache": "캐시 비우기",
+    "clearing": "삭제 중...",
+    "cleared": "✓ 삭제 완료!"
+  }
 }
