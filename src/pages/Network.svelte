@@ -38,6 +38,7 @@
   let isGethRunning = false
   let isGethInstalled = false
   let isDownloading = false
+  let isStartingNode = false
   let downloadProgress = {
     downloaded: 0,
     total: 0,
@@ -338,6 +339,7 @@
       // In web mode, simulate that geth is not installed
       isGethInstalled = false
       isGethRunning = false
+      isStartingNode = false
       return
     }
     
@@ -348,6 +350,7 @@
       if (isGethInstalled) {
         isGethRunning = await invoke('is_geth_running') as boolean
         if (isGethRunning) {
+          isStartingNode = false
           startPolling()
         }
       }
@@ -397,6 +400,7 @@
       return
     }
     
+    isStartingNode = true
     try {
       // Set miner address if we have an account
       if ($etcAccount) {
@@ -408,6 +412,8 @@
     } catch (error) {
       console.error('Failed to start geth node:', error)
       alert('Failed to start Chiral node: ' + error)
+    } finally {
+      isStartingNode = false
     }
   }
 
@@ -420,6 +426,7 @@
     try {
       await invoke('stop_geth_node')
       isGethRunning = false
+      isStartingNode = false
       peerCount = 0
       if (peerCountInterval) {
         clearInterval(peerCountInterval)
@@ -515,6 +522,9 @@
         {:else if isDownloading}
           <div class="h-2 w-2 bg-blue-500 rounded-full animate-pulse"></div>
           <span class="text-sm text-blue-600">Downloading...</span>
+        {:else if isStartingNode}
+          <div class="h-2 w-2 bg-yellow-500 rounded-full animate-pulse"></div>
+          <span class="text-sm text-yellow-600">Starting...</span>
         {:else if isGethRunning}
           <div class="h-2 w-2 bg-green-500 rounded-full animate-pulse"></div>
           <span class="text-sm text-green-600">Connected</span>
@@ -571,11 +581,17 @@
             </Button>
           </div>
         {/if}
+      {:else if isStartingNode}
+        <div class="text-center py-4">
+          <Server class="h-12 w-12 text-yellow-500 mx-auto mb-2 animate-pulse" />
+          <p class="text-sm text-muted-foreground">Starting Chiral node...</p>
+          <p class="text-xs text-muted-foreground mt-1">Please wait, this may take a moment.</p>
+        </div>
       {:else if !isGethRunning}
         <div class="text-center py-4">
           <Server class="h-12 w-12 text-muted-foreground mx-auto mb-2" />
           <p class="text-sm text-muted-foreground mb-3">Chiral node is not running</p>
-          <Button on:click={startGethNode}>
+          <Button on:click={startGethNode} disabled={isStartingNode}>
             <Play class="h-4 w-4 mr-2" />
             Start Chiral Node
           </Button>
