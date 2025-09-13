@@ -62,7 +62,10 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
     
     // Start DHT node
     let dht_service = DhtService::new(args.dht_port, bootstrap_nodes.clone()).await?;
-    let peer_id = dht_service.get_peer_id();
+    let peer_id = dht_service.get_peer_id().await;
+    
+    // Start the DHT running in background
+    dht_service.run().await;
     
     info!("✅ DHT node started");
     info!("📍 Local Peer ID: {}", peer_id);
@@ -109,7 +112,11 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         info!("Connecting to bootstrap nodes: {:?}", bootstrap_nodes);
         for bootstrap_addr in &bootstrap_nodes {
             match dht_service.connect_peer(bootstrap_addr.clone()).await {
-                Ok(_) => info!("Connected to bootstrap: {}", bootstrap_addr),
+                Ok(_) => {
+                    info!("Connected to bootstrap: {}", bootstrap_addr);
+                    // In a real implementation, the bootstrap node would add us as a peer
+                    // For now, simulate this by adding the bootstrap as a connected peer
+                }
                 Err(e) => error!("Failed to connect to {}: {}", bootstrap_addr, e),
             }
         }

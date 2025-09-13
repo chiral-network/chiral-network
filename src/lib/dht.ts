@@ -33,6 +33,10 @@ export class DhtService {
     return DhtService.instance;
   }
 
+  setPeerId(peerId: string | null): void {
+    this.peerId = peerId;
+  }
+
   async start(config?: Partial<DhtConfig>): Promise<string> {
     const port = config?.port || 4001;
     let bootstrapNodes = config?.bootstrapNodes || [];
@@ -44,15 +48,17 @@ export class DhtService {
     }
 
     try {
-      this.peerId = await invoke('start_dht_node', {
+      const peerId = await invoke<string>('start_dht_node', {
         port,
         bootstrapNodes
       });
+      this.peerId = peerId;
       this.port = port;
       console.log('DHT started with peer ID:', this.peerId);
       return this.peerId;
     } catch (error) {
       console.error('Failed to start DHT:', error);
+      this.peerId = null; // Clear on failure
       throw error;
     }
   }
@@ -102,8 +108,11 @@ export class DhtService {
   }
 
   async connectPeer(peerAddress: string): Promise<void> {
+    // Note: We check peerId to ensure DHT was started, but the actual error
+    // might be from the backend saying networking isn't implemented
     if (!this.peerId) {
-      throw new Error('DHT not started');
+      console.error('DHT service peerId not set, service may not be initialized');
+      throw new Error('DHT service not initialized properly');
     }
 
     try {
@@ -140,6 +149,16 @@ export class DhtService {
   getMultiaddr(): string | null {
     if (!this.peerId) return null;
     return `/ip4/127.0.0.1/tcp/${this.port}/p2p/${this.peerId}`;
+  }
+  
+  async getPeerCount(): Promise<number> {
+    try {
+      const count = await invoke<number>('get_dht_peer_count');
+      return count;
+    } catch (error) {
+      console.error('Failed to get peer count:', error);
+      return 0;
+    }
   }
 }
 
