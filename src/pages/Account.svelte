@@ -661,9 +661,10 @@
   }
 
   function clearAllBlacklist() {
-    if (confirm(tr('blacklist.confirm.removeAll', { count: $blacklist.length }))) {
-      blacklist.set([]);
-      blacklistSearch = '';
+    const count = $blacklist.length;
+    if (window.confirm(`Remove all ${count} blacklisted addresses?`)) {
+        blacklist.set([]);
+        blacklistSearch = '';
     }
   }
 
