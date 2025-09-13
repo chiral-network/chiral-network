@@ -11,6 +11,10 @@
   import { Html5QrcodeScanner as Html5QrcodeScannerClass } from 'html5-qrcode'
   import { tick } from 'svelte'
   import { onMount } from 'svelte'
+  import { t, locale } from 'svelte-i18n'
+  import { get } from 'svelte/store'
+  const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
+
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -116,13 +120,13 @@
       addressWarning = '';
       isAddressValid = false;
     } else if (!recipientAddress.startsWith('0x')) {
-      addressWarning = 'Address must start with 0x.';
+      addressWarning = tr('errors.address.mustStartWith0x');
       isAddressValid = false;
     } else if (recipientAddress.length !== 42) {
-      addressWarning = 'Address must be exactly 42 characters long.';
+      addressWarning = tr('errors.address.mustBe42');
       isAddressValid = false;
     } else if (!isValidAddress(recipientAddress)) {
-      addressWarning = 'Address must contain valid hexadecimal characters (0-9, a-f, A-F)';
+      addressWarning = tr('errors.address.mustBeHex');
       isAddressValid = false;
     } else {
       addressWarning = '';
@@ -138,15 +142,15 @@
       const inputValue = parseFloat(rawAmountInput);
 
       if (isNaN(inputValue) || inputValue <= 0) {
-        validationWarning = 'Please enter a valid amount greater than 0.';
+        validationWarning = tr('errors.amount.invalid');
         isAmountValid = false;
         sendAmount = 0;
       } else if (inputValue < 0.01) {
-        validationWarning = `Amount must be at least 0.01 Chiral.`;
+        validationWarning = tr('errors.amount.min', { min: '0.01' });
         isAmountValid = false;
         sendAmount = 0;
       } else if (inputValue > $wallet.balance) {
-        validationWarning = `Insufficient balance - Need ${(inputValue - $wallet.balance).toFixed(2)} more Chiral.`;
+        validationWarning = tr('errors.amount.insufficient', { more: (inputValue - $wallet.balance).toFixed(2) });
         isAmountValid = false;
         sendAmount = 0;
       } else {
@@ -166,19 +170,19 @@
       blacklistAddressWarning = '';
       isBlacklistAddressValid = false;
     } else if (!addr.startsWith('0x')) {
-      blacklistAddressWarning = 'Address must start with 0x.';
+      blacklistAddressWarning = tr('errors.address.mustStartWith0x');
       isBlacklistAddressValid = false;
     } else if (addr.length !== 42) {
-      blacklistAddressWarning = 'Address must be exactly 42 characters long.';
+      blacklistAddressWarning = tr('errors.address.mustBe42');
       isBlacklistAddressValid = false;
     } else if (!isValidAddress(addr)) {
-      blacklistAddressWarning = 'Address must contain valid hexadecimal characters (0-9, a-f, A-F)';
+      blacklistAddressWarning = tr('errors.address.mustBeHex');
       isBlacklistAddressValid = false;
     } else if (isAddressAlreadyBlacklisted(addr)) {
-      blacklistAddressWarning = 'This address is already blacklisted.';
+      blacklistAddressWarning = tr('blacklist.errors.alreadyExists');
       isBlacklistAddressValid = false;
     } else if (isOwnAddress(addr)) {
-      blacklistAddressWarning = 'Cannot blacklist your own address.';
+      blacklistAddressWarning = tr('blacklist.errors.ownAddress');
       isBlacklistAddressValid = false;
     } else {
       blacklistAddressWarning = '';
@@ -199,7 +203,7 @@
   function copyAddress() {
     const addressToCopy = $etcAccount ? $etcAccount.address : $wallet.address;
     navigator.clipboard.writeText(addressToCopy);
-    copyMessage = 'Copied!';
+    copyMessage = tr('messages.copied');
     setTimeout(() => copyMessage = '', 1500);
   }
 
@@ -207,10 +211,10 @@
     const privateKeyToCopy = $etcAccount ? $etcAccount.private_key : '';
     if (privateKeyToCopy) {
       navigator.clipboard.writeText(privateKeyToCopy);
-      privateKeyCopyMessage = 'Copied!';
+      privateKeyCopyMessage = tr('messages.copied');
     }
     else {
-      privateKeyCopyMessage = 'Failed!'
+      privateKeyCopyMessage = tr('messages.failed');
     }
     setTimeout(() => privateKeyCopyMessage = '', 1500);
   }
@@ -247,8 +251,8 @@
           const writable = await fileHandle.createWritable();
           await writable.write(dataBlob);
           await writable.close();
-          
-          exportMessage = 'Wallet exported successfully!';
+
+          exportMessage = tr('wallet.exportSuccess');
         } catch (error: any) {
           if (error.name !== 'AbortError') {
             throw error;
@@ -266,14 +270,14 @@
         link.click();
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
-        
-        exportMessage = 'Wallet exported successfully!';
+
+        exportMessage = tr('wallet.exportSuccess');
       }
       
       setTimeout(() => exportMessage = '', 3000);
     } catch (error) {
       console.error('Export failed:', error);
-      exportMessage = 'Export failed. Please try again.';
+      exportMessage = tr('errors.exportFailed');
       setTimeout(() => exportMessage = '', 3000);
     }
   }
@@ -332,7 +336,7 @@
       amount: sendAmount,
       to: recipientAddress,
       date: new Date(),
-      description: 'Manual transaction',
+      description: tr('transactions.manual'),
       status: 'pending'
     },
     ...txs // prepend so latest is first
@@ -354,7 +358,8 @@
   }
   
   function formatDate(date: Date): string {
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    const loc = get(locale) || 'en-US'
+    return new Intl.DateTimeFormat(loc, { month: 'short', day: 'numeric', year: 'numeric' }).format(date)
   }
 
   // Ensure wallet.pendingTransactions matches actual pending transactions
@@ -458,7 +463,7 @@
       }
     } catch (error) {
       console.error('Failed to create Chiral account:', error)
-      alert('Failed to create account: ' + error)
+      alert(tr('errors.createAccount', { error: String(error) }))
     } finally {
       isCreatingAccount = false
     }
@@ -477,17 +482,17 @@
                 privateKey: $etcAccount.private_key,
                 password: keystorePassword,
             });
-            keystoreSaveMessage = 'Success! Private key saved to keystore.';
+            keystoreSaveMessage = tr('keystore.success');
         } else {
             // Simulate for web
             console.log('Simulating save to keystore with password:', keystorePassword);
             await new Promise(resolve => setTimeout(resolve, 1000));
-            keystoreSaveMessage = 'Success! (Simulated) Private key saved.';
+            keystoreSaveMessage = tr('keystore.successSimulated');
         }
         keystorePassword = ''; // Clear password after saving
     } catch (error) {
         console.error('Failed to save to keystore:', error);
-        keystoreSaveMessage = `Error: ${error}`;
+        keystoreSaveMessage = tr('keystore.error', { error: String(error) });
     } finally {
         isSavingToKeystore = false;
         setTimeout(() => keystoreSaveMessage = '', 4000);
@@ -597,7 +602,7 @@
   }
 
   function removeBlacklistEntry(chiral_address: string) {
-    if (confirm(`Remove ${chiral_address} from blacklist?`)) {
+    if (confirm(tr('blacklist.confirm.remove', { address: chiral_address }))) {
       blacklist.update(entries => 
         entries.filter(entry => entry.chiral_address !== chiral_address)
       );
@@ -656,7 +661,7 @@
   }
 
   function clearAllBlacklist() {
-    if (confirm(`Remove all ${$blacklist.length} blacklisted addresses?`)) {
+    if (confirm(tr('blacklist.confirm.removeAll', { count: $blacklist.length }))) {
       blacklist.set([]);
       blacklistSearch = '';
     }
@@ -718,16 +723,16 @@
           
           if (imported.length > 0) {
             // Force reactivity by creating new array reference
-+            blacklist.update(entries => [...entries, ...imported]);
-            alert(`Imported ${imported.length} entries successfully`);
+            blacklist.update(entries => [...entries, ...imported]);
+            alert(tr('blacklist.import.success', { count: imported.length }));
           } else {
-            alert('No valid new entries found to import');
+            alert(tr('blacklist.import.none'));
           }
         } else {
-          alert('Invalid file format - no blacklist data found');
+          alert(tr('blacklist.import.invalid'));
         }
       } catch (error) {
-        alert('Invalid file format - please select a valid JSON file');
+        alert(tr('blacklist.import.parseError'));
       }
     };
     
@@ -777,22 +782,21 @@
 
 <div class="space-y-6">
   <div>
-    <h1 class="text-3xl font-bold">Account</h1>
-    <p class="text-muted-foreground mt-2">Manage your wallet and account settings</p>
+    <h1 class="text-3xl font-bold">{$t('account.title')}</h1>
+    <p class="text-muted-foreground mt-2">{$t('account.subtitle')}</p>
   </div>
   
   <div class="grid grid-cols-1 {$etcAccount ? 'md:grid-cols-2' : ''} gap-4">
     <Card class="p-6">
       <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold">Chiral Network Wallet</h2>
+        <h2 class="text-lg font-semibold">{$t('wallet.title')}</h2>
         <Wallet class="h-5 w-5 text-muted-foreground" />
       </div>
       
       <div class="space-y-4">
         {#if !$etcAccount}
           <div class="space-y-3">
-            <p class="text-sm text-muted-foreground">Get started with Chiral Network by creating or importing an account:</p>
-            
+            <p class="text-sm text-muted-foreground">{$t('wallet.cta.intro')}</p>
             
             <Button 
               class="w-full" 
@@ -800,14 +804,14 @@
               disabled={isCreatingAccount}
             >
               <Plus class="h-4 w-4 mr-2" />
-              {isCreatingAccount ? 'Creating...' : 'Create New Account'}
+              {isCreatingAccount ? $t('actions.creating') : $t('actions.createAccount')}
             </Button>
             
             <div class="space-y-2">
               <Input
                 type="text"
                 bind:value={importPrivateKey}
-                placeholder="Enter private key to import"
+                placeholder={$t('placeholders.importPrivateKey')}
                 class="w-full"
                 autocomplete="off"
                 data-form-type="other"
@@ -821,43 +825,42 @@
                 disabled={!importPrivateKey || isImportingAccount}
               >
                 <Import class="h-4 w-4 mr-2" />
-                {isImportingAccount ? 'Importing...' : 'Import Existing Account'}
+                {isImportingAccount ? $t('actions.importing') : $t('actions.importAccount')}
               </Button>
             </div>
           </div>
         {:else}
           <div>
-            <!-- Balance Display - Only when logged in -->
         <div>
-          <p class="text-sm text-muted-foreground">Balance</p>
+          <p class="text-sm text-muted-foreground">{$t('wallet.balance')}</p>
           <p class="text-2xl font-bold">{$wallet.balance.toFixed(2)} Chiral</p>
         </div>
         
             <div class="grid grid-cols-2 gap-4 mt-4">
           <div>
-            <p class="text-xs text-muted-foreground">Total Earned</p>
+            <p class="text-xs text-muted-foreground">{$t('wallet.totalEarned')}</p>
             <p class="text-sm font-medium text-green-600">+{$wallet.totalEarned.toFixed(2)} Chiral</p>
           </div>
           <div>
-            <p class="text-xs text-muted-foreground">Total Spent</p>
+            <p class="text-xs text-muted-foreground">{$t('wallet.totalSpent')}</p>
             <p class="text-sm font-medium text-red-600">-{$wallet.totalSpent.toFixed(2)} Chiral</p>
           </div>
         </div>
         
             <div class="mt-6">
-              <p class="text-sm text-muted-foreground">Chiral Address</p>
+              <p class="text-sm text-muted-foreground">{$t('wallet.address')}</p>
               <div class="flex items-center gap-2 mt-1">
                 <p class="font-mono text-sm">{$etcAccount.address.slice(0, 10)}...{$etcAccount.address.slice(-8)}</p>
                 <div class="relative">
-                  <Button size="sm" variant="outline" on:click={copyAddress}>
+                  <Button size="sm" variant="outline" on:click={copyAddress} aria-label={$t('aria.copyAddress')}>
                     <Copy class="h-3 w-3" />
                   </Button>
                   {#if copyMessage}
                     <span class="absolute top-full left-1/2 transform -translate-x-1/2 text-xs text-green-600 mt-1 whitespace-nowrap">{copyMessage}</span>
                   {/if}
                 </div>
-                <Button size = "sm" variant = "outline" on:click={generateAndShowQrCode} title = "Show QR Code">
-                  <svg xmlns = "http://www.w3.org/2000/svg" width = "12" height = "12" viewBox = "0 0 24 24" fill = "none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5h3v3H5zM5 16h3v3H5zM16 5h3v3h-3zM16 16h3v3h-3zM10.5 5h3M10.5 19h3M5 10.5v3M19 10.5v3M10.5 10.5h3v3h-3z"/></svg>
+                <Button size="sm" variant="outline" on:click={generateAndShowQrCode} title={$t('tooltips.showQr')} aria-label={$t('aria.showQr')}>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5h3v3H5zM5 16h3v3H5zM16 5h3v3h-3zM16 16h3v3h-3zM10.5 5h3M10.5 19h3M5 10.5v3M19 10.5v3M10.5 10.5h3v3h-3z"/></svg>
                 </Button>
                 {#if showQrCodeModal}
                   <div
@@ -875,16 +878,16 @@
                       aria-modal="true"
                       on:keydown={(e) => { if (e.key === 'Escape') showQrCodeModal = false; }}
                     >
-                      <h3 class="text-lg font-semibold mb-4">Your Chiral Address</h3>
+                      <h3 class="text-lg font-semibold mb-4">{$t('wallet.qrModal.title')}</h3>
                       
-                      <img src={qrCodeDataUrl} alt="Chiral Address QR Code" class="mx-auto rounded-md border" />
+                      <img src={qrCodeDataUrl} alt={$t('wallet.qrModal.alt')} class="mx-auto rounded-md border" />
                       
                       <p class="text-xs text-gray-600 mt-4 break-all font-mono">
                         {$etcAccount?.address}
                       </p>
 
                       <Button class="mt-6 w-full" variant="outline" on:click={() => showQrCodeModal = false}>
-                        Close
+                        {$t('actions.close')}
                       </Button>
                     </div>
                   </div>
@@ -893,7 +896,7 @@
             </div>
             
             <div class="mt-4">
-              <p class="text-sm text-muted-foreground">Private Key</p>
+              <p class="text-sm text-muted-foreground">{$t('wallet.privateKey')}</p>
                 <div class="flex gap-2 mt-1">
                   <Input
                     type="text"
@@ -906,6 +909,7 @@
                     size="sm"
                     variant="outline"
                     on:click={copyPrivateKey}
+                    aria-label={$t('aria.copyPrivateKey')}
                   >
                     <Copy class="h-3 w-3" />
                   </Button>
@@ -919,15 +923,15 @@
                   class="w-16"
                   on:click={() => privateKeyVisible = !privateKeyVisible}
                 >
-                  {privateKeyVisible ? 'Hide' : 'Show'}
+                  {privateKeyVisible ? $t('actions.hide') : $t('actions.show')}
                 </Button>
               </div>
-               <p class="text-xs text-muted-foreground mt-1">Never share your private key with anyone</p>
+               <p class="text-xs text-muted-foreground mt-1">{$t('warnings.neverSharePrivateKey')}</p>
              </div>
              
              <div class="mt-4">
                <Button type="button" variant="outline" class="w-full" on:click={exportWallet}>
-                 Export Wallet
+                 {$t('wallet.export')}
                </Button>
                {#if exportMessage}
                  <p class="text-xs text-center mt-2 {exportMessage.includes('successfully') ? 'text-green-600' : 'text-red-600'}">{exportMessage}</p>
@@ -941,18 +945,18 @@
     {#if $etcAccount}
     <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold">Send Chiral Coins</h2>
+      <h2 class="text-lg font-semibold">{$t('transfer.title')}</h2>
       <Coins class="h-5 w-5 text-muted-foreground" />
     </div>
     <form autocomplete="off" data-form-type="other" data-lpignore="true">
       <div class="space-y-4">
         <div>
-          <Label for="recipient">Recipient Address</Label>
+          <Label for="recipient">{$t('transfer.recipient.label')}</Label>
           <div class="relative mt-2">
             <Input
               id="recipient"
               bind:value={recipientAddress}
-              placeholder="0x..."
+              placeholder={$t('transfer.recipient.placeholder')}
               class="pr-10" 
               data-form-type="other"
               data-lpignore="true"
@@ -964,7 +968,7 @@
               size="sm"
               class="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8 p-0"
               on:click={scanQrCode}
-              aria-label="Scan QR Code"
+              aria-label={$t('transfer.recipient.scanQr')}
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect><line x1="14" x2="14" y1="14" y2="21"></line><line x1="21" x2="21" y1="14" y2="21"></line><line x1="21" x2="14" y1="21" y2="21"></line></svg>
             </Button>
@@ -972,23 +976,23 @@
           {#if showScannerModal}
             <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
               <div class="bg-white p-6 rounded-lg shadow-xl w-full max-w-md">
-                <h3 class="text-lg font-semibold mb-4 text-center">Scan QR Code</h3>
+                <h3 class="text-lg font-semibold mb-4 text-center">{$t('transfer.recipient.scanQrTitle')}</h3>
                 
                 <div id="qr-reader" class="w-full"></div>
                 
                 <Button class="mt-4 w-full" variant="outline" on:click={() => showScannerModal = false}>
-                  Cancel
+                  {$t('actions.cancel')}
                 </Button>
               </div>
             </div>
           {/if}
           <div class="flex items-center justify-between mt-1">
             <span class="text-xs text-muted-foreground">
-              {recipientAddress.length}/42 characters 
+              {recipientAddress.length}/42 {$t('transfer.recipient.characters')}
               {#if recipientAddress.length <= 42}
-                ({42 - recipientAddress.length} remaining)
+                ({42 - recipientAddress.length} {$t('transfer.recipient.remaining')})
               {:else}
-                ({recipientAddress.length - 42} over)
+                ({recipientAddress.length - 42} {$t('transfer.recipient.over')})
               {/if}
             </span>
             {#if addressWarning}
@@ -998,14 +1002,14 @@
         </div>
 
         <div>
-          <Label for="amount">Amount (Chiral)</Label>
+          <Label for="amount">{$t('transfer.amount.label')}</Label>
           <div class="relative mt-2">
             <Input
               id="amount"
               type="text"
               inputmode="decimal"
               bind:value={rawAmountInput}
-              placeholder=""
+              placeholder={$t('transfer.amount.placeholder')}
               class="mt-2"
               data-form-type="other"
               data-lpignore="true"
@@ -1019,12 +1023,12 @@
               on:click={setMaxAmount}
               disabled={$wallet.balance <= 0}
             >
-              Max
+              {$t('transfer.amount.max')}
             </Button>
           </div>
           <div class="flex items-center justify-between mt-1">
             <p class="text-xs text-muted-foreground">
-              Available: {$wallet.balance.toFixed(2)} Chiral
+              {$t('transfer.available', { values: { amount: $wallet.balance.toFixed(2) } })}
             </p>
             {#if validationWarning}
               <p class="text-xs text-red-500 font-medium">{validationWarning}</p>
@@ -1040,35 +1044,35 @@
           disabled={!isAddressValid || !isAmountValid || rawAmountInput === ''}>
           <ArrowUpRight class="h-4 w-4 mr-2" />
           {#if isConfirming}
-            Sending in {countdown}s (Tap to Cancel)
+            {$t('transfer.sendingIn', { values: { seconds: countdown } })}
           {:else}
-            Send Transaction
+            {$t('transfer.send')}
           {/if}
         </Button>
 
-        <Button type="button" class="w-full justify-center bg-gray-100 hover:bg-gray-200 text-gray-800 rounded transition-colors py-2 font-normal" on:click={() => showPending = !showPending} aria-label="View pending transactions">
+        <Button type="button" class="w-full justify-center bg-gray-100 hover:bg-gray-200 text-gray-800 rounded transition-colors py-2 font-normal" on:click={() => showPending = !showPending} aria-label={$t('transfer.viewPending')}>
           <span class="flex items-center gap-2">
             <svg class="h-4 w-4 text-orange-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
               <circle cx="12" cy="10" r="8" />
               <polyline points="12,6 12,10 16,14" />
             </svg>
             {#if $pendingCount > 0}
-              {$pendingCount} Pending Transaction{$pendingCount !== 1 ? 's' : ''}
+              {$t('transfer.pending.count', { values: { count: $pendingCount } })}
             {:else}
-              Pending Transactions
+              {$t('transfer.pending.none')}
             {/if}
           </span>
         </Button>
         {#if showPending}
           <div class="mt-2 p-3 bg-gray-50 rounded shadow">
-            <h3 class="text-sm mb-2 text-gray-700 font-normal">Pending Transactions</h3>
+            <h3 class="text-sm mb-2 text-gray-700 font-normal">{$t('transfer.pending.title')}</h3>
             <ul class="space-y-1">
               {#each $transactions.filter(tx => tx.status === 'pending') as tx}
                 <li class="text-xs text-gray-800 font-normal">
-                  {tx.description} ({tx.type === 'sent' ? 'To' : 'From'}: {tx.type === 'sent' ? tx.to : tx.from}) - {tx.amount} Chiral
+                  {tx.description} ({tx.type === 'sent' ? $t('transactions.item.to') : $t('transactions.item.from')}: {tx.type === 'sent' ? tx.to : tx.from}) - {tx.amount} Chiral
                 </li>
               {:else}
-                <li class="text-xs text-gray-500 font-normal">No pending transaction details available.</li>
+                <li class="text-xs text-gray-500 font-normal">{$t('transfer.pending.noDetails')}</li>
               {/each}
             </ul>
           </div>
@@ -1082,37 +1086,36 @@
   {#if $etcAccount}
   <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold">Transaction History</h2>
+      <h2 class="text-lg font-semibold">{$t('transactions.title')}</h2>
       <History class="h-5 w-5 text-muted-foreground" />
     </div>
-    <!-- Filter Controls -->
     <div class="flex flex-wrap gap-4 mb-4 items-end">
       <div>
-        <label for="filter-type" class="block text-xs font-medium mb-1">Type</label>
+        <label for="filter-type" class="block text-xs font-medium mb-1">{$t('filters.type')}</label>
         <select id="filter-type" bind:value={filterType} class="border rounded px-2 py-1 text-sm">
-          <option value="all">All</option>
-          <option value="sent">Sent</option>
-          <option value="received">Received</option>
+          <option value="all">{$t('filters.typeAll')}</option>
+          <option value="sent">{$t('filters.typeSent')}</option>
+          <option value="received">{$t('filters.typeReceived')}</option>
         </select>
       </div>
       <div>
-        <label for="filter-date-from" class="block text-xs font-medium mb-1">From</label>
+        <label for="filter-date-from" class="block text-xs font-medium mb-1">{$t('filters.from')}</label>
         <input id="filter-date-from" type="date" bind:value={filterDateFrom} class="border rounded px-2 py-1 text-sm" />
       </div>
       <div>
-        <label for="filter-date-to" class="block text-xs font-medium mb-1">To</label>
+        <label for="filter-date-to" class="block text-xs font-medium mb-1">{$t('filters.to')}</label>
         <input id="filter-date-to" type="date" bind:value={filterDateTo} class="border rounded px-2 py-1 text-sm" />
       </div>
       <div>
-        <label for="sort-button" class="block text-xs font-medium mb-1">Sort</label>
+        <label for="sort-button" class="block text-xs font-medium mb-1">{$t('filters.sort')}</label>
         <button id="sort-button" type="button" class="border rounded px-3 py-1 text-sm bg-white hover:bg-gray-100 transition-colors w-full" on:click={() => { sortDescending = !sortDescending; }} aria-pressed={sortDescending}>
-          {sortDescending ? 'Newest → Oldest' : 'Oldest → Newest'}
+          {sortDescending ? $t('filters.sortNewest') : $t('filters.sortOldest')}
         </button>
       </div>
       <div class="flex-1"></div>
       <div class="flex flex-col gap-1 items-end">
         <button type="button" class="border rounded px-3 py-1 text-sm bg-muted hover:bg-muted/70 transition-colors" on:click={() => { filterType = 'all'; filterDateFrom = ''; filterDateTo = ''; sortDescending = true; }}>
-          Reset
+          {$t('filters.reset')}
         </button>
       </div>
     </div>
@@ -1128,7 +1131,7 @@
             <div>
               <p class="text-sm font-medium">{tx.description}</p>
               <p class="text-xs text-muted-foreground">
-                {tx.type === 'received' ? 'From' : 'To'}: {tx.type === 'received' ? tx.from : tx.to}
+                {tx.type === 'received' ? $t('transactions.item.from') : $t('transactions.item.to')}: {tx.type === 'received' ? tx.from : tx.to}
               </p>
             </div>
           </div>
@@ -1143,29 +1146,27 @@
       {#if filteredTransactions.length === 0}
         <div class="text-center py-8 text-muted-foreground">
           <History class="h-12 w-12 mx-auto mb-2 opacity-20" />
-          <p>No transactions yet</p>
-          <p class="text-sm mt-1">Transactions will appear here once you send or receive Chiral</p>
+          <p>{$t('transactions.empty.title')}</p>
+          <p class="text-sm mt-1">{$t('transactions.empty.desc')}</p>
         </div>
       {/if}
     </div>
   </Card>
 
-  <!-- Enhanced Blacklist Management Section -->
   <Card class="p-6">
     <div class="flex items-center gap-2 mb-4">
       <KeyRound class="h-5 w-5 text-muted-foreground" />
-      <h2 class="text-lg font-semibold">Save to Local Keystore</h2>
+      <h2 class="text-lg font-semibold">{$t('keystore.title')}</h2>
     </div>
     <div class="space-y-4">
       <p class="text-sm text-muted-foreground">
-        Save your private key securely on this computer, encrypted with a password.
-        The keystore is saved in the application's secure data directory. You can later log in using your Chiral address and this password.
+        {$t('keystore.desc')}
       </p>
       <div class="flex items-center gap-2">
         <Input
           type="password"
           bind:value={keystorePassword}
-          placeholder="Enter a strong password"
+          placeholder={$t('placeholders.password')}
           class="flex-1"
           autocomplete="new-password"
         />
@@ -1174,9 +1175,9 @@
           disabled={!keystorePassword || isSavingToKeystore}
         >
           {#if isSavingToKeystore}
-            Saving...
+            {$t('actions.saving')}
           {:else}
-            Save Key
+            {$t('actions.saveKey')}
           {/if}
         </Button>
       </div>
@@ -1189,32 +1190,31 @@
   <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
       <div>
-        <h2 class="text-lg font-semibold">Blacklist Management</h2>
-        <p class="text-sm text-muted-foreground mt-1">Block malicious or unwanted addresses</p>
+        <h2 class="text-lg font-semibold">{$t('blacklist.title')}</h2>
+        <p class="text-sm text-muted-foreground mt-1">{$t('blacklist.subtitle')}</p>
       </div>
       <BadgeX class="h-5 w-5 text-muted-foreground" />
     </div>
 
     <div class="space-y-6">
-      <!-- Add to Blacklist Form -->
       <div class="border rounded-lg p-4 bg-gray-50/50">
-        <h3 class="text-md font-medium mb-3">Add New Entry</h3>
+        <h3 class="text-md font-medium mb-3">{$t('blacklist.add.title')}</h3>
         <div class="space-y-4">
           <div>
-            <Label for="blacklist-address">Chiral Address</Label>
+            <Label for="blacklist-address">{$t('blacklist.add.address')}</Label>
             <Input
               id="blacklist-address"
               bind:value={newBlacklistEntry.chiral_address}
-              placeholder="0x1234567890abcdef..."
+              placeholder={$t('blacklist.add.addressPlaceholder')}
               class="mt-2 font-mono text-sm {isBlacklistAddressValid ? 'border-green-300' : ''}"
             />
             <div class="flex items-center justify-between mt-1">
               <span class="text-xs text-muted-foreground">
-                {newBlacklistEntry.chiral_address.length}/42 characters 
+                {newBlacklistEntry.chiral_address.length}/42 {$t('transfer.recipient.characters')}
                 {#if newBlacklistEntry.chiral_address.length <= 42}
-                  ({42 - newBlacklistEntry.chiral_address.length} remaining)
+                  ({42 - newBlacklistEntry.chiral_address.length} {$t('transfer.recipient.remaining')})
                 {:else}
-                  ({newBlacklistEntry.chiral_address.length - 42} over)
+                  ({newBlacklistEntry.chiral_address.length - 42} {$t('transfer.recipient.over')})
                 {/if}
               </span>
               {#if blacklistAddressWarning}
@@ -1224,12 +1224,12 @@
           </div>
           
           <div>
-            <Label for="blacklist-reason">Reason for Blacklisting</Label>
+            <Label for="blacklist-reason">{$t('blacklist.add.reason')}</Label>
             <div class="relative mt-2">
               <Input
                 id="blacklist-reason"
                 bind:value={newBlacklistEntry.description}
-                placeholder="Enter reason (e.g., spam, fraud, malicious activity)"
+                placeholder={$t('placeholders.reason')}
                 maxlength={200}
                 class="pr-16"
               />
@@ -1239,15 +1239,14 @@
             </div>
             {#if newBlacklistEntry.description.length > 150}
               <p class="text-xs text-orange-500 mt-1">
-                {200 - newBlacklistEntry.description.length} characters remaining
+                {$t('blacklist.add.remaining', { values: { remaining: 200 - newBlacklistEntry.description.length } })}
               </p>
             {/if}
           </div>
 
-          <!-- Quick reason buttons -->
           <div class="flex flex-wrap items-center gap-2">
-            <span class="text-xs text-muted-foreground">Quick reasons:</span>
-            {#each ['Spam', 'Fraud', 'Malicious Activity', 'Harassment', 'Scam'] as reason}
+            <span class="text-xs text-muted-foreground">{$t('blacklist.quickReasons.label')}</span>
+            {#each [$t('blacklist.quickReasons.spam'), $t('blacklist.quickReasons.fraud'), $t('blacklist.quickReasons.malicious'), $t('blacklist.quickReasons.harrassment'), $t('blacklist.quickReasons.scam')] as reason}
               <button
                 type="button"
                 class="px-2 py-1 text-xs border rounded hover:bg-gray-100 transition-colors"
@@ -1264,27 +1263,25 @@
             disabled={!isBlacklistFormValid} 
             on:click={addBlacklistEntry}
           >
-            Add to Blacklist
+            {$t('blacklist.add.submit')}
           </Button>
         </div>
       </div>
 
-      <!-- Blacklist Display -->
       <div>
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
-            <h3 class="text-md font-medium">Blacklisted Addresses</h3>
+            <h3 class="text-md font-medium">{$t('blacklist.list.title')}</h3>
             {#if $blacklist.length > 0}
               <span class="text-sm text-muted-foreground">({$blacklist.length})</span>
             {/if}
           </div>
           
           <div class="flex gap-2">
-            <!-- Enhanced Search/Filter with clear button -->
             <div class="relative">
               <Input
                 bind:value={blacklistSearch}
-                placeholder="Search blacklist..."
+                placeholder={$t('placeholders.searchBlacklist')}
                 class="w-96 text-sm pr-8"
               />
               {#if blacklistSearch}
@@ -1292,7 +1289,7 @@
                   type="button"
                   class="absolute right-2 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground"
                   on:click={clearBlacklistSearch}
-                  title="Clear search"
+                  title={$t('tooltips.clearSearch')}
                 >
                   ×
                 </button>
@@ -1313,22 +1310,21 @@
                 on:click={clearAllBlacklist}
                 class="text-red-600 hover:text-red-700"
               >
-                Clear All
+                {$t('blacklist.actions.clearAll')}
               </Button>
             {/if}
           </div>
         </div>
 
-
         {#if filteredBlacklist.length === 0 && $blacklist.length === 0}
           <div class="text-center py-8 text-muted-foreground border-2 border-dashed border-gray-200 rounded-lg">
             <BadgeX class="h-12 w-12 mx-auto mb-2 opacity-20" />
-            <p class="font-medium">No addresses blacklisted</p>
-            <p class="text-sm mt-1">Add addresses above to block transactions and interactions</p>
+            <p class="font-medium">{$t('blacklist.list.emptyTitle')}</p>
+            <p class="text-sm mt-1">{$t('blacklist.list.emptyDesc')}</p>
           </div>
         {:else if filteredBlacklist.length === 0 && blacklistSearch}
           <div class="text-center py-6 text-muted-foreground">
-            <p>No blacklisted addresses match "{blacklistSearch}"</p>
+            <p>{$t('blacklist.list.noMatch', { values: { q: blacklistSearch } })}</p>
           </div>
         {:else}
           <div class="space-y-2 max-h-64 overflow-y-auto">
@@ -1343,18 +1339,17 @@
                       type="button"
                       class="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-200 rounded"
                       on:click={() => copyToClipboard(entry.chiral_address)}
-                      title="Copy address"
+                      title={$t('blacklist.actions.copyAddress')}
                     >
                       <Copy class="h-3 w-3" />
                     </button>
                   </div>
-                  
-                  <!-- Fixed inline editing with proper event handling -->
+
                   {#if editingEntry === index}
                     <div class="space-y-2">
                       <Input
                         bind:value={editReason}
-                        placeholder="Enter reason..."
+                        placeholder={$t('placeholders.reason')}
                         maxlength={200}
                         class="text-xs"
                         on:keydown={handleEditKeydown}
@@ -1362,10 +1357,10 @@
                       />
                       <div class="flex gap-2">
                         <Button size="sm" on:click={saveEdit} disabled={!editReason.trim()}>
-                          Save
+                          {$t('actions.save')}
                         </Button>
                         <Button size="sm" variant="outline" on:click={cancelEdit}>
-                          Cancel
+                          {$t('actions.cancel')}
                         </Button>
                       </div>
                     </div>
@@ -1374,7 +1369,7 @@
                   {/if}
                   
                   <p class="text-xs text-muted-foreground">
-                    Added {formatDate(entry.timestamp)}
+                    {$t('blacklist.list.addedAt', { values: { date: formatDate(entry.timestamp) } })}
                   </p>
                 </div>
                 
@@ -1386,7 +1381,7 @@
                       on:click={() => startEditEntry(index)}
                       class="opacity-0 group-hover:opacity-100 transition-opacity"
                     >
-                      Edit
+                      {$t('actions.edit')}
                     </Button>
                   {/if}
                   
@@ -1396,7 +1391,7 @@
                     on:click={() => removeBlacklistEntry(entry.chiral_address)}
                     disabled={editingEntry === index}
                   >
-                    Remove
+                    {$t('actions.remove')}
                   </Button>
                 </div>
               </div>
@@ -1406,14 +1401,13 @@
           {#if $blacklist.length > 5}
             <div class="text-center mt-3">
               <p class="text-xs text-muted-foreground">
-                Showing {filteredBlacklist.length} of {$blacklist.length} blacklisted addresses
+                {$t('blacklist.list.showing', { values: { shown: filteredBlacklist.length, total: $blacklist.length } })}
               </p>
             </div>
           {/if}
         {/if}
       </div>
 
-      <!-- Export/Import Blacklist -->
         <div class="border-t pt-4">
           <div class="flex gap-2">
             {#if $blacklist.length > 0}
@@ -1423,9 +1417,9 @@
               on:click={exportBlacklist}
               class="flex-1"
               disabled={$blacklist.length === 0}
-              title={$blacklist.length === 0 ? 'No entries to export' : 'Export blacklist to JSON file'}
+              title={$t('blacklist.actions.exportTitle', { values: { count: $blacklist.length } })}
             >
-              Export Blacklist {$blacklist.length > 0 ? `(${$blacklist.length})` : ''}
+              {$t('blacklist.actions.export')} {$blacklist.length > 0 ? `(${$blacklist.length})` : ''}
             </Button>
             {/if}
             <Button 
@@ -1434,11 +1428,10 @@
               on:click={() => importFileInput.click()}
               class="flex-1"
             >
-              Import Blacklist
+              {$t('blacklist.actions.import')}
             </Button>
           </div>
           
-          <!-- Hidden file input for import -->
           <input
             bind:this={importFileInput}
             type="file"
