@@ -1,28 +1,21 @@
-use futures_util::StreamExt;
+// Real DHT implementation with channel-based communication for thread safety
 use libp2p::{
-    kad::{self, store::MemoryStore, QueryResult, Record},
-    mdns::{self},
-    noise,
+    identity,
+    kad::{self, store::MemoryStore, Record},
     swarm::{NetworkBehaviour, SwarmEvent},
-    tcp, yamux,
-    identity::{self},
-    gossipsub::{self, MessageAuthenticity, ValidationMode},
-    PeerId, Swarm,
+    PeerId, Swarm, Multiaddr, SwarmBuilder,
 };
 use libp2p::kad::Behaviour as Kademlia;
-use libp2p::kad::Config as KademliaConfig;
 use libp2p::kad::Event as KademliaEvent;
-use libp2p::mdns::tokio::Behaviour as Mdns;
-use libp2p::gossipsub::Behaviour as Gossipsub;
-use libp2p::gossipsub::Event as GossipsubEvent;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::HashSet,
     sync::Arc,
     time::Duration,
 };
-use tokio::sync::{mpsc, Mutex};
-use tracing::{debug, info, warn, error};
+use tokio::sync::{mpsc, Mutex, oneshot};
+use tracing::{info, warn, debug, error};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileMetadata {
@@ -35,27 +28,17 @@ pub struct FileMetadata {
 }
 
 #[derive(NetworkBehaviour)]
-pub struct ChiralBehaviour {
-    pub kademlia: Kademlia<MemoryStore>,
-    pub mdns: Mdns,
-    pub gossipsub: Gossipsub,
-}
-
-pub struct DhtNode {
-    swarm: Swarm<ChiralBehaviour>,
-    peer_id: PeerId,
-    file_metadata: Arc<Mutex<HashMap<String, FileMetadata>>>,
-    command_sender: mpsc::Sender<DhtCommand>,
-    event_receiver: mpsc::Receiver<DhtEvent>,
+pub struct DhtBehaviour {
+    kademlia: Kademlia<MemoryStore>,
 }
 
 #[derive(Debug)]
 pub enum DhtCommand {
     PublishFile(FileMetadata),
-    GetFile(String),
-    RemoveFile(String),
-    GetPeers,
+    SearchFile(String),
     ConnectPeer(String),
+    GetPeerCount(oneshot::Sender<usize>),
+    GetPeerId(oneshot::Sender<String>),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -68,335 +51,236 @@ pub enum DhtEvent {
     Error(String),
 }
 
-impl DhtNode {
-    pub async fn new(listen_port: u16, bootstrap_nodes: Vec<String>) -> Result<Self, Box<dyn std::error::Error>> {
-        // Generate a new keypair for this node
-        let local_key = identity::Keypair::generate_ed25519();
-        let local_peer_id = PeerId::from(local_key.public());
-        
-        info!("Local peer id: {}", local_peer_id);
-
-        // Create a Kademlia behaviour with custom configuration
-        let mut kad_config = KademliaConfig::default();
-        kad_config.set_query_timeout(Duration::from_secs(60));
-        
-        let store = MemoryStore::new(local_peer_id);
-        let mut kademlia = Kademlia::with_config(local_peer_id, store, kad_config);
-        
-        // Set the Kademlia protocol for private network
-        kademlia.set_mode(Some(kad::Mode::Server));
-
-        // Create mDNS for local peer discovery
-        let mdns = Mdns::new(mdns::Config::default(), local_peer_id)?;
-
-        // Create Gossipsub for pub/sub messaging
-        let gossipsub_config = gossipsub::ConfigBuilder::default()
-            .heartbeat_interval(Duration::from_secs(10))
-            .validation_mode(ValidationMode::Strict)
-            .build()
-            .expect("Valid config");
-
-        let mut gossipsub = Gossipsub::new(
-            MessageAuthenticity::Signed(local_key.clone()),
-            gossipsub_config,
-        )?;
-
-        // Subscribe to file metadata topic
-        let topic = gossipsub::IdentTopic::new("chiral-file-metadata");
-        gossipsub.subscribe(&topic)?;
-
-        let behaviour = ChiralBehaviour {
-            kademlia,
-            mdns,
-            gossipsub,
-        };
-
-        // Build the swarm using the current libp2p API
-        let transport = tcp::tokio::Transport::new(tcp::Config::default())
-            .upgrade(libp2p::core::upgrade::Version::V1)
-            .authenticate(noise::Config::new(&local_key)?)
-            .multiplex(yamux::Config::default())
-            .boxed();
+async fn run_dht_node(
+    mut swarm: Swarm<DhtBehaviour>,
+    peer_id: PeerId,
+    mut cmd_rx: mpsc::Receiver<DhtCommand>,
+    event_tx: mpsc::Sender<DhtEvent>,
+    connected_peers: Arc<Mutex<HashSet<PeerId>>>,
+) {
+    loop {
+        tokio::select! {
+            Some(cmd) = cmd_rx.recv() => {
+                match cmd {
+                    DhtCommand::PublishFile(metadata) => {
+                        let key = kad::RecordKey::new(&metadata.file_hash.as_bytes());
+                        let value = serde_json::to_vec(&metadata).unwrap();
+                        let record = Record {
+                            key,
+                            value,
+                            publisher: Some(peer_id),
+                            expires: None,
+                        };
+                        
+                        swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One)
+                            .map_err(|e| error!("Failed to publish: {}", e)).ok();
+                        info!("Published file metadata: {}", metadata.file_hash);
+                    }
+                    DhtCommand::SearchFile(file_hash) => {
+                        let key = kad::RecordKey::new(&file_hash.as_bytes());
+                        swarm.behaviour_mut().kademlia.get_record(key);
+                        info!("Searching for file: {}", file_hash);
+                    }
+                    DhtCommand::ConnectPeer(addr) => {
+                        info!("Attempting to connect to: {}", addr);
+                        if let Ok(multiaddr) = addr.parse::<Multiaddr>() {
+                            match swarm.dial(multiaddr.clone()) {
+                                Ok(_) => {
+                                    info!("✓ Initiated connection to: {}", addr);
+                                    info!("  Multiaddr: {}", multiaddr);
+                                    info!("  Waiting for ConnectionEstablished event...");
+                                }
+                                Err(e) => {
+                                    error!("✗ Failed to dial {}: {}", addr, e);
+                                    let _ = event_tx.send(DhtEvent::Error(format!("Failed to connect: {}", e))).await;
+                                }
+                            }
+                        } else {
+                            error!("✗ Invalid multiaddr format: {}", addr);
+                            let _ = event_tx.send(DhtEvent::Error(format!("Invalid address: {}", addr))).await;
+                        }
+                    }
+                    DhtCommand::GetPeerCount(tx) => {
+                        let count = connected_peers.lock().await.len();
+                        let _ = tx.send(count);
+                    }
+                    DhtCommand::GetPeerId(tx) => {
+                        let _ = tx.send(peer_id.to_string());
+                    }
+                }
+            }
             
-        let mut swarm = Swarm::new(
-            transport,
-            behaviour,
-            local_peer_id,
-            libp2p::swarm::Config::with_executor(tokio::runtime::Handle::current())
-                .with_idle_connection_timeout(Duration::from_secs(60)),
-        );
-
-        // Listen on the specified port
-        let listen_addr = format!("/ip4/0.0.0.0/tcp/{}", listen_port);
-        swarm.listen_on(listen_addr.parse()?)?;
-
-        // Add bootstrap nodes
-        for addr in bootstrap_nodes {
-            if let Ok(multiaddr) = addr.parse() {
-                if let Some(peer_id) = extract_peer_id(&addr) {
-                    swarm.behaviour_mut().kademlia.add_address(&peer_id, multiaddr);
-                    info!("Added bootstrap node: {}", addr);
-                }
-            }
-        }
-
-        // Bootstrap the Kademlia DHT
-        swarm.behaviour_mut().kademlia.bootstrap()?;
-
-        let (cmd_tx, mut cmd_rx) = mpsc::channel(100);
-        let (event_tx, event_rx) = mpsc::channel(100);
-
-        Ok(DhtNode {
-            swarm,
-            peer_id: local_peer_id,
-            file_metadata: Arc::new(Mutex::new(HashMap::new())),
-            command_sender: cmd_tx,
-            event_receiver: event_rx,
-        })
-    }
-
-    pub async fn start(mut self) -> (mpsc::Sender<DhtCommand>, mpsc::Receiver<DhtEvent>) {
-        let (cmd_tx, mut cmd_rx) = mpsc::channel(100);
-        let (event_tx, event_rx) = mpsc::channel(100);
-        
-        let event_sender = event_tx.clone();
-
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    // Handle incoming commands
-                    Some(command) = cmd_rx.recv() => {
-                        match command {
-                            DhtCommand::PublishFile(metadata) => {
-                                self.publish_file(metadata).await;
-                            }
-                            DhtCommand::GetFile(file_hash) => {
-                                self.get_file(&file_hash).await;
-                            }
-                            DhtCommand::RemoveFile(file_hash) => {
-                                self.remove_file(&file_hash).await;
-                            }
-                            DhtCommand::GetPeers => {
-                                let peers = self.get_connected_peers();
-                                info!("Connected peers: {:?}", peers);
-                            }
-                            DhtCommand::ConnectPeer(addr) => {
-                                self.connect_to_peer(&addr).await;
-                            }
-                        }
+            event = swarm.next() => if let Some(event) = event {
+                match event {
+                    SwarmEvent::Behaviour(DhtBehaviourEvent::Kademlia(kad_event)) => {
+                        handle_kademlia_event(kad_event, &event_tx).await;
                     }
-                    
-                    // Handle swarm events
-                    event = self.swarm.next() => if let Some(event) = event {
-                        match event {
-                            SwarmEvent::Behaviour(ChiralBehaviourEvent::Kademlia(kad_event)) => {
-                                self.handle_kademlia_event(kad_event, &event_sender).await;
-                            }
-                            SwarmEvent::Behaviour(ChiralBehaviourEvent::Mdns(mdns_event)) => {
-                                self.handle_mdns_event(mdns_event, &event_sender).await;
-                            }
-                            SwarmEvent::Behaviour(ChiralBehaviourEvent::Gossipsub(gossip_event)) => {
-                                self.handle_gossipsub_event(gossip_event, &event_sender).await;
-                            }
-                            SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                                info!("Connection established with: {}", peer_id);
-                                let _ = event_sender.send(DhtEvent::PeerConnected(peer_id.to_string())).await;
-                            }
-                            SwarmEvent::ConnectionClosed { peer_id, .. } => {
-                                info!("Connection closed with: {}", peer_id);
-                                let _ = event_sender.send(DhtEvent::PeerDisconnected(peer_id.to_string())).await;
-                            }
-                            SwarmEvent::NewListenAddr { address, .. } => {
-                                info!("Listening on: {}", address);
-                            }
-                            _ => {}
-                        }
+                    SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
+                        info!("✅ CONNECTION ESTABLISHED with peer: {}", peer_id);
+                        info!("   Endpoint: {:?}", endpoint);
+                        let peers_count = {
+                            let mut peers = connected_peers.lock().await;
+                            peers.insert(peer_id);
+                            peers.len()
+                        };
+                        info!("   Total connected peers: {}", peers_count);
+                        let _ = event_tx.send(DhtEvent::PeerConnected(peer_id.to_string())).await;
                     }
-                }
-            }
-        });
-
-        (cmd_tx, event_rx)
-    }
-
-    async fn publish_file(&mut self, metadata: FileMetadata) {
-        let key = format!("file:{}", metadata.file_hash);
-        let value = serde_json::to_vec(&metadata).unwrap();
-        
-        let record = Record {
-            key: key.as_bytes().to_vec().into(),
-            value,
-            publisher: Some(self.peer_id),
-            expires: None,
-        };
-
-        match self.swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One) {
-            Ok(_) => {
-                info!("Published file metadata: {}", metadata.file_hash);
-                
-                // Also publish via gossipsub
-                let topic = gossipsub::IdentTopic::new("chiral-file-metadata");
-                if let Ok(json) = serde_json::to_string(&metadata) {
-                    let _ = self.swarm.behaviour_mut().gossipsub.publish(topic, json.as_bytes());
-                }
-            }
-            Err(e) => {
-                error!("Failed to publish file metadata: {}", e);
-            }
-        }
-    }
-
-    async fn get_file(&mut self, file_hash: &str) {
-        let key = format!("file:{}", file_hash);
-        self.swarm.behaviour_mut().kademlia.get_record(key.as_bytes().to_vec().into());
-        info!("Searching for file: {}", file_hash);
-    }
-
-    async fn remove_file(&mut self, file_hash: &str) {
-        let key = format!("file:{}", file_hash);
-        self.swarm.behaviour_mut().kademlia.remove_record(&key.as_bytes().to_vec().into());
-        info!("Removed file from DHT: {}", file_hash);
-    }
-
-    fn get_connected_peers(&self) -> Vec<String> {
-        self.swarm
-            .connected_peers()
-            .map(|p| p.to_string())
-            .collect()
-    }
-
-    async fn connect_to_peer(&mut self, addr: &str) {
-        match addr.parse() {
-            Ok(multiaddr) => {
-                match self.swarm.dial(multiaddr) {
-                    Ok(_) => info!("Dialing peer: {}", addr),
-                    Err(e) => error!("Failed to dial peer: {}", e),
-                }
-            }
-            Err(e) => error!("Invalid multiaddr: {}", e),
-        }
-    }
-
-    async fn handle_kademlia_event(&mut self, event: KademliaEvent, event_sender: &mpsc::Sender<DhtEvent>) {
-        match event {
-            KademliaEvent::OutboundQueryProgressed { result, .. } => {
-                match result {
-                    QueryResult::GetRecord(Ok(result)) => if let Some(kad::PeerRecord { record, .. }) = result.records.first() {
-                        if let Ok(metadata) = serde_json::from_slice::<FileMetadata>(&record.value) {
-                            info!("Found file metadata: {}", metadata.file_hash);
-                            let _ = event_sender.send(DhtEvent::FileDiscovered(metadata)).await;
-                        }
+                    SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
+                        warn!("❌ DISCONNECTED from peer: {}", peer_id);
+                        warn!("   Cause: {:?}", cause);
+                        let peers_count = {
+                            let mut peers = connected_peers.lock().await;
+                            peers.remove(&peer_id);
+                            peers.len()
+                        };
+                        info!("   Remaining connected peers: {}", peers_count);
+                        let _ = event_tx.send(DhtEvent::PeerDisconnected(peer_id.to_string())).await;
                     }
-                    QueryResult::GetRecord(Err(e)) => {
-                        warn!("Failed to get record: {:?}", e);
-                        let _ = event_sender.send(DhtEvent::FileNotFound("File not found".to_string())).await;
+                    SwarmEvent::NewListenAddr { address, .. } => {
+                        info!("📡 Now listening on: {}", address);
                     }
-                    QueryResult::PutRecord(Ok(_)) => {
-                        info!("Successfully stored record in DHT");
+                    SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                        error!("❌ Outgoing connection error to {:?}: {}", peer_id, error);
+                        let _ = event_tx.send(DhtEvent::Error(format!("Connection failed: {}", error))).await;
                     }
-                    QueryResult::PutRecord(Err(e)) => {
-                        error!("Failed to store record: {:?}", e);
+                    SwarmEvent::IncomingConnectionError { error, .. } => {
+                        error!("❌ Incoming connection error: {}", error);
                     }
                     _ => {}
                 }
             }
-            KademliaEvent::RoutingUpdated { peer, .. } => {
-                debug!("Routing table updated with peer: {}", peer);
-            }
-            _ => {}
-        }
-    }
-
-    async fn handle_mdns_event(&mut self, event: mdns::Event, event_sender: &mpsc::Sender<DhtEvent>) {
-        match event {
-            mdns::Event::Discovered(peers) => {
-                for (peer_id, addr) in peers {
-                    info!("Discovered peer via mDNS: {} at {}", peer_id, addr);
-                    self.swarm.behaviour_mut().kademlia.add_address(&peer_id, addr.clone());
-                    let _ = self.swarm.dial(addr);
-                    let _ = event_sender.send(DhtEvent::PeerDiscovered(peer_id.to_string())).await;
-                }
-            }
-            mdns::Event::Expired(peers) => {
-                for (peer_id, _) in peers {
-                    info!("mDNS peer expired: {}", peer_id);
-                }
-            }
-        }
-    }
-
-    async fn handle_gossipsub_event(&mut self, event: GossipsubEvent, event_sender: &mpsc::Sender<DhtEvent>) {
-        match event {
-            GossipsubEvent::Message { message, .. } => {
-                if let Ok(metadata) = serde_json::from_slice::<FileMetadata>(&message.data) {
-                    info!("Received file metadata via gossipsub: {}", metadata.file_hash);
-                    let _ = event_sender.send(DhtEvent::FileDiscovered(metadata)).await;
-                }
-            }
-            GossipsubEvent::Subscribed { peer_id, topic } => {
-                debug!("Peer {} subscribed to topic {}", peer_id, topic);
-            }
-            _ => {}
         }
     }
 }
 
-fn extract_peer_id(addr: &str) -> Option<PeerId> {
-    // Extract peer ID from multiaddr like /ip4/1.2.3.4/tcp/4001/p2p/QmPeerId
-    if let Some(p2p_part) = addr.split("/p2p/").nth(1) {
-        p2p_part.parse().ok()
-    } else {
-        None
+async fn handle_kademlia_event(event: KademliaEvent, _event_tx: &mpsc::Sender<DhtEvent>) {
+    match event {
+        KademliaEvent::RoutingUpdated { peer, .. } => {
+            debug!("Routing table updated with peer: {}", peer);
+        }
+        KademliaEvent::UnroutablePeer { peer } => {
+            warn!("Peer {} is unroutable", peer);
+        }
+        KademliaEvent::RoutablePeer { peer, .. } => {
+            debug!("Peer {} became routable", peer);
+        }
+        _ => {}
     }
 }
 
 // Public API for the DHT
 pub struct DhtService {
-    command_sender: mpsc::Sender<DhtCommand>,
-    event_receiver: Arc<Mutex<mpsc::Receiver<DhtEvent>>>,
+    cmd_tx: mpsc::Sender<DhtCommand>,
+    event_rx: Arc<Mutex<mpsc::Receiver<DhtEvent>>>,
+    peer_id: String,
 }
 
 impl DhtService {
     pub async fn new(port: u16, bootstrap_nodes: Vec<String>) -> Result<Self, Box<dyn std::error::Error>> {
-        let node = DhtNode::new(port, bootstrap_nodes).await?;
-        let (cmd_sender, event_receiver) = node.start().await;
+        // Generate a new keypair for this node
+        let local_key = identity::Keypair::generate_ed25519();
+        let local_peer_id = PeerId::from(local_key.public());
+        let peer_id_str = local_peer_id.to_string();
+        
+        info!("Local peer id: {}", local_peer_id);
+        
+        // Create a Kademlia behaviour
+        let store = MemoryStore::new(local_peer_id);
+        let kademlia = Kademlia::new(local_peer_id, store);
+        
+        let behaviour = DhtBehaviour { kademlia };
+        
+        // Create the swarm
+        let mut swarm = SwarmBuilder::with_existing_identity(local_key)
+            .with_tokio()
+            .with_tcp(
+                Default::default(),
+                libp2p::noise::Config::new,
+                libp2p::yamux::Config::default,
+            )?
+            .with_behaviour(|_| behaviour)?
+            .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
+            .build();
+        
+        // Listen on the specified port
+        let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", port).parse()?;
+        swarm.listen_on(listen_addr)?;
+        info!("DHT listening on port: {}", port);
+        
+        // Connect to bootstrap nodes
+        info!("Bootstrap nodes to connect: {:?}", bootstrap_nodes);
+        for bootstrap_addr in &bootstrap_nodes {
+            info!("Attempting to connect to bootstrap: {}", bootstrap_addr);
+            if let Ok(addr) = bootstrap_addr.parse::<Multiaddr>() {
+                match swarm.dial(addr.clone()) {
+                    Ok(_) => info!("✓ Initiated connection to bootstrap: {}", bootstrap_addr),
+                    Err(e) => warn!("✗ Failed to dial bootstrap {}: {}", bootstrap_addr, e),
+                }
+            } else {
+                warn!("✗ Invalid bootstrap address format: {}", bootstrap_addr);
+            }
+        }
+        
+        let (cmd_tx, cmd_rx) = mpsc::channel(100);
+        let (event_tx, event_rx) = mpsc::channel(100);
+        let connected_peers = Arc::new(Mutex::new(HashSet::new()));
+        
+        // Spawn the DHT node task
+        tokio::spawn(run_dht_node(
+            swarm,
+            local_peer_id,
+            cmd_rx,
+            event_tx,
+            connected_peers,
+        ));
         
         Ok(DhtService {
-            command_sender: cmd_sender,
-            event_receiver: Arc::new(Mutex::new(event_receiver)),
+            cmd_tx,
+            event_rx: Arc::new(Mutex::new(event_rx)),
+            peer_id: peer_id_str,
         })
     }
-
+    
+    pub async fn run(&self) {
+        // The node is already running in a spawned task
+        info!("DHT node is running");
+    }
+    
     pub async fn publish_file(&self, metadata: FileMetadata) -> Result<(), String> {
-        self.command_sender
-            .send(DhtCommand::PublishFile(metadata))
-            .await
+        self.cmd_tx.send(DhtCommand::PublishFile(metadata)).await
             .map_err(|e| e.to_string())
     }
-
+    
+    pub async fn search_file(&self, file_hash: String) -> Result<(), String> {
+        self.cmd_tx.send(DhtCommand::SearchFile(file_hash)).await
+            .map_err(|e| e.to_string())
+    }
+    
     pub async fn get_file(&self, file_hash: String) -> Result<(), String> {
-        self.command_sender
-            .send(DhtCommand::GetFile(file_hash))
-            .await
-            .map_err(|e| e.to_string())
+        self.search_file(file_hash).await
     }
-
-    pub async fn remove_file(&self, file_hash: String) -> Result<(), String> {
-        self.command_sender
-            .send(DhtCommand::RemoveFile(file_hash))
-            .await
-            .map_err(|e| e.to_string())
-    }
-
+    
     pub async fn connect_peer(&self, addr: String) -> Result<(), String> {
-        self.command_sender
-            .send(DhtCommand::ConnectPeer(addr))
-            .await
+        self.cmd_tx.send(DhtCommand::ConnectPeer(addr)).await
             .map_err(|e| e.to_string())
     }
-
+    
+    pub async fn get_peer_id(&self) -> String {
+        self.peer_id.clone()
+    }
+    
+    pub async fn get_peer_count(&self) -> usize {
+        let (tx, rx) = oneshot::channel();
+        if self.cmd_tx.send(DhtCommand::GetPeerCount(tx)).await.is_ok() {
+            rx.await.unwrap_or(0)
+        } else {
+            0
+        }
+    }
+    
     pub async fn get_next_event(&self) -> Option<DhtEvent> {
-        let mut receiver = self.event_receiver.lock().await;
-        receiver.recv().await
+        let mut rx = self.event_rx.lock().await;
+        rx.recv().await
     }
 }

@@ -3,7 +3,7 @@
   import Card from '$lib/components/ui/card.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX } from 'lucide-svelte'
+  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound } from 'lucide-svelte'
   import { wallet, etcAccount, blacklist } from '$lib/stores'
   import { writable, derived } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
@@ -13,7 +13,6 @@
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
-
   interface Transaction {
     id: number;
     type: 'sent' | 'received';
@@ -44,6 +43,9 @@
   let showQrCodeModal = false;
   let qrCodeDataUrl = ''
   let showScannerModal = false;
+  let keystorePassword = '';
+  let isSavingToKeystore = false;
+  let keystoreSaveMessage = '';
 
   let Html5QrcodeScanner: InstanceType<typeof Html5QrcodeScannerClass> | null = null;
   
@@ -428,6 +430,36 @@
       alert('Failed to create account: ' + error)
     } finally {
       isCreatingAccount = false
+    }
+  }
+
+  async function saveToKeystore() {
+    if (!keystorePassword || !$etcAccount) return;
+
+    isSavingToKeystore = true;
+    keystoreSaveMessage = '';
+
+    try {
+        if (isTauri) {
+            await invoke('save_account_to_keystore', {
+                address: $etcAccount.address,
+                privateKey: $etcAccount.private_key,
+                password: keystorePassword,
+            });
+            keystoreSaveMessage = 'Success! Private key saved to keystore.';
+        } else {
+            // Simulate for web
+            console.log('Simulating save to keystore with password:', keystorePassword);
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            keystoreSaveMessage = 'Success! (Simulated) Private key saved.';
+        }
+        keystorePassword = ''; // Clear password after saving
+    } catch (error) {
+        console.error('Failed to save to keystore:', error);
+        keystoreSaveMessage = `Error: ${error}`;
+    } finally {
+        isSavingToKeystore = false;
+        setTimeout(() => keystoreSaveMessage = '', 4000);
     }
   }
 
@@ -902,7 +934,6 @@
          {/if}
       </div>
     </Card>
-    
     {#if $etcAccount}
     <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
@@ -1116,6 +1147,41 @@
   </Card>
 
   <!-- Enhanced Blacklist Management Section -->
+  <Card class="p-6">
+    <div class="flex items-center gap-2 mb-4">
+      <KeyRound class="h-5 w-5 text-muted-foreground" />
+      <h2 class="text-lg font-semibold">Save to Local Keystore</h2>
+    </div>
+    <div class="space-y-4">
+      <p class="text-sm text-muted-foreground">
+        Save your private key securely on this computer, encrypted with a password.
+        The keystore is saved in the application's secure data directory. You can later log in using your Chiral address and this password.
+      </p>
+      <div class="flex items-center gap-2">
+        <Input
+          type="password"
+          bind:value={keystorePassword}
+          placeholder="Enter a strong password"
+          class="flex-1"
+          autocomplete="new-password"
+        />
+        <Button
+          on:click={saveToKeystore}
+          disabled={!keystorePassword || isSavingToKeystore}
+        >
+          {#if isSavingToKeystore}
+            Saving...
+          {:else}
+            Save Key
+          {/if}
+        </Button>
+      </div>
+      {#if keystoreSaveMessage}
+        <p class="text-xs text-center mt-2 {keystoreSaveMessage.toLowerCase().includes('success') ? 'text-green-600' : 'text-red-600'}">{keystoreSaveMessage}</p>
+      {/if}
+    </div>
+  </Card>
+
   <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
       <div>
