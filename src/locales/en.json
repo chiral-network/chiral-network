@@ -78,5 +78,202 @@
     "clearCache": "Clear Cache",
     "clearing": "Clearing...",
     "cleared": "✓ Cleared!"
+  },
+
+  "account": {
+    "title": "Account",
+    "subtitle": "Manage your wallet and account settings"
+  },
+
+  "wallet": {
+    "title": "Chiral Network Wallet",
+    "balance": "Balance",
+    "totalEarned": "Total Earned",
+    "totalSpent": "Total Spent",
+    "address": "Chiral Address",
+    "qrModal": {
+      "title": "Your Chiral Address",
+      "alt": "Chiral Address QR Code"
+    },
+    "export": "Export Wallet",
+    "exportSuccess": "Wallet exported successfully!",
+    "cta": {
+      "intro": "Get started with Chiral Network by creating or importing an account:"
+    },
+    "privateKey": "Private Key"
+  },
+
+  "transfer": {
+    "title": "Send Chiral Coins",
+    "recipient": {
+      "label": "Recipient Address",
+      "aria": "Recipient address input",
+      "placeholder": "0x...",
+      "characters": "characters",
+      "remaining": "remaining",
+      "over": "over",
+      "scanQr": "Scan QR Code",
+      "scanQrTitle": "Scan QR Code"
+    },
+    "amount": {
+      "label": "Amount (Chiral)",
+      "max": "Max",
+      "placeholder": ""
+    },
+    "available": "Available: {amount} Chiral",
+    "send": "Send Transaction",
+    "sendingIn": "Sending in {seconds}s (Tap to Cancel)",
+    "viewPending": "View pending transactions",
+    "pending": {
+      "title": "Pending Transactions",
+      "noDetails": "No pending transaction details available.",
+      "count": "{count} Pending Transaction{count !== 1 ? 's' : ''}",
+      "none": "Pending Transactions"
+    }
+  },
+
+  "transactions": {
+    "title": "Transaction History",
+    "manual": "Manual transaction",
+    "empty": {
+      "title": "No transactions yet",
+      "desc": "Transactions will appear here once you send or receive Chiral"
+    },
+    "item": {
+      "from": "From",
+      "to": "To"
+    }
+  },
+
+  "keystore": {
+    "title": "Save to Local Keystore",
+    "desc": "Save your private key securely on this computer, encrypted with a password.",
+    "success": "Success! Private key saved to keystore.",
+    "successSimulated": "Success! (Simulated) Private key saved.",
+    "error": "Error: {error}"
+  },
+
+  "blacklist": {
+    "title": "Blacklist Management",
+    "subtitle": "Block malicious or unwanted addresses",
+    "add": {
+      "title": "Add New Entry",
+      "address": "Chiral Address",
+      "addressPlaceholder": "0x1234567890abcdef...",
+      "reason": "Reason for Blacklisting",
+      "remaining": "{remaining} characters remaining",
+      "submit": "Add to Blacklist"
+    },
+    "quickReasons": {
+      "label": "Quick reasons:",
+      "spam": "Spam",
+      "fraud": "Fraud",
+      "malicious": "Malicious Activity",
+      "harassment": "Harassment",
+      "scam": "Scam"
+    },
+    "list": {
+      "title": "Blacklisted Addresses",
+      "emptyTitle": "No addresses blacklisted",
+      "emptyDesc": "Add addresses above to block transactions and interactions",
+      "noMatch": "No blacklisted addresses match \"{q}\"",
+      "addedAt": "Added {date}",
+      "showing": "Showing {shown} of {total} blacklisted addresses"
+    },
+    "actions": {
+      "clearAll": "Clear All",
+      "export": "Export Blacklist",
+      "exportTitle": "Export blacklist to JSON file",
+      "import": "Import Blacklist",
+      "copyAddress": "Copy address"
+    },
+    "errors": {
+      "alreadyExists": "This address is already blacklisted.",
+      "ownAddress": "Cannot blacklist your own address."
+    },
+    "confirm": {
+      "remove": "Remove {address} from blacklist?",
+      "removeAll": "Remove all {count} blacklisted addresses?"
+    },
+    "import": {
+      "success": "Imported {count} entries successfully",
+      "none": "No valid new entries found to import",
+      "invalid": "Invalid file format - no blacklist data found",
+      "parseError": "Invalid file format - please select a valid JSON file"
+    }
+  },
+
+  "filters": {
+    "type": "Type",
+    "typeAll": "All",
+    "typeSent": "Sent",
+    "typeReceived": "Received",
+    "from": "From",
+    "to": "To",
+    "sort": "Sort",
+    "sortNewest": "Newest → Oldest",
+    "sortOldest": "Oldest → Newest",
+    "reset": "Reset"
+  },
+
+  "actions": {
+    "createAccount": "Create New Account",
+    "creating": "Creating...",
+    "importAccount": "Import Existing Account",
+    "importing": "Importing...",
+    "copy": "Copy",
+    "show": "Show",
+    "hide": "Hide",
+    "close": "Close",
+    "saveKey": "Save Key",
+    "saving": "Saving...",
+    "save": "Save",
+    "saveSettings": "Save Settings",
+    "cancel": "Cancel",
+    "remove": "Remove",
+    "edit": "Edit",
+    "resetDefaults": "Reset to Defaults"
+  },
+
+  "placeholders": {
+    "importPrivateKey": "Enter private key to import",
+    "password": "Enter a strong password",
+    "searchBlacklist": "Search blacklist...",
+    "reason": "Enter reason..."
+  },
+
+  "tooltips": {
+    "showQr": "Show QR Code",
+    "clearSearch": "Clear search"
+  },
+
+  "aria": {
+    "copyAddress": "Copy address",
+    "copyPrivateKey": "Copy private key",
+    "showQr": "Show QR code"
+  },
+
+  "warnings": {
+    "neverSharePrivateKey": "Never share your private key with anyone"
+  },
+
+  "errors": {
+    "address": {
+      "mustStartWith0x": "Address must start with 0x.",
+      "mustBe42": "Address must be exactly 42 characters long.",
+      "mustBeHex": "Address must contain valid hexadecimal characters (0-9, a-f, A-F)"
+    },
+    "amount": {
+      "invalid": "Please enter a valid amount greater than 0.",
+      "min": "Amount must be at least {min} Chiral.",
+      "insufficient": "Insufficient balance - Need {more} more Chiral."
+    },
+    "exportFailed": "Export failed. Please try again.",
+    "createAccount": "Failed to create account: {error}"
+  },
+
+  "messages": {
+    "copied": "Copied!",
+    "failed": "Failed!"
   }
 }

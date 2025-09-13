@@ -78,5 +78,210 @@
     "clearCache": "캐시 비우기",
     "clearing": "삭제 중...",
     "cleared": "✓ 삭제 완료!"
+  },
+
+  "account": {
+    "title": "계정",
+    "subtitle": "지갑과 계정 설정을 관리하세요"
+  },
+
+  "wallet": {
+    "title": "카이럴 네트워크 지갑",
+    "balance": "잔액",
+    "totalEarned": "총 수익",
+    "totalSpent": "총 지출",
+    "address": "카이럴 주소",
+    "qrModal": {
+      "title": "나의 카이럴 주소",
+      "alt": "카이럴 주소 QR 코드"
+    },
+    "export": "지갑 내보내기",
+    "exportSuccess": "지갑이 성공적으로 내보내졌습니다!",
+    "cta": {
+      "intro": "새 계정을 만들거나 기존 계정을 가져와 카이럴 네트워크를 시작하세요:"
+    },
+    "privateKey": "개인 키"
+  },
+
+  "transfer": {
+    "title": "카이럴 코인 보내기",
+    "recipient": {
+      "label": "수신자 주소",
+      "aria": "수신자 주소 입력",
+      "placeholder": "0x...",
+      "characters": "자",
+      "remaining": "남음",
+      "over": "초과",
+      "scanQr": "QR 코드 스캔",
+      "scanQrTitle": "QR 코드 스캔"
+    },
+    "amount": {
+      "label": "금액(Chiral)",
+      "max": "최대",
+      "placeholder": ""
+    },
+    "available": "사용 가능: {amount} Chiral",
+    "send": "전송",
+    "sendingIn": "{seconds}초 후 전송 (탭하여 취소)",
+    "viewPending": "보류 중 트랜잭션 보기",
+    "pending": {
+      "title": "보류 중 트랜잭션",
+      "noDetails": "표시할 보류 중 트랜잭션이 없습니다.",
+      "count": "보류 중 {count}건",
+      "none": "보류 중 트랜잭션"
+    }
+  },
+
+  "transactions": {
+    "title": "트랜잭션 내역",
+    "manual": "수동 트랜잭션",
+    "empty": {
+      "title": "아직 트랜잭션이 없습니다",
+      "desc": "전송 또는 수신 시 여기에 표시됩니다"
+    },
+    "item": {
+      "from": "보낸 사람",
+      "to": "받는 사람"
+    }
+  },
+
+  "keystore": {
+    "title": "로컬 키스토어에 저장",
+    "desc": "이 컴퓨터에 비밀번호로 암호화하여 안전하게 저장합니다.",
+    "success": "성공! 개인 키가 키스토어에 저장되었습니다.",
+    "successSimulated": "성공! (시뮬레이션) 개인 키가 저장되었습니다.",
+    "error": "오류: {error}"
+  },
+
+  "blacklist": {
+    "title": "블랙리스트 관리",
+    "subtitle": "악성/원치 않는 주소를 차단합니다",
+    "add": {
+      "title": "새 항목 추가",
+      "address": "카이럴 주소",
+      "addressPlaceholder": "0x1234567890abcdef...",
+      "reason": "차단 사유",
+      "remaining": "남은 글자: {remaining}",
+      "submit": "블랙리스트에 추가"
+    },
+    "quickReasons": {
+      "label": "빠른 사유:",
+      "spam": "스팸",
+      "fraud": "사기",
+      "malicious": "악성 활동",
+      "harassment": "괴롭힘",
+      "scam": "스캠"
+    },
+    "list": {
+      "title": "블랙리스트 주소",
+      "emptyTitle": "블랙리스트가 비어 있습니다",
+      "emptyDesc": "위에서 주소를 추가해 트랜잭션과 상호작용을 차단하세요",
+      "noMatch": "\"{q}\"과(와) 일치하는 블랙리스트 주소가 없습니다",
+      "addedAt": "{date}에 추가됨",
+      "showing": "총 {total}개 중 {shown}개 표시"
+    },
+    "actions": {
+      "clearAll": "전체 삭제",
+      "export": "블랙리스트 내보내기",
+      "exportTitle": "블랙리스트를 JSON 파일로 내보내기",
+      "import": "블랙리스트 가져오기",
+      "copyAddress": "주소 복사"
+    },
+    "errors": {
+      "alreadyExists": "이미 블랙리스트에 있는 주소입니다.",
+      "ownAddress": "자신의 주소는 블랙리스트에 추가할 수 없습니다."
+    },
+    "confirm": {
+      "remove": "블랙리스트에서 {address} 주소를 삭제하시겠습니까?",
+      "removeAll": "블랙리스트 {count}개 항목을 모두 삭제하시겠습니까?"
+    },
+    "import": {
+      "success": "{count}개 항목을 성공적으로 가져왔습니다",
+      "none": "가져올 수 있는 유효한 새 항목이 없습니다",
+      "invalid": "잘못된 파일 형식 — 블랙리스트 데이터가 없습니다",
+      "parseError": "잘못된 파일 형식 — 올바른 JSON 파일을 선택하세요"
+    }
+  },
+
+  "filters": {
+    "type": "유형",
+    "typeAll": "전체",
+    "typeSent": "보냄",
+    "typeReceived": "받음",
+    "from": "시작일",
+    "to": "종료일",
+    "sort": "정렬",
+    "sortNewest": "최신 → 오래된",
+    "sortOldest": "오래된 → 최신",
+    "reset": "초기화"
+  },
+
+  "actionsGroup": {},
+
+  "actionsGroupNote": "Do not remove this key; placeholder to avoid merging issues.",
+
+  "actionsObjectNote": "Real actions are under \"actions\" and below \"actions\" object. Above top-level action keys are also kept for backward compatibility.",
+
+  "actionsObject": {},
+
+  "actions": {
+    "createAccount": "새 계정 만들기",
+    "creating": "생성 중...",
+    "importAccount": "기존 계정 가져오기",
+    "importing": "가져오는 중...",
+    "copy": "복사",
+    "show": "표시",
+    "hide": "숨기기",
+    "close": "닫기",
+    "saveKey": "키 저장",
+    "saving": "저장 중...",
+    "save": "저장",
+    "saveSettings": "설정 저장",
+    "cancel": "취소",
+    "remove": "삭제",
+    "edit": "편집",
+    "resetDefaults": "기본값으로 재설정"
+  },
+
+  "placeholders": {
+    "importPrivateKey": "가져올 개인 키를 입력",
+    "password": "강력한 비밀번호 입력",
+    "searchBlacklist": "블랙리스트 검색…",
+    "reason": "사유 입력…"
+  },
+
+  "tooltips": {
+    "showQr": "QR 코드 보기",
+    "clearSearch": "검색 지우기"
+  },
+
+  "aria": {
+    "copyAddress": "주소 복사",
+    "copyPrivateKey": "개인 키 복사",
+    "showQr": "QR 코드 보기"
+  },
+
+  "warnings": {
+    "neverSharePrivateKey": "개인 키는 누구와도 공유하지 마세요"
+  },
+
+  "errors": {
+    "address": {
+      "mustStartWith0x": "주소는 0x로 시작해야 합니다.",
+      "mustBe42": "주소 길이는 정확히 42자여야 합니다.",
+      "mustBeHex": "주소는 16진수 문자(0-9, a-f, A-F)만 포함해야 합니다."
+    },
+    "amount": {
+      "invalid": "0보다 큰 올바른 금액을 입력하세요.",
+      "min": "금액은 최소 {min} Chiral이어야 합니다.",
+      "insufficient": "잔액이 부족합니다 — {more} Chiral이 더 필요합니다."
+    },
+    "exportFailed": "내보내기에 실패했습니다. 다시 시도하세요.",
+    "createAccount": "계정 생성 실패: {error}"
+  },
+
+  "messages": {
+    "copied": "복사됨!",
+    "failed": "실패!"
   }
 }
