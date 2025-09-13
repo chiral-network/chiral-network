@@ -705,7 +705,11 @@
 
   <!-- Action Buttons -->
   <div class="flex flex-wrap items-center justify-between gap-2">
-    <Button variant="outline" size="xs" on:click={openResetConfirm}>
+    <Button 
+      variant="destructive" 
+      size="xs" 
+      on:click={openResetConfirm}
+    >
       {$t("actions.resetDefaults")}
     </Button>
 
@@ -715,12 +719,23 @@
         size="xs"
         on:click={() => (settings = { ...savedSettings })}
         disabled={!hasChanges}
+        class="transition-colors duration-200"
+        class:cursor-not-allowed={!hasChanges}
+        class:opacity-50={!hasChanges}
       >
-        {$t("actions.cancel")}
+        {$t('actions.cancel')}
       </Button>
-      <Button size="xs" on:click={saveSettings} disabled={!hasChanges || !isValid}>
+
+      <Button
+        size="xs"
+        on:click={saveSettings}
+        disabled={!hasChanges || !isValid}
+        class="transition-colors duration-200"
+        class:cursor-not-allowed={!hasChanges || !isValid}
+        class:opacity-50={!hasChanges || !isValid}
+      >
         <Save class="h-4 w-4 mr-2" />
-        {$t("actions.save")}
+        {$t('actions.save')}
       </Button>
     </div>
   </div>

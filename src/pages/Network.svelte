@@ -56,6 +56,9 @@
   let dhtPort = 4001
   let dhtBootstrapNode = DEFAULT_BOOTSTRAP_NODE
   let dhtEvents: string[] = []
+  let dhtPeerCount = 0
+  let dhtError: string | null = null
+  let connectionAttempts = 0
   
   function formatSize(bytes: number): string {
     const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
@@ -83,25 +86,129 @@
     
     try {
       dhtStatus = 'connecting'
-      const peerId = await dhtService.start({
-        port: dhtPort,
-        bootstrapNodes: [dhtBootstrapNode]
-      })
-      dhtPeerId = peerId
-      dhtStatus = 'connected'
+      dhtError = null
+      connectionAttempts++
       
-      // Start polling for DHT events
+      // Add a small delay to show the connecting state
+      await new Promise(resolve => setTimeout(resolve, 500))
+      
+      // Only start DHT if not already running
+      if (!dhtPeerId) {
+        try {
+          const peerId = await dhtService.start({
+            port: dhtPort,
+            bootstrapNodes: [dhtBootstrapNode]
+          })
+          dhtPeerId = peerId
+          // Also ensure the service knows its own peer ID
+          dhtService.setPeerId(peerId)
+        } catch (error: any) {
+          if (error.toString().includes('already running')) {
+            // DHT is already running in backend but frontend doesn't know the peer ID
+            // This can happen after page refresh or reconnection
+            console.warn('DHT already running in backend, retrieving peer ID...')
+            dhtEvents = [...dhtEvents, `⚠ DHT already running, retrieving peer ID...`]
+            // Try to get the peer ID from the service
+            const existingPeerId = dhtService.getPeerId()
+            if (existingPeerId) {
+              dhtPeerId = existingPeerId
+            } else {
+              // If we still don't have it, we need to stop and restart
+              console.warn('Cannot retrieve peer ID, stopping and restarting DHT...')
+              try {
+                await dhtService.stop()
+                const peerId = await dhtService.start({
+                  port: dhtPort,
+                  bootstrapNodes: [dhtBootstrapNode]
+                })
+                dhtPeerId = peerId
+                dhtService.setPeerId(peerId)
+              } catch (restartError) {
+                console.error('Failed to restart DHT:', restartError)
+                throw restartError
+              }
+            }
+          } else {
+            throw error
+          }
+        }
+      } else {
+        // DHT already running, ensure service knows the peer ID
+        dhtService.setPeerId(dhtPeerId)
+        console.log('DHT already started with peer ID:', dhtPeerId)
+        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] DHT already running, retrying connection...`]
+      }
+      
+      // Try to connect to bootstrap node
+      let connectionSuccessful = false
+      if (dhtBootstrapNode) {
+        console.log('Attempting to connect to bootstrap node:', dhtBootstrapNode)
+        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to ${dhtBootstrapNode}...`]
+        
+        // Add another small delay to show the connection attempt
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        
+        try {
+          await dhtService.connectPeer(dhtBootstrapNode)
+          console.log('Connection initiated to bootstrap node')
+          connectionSuccessful = true
+          dhtEvents = [...dhtEvents, `✓ Connection initiated to bootstrap node (waiting for handshake...)`]
+          
+          // Poll for actual connection after a delay
+          setTimeout(async () => {
+            const peerCount = await invoke('get_dht_peer_count')
+            if (peerCount > 0) {
+              dhtEvents = [...dhtEvents, `✓ Successfully connected! Peers: ${peerCount}`]
+            } else {
+              dhtEvents = [...dhtEvents, `⚠ Connection pending... (bootstrap node may be unreachable)`]
+            }
+          }, 3000)
+        } catch (error: any) {
+          console.warn('Cannot connect to bootstrap node:', error)
+          connectionSuccessful = false
+          
+          // Parse and improve error messages
+          let errorMessage = error.toString ? error.toString() : String(error)
+          
+          if (errorMessage.includes('DHT not started')) {
+            errorMessage = 'DHT service not initialized properly. Try stopping and restarting.'
+          } else if (errorMessage.includes('DHT networking not implemented')) {
+            errorMessage = 'P2P networking not available (requires libp2p implementation)'
+          } else if (errorMessage.includes('already running')) {
+            errorMessage = 'DHT already running on this port'
+          } else if (errorMessage.includes('Connection refused')) {
+            errorMessage = 'Bootstrap node is not reachable or offline'
+          } else if (errorMessage.includes('timeout')) {
+            errorMessage = 'Connection timed out - bootstrap node may be unreachable'
+          }
+          
+          dhtError = errorMessage
+          dhtEvents = [...dhtEvents, `✗ Connection failed: ${errorMessage}`]
+        }
+      }
+      
+      // Set status based on connection result
+      dhtStatus = connectionSuccessful ? 'connected' : 'disconnected'
+      
+      // Start polling for DHT events and peer count
       setInterval(async () => {
         try {
           const events = await dhtService.getEvents()
-          dhtEvents = events
+          if (events.length > 0) {
+            dhtEvents = [...dhtEvents, ...events].slice(-10) // Keep last 10 events
+          }
+          
+          const count = await dhtService.getPeerCount()
+          dhtPeerCount = count
         } catch (error) {
           console.error('Failed to get DHT events:', error)
         }
       }, 5000)
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to start DHT:', error)
       dhtStatus = 'disconnected'
+      dhtError = error.toString ? error.toString() : String(error)
+      dhtEvents = [...dhtEvents, `✗ Failed to start DHT: ${dhtError}`]
     }
   }
   
@@ -109,6 +216,8 @@
     if (!isTauri) {
       dhtStatus = 'disconnected'
       dhtPeerId = null
+      dhtError = null
+      connectionAttempts = 0
       return
     }
     
@@ -116,8 +225,12 @@
       await dhtService.stop()
       dhtStatus = 'disconnected'
       dhtPeerId = null
+      dhtError = null
+      connectionAttempts = 0
+      dhtEvents = [...dhtEvents, `✓ DHT stopped`]
     } catch (error) {
       console.error('Failed to stop DHT:', error)
+      dhtEvents = [...dhtEvents, `✗ Failed to stop DHT: ${error}`]
     }
   }
 
@@ -464,16 +577,42 @@
         <div class="text-center py-4">
           <Wifi class="h-12 w-12 text-muted-foreground mx-auto mb-2" />
           <p class="text-sm text-muted-foreground mb-3">DHT is not connected</p>
-          <Button on:click={startDht}>
-            <Wifi class="h-4 w-4 mr-2" />
-            Connect to DHT Network
-          </Button>
+          {#if dhtError}
+            <div class="bg-red-500/10 border border-red-500/20 rounded-lg p-3 mb-3 mx-4">
+              <p class="text-xs text-red-400 font-medium mb-1">Connection Error:</p>
+              <p class="text-xs text-red-300 font-mono">{dhtError}</p>
+            </div>
+          {/if}
+          <div class="flex gap-2 justify-center">
+            <Button on:click={startDht}>
+              <Wifi class="h-4 w-4 mr-2" />
+              {connectionAttempts > 0 ? 'Retry Connection' : 'Connect to DHT Network'}
+            </Button>
+            {#if dhtPeerId}
+              <Button variant="outline" on:click={stopDht}>
+                <Wifi class="h-4 w-4 mr-2" />
+                Stop DHT
+              </Button>
+            {/if}
+          </div>
+          
+          {#if dhtEvents.length > 0}
+            <div class="mt-4 mx-4">
+              <p class="text-xs text-muted-foreground mb-2">Connection Log:</p>
+              <div class="bg-secondary/50 rounded-lg p-2 max-h-32 overflow-y-auto text-left">
+                {#each dhtEvents.slice(-5) as event}
+                  <p class="text-xs font-mono text-muted-foreground">{event}</p>
+                {/each}
+              </div>
+            </div>
+          {/if}
         </div>
       {:else if dhtStatus === 'connecting'}
         <div class="text-center py-4">
           <Wifi class="h-12 w-12 text-yellow-500 mx-auto mb-2 animate-pulse" />
           <p class="text-sm text-muted-foreground">Connecting to bootstrap node...</p>
           <p class="text-xs text-muted-foreground mt-1">{dhtBootstrapNode}</p>
+          <p class="text-xs text-yellow-500 mt-2">Attempt #{connectionAttempts}</p>
         </div>
       {:else}
         <div class="space-y-3">
@@ -483,8 +622,8 @@
               <p class="text-2xl font-bold">{dhtPort}</p>
             </div>
             <div class="bg-secondary rounded-lg p-3">
-              <p class="text-sm text-muted-foreground">Bootstrap</p>
-              <p class="text-sm font-medium">Connected</p>
+              <p class="text-sm text-muted-foreground">Connected Peers</p>
+              <p class="text-2xl font-bold">{dhtPeerCount}</p>
             </div>
           </div>
           
@@ -538,8 +677,8 @@
           <Users class="h-5 w-5 text-blue-500" />
         </div>
         <div>
-          <p class="text-sm text-muted-foreground">Active Peers</p>
-          <p class="text-xl font-bold">{$networkStats.onlinePeers}/{$networkStats.totalPeers}</p>
+          <p class="text-sm text-muted-foreground">DHT Peers</p>
+          <p class="text-xl font-bold">{dhtStatus === 'connected' ? dhtPeerCount : 0}</p>
         </div>
       </div>
     </Card>

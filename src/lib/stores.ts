@@ -252,6 +252,15 @@ export const userLocation = writable<string>("US-East");
 export const etcAccount = writable<ETCAccount | null>(null);
 export const blacklist = writable<BlacklistEntry[]>(blacklistedPeers);
 
+interface RecentBlock {
+  id: string;
+  hash: string;
+  reward: number;
+  timestamp: Date;
+  difficulty: number;
+  nonce: number;
+}
+
 // Mining state
 export interface MiningState {
   isMining: boolean;
@@ -262,6 +271,7 @@ export interface MiningState {
   minerIntensity: number;
   selectedPool: string;
   sessionStartTime?: number; // Track mining session start time for persistence
+  recentBlocks?: RecentBlock[]; // Store recent blocks found
 }
 
 export const miningState = writable<MiningState>({
@@ -273,4 +283,5 @@ export const miningState = writable<MiningState>({
   minerIntensity: 50,
   selectedPool: "solo",
   sessionStartTime: undefined,
+  recentBlocks: [],
 });

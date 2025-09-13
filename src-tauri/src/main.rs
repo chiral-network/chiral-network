@@ -6,9 +6,8 @@
 mod ethereum;
 mod keystore;
 mod geth_downloader;
-mod dht_simple;
+mod dht;
 mod headless;
-use dht_simple as dht;
 
 use ethereum::{
     create_new_account, get_account_from_private_key, get_balance, get_peer_count,
@@ -278,7 +277,10 @@ async fn start_dht_node(state: State<'_, AppState>, port: u16, bootstrap_nodes: 
         .await
         .map_err(|e| format!("Failed to start DHT: {}", e))?;
     
-    let peer_id = dht_service.get_peer_id();
+    let peer_id = dht_service.get_peer_id().await;
+    
+    // Start the DHT node running in background
+    dht_service.run().await;
     
     {
         let mut dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
@@ -356,6 +358,20 @@ async fn connect_to_peer(state: State<'_, AppState>, peer_address: String) -> Re
 }
 
 #[tauri::command]
+async fn get_dht_peer_count(state: State<'_, AppState>) -> Result<usize, String> {
+    let dht = {
+        let dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
+        dht_guard.as_ref().cloned()
+    };
+    
+    if let Some(dht) = dht {
+        Ok(dht.get_peer_count().await)
+    } else {
+        Ok(0) // Return 0 if DHT is not running
+    }
+}
+
+#[tauri::command]
 async fn get_dht_events(_state: State<'_, AppState>) -> Result<Vec<String>, String> {
     // Simplified version returns empty events for now
     Ok(vec![])
@@ -407,6 +423,20 @@ fn detect_locale() -> String {
 }
 
 fn main() {
+    // Initialize logging for debug builds
+    #[cfg(debug_assertions)]
+    {
+        use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+        tracing_subscriber::registry()
+            .with(fmt::layer())
+            .with(EnvFilter::from_default_env()
+                .add_directive("chiral_network=info".parse().unwrap())
+                .add_directive("libp2p=info".parse().unwrap())
+                .add_directive("libp2p_kad=debug".parse().unwrap())
+                .add_directive("libp2p_swarm=debug".parse().unwrap()))
+            .init();
+    }
+    
     // Parse command line arguments
     use clap::Parser;
     let args = headless::CliArgs::parse();
@@ -466,7 +496,8 @@ fn main() {
             search_file_metadata,
             connect_to_peer,
             get_dht_events,
-            detect_locale
+            detect_locale,
+            get_dht_peer_count
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
