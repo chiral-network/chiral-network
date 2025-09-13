@@ -372,6 +372,20 @@ async fn get_dht_peer_count(state: State<'_, AppState>) -> Result<usize, String>
 }
 
 #[tauri::command]
+async fn get_dht_peer_id(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let dht = {
+        let dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
+        dht_guard.as_ref().cloned()
+    };
+    
+    if let Some(dht) = dht {
+        Ok(Some(dht.get_peer_id().await))
+    } else {
+        Ok(None) // Return None if DHT is not running
+    }
+}
+
+#[tauri::command]
 async fn get_dht_events(_state: State<'_, AppState>) -> Result<Vec<String>, String> {
     // Simplified version returns empty events for now
     Ok(vec![])
@@ -497,7 +511,8 @@ fn main() {
             connect_to_peer,
             get_dht_events,
             detect_locale,
-            get_dht_peer_count
+            get_dht_peer_count,
+            get_dht_peer_id
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())

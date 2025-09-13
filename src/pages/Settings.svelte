@@ -79,12 +79,6 @@
     { value: 'Asia-Pacific', label: 'Asia Pacific' }
   ];
 
-  const languages = [
-    { value: 'en', label: 'English' },
-    { value: 'es', label: 'Español' },
-    { value: 'zh', label: '中文' },
-    { value: 'ko', label: '한국어' }
-  ];
 
   // Check for changes
   $: hasChanges = JSON.stringify(settings) !== JSON.stringify(savedSettings);
@@ -126,12 +120,12 @@
     }
   } catch {
     // Fallback for browser environment
-    if (window.showDirectoryPicker) {
+    if ('showDirectoryPicker' in window) {
       // Use File System Access API (Chrome/Edge)
       try {
-        const directoryHandle = await window.showDirectoryPicker();
+        const directoryHandle = await (window as any).showDirectoryPicker();
         settings.storagePath = directoryHandle.name;
-      } catch (err) {
+      } catch (err: any) {
         if (err.name !== 'AbortError') {
           console.error('Directory picker error:', err);
         }

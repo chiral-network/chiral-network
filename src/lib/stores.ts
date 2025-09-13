@@ -243,9 +243,11 @@ export const proxyNodes = writable<ProxyNode[]>(dummyProxyNodes);
 export const wallet = writable<WalletInfo>(dummyWallet);
 export const activeDownloads = writable<number>(2);
 
+
 // Import real network status
 import { networkStatus } from './services/networkService';
 export { networkStatus };
+
 
 export const peers = writable<PeerInfo[]>(dummyPeers);
 export const chatMessages = writable<ChatMessage[]>([]);

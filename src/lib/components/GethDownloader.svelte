@@ -4,7 +4,7 @@
   import { listen } from '@tauri-apps/api/event'
   import Card from '$lib/components/ui/card.svelte'
   import Button from '$lib/components/ui/button.svelte'
-  import { Download, CheckCircle, AlertCircle } from 'lucide-svelte'
+  import { Download, AlertCircle } from 'lucide-svelte'
   
   export let onComplete: () => void = () => {}
   
@@ -19,16 +19,22 @@
   }
   let error = ''
   
-  onMount(async () => {
-    await checkGethBinary()
+  onMount(() => {
+    checkGethBinary()
     
     // Listen for download progress updates
-    const unlisten = await listen('geth-download-progress', (event) => {
+    let unlisten: (() => void) | null = null
+    
+    listen('geth-download-progress', (event) => {
       downloadProgress = event.payload as typeof downloadProgress
+    }).then((unlistenFn) => {
+      unlisten = unlistenFn
     })
     
     return () => {
-      unlisten()
+      if (unlisten) {
+        unlisten()
+      }
     }
   })
   
@@ -36,7 +42,7 @@
     isChecking = true
     error = ''
     try {
-      isInstalled = await invoke('check_geth_binary')
+      isInstalled = await invoke('check_geth_binary') as boolean
       if (isInstalled) {
         onComplete()
       }
