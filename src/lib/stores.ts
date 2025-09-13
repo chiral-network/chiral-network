@@ -172,7 +172,7 @@ const dummyProxyNodes: ProxyNode[] = [
 ];
 
 const dummyWallet: WalletInfo = {
-  address: "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb",
+  address: "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1",
   balance: 1000.5,
   pendingTransactions: 2,
   totalEarned: 250.75,
@@ -221,7 +221,7 @@ const dummyPeers: PeerInfo[] = [
 
 const blacklistedPeers: BlacklistEntry[] = [
   {
-    chiral_address: "0x702f05Cc6634C599fj293b844Bc9e759jw04989",
+    chiral_address: "0x702f05Cc6634C599f1293b844Bc9e759ef049891",
     reason: "Unfufilled requests",
     timestamp: new Date("2024-05-01T10:00:00Z"),
   },
