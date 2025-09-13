@@ -511,7 +511,7 @@ fn main() {
             connect_to_peer,
             get_dht_events,
             detect_locale,
-            get_dht_peer_count
+            get_dht_peer_count,
             get_dht_peer_id
         ])
         .plugin(tauri_plugin_process::init())
