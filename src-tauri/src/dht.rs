@@ -61,8 +61,17 @@ async fn run_dht_node(
     event_tx: mpsc::Sender<DhtEvent>,
     connected_peers: Arc<Mutex<HashSet<PeerId>>>,
 ) {
+    // Periodic bootstrap interval
+    let mut bootstrap_interval = tokio::time::interval(Duration::from_secs(30));
+    
     loop {
         tokio::select! {
+            _ = bootstrap_interval.tick() => {
+                // Periodically bootstrap to maintain connections
+                swarm.behaviour_mut().kademlia.bootstrap();
+                debug!("Performing periodic Kademlia bootstrap");
+            }
+            
             Some(cmd) = cmd_rx.recv() => {
                 match cmd {
                     DhtCommand::PublishFile(metadata) => {
@@ -235,7 +244,9 @@ impl DhtService {
                 libp2p::yamux::Config::default,
             )?
             .with_behaviour(|_| behaviour)?
-            .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
+            .with_swarm_config(|c| c
+                .with_idle_connection_timeout(Duration::from_secs(300)) // 5 minutes
+            )
             .build();
         
         // Listen on the specified port
@@ -249,12 +260,30 @@ impl DhtService {
             info!("Attempting to connect to bootstrap: {}", bootstrap_addr);
             if let Ok(addr) = bootstrap_addr.parse::<Multiaddr>() {
                 match swarm.dial(addr.clone()) {
-                    Ok(_) => info!("✓ Initiated connection to bootstrap: {}", bootstrap_addr),
+                    Ok(_) => {
+                        info!("✓ Initiated connection to bootstrap: {}", bootstrap_addr);
+                        // Add bootstrap node to Kademlia routing table if it has a peer ID
+                        if let Some(peer_id) = addr.iter().find_map(|p| {
+                            if let libp2p::multiaddr::Protocol::P2p(peer) = p {
+                                Some(peer)
+                            } else {
+                                None
+                            }
+                        }) {
+                            swarm.behaviour_mut().kademlia.add_address(&peer_id, addr.clone());
+                        }
+                    }
                     Err(e) => warn!("✗ Failed to dial bootstrap {}: {}", bootstrap_addr, e),
                 }
             } else {
                 warn!("✗ Invalid bootstrap address format: {}", bootstrap_addr);
             }
+        }
+        
+        // Trigger initial bootstrap if we have bootstrap nodes
+        if !bootstrap_nodes.is_empty() {
+            swarm.behaviour_mut().kademlia.bootstrap();
+            info!("Triggered initial Kademlia bootstrap");
         }
         
         let (cmd_tx, cmd_rx) = mpsc::channel(100);

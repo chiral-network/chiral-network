@@ -1,9 +1,10 @@
-# Migration Guide: Svelte 5 & Tauri 2.0 Stable
+# Migration Guide: Svelte 5 & Tauri 2.0 Stable + DHT Improvements
 
 ## Overview
 This document outlines the migration from:
 - Svelte 4.2.19 → Svelte 5.0
 - Tauri 2.0 beta → Tauri 2.1 stable
+- DHT networking improvements for stable P2P connections
 
 ## Changes Made
 
@@ -94,6 +95,52 @@ let doubled = $derived(count * 2);
 - `tauri-plugin-app` → `tauri-plugin-process` (handles app lifecycle)
 - All plugins now at stable 2.0 versions
 
+## DHT Networking Improvements
+
+### What Was Fixed:
+
+1. **Connection Stability Issues:**
+   - **Problem**: Clients were disconnecting immediately after connecting ("Error(Right(Closed))")
+   - **Solution**: Added libp2p identify protocol for proper protocol negotiation
+
+2. **Keep-Alive Timeout Issues:**
+   - **Problem**: Connections timing out after 60 seconds of inactivity
+   - **Solutions**:
+     - Extended idle connection timeout from 60 to 300 seconds (5 minutes)
+     - Added periodic Kademlia bootstrap every 30 seconds
+     - Implemented automatic bootstrap on initial connection
+
+### Technical Changes to DHT (`src-tauri/src/dht.rs`):
+
+```rust
+// Added identify protocol
+use libp2p::identify;
+
+// Updated NetworkBehaviour to include identify
+#[derive(NetworkBehaviour)]
+pub struct DhtBehaviour {
+    kademlia: Kademlia<MemoryStore>,
+    identify: identify::Behaviour,
+}
+
+// Set Kademlia to server mode
+kademlia.set_mode(Some(Mode::Server));
+
+// Extended idle timeout
+.with_swarm_config(|c| c
+    .with_idle_connection_timeout(Duration::from_secs(300))
+)
+
+// Added periodic bootstrap
+let mut bootstrap_interval = tokio::time::interval(Duration::from_secs(30));
+```
+
+### Benefits:
+- **Stable Connections**: Peers maintain long-lived connections without dropouts
+- **Protocol Negotiation**: Nodes properly identify and communicate capabilities
+- **Automatic Recovery**: Periodic bootstrap maintains network connectivity
+- **Better Routing**: Peers are properly added to Kademlia routing tables
+
 ## Testing Checklist
 
 After migration, test these critical areas:
@@ -101,6 +148,8 @@ After migration, test these critical areas:
 - [ ] Application starts without errors
 - [ ] File upload/download functionality works
 - [ ] DHT network connection establishes
+- [ ] DHT connections remain stable (no disconnections)
+- [ ] Peers can discover each other via bootstrap nodes
 - [ ] Mining interface functions correctly
 - [ ] Settings save and load properly
 - [ ] Theme switching works
