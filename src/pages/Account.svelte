@@ -57,6 +57,9 @@
   let addressWarning = '';
   let isAddressValid = false;
 
+  // Blacklist validation state
+  let blacklistAddressWarning = '';
+  let isBlacklistAddressValid = false;
 
   // Copy feedback message
   let copyMessage = '';
@@ -143,6 +146,28 @@
         isAmountValid = true;
         sendAmount = inputValue;
       }
+    }
+  }
+
+  //Blacklist address validation (mirror of Send Coins)
+  $: {
+    const addr = newBlacklistEntry.chiral_address;
+
+    if (!addr) {
+      blacklistAddressWarning = '';
+      isBlacklistAddressValid = false;
+    } else if (!addr.startsWith('0x')) {
+      blacklistAddressWarning = 'Address must start with 0x.';
+      isBlacklistAddressValid = false;
+    } else if (addr.length !== 42) {
+      blacklistAddressWarning = 'Address must be exactly 42 characters long.';
+      isBlacklistAddressValid = false;
+    } else if (!isValidAddress(addr)) {
+      blacklistAddressWarning = 'Address must contain valid hexadecimal characters (0-9, a-f, A-F)';
+      isBlacklistAddressValid = false;
+    } else {
+      blacklistAddressWarning = '';
+      isBlacklistAddressValid = true;
     }
   }
   
@@ -546,20 +571,18 @@
     description: ""
   }
 
-  $: isBlacklistFormValid = 
-    newBlacklistEntry.description.trim() !== '' &&
-    newBlacklistEntry.chiral_address.startsWith('0x') &&
-    newBlacklistEntry.chiral_address.length === 42;
+  //Use the new validity flag computed above
+  $: isBlacklistFormValid =
+    newBlacklistEntry.description.trim() !== '' && isBlacklistAddressValid;
   
+  //Guard add with validity check
   function addBlacklistEntry() {
-    if (newBlacklistEntry.chiral_address && newBlacklistEntry.description) {
-      blacklist.update(entries => [...entries,
-        { chiral_address: newBlacklistEntry.chiral_address, reason: newBlacklistEntry.description, timestamp: new Date() }
-      ]);
-      newBlacklistEntry = { chiral_address: "", description: "" }; // Clear input fields
-    }
+    if (!isBlacklistFormValid) return;
+    blacklist.update(entries => [...entries,
+      { chiral_address: newBlacklistEntry.chiral_address, reason: newBlacklistEntry.description, timestamp: new Date() }
+    ]);
+    newBlacklistEntry = { chiral_address: "", description: "" }; // Clear input fields
   }
-
 
   function removeBlacklistEntry(chiral_address: string) {
     blacklist.update(entries => {
@@ -1014,12 +1037,26 @@
     <div class="space-y-4">
       <div>
         <Label for="blacklist-address">Chiral Address to Blacklist</Label>
+        <!-- mirrored UX from Send Coins input -->
         <Input
           id="blacklist-address"
           bind:value={newBlacklistEntry.chiral_address}
-          placeholder="e.g., 0x1234...5678 (42 characters)"
-          class="mt-2"
+          placeholder="0x..."
+          class="mt-2 {blacklistAddressWarning ? 'border-red-500' : ''}"
         />
+        <div class="flex items-center justify-between mt-1">
+          <span class="text-xs text-muted-foreground">
+            {newBlacklistEntry.chiral_address.length}/42 characters 
+            {#if newBlacklistEntry.chiral_address.length <= 42}
+              ({42 - newBlacklistEntry.chiral_address.length} remaining)
+            {:else}
+              ({newBlacklistEntry.chiral_address.length - 42} over)
+            {/if}
+          </span>
+          {#if blacklistAddressWarning}
+            <p class="text-xs text-red-500 font-medium">{blacklistAddressWarning}</p>
+          {/if}
+        </div>
       </div>
       <div>
         <Label for="blacklist-name">Reason</Label>
