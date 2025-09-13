@@ -13,7 +13,6 @@
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
-  console.log(isTauri)
   interface Transaction {
     id: number;
     type: 'sent' | 'received';
