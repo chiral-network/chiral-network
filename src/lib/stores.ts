@@ -242,12 +242,11 @@ export const files = writable<FileItem[]>(dummyFiles);
 export const proxyNodes = writable<ProxyNode[]>(dummyProxyNodes);
 export const wallet = writable<WalletInfo>(dummyWallet);
 export const activeDownloads = writable<number>(2);
-// Old static network status (replaced with real-time monitoring)
-// export const networkStatus = writable<"connected" | "disconnected">("connected");
 
 // Import real network status
 import { networkStatus } from './services/networkService';
 export { networkStatus };
+
 export const peers = writable<PeerInfo[]>(dummyPeers);
 export const chatMessages = writable<ChatMessage[]>([]);
 export const networkStats = writable<NetworkStats>(dummyNetworkStats);
