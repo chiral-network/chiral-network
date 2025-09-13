@@ -679,25 +679,45 @@
 
   <!-- Action Buttons -->
   <div class="flex flex-wrap items-center justify-between gap-2">
-    <Button variant="outline" size="xs" on:click={openResetConfirm}>
-      Reset to Defaults
+  <Button 
+    variant="destructive" 
+    size="xs" 
+    on:click={openResetConfirm}
+  >
+    Reset to Defaults
+  </Button>
+
+  <div class="flex gap-2">
+    <Button
+      variant="outline"
+      size="xs"
+      on:click={() => (settings = { ...savedSettings })}
+      disabled={!hasChanges}
+      class={`transition-colors duration-200 ${
+        !hasChanges 
+          ? 'cursor-not-allowed opacity-50' 
+          : 'hover:bg-gray-200'
+      }`}
+    >
+      Cancel
     </Button>
 
-    <div class="flex gap-2">
-      <Button
-        variant="outline"
-        size="xs"
-        on:click={() => (settings = { ...savedSettings })}
-        disabled={!hasChanges}
-      >
-        Cancel
-      </Button>
-      <Button size="xs" on:click={saveSettings} disabled={!hasChanges || !isValid}>
-        <Save class="h-4 w-4 mr-2" />
-        Save Settings
-      </Button>
-    </div>
+    <Button
+      size="xs"
+      on:click={saveSettings}
+      disabled={!hasChanges || !isValid}
+      class={`transition-colors duration-200 ${
+        !hasChanges || !isValid
+          ? 'cursor-not-allowed opacity-50 pointer-events-none'
+          : 'bg-green-500 text-white hover:bg-green-600'
+      }`}
+    >
+      <Save class="h-4 w-4 mr-2" />
+      Save Settings
+    </Button>
   </div>
+</div>
+
 </div>
 {#if showResetConfirmModal}
   <div
