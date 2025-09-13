@@ -59,6 +59,7 @@
   let dhtPeerCount = 0
   let dhtError: string | null = null
   let connectionAttempts = 0
+  let dhtPollInterval: number | undefined
   
   function formatSize(bytes: number): string {
     const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
@@ -85,15 +86,49 @@
     }
     
     try {
-      dhtStatus = 'connecting'
       dhtError = null
-      connectionAttempts++
       
-      // Add a small delay to show the connecting state
-      await new Promise(resolve => setTimeout(resolve, 500))
+      // First check if DHT is already running in backend BEFORE setting any status
+      let backendPeerId = null
+      try {
+        backendPeerId = await invoke<string | null>('get_dht_peer_id')
+      } catch (error) {
+        console.log('Failed to check backend DHT status:', error)
+      }
       
-      // Only start DHT if not already running
-      if (!dhtPeerId) {
+      if (backendPeerId) {
+        // DHT is already running in backend, sync the frontend state immediately
+        console.log('DHT already running in backend with peer ID:', backendPeerId)
+        dhtPeerId = backendPeerId
+        dhtService.setPeerId(backendPeerId) // Update frontend service state
+        dhtEvents = [...dhtEvents, `✓ DHT already running with peer ID: ${backendPeerId.slice(0, 16)}...`]
+        
+        // Check connection status immediately
+        const peerCount = await dhtService.getPeerCount()
+        dhtPeerCount = peerCount
+        
+        if (peerCount > 0) {
+          // Set status directly to connected without showing connecting first
+          dhtStatus = 'connected'
+          dhtEvents = [...dhtEvents, `✓ Connected to ${peerCount} peer(s)`]
+          startDhtPolling() // Start polling for updates
+          return // Already connected, no need to continue
+        } else {
+          // No peers connected, set to disconnected and try to connect
+          dhtStatus = 'disconnected'
+          dhtEvents = [...dhtEvents, `⚠ No peers connected, attempting to connect to bootstrap...`]
+          startDhtPolling() // Start polling anyway
+          connectionAttempts++
+          // Continue below to try connecting to bootstrap
+        }
+      } else {
+        // DHT not running, show connecting state and start it
+        dhtStatus = 'connecting'
+        connectionAttempts++
+        
+        // Add a small delay to show the connecting state only when starting fresh
+        await new Promise(resolve => setTimeout(resolve, 500))
+        // DHT not running, start it
         try {
           const peerId = await dhtService.start({
             port: dhtPort,
@@ -102,41 +137,32 @@
           dhtPeerId = peerId
           // Also ensure the service knows its own peer ID
           dhtService.setPeerId(peerId)
+          dhtEvents = [...dhtEvents, `✓ DHT started with peer ID: ${peerId.slice(0, 16)}...`]
         } catch (error: any) {
           if (error.toString().includes('already running')) {
-            // DHT is already running in backend but frontend doesn't know the peer ID
-            // This can happen after page refresh or reconnection
-            console.warn('DHT already running in backend, retrieving peer ID...')
-            dhtEvents = [...dhtEvents, `⚠ DHT already running, retrieving peer ID...`]
-            // Try to get the peer ID from the service
-            const existingPeerId = dhtService.getPeerId()
-            if (existingPeerId) {
-              dhtPeerId = existingPeerId
-            } else {
-              // If we still don't have it, we need to stop and restart
-              console.warn('Cannot retrieve peer ID, stopping and restarting DHT...')
-              try {
-                await dhtService.stop()
-                const peerId = await dhtService.start({
-                  port: dhtPort,
-                  bootstrapNodes: [dhtBootstrapNode]
-                })
-                dhtPeerId = peerId
-                dhtService.setPeerId(peerId)
-              } catch (restartError) {
-                console.error('Failed to restart DHT:', restartError)
-                throw restartError
+            // DHT is already running in backend but service doesn't have the peer ID
+            // This shouldn't happen with our singleton pattern, but handle it anyway
+            console.warn('DHT already running in backend, attempting to retrieve peer ID...')
+            dhtEvents = [...dhtEvents, `⚠ DHT already running in backend, retrieving peer ID...`]
+            
+            // Try to get it from the backend directly
+            try {
+              const peerId = await invoke('get_dht_peer_id')
+              if (peerId) {
+                dhtPeerId = peerId as string
+                dhtService.setPeerId(dhtPeerId)
+                dhtEvents = [...dhtEvents, `✓ Retrieved peer ID: ${dhtPeerId.slice(0, 16)}...`]
+              } else {
+                throw new Error('Could not retrieve peer ID from backend')
               }
+            } catch (retrieveError) {
+              console.error('Failed to retrieve peer ID:', retrieveError)
+              throw retrieveError
             }
           } else {
             throw error
           }
         }
-      } else {
-        // DHT already running, ensure service knows the peer ID
-        dhtService.setPeerId(dhtPeerId)
-        console.log('DHT already started with peer ID:', dhtPeerId)
-        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] DHT already running, retrying connection...`]
       }
       
       // Try to connect to bootstrap node
@@ -191,25 +217,40 @@
       dhtStatus = connectionSuccessful ? 'connected' : 'disconnected'
       
       // Start polling for DHT events and peer count
-      setInterval(async () => {
-        try {
-          const events = await dhtService.getEvents()
-          if (events.length > 0) {
-            dhtEvents = [...dhtEvents, ...events].slice(-10) // Keep last 10 events
-          }
-          
-          const count = await dhtService.getPeerCount()
-          dhtPeerCount = count
-        } catch (error) {
-          console.error('Failed to get DHT events:', error)
-        }
-      }, 5000)
+      startDhtPolling()
     } catch (error: any) {
       console.error('Failed to start DHT:', error)
       dhtStatus = 'disconnected'
       dhtError = error.toString ? error.toString() : String(error)
       dhtEvents = [...dhtEvents, `✗ Failed to start DHT: ${dhtError}`]
     }
+  }
+  
+  function startDhtPolling() {
+    if (dhtPollInterval) return // Already polling
+    
+    dhtPollInterval = setInterval(async () => {
+      try {
+        const events = await dhtService.getEvents()
+        if (events.length > 0) {
+          dhtEvents = [...dhtEvents, ...events].slice(-10)
+        }
+        
+        const peerCount = await dhtService.getPeerCount()
+        dhtPeerCount = peerCount
+        
+        // Update connection status based on peer count
+        if (dhtStatus === 'connected' && peerCount === 0) {
+          dhtStatus = 'disconnected'
+          dhtEvents = [...dhtEvents, '⚠ Lost connection to all peers']
+        } else if (dhtStatus === 'disconnected' && peerCount > 0) {
+          dhtStatus = 'connected'
+          dhtEvents = [...dhtEvents, `✓ Reconnected to ${peerCount} peer(s)`]
+        }
+      } catch (error) {
+        console.error('Failed to poll DHT status:', error)
+      }
+    }, 2000) as unknown as number
   }
   
   async function stopDht() {
@@ -408,10 +449,13 @@
   onMount(() => {
     const interval = setInterval(refreshStats, 5000)
     let unlistenProgress: (() => void) | null = null
+    let dhtPollInterval: number | undefined
     
     // Initialize async operations
     const initAsync = async () => {
       await checkGethStatus()
+      
+      // DHT check will happen in startDht()
       
       // Listen for download progress updates (only in Tauri)
       if (isTauri) {
@@ -446,6 +490,11 @@
     if (peerCountInterval) {
       clearInterval(peerCountInterval)
     }
+    if (dhtPollInterval) {
+      clearInterval(dhtPollInterval)
+    }
+    // Note: We do NOT stop the DHT service here
+    // The DHT should persist across page navigations
   })
 </script>
 
