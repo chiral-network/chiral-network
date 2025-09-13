@@ -8,7 +8,8 @@
   import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, File } from 'lucide-svelte'
   import { files, downloadQueue, type FileItem } from '$lib/stores'
   
-  let searchHash = ''
+  let searchHash = ''  // For downloading new files
+  let searchFilter = ''  // For searching existing downloads
   let maxConcurrentDownloads = 3
   let autoStartQueue = true
   let filterStatus = 'all' // 'all', 'active', 'paused', 'queued', 'completed', 'failed'
@@ -21,42 +22,7 @@
   $: allDownloads = (() => {
     const combined = [...$files, ...$downloadQueue]
 
-    // If there's a search hash, prioritize matching files
-    if (searchHash.trim()) {
-      const matchingFiles = combined.filter(f => 
-        f.hash.toLowerCase().includes(searchHash.toLowerCase()) ||
-        f.name.toLowerCase().includes(searchHash.toLowerCase())
-      )
-      const nonMatchingFiles = combined.filter(f => 
-        !f.hash.toLowerCase().includes(searchHash.toLowerCase()) &&
-        !f.name.toLowerCase().includes(searchHash.toLowerCase())
-      )
-      
-      // Sort matching files by status first, then non-matching files
-      const statusOrder = {
-        'downloading': 0,
-        'paused': 1,
-        'completed': 2,
-        'queued': 3,
-        'failed': 4,
-        'uploaded': 5,
-        'seeding': 6
-      }
-      
-      const sortByStatus = (a: FileItem, b: FileItem) => {
-        const statusA = statusOrder[a.status as keyof typeof statusOrder] ?? 999
-        const statusB = statusOrder[b.status as keyof typeof statusOrder] ?? 999
-        const statusDiff = statusA - statusB
-        return statusDiff === 0 ? a.id.localeCompare(b.id) : statusDiff
-      }
-      
-      return [
-        ...matchingFiles.sort(sortByStatus),
-        ...nonMatchingFiles.sort(sortByStatus)
-      ]
-    }
-
-    // Normal sorting when no search hash
+    // Normal sorting by status
     const statusOrder = {
       'downloading': 0,
       'paused': 1,
@@ -82,10 +48,19 @@
   })()
   
   
-  // Filter downloads based on selected status
+  // Filter downloads based on selected status and search
   $: filteredDownloads = (() => {
     let filtered = allDownloads.filter(f => f.status !== 'uploaded' && f.status !== 'seeding')
 
+    // Apply search filter first
+    if (searchFilter.trim()) {
+      filtered = filtered.filter(f => 
+        f.hash.toLowerCase().includes(searchFilter.toLowerCase()) ||
+        f.name.toLowerCase().includes(searchFilter.toLowerCase())
+      )
+    }
+
+    // Then apply status filter
     switch (filterStatus) {
       case 'active':
         return filtered.filter(f => f.status === 'downloading')
@@ -335,6 +310,24 @@ function clearSearch() {
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
       <div class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
         <h2 class="text-lg font-semibold">Downloads</h2>
+        <!-- Search existing downloads -->
+        <div class="relative">
+          <Input
+            bind:value={searchFilter}
+            placeholder="Search downloads..."
+            class="pr-8 w-48"
+          />
+          <Search class="absolute right-2 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          {#if searchFilter}
+            <button
+              on:click={() => searchFilter = ''}
+              class="absolute right-7 top-1/2 transform -translate-y-1/2 p-0.5 hover:bg-gray-100 rounded-full transition-colors"
+              type="button"
+            >
+              <X class="h-3 w-3 text-gray-500 hover:text-gray-700" />
+            </button>
+          {/if}
+        </div>
         <div class="flex flex-wrap gap-2">
           <Button
             size="sm"
@@ -480,13 +473,10 @@ function clearSearch() {
                 <Badge class={
                   file.status === 'downloading' ? 'bg-green-500 text-white border-green-500' :
                   file.status === 'completed' ? 'bg-blue-500 text-white border-blue-500' :
-                  file.status === 'paused' ? 'bg-yellow-500 text-white border-yellow-500' :
-                  file.status === 'queued' ? 'bg-gray-500 text-white border-gray-500' :
-                  'bg-red-500 text-white border-red-500'
-                            }>
-                      {file.status === 'queued'
-                          ? `Queued #${filteredDownloads.filter(f => f.status === 'queued').indexOf(file) + 1}`
-                              : file.status}
+                  file.status === 'paused' ? 'bg-yellow-500 text-black border-yellow-500' :
+                  file.status === 'queued' ? 'bg-gray-500 text-white border-gray-500' : 'bg-red-500 text-white border-red-500'
+                }>
+                  {file.status === 'queued' ? `Queued #${$downloadQueue.indexOf(file) + 1}` : file.status}
                 </Badge>
               </div>
             </div>
