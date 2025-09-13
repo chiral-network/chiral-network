@@ -47,7 +47,7 @@
   let downloadError = ''
   let dataDir = './bin/geth-data'
   let peerCount = 0
-  let peerCountInterval: number | undefined
+  let peerCountInterval: ReturnType<typeof setInterval> | undefined
   let chainId = 98765
   
   // DHT variables
@@ -182,9 +182,9 @@
           
           // Poll for actual connection after a delay
           setTimeout(async () => {
-            const peerCount = await invoke('get_dht_peer_count')
-            if (peerCount > 0) {
-              dhtEvents = [...dhtEvents, `✓ Successfully connected! Peers: ${peerCount}`]
+            const dhtPeerCountResult = await invoke('get_dht_peer_count') as number
+            if (dhtPeerCountResult > 0) {
+              dhtEvents = [...dhtEvents, `✓ Successfully connected! Peers: ${dhtPeerCountResult}`]
             } else {
               dhtEvents = [...dhtEvents, `⚠ Connection pending... (bootstrap node may be unreachable)`]
             }
@@ -388,7 +388,7 @@
       clearInterval(peerCountInterval)
     }
     fetchPeerCount()
-    peerCountInterval = setInterval(fetchPeerCount, 5000) as unknown as number
+    peerCountInterval = setInterval(fetchPeerCount, 5000)
   }
 
   async function startGethNode() {

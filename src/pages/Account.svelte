@@ -10,6 +10,7 @@
   import QRCode from 'qrcode'
   import { Html5QrcodeScanner as Html5QrcodeScannerClass } from 'html5-qrcode'
   import { tick } from 'svelte'
+  import { onMount } from 'svelte'
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -347,9 +348,6 @@
   // Ensure pendingCount is used (for linter)
   $: void $pendingCount;
 
-  import { onMount } from 'svelte'
-  import Progress from '$lib/components/ui/progress.svelte';
-  
   let balanceInterval: number | undefined
   
   onMount(() => {
