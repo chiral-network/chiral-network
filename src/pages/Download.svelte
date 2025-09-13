@@ -10,13 +10,53 @@
   
   let searchHash = ''  // For downloading new files
   let searchFilter = ''  // For searching existing downloads
-  let maxConcurrentDownloads = 3
+  let maxConcurrentDownloads: string | number = 3
+  let lastValidMaxConcurrent = 3 // Store the last valid value
   let autoStartQueue = true
   let filterStatus = 'all' // 'all', 'active', 'paused', 'queued', 'completed', 'failed'
   let activeSimulations = new Set<string>() // Track files with active progress simulations
 
-  // Ensure maxConcurrentDownloads is always a valid number (minimum 1)
-  $: maxConcurrentDownloads = Math.max(1, Number(maxConcurrentDownloads) || 3)
+  // Function to validate and correct maxConcurrentDownloads
+  function validateMaxConcurrent() {
+    // If empty or invalid, revert to last valid value
+    if (maxConcurrentDownloads === '' || maxConcurrentDownloads === null || maxConcurrentDownloads === undefined) {
+      maxConcurrentDownloads = lastValidMaxConcurrent
+      return
+    }
+    
+    const parsed = Number(maxConcurrentDownloads)
+    if (isNaN(parsed) || parsed < 1) {
+      maxConcurrentDownloads = lastValidMaxConcurrent
+    } else {
+      const validValue = Math.floor(parsed) // Ensure it's an integer
+      maxConcurrentDownloads = validValue
+      lastValidMaxConcurrent = validValue // Store as the new last valid value
+    }
+  }
+
+  // Function to handle input and only allow positive numbers
+  function handleMaxConcurrentInput(event: any) {
+    const target = event.target as HTMLInputElement
+    let value = target.value
+    
+    // Remove any non-digit characters
+    value = value.replace(/\D/g, '')
+    
+    // Remove leading zeros but allow empty string
+    if (value.length > 1 && value.startsWith('0')) {
+      value = value.replace(/^0+/, '')
+    }
+    
+    // Update the input value to the cleaned version
+    target.value = value
+    
+    // Update the bound variable (allow empty string during typing)
+    if (value === '') {
+      maxConcurrentDownloads = '' // Allow empty during typing
+    } else {
+      maxConcurrentDownloads = parseInt(value)
+    }
+  }
   
   // Combine all files and queue into single list with stable sorting
   $: allDownloads = (() => {
@@ -105,8 +145,10 @@
     if (autoStartQueue) {
       const activeDownloads = $files.filter(f => f.status === 'downloading').length
       const queued = $downloadQueue.filter(f => f.status === 'queued')
+      // Handle case where maxConcurrentDownloads might be empty during typing
+      const maxConcurrent = Math.max(1, Number(maxConcurrentDownloads) || 3)
       
-      if (activeDownloads < maxConcurrentDownloads && queued.length > 0) {
+      if (activeDownloads < maxConcurrent && queued.length > 0) {
         // Start next queued download
         const nextFile = queued.sort((a, b) => {
           // Priority order: high > normal > low
@@ -155,7 +197,9 @@ function clearSearch() {
   function processQueue() {
     // Only prevent starting new downloads if we've reached the max concurrent limit
     const activeDownloads = $files.filter(f => f.status === 'downloading').length
-    if (activeDownloads >= maxConcurrentDownloads) return
+    // Handle case where maxConcurrentDownloads might be empty during typing
+    const maxConcurrent = Math.max(1, Number(maxConcurrentDownloads) || 3)
+    if (activeDownloads >= maxConcurrent) return
 
     const nextFile = $downloadQueue[0]
     if (!nextFile) return
@@ -280,51 +324,61 @@ function clearSearch() {
 <div class="space-y-6">
   <div>
     <h1 class="text-3xl font-bold">Download Files</h1>
-    <p class="text-muted-foreground mt-2">Download files from the network using their hash</p>
+    <p class="text-muted-foreground mt-2">Download files from the Chiral Network using their hash</p>
   </div>
   
   <Card class="p-6">
     <div class="space-y-4">
       <div>
-        <Label for="hash-input">File Hash</Label>
-        <div class="flex flex-col sm:flex-row gap-2 mt-2">
-            <div class="relative flex-1">
-              <Input
-                id="hash-input"
-                bind:value={searchHash}
-                placeholder="Enter file hash (e.g., QmZ4tDuvesekqMD...)"
-                class="pr-10"
-              />
-              {#if searchHash}
-                <button
-                  on:click={clearSearch}
-                  class="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 hover:bg-gray-100 rounded-full transition-colors"
-                  type="button"
-                >
-                  <X class="h-4 w-4 text-gray-500 hover:text-gray-700" />
-                </button>
-              {/if}
-            </div>
-            <Button on:click={startDownload} disabled={!searchHash}>
-              <Search class="h-4 w-4 mr-2" />
-              Search & Download
-            </Button>
+        <Label for="hash-input" class="text-base font-medium">Add New Download</Label>
+        <p class="text-sm text-muted-foreground mt-1 mb-3">
+          Enter a file hash to search for and download from the network
+        </p>
+        <div class="flex flex-col sm:flex-row gap-3">
+          <div class="relative flex-1">
+            <Input
+              id="hash-input"
+              bind:value={searchHash}
+              placeholder="Enter file hash (e.g., QmZ4tDuvesekqMD...)"
+              class="pr-10 h-10"
+            />
+            {#if searchHash}
+              <button
+                on:click={clearSearch}
+                class="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 hover:bg-muted rounded-full transition-colors"
+                type="button"
+                aria-label="Clear input"
+              >
+                <X class="h-4 w-4 text-muted-foreground hover:text-foreground" />
+              </button>
+            {/if}
           </div>
+          <Button 
+            on:click={startDownload} 
+            disabled={!searchHash.trim()}
+            class="h-10 px-6"
+          >
+            <Search class="h-4 w-4 mr-2" />
+            Search & Download
+          </Button>
+        </div>
       </div>
     </div>
   </Card>
   
   <!-- Unified Downloads List -->
   <Card class="p-6">
-    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
-      <div class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-        <h2 class="text-lg font-semibold">Downloads</h2>
-        <!-- Search existing downloads -->
-        <div class="relative">
+    <!-- Header Section -->
+    <div class="space-y-4 mb-6">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <h2 class="text-xl font-semibold">Downloads</h2>
+        
+        <!-- Search Bar -->
+        <div class="relative w-full sm:w-80">
           <Input
             bind:value={searchFilter}
             placeholder="Search downloads..."
-            class="pr-8 w-48"
+            class="pr-8"
           />
           <Search class="absolute right-2 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           {#if searchFilter}
@@ -337,11 +391,17 @@ function clearSearch() {
             </button>
           {/if}
         </div>
+      </div>
+      
+      <!-- Filter Buttons and Controls -->
+      <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+        <!-- Filter Buttons -->
         <div class="flex flex-wrap gap-2">
           <Button
             size="sm"
             variant={filterStatus === 'all' ? 'default' : 'outline'}
             on:click={() => filterStatus = 'all'}
+            class="text-xs"
           >
             All ({allFilteredDownloads.length})
           </Button>
@@ -349,6 +409,7 @@ function clearSearch() {
             size="sm"
             variant={filterStatus === 'active' ? 'default' : 'outline'}
             on:click={() => filterStatus = 'active'}
+            class="text-xs"
           >
             Active ({activeCount})
           </Button>
@@ -356,81 +417,84 @@ function clearSearch() {
             size="sm"
             variant={filterStatus === 'paused' ? 'default' : 'outline'}
             on:click={() => filterStatus = 'paused'}
+            class="text-xs"
           >
             Paused ({pausedCount})
           </Button>
           <Button
             size="sm"
+            variant={filterStatus === 'queued' ? 'default' : 'outline'}
+            on:click={() => filterStatus = 'queued'}
+            class="text-xs"
+          >
+            Queued ({queuedCount})
+          </Button>
+          <Button
+            size="sm"
             variant={filterStatus === 'completed' ? 'default' : 'outline'}
             on:click={() => filterStatus = 'completed'}
+            class="text-xs"
           >
             Completed ({completedCount})
           </Button>
           <Button
             size="sm"
-            variant={filterStatus === 'queued' ? 'default' : 'outline'}
-            on:click={() => filterStatus = 'queued'}
-          >
-            Queued ({queuedCount})
-          </Button>
-
-          <Button
-            size="sm"
             variant={filterStatus === 'canceled' ? 'default' : 'outline'}
             on:click={() => filterStatus = 'canceled'}
-            >
+            class="text-xs"
+          >
             Canceled ({allFilteredDownloads.filter(f => f.status === 'canceled').length})
           </Button>
-
-
           <Button
             size="sm"
             variant={filterStatus === 'failed' ? 'default' : 'outline'}
             on:click={() => filterStatus = 'failed'}
+            class="text-xs"
           >
             Failed ({failedCount})
           </Button>
         </div>
-      </div>
-
-      <div class="flex flex-col sm:flex-row sm:items-center gap-2 w-full sm:w-auto">
-        <div class="flex items-center gap-2 text-sm flex-wrap">
-          <Settings class="h-4 w-4" />
-          <Label>Max Concurrent:</Label>
-          <Input
-            type="number"
-            bind:value={maxConcurrentDownloads}
-            min="1"
-            step="1"
-            class="w-16 pl-2 pr-2 py-1 text-center"
-            placeholder="3"
-          />
-        </div>
-        <div class="flex items-center gap-2">
-          <span class="text-sm font-medium">Auto-Start</span>
-          <button
+        
+        <!-- Settings Controls -->
+        <div class="flex flex-wrap items-center gap-4 text-sm">
+          <div class="flex items-center gap-2">
+            <Settings class="h-4 w-4 text-muted-foreground" />
+            <Label class="font-medium">Max Concurrent:</Label>
+            <input
+              type="number"
+              bind:value={maxConcurrentDownloads}
+              on:input={handleMaxConcurrentInput}
+              on:blur={validateMaxConcurrent}
+              min="1"
+              step="1"
+              class="w-14 h-7 text-center text-xs border border-input bg-background px-2 py-1 ring-offset-background file:border-0 file:bg-transparent file:font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 rounded-md"
+            />
+          </div>
+          
+          <div class="flex items-center gap-2">
+            <Label class="font-medium">Auto-Start:</Label>
+            <button
               type="button"
               aria-label="Toggle auto-start queue {autoStartQueue ? 'off' : 'on'}"
               on:click={() => autoStartQueue = !autoStartQueue}
-              class="relative inline-flex h-6 w-12 items-center rounded-full transition-colors focus:outline-none"
+              class="relative inline-flex h-4 w-8 items-center rounded-full transition-colors focus:outline-none"
               class:bg-green-500={autoStartQueue}
-              class:bg-red-500={!autoStartQueue}
+              class:bg-muted-foreground={!autoStartQueue}
             >
               <span
-                class="inline-block h-5 w-5 transform rounded-full bg-white transition-transform"
-                class:translate-x-6={autoStartQueue}
-                class:translate-x-1={!autoStartQueue}
+                class="inline-block h-3 w-3 rounded-full bg-white transition-transform shadow-sm"
+                style="transform: translateX({autoStartQueue ? '18px' : '2px'})"
               ></span>
-          </button>
+            </button>
+          </div>
         </div>
-
       </div>
     </div>
     
     {#if filteredDownloads.length === 0}
       <p class="text-sm text-muted-foreground text-center py-8">
         {#if filterStatus === 'all'}
-          No downloads yet. Enter a file hash above to start downloading.
+          No downloads yet. Enter a file name or hash above to start downloading.
         {:else if filterStatus === 'active'}
           No active downloads.
         {:else if filterStatus === 'paused'}
@@ -446,124 +510,145 @@ function clearSearch() {
     {:else}
       <div class="space-y-3">
         {#each filteredDownloads as file, index}
-
-          <div class="p-4 bg-secondary rounded-lg">
-            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4 w-full flex-wrap">
-              <div class="flex flex-wrap items-center gap-2">
-                {#if file.status === 'queued'}
-                  <div class="flex flex-col gap-1">
-                    <button
-                      on:click={() => moveInQueue(file.id, 'up')}
-                      disabled={index === 0}
-                      class="p-0.5 hover:bg-accent rounded disabled:opacity-30"
-                    >
-                      <ChevronUp class="h-3 w-3" />
-                    </button>
-                    <button
-                      on:click={() => moveInQueue(file.id, 'down')}
-                      disabled={index === filteredDownloads.filter(f => f.status === 'queued').length - 1}
-                      class="p-0.5 hover:bg-accent rounded disabled:opacity-30"
-                    >
-                      <ChevronDown class="h-3 w-3" />
-                    </button>
+          <div class="bg-card border rounded-lg overflow-hidden hover:shadow-md transition-shadow">
+            <!-- File Header -->
+            <div class="p-4 pb-2">
+              <div class="flex items-start justify-between gap-4">
+                <div class="flex items-start gap-3 flex-1 min-w-0">
+                  <!-- Queue Controls -->
+                  {#if file.status === 'queued'}
+                    <div class="flex flex-col gap-1 mt-1">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        on:click={() => moveInQueue(file.id, 'up')}
+                        disabled={index === 0}
+                        class="h-6 w-6 p-0 hover:bg-muted"
+                      >
+                        <ChevronUp class="h-4 w-4" />
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        on:click={() => moveInQueue(file.id, 'down')}
+                        disabled={index === filteredDownloads.filter(f => f.status === 'queued').length - 1}
+                        class="h-6 w-6 p-0 hover:bg-muted"
+                      >
+                        <ChevronDown class="h-4 w-4" />
+                      </Button>
+                    </div>
+                  {/if}
+                  
+                  <!-- File Info -->
+                  <div class="flex-1 min-w-0">
+                    <h3 class="font-medium text-sm truncate mb-1">{file.name}</h3>
+                    <p class="text-xs text-muted-foreground truncate mb-2">
+                      Hash: {file.hash}
+                    </p>
+                    <div class="flex items-center gap-2 flex-wrap">
+                      <Badge variant="outline" class="text-xs">
+                        {formatFileSize(file.size)}
+                      </Badge>
+                      {#if file.status === 'queued'}
+                        <select
+                          value={file.priority || 'normal'}
+                          on:change={(e) => {
+                            const target = e.target as HTMLSelectElement;
+                            if (target) changePriority(file.id, target.value as 'low' | 'normal' | 'high');
+                          }}
+                          class="text-xs px-2 py-1 border rounded bg-background h-6"
+                        >
+                          <option value="low">Low</option>
+                          <option value="normal">Normal</option>
+                          <option value="high">High</option>
+                        </select>
+                      {/if}
+                    </div>
                   </div>
-                {/if}
-                <div class="flex-1 min-w-0">
-                  <p class="font-medium truncate">{file.name}</p>
-                  <p class="text-xs text-muted-foreground truncate">Hash: {file.hash}</p>
                 </div>
-              </div>
-
-              <div class="flex flex-wrap items-center gap-2 mt-2 sm:mt-0">
-                {#if file.status === 'queued'}
-                  <select
-                    value={file.priority || 'normal'}
-                    on:change={(e) => {
-                      const target = e.target as HTMLSelectElement;
-                      if (target) changePriority(file.id, target.value as 'low' | 'normal' | 'high');
-                    }}
-                    class="text-xs px-2 py-1 border rounded bg-background"
-                  >
-                    <option value="low">Low Priority</option>
-                    <option value="normal">Normal</option>
-                    <option value="high">High Priority</option>
-                  </select>
-                {/if}
-                <Badge variant="outline">{formatFileSize(file.size)}</Badge>
+                
+                <!-- Status Badge -->
                 <Badge class={
-                  file.status === 'downloading' ? 'bg-green-500 text-white border-green-500' :
-                  file.status === 'completed' ? 'bg-blue-500 text-white border-blue-500' :
-                  file.status === 'paused' ? 'bg-yellow-500 text-black border-yellow-500' :
-                  file.status === 'queued' ? 'bg-gray-500 text-white border-gray-500' :
-                  file.status === 'canceled' ? 'bg-gray-700 text-white border-gray-700' :
-                  'bg-red-500 text-white border-red-500'
+                  file.status === 'downloading' ? 'bg-green-100 text-green-800 border-green-200' :
+                  file.status === 'completed' ? 'bg-blue-100 text-blue-800 border-blue-200' :
+                  file.status === 'paused' ? 'bg-yellow-100 text-yellow-800 border-yellow-200' :
+                  file.status === 'queued' ? 'bg-gray-100 text-gray-800 border-gray-200' :
+                  file.status === 'canceled' ? 'bg-gray-100 text-gray-600 border-gray-200' :
+                  'bg-red-100 text-red-800 border-red-200'
                 }>
-                  {file.status === 'queued' ? `Queued #${$downloadQueue.indexOf(file) + 1}` : file.status}
+                  {file.status === 'queued' ? `Queue #${$downloadQueue.indexOf(file) + 1}` : file.status}
                 </Badge>
               </div>
             </div>
             
+            <!-- Progress Section -->
             {#if file.status === 'downloading' || file.status === 'paused'}
-              <div class="space-y-2 mt-3">
-                <div class="flex items-center text-sm">
-                  <span>Progress: {(file.progress || 0).toFixed(2)}%</span>
+              <div class="px-4 pb-2">
+                <div class="bg-muted/50 rounded-lg p-3">
+                  <div class="flex items-center justify-between text-sm mb-2">
+                    <span class="font-medium">Progress</span>
+                    <span class="text-muted-foreground">{(file.progress || 0).toFixed(2)}%</span>
+                  </div>
+                  <Progress 
+                    value={file.progress || 0} 
+                    max={100} 
+                    class="h-2 bg-muted [&>div]:bg-green-500" 
+                  />
                 </div>
-                <Progress value={file.progress || 0} max={100} class="bg-gray-200" />
               </div>
             {/if}
             
-            {#if file.status === 'downloading' || file.status === 'paused' || file.status === 'queued'}
-              <div class="flex flex-wrap gap-2 mt-3">
-                {#if file.status === 'queued'}
+            <!-- Action Buttons -->
+            <div class="px-4 pb-4">
+              <div class="flex flex-wrap gap-2">
+                {#if file.status === 'downloading' || file.status === 'paused' || file.status === 'queued'}
+                  {#if file.status === 'queued'}
+                    <Button
+                      size="sm"
+                      variant="default"
+                      on:click={() => startQueuedDownload(file.id)}
+                      class="h-8 px-3"
+                    >
+                      <Play class="h-3 w-3 mr-1" />
+                      Start
+                    </Button>
+                  {:else}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      on:click={() => togglePause(file.id)}
+                      class="h-8 px-3"
+                    >
+                      {#if file.status === 'downloading'}
+                        <Pause class="h-3 w-3 mr-1" />
+                        Pause
+                      {:else}
+                        <Play class="h-3 w-3 mr-1" />
+                        Resume
+                      {/if}
+                    </Button>
+                  {/if}
                   <Button
                     size="sm"
-                    variant="default"
-                    on:click={() => startQueuedDownload(file.id)}
-                    class="flex-1 min-w-[100px] sm:flex-none"
+                    variant="destructive"
+                    on:click={() => cancelDownload(file.id)}
+                    class="h-8 px-3"
                   >
-                    <Play class="h-3 w-3 mr-1" />
-                    Start Download
+                    <X class="h-3 w-3 mr-1" />
+                    {file.status === 'queued' ? 'Remove' : 'Cancel'}
                   </Button>
-                {:else}
+                {:else if file.status === 'completed'}
                   <Button
                     size="sm"
                     variant="outline"
-                    on:click={() => togglePause(file.id)}
-                    class="flex-1 min-w-[100px] sm:flex-none"
+                    class="h-8 px-3"
                   >
-                    {#if file.status === 'downloading'}
-                      <Pause class="h-3 w-3 mr-1" />
-                      Pause
-                    {:else}
-                      <Play class="h-3 w-3 mr-1" />
-                      Resume
-                    {/if}
+                    <File class="h-3 w-3 mr-1" />
+                    Open File
                   </Button>
                 {/if}
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  on:click={() => cancelDownload(file.id)}
-                  class="flex-1 min-w-[100px] sm:flex-none"
-                >
-                  <X class="h-3 w-3 mr-1" />
-                  {file.status === 'queued' ? 'Remove' : 'Cancel'}
-                </Button>
               </div>
-            {/if}
-            
-            {#if file.status === 'completed'}
-              <div class="flex flex-wrap gap-2 mt-3">
-                <Button
-                        size="sm"
-                        variant="outline"
-                        class="flex-1 min-w-[100px] sm:flex-none"
-                >
-                  <File class="h-3 w-3 mr-1" />
-                  Open File
-                </Button>
-              </div>
-            {/if}
+            </div>
           </div>
         {/each}
       </div>
