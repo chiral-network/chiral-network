@@ -577,7 +577,8 @@ function clearSearch() {
                   file.status === 'queued' ? 'bg-gray-100 text-gray-800 border-gray-200' :
                   file.status === 'canceled' ? 'bg-gray-100 text-gray-600 border-gray-200' :
                   'bg-red-100 text-red-800 border-red-200'
-                }>
+                }
+                  style="pointer-events: none;">
                   {file.status === 'queued' ? `Queue #${$downloadQueue.indexOf(file) + 1}` : file.status}
                 </Badge>
               </div>
