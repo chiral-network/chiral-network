@@ -6,7 +6,7 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
   import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, File } from 'lucide-svelte'
-  import { files, downloadQueue, type FileItem } from '$lib/stores'
+  import { files, downloadQueue } from '$lib/stores'
   
   let searchHash = ''  // For downloading new files
   let searchFilter = ''  // For searching existing downloads
@@ -410,6 +410,7 @@ function clearSearch() {
           <span class="text-sm font-medium">Auto-Start</span>
           <button
               type="button"
+              aria-label="Toggle auto-start queue {autoStartQueue ? 'off' : 'on'}"
               on:click={() => autoStartQueue = !autoStartQueue}
               class="relative inline-flex h-6 w-12 items-center rounded-full transition-colors focus:outline-none"
               class:bg-green-500={autoStartQueue}
@@ -419,7 +420,7 @@ function clearSearch() {
                 class="inline-block h-5 w-5 transform rounded-full bg-white transition-transform"
                 class:translate-x-6={autoStartQueue}
                 class:translate-x-1={!autoStartQueue}
-              />
+              ></span>
           </button>
         </div>
 

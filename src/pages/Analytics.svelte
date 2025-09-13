@@ -3,12 +3,8 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
   import { TrendingUp, Upload, DollarSign, HardDrive, Award, BarChart3, TrendingUp as LineChart } from 'lucide-svelte'
-  //CHANGING IMPORT TO ADD PROXY NODES
   import { files, wallet, networkStats, proxyNodes } from '$lib/stores'
-  //import { files, wallet, networkStats } from '$lib/stores'
   import { onMount } from 'svelte'
-  // import { DatePicker } from '@svelte-plugins/datepicker'
-  // import { Popover } from "bits-ui"; // Added Popover component
 
   let uploadedFiles: any[] = []
   let downloadedFiles: any[] = []
@@ -17,12 +13,14 @@
   let earningsHistory: any[] = []
   let storageUsed = 0
   let bandwidthUsed = { upload: 0, download: 0 }
-  //ADDING LATENCY STATE AND HELPER
+  
   // Latency analytics (derived from proxy nodes)
   let avgLatency = 0
   let p95Latency = 0
   let bestLatency = 0
   let latencyHistory: { date: string; latency: number }[] = []
+  let hoveredLatency: { date: string; latency: number } | null = null
+  let hoveredLatencyIndex: number | null = null
 
   function computeLatencyStats() {
     // Use the live values from $proxyNodes
@@ -157,7 +155,7 @@
     }
 
     earningsHistory = history
-    //ADDING THIS: INITIALIZING THE LATENCY History
+    
     // Generate mock latency history (last 30 points)
     const lhist: { date: string; latency: number }[] = []
     for (let i = 29; i >= 0; i--) {
@@ -181,8 +179,7 @@
         download: bandwidthUsed.download + Math.random() * 150
       }
     }, 3000)*/
-
-    //ADDING THIS extending refresh timer to include latency also
+    
     // Update bandwidth & latency periodically
     const interval = setInterval(() => {
       bandwidthUsed = {
@@ -247,8 +244,8 @@
   $: popularFiles = [...$files]
           .sort((a, b) => (b.seeders || 0) - (a.seeders || 0))
           .slice(0, 5)
-
-  //Generate SVG path for line chart
+  
+  // Generate SVG path for line chart
   function generateLinePath(data: any[], maxValue: number, width: number, height: number): string {
     if (data.length === 0) return '';
     if (data.length === 1) {
@@ -451,11 +448,6 @@
       </div>
     </Card>
 
-    <script>
-      let hoveredLatency = null;
-      let hoveredIndex = null;
-    </script>
-
     <Card class="p-6">
       <h3 class="text-md font-medium mb-4">Latency (recent)</h3>
       <div class="flex h-48 gap-2">
@@ -483,10 +475,10 @@
                     class="flex-1 bg-gradient-to-t from-blue-400/40 to-blue-500/80 hover:from-blue-500/60 hover:to-blue-600/90 transition-all rounded-t-md shadow-sm relative"
                     style="height: {(Math.min(p.latency, 300) / 300) * 100}%"
                     aria-label="{p.date}: {p.latency.toFixed(0)} ms"
-                    on:mouseenter={() => { hoveredLatency = p; hoveredIndex = i; }}
-                    on:mouseleave={() => { hoveredLatency = null; hoveredIndex = null; }}
+                    on:mouseenter={() => { hoveredLatency = p; hoveredLatencyIndex = i; }}
+                    on:mouseleave={() => { hoveredLatency = null; hoveredLatencyIndex = null; }}
             >
-              {#if hoveredIndex === i && hoveredLatency}
+              {#if hoveredLatencyIndex === i && hoveredLatency}
                 <div
                         class="absolute left-1/2 -translate-x-1/2 -top-8 z-10 px-2 py-1 rounded bg-primary text-white text-xs shadow-lg pointer-events-none"
                         style="white-space:nowrap;"
@@ -713,6 +705,9 @@
                         stroke="white"
                         stroke-width="0.2"
                         class="cursor-pointer hover:r-1.2 transition-all"
+                        role="button"
+                        tabindex="0"
+                        aria-label="Data point for {day.date}: {day.earnings} earnings"
                         on:mouseenter={() => { hoveredDay = day; hoveredIndex = i; }}
                         on:mouseleave={() => { hoveredDay = null; hoveredIndex = null; }}
                 />
