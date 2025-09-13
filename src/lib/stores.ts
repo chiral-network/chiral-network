@@ -12,7 +12,8 @@ export interface FileItem {
     | "failed"
     | "uploaded"
     | "queued"
-    | "seeding";
+    | "seeding"
+    | "canceled";
   progress?: number;
   uploadDate?: Date;
   owner?: string;
@@ -223,7 +224,7 @@ const blacklistedPeers: BlacklistEntry[] = [
     chiral_address: "0x702f05Cc6634C599fj293b844Bc9e759jw04989",
     reason: "Unfufilled requests",
     timestamp: new Date("2024-05-01T10:00:00Z"),
-  }
+  },
 ];
 
 const dummyNetworkStats: NetworkStats = {
@@ -241,9 +242,12 @@ export const files = writable<FileItem[]>(dummyFiles);
 export const proxyNodes = writable<ProxyNode[]>(dummyProxyNodes);
 export const wallet = writable<WalletInfo>(dummyWallet);
 export const activeDownloads = writable<number>(2);
-export const networkStatus = writable<"connected" | "disconnected">(
-  "connected",
-);
+// Old static network status (replaced with real-time monitoring)
+// export const networkStatus = writable<"connected" | "disconnected">("connected");
+
+// Import real network status
+import { networkStatus } from './services/networkService';
+export { networkStatus };
 export const peers = writable<PeerInfo[]>(dummyPeers);
 export const chatMessages = writable<ChatMessage[]>([]);
 export const networkStats = writable<NetworkStats>(dummyNetworkStats);

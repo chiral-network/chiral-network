@@ -15,7 +15,7 @@
     import {onMount} from 'svelte';
     import { tick } from 'svelte';
     import { setupI18n } from '../src/i18n/i18n';
-
+    import { startNetworkMonitoring } from '$lib/services/networkService';
     // gets path name not entire url:
     // ex: http://locatlhost:1420/download -> /download
     
@@ -40,6 +40,9 @@
       // set the currentPage var
       syncFromUrl();
 
+      // Start network monitoring
+      const stopNetworkMonitoring = startNetworkMonitoring();
+
       // popstate - event that tracks history of current tab 
       // (i.e. clicking on new url or going back)
       const onPop = () => syncFromUrl();
@@ -48,7 +51,10 @@
       window.addEventListener('popstate', onPop);
 
       //  cleanup when component unmounts for removing duplicate event listeners. 
-      return () => window.removeEventListener('popstate', onPop);
+      return () => {
+        window.removeEventListener('popstate', onPop);
+        stopNetworkMonitoring();
+      };
     })
     let sidebarCollapsed = false
     let mobileMenuOpen = false
