@@ -1,12 +1,14 @@
 // Real DHT implementation with channel-based communication for thread safety
 use libp2p::{
     identity,
-    kad::{self, store::MemoryStore, Record},
+    kad::{self, store::MemoryStore, Record, Mode},
     swarm::{NetworkBehaviour, SwarmEvent},
+    identify,
     PeerId, Swarm, Multiaddr, SwarmBuilder,
 };
 use libp2p::kad::Behaviour as Kademlia;
 use libp2p::kad::Event as KademliaEvent;
+use libp2p::identify::Event as IdentifyEvent;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -30,6 +32,7 @@ pub struct FileMetadata {
 #[derive(NetworkBehaviour)]
 pub struct DhtBehaviour {
     kademlia: Kademlia<MemoryStore>,
+    identify: identify::Behaviour,
 }
 
 #[derive(Debug)]
@@ -58,8 +61,17 @@ async fn run_dht_node(
     event_tx: mpsc::Sender<DhtEvent>,
     connected_peers: Arc<Mutex<HashSet<PeerId>>>,
 ) {
+    // Periodic bootstrap interval
+    let mut bootstrap_interval = tokio::time::interval(Duration::from_secs(30));
+    
     loop {
         tokio::select! {
+            _ = bootstrap_interval.tick() => {
+                // Periodically bootstrap to maintain connections
+                swarm.behaviour_mut().kademlia.bootstrap();
+                debug!("Performing periodic Kademlia bootstrap");
+            }
+            
             Some(cmd) = cmd_rx.recv() => {
                 match cmd {
                     DhtCommand::PublishFile(metadata) => {
@@ -115,9 +127,16 @@ async fn run_dht_node(
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Kademlia(kad_event)) => {
                         handle_kademlia_event(kad_event, &event_tx).await;
                     }
+                    SwarmEvent::Behaviour(DhtBehaviourEvent::Identify(identify_event)) => {
+                        handle_identify_event(identify_event, &mut swarm, &event_tx).await;
+                    }
                     SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                         info!("✅ CONNECTION ESTABLISHED with peer: {}", peer_id);
                         info!("   Endpoint: {:?}", endpoint);
+                        
+                        // Add peer to Kademlia routing table
+                        swarm.behaviour_mut().kademlia.add_address(&peer_id, endpoint.get_remote_address().clone());
+                        
                         let peers_count = {
                             let mut peers = connected_peers.lock().await;
                             peers.insert(peer_id);
@@ -169,6 +188,22 @@ async fn handle_kademlia_event(event: KademliaEvent, _event_tx: &mpsc::Sender<Dh
     }
 }
 
+async fn handle_identify_event(event: IdentifyEvent, swarm: &mut Swarm<DhtBehaviour>, _event_tx: &mpsc::Sender<DhtEvent>) {
+    match event {
+        IdentifyEvent::Received { peer_id, info, .. } => {
+            info!("Identified peer {}: {:?}", peer_id, info.protocol_version);
+            // Add identified peer to Kademlia routing table
+            for addr in info.listen_addrs {
+                swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
+            }
+        }
+        IdentifyEvent::Sent { peer_id, .. } => {
+            debug!("Sent identify info to {}", peer_id);
+        }
+        _ => {}
+    }
+}
+
 // Public API for the DHT
 pub struct DhtService {
     cmd_tx: mpsc::Sender<DhtCommand>,
@@ -185,11 +220,20 @@ impl DhtService {
         
         info!("Local peer id: {}", local_peer_id);
         
-        // Create a Kademlia behaviour
+        // Create a Kademlia behaviour with custom protocol
         let store = MemoryStore::new(local_peer_id);
-        let kademlia = Kademlia::new(local_peer_id, store);
+        let mut kademlia = Kademlia::new(local_peer_id, store);
         
-        let behaviour = DhtBehaviour { kademlia };
+        // Set Kademlia to server mode to accept incoming connections
+        kademlia.set_mode(Some(Mode::Server));
+        
+        // Create identify behaviour
+        let identify = identify::Behaviour::new(identify::Config::new(
+            "/chiral/1.0.0".to_string(),
+            local_key.public(),
+        ));
+        
+        let behaviour = DhtBehaviour { kademlia, identify };
         
         // Create the swarm
         let mut swarm = SwarmBuilder::with_existing_identity(local_key)
@@ -200,7 +244,9 @@ impl DhtService {
                 libp2p::yamux::Config::default,
             )?
             .with_behaviour(|_| behaviour)?
-            .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
+            .with_swarm_config(|c| c
+                .with_idle_connection_timeout(Duration::from_secs(300)) // 5 minutes
+            )
             .build();
         
         // Listen on the specified port
@@ -214,12 +260,30 @@ impl DhtService {
             info!("Attempting to connect to bootstrap: {}", bootstrap_addr);
             if let Ok(addr) = bootstrap_addr.parse::<Multiaddr>() {
                 match swarm.dial(addr.clone()) {
-                    Ok(_) => info!("✓ Initiated connection to bootstrap: {}", bootstrap_addr),
+                    Ok(_) => {
+                        info!("✓ Initiated connection to bootstrap: {}", bootstrap_addr);
+                        // Add bootstrap node to Kademlia routing table if it has a peer ID
+                        if let Some(peer_id) = addr.iter().find_map(|p| {
+                            if let libp2p::multiaddr::Protocol::P2p(peer) = p {
+                                Some(peer)
+                            } else {
+                                None
+                            }
+                        }) {
+                            swarm.behaviour_mut().kademlia.add_address(&peer_id, addr.clone());
+                        }
+                    }
                     Err(e) => warn!("✗ Failed to dial bootstrap {}: {}", bootstrap_addr, e),
                 }
             } else {
                 warn!("✗ Invalid bootstrap address format: {}", bootstrap_addr);
             }
+        }
+        
+        // Trigger initial bootstrap if we have bootstrap nodes
+        if !bootstrap_nodes.is_empty() {
+            swarm.behaviour_mut().kademlia.bootstrap();
+            info!("Triggered initial Kademlia bootstrap");
         }
         
         let (cmd_tx, cmd_rx) = mpsc::channel(100);
