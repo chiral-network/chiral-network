@@ -380,15 +380,17 @@ function clearSearch() {
             placeholder="Search downloads..."
             class="pr-8"
           />
-          <Search class="absolute right-2 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           {#if searchFilter}
             <button
               on:click={() => searchFilter = ''}
-              class="absolute right-7 top-1/2 transform -translate-y-1/2 p-0.5 hover:bg-gray-100 rounded-full transition-colors"
+              class="absolute right-2 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground"
               type="button"
+              title="Clear search"
             >
-              <X class="h-3 w-3 text-gray-500 hover:text-gray-700" />
+              ×
             </button>
+          {:else}
+            <Search class="absolute right-2 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
           {/if}
         </div>
       </div>

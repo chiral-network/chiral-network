@@ -69,6 +69,7 @@
   let blacklistAddressWarning = '';
   let isBlacklistAddressValid = false;
 
+
   // Copy feedback message
   let copyMessage = '';
   let privateKeyCopyMessage = '';
@@ -157,7 +158,7 @@
     }
   }
 
-  //Blacklist address validation (mirror of Send Coins)
+  // Blacklist address validation (same as Send Coins validation)
   $: {
     const addr = newBlacklistEntry.chiral_address;
 
@@ -172,6 +173,12 @@
       isBlacklistAddressValid = false;
     } else if (!isValidAddress(addr)) {
       blacklistAddressWarning = 'Address must contain valid hexadecimal characters (0-9, a-f, A-F)';
+      isBlacklistAddressValid = false;
+    } else if (isAddressAlreadyBlacklisted(addr)) {
+      blacklistAddressWarning = 'This address is already blacklisted.';
+      isBlacklistAddressValid = false;
+    } else if (isOwnAddress(addr)) {
+      blacklistAddressWarning = 'Cannot blacklist your own address.';
       isBlacklistAddressValid = false;
     } else {
       blacklistAddressWarning = '';
@@ -579,9 +586,6 @@
     description: ""
   }
 
-  //Use the new validity flag computed above
-  $: isBlacklistFormValid =
-    newBlacklistEntry.description.trim() !== '' && isBlacklistAddressValid;
   
   //Guard add with validity check
   function addBlacklistEntry() {
@@ -630,9 +634,7 @@
   // Enhanced validation
   $: isBlacklistFormValid = 
     newBlacklistEntry.description.trim() !== '' &&
-    isValidBlacklistAddress(newBlacklistEntry.chiral_address) &&
-    !isAddressAlreadyBlacklisted(newBlacklistEntry.chiral_address) &&
-    !isOwnAddress(newBlacklistEntry.chiral_address);
+    isBlacklistAddressValid;
 
   // Filtered blacklist for search
   $: filteredBlacklist = $blacklist.filter(entry => 
@@ -640,18 +642,6 @@
     entry.reason.toLowerCase().includes(blacklistSearch.toLowerCase())
   );
 
-  function isValidBlacklistAddress(address: string) {
-    if (!address) return false;
-    return address.startsWith('0x') && 
-          address.length === 42 && 
-          isValidHexadecimal(address.slice(2));
-  }
-
-  function isValidHexadecimal(hexString: string) {
-    if (hexString.length === 0) return false;
-    const hexRegex = /^[a-fA-F0-9]+$/;
-    return hexRegex.test(hexString);
-  }
 
   function isAddressAlreadyBlacklisted(address: string) {
     if (!address) return false;
@@ -681,8 +671,6 @@
     // Could show a brief "Copied!" message
   }
 
-  let exportNotification = '';
-  let importNotification = '';
 
   function exportBlacklist() {
     const data = {
@@ -720,13 +708,12 @@
           const imported = data.blacklist.filter((entry: Partial<BlacklistEntry>) =>
             entry.chiral_address && 
             entry.reason &&
-            isValidBlacklistAddress(entry.chiral_address) &&
+            isValidAddress(entry.chiral_address) &&
             !isAddressAlreadyBlacklisted(entry.chiral_address)
           ).map((entry: Partial<BlacklistEntry>) => ({
             chiral_address: entry.chiral_address!,
             reason: entry.reason!,
-            timestamp: entry.timestamp ? new Date(entry.timestamp) : new Date(),
-            notes: entry.notes || ''
+            timestamp: entry.timestamp ? new Date(entry.timestamp) : new Date()
           }));
           
           if (imported.length > 0) {
@@ -1219,21 +1206,21 @@
               id="blacklist-address"
               bind:value={newBlacklistEntry.chiral_address}
               placeholder="0x1234567890abcdef..."
-              class="mt-2 font-mono text-sm {newBlacklistEntry.chiral_address && !isValidBlacklistAddress(newBlacklistEntry.chiral_address) ? 'border-red-300' : ''} {isValidBlacklistAddress(newBlacklistEntry.chiral_address) ? 'border-green-300' : ''}"
+              class="mt-2 font-mono text-sm {isBlacklistAddressValid ? 'border-green-300' : ''}"
             />
-            {#if newBlacklistEntry.chiral_address && !isValidBlacklistAddress(newBlacklistEntry.chiral_address)}
-              <p class="text-xs text-red-500 mt-1">
-                {!newBlacklistEntry.chiral_address.startsWith('0x') ? 'Address must start with 0x' :
-                newBlacklistEntry.chiral_address.length !== 42 ? `Address must be 42 characters (currently ${newBlacklistEntry.chiral_address.length})` :
-                'Invalid hexadecimal characters'}
-              </p>
-            {/if}
-            {#if isAddressAlreadyBlacklisted(newBlacklistEntry.chiral_address)}
-              <p class="text-xs text-orange-500 mt-1">This address is already blacklisted</p>
-            {/if}
-            {#if isOwnAddress(newBlacklistEntry.chiral_address)}
-              <p class="text-xs text-red-500 mt-1">Cannot blacklist your own address</p>
-            {/if}
+            <div class="flex items-center justify-between mt-1">
+              <span class="text-xs text-muted-foreground">
+                {newBlacklistEntry.chiral_address.length}/42 characters 
+                {#if newBlacklistEntry.chiral_address.length <= 42}
+                  ({42 - newBlacklistEntry.chiral_address.length} remaining)
+                {:else}
+                  ({newBlacklistEntry.chiral_address.length - 42} over)
+                {/if}
+              </span>
+              {#if blacklistAddressWarning}
+                <p class="text-xs text-red-500 font-medium">{blacklistAddressWarning}</p>
+              {/if}
+            </div>
           </div>
           
           <div>
@@ -1244,6 +1231,7 @@
                 bind:value={newBlacklistEntry.description}
                 placeholder="Enter reason (e.g., spam, fraud, malicious activity)"
                 maxlength={200}
+                class="pr-16"
               />
               <span class="absolute right-3 top-1/2 transform -translate-y-1/2 text-xs text-muted-foreground">
                 {newBlacklistEntry.description.length}/200
@@ -1257,8 +1245,8 @@
           </div>
 
           <!-- Quick reason buttons -->
-          <div class="flex flex-wrap gap-2">
-            <span class="text-xs text-muted-foreground mr-2">Quick reasons:</span>
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-xs text-muted-foreground">Quick reasons:</span>
             {#each ['Spam', 'Fraud', 'Malicious Activity', 'Harassment', 'Scam'] as reason}
               <button
                 type="button"
@@ -1276,7 +1264,6 @@
             disabled={!isBlacklistFormValid} 
             on:click={addBlacklistEntry}
           >
-            <BadgeX class="h-4 w-4 mr-2" />
             Add to Blacklist
           </Button>
         </div>
@@ -1285,12 +1272,12 @@
       <!-- Blacklist Display -->
       <div>
         <div class="flex items-center justify-between mb-3">
-          <h3 class="text-md font-medium">
-            Blacklisted Addresses
+          <div class="flex items-center gap-2">
+            <h3 class="text-md font-medium">Blacklisted Addresses</h3>
             {#if $blacklist.length > 0}
-              <span class="text-sm text-muted-foreground ml-2">({$blacklist.length})</span>
+              <span class="text-sm text-muted-foreground">({$blacklist.length})</span>
             {/if}
-          </h3>
+          </div>
           
           <div class="flex gap-2">
             <!-- Enhanced Search/Filter with clear button -->
@@ -1298,7 +1285,7 @@
               <Input
                 bind:value={blacklistSearch}
                 placeholder="Search blacklist..."
-                class="w-48 text-sm pr-8"
+                class="w-96 text-sm pr-8"
               />
               {#if blacklistSearch}
                 <button
@@ -1309,6 +1296,13 @@
                 >
                   ×
                 </button>
+              {:else}
+                <div class="absolute right-2 top-1/2 transform -translate-y-1/2 text-muted-foreground pointer-events-none">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8"/>
+                    <path d="m21 21-4.35-4.35"/>
+                  </svg>
+                </div>
               {/if}
             </div>
             
@@ -1380,10 +1374,7 @@
                   {/if}
                   
                   <p class="text-xs text-muted-foreground">
-                    Added {formatDate(entry.timestamp)} 
-                    {#if entry.notes && entry.notes.length > 0}
-                      • {entry.notes}
-                    {/if}
+                    Added {formatDate(entry.timestamp)}
                   </p>
                 </div>
                 
