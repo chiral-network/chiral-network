@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@mateothegreat/svelte5-router": "^2.16.19",
-    "@tauri-apps/api": "^2.8.0",
+    "@tauri-apps/api": "^2.1.1",
     "@tauri-apps/plugin-dialog": "^2.4.0",
     "@tauri-apps/plugin-shell": "^2.3.1",
     "@tauri-apps/plugin-store": "^2.4.0",
@@ -22,8 +22,6 @@
     "lucide-svelte": "^0.468.0",
     "mode-watcher": "^0.4.1",
     "qrcode": "^1.5.4",
-    "i18next": "^25.5.2",
-    "react-i18next": "^15.7.3",
     "svelte-i18n": "^4.0.1",
     "svelte-sonner": "^0.3.19",
     "tailwind-merge": "^2.5.5",
