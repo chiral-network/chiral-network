@@ -1,105 +1,91 @@
 #!/bin/bash
 
+# Chiral Network DHT Upgrade Script
+# This script helps update existing installations with improved DHT networking
+
+set -e
+
 echo "========================================="
-echo "Chiral Network - Upgrade to Svelte 5 & Tauri 2.0 Stable"
+echo "Chiral Network DHT Upgrade Script"
 echo "========================================="
 echo ""
 
-# Color codes for output
+# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Function to print colored output
-print_status() {
-    echo -e "${GREEN}✓${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}⚠${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}✗${NC} $1"
-}
-
-# Check if npm is installed
-if ! command -v npm &> /dev/null; then
-    print_error "npm is not installed. Please install Node.js and npm first."
+# Check if we're in the right directory
+if [ ! -f "package.json" ] || [ ! -d "src-tauri" ]; then
+    echo -e "${RED}Error: This script must be run from the Chiral Network project root${NC}"
     exit 1
 fi
 
-# Check if cargo is installed
-if ! command -v cargo &> /dev/null; then
-    print_error "Cargo is not installed. Please install Rust first."
-    print_warning "Install Rust from: https://rustup.rs/"
-    exit 1
-fi
-
-echo "Starting upgrade process..."
+echo -e "${YELLOW}This upgrade will:${NC}"
+echo "  • Update DHT connection stability"
+echo "  • Add protocol negotiation support"
+echo "  • Improve keep-alive mechanisms"
+echo "  • Extend connection timeouts"
 echo ""
 
-# Step 1: Clean old dependencies
-print_status "Cleaning old dependencies..."
-rm -rf node_modules package-lock.json
-rm -rf src-tauri/target
+# Ask for confirmation
+read -p "Do you want to continue? (y/N): " -n 1 -r
+echo ""
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Upgrade cancelled"
+    exit 0
+fi
 
-# Step 2: Install new Node dependencies
-print_status "Installing updated Node.js dependencies..."
+echo ""
+echo -e "${GREEN}Step 1: Stopping any running instances...${NC}"
+# Kill any running chiral-network processes
+pkill -f "chiral-network" 2>/dev/null || true
+pkill -f "npm run tauri" 2>/dev/null || true
+
+echo -e "${GREEN}Step 2: Backing up configuration...${NC}"
+# Create backup directory
+BACKUP_DIR="backup_$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$BACKUP_DIR"
+
+# Backup important files if they exist
+if [ -f "src-tauri/tauri.conf.json" ]; then
+    cp "src-tauri/tauri.conf.json" "$BACKUP_DIR/"
+fi
+
+if [ -d "bin/geth-data" ]; then
+    echo "  • Backing up geth data (this may take a moment)..."
+    cp -r "bin/geth-data" "$BACKUP_DIR/" 2>/dev/null || true
+fi
+
+echo -e "${GREEN}Step 3: Cleaning build artifacts...${NC}"
+rm -rf src-tauri/target/debug 2>/dev/null || true
+rm -rf src-tauri/target/release 2>/dev/null || true
+rm -rf dist 2>/dev/null || true
+
+echo -e "${GREEN}Step 4: Installing dependencies...${NC}"
 npm install
 
-if [ $? -ne 0 ]; then
-    print_error "Failed to install Node.js dependencies"
-    exit 1
-fi
+echo -e "${GREEN}Step 5: Building the application...${NC}"
+echo "  • Building frontend..."
+npm run build
 
-# Step 3: Build Tauri dependencies
-print_status "Building Tauri/Rust dependencies..."
-cd src-tauri
-cargo build
-
-if [ $? -ne 0 ]; then
-    print_error "Failed to build Rust dependencies"
-    cd ..
-    exit 1
-fi
-cd ..
-
-# Step 4: Optional - Run Svelte 5 migration
-echo ""
-print_warning "Would you like to automatically migrate to Svelte 5 syntax?"
-print_warning "This is optional - your code will work without migration."
-echo "Run migration? (y/N): "
-read -r response
-
-if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
-    print_status "Running Svelte 5 migration..."
-    npx sv migrate svelte-5
-    
-    if [ $? -eq 0 ]; then
-        print_status "Migration completed successfully!"
-    else
-        print_warning "Migration had some issues. Please review the changes."
-    fi
-else
-    print_status "Skipping Svelte 5 migration. You can run 'npx sv migrate svelte-5' later."
-fi
+echo "  • Building Tauri application (this may take several minutes)..."
+npm run tauri build
 
 echo ""
-echo "========================================="
-echo "Upgrade Complete!"
-echo "========================================="
+echo -e "${GREEN}✅ Upgrade complete!${NC}"
 echo ""
-print_status "Successfully updated to:"
-echo "  • Svelte 5.0"
-echo "  • Tauri 2.1 (stable)"
-echo "  • TypeScript 5.7"
-echo "  • All related dependencies"
+echo "The DHT networking has been upgraded with:"
+echo "  • Protocol negotiation via libp2p identify"
+echo "  • Extended idle timeout (5 minutes)"
+echo "  • Periodic Kademlia bootstrap (every 30 seconds)"
+echo "  • Improved connection stability"
 echo ""
-echo "Next steps:"
-echo "1. Run 'npm run tauri dev' to test the application"
-echo "2. Check MIGRATION.md for detailed changes"
-echo "3. Test all functionality thoroughly"
+echo "To run the application:"
+echo "  • Development mode: npm run tauri dev"
+echo "  • Production: ./src-tauri/target/release/chiral-network"
+echo "  • Headless bootstrap: ./src-tauri/target/release/chiral-network --headless --dht-port 4001"
 echo ""
-print_warning "If you encounter issues, check MIGRATION.md for troubleshooting"
+echo "Your backup is stored in: $BACKUP_DIR"
+echo ""
