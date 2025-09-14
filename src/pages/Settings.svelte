@@ -71,6 +71,7 @@
   let selectedLanguage = 'en';
   let clearingCache = false;
   let cacheCleared = false;
+  let importExportFeedback: { message: string; type: 'success' | 'error' } | null = null;
 
   const locations = [
     { value: 'US-East', label: 'US East' },
@@ -96,6 +97,7 @@
     localStorage.setItem("chiralSettings", JSON.stringify(settings));
     savedSettings = { ...settings };
     userLocation.set(settings.userLocation);
+    importExportFeedback = null;
   }
 
   function handleConfirmReset() {
@@ -173,6 +175,10 @@
     a.download = "chiral-settings.json";
     a.click();
     URL.revokeObjectURL(url);
+    importExportFeedback = {
+      message: $t('advanced.exportSuccess', { default: "Settings exported to your browser's download folder." }),
+      type: 'success'
+    };
   }
 
   function importSettings(event: Event) {
@@ -184,12 +190,18 @@
       try {
         const imported = JSON.parse(e.target?.result as string);
         settings = { ...settings, ...imported };
-        saveSettings();
-        localStorage.setItem("chiralSettings", JSON.stringify(settings));
-        hasChanges = false;
+        saveSettings(); // This saves, updates savedSettings, and clears any old feedback.
+        // Now we set the new feedback for the import action.
+        importExportFeedback = {
+          message: $t('advanced.importSuccess', { default: 'Settings imported successfully.' }),
+          type: 'success'
+        };
       } catch (err) {
         console.error("Failed to import settings:", err);
-        alert("Invalid JSON file. Please select a valid export.");
+        importExportFeedback = {
+          message: $t('advanced.importError', { default: 'Invalid JSON file. Please select a valid export.' }),
+          type: 'error'
+        };
       }
     };
     reader.readAsText(file);
@@ -695,6 +707,12 @@
           />
         </label>
       </div>
+
+      {#if importExportFeedback}
+        <div class="mt-4 p-3 rounded-md text-sm {importExportFeedback.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}">
+          {importExportFeedback.message}
+        </div>
+      {/if}
     </div>
   </Card>
 
