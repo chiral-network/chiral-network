@@ -4,7 +4,7 @@ use libp2p::{
     kad::{self, store::MemoryStore, Record, Mode},
     swarm::{NetworkBehaviour, SwarmEvent},
     identify,
-    PeerId, Swarm, Multiaddr, SwarmBuilder,
+    PeerId, Swarm, Multiaddr, SwarmBuilder, StreamProtocol,
 };
 use libp2p::kad::Behaviour as Kademlia;
 use libp2p::kad::Event as KademliaEvent;
@@ -44,7 +44,6 @@ pub enum DhtCommand {
     SearchFile(String),
     ConnectPeer(String),
     GetPeerCount(oneshot::Sender<usize>),
-    GetPeerId(oneshot::Sender<String>),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -71,7 +70,7 @@ async fn run_dht_node(
         tokio::select! {
             _ = bootstrap_interval.tick() => {
                 // Periodically bootstrap to maintain connections
-                swarm.behaviour_mut().kademlia.bootstrap();
+                let _ = swarm.behaviour_mut().kademlia.bootstrap();
                 debug!("Performing periodic Kademlia bootstrap");
             }
             
@@ -118,9 +117,6 @@ async fn run_dht_node(
                     DhtCommand::GetPeerCount(tx) => {
                         let count = connected_peers.lock().await.len();
                         let _ = tx.send(count);
-                    }
-                    DhtCommand::GetPeerId(tx) => {
-                        let _ = tx.send(peer_id.to_string());
                     }
                 }
             }
@@ -279,7 +275,7 @@ impl DhtService {
         
         // Create a Kademlia behaviour with tuned configuration
         let store = MemoryStore::new(local_peer_id);
-        let mut kad_cfg = KademliaConfig::default();
+        let mut kad_cfg = KademliaConfig::new(StreamProtocol::new("/ipfs/kad/1.0.0"));
         // Align with docs: shorter queries, higher replication
         kad_cfg.set_query_timeout(Duration::from_secs(10));
         // Replication factor of 20 (as per spec table)
@@ -349,7 +345,7 @@ impl DhtService {
         
         // Trigger initial bootstrap if we have bootstrap nodes
         if !bootstrap_nodes.is_empty() {
-            swarm.behaviour_mut().kademlia.bootstrap();
+            let _ = swarm.behaviour_mut().kademlia.bootstrap();
             info!("Triggered initial Kademlia bootstrap");
         }
         
@@ -410,10 +406,6 @@ impl DhtService {
         }
     }
     
-    pub async fn get_next_event(&self) -> Option<DhtEvent> {
-        let mut rx = self.event_rx.lock().await;
-        rx.recv().await
-    }
 
     // Drain up to `max` pending events without blocking
     pub async fn drain_events(&self, max: usize) -> Vec<DhtEvent> {
