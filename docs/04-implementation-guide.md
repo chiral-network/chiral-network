@@ -12,7 +12,7 @@
 
 ### Repository Structure
 
-```
+```text
 chiral-network/
 ├── blockchain/          # Ethereum-compatible implementation
 │   ├── src/            # Core blockchain code
@@ -126,44 +126,77 @@ use libp2p::{
     PeerId, Transport,
 };
 
-pub struct DHTNode {
-    swarm: Swarm<Kademlia<MemoryStore>>,
-    peer_id: PeerId,
+pub struct DhtService {
+    cmd_tx: mpsc::Sender<DhtCommand>,
+    event_rx: Arc<Mutex<mpsc::Receiver<DhtEvent>>>,
+    peer_id: String,
 }
 
-impl DHTNode {
-    pub fn new() -> Result<Self, Box<dyn Error>> {
+impl DhtService {
+    pub async fn new(port: u16, bootstrap_nodes: Vec<String>) -> Result<Self, Box<dyn std::error::Error>> {
         let local_key = identity::Keypair::generate_ed25519();
-        let peer_id = PeerId::from(local_key.public());
+        let local_peer_id = PeerId::from(local_key.public());
+        let peer_id_str = local_peer_id.to_string();
 
-        let transport = libp2p::development_transport(local_key)?;
+        // Create Kademlia configuration
+        let store = MemoryStore::new(local_peer_id);
+        let mut kad_cfg = KademliaConfig::new(StreamProtocol::new("/chiral/kad/1.0.0"));
+        kad_cfg.set_query_timeout(Duration::from_secs(10));
+        kad_cfg.set_replication_factor(20);
 
-        let mut cfg = KademliaConfig::default();
-        cfg.set_query_timeout(Duration::from_secs(60));
+        let mut kademlia = Kademlia::with_config(local_peer_id, store, kad_cfg);
+        kademlia.set_mode(Some(Mode::Server));
 
-        let store = MemoryStore::new(peer_id);
-        let kademlia = Kademlia::with_config(peer_id, store, cfg);
+        // Create identify and mDNS behaviours
+        let identify = identify::Behaviour::new(identify::Config::new(
+            "/chiral/1.0.0".to_string(),
+            local_key.public(),
+        ));
+        let mdns = Mdns::new(Default::default(), local_peer_id)?;
 
-        let swarm = SwarmBuilder::new(transport, kademlia, peer_id)
-            .executor(Box::new(|fut| {
-                tokio::spawn(fut);
-            }))
+        let behaviour = DhtBehaviour { kademlia, identify, mdns };
+
+        // Create swarm and spawn background task
+        let mut swarm = SwarmBuilder::with_existing_identity(local_key)
+            .with_tokio()
+            .with_tcp(Default::default(), libp2p::noise::Config::new, libp2p::yamux::Config::default)?
+            .with_behaviour(|_| behaviour)?
             .build();
 
-        Ok(DHTNode { swarm, peer_id })
+        let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", port).parse()?;
+        swarm.listen_on(listen_addr)?;
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(100);
+        let (event_tx, event_rx) = mpsc::channel(100);
+        let connected_peers = Arc::new(Mutex::new(HashSet::new()));
+
+        // Spawn the DHT node task
+        tokio::spawn(run_dht_node(swarm, local_peer_id, cmd_rx, event_tx, connected_peers));
+
+        Ok(DhtService {
+            cmd_tx,
+            event_rx: Arc::new(Mutex::new(event_rx)),
+            peer_id: peer_id_str,
+        })
     }
 
-    pub async fn store(&mut self, key: Vec<u8>, value: Vec<u8>) -> Result<(), Error> {
-        self.swarm.behaviour_mut().put_record(
-            Record::new(key, value),
-            Quorum::One
-        )?;
-        Ok(())
+    pub async fn publish_file(&self, metadata: FileMetadata) -> Result<(), String> {
+        self.cmd_tx.send(DhtCommand::PublishFile(metadata)).await
+            .map_err(|e| e.to_string())
     }
 
-    pub async fn retrieve(&mut self, key: &[u8]) -> Result<Vec<u8>, Error> {
-        let query_id = self.swarm.behaviour_mut().get_record(key.into());
-        // Wait for result...
+    pub async fn search_file(&self, file_hash: String) -> Result<(), String> {
+        self.cmd_tx.send(DhtCommand::SearchFile(file_hash)).await
+            .map_err(|e| e.to_string())
+    }
+
+    pub async fn connect_peer(&self, addr: String) -> Result<(), String> {
+        self.cmd_tx.send(DhtCommand::ConnectPeer(addr)).await
+            .map_err(|e| e.to_string())
+    }
+
+    pub async fn get_peer_id(&self) -> String {
+        self.peer_id.clone()
     }
 }
 ```
@@ -350,7 +383,7 @@ app.post("/api/v1/market/supply", async (req, res) => {
     // Check if file exists
     const [files] = await pool.execute(
       "SELECT file_hash FROM files WHERE file_hash = ?",
-      [file_hash],
+      [file_hash]
     );
 
     if (files.length === 0) {
@@ -369,7 +402,7 @@ app.post("/api/v1/market/supply", async (req, res) => {
              bandwidth_limit = VALUES(bandwidth_limit),
              last_seen = NOW(),
              expires_at = DATE_ADD(NOW(), INTERVAL 1 HOUR)`,
-      [req.user.id, file_hash, ip, port, price, bandwidth],
+      [req.user.id, file_hash, ip, port, price, bandwidth]
     );
 
     res.json({ success: true, expires_in: 3600 });
@@ -388,7 +421,7 @@ app.get("/api/v1/market/lookup/:hash", async (req, res) => {
              FROM suppliers
              WHERE file_hash = ? AND expires_at > NOW()
              ORDER BY price_per_mb ASC, reputation DESC`,
-      [hash],
+      [hash]
     );
 
     res.json(suppliers);

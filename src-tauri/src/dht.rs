@@ -78,21 +78,34 @@ async fn run_dht_node(
                 match cmd {
                     DhtCommand::PublishFile(metadata) => {
                         let key = kad::RecordKey::new(&metadata.file_hash.as_bytes());
-                        let value = serde_json::to_vec(&metadata).unwrap();
-                        let record = Record {
-                            key,
-                            value,
-                            publisher: Some(peer_id),
-                            expires: None,
-                        };
-                        
-                        swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One)
-                            .map_err(|e| error!("Failed to publish: {}", e)).ok();
-                        info!("Published file metadata: {}", metadata.file_hash);
+                        match serde_json::to_vec(&metadata) {
+                            Ok(value) => {
+                                let record = Record {
+                                    key,
+                                    value,
+                                    publisher: Some(peer_id),
+                                    expires: None,
+                                };
+                                
+                                match swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One) {
+                                    Ok(_) => {
+                                        info!("Published file metadata: {}", metadata.file_hash);
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to publish file metadata {}: {}", metadata.file_hash, e);
+                                        let _ = event_tx.send(DhtEvent::Error(format!("Failed to publish: {}", e))).await;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                error!("Failed to serialize file metadata {}: {}", metadata.file_hash, e);
+                                let _ = event_tx.send(DhtEvent::Error(format!("Failed to serialize metadata: {}", e))).await;
+                            }
+                        }
                     }
                     DhtCommand::SearchFile(file_hash) => {
                         let key = kad::RecordKey::new(&file_hash.as_bytes());
-                        swarm.behaviour_mut().kademlia.get_record(key);
+                        let _query_id = swarm.behaviour_mut().kademlia.get_record(key);
                         info!("Searching for file: {}", file_hash);
                     }
                     DhtCommand::ConnectPeer(addr) => {
@@ -175,7 +188,7 @@ async fn run_dht_node(
     }
 }
 
-async fn handle_kademlia_event(event: KademliaEvent, _event_tx: &mpsc::Sender<DhtEvent>) {
+async fn handle_kademlia_event(event: KademliaEvent, event_tx: &mpsc::Sender<DhtEvent>) {
     match event {
         KademliaEvent::RoutingUpdated { peer, .. } => {
             debug!("Routing table updated with peer: {}", peer);
@@ -192,7 +205,7 @@ async fn handle_kademlia_event(event: KademliaEvent, _event_tx: &mpsc::Sender<Dh
                     GetRecordOk::FoundRecord(peer_record) => {
                         // Try to parse file metadata from record value
                         if let Ok(metadata) = serde_json::from_slice::<FileMetadata>(&peer_record.record.value) {
-                            let _ = _event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
+                            let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
                         } else {
                             debug!("Received non-file metadata record");
                         }
@@ -206,7 +219,7 @@ async fn handle_kademlia_event(event: KademliaEvent, _event_tx: &mpsc::Sender<Dh
                     // If the error includes the key, emit FileNotFound
                     if let kad::GetRecordError::NotFound { key, .. } = err {
                         let file_hash = String::from_utf8_lossy(key.as_ref()).to_string();
-                        let _ = _event_tx.send(DhtEvent::FileNotFound(file_hash)).await;
+                        let _ = event_tx.send(DhtEvent::FileNotFound(file_hash)).await;
                     }
                 }
                 QueryResult::PutRecord(Ok(PutRecordOk { key })) => {
@@ -214,7 +227,7 @@ async fn handle_kademlia_event(event: KademliaEvent, _event_tx: &mpsc::Sender<Dh
                 }
                 QueryResult::PutRecord(Err(err)) => {
                     warn!("PutRecord error: {:?}", err);
-                    let _ = _event_tx.send(DhtEvent::Error(format!("PutRecord failed: {:?}", err))).await;
+                    let _ = event_tx.send(DhtEvent::Error(format!("PutRecord failed: {:?}", err))).await;
                 }
                 _ => {}
             }
@@ -275,7 +288,7 @@ impl DhtService {
         
         // Create a Kademlia behaviour with tuned configuration
         let store = MemoryStore::new(local_peer_id);
-        let mut kad_cfg = KademliaConfig::new(StreamProtocol::new("/ipfs/kad/1.0.0"));
+        let mut kad_cfg = KademliaConfig::new(StreamProtocol::new("/chiral/kad/1.0.0"));
         // Align with docs: shorter queries, higher replication
         kad_cfg.set_query_timeout(Duration::from_secs(10));
         // Replication factor of 20 (as per spec table)
