@@ -571,13 +571,14 @@ function clearSearch() {
                 
                 <!-- Status Badge -->
                 <Badge class={
-                  file.status === 'downloading' ? 'bg-green-100 text-green-800 border-green-200' :
-                  file.status === 'completed' ? 'bg-blue-100 text-blue-800 border-blue-200' :
-                  file.status === 'paused' ? 'bg-yellow-100 text-yellow-800 border-yellow-200' :
-                  file.status === 'queued' ? 'bg-gray-100 text-gray-800 border-gray-200' :
-                  file.status === 'canceled' ? 'bg-gray-100 text-gray-600 border-gray-200' :
-                  'bg-red-100 text-red-800 border-red-200'
-                }>
+                  file.status === 'downloading' ? 'bg-blue-500 text-white border-blue-500' :
+                  file.status === 'completed' ? 'bg-green-500 text-white border-green-500' :
+                  file.status === 'paused' ? 'bg-yellow-400 text-white border-yellow-400' :
+                  file.status === 'queued' ? 'bg-gray-500 text-white border-gray-500' :
+                  file.status === 'canceled' ? 'bg-red-600 text-white border-red-600' :
+                  'bg-red-500 text-white border-red-500'
+                }
+                >
                   {file.status === 'queued' ? `Queue #${$downloadQueue.indexOf(file) + 1}` : file.status}
                 </Badge>
               </div>
