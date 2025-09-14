@@ -968,6 +968,7 @@
       <p class="text-xs text-muted-foreground text-center mt-2">{$t('mining.last5Minutes')}</p>
     </Card>
   {/if}
+  </div>
 
   <!-- Logs Modal -->
   {#if showLogs}
@@ -1052,4 +1053,3 @@
       </Card>
     </div>
   {/if}
-</div>
