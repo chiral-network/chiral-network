@@ -10,7 +10,8 @@
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
   import { dhtService, DEFAULT_BOOTSTRAP_NODE } from '$lib/dht'
-  
+  import { Clipboard } from "lucide-svelte"
+
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
   
@@ -62,6 +63,12 @@
   let connectionAttempts = 0
   let dhtPollInterval: number | undefined
   
+  // UI variables
+  const nodeAddress = "enode://277ac35977fc0a230e3ca4ccbf6df6da486fd2af9c129925b1193b25da6f013a301788fceed458f03c6c0d289dfcbf7a7ca5c0aef34b680fcbbc8c2ef79c0f71@127.0.0.1:30303"
+  let copiedNodeAddr = false
+  let copiedPeerId = false
+  let copiedBootstrap = false
+
   function formatSize(bytes: number): string {
     const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
     let size = bytes
@@ -437,6 +444,16 @@
     }
   }
 
+  // Copy Helper
+  async function copy(text: string | null | undefined) {
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch (e) {
+      console.error('Copy failed:', e)
+    }
+  }
+
   async function fetchPeerCount() {
     if (!isGethRunning) return
     if (!isTauri) {
@@ -456,7 +473,6 @@
   onMount(() => {
     const interval = setInterval(refreshStats, 5000)
     let unlistenProgress: (() => void) | null = null
-    let dhtPollInterval: number | undefined
     
     // Initialize async operations
     const initAsync = async () => {
@@ -608,8 +624,23 @@
           </div>
         </div>
         <div class="pt-2">
-          <p class="text-sm text-muted-foreground mb-1">Node Address</p>
-          <p class="text-xs font-mono break-all">enode://277ac35977fc0a230e3ca4ccbf6df6da486fd2af9c129925b1193b25da6f013a301788fceed458f03c6c0d289dfcbf7a7ca5c0aef34b680fcbbc8c2ef79c0f71@127.0.0.1:30303</p>
+          <div class="flex items-center justify-between mb-1 gap-2">
+            <p class="text-sm text-muted-foreground">Node Address</p>
+            <Button
+              variant="outline"
+              size="sm"
+              class="h-7 px-2"
+              on:click={async () => {
+                await copy(nodeAddress);
+                copiedNodeAddr = true;
+                setTimeout(() => (copiedNodeAddr = false), 1200);
+              }}
+            >
+              <Clipboard class="h-3.5 w-3.5 mr-1" />
+              {copiedNodeAddr ? "Copied!" : "Copy"}
+            </Button>
+          </div>
+          <p class="text-xs font-mono break-all">{nodeAddress}</p>
         </div>
         <Button class="w-full" variant="outline" on:click={stopGethNode}>
           <Square class="h-4 w-4 mr-2" />
@@ -693,12 +724,44 @@
           </div>
           
           <div class="pt-2">
-            <p class="text-sm text-muted-foreground mb-1">Peer ID</p>
+            <div class="flex items-center justify-between mb-1 gap-2">
+              <p class="text-sm text-muted-foreground">Peer ID</p>
+              <Button
+                variant="outline"
+                size="sm"
+                class="h-7 px-2"
+                on:click={async () => {
+                  await copy(dhtPeerId);
+                  copiedPeerId = true;
+                  setTimeout(() => (copiedPeerId = false), 1200);
+                }}
+                disabled={!dhtPeerId}
+              >
+                <Clipboard class="h-3.5 w-3.5 mr-1" />
+                {copiedPeerId ? "Copied!" : "Copy"}
+              </Button>
+            </div>
             <p class="text-xs font-mono break-all">{dhtPeerId}</p>
           </div>
           
           <div class="pt-2">
-            <p class="text-sm text-muted-foreground mb-1">Bootstrap Node</p>
+            <div class="flex items-center justify-between mb-1 gap-2">
+              <p class="text-sm text-muted-foreground">Bootstrap Node</p>
+              <Button
+                variant="outline"
+                size="sm"
+                class="h-7 px-2"
+                on:click={async () => {
+                  await copy(dhtBootstrapNode);
+                  copiedBootstrap = true;
+                  setTimeout(() => (copiedBootstrap = false), 1200);
+                }}
+                disabled={!dhtBootstrapNode}
+              >
+                <Clipboard class="h-3.5 w-3.5 mr-1" />
+                {copiedBootstrap ? "Copied!" : "Copy"}
+              </Button>
+            </div>
             <p class="text-xs font-mono break-all">{dhtBootstrapNode}</p>
           </div>
           
