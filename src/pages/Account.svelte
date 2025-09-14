@@ -12,6 +12,7 @@
   import { tick } from 'svelte'
   import { onMount } from 'svelte'
   import { t, locale } from 'svelte-i18n'
+  import { showToast } from '$lib/toast'
   import { get } from 'svelte/store'
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
 
@@ -201,11 +202,14 @@
   }
   
   function copyAddress() {
-    const addressToCopy = $etcAccount ? $etcAccount.address : $wallet.address;
-    navigator.clipboard.writeText(addressToCopy);
-    copyMessage = tr('messages.copied');
-    setTimeout(() => copyMessage = '', 1500);
-  }
+  const addressToCopy = $etcAccount ? $etcAccount.address : $wallet.address;
+  navigator.clipboard.writeText(addressToCopy);
+  
+  
+  showToast('Address copied to clipboard!', 'success')
+  
+  
+}
 
   function copyPrivateKey() {
     const privateKeyToCopy = $etcAccount ? $etcAccount.private_key : '';
@@ -427,47 +431,47 @@
   }
 
   async function createChiralAccount() {
-    isCreatingAccount = true
-    try {
+  isCreatingAccount = true
+  try {
+    let account: { address: string, private_key: string, blacklist: Object[] }
 
-      let account: { address: string, private_key: string, blacklist: Object[] }
-
-      if (isTauri) {
-        // Use Tauri backend
-        account = await invoke('create_chiral_account') as { address: string, private_key: string, blacklist: Object[] }
-      } else {
-        // Fallback for web environment - generate demo account
-        const demoAddress = '0x' + Math.random().toString(16).substr(2, 40)
-        const demoPrivateKey = '0x' + Math.random().toString(16).substr(2, 64)
-        const demoBlackList = [{node_id: 169245, name: "Jane"}]
-        account = {
-          address: demoAddress,
-          private_key: demoPrivateKey,
-          blacklist: demoBlackList
-        }
-        console.log('Running in web mode - using demo account')
+    if (isTauri) {
+      account = await invoke('create_chiral_account') as { address: string, private_key: string, blacklist: Object[] }
+    } else {
+      const demoAddress = '0x' + Math.random().toString(16).substr(2, 40)
+      const demoPrivateKey = '0x' + Math.random().toString(16).substr(2, 64)
+      const demoBlackList = [{node_id: 169245, name: "Jane"}]
+      account = {
+        address: demoAddress,
+        private_key: demoPrivateKey,
+        blacklist: demoBlackList
       }
-      
-      // Update the Chiral account store
-      etcAccount.set(account)
-      // Also update the wallet store with the new Chiral address
-      wallet.update(w => ({
-        ...w,
-        address: account.address
-      }))
-      // Private key stays hidden by default
-      
-      // Fetch balance for new account
-      if (isGethRunning) {
-        await fetchBalance()
-      }
-    } catch (error) {
-      console.error('Failed to create Chiral account:', error)
-      alert(tr('errors.createAccount', { error: String(error) }))
-    } finally {
-      isCreatingAccount = false
+      console.log('Running in web mode - using demo account')
     }
+    
+    etcAccount.set(account)
+    wallet.update(w => ({
+      ...w,
+      address: account.address
+    }))
+    
+    // 🎯 添加成功通知
+    showToast('Account Created Successfully!', 'success')
+    
+    if (isGethRunning) {
+      await fetchBalance()
+    }
+  } catch (error) {
+    console.error('Failed to create Chiral account:', error)
+    
+    // 🎯 添加错误通知
+    showToast('Failed to create account: ' + String(error), 'error')
+    
+    alert(tr('errors.createAccount', { error: String(error) }))
+  } finally {
+    isCreatingAccount = false
   }
+}
 
   async function saveToKeystore() {
     if (!keystorePassword || !$etcAccount) return;
@@ -551,11 +555,8 @@
       let account: { address: string, private_key: string }
       
       if (isTauri) {
-        // Use Tauri backend
         account = await invoke('import_chiral_account', { privateKey: importPrivateKey }) as { address: string, private_key: string }
       } else {
-        // Fallback for web environment - use the provided private key
-        // In a real implementation, you'd derive the address from the private key
         const demoAddress = '0x' + Math.random().toString(16).substr(2, 40)
         account = {
           address: demoAddress,
@@ -564,22 +565,25 @@
         console.log('Running in web mode - using provided private key')
       }
       
-      // Update the Chiral account store
       etcAccount.set(account)
-      // Also update the wallet store with the imported Chiral address
       wallet.update(w => ({
         ...w,
         address: account.address
       }))
       importPrivateKey = ''
-      // Private key stays hidden by default
       
-      // Fetch balance for imported account
+      
+      showToast('Account imported successfully!', 'success')
+      
       if (isGethRunning) {
         await fetchBalance()
       }
     } catch (error) {
       console.error('Failed to import Chiral account:', error)
+      
+      
+      showToast('Failed to import account: ' + String(error), 'error')
+      
       alert('Failed to import account: ' + error)
     } finally {
       isImportingAccount = false
