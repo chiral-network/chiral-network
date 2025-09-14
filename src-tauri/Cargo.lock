@@ -805,6 +805,7 @@ name = "chiral-network"
 version = "0.1.0"
 dependencies = [
  "aes",
+ "aes-gcm",
  "async-std",
  "async-trait",
  "clap",
@@ -821,6 +822,7 @@ dependencies = [
  "secp256k1",
  "serde",
  "serde_json",
+ "sha2",
  "sha3",
  "sys-locale",
  "sysinfo",

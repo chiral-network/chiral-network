@@ -1,4 +1,4 @@
-import { writable, type Writable } from 'svelte/store';
+import { writable, type Writable } from "svelte/store";
 
 export type IceServer = RTCIceServer;
 
@@ -24,7 +24,9 @@ export type WebRTCSession = {
   channelState: Writable<RTCDataChannelState>;
   // signaling helpers
   createOffer: () => Promise<RTCSessionDescriptionInit>;
-  acceptOfferCreateAnswer: (remote: RTCSessionDescriptionInit) => Promise<RTCSessionDescriptionInit>;
+  acceptOfferCreateAnswer: (
+    remote: RTCSessionDescriptionInit
+  ) => Promise<RTCSessionDescriptionInit>;
   acceptAnswer: (remote: RTCSessionDescriptionInit) => Promise<void>;
   addRemoteIceCandidate: (candidate: RTCIceCandidateInit) => Promise<void>;
   // messaging
@@ -33,14 +35,14 @@ export type WebRTCSession = {
 };
 
 const defaultIceServers: IceServer[] = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:global.stun.twilio.com:3478?transport=udp' },
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:global.stun.twilio.com:3478?transport=udp" },
 ];
 
 export function createWebRTCSession(opts: WebRTCOptions = {}): WebRTCSession {
   const {
     iceServers = defaultIceServers,
-    label = 'chiral-data',
+    label = "chiral-data",
     ordered = true,
     maxRetransmits,
     isInitiator = true,
@@ -55,7 +57,7 @@ export function createWebRTCSession(opts: WebRTCOptions = {}): WebRTCSession {
 
   const pc = new RTCPeerConnection({ iceServers });
   const connectionState = writable<RTCPeerConnectionState>(pc.connectionState);
-  const channelState = writable<RTCDataChannelState>('closed');
+  const channelState = writable<RTCDataChannelState>("closed");
 
   let channel: RTCDataChannel | null = null;
 
@@ -106,7 +108,9 @@ export function createWebRTCSession(opts: WebRTCOptions = {}): WebRTCSession {
     return sdp;
   }
 
-  async function acceptOfferCreateAnswer(remote: RTCSessionDescriptionInit): Promise<RTCSessionDescriptionInit> {
+  async function acceptOfferCreateAnswer(
+    remote: RTCSessionDescriptionInit
+  ): Promise<RTCSessionDescriptionInit> {
     await pc.setRemoteDescription(remote);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
@@ -115,22 +119,31 @@ export function createWebRTCSession(opts: WebRTCOptions = {}): WebRTCSession {
     return sdp;
   }
 
-  async function acceptAnswer(remote: RTCSessionDescriptionInit): Promise<void> {
+  async function acceptAnswer(
+    remote: RTCSessionDescriptionInit
+  ): Promise<void> {
     await pc.setRemoteDescription(remote);
   }
 
-  async function addRemoteIceCandidate(candidate: RTCIceCandidateInit): Promise<void> {
+  async function addRemoteIceCandidate(
+    candidate: RTCIceCandidateInit
+  ): Promise<void> {
     await pc.addIceCandidate(candidate);
   }
 
   function send(data: string | ArrayBuffer | Blob) {
-    if (!channel || channel.readyState !== 'open') throw new Error('DataChannel not open');
-    channel.send(data);
+    if (!channel || channel.readyState !== "open")
+      throw new Error("DataChannel not open");
+    channel.send(data as any);
   }
 
   function close() {
-    try { channel?.close(); } catch {}
-    try { pc.close(); } catch {}
+    try {
+      channel?.close();
+    } catch {}
+    try {
+      pc.close();
+    } catch {}
   }
 
   return {
@@ -146,4 +159,3 @@ export function createWebRTCSession(opts: WebRTCOptions = {}): WebRTCSession {
     close,
   };
 }
-
