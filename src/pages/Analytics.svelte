@@ -5,6 +5,7 @@
   import { TrendingUp, Upload, DollarSign, HardDrive, Award, BarChart3, TrendingUp as LineChart } from 'lucide-svelte'
   import { files, wallet, networkStats, proxyNodes } from '$lib/stores'
   import { onMount } from 'svelte'
+  import { t } from 'svelte-i18n'
 
   let uploadedFiles: any[] = []
   let downloadedFiles: any[] = []
@@ -52,12 +53,12 @@
   let chartType: 'bar' | 'line' = 'bar';
   // Use a single array for the date range
   let customDateRange: [Date | null, Date | null] = [null, null];
-  const periodPresets = [
-    { label: 'Last 7 days', value: '7d' },
-    { label: 'Last 30 days', value: '30d' },
-    { label: 'This Month', value: 'month' },
-    { label: 'Last Month', value: 'lastmonth' },
-    { label: 'Year to Date', value: 'ytd' },
+  $: periodPresets = [
+    { label: $t('analytics.periods.7d'), value: '7d' },
+    { label: $t('analytics.periods.30d'), value: '30d' },
+    { label: $t('analytics.periods.thisMonth'), value: 'month' },
+    { label: $t('analytics.periods.lastMonth'), value: 'lastmonth' },
+    { label: $t('analytics.periods.ytd'), value: 'ytd' },
     // { label: 'Custom…', value: 'custom' }
   ];
   const MAX_BARS = 60;
@@ -267,19 +268,19 @@
 
 <div class="space-y-6">
   <div>
-    <h1 class="text-3xl font-bold">Analytics Dashboard</h1>
-    <p class="text-muted-foreground mt-2">Track your performance and network activity</p>
+    <h1 class="text-3xl font-bold">{$t('analytics.title')}</h1>
+    <p class="text-muted-foreground mt-2">{$t('analytics.subtitle')}</p>
   </div>
 
   <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
     <Card class="p-4">
       <div class="flex items-center justify-between">
         <div>
-          <p class="text-sm text-muted-foreground">Total Earnings</p>
+          <p class="text-sm text-muted-foreground">{$t('analytics.totalEarnings')}</p>
           <p class="text-2xl font-bold">{$wallet.totalEarned.toFixed(2)} Chiral</p>
           <p class="text-xs text-green-600 flex items-center gap-1 mt-1">
             <TrendingUp class="h-3 w-3" />
-            +12.5% this week
+            {$t('analytics.earningsThisWeek')}
           </p>
         </div>
         <div class="p-2 bg-green-500/10 rounded-lg">
@@ -291,7 +292,7 @@
     <Card class="p-4">
       <div class="flex items-center justify-between">
         <div>
-          <p class="text-sm text-muted-foreground">Storage Used</p>
+          <p class="text-sm text-muted-foreground">{$t('analytics.storageUsed')}</p>
           <p class="text-2xl font-bold">{formatSize(storageUsed)}</p>
           <Progress value={storageUsed} max={10737418240} class="mt-2 h-1" />
         </div>
@@ -304,10 +305,10 @@
     <Card class="p-4">
       <div class="flex items-center justify-between">
         <div>
-          <p class="text-sm text-muted-foreground">Files Shared</p>
+          <p class="text-sm text-muted-foreground">{$t('analytics.filesShared')}</p>
           <p class="text-2xl font-bold">{uploadedFiles.length}</p>
           <p class="text-xs text-muted-foreground mt-1">
-            {downloadedFiles.length} downloaded
+            {downloadedFiles.length} {$t('analytics.downloaded')}
           </p>
         </div>
         <div class="p-2 bg-blue-500/10 rounded-lg">
@@ -319,7 +320,7 @@
     <Card class="p-4">
       <div class="flex items-center justify-between">
         <div>
-          <p class="text-sm text-muted-foreground">Reputation</p>
+          <p class="text-sm text-muted-foreground">{$t('analytics.reputation')}</p>
           <p class="text-2xl font-bold">{$wallet.reputation || 4.5}/5.0</p>
           <!-- Stars (replaces your existing block) -->
           <div
@@ -351,21 +352,21 @@
 
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
     <Card class="p-6">
-      <h2 class="text-lg font-semibold mb-4">Bandwidth Usage (Today)</h2>
+      <h2 class="text-lg font-semibold mb-4">{$t('analytics.bandwidthUsage')}</h2>
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
       <div class="bg-blue-50 rounded-lg p-4 flex flex-col items-center">
-        <span class="text-sm text-muted-foreground mb-1">Upload</span>
+        <span class="text-sm text-muted-foreground mb-1">{$t('analytics.upload')}</span>
         <span class="text-2xl font-bold text-blue-600">{formatSize(bandwidthUsed.upload * 1048576)}</span>
       </div>
       <div class="bg-green-50 rounded-lg p-4 flex flex-col items-center">
-        <span class="text-sm text-muted-foreground mb-1">Download</span>
+        <span class="text-sm text-muted-foreground mb-1">{$t('analytics.download')}</span>
         <span class="text-2xl font-bold text-green-600">{formatSize(bandwidthUsed.download * 1048576)}</span>
       </div>
       </div>
       <div class="pt-4 border-t mt-4 flex items-center justify-between text-sm">
         <span class="text-muted-foreground flex items-center gap-1">
           <BarChart3 class="h-4 w-4 text-blue-500" />
-          Total Bandwidth Used
+          {$t('analytics.totalBandwidthUsed')}
         </span>
         <span class="font-bold text-blue-700 text-lg flex items-center gap-1">
           {formatSize((bandwidthUsed.upload + bandwidthUsed.download) * 1048576)}
@@ -377,26 +378,26 @@
     </Card>
 
     <Card class="p-6">
-      <h2 class="text-lg font-semibold mb-4">Network Activity</h2>
+      <h2 class="text-lg font-semibold mb-4">{$t('analytics.networkActivity')}</h2>
       <div class="space-y-3">
         <div class="flex justify-between items-center">
-          <span class="text-sm">Active Uploads</span>
+          <span class="text-sm">{$t('analytics.activeUploads')}</span>
           <Badge>{uploadedFiles.filter(f => f.status === 'seeding').length}</Badge>
         </div>
         <div class="flex justify-between items-center">
-          <span class="text-sm">Active Downloads</span>
+          <span class="text-sm">{$t('analytics.activeDownloads')}</span>
           <Badge>{$files.filter(f => f.status === 'downloading').length}</Badge>
         </div>
         <div class="flex justify-between items-center">
-          <span class="text-sm">Queued Downloads</span>
+          <span class="text-sm">{$t('analytics.queuedDownloads')}</span>
           <Badge variant="outline">{$files.filter(f => f.status === 'queued').length}</Badge>
         </div>
         <div class="flex justify-between items-center">
-          <span class="text-sm">Total Transactions</span>
+          <span class="text-sm">{$t('analytics.totalTransactions')}</span>
           <Badge variant="secondary">{$networkStats.totalTransactions}</Badge>
         </div>
         <div class="flex justify-between items-center">
-          <span class="text-sm">Network Files</span>
+          <span class="text-sm">{$t('analytics.networkFiles')}</span>
           <Badge variant="secondary">{$networkStats.totalFiles}</Badge>
         </div>
       </div>
@@ -407,18 +408,18 @@
   <!-- Network Latency -->
   <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
     <Card class="p-6">
-      <h2 class="text-lg font-semibold mb-4">Network Latency</h2>
+      <h2 class="text-lg font-semibold mb-4">{$t('analytics.networkLatency')}</h2>
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-6 mb-6">
         <div>
-          <p class="text-xs text-muted-foreground mb-1">Average</p>
+          <p class="text-xs text-muted-foreground mb-1">{$t('analytics.average')}</p>
           <p class="text-2xl font-bold">{avgLatency.toFixed(0)} ms</p>
         </div>
         <div>
-          <p class="text-xs text-muted-foreground mb-1">P95</p>
+          <p class="text-xs text-muted-foreground mb-1">{$t('analytics.p95')}</p>
           <p class="text-2xl font-bold">{p95Latency.toFixed(0)} ms</p>
         </div>
         <div>
-          <p class="text-xs text-muted-foreground mb-1">Best</p>
+          <p class="text-xs text-muted-foreground mb-1">{$t('analytics.best')}</p>
           <p class="text-2xl font-bold">{bestLatency.toFixed(0)} ms</p>
         </div>
       </div>
@@ -426,22 +427,22 @@
       <div class="space-y-4">
         <div>
           <div class="flex justify-between mb-2">
-            <span class="text-sm">Current Avg</span>
+            <span class="text-sm">{$t('analytics.currentAvg')}</span>
             <span class="text-sm font-medium">{avgLatency.toFixed(0)} ms</span>
           </div>
           <Progress value={Math.min(avgLatency, 300)} max={300} />
           <p class="text-xs text-muted-foreground mt-1">
-            0–50 ms (great), 50–150 ms (ok), &gt;150 ms (poor)
+            {$t('analytics.latencyHint')}
           </p>
         </div>
 
         <div class="pt-2 border-t text-sm grid grid-cols-2 gap-2">
           <div class="flex justify-between items-center">
-            <span class="text-sm">Nodes Reporting</span>
+            <span class="text-sm">{$t('analytics.nodesReporting')}</span>
             <Badge variant="outline">{$proxyNodes.length}</Badge>
           </div>
           <div class="flex justify-between items-center">
-            <span class="text-sm">Sample Size</span>
+            <span class="text-sm">{$t('analytics.sampleSize')}</span>
             <Badge variant="outline">{latencyHistory.length}</Badge>
           </div>
         </div>
@@ -449,7 +450,7 @@
     </Card>
 
     <Card class="p-6">
-      <h3 class="text-md font-medium mb-4">Latency (recent)</h3>
+      <h3 class="text-md font-medium mb-4">{$t('analytics.latencyRecent')}</h3>
       <div class="flex h-48 gap-2">
         <!-- Y-axis labels -->
         <div class="flex flex-col justify-between text-xs text-muted-foreground pr-2">
@@ -506,7 +507,7 @@
   </div>
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
     <Card class="p-6">
-      <h2 class="text-lg font-semibold mb-4">Top Earning Files</h2>
+      <h2 class="text-lg font-semibold mb-4">{$t('analytics.topEarningFiles')}</h2>
       <div class="space-y-2">
         {#each topEarners as file, i}
           <div
@@ -530,7 +531,7 @@
               </span>
               <div>
                 <p class="text-sm font-medium">{file.name}</p>
-                <p class="text-xs text-muted-foreground">{file.seeders || 0} seeders</p>
+                <p class="text-xs text-muted-foreground">{file.seeders || 0} {$t('analytics.seeders')}</p>
               </div>
             </div>
             <Badge variant="outline">
@@ -539,13 +540,13 @@
           </div>
         {/each}
         {#if topEarners.length === 0}
-          <p class="text-sm text-muted-foreground text-center py-4">No earnings yet</p>
+          <p class="text-sm text-muted-foreground text-center py-4">{$t('analytics.noEarningsYet')}</p>
         {/if}
       </div>
     </Card>
 
     <Card class="p-6">
-      <h2 class="text-lg font-semibold mb-4">Popular Files</h2>
+      <h2 class="text-lg font-semibold mb-4">{$t('analytics.popularFiles')}</h2>
       <div class="space-y-2">
         {#each popularFiles as file, i}
           <div
@@ -574,18 +575,18 @@
             </div>
             <div class="flex items-center gap-2">
               <Badge variant="outline">
-                {file.seeders || 0} Seeders
+                {file.seeders || 0} {$t('analytics.seeders')}
               </Badge>
               {#if file.leechers && file.leechers > 0}
                 <Badge variant="secondary">
-                  {file.leechers} Leechers
+                  {file.leechers} {$t('analytics.leechers')}
                 </Badge>
               {/if}
             </div>
           </div>
         {/each}
         {#if popularFiles.length === 0}
-          <p class="text-sm text-muted-foreground text-center py-4">No files yet</p>
+          <p class="text-sm text-muted-foreground text-center py-4">{$t('analytics.noFilesYet')}</p>
         {/if}
       </div>
     </Card>
@@ -593,7 +594,7 @@
 
   <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold">Earnings History</h2>
+      <h2 class="text-lg font-semibold">{$t('analytics.earningsHistory')}</h2>
       <!-- NEW: Chart type toggle buttons -->
       <div class="flex gap-1 p-1 bg-muted rounded-md">
         <button
@@ -604,7 +605,7 @@
                 aria-pressed={chartType === 'bar'}
         >
           <BarChart3 class="h-3 w-3" />
-          Bars
+          {$t('analytics.bars')}
         </button>
         <button
                 type="button"
@@ -614,7 +615,7 @@
                 aria-pressed={chartType === 'line'}
         >
           <LineChart class="h-3 w-3" />
-          Line
+          {$t('analytics.line')}
         </button>
       </div>
     </div>
