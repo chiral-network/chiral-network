@@ -67,6 +67,7 @@
   let showLogs = false
   let logs: string[] = []
   let logsInterval: number | null = null
+  // simplified log view — no font/wrap controls
 
 
 
@@ -921,19 +922,20 @@
             <X class="h-4 w-4" />
           </Button>
         </div>
-        <div class="flex-1 overflow-auto p-4 bg-black/90 font-mono text-xs">
+        <div class="flex-1 p-4">
           {#if logs.length === 0}
-            <p class="text-gray-400">{$t('mining.noLogs')}</p>
+            <p class="text-xs text-muted-foreground">{$t('mining.noLogs')}</p>
           {:else}
-            {#each logs as log}
-              <div class="text-green-400 whitespace-pre-wrap break-all">{log}</div>
-            {/each}
+            <div class="bg-secondary/50 rounded-lg p-2 max-h-[60vh] overflow-y-auto text-left font-mono text-xs">
+              {#each logs.slice(-500) as log}
+                <p class="font-mono text-muted-foreground whitespace-pre-wrap break-all">{log}</p>
+              {/each}
+            </div>
           {/if}
         </div>
+
         <div class="p-4 border-t flex items-center justify-between">
-          <p class="text-sm text-muted-foreground">
-            {$t('mining.autoRefresh')}: {logsInterval ? $t('mining.on') : $t('mining.off')}
-          </p>
+          <p class="text-sm text-muted-foreground">{$t('mining.autoRefresh')}: {logsInterval ? $t('mining.on') : $t('mining.off')}</p>
           <div class="flex gap-2">
             <Button size="sm" variant="outline" on:click={fetchLogs}>
               <RefreshCw class="h-3 w-3 mr-1" />
