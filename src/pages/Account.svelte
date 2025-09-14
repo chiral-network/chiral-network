@@ -13,6 +13,7 @@
   import { tick } from 'svelte'
   import { onMount } from 'svelte'
   import { t, locale } from 'svelte-i18n'
+  import { showToast } from '$lib/toast'
   import { get } from 'svelte/store'
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
 
@@ -211,11 +212,14 @@
   }
   
   function copyAddress() {
-    const addressToCopy = $etcAccount ? $etcAccount.address : $wallet.address;
-    navigator.clipboard.writeText(addressToCopy);
-    copyMessage = tr('messages.copied');
-    setTimeout(() => copyMessage = '', 1500);
-  }
+  const addressToCopy = $etcAccount ? $etcAccount.address : $wallet.address;
+  navigator.clipboard.writeText(addressToCopy);
+  
+  
+  showToast('Address copied to clipboard!', 'success')
+  
+  
+}
 
   function copyPrivateKey() {
     const privateKeyToCopy = $etcAccount ? $etcAccount.private_key : '';
@@ -232,8 +236,8 @@
   async function exportWallet() {
     try {
       const walletData = {
-        address: $wallet.address,
-        privateKey: "your-private-key-here-do-not-share", // this should change to be the actual private key
+        address: $etcAccount?.address,
+        privateKey: $etcAccount?.private_key,
         balance: $wallet.balance,
         totalEarned: $wallet.totalEarned,
         totalSpent: $wallet.totalSpent,
@@ -438,50 +442,44 @@
   }
 
   
-
   async function createChiralAccount() {
-    isCreatingAccount = true
-    try {
+  isCreatingAccount = true
+  try {
+    let account: { address: string, private_key: string, blacklist: Object[] }
 
-      let account: { address: string, private_key: string, blacklist: Object[] }
-
-      if (isTauri) {
-        // Use Tauri backend
-        account = await invoke('create_chiral_account') as { address: string, private_key: string, blacklist: Object[] }
-      } else {
-        // Fallback for web environment - generate demo account
-        const demoAddress = '0x' + Math.random().toString(16).substr(2, 40)
-        const demoPrivateKey = '0x' + Math.random().toString(16).substr(2, 64)
-        const demoBlackList = [{node_id: 169245, name: "Jane"}]
-        account = {
-          address: demoAddress,
-          private_key: demoPrivateKey,
-          blacklist: demoBlackList
-        }
-        console.log('Running in web mode - using demo account')
+    if (isTauri) {
+      account = await invoke('create_chiral_account') as { address: string, private_key: string, blacklist: Object[] }
+    } else {
+      const demoAddress = '0x' + Math.random().toString(16).substr(2, 40)
+      const demoPrivateKey = '0x' + Math.random().toString(16).substr(2, 64)
+      const demoBlackList = [{node_id: 169245, name: "Jane"}]
+      account = {
+        address: demoAddress,
+        private_key: demoPrivateKey,
+        blacklist: demoBlackList
       }
-      
-      // Update the Chiral account store
-      etcAccount.set(account)
-      // Also update the wallet store with the new Chiral address
-      wallet.update(w => ({
-        ...w,
-        address: account.address
-      }))
-      // Private key stays hidden by default
-      
-      // Fetch balance for new account
-      if (isGethRunning) {
-        await fetchBalance()
-      }
-      await setAccount(account);
-    } catch (error) {
-      console.error('Failed to create Chiral account:', error)
-      alert(tr('errors.createAccount', { error: String(error) }))
-    } finally {
-      isCreatingAccount = false
+      console.log('Running in web mode - using demo account')
     }
+    
+    etcAccount.set(account)
+    wallet.update(w => ({
+      ...w,
+      address: account.address
+    }))
+    
+    showToast('Account Created Successfully!', 'success')
+    
+    if (isGethRunning) {
+      await fetchBalance()
+    }
+  } catch (error) {
+    console.error('Failed to create Chiral account:', error)
+    showToast('Failed to create account: ' + String(error), 'error')
+    alert(tr('errors.createAccount', { error: String(error) }))
+  } finally {
+    isCreatingAccount = false
   }
+}
 
   async function setAccount(account: { address: string, private_key: string }) {
     etcAccount.set(account);
@@ -571,11 +569,8 @@
       let account: { address: string, private_key: string }
       
       if (isTauri) {
-        // Use Tauri backend
         account = await invoke('import_chiral_account', { privateKey: importPrivateKey }) as { address: string, private_key: string }
       } else {
-        // Fallback for web environment - use the provided private key
-        // In a real implementation, you'd derive the address from the private key
         const demoAddress = '0x' + Math.random().toString(16).substr(2, 40)
         account = {
           address: demoAddress,
@@ -584,23 +579,26 @@
         console.log('Running in web mode - using provided private key')
       }
       
-      // Update the Chiral account store
       etcAccount.set(account)
-      // Also update the wallet store with the imported Chiral address
       wallet.update(w => ({
         ...w,
         address: account.address
       }))
       await setAccount(account);
       importPrivateKey = ''
-      // Private key stays hidden by default
       
-      // Fetch balance for imported account
+      
+      showToast('Account imported successfully!', 'success')
+      
       if (isGethRunning) {
         await fetchBalance()
       }
     } catch (error) {
       console.error('Failed to import Chiral account:', error)
+      
+      
+      showToast('Failed to import account: ' + String(error), 'error')
+      
       alert('Failed to import account: ' + error)
     } finally {
       isImportingAccount = false
@@ -687,17 +685,18 @@
 
   let newBlacklistEntry = {
     chiral_address: "",
-    description: ""
+    reason: ""
   }
 
   
   //Guard add with validity check
   function addBlacklistEntry() {
     if (!isBlacklistFormValid) return;
-    blacklist.update(entries => [...entries,
-      { chiral_address: newBlacklistEntry.chiral_address, reason: newBlacklistEntry.description, timestamp: new Date() }
-    ]);
-    newBlacklistEntry = { chiral_address: "", description: "" }; // Clear input fields
+    const newEntry = { chiral_address: newBlacklistEntry.chiral_address, reason: newBlacklistEntry.reason, timestamp: new Date() };
+    blacklist.update(entries => [...entries, newEntry]);
+    // Clear input fields
+    newBlacklistEntry.chiral_address = "";
+    newBlacklistEntry.reason = "";
   }
 
   function removeBlacklistEntry(chiral_address: string) {
@@ -737,7 +736,7 @@
 
   // Enhanced validation
   $: isBlacklistFormValid = 
-    newBlacklistEntry.description.trim() !== '' &&
+    newBlacklistEntry.reason.trim() !== '' &&
     isBlacklistAddressValid;
 
   // Filtered blacklist for search
@@ -843,11 +842,11 @@
   // Enhanced keyboard event handling
   function handleEditKeydown(e: CustomEvent<KeyboardEvent>) {
     if (e.detail.key === 'Enter') {
-      e.preventDefault();
+      e.detail.preventDefault();
       saveEdit();
     }
     if (e.detail.key === 'Escape') {
-      e.preventDefault();
+      e.detail.preventDefault();
       cancelEdit();
     }
   }
@@ -855,6 +854,30 @@
   // Helper function to set max amount
   function setMaxAmount() {
     rawAmountInput = $wallet.balance.toFixed(2);
+  }
+
+  function logout() {
+    // Clear the account details from memory, effectively logging out
+    loadKeystoreAccountsList()
+    etcAccount.set(null);
+
+    // Reset wallet state to defaults
+    wallet.update(w => ({
+      ...w,
+      address: '',
+      balance: 0,
+      totalEarned: 0,
+      totalSpent: 0,
+      pendingTransactions: 0,
+    }));
+
+    // Clear any other sensitive state that might be in component memory
+    privateKeyVisible = false;
+    keystorePassword = '';
+    loadKeystorePassword = '';
+    importPrivateKey = '';
+
+    console.log('Session cleared, wallet locked.');
   }
 
   async function generateAndShowQrCode(){
@@ -1083,14 +1106,17 @@
                <p class="text-xs text-muted-foreground mt-1">{$t('warnings.neverSharePrivateKey')}</p>
              </div>
              
-             <div class="mt-4">
-               <Button type="button" variant="outline" class="w-full" on:click={exportWallet}>
-                 {$t('wallet.export')}
-               </Button>
-               {#if exportMessage}
-                 <p class="text-xs text-center mt-2 {exportMessage.includes('successfully') ? 'text-green-600' : 'text-red-600'}">{exportMessage}</p>
-               {/if}
-             </div>
+            <div class="mt-6 space-y-2">
+              <div class="grid grid-cols-2 gap-2">
+                <Button type="button" variant="outline" on:click={exportWallet}>
+                  {$t('wallet.export')}
+                </Button>
+                <Button type="button" variant="destructive" on:click={logout}>
+                  {$t('actions.lockWallet')}
+                </Button>
+              </div>
+              {#if exportMessage}<p class="text-xs text-center mt-2 {exportMessage.includes('successfully') ? 'text-green-600' : 'text-red-600'}">{exportMessage}</p>{/if}
+            </div>
            </div>
          {/if}
       </div>
@@ -1382,29 +1408,29 @@
             <div class="relative mt-2">
               <Input
                 id="blacklist-reason"
-                bind:value={newBlacklistEntry.description}
+                bind:value={newBlacklistEntry.reason}
                 placeholder={$t('placeholders.reason')}
                 maxlength={200}
                 class="pr-16"
               />
               <span class="absolute right-3 top-1/2 transform -translate-y-1/2 text-xs text-muted-foreground">
-                {newBlacklistEntry.description.length}/200
+                {newBlacklistEntry.reason.length}/200
               </span>
             </div>
-            {#if newBlacklistEntry.description.length > 150}
+            {#if newBlacklistEntry.reason.length > 150}
               <p class="text-xs text-orange-500 mt-1">
-                {$t('blacklist.add.remaining', { values: { remaining: 200 - newBlacklistEntry.description.length } })}
+                {$t('blacklist.add.remaining', { values: { remaining: 200 - newBlacklistEntry.reason.length } })}
               </p>
             {/if}
           </div>
 
           <div class="flex flex-wrap items-center gap-2">
             <span class="text-xs text-muted-foreground">{$t('blacklist.quickReasons.label')}</span>
-            {#each [$t('blacklist.quickReasons.spam'), $t('blacklist.quickReasons.fraud'), $t('blacklist.quickReasons.malicious'), $t('blacklist.quickReasons.harrassment'), $t('blacklist.quickReasons.scam')] as reason}
+            {#each [$t('blacklist.quickReasons.spam'), $t('blacklist.quickReasons.fraud'), $t('blacklist.quickReasons.malicious'), $t('blacklist.quickReasons.harassment'), $t('blacklist.quickReasons.scam')] as reason}
               <button
                 type="button"
                 class="px-2 py-1 text-xs border rounded hover:bg-gray-100 transition-colors"
-                on:click={() => newBlacklistEntry.description = reason}
+                on:click={() => newBlacklistEntry.reason = reason}
               >
                 {reason}
               </button>

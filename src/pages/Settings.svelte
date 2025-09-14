@@ -71,12 +71,21 @@
   let selectedLanguage = 'en';
   let clearingCache = false;
   let cacheCleared = false;
+  let importExportFeedback: { message: string; type: 'success' | 'error' } | null = null;
 
   const locations = [
     { value: 'US-East', label: 'US East' },
     { value: 'US-West', label: 'US West' },
     { value: 'EU-West', label: 'Europe West' },
     { value: 'Asia-Pacific', label: 'Asia Pacific' }
+  ];
+
+  let languages = [];
+  $: languages = [
+    { value: 'en', label: $t("language.english") },
+    { value: 'es', label: $t("language.spanish") },
+    { value: 'zh', label: $t("language.chinese") },
+    { value: 'ko', label: $t("language.korean") }
   ];
 
 
@@ -88,6 +97,7 @@
     localStorage.setItem("chiralSettings", JSON.stringify(settings));
     savedSettings = { ...settings };
     userLocation.set(settings.userLocation);
+    importExportFeedback = null;
   }
 
   function handleConfirmReset() {
@@ -165,6 +175,10 @@
     a.download = "chiral-settings.json";
     a.click();
     URL.revokeObjectURL(url);
+    importExportFeedback = {
+      message: $t('advanced.exportSuccess', { default: "Settings exported to your browser's download folder." }),
+      type: 'success'
+    };
   }
 
   function importSettings(event: Event) {
@@ -176,12 +190,18 @@
       try {
         const imported = JSON.parse(e.target?.result as string);
         settings = { ...settings, ...imported };
-        saveSettings();
-        localStorage.setItem("chiralSettings", JSON.stringify(settings));
-        hasChanges = false;
+        saveSettings(); // This saves, updates savedSettings, and clears any old feedback.
+        // Now we set the new feedback for the import action.
+        importExportFeedback = {
+          message: $t('advanced.importSuccess', { default: 'Settings imported successfully.' }),
+          type: 'success'
+        };
       } catch (err) {
         console.error("Failed to import settings:", err);
-        alert("Invalid JSON file. Please select a valid export.");
+        importExportFeedback = {
+          message: $t('advanced.importError', { default: 'Invalid JSON file. Please select a valid export.' }),
+          type: 'error'
+        };
       }
     };
     reader.readAsText(file);
@@ -215,6 +235,11 @@
     }
   });
 
+  $: if (selectedLanguage) {
+    changeLocale(selectedLanguage);
+    (settings as any).language = selectedLanguage;
+  }
+
   const limits = {
     maxStorageSize:     { min: 10,   max: 10000, label: "Max Storage Size (GB)" },
     cleanupThreshold:   { min: 50,   max: 100,   label: "Auto-Cleanup Threshold (%)" },
@@ -245,12 +270,6 @@
     }
     console.log(next)
     errors = next;
-  }
-
-  function onLanguageChange(lang: string) {
-    selectedLanguage = lang;
-    changeLocale(lang);
-    (settings as any).language = lang;
   }
 
   // Revalidate whenever settings change
@@ -472,17 +491,11 @@
     <div class="space-y-4">
       <div>
         <Label for="language-select">{$t("language.select")}</Label>
-        <select
+        <DropDown
           id="language-select"
+          options={languages}
           bind:value={selectedLanguage}
-          on:change={(e) => onLanguageChange((e.target as HTMLSelectElement).value)}
-          class="w-full px-3 py-2 mt-2 border rounded-md bg-white"
-        >
-          <option value="en">{$t("language.english")}</option>
-          <option value="es">{$t("language.spanish")}</option>
-          <option value="zh">{$t("language.chinese")}</option>
-          <option value="ko">{$t("language.korean")}</option>
-        </select>
+        />
       </div>
     </div>
   </Card>
@@ -694,6 +707,12 @@
           />
         </label>
       </div>
+
+      {#if importExportFeedback}
+        <div class="mt-4 p-3 rounded-md text-sm {importExportFeedback.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}">
+          {importExportFeedback.message}
+        </div>
+      {/if}
     </div>
   </Card>
 

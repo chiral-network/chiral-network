@@ -1,5 +1,13 @@
 import { writable } from "svelte/store";
 
+// Add invoke import for Tauri functionality
+let invoke: any;
+if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+  import('@tauri-apps/api/core').then(module => {
+    invoke = module.invoke;
+  });
+}
+
 export interface FileItem {
   id: string;
   name: string;
@@ -243,11 +251,9 @@ export const proxyNodes = writable<ProxyNode[]>(dummyProxyNodes);
 export const wallet = writable<WalletInfo>(dummyWallet);
 export const activeDownloads = writable<number>(2);
 
-
 // Import real network status
 import { networkStatus } from './services/networkService';
 export { networkStatus };
-
 
 export const peers = writable<PeerInfo[]>(dummyPeers);
 export const chatMessages = writable<ChatMessage[]>([]);
