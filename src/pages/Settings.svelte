@@ -79,6 +79,14 @@
     { value: 'Asia-Pacific', label: 'Asia Pacific' }
   ];
 
+  let languages = [];
+  $: languages = [
+    { value: 'en', label: $t("language.english") },
+    { value: 'es', label: $t("language.spanish") },
+    { value: 'zh', label: $t("language.chinese") },
+    { value: 'ko', label: $t("language.korean") }
+  ];
+
 
   // Check for changes
   $: hasChanges = JSON.stringify(settings) !== JSON.stringify(savedSettings);
@@ -215,6 +223,11 @@
     }
   });
 
+  $: if (selectedLanguage) {
+    changeLocale(selectedLanguage);
+    (settings as any).language = selectedLanguage;
+  }
+
   const limits = {
     maxStorageSize:     { min: 10,   max: 10000, label: "Max Storage Size (GB)" },
     cleanupThreshold:   { min: 50,   max: 100,   label: "Auto-Cleanup Threshold (%)" },
@@ -245,12 +258,6 @@
     }
     console.log(next)
     errors = next;
-  }
-
-  function onLanguageChange(lang: string) {
-    selectedLanguage = lang;
-    changeLocale(lang);
-    (settings as any).language = lang;
   }
 
   // Revalidate whenever settings change
@@ -472,17 +479,11 @@
     <div class="space-y-4">
       <div>
         <Label for="language-select">{$t("language.select")}</Label>
-        <select
+        <DropDown
           id="language-select"
+          options={languages}
           bind:value={selectedLanguage}
-          on:change={(e) => onLanguageChange((e.target as HTMLSelectElement).value)}
-          class="w-full px-3 py-2 mt-2 border rounded-md bg-white"
-        >
-          <option value="en">{$t("language.english")}</option>
-          <option value="es">{$t("language.spanish")}</option>
-          <option value="zh">{$t("language.chinese")}</option>
-          <option value="ko">{$t("language.korean")}</option>
-        </select>
+        />
       </div>
     </div>
   </Card>
