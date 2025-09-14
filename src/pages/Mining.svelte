@@ -73,15 +73,28 @@
   // Wrap toggle for logs (true = wrap lines, false = preserve long lines with horizontal scroll)
   let wrapLogs: boolean = true
 
+  // Log filtering
+  let logFilters: { [key: string]: boolean } = {
+    error: true,
+    warn: true,
+    info: true,
+    other: true
+  }
+
+  // Computed filtered logs
+  $: filteredLogs = logs.filter(log => {
+    const level = detectLogLevel(log)
+    return logFilters[level]
+  })
+
   // Determine log level from a log line and return a semantic level
-  function detectLogLevel(line: string): 'error' | 'warn' | 'info' | 'debug' | 'default' {
-    if (!line) return 'default'
+  function detectLogLevel(line: string): 'error' | 'warn' | 'info' | 'other' {
+    if (!line) return 'other'
     const l = line.toLowerCase()
     if (l.includes('error') || l.includes('err') || l.includes('fatal')) return 'error'
     if (l.includes('warn') || l.includes('warning')) return 'warn'
     if (l.includes('info') || l.includes('[i]') || l.includes('notice')) return 'info'
-    if (l.includes('debug') || l.includes('trace')) return 'debug'
-    return 'default'
+    return 'other'
   }
 
   // Map level to Tailwind classes (text color + subtle opacity for less-important levels)
@@ -94,8 +107,6 @@
         return 'text-amber-400'
       case 'info':
         return 'text-blue-300'
-      case 'debug':
-        return 'text-muted-foreground opacity-80'
       default:
         return 'text-muted-foreground'
     }
@@ -969,13 +980,13 @@
           </Button>
         </div>
         <div class="flex-1 p-4">
-          {#if logs.length === 0}
+          {#if filteredLogs.length === 0}
             <p class="text-xs text-muted-foreground">{$t('mining.noLogs')}</p>
             {:else}
             <div class="bg-secondary/50 rounded-lg p-2 max-h-[60vh] overflow-y-auto text-left font-mono text-xs">
               <!-- When wrapping is disabled, allow horizontal scroll and preserve whitespace -->
               <div class={wrapLogs ? 'w-full' : 'w-full overflow-x-auto'}>
-                {#each logs.slice(-500) as log}
+                {#each filteredLogs.slice(-500) as log}
                   {@const split = splitLogPrefix(log)}
                   <p class="font-mono {wrapLogs ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'}">
                     {#if split.prefix}
@@ -1010,6 +1021,21 @@
             <div class="flex items-center gap-2 ml-3">
               <input id="wrap-logs" type="checkbox" bind:checked={wrapLogs} />
               <label for="wrap-logs" class="text-sm text-muted-foreground">{$t('mining.wrapLogs')}</label>
+            </div>
+          </div>
+
+          <!-- Log Level Filters -->
+          <div class="flex items-center gap-2">
+            <span class="text-sm text-muted-foreground">{$t('mining.filterByLevel')}:</span>
+            <div class="flex gap-1">
+              {#each Object.entries(logFilters) as [level, enabled]}
+                <button
+                  class="px-2 py-1 text-xs rounded {enabled ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground'}"
+                  on:click={() => logFilters[level] = !enabled}
+                >
+                  {level.toUpperCase()}
+                </button>
+              {/each}
             </div>
           </div>
 
