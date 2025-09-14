@@ -3,6 +3,7 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import { File, X, Plus, FolderOpen } from 'lucide-svelte'
   import { files } from '$lib/stores'
+  import { t } from 'svelte-i18n';
   
   let isDragging = false
   let dragCounter = 0
@@ -89,8 +90,8 @@
 
 <div class="space-y-6">
   <div>
-    <h1 class="text-3xl font-bold">Upload Files</h1>
-    <p class="text-muted-foreground mt-2">Share your files on the Chiral Network</p>
+    <h1 class="text-3xl font-bold">{$t('upload.title')}</h1>
+    <p class="text-muted-foreground mt-2">{$t('upload.subtitle')}</p>
   </div>
   
   <Card class="relative p-6 transition-all duration-200 border-dashed {isDragging ? 'border-primary bg-primary/5 scale-[1.01]' : 'border-muted-foreground/25 hover:border-muted-foreground/50'}">
@@ -114,29 +115,29 @@
       {#if $files.filter(f => f.status === 'seeding' || f.status === 'uploaded').length === 0}
         <div class="text-center py-8 border-2 border-dashed border-muted-foreground/25 rounded-lg bg-muted/10">
           <FolderOpen class="h-12 w-12 mx-auto text-muted-foreground mb-3" />
-          <h3 class="text-lg font-semibold text-muted-foreground mb-2">Drop files here to share</h3>
-          <p class="text-sm text-muted-foreground mb-4">Drag and drop files anywhere on this card, or click "Add Files" below</p>
+          <h3 class="text-lg font-semibold text-muted-foreground mb-2">{$t('upload.dropFiles')}</h3>
+          <p class="text-sm text-muted-foreground mb-4">{$t('upload.dropFilesHint')}</p>
           <div class="flex justify-center gap-2">
             <button class="inline-flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90" on:click={() => { console.log('fileInput:', fileInput); fileInput?.click(); }}>
               <Plus class="h-4 w-4 mr-2" />
-              Add Files
+              {$t('upload.addFiles')}
             </button>
           </div>
         </div>
       {:else}
         <div class="flex flex-wrap items-center justify-between gap-4 mb-4">
           <div>
-            <h2 class="text-lg font-semibold">Shared Files</h2>
+            <h2 class="text-lg font-semibold">{$t('upload.sharedFiles')}</h2>
             <p class="text-sm text-muted-foreground mt-1">
-              {$files.filter(f => f.status === 'seeding' || f.status === 'uploaded').length} files •
-              {formatFileSize($files.filter(f => f.status === 'seeding' || f.status === 'uploaded').reduce((sum, f) => sum + f.size, 0))} total
+              {$files.filter(f => f.status === 'seeding' || f.status === 'uploaded').length} {$t('upload.files')} •
+              {formatFileSize($files.filter(f => f.status === 'seeding' || f.status === 'uploaded').reduce((sum, f) => sum + f.size, 0))} {$t('upload.total')}
             </p>
-            <p class="text-xs text-muted-foreground mt-1">💡 Tip: You can also drag and drop files here to add them</p>
+            <p class="text-xs text-muted-foreground mt-1">{$t('upload.tip')}</p>
           </div>
           <div class="flex gap-2">
             <button class="inline-flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90" on:click={() => { console.log('fileInput:', fileInput); fileInput?.click(); }}>
               <Plus class="h-4 w-4 mr-2" />
-              Add More Files
+              {$t('upload.addMoreFiles')}
             </button>
           </div>
         </div>
@@ -152,29 +153,29 @@
                 <div class="flex-1 min-w-0">
                   <p class="text-sm font-medium truncate">{file.name}</p>
                   <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1">
-                    <p class="text-xs text-muted-foreground truncate">Hash: {file.hash}</p>
+                    <p class="text-xs text-muted-foreground truncate">{$t('upload.hash')}: {file.hash}</p>
                     <span class="text-xs text-muted-foreground">•</span>
                     <p class="text-xs text-muted-foreground truncate">{formatFileSize(file.size)}</p>
                     {#if file.seeders !== undefined}
                       <span class="text-xs text-muted-foreground">•</span>
-                      <p class="text-xs text-green-600">{file.seeders || 1} seeder{(file.seeders || 1) !== 1 ? 's' : ''}</p>
+                      <p class="text-xs text-green-600">{file.seeders || 1} {$t('upload.seeder', { count: file.seeders || 1 })}</p>
                     {/if}
                     {#if file.leechers && file.leechers > 0}
                       <span class="text-xs text-muted-foreground">•</span>
-                      <p class="text-xs text-orange-600">{file.leechers} leecher{file.leechers !== 1 ? 's' : ''}</p>
+                      <p class="text-xs text-orange-600">{file.leechers} {$t('upload.leecher', { count: file.leechers })}</p>
                     {/if}
                   </div>
                 </div>
               </div>
               <div class="flex items-center gap-2">
                 <Badge variant="secondary" class="text-green-600">
-                  Seeding
+                  {$t('upload.seeding')}
                 </Badge>
                 <div class="relative inline-block">
                   <button
                     on:click={() => handleCopy(file.hash)}
                     class="p-1 hover:bg-destructive/10 rounded transition-colors"
-                    title="Copy hash"
+                    title={$t('upload.copyHash')}
                     aria-label="Copy file hash"
                   >
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -183,14 +184,14 @@
                   </button>
                   {#if showCopied && copiedHash === file.hash}
                     <div class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 rounded bg-primary text-primary-foreground text-xs shadow z-10 whitespace-nowrap">
-                      Hash copied!
+                      {$t('upload.hashCopied')}
                     </div>
                   {/if}
                 </div>
                 <button
                   on:click={() => removeFile(file.id)}
                   class="p-1 hover:bg-destructive/10 rounded transition-colors"
-                  title="Stop sharing"
+                  title={$t('upload.stopSharing')}
                   aria-label="Stop sharing file"
                 >
                   <X class="h-4 w-4" />
@@ -202,8 +203,8 @@
       {:else}
         <div class="text-center py-8">
           <FolderOpen class="h-12 w-12 mx-auto text-muted-foreground mb-3" />
-          <p class="text-sm text-muted-foreground">No files shared yet</p>
-          <p class="text-xs text-muted-foreground mt-1">Add files to start sharing on the network</p>
+          <p class="text-sm text-muted-foreground">{$t('upload.noFilesShared')}</p>
+          <p class="text-xs text-muted-foreground mt-1">{$t('upload.addFilesHint2')}</p>
         </div>
       {/if}
 
