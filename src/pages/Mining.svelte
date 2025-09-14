@@ -73,6 +73,46 @@
   // Wrap toggle for logs (true = wrap lines, false = preserve long lines with horizontal scroll)
   let wrapLogs: boolean = true
 
+  // Determine log level from a log line and return a semantic level
+  function detectLogLevel(line: string): 'error' | 'warn' | 'info' | 'debug' | 'default' {
+    if (!line) return 'default'
+    const l = line.toLowerCase()
+    if (l.includes('error') || l.includes('err') || l.includes('fatal')) return 'error'
+    if (l.includes('warn') || l.includes('warning')) return 'warn'
+    if (l.includes('info') || l.includes('[i]') || l.includes('notice')) return 'info'
+    if (l.includes('debug') || l.includes('trace')) return 'debug'
+    return 'default'
+  }
+
+  // Map level to Tailwind classes (text color + subtle opacity for less-important levels)
+  function logLevelClass(line: string): string {
+    const level = detectLogLevel(line)
+    switch (level) {
+      case 'error':
+        return 'text-red-400'
+      case 'warn':
+        return 'text-amber-400'
+      case 'info':
+        return 'text-blue-300'
+      case 'debug':
+        return 'text-muted-foreground opacity-80'
+      default:
+        return 'text-muted-foreground'
+    }
+  }
+
+  // Parse a log line and extract a severity prefix (if present) and the rest of the message.
+  // Example: "INFO [09-14|16:32:29.577] Message..." -> { prefix: 'INFO', rest: '[09-14|16:32:29.577] Message...' }
+  function splitLogPrefix(line: string): { prefix: string | null; rest: string } {
+    if (!line) return { prefix: null, rest: '' }
+    // Match leading ALL-CAPS token (usually INFO, WARN, ERROR, DEBUG) optionally followed by a timestamp bracket
+    const m = line.match(/^([A-Z]{3,7})\b\s*(.*)$/)
+    if (m) {
+      return { prefix: m[1], rest: m[2] }
+    }
+    return { prefix: null, rest: line }
+  }
+
 
 
  // Bar or Line chart toggle
@@ -936,7 +976,15 @@
               <!-- When wrapping is disabled, allow horizontal scroll and preserve whitespace -->
               <div class={wrapLogs ? 'w-full' : 'w-full overflow-x-auto'}>
                 {#each logs.slice(-500) as log}
-                  <p class="font-mono text-muted-foreground {wrapLogs ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'}">{log}</p>
+                  {@const split = splitLogPrefix(log)}
+                  <p class="font-mono {wrapLogs ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'}">
+                    {#if split.prefix}
+                      <span class={logLevelClass(split.prefix)}>{split.prefix}</span>
+                      <span class="text-muted-foreground"> {split.rest}</span>
+                    {:else}
+                      <span class="text-muted-foreground">{split.rest}</span>
+                    {/if}
+                  </p>
                 {/each}
               </div>
             </div>
@@ -965,7 +1013,7 @@
             </div>
           </div>
 
-          <div class="flex gap-2">
+          <div class="flex items-center gap-2">
             {#if !autoRefresh}
               <Button size="sm" variant="outline" on:click={fetchLogs}>
                 <RefreshCw class="h-3 w-3 mr-1" />
