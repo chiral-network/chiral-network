@@ -43,6 +43,9 @@ src-tauri/bin/
 src-tauri/gen/schemas/
 src-tauri/geth-data/
 
+# Downloaded binaries
+bin/
+
 # Tauri executables
 *.exe
 *.app

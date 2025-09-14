@@ -266,6 +266,12 @@ interface RecentBlock {
   nonce: number;
 }
 
+interface MiningHistoryPoint {
+  timestamp: number;
+  hashRate: number;
+  power: number;
+}
+
 // Mining state
 export interface MiningState {
   isMining: boolean;
@@ -277,6 +283,7 @@ export interface MiningState {
   selectedPool: string;
   sessionStartTime?: number; // Track mining session start time for persistence
   recentBlocks?: RecentBlock[]; // Store recent blocks found
+  miningHistory?: MiningHistoryPoint[]; // Store hash rate history for charts
 }
 
 export const miningState = writable<MiningState>({
@@ -289,4 +296,5 @@ export const miningState = writable<MiningState>({
   selectedPool: "solo",
   sessionStartTime: undefined,
   recentBlocks: [],
+  miningHistory: [],
 });
