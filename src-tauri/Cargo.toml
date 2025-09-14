@@ -6,6 +6,7 @@ authors = ["Chiral Network Team"]
 license = "MIT"
 repository = ""
 edition = "2021"
+default-run = "chiral-network"
 
 [build-dependencies]
 tauri-build = { version = "2.0", features = [] }
