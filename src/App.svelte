@@ -15,6 +15,7 @@
     import {onMount} from 'svelte';
     import { tick } from 'svelte';
     import { setupI18n } from '../src/i18n/i18n';
+    import SimpleToast from '$lib/components/SimpleToast.svelte';
     import { startNetworkMonitoring } from '$lib/services/networkService';
     // gets path name not entire url:
     // ex: http://locatlhost:1420/download -> /download
@@ -252,3 +253,5 @@
       </div>
     </div>
   </div>
+  <!-- add Toast  -->
+<SimpleToast />
