@@ -251,7 +251,8 @@
     "cancel": "취소",
     "remove": "삭제",
     "edit": "편집",
-    "resetDefaults": "기본값으로 재설정"
+    "resetDefaults": "기본값으로 재설정",
+    "lockWallet": "지갑 잠금"
   },
 
   "placeholders": {

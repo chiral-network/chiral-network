@@ -243,7 +243,8 @@
     "cancel": "Cancel",
     "remove": "Remove",
     "edit": "Edit",
-    "resetDefaults": "Reset to Defaults"
+    "resetDefaults": "Reset to Defaults",
+    "lockWallet": "Lock Wallet"
   },
 
   "placeholders": {
