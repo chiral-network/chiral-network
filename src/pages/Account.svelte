@@ -4,6 +4,7 @@
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
   import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound } from 'lucide-svelte'
+  import DropDown from "$lib/components/ui/dropDown.svelte";
   import { wallet, etcAccount, blacklist } from '$lib/stores'
   import { writable, derived } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
@@ -196,6 +197,9 @@
     }
   }
   
+  // Prepare options for the DropDown component
+  $: keystoreOptions = keystoreAccounts.map(acc => ({ value: acc, label: acc }));
+
   // Enhanced address validation function
   function isValidAddress(address: string): boolean {
     // Check that everything after 0x is hexadecimal
@@ -940,11 +944,14 @@
                 <div class="space-y-2">
                   <div>
                     <Label for="keystore-account">{$t('keystore.load.select')}</Label>
-                    <select id="keystore-account" bind:value={selectedKeystoreAccount} class="w-full border rounded px-2 py-1.5 text-sm mt-1 bg-background">
-                      {#each keystoreAccounts as acc}
-                        <option value={acc}>{acc}</option>
-                      {/each}
-                    </select>
+                    <div class="mt-1">
+                      <DropDown
+                        id="keystore-account"
+                        options={keystoreOptions}
+                        bind:value={selectedKeystoreAccount}
+                        disabled={keystoreAccounts.length === 0}
+                      />
+                    </div>
                   </div>
                   <div>
                     <Label for="keystore-password">{$t('placeholders.password')}</Label>
