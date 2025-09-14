@@ -2,7 +2,6 @@
 use crate::dht::{DhtService, FileMetadata};
 use crate::ethereum::GethProcess;
 use clap::Parser;
-use std::sync::Arc;
 use tokio::signal;
 use tracing::{info, error};
 
