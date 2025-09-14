@@ -68,6 +68,8 @@
   let logs: string[] = []
   let logsInterval: number | null = null
   // simplified log view — no font/wrap controls
+  // Auto-refresh toggle for logs modal
+  let autoRefresh: boolean = true
 
 
 
@@ -472,8 +474,10 @@
     showLogs = !showLogs
     if (showLogs) {
       fetchLogs()
-      // Start auto-refresh of logs
-      logsInterval = setInterval(fetchLogs, 2000) as unknown as number
+      // Start auto-refresh of logs if enabled
+      if (autoRefresh) {
+        logsInterval = setInterval(fetchLogs, 2000) as unknown as number
+      }
     } else {
       // Stop auto-refresh
       if (logsInterval) {
@@ -935,12 +939,28 @@
         </div>
 
         <div class="p-4 border-t flex items-center justify-between">
-          <p class="text-sm text-muted-foreground">{$t('mining.autoRefresh')}: {logsInterval ? $t('mining.on') : $t('mining.off')}</p>
+          <div class="flex items-center gap-3">
+            <input id="auto-refresh" type="checkbox" bind:checked={autoRefresh} on:change={() => {
+              // If modal is open, start/stop the interval immediately
+              if (showLogs) {
+                if (autoRefresh && !logsInterval) {
+                  logsInterval = setInterval(fetchLogs, 2000) as unknown as number
+                } else if (!autoRefresh && logsInterval) {
+                  clearInterval(logsInterval)
+                  logsInterval = null
+                }
+              }
+            }} />
+            <label for="auto-refresh" class="text-sm text-muted-foreground">{$t('mining.autoRefresh')}</label>
+          </div>
+
           <div class="flex gap-2">
-            <Button size="sm" variant="outline" on:click={fetchLogs}>
-              <RefreshCw class="h-3 w-3 mr-1" />
-              {$t('mining.refresh')}
-            </Button>
+            {#if !autoRefresh}
+              <Button size="sm" variant="outline" on:click={fetchLogs}>
+                <RefreshCw class="h-3 w-3 mr-1" />
+                {$t('mining.refresh')}
+              </Button>
+            {/if}
             <Button size="sm" variant="outline" on:click={() => logs = []}>
               {$t('mining.clear')}
             </Button>
