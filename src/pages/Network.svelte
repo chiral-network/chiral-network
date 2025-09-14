@@ -713,7 +713,6 @@
             <p class="text-2xl font-bold">{chainId}</p>
           </div>
         </div>
-
         <div class="pt-2">
           <div class="flex items-center justify-between mb-1 gap-2">
             <p class="text-sm text-muted-foreground">Node Address</p>
