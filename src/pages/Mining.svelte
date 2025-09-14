@@ -1040,12 +1040,10 @@
           </div>
 
           <div class="flex items-center gap-2">
-            {#if !autoRefresh}
-              <Button size="sm" variant="outline" on:click={fetchLogs}>
-                <RefreshCw class="h-3 w-3 mr-1" />
-                {$t('mining.refresh')}
-              </Button>
-            {/if}
+            <Button size="sm" variant="outline" on:click={fetchLogs}>
+              <RefreshCw class="h-3 w-3 mr-1" />
+              {$t('mining.refresh')}
+            </Button>
             <Button size="sm" variant="outline" on:click={() => logs = []}>
               {$t('mining.clear')}
             </Button>
