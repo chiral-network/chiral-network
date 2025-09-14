@@ -10,7 +10,9 @@
   import { onDestroy, onMount } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { etcAccount, miningState } from '$lib/stores'
-    import { getVersion } from "@tauri-apps/api/app";
+  import { getVersion } from "@tauri-apps/api/app";
+  import { t } from 'svelte-i18n';
+
   // Interfaces - MiningHistoryPoint is now defined in stores.ts
   
   // interface RecentBlock {
@@ -87,7 +89,7 @@
   $: {
     const numThreads = Number(selectedThreads);
     threadsWarning = (numThreads < 1 || numThreads > cpuThreads)
-            ? `Threads must be between 1 and ${cpuThreads}`
+            ? $t('mining.errors.threads', { values: { cpuThreads } })
             : '';
   }
 
@@ -95,7 +97,7 @@
   $: {
     const numIntensity = Number($miningState.minerIntensity);
     intensityWarning = (numIntensity < 1 || numIntensity > 100)
-            ? `Intensity must be between 1 and 100`
+            ? $t('mining.errors.intensity')
             : '';
   }
 
@@ -328,12 +330,12 @@
   
   async function startMining() {
     if (!$etcAccount) {
-      error = 'Please create a Chiral Network account first in the Account page'
+      error = $t('mining.errors.noAccount')
       return
     }
     
     if (!isGethRunning) {
-      error = 'Chiral node is not running. Please start it from the Network page'
+      error = $t('mining.errors.gethNotRunning')
       return
     }
     
@@ -342,7 +344,7 @@
     
     try {
       // Show message that we're starting mining
-      error = 'Starting mining... (may restart node if needed)'
+      error = $t('mining.starting')
       
       await invoke('start_miner', {
         address: $etcAccount.address,
@@ -481,11 +483,11 @@
   }
   
   // Mock pool options
-  const pools = [
-    { value: 'solo', label: 'Solo Mining' },
-    { value: 'pool1', label: 'ChiralPool #1' },
-    { value: 'pool2', label: 'ChiralPool #2' },
-    { value: 'pool3', label: 'Community Pool' }
+  $: pools = [
+    { value: 'solo', label: $t('mining.pools.solo') },
+    { value: 'pool1', label: $t('mining.pools.pool1') },
+    { value: 'pool2', label: $t('mining.pools.pool2') },
+    { value: 'pool3', label: $t('mining.pools.community') }
   ]
   
   onDestroy(async () => {
@@ -506,8 +508,8 @@
 
 <div class="space-y-6">
   <div>
-    <h1 class="text-3xl font-bold">Mining</h1>
-    <p class="text-muted-foreground mt-2">Contribute computing power to secure the network and earn rewards</p>
+    <h1 class="text-3xl font-bold">{$t('mining.title')}</h1>
+    <p class="text-muted-foreground mt-2">{$t('mining.subtitle')}</p>
   </div>
   
   <!-- Mining Status Cards -->
@@ -515,10 +517,10 @@
     <Card class="p-4">
       <div class="flex items-center justify-between">
         <div>
-          <p class="text-sm text-muted-foreground">Hash Rate</p>
+          <p class="text-sm text-muted-foreground">{$t('mining.hashRate')}</p>
           <p class="text-2xl font-bold">{$miningState.hashRate}</p>
           <p class="text-xs text-muted-foreground mt-1">
-            {$miningState.isMining ? `${$miningState.activeThreads} threads` : 'Not mining'}
+            {$miningState.isMining ? `${$miningState.activeThreads} ${$t('mining.threads')}` : $t('mining.notMining')}
           </p>
         </div>
         <div class="p-2 bg-primary/10 rounded-lg">
@@ -530,11 +532,11 @@
     <Card class="p-4">
       <div class="flex items-center justify-between">
         <div>
-          <p class="text-sm text-muted-foreground">Total Rewards</p>
+          <p class="text-sm text-muted-foreground">{$t('mining.totalRewards')}</p>
           <p class="text-2xl font-bold">{$miningState.totalRewards.toFixed(2)} Chiral</p>
           <p class="text-xs text-green-600 flex items-center gap-1 mt-1">
             <TrendingUp class="h-3 w-3" />
-            {$miningState.blocksFound} blocks found
+            {$miningState.blocksFound} {$t('mining.blocksFound')}
           </p>
         </div>
         <div class="p-2 bg-yellow-500/10 rounded-lg">
@@ -546,10 +548,10 @@
     <Card class="p-4">
       <div class="flex items-center justify-between">
         <div>
-          <p class="text-sm text-muted-foreground">Power Usage</p>
+          <p class="text-sm text-muted-foreground">{$t('mining.powerUsage')}</p>
           <p class="text-2xl font-bold">{powerConsumption.toFixed(0)}W</p>
           <p class="text-xs text-muted-foreground mt-1">
-            {efficiency.toFixed(2)} H/W
+            {efficiency.toFixed(2)} {$t('mining.hw')}
           </p>
         </div>
         <div class="p-2 bg-amber-500/10 rounded-lg">
@@ -561,7 +563,7 @@
     <Card class="p-4">
       <div class="flex items-center justify-between">
         <div>
-          <p class="text-sm text-muted-foreground">Temperature</p>
+          <p class="text-sm text-muted-foreground">{$t('mining.temperature')}</p>
           <p class="text-2xl font-bold">{temperature.toFixed(1)}°C</p>
           <div class="mt-1">
             <Progress 
@@ -581,16 +583,16 @@
   <!-- Mining Control -->
   <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold">Mining Control</h2>
+      <h2 class="text-lg font-semibold">{$t('mining.control')}</h2>
       <Badge variant={$miningState.isMining ? 'default' : 'secondary'}>
-        {$miningState.isMining ? 'Mining Active' : 'Mining Stopped'}
+        {$miningState.isMining ? $t('mining.active') : $t('mining.stopped')}
       </Badge>
     </div>
     
     <div class="space-y-4">
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div class="relative">
-          <Label for="pool-select">Mining Pool</Label>
+          <Label for="pool-select">{$t('mining.pool')}</Label>
           <DropDown
             id="pool-select"
             options={pools}
@@ -601,7 +603,7 @@
         </div>
         
         <div>
-          <Label for="thread-count">CPU Threads ({cpuThreads} available)</Label>
+          <Label for="thread-count">{$t('mining.cpuThreads', { values: { cpuThreads } })}</Label>
           <Input
                   id="thread-count"
                   type="number"
@@ -622,7 +624,7 @@
         </div>
         
         <div>
-          <Label for="intensity">Mining Intensity (%)</Label>
+          <Label for="intensity">{$t('mining.intensity')}</Label>
           <Input
                   id="intensity"
                   type="number"
@@ -648,10 +650,10 @@
       <div class="flex items-center justify-between pt-4">
         <div class="text-sm space-y-1">
           <p class="text-muted-foreground">
-            Session: <span class="font-medium">{$miningState.isMining ? formatUptime(uptimeNow) : '0h 0m 0s'}</span>
+            {$t('mining.session')}: <span class="font-medium">{$miningState.isMining ? formatUptime(uptimeNow) : '0h 0m 0s'}</span>
           </p>
           <p class="text-muted-foreground">
-            Total Hashes: <span class="font-medium">{formatNumber(totalHashes)}</span>
+            {$t('mining.totalHashes')}: <span class="font-medium">{formatNumber(totalHashes)}</span>
           </p>
         </div>
         
@@ -664,17 +666,17 @@
           >
             {#if $miningState.isMining}
               <Pause class="h-4 w-4 mr-2" />
-              Stop Mining
+              {$t('mining.stop')}
             {:else}
               <Play class="h-4 w-4 mr-2" />
-              Start Mining
+              {$t('mining.start')}
             {/if}
           </Button>
           <Button
             size="lg"
             variant="outline"
             on:click={toggleLogs}
-            title="Show mining logs"
+            title={$t('mining.showLogs')}
           >
             <Terminal class="h-4 w-4" />
           </Button>
@@ -696,7 +698,7 @@
           <div class="flex items-center gap-2">
             <AlertCircle class="h-4 w-4 text-yellow-500 flex-shrink-0" />
             <p class="text-sm text-yellow-600">
-              Chiral node is not running. Please start it from the <a href="/network" class="underline font-medium">Network page</a>
+              {$t('mining.errors.gethNotRunning')} <a href="/network" class="underline font-medium">{$t('mining.networkPage')}</a>
             </p>
           </div>
         </div>
@@ -706,7 +708,7 @@
           <div class="flex items-center gap-2">
             <AlertCircle class="h-4 w-4 text-blue-500 flex-shrink-0" />
             <p class="text-sm text-blue-600">
-              Please create a Chiral Network account from the <a href="/account" class="underline font-medium">Account page</a> to start mining
+              {$t('mining.errors.noAccountLink')} <a href="/account" class="underline font-medium">{$t('mining.accountPage')}</a>
             </p>
           </div>
         </div>
@@ -717,83 +719,83 @@
   <!-- Mining Statistics -->
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
     <Card class="p-6">
-      <h2 class="text-lg font-semibold mb-4">Network Statistics</h2>
+      <h2 class="text-lg font-semibold mb-4">{$t('mining.networkStats')}</h2>
       <div class="space-y-3">
         <div class="flex justify-between items-center">
-          <span class="text-sm text-muted-foreground">Network Hash Rate</span>
+          <span class="text-sm text-muted-foreground">{$t('mining.networkHashRate')}</span>
           <Badge variant="outline">{networkHashRate}</Badge>
         </div>
         <div class="flex justify-between items-center">
-          <span class="text-sm text-muted-foreground">Network Difficulty</span>
+          <span class="text-sm text-muted-foreground">{$t('mining.networkDifficulty')}</span>
           <Badge variant="outline">{networkDifficulty}</Badge>
         </div>
         <div class="flex justify-between items-center">
-          <span class="text-sm text-muted-foreground">Block Height</span>
+          <span class="text-sm text-muted-foreground">{$t('mining.blockHeight')}</span>
           <Badge variant="outline">#{currentBlock}</Badge>
         </div>
         <div class="flex justify-between items-center">
-          <span class="text-sm text-muted-foreground">Block Reward</span>
+          <span class="text-sm text-muted-foreground">{$t('mining.blockReward')}</span>
           <Badge variant="outline">{blockReward} Chiral</Badge>
         </div>
         <div class="flex justify-between items-center">
-          <span class="text-sm text-muted-foreground">Est. Time to Block</span>
+          <span class="text-sm text-muted-foreground">{$t('mining.estTimeToBlock')}</span>
           <Badge variant="outline">
-            {estimatedTimeToBlock > 0 ? `~${Math.floor(estimatedTimeToBlock / 60)} min` : 'Calculating...'}
+            {estimatedTimeToBlock > 0 ? `~${Math.floor(estimatedTimeToBlock / 60)} min` : $t('mining.calculating')}
           </Badge>
         </div>
         <div class="flex justify-between items-center">
-          <span class="text-sm text-muted-foreground">Active Miners</span>
+          <span class="text-sm text-muted-foreground">{$t('mining.activeMiners')}</span>
           <Badge variant="outline">{peerCount}</Badge>
         </div>
       </div>
     </Card>
     
     <Card class="p-6">
-      <h2 class="text-lg font-semibold mb-4">Pool Information</h2>
+      <h2 class="text-lg font-semibold mb-4">{$t('mining.poolInfo')}</h2>
       {#if $miningState.selectedPool === 'solo'}
         <div class="space-y-3">
           <p class="text-sm text-muted-foreground">
-            You are mining solo. All block rewards will be yours, but finding blocks may take longer.
+            {$t('mining.soloInfo')}
           </p>
           <div class="pt-2 space-y-2">
             <div class="flex justify-between">
-              <span class="text-sm">Your Share</span>
+              <span class="text-sm">{$t('mining.yourShare')}</span>
               <span class="text-sm font-medium">100%</span>
             </div>
             <div class="flex justify-between">
-              <span class="text-sm">Pool Fee</span>
+              <span class="text-sm">{$t('mining.poolFee')}</span>
               <span class="text-sm font-medium">0%</span>
             </div>
             <div class="flex justify-between">
-              <span class="text-sm">Min Payout</span>
-              <span class="text-sm font-medium">N/A</span>
+              <span class="text-sm">{$t('mining.minPayout')}</span>
+              <span class="text-sm font-medium">{$t('mining.na')}</span>
             </div>
           </div>
         </div>
       {:else}
         <div class="space-y-3">
           <div class="flex justify-between">
-            <span class="text-sm">Pool Hash Rate</span>
+            <span class="text-sm">{$t('mining.poolHashRate')}</span>
             <span class="text-sm font-medium">850 MH/s</span>
           </div>
           <div class="flex justify-between">
-            <span class="text-sm">Pool Miners</span>
+            <span class="text-sm">{$t('mining.poolMiners')}</span>
             <span class="text-sm font-medium">342</span>
           </div>
           <div class="flex justify-between">
-            <span class="text-sm">Your Share</span>
+            <span class="text-sm">{$t('mining.yourShare')}</span>
             <span class="text-sm font-medium">{(parseHashRate($miningState.hashRate) / 850000000 * 100).toFixed(4)}%</span>
           </div>
           <div class="flex justify-between">
-            <span class="text-sm">Pool Fee</span>
+            <span class="text-sm">{$t('mining.poolFee')}</span>
             <span class="text-sm font-medium">1%</span>
           </div>
           <div class="flex justify-between">
-            <span class="text-sm">Min Payout</span>
+            <span class="text-sm">{$t('mining.minPayout')}</span>
             <span class="text-sm font-medium">10 Chiral</span>
           </div>
           <div class="flex justify-between">
-            <span class="text-sm">Payment Method</span>
+            <span class="text-sm">{$t('mining.paymentMethod')}</span>
             <span class="text-sm font-medium">PPLNS</span>
           </div>
         </div>
@@ -803,10 +805,10 @@
   
   <!-- Recent Blocks -->
   <Card class="p-6">
-    <h2 class="text-lg font-semibold mb-4">Recent Blocks Found</h2>
+    <h2 class="text-lg font-semibold mb-4">{$t('mining.recentBlocks')}</h2>
     {#if (!$miningState.recentBlocks || $miningState.recentBlocks.length === 0)}
       <p class="text-sm text-muted-foreground text-center py-8">
-        No blocks found yet. Start mining to earn rewards!
+        {$t('mining.noBlocksFound')}
       </p>
     {:else}
       <div class="space-y-2">
@@ -815,9 +817,9 @@
             <div class="flex items-center gap-3">
               <Award class="h-4 w-4 text-yellow-500" />
               <div>
-                <p class="text-sm font-medium">Block Found!</p>
+                <p class="text-sm font-medium">{$t('mining.blockFound')}</p>
                 <p class="text-xs text-muted-foreground">
-                  Hash: {block.hash} • Nonce: {block.nonce}
+                  {$t('mining.hash')}: {block.hash} • {$t('mining.nonce')}: {block.nonce}
                 </p>
               </div>
             </div>
@@ -838,13 +840,13 @@
   <!-- Hash Rate Chart (simplified) -->
   {#if ($miningState.miningHistory || []).length > 0}
     <Card class="p-6">
-      <h2 class="text-lg font-semibold mb-4">Hash Rate History</h2>
+      <h2 class="text-lg font-semibold mb-4">{$t('mining.hashRateHistory')}</h2>
 
       <!-- Chart Type Toggle -->
       <div class="flex items-center gap-2 mb-2">
-        <span class="text-sm text-muted-foreground">Chart Type:</span>
-        <Button size="sm" variant={chartType === 'bar' ? 'default' : 'outline'} on:click={() => chartType = 'bar'}>Bar</Button>
-        <Button size="sm" variant={chartType === 'line' ? 'default' : 'outline'} on:click={() => chartType = 'line'}>Line</Button>
+        <span class="text-sm text-muted-foreground">{$t('mining.chartType')}:</span>
+        <Button size="sm" variant={chartType === 'bar' ? 'default' : 'outline'} on:click={() => chartType = 'bar'}>{$t('mining.bar')}</Button>
+        <Button size="sm" variant={chartType === 'line' ? 'default' : 'outline'} on:click={() => chartType = 'line'}>{$t('mining.line')}</Button>
       </div>
 
       <!-- Chart Rendering -->
@@ -905,7 +907,7 @@
         </div>
       {/if}
 
-      <p class="text-xs text-muted-foreground text-center mt-2">Last 5 minutes</p>
+      <p class="text-xs text-muted-foreground text-center mt-2">{$t('mining.last5Minutes')}</p>
     </Card>
   {/if}
 
@@ -914,14 +916,14 @@
     <div class="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <Card class="w-full max-w-4xl max-h-[80vh] flex flex-col">
         <div class="p-4 border-b flex items-center justify-between">
-          <h2 class="text-lg font-semibold">Mining Logs</h2>
+          <h2 class="text-lg font-semibold">{$t('mining.logs')}</h2>
           <Button size="sm" variant="ghost" on:click={toggleLogs}>
             <X class="h-4 w-4" />
           </Button>
         </div>
         <div class="flex-1 overflow-auto p-4 bg-black/90 font-mono text-xs">
           {#if logs.length === 0}
-            <p class="text-gray-400">No logs available yet...</p>
+            <p class="text-gray-400">{$t('mining.noLogs')}</p>
           {:else}
             {#each logs as log}
               <div class="text-green-400 whitespace-pre-wrap break-all">{log}</div>
@@ -930,15 +932,15 @@
         </div>
         <div class="p-4 border-t flex items-center justify-between">
           <p class="text-sm text-muted-foreground">
-            Auto-refresh: {logsInterval ? 'ON' : 'OFF'}
+            {$t('mining.autoRefresh')}: {logsInterval ? $t('mining.on') : $t('mining.off')}
           </p>
           <div class="flex gap-2">
             <Button size="sm" variant="outline" on:click={fetchLogs}>
               <RefreshCw class="h-3 w-3 mr-1" />
-              Refresh
+              {$t('mining.refresh')}
             </Button>
             <Button size="sm" variant="outline" on:click={() => logs = []}>
-              Clear
+              {$t('mining.clear')}
             </Button>
           </div>
         </div>

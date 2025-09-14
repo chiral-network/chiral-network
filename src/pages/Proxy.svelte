@@ -6,6 +6,7 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import { Shield, Globe, Activity, Plus, Power, Trash2 } from 'lucide-svelte'
   import { proxyNodes } from '$lib/stores'
+  import { t } from 'svelte-i18n'
   
   let newNodeAddress = ''
   let proxyEnabled = true
@@ -16,12 +17,12 @@
       const validAddressRegex = /^[a-zA-Z0-9.-]+:[0-9]{1,5}$/
       const isDuplicate = $proxyNodes.some(node => node.address === newNodeAddress.trim())
       if (isDuplicate) {
-          alert('This proxy address is already added!')
+          alert($t('proxy.alreadyAdded'))
           return
       }
 
       if (!newNodeAddress || !validAddressRegex.test(newNodeAddress.trim())) {
-          alert('Please enter a valid proxy address (e.g., 192.168.1.100:8080)')
+          alert($t('proxy.invalidAddress'))
           return
       }
 
@@ -77,8 +78,8 @@
 
 <div class="space-y-6">
   <div>
-    <h1 class="text-3xl font-bold">Proxy Network</h1>
-    <p class="text-muted-foreground mt-2">Manage your proxy nodes and network settings</p>
+    <h1 class="text-3xl font-bold">{$t('proxy.title')}</h1>
+    <p class="text-muted-foreground mt-2">{$t('proxy.subtitle')}</p>
   </div>
   
   <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -88,8 +89,8 @@
           <Shield class="h-5 w-5 text-primary" />
         </div>
         <div>
-          <p class="text-sm text-muted-foreground">Proxy Status</p>
-          <p class="text-xl font-bold">{proxyEnabled ? 'Active' : 'Inactive'}</p>
+          <p class="text-sm text-muted-foreground">{$t('proxy.status')}</p>
+          <p class="text-xl font-bold">{proxyEnabled ? $t('proxy.active') : $t('proxy.inactive')}</p>
         </div>
       </div>
     </Card>
@@ -100,7 +101,7 @@
           <Globe class="h-5 w-5 text-green-500" />
         </div>
         <div>
-          <p class="text-sm text-muted-foreground">Active Nodes</p>
+          <p class="text-sm text-muted-foreground">{$t('proxy.activeNodes')}</p>
           <p class="text-xl font-bold">{activeNodes} / {$proxyNodes.length}</p>
         </div>
       </div>
@@ -112,7 +113,7 @@
           <Activity class="h-5 w-5 text-blue-500" />
         </div>
         <div>
-          <p class="text-sm text-muted-foreground">Total Bandwidth</p>
+          <p class="text-sm text-muted-foreground">{$t('proxy.totalBandwidth')}</p>
           <p class="text-xl font-bold">{totalBandwidth} Mbps</p>
         </div>
       </div>
@@ -121,9 +122,9 @@
   
   <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold">Proxy Settings</h2>
+      <h2 class="text-lg font-semibold">{$t('proxy.settings')}</h2>
       <div class="flex items-center gap-2">
-        <span class="text-sm text-black">Proxy</span>
+        <span class="text-sm text-black">{$t('proxy.proxy')}</span>
         <button
           type="button"
           role="switch"
@@ -141,25 +142,24 @@
       </div>
     </div>
 
-
     
     <div class="space-y-4">
         <div>
-            <Label for="new-node">Add Proxy Node</Label>
+            <Label for="new-node">{$t('proxy.addNode')}</Label>
             <div class="flex gap-2 mt-2">
                 <Input
                     id="new-node"
                     bind:value={newNodeAddress}
-                    placeholder="Enter node address (e.g., 192.168.1.100:8080)"
+                    placeholder={$t('proxy.enterAddress')}
                     class="flex-1 {isAddressValid || newNodeAddress === '' ? '' : 'border border-red-500 focus:ring-red-500'}"
                 />
                 <Button on:click={addNode} disabled={!isAddressValid || !newNodeAddress}>
                     <Plus class="h-4 w-4 mr-2" />
-                    Add Node
+                    {$t('proxy.addNodeButton')}
                 </Button>
             </div>
             {#if !isAddressValid && newNodeAddress !== ''}
-                <p class="text-sm text-red-500 mt-1">Please enter a valid proxy address (e.g., 192.168.1.100:8080)</p>
+                <p class="text-sm text-red-500 mt-1">{$t('proxy.invalidAddress')}</p>
             {/if}
         </div>
 
@@ -167,7 +167,7 @@
   </Card>
   
   <Card class="p-6">
-    <h2 class="text-lg font-semibold mb-4">Proxy Nodes</h2>
+    <h2 class="text-lg font-semibold mb-4">{$t('proxy.proxyNodes')}</h2>
     <div class="space-y-3">
       {#each $proxyNodes as node}
         <div class="p-4 bg-secondary rounded-lg">
@@ -201,11 +201,11 @@
           
           <div class="grid grid-cols-2 gap-4 mb-3">
             <div>
-              <p class="text-xs text-muted-foreground">Bandwidth</p>
+              <p class="text-xs text-muted-foreground">{$t('proxy.bandwidth')}</p>
               <p class="text-sm font-medium">{node.bandwidth} Mbps</p>
             </div>
             <div>
-              <p class="text-xs text-muted-foreground">Latency</p>
+              <p class="text-xs text-muted-foreground">{$t('proxy.latency')}</p>
               <p class="text-sm font-medium">{node.latency} ms</p>
             </div>
           </div>
@@ -217,7 +217,7 @@
               on:click={() => toggleNode(node.id)}
             >
               <Power class="h-3 w-3 mr-1" />
-              {node.status === 'online' ? 'Disconnect' : 'Connect'}
+              {node.status === 'online' ? $t('proxy.disconnect') : $t('proxy.connect')}
             </Button>
             <Button
               size="sm"
@@ -225,7 +225,7 @@
               on:click={() => removeNode(node.id)}
             >
               <Trash2 class="h-3 w-3 mr-1" />
-              Remove
+              {$t('proxy.remove')}
             </Button>
           </div>
         </div>

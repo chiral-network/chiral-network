@@ -11,6 +11,7 @@
   import { listen } from '@tauri-apps/api/event'
   import { dhtService, DEFAULT_BOOTSTRAP_NODE } from '$lib/dht'
   import { Clipboard } from "lucide-svelte"
+  import { t } from 'svelte-i18n';
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -368,7 +369,7 @@
   
   async function downloadGeth() {
     if (!isTauri) {
-      downloadError = 'Chiral Node download is only available in the desktop app. Please download and run the Tauri desktop version.'
+      downloadError = $t('network.errors.downloadOnlyTauri')
       return
     }
     
@@ -378,7 +379,7 @@
       downloaded: 0,
       total: 0,
       percentage: 0,
-      status: 'Starting download...'
+      status: $t('network.download.starting')
     }
     
     try {
@@ -523,30 +524,30 @@
 
 <div class="space-y-6">
   <div>
-    <h1 class="text-3xl font-bold">Network Overview</h1>
-    <p class="text-muted-foreground mt-2">Monitor network health and discover peers</p>
+    <h1 class="text-3xl font-bold">{$t('network.title')}</h1>
+    <p class="text-muted-foreground mt-2">{$t('network.subtitle')}</p>
   </div>
   
   <!-- Chiral Network Node Status Card -->
   <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold">Chiral Node Status</h2>
+      <h2 class="text-lg font-semibold">{$t('network.nodeStatus')}</h2>
       <div class="flex items-center gap-2">
         {#if !isGethInstalled}
           <div class="h-2 w-2 bg-yellow-500 rounded-full"></div>
-          <span class="text-sm text-yellow-600">Not Installed</span>
+          <span class="text-sm text-yellow-600">{$t('network.status.notInstalled')}</span>
         {:else if isDownloading}
           <div class="h-2 w-2 bg-blue-500 rounded-full animate-pulse"></div>
-          <span class="text-sm text-blue-600">Downloading...</span>
+          <span class="text-sm text-blue-600">{$t('network.status.downloading')}</span>
         {:else if isStartingNode}
           <div class="h-2 w-2 bg-yellow-500 rounded-full animate-pulse"></div>
-          <span class="text-sm text-yellow-600">Starting...</span>
+          <span class="text-sm text-yellow-600">{$t('network.status.starting')}</span>
         {:else if isGethRunning}
           <div class="h-2 w-2 bg-green-500 rounded-full animate-pulse"></div>
-          <span class="text-sm text-green-600">Connected</span>
+          <span class="text-sm text-green-600">{$t('network.status.connected')}</span>
         {:else}
           <div class="h-2 w-2 bg-red-500 rounded-full"></div>
-          <span class="text-sm text-red-600">Disconnected</span>
+          <span class="text-sm text-red-600">{$t('network.status.disconnected')}</span>
         {/if}
       </div>
     </div>
@@ -561,7 +562,7 @@
             </div>
             <div class="space-y-2">
               <div class="flex justify-between text-sm">
-                <span>Progress</span>
+                <span>{$t('network.download.progress')}</span>
                 <span>{downloadProgress.percentage.toFixed(0)}%</span>
               </div>
               <div class="w-full bg-secondary rounded-full h-2 overflow-hidden">
@@ -581,8 +582,8 @@
         {:else}
           <div class="text-center py-4">
             <Server class="h-12 w-12 text-muted-foreground mx-auto mb-2" />
-            <p class="text-sm text-muted-foreground mb-1">Chiral node binary not found</p>
-            <p class="text-xs text-muted-foreground mb-3">Download the Core-Geth binary to run a local node</p>
+            <p class="text-sm text-muted-foreground mb-1">{$t('network.download.notFound')}</p>
+            <p class="text-xs text-muted-foreground mb-3">{$t('network.download.prompt')}</p>
             {#if downloadError}
               <div class="bg-red-500/10 border border-red-500/20 rounded-lg p-2 mb-3">
                 <div class="flex items-center gap-2 justify-center">
@@ -593,39 +594,39 @@
             {/if}
             <Button on:click={downloadGeth} disabled={isDownloading}>
               <Download class="h-4 w-4 mr-2" />
-              Download Chiral Node (~50 MB)
+              {$t('network.download.button')}
             </Button>
           </div>
         {/if}
       {:else if isStartingNode}
         <div class="text-center py-4">
           <Server class="h-12 w-12 text-yellow-500 mx-auto mb-2 animate-pulse" />
-          <p class="text-sm text-muted-foreground">Starting Chiral node...</p>
-          <p class="text-xs text-muted-foreground mt-1">Please wait, this may take a moment.</p>
+          <p class="text-sm text-muted-foreground">{$t('network.startingNode')}</p>
+          <p class="text-xs text-muted-foreground mt-1">{$t('network.pleaseWait')}</p>
         </div>
       {:else if !isGethRunning}
         <div class="text-center py-4">
           <Server class="h-12 w-12 text-muted-foreground mx-auto mb-2" />
-          <p class="text-sm text-muted-foreground mb-3">Chiral node is not running</p>
+          <p class="text-sm text-muted-foreground mb-3">{$t('network.notRunning')}</p>
           <Button on:click={startGethNode} disabled={isStartingNode}>
             <Play class="h-4 w-4 mr-2" />
-            Start Chiral Node
+            {$t('network.startNode')}
           </Button>
         </div>
       {:else}
         <div class="grid grid-cols-2 gap-4">
           <div class="bg-secondary rounded-lg p-3">
-            <p class="text-sm text-muted-foreground">Chiral Peers</p>
+            <p class="text-sm text-muted-foreground">{$t('network.chiralPeers')}</p>
             <p class="text-2xl font-bold">{peerCount}</p>
           </div>
           <div class="bg-secondary rounded-lg p-3">
-            <p class="text-sm text-muted-foreground">Chain ID</p>
+            <p class="text-sm text-muted-foreground">{$t('network.chainId')}</p>
             <p class="text-2xl font-bold">{chainId}</p>
           </div>
         </div>
         <div class="pt-2">
           <div class="flex items-center justify-between mb-1 gap-2">
-            <p class="text-sm text-muted-foreground">Node Address</p>
+            <p class="text-sm text-muted-foreground">{$t('network.nodeAddress')}</p>
             <Button
               variant="outline"
               size="sm"
@@ -637,14 +638,14 @@
               }}
             >
               <Clipboard class="h-3.5 w-3.5 mr-1" />
-              {copiedNodeAddr ? "Copied!" : "Copy"}
+              {copiedNodeAddr ? $t('network.copied') : $t('network.copy')}
             </Button>
           </div>
           <p class="text-xs font-mono break-all">{nodeAddress}</p>
         </div>
         <Button class="w-full" variant="outline" on:click={stopGethNode}>
           <Square class="h-4 w-4 mr-2" />
-          Stop Chiral Node
+          {$t('network.stopNode')}
         </Button>
       {/if}
     </div>
@@ -653,17 +654,17 @@
   <!-- DHT Network Status Card -->
   <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold">DHT Network</h2>
+      <h2 class="text-lg font-semibold">{$t('network.dht.title')}</h2>
       <div class="flex items-center gap-2">
         {#if dhtStatus === 'connected'}
           <div class="h-2 w-2 bg-green-500 rounded-full animate-pulse"></div>
-          <span class="text-sm text-green-600">Connected</span>
+          <span class="text-sm text-green-600">{$t('network.status.connected')}</span>
         {:else if dhtStatus === 'connecting'}
           <div class="h-2 w-2 bg-yellow-500 rounded-full animate-pulse"></div>
-          <span class="text-sm text-yellow-600">Connecting...</span>
+          <span class="text-sm text-yellow-600">{$t('network.status.connecting')}</span>
         {:else}
           <div class="h-2 w-2 bg-red-500 rounded-full"></div>
-          <span class="text-sm text-red-600">Disconnected</span>
+          <span class="text-sm text-red-600">{$t('network.status.disconnected')}</span>
         {/if}
       </div>
     </div>
@@ -672,29 +673,29 @@
       {#if dhtStatus === 'disconnected'}
         <div class="text-center py-4">
           <Wifi class="h-12 w-12 text-muted-foreground mx-auto mb-2" />
-          <p class="text-sm text-muted-foreground mb-3">DHT is not connected</p>
+          <p class="text-sm text-muted-foreground mb-3">{$t('network.dht.notConnected')}</p>
           {#if dhtError}
             <div class="bg-red-500/10 border border-red-500/20 rounded-lg p-3 mb-3 mx-4">
-              <p class="text-xs text-red-400 font-medium mb-1">Connection Error:</p>
+              <p class="text-xs text-red-400 font-medium mb-1">{$t('network.dht.connectionError')}:</p>
               <p class="text-xs text-red-300 font-mono">{dhtError}</p>
             </div>
           {/if}
           <div class="flex gap-2 justify-center">
             <Button on:click={startDht}>
               <Wifi class="h-4 w-4 mr-2" />
-              {connectionAttempts > 0 ? 'Retry Connection' : 'Connect to DHT Network'}
+              {connectionAttempts > 0 ? $t('network.dht.retry') : $t('network.dht.connect')}
             </Button>
             {#if dhtPeerId}
               <Button variant="outline" on:click={stopDht}>
                 <Wifi class="h-4 w-4 mr-2" />
-                Stop DHT
+                {$t('network.dht.stop')}
               </Button>
             {/if}
           </div>
           
           {#if dhtEvents.length > 0}
             <div class="mt-4 mx-4">
-              <p class="text-xs text-muted-foreground mb-2">Connection Log:</p>
+              <p class="text-xs text-muted-foreground mb-2">{$t('network.dht.log')}:</p>
               <div class="bg-secondary/50 rounded-lg p-2 max-h-32 overflow-y-auto text-left">
                 {#each dhtEvents.slice(-5) as event}
                   <p class="text-xs font-mono text-muted-foreground">{event}</p>
@@ -706,26 +707,26 @@
       {:else if dhtStatus === 'connecting'}
         <div class="text-center py-4">
           <Wifi class="h-12 w-12 text-yellow-500 mx-auto mb-2 animate-pulse" />
-          <p class="text-sm text-muted-foreground">Connecting to bootstrap node...</p>
+          <p class="text-sm text-muted-foreground">{$t('network.dht.connectingToBootstrap')}</p>
           <p class="text-xs text-muted-foreground mt-1">{dhtBootstrapNode}</p>
-          <p class="text-xs text-yellow-500 mt-2">Attempt #{connectionAttempts}</p>
+          <p class="text-xs text-yellow-500 mt-2">{$t('network.dht.attempt', { values: { connectionAttempts } })}</p>
         </div>
       {:else}
         <div class="space-y-3">
           <div class="grid grid-cols-2 gap-4">
             <div class="bg-secondary rounded-lg p-3">
-              <p class="text-sm text-muted-foreground">DHT Port</p>
+              <p class="text-sm text-muted-foreground">{$t('network.dht.port')}</p>
               <p class="text-2xl font-bold">{dhtPort}</p>
             </div>
             <div class="bg-secondary rounded-lg p-3">
-              <p class="text-sm text-muted-foreground">Connected Peers</p>
+              <p class="text-sm text-muted-foreground">{$t('network.dht.peers')}</p>
               <p class="text-2xl font-bold">{dhtPeerCount}</p>
             </div>
           </div>
           
           <div class="pt-2">
             <div class="flex items-center justify-between mb-1 gap-2">
-              <p class="text-sm text-muted-foreground">Peer ID</p>
+              <p class="text-sm text-muted-foreground">{$t('network.dht.peerId')}</p>
               <Button
                 variant="outline"
                 size="sm"
@@ -738,7 +739,7 @@
                 disabled={!dhtPeerId}
               >
                 <Clipboard class="h-3.5 w-3.5 mr-1" />
-                {copiedPeerId ? "Copied!" : "Copy"}
+                {copiedPeerId ? $t('network.copied') : $t('network.copy')}
               </Button>
             </div>
             <p class="text-xs font-mono break-all">{dhtPeerId}</p>
@@ -746,7 +747,7 @@
           
           <div class="pt-2">
             <div class="flex items-center justify-between mb-1 gap-2">
-              <p class="text-sm text-muted-foreground">Bootstrap Node</p>
+              <p class="text-sm text-muted-foreground">{$t('network.dht.bootstrapNode')}</p>
               <Button
                 variant="outline"
                 size="sm"
@@ -759,7 +760,7 @@
                 disabled={!dhtBootstrapNode}
               >
                 <Clipboard class="h-3.5 w-3.5 mr-1" />
-                {copiedBootstrap ? "Copied!" : "Copy"}
+                {copiedBootstrap ? $t('network.copied') : $t('network.copy')}
               </Button>
             </div>
             <p class="text-xs font-mono break-all">{dhtBootstrapNode}</p>
@@ -767,7 +768,7 @@
           
           {#if dhtEvents.length > 0}
             <div class="pt-2">
-              <p class="text-sm text-muted-foreground mb-2">Recent Events</p>
+              <p class="text-sm text-muted-foreground mb-2">{$t('network.dht.recentEvents')}</p>
               <div class="bg-secondary rounded-lg p-2 max-h-32 overflow-y-auto">
                 {#each dhtEvents.slice(-5) as event}
                   <p class="text-xs font-mono text-muted-foreground">{event}</p>
@@ -778,7 +779,7 @@
           
           <Button class="w-full" variant="outline" on:click={stopDht}>
             <Square class="h-4 w-4 mr-2" />
-            Disconnect from DHT
+            {$t('network.dht.disconnect')}
           </Button>
         </div>
       {/if}
@@ -793,7 +794,7 @@
           <Signal class="h-5 w-5 text-green-500" />
         </div>
         <div>
-          <p class="text-sm text-muted-foreground">Network Status</p>
+          <p class="text-sm text-muted-foreground">{$t('network.networkStatus')}</p>
           <p class="text-xl font-bold capitalize">{$networkStatus}</p>
         </div>
       </div>
@@ -805,7 +806,7 @@
           <Users class="h-5 w-5 text-blue-500" />
         </div>
         <div>
-          <p class="text-sm text-muted-foreground">DHT Peers</p>
+          <p class="text-sm text-muted-foreground">{$t('network.dhtPeers')}</p>
           <p class="text-xl font-bold">{dhtStatus === 'connected' ? dhtPeerCount : 0}</p>
         </div>
       </div>
@@ -817,7 +818,7 @@
           <HardDrive class="h-5 w-5 text-purple-500" />
         </div>
         <div>
-          <p class="text-sm text-muted-foreground">Network Size</p>
+          <p class="text-sm text-muted-foreground">{$t('network.networkSize')}</p>
           <p class="text-xl font-bold">{formatSize($networkStats.networkSize)}</p>
         </div>
       </div>
@@ -829,7 +830,7 @@
           <Activity class="h-5 w-5 text-orange-500" />
         </div>
         <div>
-          <p class="text-sm text-muted-foreground">Bandwidth</p>
+          <p class="text-sm text-muted-foreground">{$t('network.bandwidth')}</p>
           <p class="text-sm font-bold">↓ {$networkStats.avgDownloadSpeed.toFixed(1)} MB/s</p>
           <p class="text-sm font-bold">↑ {$networkStats.avgUploadSpeed.toFixed(1)} MB/s</p>
         </div>
@@ -840,7 +841,7 @@
   <!-- Peer Discovery -->
   <Card class="p-6">
     <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
-      <h2 class="text-lg font-semibold">Peer Discovery</h2>
+      <h2 class="text-lg font-semibold">{$t('network.peerDiscovery.title')}</h2>
       <div class="flex-shrink-0">
         <Button
           size="sm"
@@ -849,24 +850,24 @@
           disabled={discoveryRunning}
         >
           <RefreshCw class="h-4 w-4 mr-2 {discoveryRunning ? 'animate-spin' : ''}" />
-          {discoveryRunning ? 'Discovering...' : 'Run Discovery'}
+          {discoveryRunning ? $t('network.peerDiscovery.discovering') : $t('network.peerDiscovery.run')}
         </Button>
       </div>
     </div>
     
     <div class="space-y-4">
       <div>
-        <Label for="peer-address">Direct Connect</Label>
+        <Label for="peer-address">{$t('network.peerDiscovery.directConnect')}</Label>
         <div class="flex flex-wrap gap-2 mt-2">
           <Input
             id="peer-address"
             bind:value={newPeerAddress}
-            placeholder="Enter peer address (IP:Port or peer ID)"
+            placeholder={$t('network.peerDiscovery.placeholder')}
             class="flex-1 min-w-0 break-all"
           />
           <Button on:click={connectToPeer} disabled={!newPeerAddress}>
             <UserPlus class="h-4 w-4 mr-2" />
-            Connect
+            {$t('network.peerDiscovery.connect')}
           </Button>
         </div>
       </div>
@@ -876,22 +877,22 @@
   <!-- Connected Peers -->
   <Card class="p-6">
       <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
-          <h2 class="text-lg font-semibold">Connected Peers ({$peers.length})</h2>
+          <h2 class="text-lg font-semibold">{$t('network.connectedPeers.title', { values: { count: $peers.length } })}</h2>
           <div class="flex items-center gap-2">
-              <Label for="sort">Sort By</Label>
+              <Label for="sort">{$t('network.connectedPeers.sortBy')}</Label>
               <select
                       id="sort"
                       bind:value={sortBy}
                       class="border rounded px-2 py-1 text-sm"
               >
-                  <option value="reputation">Reputation</option>
-                  <option value="sharedFiles">Shared Files</option>
-                  <option value="totalSize">Total Size</option>
-                  <option value="nickname">Name</option>
-                  <option value="location">Location</option>
-                  <option value="joinDate">Join Date</option>
-                  <option value="lastSeen">Last Seen</option>
-                  <option value="status">Status</option>
+                  <option value="reputation">{$t('network.connectedPeers.reputation')}</option>
+                  <option value="sharedFiles">{$t('network.connectedPeers.sharedFiles')}</option>
+                  <option value="totalSize">{$t('network.connectedPeers.totalSize')}</option>
+                  <option value="nickname">{$t('network.connectedPeers.name')}</option>
+                  <option value="location">{$t('network.connectedPeers.location')}</option>
+                  <option value="joinDate">{$t('network.connectedPeers.joinDate')}</option>
+                  <option value="lastSeen">{$t('network.connectedPeers.lastSeen')}</option>
+                  <option value="status">{$t('network.connectedPeers.status')}</option>
               </select>
               <select
                       id="sort-direction"
@@ -899,29 +900,29 @@
                       class="border rounded px-2 py-1 text-sm"
               >
                   {#if sortBy === 'reputation'}
-                      <option value="desc">Highest</option>
-                      <option value="asc">Lowest</option>
+                      <option value="desc">{$t('network.connectedPeers.highest')}</option>
+                      <option value="asc">{$t('network.connectedPeers.lowest')}</option>
                   {:else if sortBy === 'sharedFiles'}
-                      <option value="desc">Most</option>
-                      <option value="asc">Least</option>
+                      <option value="desc">{$t('network.connectedPeers.most')}</option>
+                      <option value="asc">{$t('network.connectedPeers.least')}</option>
                   {:else if sortBy === 'totalSize'}
-                      <option value="desc">Largest</option>
-                      <option value="asc">Smallest</option>
+                      <option value="desc">{$t('network.connectedPeers.largest')}</option>
+                      <option value="asc">{$t('network.connectedPeers.smallest')}</option>
                   {:else if sortBy === 'joinDate'}
-                      <option value="desc">Newest</option>
-                      <option value="asc">Oldest</option>
+                      <option value="desc">{$t('network.connectedPeers.newest')}</option>
+                      <option value="asc">{$t('network.connectedPeers.oldest')}</option>
                   {:else if sortBy === 'lastSeen'}
-                      <option value="desc">Most Recent</option>
-                      <option value="asc">Least Recent</option>
+                      <option value="desc">{$t('network.connectedPeers.mostRecent')}</option>
+                      <option value="asc">{$t('network.connectedPeers.leastRecent')}</option>
                   {:else if sortBy === 'location'}
-                      <option value="asc">Closest</option>
-                      <option value="desc">Farthest</option>
+                      <option value="asc">{$t('network.connectedPeers.closest')}</option>
+                      <option value="desc">{$t('network.connectedPeers.farthest')}</option>
                   {:else if sortBy === 'status'}
-                      <option value="asc">Online</option>
-                      <option value="desc">Offline</option>
+                      <option value="asc">{$t('network.connectedPeers.online')}</option>
+                      <option value="desc">{$t('network.connectedPeers.offline')}</option>
                   {:else if sortBy === 'nickname'}
-                      <option value="asc">A → Z</option>
-                      <option value="desc">Z → A</option>
+                      <option value="asc">{$t('network.connectedPeers.aToZ')}</option>
+                      <option value="desc">{$t('network.connectedPeers.zToA')}</option>
                   {/if}
               </select>
           </div>
@@ -1013,7 +1014,7 @@
                 'bg-red-500'
               }"></div>
               <div>
-                <p class="font-medium">{peer.nickname || 'Anonymous'}</p>
+                <p class="font-medium">{peer.nickname || $t('network.connectedPeers.anonymous')}</p>
                 <p class="text-xs text-muted-foreground break-all">{peer.address}</p>
               </div>
             </div>
@@ -1036,26 +1037,26 @@
           
           <div class="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
             <div>
-              <p class="text-xs text-muted-foreground">Shared Files</p>
+              <p class="text-xs text-muted-foreground">{$t('network.connectedPeers.sharedFiles')}</p>
               <p class="font-medium">{peer.sharedFiles}</p>
             </div>
             <div>
-              <p class="text-xs text-muted-foreground">Total Size</p>
+              <p class="text-xs text-muted-foreground">{$t('network.connectedPeers.totalSize')}</p>
               <p class="font-medium">{formatSize(peer.totalSize)}</p>
             </div>
             <div>
-              <p class="text-xs text-muted-foreground">Location</p>
-              <p class="font-medium">{peer.location || 'Unknown'}</p>
+              <p class="text-xs text-muted-foreground">{$t('network.connectedPeers.location')}</p>
+              <p class="font-medium">{peer.location || $t('network.connectedPeers.unknown')}</p>
             </div>
             <div>
-              <p class="text-xs text-muted-foreground">Joined</p>
+              <p class="text-xs text-muted-foreground">{$t('network.connectedPeers.joined')}</p>
               <p class="font-medium">{new Date(peer.joinDate).toLocaleString()}</p>
             </div>
             <div>
-              <p class="text-xs text-muted-foreground">Last Seen</p>
+              <p class="text-xs text-muted-foreground">{$t('network.connectedPeers.lastSeen')}</p>
               <p class="font-medium">
                 {#if peer.status === 'online'}
-                  Now
+                  {$t('network.connectedPeers.now')}
                 {:else}
                   {new Date(peer.lastSeen).toLocaleString()}
                 {/if}
@@ -1066,7 +1067,7 @@
       {/each}
       
       {#if $peers.length === 0}
-        <p class="text-center text-muted-foreground py-8">No peers connected. Run discovery to find peers.</p>
+        <p class="text-center text-muted-foreground py-8">{$t('network.connectedPeers.noPeers')}</p>
       {/if}
     </div>
   </Card>
