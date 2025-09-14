@@ -854,6 +854,7 @@
 
   function logout() {
     // Clear the account details from memory, effectively logging out
+    loadKeystoreAccountsList()
     etcAccount.set(null);
 
     // Reset wallet state to defaults
