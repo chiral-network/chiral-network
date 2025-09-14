@@ -333,5 +333,27 @@
       "lastMonth": "Last Month",
       "ytd": "Year to Date"
     }
+  },
+  "proxy": {
+    "title": "Proxy Network",
+    "subtitle": "Manage your proxy nodes and network settings",
+    "status": "Proxy Status",
+    "active": "Active",
+    "inactive": "Inactive",
+    "activeNodes": "Active Nodes",
+    "totalBandwidth": "Total Bandwidth",
+    "settings": "Proxy Settings",
+    "proxy": "Proxy",
+    "addNode": "Add Proxy Node",
+    "enterAddress": "Enter node address (e.g., 192.168.1.100:8080)",
+    "addNodeButton": "Add Node",
+    "invalidAddress": "Please enter a valid proxy address (e.g., 192.168.1.100:8080)",
+    "proxyNodes": "Proxy Nodes",
+    "bandwidth": "Bandwidth",
+    "latency": "Latency",
+    "disconnect": "Disconnect",
+    "connect": "Connect",
+    "remove": "Remove",
+    "alreadyAdded": "This proxy address is already added!"
   }
 }
