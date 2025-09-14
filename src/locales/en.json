@@ -98,7 +98,8 @@
     "export": "Export Wallet",
     "exportSuccess": "Wallet exported successfully!",
     "cta": {
-      "intro": "Get started with Chiral Network by creating or importing an account:"
+      "intro": "Get started with Chiral Network by creating or importing an account:",
+      "or": "Or"
     },
     "privateKey": "Private Key"
   },
@@ -150,7 +151,15 @@
     "desc": "Save your private key securely on this computer, encrypted with a password.",
     "success": "Success! Private key saved to keystore.",
     "successSimulated": "Success! (Simulated) Private key saved.",
-    "error": "Error: {error}"
+    "error": "Error: {error}",
+    "load": {
+      "title": "Load from Keystore",
+      "select": "Select Account",
+      "empty": "No accounts found in keystore.",
+      "success": "Account loaded successfully",
+      "successSimulated": "Account loaded (demo mode)",
+      "error": "Failed to load account: {error}"
+    }
   },
 
   "blacklist": {
@@ -221,6 +230,8 @@
     "creating": "Creating...",
     "importAccount": "Import Existing Account",
     "importing": "Importing...",
+    "unlockAccount": "Unlock Account",
+    "unlocking": "Unlocking...",
     "copy": "Copy",
     "show": "Show",
     "hide": "Hide",
@@ -238,6 +249,7 @@
   "placeholders": {
     "importPrivateKey": "Enter private key to import",
     "password": "Enter a strong password",
+    "unlockPassword": "Enter password to unlock",
     "searchBlacklist": "Search blacklist...",
     "reason": "Enter reason..."
   },
