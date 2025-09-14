@@ -67,7 +67,11 @@ async fn save_account_to_keystore(address: String, private_key: String, password
 #[tauri::command]
 async fn load_account_from_keystore(address: String, password: String) -> Result<EthAccount, String> {
     let keystore = Keystore::load()?;
+    
+    // Get decrypted private key from keystore
     let private_key = keystore.get_account(&address, &password)?;
+    
+    // Derive account details from private key
     get_account_from_private_key(&private_key)
 }
 

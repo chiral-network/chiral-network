@@ -3,7 +3,7 @@
   import Card from '$lib/components/ui/card.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound } from 'lucide-svelte'
+  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound} from 'lucide-svelte'
   import { wallet, etcAccount, blacklist } from '$lib/stores'
   import { writable, derived } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
@@ -53,6 +53,12 @@
   let keystorePassword = '';
   let isSavingToKeystore = false;
   let keystoreSaveMessage = '';
+  let keystoreAccounts: string[] = [];
+  let selectedKeystoreAccount = '';
+  let loadKeystorePassword = '';
+  let isLoadingFromKeystore = false;
+  let keystoreLoadMessage = '';
+  
 
   let Html5QrcodeScanner: InstanceType<typeof Html5QrcodeScannerClass> | null = null;
   
@@ -226,8 +232,8 @@
   async function exportWallet() {
     try {
       const walletData = {
-        address: $wallet.address,
-        privateKey: "your-private-key-here-do-not-share", // this should change to be the actual private key
+        address: $etcAccount?.address,
+        privateKey: $etcAccount?.private_key,
         balance: $wallet.balance,
         totalEarned: $wallet.totalEarned,
         totalSpent: $wallet.totalSpent,
@@ -376,6 +382,7 @@
   
   onMount(() => {
     checkGethStatus()
+    loadKeystoreAccountsList();
 
     // Set up periodic balance refresh every 10 seconds
     balanceInterval = window.setInterval(() => {
@@ -430,6 +437,7 @@
     }
   }
 
+  
   async function createChiralAccount() {
   isCreatingAccount = true
   try {
@@ -455,7 +463,6 @@
       address: account.address
     }))
     
-    // 🎯 添加成功通知
     showToast('Account Created Successfully!', 'success')
     
     if (isGethRunning) {
@@ -463,15 +470,18 @@
     }
   } catch (error) {
     console.error('Failed to create Chiral account:', error)
-    
-    // 🎯 添加错误通知
     showToast('Failed to create account: ' + String(error), 'error')
-    
     alert(tr('errors.createAccount', { error: String(error) }))
   } finally {
     isCreatingAccount = false
   }
 }
+
+  async function setAccount(account: { address: string, private_key: string }) {
+    etcAccount.set(account);
+    wallet.update(w => ({ ...w, address: account.address }));
+    if (isGethRunning) { await fetchBalance(); }
+  }
 
   async function saveToKeystore() {
     if (!keystorePassword || !$etcAccount) return;
@@ -570,6 +580,7 @@
         ...w,
         address: account.address
       }))
+      await setAccount(account);
       importPrivateKey = ''
       
       
@@ -590,19 +601,98 @@
     }
   }
 
+  async function loadKeystoreAccountsList() {
+    try {
+      if (isTauri) {
+        const accounts = await invoke('list_keystore_accounts') as string[];
+        keystoreAccounts = accounts;
+        if (accounts.length > 0) {
+          selectedKeystoreAccount = accounts[0];
+        }
+      }
+    } catch (error) {
+      console.error('Failed to list keystore accounts:', error);
+    }
+  }
+
+  async function loadFromKeystore() {
+    if (!selectedKeystoreAccount || !loadKeystorePassword) return;
+
+    isLoadingFromKeystore = true;
+    keystoreLoadMessage = '';
+
+    try {
+        if (isTauri) {
+            // Send password to backend for decryption
+            const decryptedAccount = await invoke('load_account_from_keystore', {
+                address: selectedKeystoreAccount,
+                password: loadKeystorePassword,
+            }) as { 
+                address: string, 
+                private_key: string,
+            };
+
+            // Verify the decrypted address matches selected address
+            if (decryptedAccount.address.toLowerCase() !== selectedKeystoreAccount.toLowerCase()) {
+                throw new Error(tr('keystore.load.addressMismatch'));
+            }
+
+            // Update stores with decrypted account
+            etcAccount.set({
+                address: decryptedAccount.address,
+                private_key: decryptedAccount.private_key
+            });
+
+            // Update wallet store
+            wallet.update(w => ({
+                ...w,
+                address: decryptedAccount.address
+            }));
+            await setAccount(decryptedAccount);
+            
+            // Clear sensitive data
+            loadKeystorePassword = '';
+            
+            // Fetch initial balance if geth is running
+            if (isGethRunning) {
+                await fetchBalance();
+            }
+            
+            keystoreLoadMessage = tr('keystore.load.success');
+
+        } else {
+            // Web demo mode simulation
+            console.log('Simulating keystore load in web mode');
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            keystoreLoadMessage = tr('keystore.load.successSimulated');
+        }
+        
+    } catch (error) {
+        console.error('Failed to load from keystore:', error);
+        keystoreLoadMessage = tr('keystore.load.error', { error: String(error) });
+        
+        // Clear sensitive data on error
+        loadKeystorePassword = '';
+    } finally {
+        isLoadingFromKeystore = false;
+        setTimeout(() => keystoreLoadMessage = '', 4000);
+    }
+  }
+
   let newBlacklistEntry = {
     chiral_address: "",
-    description: ""
+    reason: ""
   }
 
   
   //Guard add with validity check
   function addBlacklistEntry() {
     if (!isBlacklistFormValid) return;
-    blacklist.update(entries => [...entries,
-      { chiral_address: newBlacklistEntry.chiral_address, reason: newBlacklistEntry.description, timestamp: new Date() }
-    ]);
-    newBlacklistEntry = { chiral_address: "", description: "" }; // Clear input fields
+    const newEntry = { chiral_address: newBlacklistEntry.chiral_address, reason: newBlacklistEntry.reason, timestamp: new Date() };
+    blacklist.update(entries => [...entries, newEntry]);
+    // Clear input fields
+    newBlacklistEntry.chiral_address = "";
+    newBlacklistEntry.reason = "";
   }
 
   function removeBlacklistEntry(chiral_address: string) {
@@ -642,7 +732,7 @@
 
   // Enhanced validation
   $: isBlacklistFormValid = 
-    newBlacklistEntry.description.trim() !== '' &&
+    newBlacklistEntry.reason.trim() !== '' &&
     isBlacklistAddressValid;
 
   // Filtered blacklist for search
@@ -748,11 +838,11 @@
   // Enhanced keyboard event handling
   function handleEditKeydown(e: CustomEvent<KeyboardEvent>) {
     if (e.detail.key === 'Enter') {
-      e.preventDefault();
+      e.detail.preventDefault();
       saveEdit();
     }
     if (e.detail.key === 'Escape') {
-      e.preventDefault();
+      e.detail.preventDefault();
       cancelEdit();
     }
   }
@@ -760,6 +850,29 @@
   // Helper function to set max amount
   function setMaxAmount() {
     rawAmountInput = $wallet.balance.toFixed(2);
+  }
+
+  function logout() {
+    // Clear the account details from memory, effectively logging out
+    etcAccount.set(null);
+
+    // Reset wallet state to defaults
+    wallet.update(w => ({
+      ...w,
+      address: '',
+      balance: 0,
+      totalEarned: 0,
+      totalSpent: 0,
+      pendingTransactions: 0,
+    }));
+
+    // Clear any other sensitive state that might be in component memory
+    privateKeyVisible = false;
+    keystorePassword = '';
+    loadKeystorePassword = '';
+    importPrivateKey = '';
+
+    console.log('Session cleared, wallet locked.');
   }
 
   async function generateAndShowQrCode(){
@@ -833,6 +946,57 @@
                 {isImportingAccount ? $t('actions.importing') : $t('actions.importAccount')}
               </Button>
             </div>
+
+            <div class="relative py-2">
+              <div class="absolute inset-0 flex items-center">
+                <span class="w-full border-t"></span>
+              </div>
+              <div class="relative flex justify-center text-xs uppercase">
+                <span class="bg-card px-2 text-muted-foreground">{$t('wallet.cta.or')}</span>
+              </div>
+            </div>
+
+            <div class="space-y-3">
+              <h3 class="text-md font-medium">{$t('keystore.load.title')}</h3>
+              {#if keystoreAccounts.length > 0}
+                <div class="space-y-2">
+                  <div>
+                    <Label for="keystore-account">{$t('keystore.load.select')}</Label>
+                    <select id="keystore-account" bind:value={selectedKeystoreAccount} class="w-full border rounded px-2 py-1.5 text-sm mt-1 bg-background">
+                      {#each keystoreAccounts as acc}
+                        <option value={acc}>{acc}</option>
+                      {/each}
+                    </select>
+                  </div>
+                  <div>
+                    <Label for="keystore-password">{$t('placeholders.password')}</Label>
+                    <Input
+                      id="keystore-password"
+                      type="password"
+                      bind:value={loadKeystorePassword}
+                      placeholder={$t('placeholders.unlockPassword')}
+                      class="w-full mt-1"
+                      autocomplete="current-password"
+                    />
+                  </div>
+                  <Button
+                    class="w-full"
+                    variant="outline"
+                    on:click={loadFromKeystore}
+                    disabled={!selectedKeystoreAccount || !loadKeystorePassword || isLoadingFromKeystore}
+                  >
+                    <KeyRound class="h-4 w-4 mr-2" />
+                    {isLoadingFromKeystore ? $t('actions.unlocking') : $t('actions.unlockAccount')}
+                  </Button>
+                  {#if keystoreLoadMessage}
+                    <p class="text-xs text-center {keystoreLoadMessage.toLowerCase().includes('success') ? 'text-green-600' : 'text-red-600'}">{keystoreLoadMessage}</p>
+                  {/if}
+                </div>
+              {:else}
+                <p class="text-xs text-muted-foreground text-center py-2">{$t('keystore.load.empty')}</p>
+              {/if}
+            </div>
+
           </div>
         {:else}
           <div>
@@ -934,14 +1098,17 @@
                <p class="text-xs text-muted-foreground mt-1">{$t('warnings.neverSharePrivateKey')}</p>
              </div>
              
-             <div class="mt-4">
-               <Button type="button" variant="outline" class="w-full" on:click={exportWallet}>
-                 {$t('wallet.export')}
-               </Button>
-               {#if exportMessage}
-                 <p class="text-xs text-center mt-2 {exportMessage.includes('successfully') ? 'text-green-600' : 'text-red-600'}">{exportMessage}</p>
-               {/if}
-             </div>
+            <div class="mt-6 space-y-2">
+              <div class="grid grid-cols-2 gap-2">
+                <Button type="button" variant="outline" on:click={exportWallet}>
+                  {$t('wallet.export')}
+                </Button>
+                <Button type="button" variant="destructive" on:click={logout}>
+                  {$t('actions.lockWallet')}
+                </Button>
+              </div>
+              {#if exportMessage}<p class="text-xs text-center mt-2 {exportMessage.includes('successfully') ? 'text-green-600' : 'text-red-600'}">{exportMessage}</p>{/if}
+            </div>
            </div>
          {/if}
       </div>
@@ -1233,29 +1400,29 @@
             <div class="relative mt-2">
               <Input
                 id="blacklist-reason"
-                bind:value={newBlacklistEntry.description}
+                bind:value={newBlacklistEntry.reason}
                 placeholder={$t('placeholders.reason')}
                 maxlength={200}
                 class="pr-16"
               />
               <span class="absolute right-3 top-1/2 transform -translate-y-1/2 text-xs text-muted-foreground">
-                {newBlacklistEntry.description.length}/200
+                {newBlacklistEntry.reason.length}/200
               </span>
             </div>
-            {#if newBlacklistEntry.description.length > 150}
+            {#if newBlacklistEntry.reason.length > 150}
               <p class="text-xs text-orange-500 mt-1">
-                {$t('blacklist.add.remaining', { values: { remaining: 200 - newBlacklistEntry.description.length } })}
+                {$t('blacklist.add.remaining', { values: { remaining: 200 - newBlacklistEntry.reason.length } })}
               </p>
             {/if}
           </div>
 
           <div class="flex flex-wrap items-center gap-2">
             <span class="text-xs text-muted-foreground">{$t('blacklist.quickReasons.label')}</span>
-            {#each [$t('blacklist.quickReasons.spam'), $t('blacklist.quickReasons.fraud'), $t('blacklist.quickReasons.malicious'), $t('blacklist.quickReasons.harrassment'), $t('blacklist.quickReasons.scam')] as reason}
+            {#each [$t('blacklist.quickReasons.spam'), $t('blacklist.quickReasons.fraud'), $t('blacklist.quickReasons.malicious'), $t('blacklist.quickReasons.harassment'), $t('blacklist.quickReasons.scam')] as reason}
               <button
                 type="button"
                 class="px-2 py-1 text-xs border rounded hover:bg-gray-100 transition-colors"
-                on:click={() => newBlacklistEntry.description = reason}
+                on:click={() => newBlacklistEntry.reason = reason}
               >
                 {reason}
               </button>

@@ -98,7 +98,8 @@
     "export": "지갑 내보내기",
     "exportSuccess": "지갑이 성공적으로 내보내졌습니다!",
     "cta": {
-      "intro": "새 계정을 만들거나 기존 계정을 가져와 카이럴 네트워크를 시작하세요:"
+      "intro": "새 계정을 만들거나 기존 계정을 가져와 카이럴 네트워크를 시작하세요:",
+      "or": "또는"
     },
     "privateKey": "개인 키"
   },
@@ -150,7 +151,15 @@
     "desc": "이 컴퓨터에 비밀번호로 암호화하여 안전하게 저장합니다.",
     "success": "성공! 개인 키가 키스토어에 저장되었습니다.",
     "successSimulated": "성공! (시뮬레이션) 개인 키가 저장되었습니다.",
-    "error": "오류: {error}"
+    "error": "오류: {error}",
+    "load": {
+      "title": "키스토어에서 불러오기",
+      "select": "계정 선택",
+      "empty": "키스토어에서 계정을 찾을 수 없습니다.",
+      "success": "계정을 성공적으로 불러왔습니다!",
+      "successSimulated": "시뮬레이션된 계정 불러오기 성공!",
+      "error": "오류: {error}"
+    }
   },
 
   "blacklist": {
@@ -229,6 +238,8 @@
     "creating": "생성 중...",
     "importAccount": "기존 계정 가져오기",
     "importing": "가져오는 중...",
+    "unlockAccount": "계정 잠금 해제",
+    "unlocking": "잠금 해제 중...",
     "copy": "복사",
     "show": "표시",
     "hide": "숨기기",
@@ -240,12 +251,14 @@
     "cancel": "취소",
     "remove": "삭제",
     "edit": "편집",
-    "resetDefaults": "기본값으로 재설정"
+    "resetDefaults": "기본값으로 재설정",
+    "lockWallet": "지갑 잠금"
   },
 
   "placeholders": {
     "importPrivateKey": "가져올 개인 키를 입력",
     "password": "강력한 비밀번호 입력",
+    "unlockPassword": "잠금 해제를 위해 비밀번호를 입력하세요",
     "searchBlacklist": "블랙리스트 검색…",
     "reason": "사유 입력…"
   },
