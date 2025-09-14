@@ -8,6 +8,8 @@ use libp2p::{
 };
 use libp2p::kad::Behaviour as Kademlia;
 use libp2p::kad::Event as KademliaEvent;
+use libp2p::kad::{Config as KademliaConfig, QueryResult, GetRecordOk, PutRecordOk};
+use libp2p::mdns::{tokio::Behaviour as Mdns, Event as MdnsEvent};
 use libp2p::identify::Event as IdentifyEvent;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -33,6 +35,7 @@ pub struct FileMetadata {
 pub struct DhtBehaviour {
     kademlia: Kademlia<MemoryStore>,
     identify: identify::Behaviour,
+    mdns: Mdns,
 }
 
 #[derive(Debug)]
@@ -130,6 +133,9 @@ async fn run_dht_node(
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Identify(identify_event)) => {
                         handle_identify_event(identify_event, &mut swarm, &event_tx).await;
                     }
+                    SwarmEvent::Behaviour(DhtBehaviourEvent::Mdns(mdns_event)) => {
+                        handle_mdns_event(mdns_event, &mut swarm, &event_tx).await;
+                    }
                     SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                         info!("✅ CONNECTION ESTABLISHED with peer: {}", peer_id);
                         info!("   Endpoint: {:?}", endpoint);
@@ -184,6 +190,39 @@ async fn handle_kademlia_event(event: KademliaEvent, _event_tx: &mpsc::Sender<Dh
         KademliaEvent::RoutablePeer { peer, .. } => {
             debug!("Peer {} became routable", peer);
         }
+        KademliaEvent::OutboundQueryProgressed { result, .. } => {
+            match result {
+                QueryResult::GetRecord(Ok(ok)) => match ok {
+                    GetRecordOk::FoundRecord(peer_record) => {
+                        // Try to parse file metadata from record value
+                        if let Ok(metadata) = serde_json::from_slice::<FileMetadata>(&peer_record.record.value) {
+                            let _ = _event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
+                        } else {
+                            debug!("Received non-file metadata record");
+                        }
+                    }
+                    GetRecordOk::FinishedWithNoAdditionalRecord { .. } => {
+                        // No additional records; do nothing here
+                    }
+                },
+                QueryResult::GetRecord(Err(err)) => {
+                    warn!("GetRecord error: {:?}", err);
+                    // If the error includes the key, emit FileNotFound
+                    if let kad::GetRecordError::NotFound { key, .. } = err {
+                        let file_hash = String::from_utf8_lossy(key.as_ref()).to_string();
+                        let _ = _event_tx.send(DhtEvent::FileNotFound(file_hash)).await;
+                    }
+                }
+                QueryResult::PutRecord(Ok(PutRecordOk { key })) => {
+                    debug!("PutRecord succeeded for key: {:?}", key);
+                }
+                QueryResult::PutRecord(Err(err)) => {
+                    warn!("PutRecord error: {:?}", err);
+                    let _ = _event_tx.send(DhtEvent::Error(format!("PutRecord failed: {:?}", err))).await;
+                }
+                _ => {}
+            }
+        }
         _ => {}
     }
 }
@@ -204,6 +243,24 @@ async fn handle_identify_event(event: IdentifyEvent, swarm: &mut Swarm<DhtBehavi
     }
 }
 
+async fn handle_mdns_event(event: MdnsEvent, swarm: &mut Swarm<DhtBehaviour>, event_tx: &mpsc::Sender<DhtEvent>) {
+    match event {
+        MdnsEvent::Discovered(list) => {
+            for (peer_id, multiaddr) in list {
+                debug!("mDNS discovered peer {} at {}", peer_id, multiaddr);
+                swarm.behaviour_mut().kademlia.add_address(&peer_id, multiaddr);
+                let _ = event_tx.send(DhtEvent::PeerDiscovered(peer_id.to_string())).await;
+            }
+        }
+        MdnsEvent::Expired(list) => {
+            for (peer_id, multiaddr) in list {
+                debug!("mDNS expired peer {} at {}", peer_id, multiaddr);
+                swarm.behaviour_mut().kademlia.remove_address(&peer_id, &multiaddr);
+            }
+        }
+    }
+}
+
 // Public API for the DHT
 pub struct DhtService {
     cmd_tx: mpsc::Sender<DhtCommand>,
@@ -220,9 +277,16 @@ impl DhtService {
         
         info!("Local peer id: {}", local_peer_id);
         
-        // Create a Kademlia behaviour with custom protocol
+        // Create a Kademlia behaviour with tuned configuration
         let store = MemoryStore::new(local_peer_id);
-        let mut kademlia = Kademlia::new(local_peer_id, store);
+        let mut kad_cfg = KademliaConfig::default();
+        // Align with docs: shorter queries, higher replication
+        kad_cfg.set_query_timeout(Duration::from_secs(10));
+        // Replication factor of 20 (as per spec table)
+        if let Some(nz) = std::num::NonZeroUsize::new(20) {
+            kad_cfg.set_replication_factor(nz);
+        }
+        let mut kademlia = Kademlia::with_config(local_peer_id, store, kad_cfg);
         
         // Set Kademlia to server mode to accept incoming connections
         kademlia.set_mode(Some(Mode::Server));
@@ -233,7 +297,10 @@ impl DhtService {
             local_key.public(),
         ));
         
-        let behaviour = DhtBehaviour { kademlia, identify };
+        // mDNS for local peer discovery
+        let mdns = Mdns::new(Default::default(), local_peer_id)?;
+        
+        let behaviour = DhtBehaviour { kademlia, identify, mdns };
         
         // Create the swarm
         let mut swarm = SwarmBuilder::with_existing_identity(local_key)
@@ -346,5 +413,20 @@ impl DhtService {
     pub async fn get_next_event(&self) -> Option<DhtEvent> {
         let mut rx = self.event_rx.lock().await;
         rx.recv().await
+    }
+
+    // Drain up to `max` pending events without blocking
+    pub async fn drain_events(&self, max: usize) -> Vec<DhtEvent> {
+        use tokio::sync::mpsc::error::TryRecvError;
+        let mut rx = self.event_rx.lock().await;
+        let mut events = Vec::new();
+        while events.len() < max {
+            match rx.try_recv() {
+                Ok(ev) => events.push(ev),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => break,
+            }
+        }
+        events
     }
 }

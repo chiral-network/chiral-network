@@ -17,7 +17,7 @@ use ethereum::{
 };
 use keystore::Keystore;
 use geth_downloader::GethDownloader;
-use dht::{DhtService, FileMetadata};
+use dht::{DhtService, FileMetadata, DhtEvent};
 use sysinfo::{Components, System, MINIMUM_CPU_UPDATE_INTERVAL};
 use systemstat::{Platform, System as SystemStat};
 use std::{sync::{Arc, Mutex}, time::Instant};
@@ -390,9 +390,32 @@ async fn get_dht_peer_id(state: State<'_, AppState>) -> Result<Option<String>, S
 }
 
 #[tauri::command]
-async fn get_dht_events(_state: State<'_, AppState>) -> Result<Vec<String>, String> {
-    // Simplified version returns empty events for now
-    Ok(vec![])
+async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let dht = {
+        let dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
+        dht_guard.as_ref().cloned()
+    };
+
+    if let Some(dht) = dht {
+        let events = dht.drain_events(100).await;
+        // Convert events to concise human-readable strings for the UI
+        let mapped: Vec<String> = events.into_iter().map(|e| match e {
+            DhtEvent::PeerDiscovered(p) => format!("peer_discovered:{}", p),
+            DhtEvent::PeerConnected(p) => format!("peer_connected:{}", p),
+            DhtEvent::PeerDisconnected(p) => format!("peer_disconnected:{}", p),
+            DhtEvent::FileDiscovered(meta) => format!(
+                "file_discovered:{}:{}:{}",
+                meta.file_hash,
+                meta.file_name,
+                meta.file_size
+            ),
+            DhtEvent::FileNotFound(hash) => format!("file_not_found:{}", hash),
+            DhtEvent::Error(err) => format!("error:{}", err),
+        }).collect();
+        Ok(mapped)
+    } else {
+        Ok(vec![])
+    }
 }
 
 #[tauri::command]

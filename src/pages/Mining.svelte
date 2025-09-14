@@ -11,12 +11,7 @@
   import { invoke } from '@tauri-apps/api/core'
   import { etcAccount, miningState } from '$lib/stores'
     import { getVersion } from "@tauri-apps/api/app";
-  // Interfaces
-  interface MiningHistoryPoint {
-    timestamp: number
-    hashRate: number
-    power: number
-  }
+  // Interfaces - MiningHistoryPoint is now defined in stores.ts
   
   // interface RecentBlock {
   //   id: string
@@ -60,8 +55,7 @@
   let uptimeNow: number = Date.now()
   let uptimeInterval: number | null = null
   
-  // Mining history
-  let miningHistory: MiningHistoryPoint[] = []
+  // Mining history is now stored in the miningState store
   // let recentBlocks: RecentBlock[] = []
   
   // Mock mining intervals  
@@ -238,7 +232,7 @@
       
       // Update mining history for chart
       if ($miningState.isMining) {
-        miningHistory = [...miningHistory.slice(-29), {
+        $miningState.miningHistory = [...($miningState.miningHistory || []).slice(-29), {
           timestamp: Date.now(),
           hashRate: hashRateNum,
           power: powerConsumption
@@ -391,6 +385,8 @@
       $miningState.activeThreads = 0
       // Clear session start time
       $miningState.sessionStartTime = undefined
+      // Clear mining history when stopping
+      $miningState.miningHistory = []
       
       // stop uptime ticker
       if (uptimeInterval) {
@@ -840,7 +836,7 @@
   </Card>
   
   <!-- Hash Rate Chart (simplified) -->
-  {#if miningHistory.length > 0}
+  {#if ($miningState.miningHistory || []).length > 0}
     <Card class="p-6">
       <h2 class="text-lg font-semibold mb-4">Hash Rate History</h2>
 
@@ -854,10 +850,10 @@
       <!-- Chart Rendering -->
       {#if chartType === 'bar'}
         <div class="h-32 flex items-end gap-1">
-          {#each miningHistory as point}
+          {#each ($miningState.miningHistory || []) as point}
             <div
                     class="flex-1 bg-primary/20 hover:bg-primary/30 transition-all rounded-t"
-                    style="height: {(point.hashRate / Math.max(...miningHistory.map(h => h.hashRate))) * 100}%; transition: height 0.5s ease;"
+                    style="height: {(point.hashRate / Math.max(...($miningState.miningHistory || []).map(h => h.hashRate))) * 100}%; transition: height 0.5s ease;"
                     title="{formatHashRate(point.hashRate)}"
             ></div>
           {/each}
@@ -880,18 +876,18 @@
                     stroke-width="3"
                     stroke-linecap="round"
                     stroke-linejoin="round"
-                    points={miningHistory.map((point, i) => {
-        const x = (i / Math.max(miningHistory.length - 1, 1)) * 380 + 10; // 10px margin
-        const maxHash = Math.max(...miningHistory.map(h => h.hashRate)) || 1;
+                    points={($miningState.miningHistory || []).map((point, i) => {
+        const x = (i / Math.max(($miningState.miningHistory || []).length - 1, 1)) * 380 + 10; // 10px margin
+        const maxHash = Math.max(...($miningState.miningHistory || []).map(h => h.hashRate)) || 1;
         const y = 118 - ((point.hashRate / maxHash) * 100); // 10px margin top/bottom
         return `${x},${y}`;
       }).join(" ")}
             />
 
             <!-- Data points -->
-            {#each miningHistory as point, i}
-              {@const x = (i / Math.max(miningHistory.length - 1, 1)) * 380 + 10}
-              {@const maxHash = Math.max(...miningHistory.map(h => h.hashRate)) || 1}
+            {#each ($miningState.miningHistory || []) as point, i}
+              {@const x = (i / Math.max(($miningState.miningHistory || []).length - 1, 1)) * 380 + 10}
+              {@const maxHash = Math.max(...($miningState.miningHistory || []).map(h => h.hashRate)) || 1}
               {@const y = 118 - ((point.hashRate / maxHash) * 100)}
               <circle
                       cx={x}
