@@ -494,6 +494,7 @@
     "logs": "Mining Logs",
     "noLogs": "No logs available yet...",
     "autoRefresh": "Auto-refresh",
+    "wrapLogs": "Wrap",
     "on": "ON",
     "off": "OFF",
     "refresh": "Refresh",

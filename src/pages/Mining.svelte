@@ -70,6 +70,8 @@
   // simplified log view — no font/wrap controls
   // Auto-refresh toggle for logs modal
   let autoRefresh: boolean = true
+  // Wrap toggle for logs (true = wrap lines, false = preserve long lines with horizontal scroll)
+  let wrapLogs: boolean = true
 
 
 
@@ -929,11 +931,14 @@
         <div class="flex-1 p-4">
           {#if logs.length === 0}
             <p class="text-xs text-muted-foreground">{$t('mining.noLogs')}</p>
-          {:else}
+            {:else}
             <div class="bg-secondary/50 rounded-lg p-2 max-h-[60vh] overflow-y-auto text-left font-mono text-xs">
-              {#each logs.slice(-500) as log}
-                <p class="font-mono text-muted-foreground whitespace-pre-wrap break-all">{log}</p>
-              {/each}
+              <!-- When wrapping is disabled, allow horizontal scroll and preserve whitespace -->
+              <div class={wrapLogs ? 'w-full' : 'w-full overflow-x-auto'}>
+                {#each logs.slice(-500) as log}
+                  <p class="font-mono text-muted-foreground {wrapLogs ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'}">{log}</p>
+                {/each}
+              </div>
             </div>
           {/if}
         </div>
@@ -952,6 +957,12 @@
               }
             }} />
             <label for="auto-refresh" class="text-sm text-muted-foreground">{$t('mining.autoRefresh')}</label>
+            
+            <!-- Wrap toggle -->
+            <div class="flex items-center gap-2 ml-3">
+              <input id="wrap-logs" type="checkbox" bind:checked={wrapLogs} />
+              <label for="wrap-logs" class="text-sm text-muted-foreground">{$t('mining.wrapLogs')}</label>
+            </div>
           </div>
 
           <div class="flex gap-2">
