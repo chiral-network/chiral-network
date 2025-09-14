@@ -3,7 +3,7 @@
   import Card from '$lib/components/ui/card.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound } from 'lucide-svelte'
+  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound} from 'lucide-svelte'
   import { wallet, etcAccount, blacklist } from '$lib/stores'
   import { writable, derived } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
@@ -228,8 +228,8 @@
   async function exportWallet() {
     try {
       const walletData = {
-        address: $wallet.address,
-        privateKey: "your-private-key-here-do-not-share", // this should change to be the actual private key
+        address: $etcAccount?.address,
+        privateKey: $etcAccount?.private_key,
         balance: $wallet.balance,
         totalEarned: $wallet.totalEarned,
         totalSpent: $wallet.totalSpent,
@@ -439,20 +439,18 @@
     isCreatingAccount = true
     try {
 
-      let account: { address: string, private_key: string, blacklist: Object[] }
+      let account: { address: string, private_key: string }
 
       if (isTauri) {
         // Use Tauri backend
-        account = await invoke('create_chiral_account') as { address: string, private_key: string, blacklist: Object[] }
+        account = await invoke('create_chiral_account') as { address: string, private_key: string }
       } else {
         // Fallback for web environment - generate demo account
         const demoAddress = '0x' + Math.random().toString(16).substr(2, 40)
         const demoPrivateKey = '0x' + Math.random().toString(16).substr(2, 64)
-        const demoBlackList = [{node_id: 169245, name: "Jane"}]
         account = {
           address: demoAddress,
           private_key: demoPrivateKey,
-          blacklist: demoBlackList
         }
         console.log('Running in web mode - using demo account')
       }
@@ -683,17 +681,18 @@
 
   let newBlacklistEntry = {
     chiral_address: "",
-    description: ""
+    reason: ""
   }
 
   
   //Guard add with validity check
   function addBlacklistEntry() {
     if (!isBlacklistFormValid) return;
-    blacklist.update(entries => [...entries,
-      { chiral_address: newBlacklistEntry.chiral_address, reason: newBlacklistEntry.description, timestamp: new Date() }
-    ]);
-    newBlacklistEntry = { chiral_address: "", description: "" }; // Clear input fields
+    const newEntry = { chiral_address: newBlacklistEntry.chiral_address, reason: newBlacklistEntry.reason, timestamp: new Date() };
+    blacklist.update(entries => [...entries, newEntry]);
+    // Clear input fields
+    newBlacklistEntry.chiral_address = "";
+    newBlacklistEntry.reason = "";
   }
 
   function removeBlacklistEntry(chiral_address: string) {
@@ -733,7 +732,7 @@
 
   // Enhanced validation
   $: isBlacklistFormValid = 
-    newBlacklistEntry.description.trim() !== '' &&
+    newBlacklistEntry.reason.trim() !== '' &&
     isBlacklistAddressValid;
 
   // Filtered blacklist for search
@@ -839,11 +838,11 @@
   // Enhanced keyboard event handling
   function handleEditKeydown(e: CustomEvent<KeyboardEvent>) {
     if (e.detail.key === 'Enter') {
-      e.preventDefault();
+      e.detail.preventDefault();
       saveEdit();
     }
     if (e.detail.key === 'Escape') {
-      e.preventDefault();
+      e.detail.preventDefault();
       cancelEdit();
     }
   }
@@ -851,6 +850,29 @@
   // Helper function to set max amount
   function setMaxAmount() {
     rawAmountInput = $wallet.balance.toFixed(2);
+  }
+
+  function logout() {
+    // Clear the account details from memory, effectively logging out
+    etcAccount.set(null);
+
+    // Reset wallet state to defaults
+    wallet.update(w => ({
+      ...w,
+      address: '',
+      balance: 0,
+      totalEarned: 0,
+      totalSpent: 0,
+      pendingTransactions: 0,
+    }));
+
+    // Clear any other sensitive state that might be in component memory
+    privateKeyVisible = false;
+    keystorePassword = '';
+    loadKeystorePassword = '';
+    importPrivateKey = '';
+
+    console.log('Session cleared, wallet locked.');
   }
 
   async function generateAndShowQrCode(){
@@ -1076,14 +1098,17 @@
                <p class="text-xs text-muted-foreground mt-1">{$t('warnings.neverSharePrivateKey')}</p>
              </div>
              
-             <div class="mt-4">
-               <Button type="button" variant="outline" class="w-full" on:click={exportWallet}>
-                 {$t('wallet.export')}
-               </Button>
-               {#if exportMessage}
-                 <p class="text-xs text-center mt-2 {exportMessage.includes('successfully') ? 'text-green-600' : 'text-red-600'}">{exportMessage}</p>
-               {/if}
-             </div>
+            <div class="mt-6 space-y-2">
+              <div class="grid grid-cols-2 gap-2">
+                <Button type="button" variant="outline" on:click={exportWallet}>
+                  {$t('wallet.export')}
+                </Button>
+                <Button type="button" variant="destructive" on:click={logout}>
+                  {$t('actions.lockWallet')}
+                </Button>
+              </div>
+              {#if exportMessage}<p class="text-xs text-center mt-2 {exportMessage.includes('successfully') ? 'text-green-600' : 'text-red-600'}">{exportMessage}</p>{/if}
+            </div>
            </div>
          {/if}
       </div>
@@ -1375,29 +1400,29 @@
             <div class="relative mt-2">
               <Input
                 id="blacklist-reason"
-                bind:value={newBlacklistEntry.description}
+                bind:value={newBlacklistEntry.reason}
                 placeholder={$t('placeholders.reason')}
                 maxlength={200}
                 class="pr-16"
               />
               <span class="absolute right-3 top-1/2 transform -translate-y-1/2 text-xs text-muted-foreground">
-                {newBlacklistEntry.description.length}/200
+                {newBlacklistEntry.reason.length}/200
               </span>
             </div>
-            {#if newBlacklistEntry.description.length > 150}
+            {#if newBlacklistEntry.reason.length > 150}
               <p class="text-xs text-orange-500 mt-1">
-                {$t('blacklist.add.remaining', { values: { remaining: 200 - newBlacklistEntry.description.length } })}
+                {$t('blacklist.add.remaining', { values: { remaining: 200 - newBlacklistEntry.reason.length } })}
               </p>
             {/if}
           </div>
 
           <div class="flex flex-wrap items-center gap-2">
             <span class="text-xs text-muted-foreground">{$t('blacklist.quickReasons.label')}</span>
-            {#each [$t('blacklist.quickReasons.spam'), $t('blacklist.quickReasons.fraud'), $t('blacklist.quickReasons.malicious'), $t('blacklist.quickReasons.harrassment'), $t('blacklist.quickReasons.scam')] as reason}
+            {#each [$t('blacklist.quickReasons.spam'), $t('blacklist.quickReasons.fraud'), $t('blacklist.quickReasons.malicious'), $t('blacklist.quickReasons.harassment'), $t('blacklist.quickReasons.scam')] as reason}
               <button
                 type="button"
                 class="px-2 py-1 text-xs border rounded hover:bg-gray-100 transition-colors"
-                on:click={() => newBlacklistEntry.description = reason}
+                on:click={() => newBlacklistEntry.reason = reason}
               >
                 {reason}
               </button>
