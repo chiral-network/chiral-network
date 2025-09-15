@@ -522,5 +522,26 @@
       "noAccountLink": "채굴을 시작하려면 계정 페이지에서 카이럴 네트워크 계정을 생성하세요."
     },
     "starting": "채굴 시작 중... (필요 시 노드가 다시 시작될 수 있습니다)"
+  },
+  "upload": {
+    "title": "파일 업로드",
+    "subtitle": "Chiral 네트워크에 파일을 공유하세요",
+    "dropFiles": "공유할 파일을 여기에 드롭하세요",
+    "dropFilesHint": "이 카드 어디든 파일을 드래그 앤 드롭하거나 아래 \"파일 추가\"를 클릭하세요",
+    "addFiles": "파일 추가",
+    "sharedFiles": "공유된 파일",
+    "files": "개 파일",
+    "total": "총",
+    "tip": "💡 팁: 파일을 여기에 드래그 앤 드롭하여 추가할 수도 있습니다",
+    "addMoreFiles": "파일 더 추가",
+    "hash": "해시",
+    "seeder": "시더",
+    "leecher": "리처",
+    "seeding": "시딩 중",
+    "copyHash": "해시 복사",
+    "hashCopied": "해시 복사됨!",
+    "stopSharing": "공유 중지",
+    "noFilesShared": "아직 공유된 파일이 없습니다",
+    "addFilesHint2": "네트워크에서 공유를 시작하려면 파일을 추가하세요"
   }
 }

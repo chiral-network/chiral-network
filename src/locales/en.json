@@ -514,5 +514,26 @@
       "noAccountLink": "Please create a Chiral Network account from the"
     },
     "starting": "Starting mining... (may restart node if needed)"
+  },
+  "upload": {
+    "title": "Upload Files",
+    "subtitle": "Share your files on the Chiral Network",
+    "dropFiles": "Drop files here to share",
+    "dropFilesHint": "Drag and drop files anywhere on this card, or click \"Add Files\" below",
+    "addFiles": "Add Files",
+    "sharedFiles": "Shared Files",
+    "files": "files",
+    "total": "total",
+    "tip": "💡 Tip: You can also drag and drop files here to add them",
+    "addMoreFiles": "Add More Files",
+    "hash": "Hash",
+    "seeder": "seeder{count, plural, =1 {} other {s}}",
+    "leecher": "leecher{count, plural, =1 {} other {s}}",
+    "seeding": "Seeding",
+    "copyHash": "Copy hash",
+    "hashCopied": "Hash copied!",
+    "stopSharing": "Stop sharing",
+    "noFilesShared": "No files shared yet",
+    "addFilesHint2": "Add files to start sharing on the network"
   }
 }
