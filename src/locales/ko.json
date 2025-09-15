@@ -423,8 +423,16 @@
       "30d": "지난 30일",
       "thisMonth": "이번 달",
       "lastMonth": "지난달",
-      "ytd": "연초부터 현재까지"
-    }
+      "ytd": "연초부터 현재까지",
+      "custom": "사용자 정의"
+    },
+    "from": "부터:",
+    "to": "까지:",
+    "ms": "ms",
+    "min": "최소:",
+    "max": "최대:",
+    "suspiciousActivity": "의심스러운 활동 알림",
+    "noSuspiciousActivity": "의심스러운 활동이 감지되지 않았습니다"
   },
   "proxy": {
     "title": "프록시 네트워크",

@@ -415,8 +415,16 @@
       "30d": "Last 30 days",
       "thisMonth": "This Month",
       "lastMonth": "Last Month",
-      "ytd": "Year to Date"
-    }
+      "ytd": "Year to Date",
+      "custom": "Custom"
+    },
+    "from": "From:",
+    "to": "To:",
+    "ms": "ms",
+    "min": "Min:",
+    "max": "Max:",
+    "suspiciousActivity": "Suspicious Activity Alerts",
+    "noSuspiciousActivity": "No suspicious activity detected"
   },
   "proxy": {
     "title": "Proxy Network",

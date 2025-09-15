@@ -67,7 +67,7 @@
     { label: $t('analytics.periods.thisMonth'), value: 'month' },
     { label: $t('analytics.periods.lastMonth'), value: 'lastmonth' },
     { label: $t('analytics.periods.ytd'), value: 'ytd' },
-    { label: 'Custom', value: 'custom' }
+    { label: $t('analytics.periods.custom'), value: 'custom' }
   ];
   const MAX_BARS = 60;
   $: {
