@@ -12,7 +12,7 @@
     import NotFound from './pages/NotFound.svelte'
     import { networkStatus } from '$lib/stores'
     import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
-    import {onMount} from 'svelte';
+    import {onMount, setContext} from 'svelte';
     import { tick } from 'svelte';
     import { setupI18n } from '../src/i18n/i18n';
     import SimpleToast from '$lib/components/SimpleToast.svelte';
@@ -57,6 +57,13 @@
         stopNetworkMonitoring();
       };
     })
+
+    setContext('navigation', {
+      setCurrentPage: (page: string) => {
+        currentPage = page;
+      }
+    });
+
     let sidebarCollapsed = false
     let mobileMenuOpen = false
 
