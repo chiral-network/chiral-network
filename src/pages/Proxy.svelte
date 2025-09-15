@@ -11,6 +11,8 @@
   let newNodeAddress = ''
   let proxyEnabled = true
   let isAddressValid = true
+  let showConfirmDialog = false
+  let nodeToRemove = null
   const validAddressRegex = /^[a-zA-Z0-9.-]+:[0-9]{1,5}$/
 
   function addNode() {
@@ -54,9 +56,22 @@
       }, 2000)
   }
 
+  function requestRemoveNode(nodeId: string) {
+    nodeToRemove = $proxyNodes.find(node => node.id === nodeId)
+    showConfirmDialog = true
+  }
 
-  function removeNode(nodeId: string) {
-    proxyNodes.update(nodes => nodes.filter(node => node.id !== nodeId))
+  function confirmRemoveNode() {
+    if (nodeToRemove) {
+      proxyNodes.update(nodes => nodes.filter(node => node.id !== nodeToRemove.id))
+    }
+    showConfirmDialog = false
+    nodeToRemove = null
+  }
+
+  function cancelRemoveNode() {
+    showConfirmDialog = false
+    nodeToRemove = null
   }
   
   function toggleNode(nodeId: string) {
@@ -75,6 +90,29 @@
   $: totalBandwidth = $proxyNodes.reduce((sum, n) => sum + (n.status === 'online' ? n.bandwidth : 0), 0)
   $: isAddressValid = validAddressRegex.test(newNodeAddress.trim())
 </script>
+
+<!-- Confirmation Dialog -->
+{#if showConfirmDialog && nodeToRemove}
+  <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div class="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+      <h3 class="text-lg font-semibold mb-4">{$t('proxy.confirmRemove') || 'Confirm Removal'}</h3>
+      <p class="text-muted-foreground mb-6">
+        {$t('proxy.confirmRemoveMessage') || 'Are you sure you want to remove the proxy node'} 
+        <span class="font-medium">{nodeToRemove.address}</span>?
+        {$t('proxy.confirmRemoveWarning') || 'This action cannot be undone.'}
+      </p>
+      <div class="flex gap-3 justify-end">
+        <Button variant="outline" on:click={cancelRemoveNode}>
+          {$t('proxy.cancel') || 'Cancel'}
+        </Button>
+        <Button variant="destructive" on:click={confirmRemoveNode}>
+          <Trash2 class="h-4 w-4 mr-2" />
+          {$t('proxy.remove') || 'Remove'}
+        </Button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <div class="space-y-6">
   <div>
@@ -222,7 +260,7 @@
             <Button
               size="sm"
               variant="destructive"
-              on:click={() => removeNode(node.id)}
+              on:click={() => requestRemoveNode(node.id)}
             >
               <Trash2 class="h-3 w-3 mr-1" />
               {$t('proxy.remove')}
