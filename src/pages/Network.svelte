@@ -836,8 +836,8 @@
         </div>
         <div>
           <p class="text-sm text-muted-foreground">{$t('network.bandwidth')}</p>
-          <p class="text-sm font-bold">↓ {$networkStats.avgDownloadSpeed.toFixed(1)} MB/s</p>
-          <p class="text-sm font-bold">↑ {$networkStats.avgUploadSpeed.toFixed(1)} MB/s</p>
+          <p class="text-sm font-bold">↓ {dhtStatus === 'connected' ? $networkStats.avgDownloadSpeed.toFixed(1) : '0.0'} MB/s</p>
+          <p class="text-sm font-bold">↑ {dhtStatus === 'connected' ? $networkStats.avgUploadSpeed.toFixed(1) : '0.0'} MB/s</p>
         </div>
       </div>
     </Card>
