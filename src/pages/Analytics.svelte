@@ -6,7 +6,8 @@
   import { files, wallet, networkStats, proxyNodes } from '$lib/stores'
   import { onMount } from 'svelte'
   import { t } from 'svelte-i18n'
-
+  import { suspiciousActivity } from '$lib/stores'; // only import
+  
   let uploadedFiles: any[] = []
   let downloadedFiles: any[] = []
   let totalUploaded = 0
@@ -159,7 +160,13 @@
   }
 
   // Generate mock latency history once on mount
-  onMount(() => {    
+  onMount(() => {   
+    suspiciousActivity.set([
+        { type: 'Unusual Upload', description: 'File > 1GB uploaded unusually fast', date: new Date().toLocaleString(), severity: 'high' },
+        { type: 'Multiple Logins', description: 'User logged in from different countries in 5 mins', date: new Date().toLocaleString(), severity: 'medium' },
+        { type: 'Failed Downloads', description: 'Several failed download attempts detected', date: new Date().toLocaleString(), severity: 'low' },
+      ]);
+
     // Generate mock latency history (last 30 points)
     const lhist: { date: string; latency: number }[] = []
     for (let i = 29; i >= 0; i--) {
@@ -772,4 +779,33 @@
       <span>{filteredHistory[filteredHistory.length - 1]?.date}</span>
     </div>
   </Card>
+
+  <Card class="p-6">
+  <h2 class="text-lg font-semibold mb-4">Suspicious Activity Alerts</h2>
+  {#if $suspiciousActivity.length > 0}
+    <div class="space-y-2">
+      {#each $suspiciousActivity as alert}
+        <div class="flex items-center justify-between p-2 rounded hover:bg-red-50 transition">
+          <div>
+            <p class="text-sm font-medium">{alert.type}</p>
+            <p class="text-xs text-muted-foreground">{alert.description}</p>
+            <p class="text-xs text-muted-foreground mt-1">{alert.date}</p>
+          </div>
+          <span
+            class="px-2 py-0.5 rounded text-xs font-semibold"
+            class:red-500={alert.severity === 'high'}
+            class:yellow-500={alert.severity === 'medium'}
+            class:green-500={alert.severity === 'low'}
+            style="background-color: {alert.severity === 'high' ? '#fee2e2' : alert.severity === 'medium' ? '#fef3c7' : '#dcfce7'}"
+          >
+            {alert.severity.toUpperCase()}
+          </span>
+        </div>
+      {/each}
+    </div>
+  {:else}
+    <p class="text-sm text-muted-foreground text-center py-4">No suspicious activity detected</p>
+  {/if}
+</Card>
+
 </div>
