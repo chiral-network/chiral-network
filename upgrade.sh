@@ -53,9 +53,20 @@ if [ -f "src-tauri/tauri.conf.json" ]; then
     cp "src-tauri/tauri.conf.json" "$BACKUP_DIR/"
 fi
 
-if [ -d "bin/geth-data" ]; then
-    echo "  • Backing up geth data (this may take a moment)..."
-    cp -r "bin/geth-data" "$BACKUP_DIR/" 2>/dev/null || true
+if [ -d "src-tauri/bin/geth-data" ]; then
+    echo "  • Backing up geth data from src-tauri/bin (legacy path)..."
+    cp -r "src-tauri/bin/geth-data" "$BACKUP_DIR/geth-data_legacy" 2>/dev/null || true
+fi
+
+# Also back up unified locations next to the executable (dev/release)
+if [ -d "src-tauri/target/debug/bin/geth-data" ]; then
+    echo "  • Backing up geth data from target/debug/bin..."
+    cp -r "src-tauri/target/debug/bin/geth-data" "$BACKUP_DIR/geth-data_debug" 2>/dev/null || true
+fi
+
+if [ -d "src-tauri/target/release/bin/geth-data" ]; then
+    echo "  • Backing up geth data from target/release/bin..."
+    cp -r "src-tauri/target/release/bin/geth-data" "$BACKUP_DIR/geth-data_release" 2>/dev/null || true
 fi
 
 echo -e "${GREEN}Step 3: Cleaning build artifacts...${NC}"

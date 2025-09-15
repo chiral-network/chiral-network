@@ -39,12 +39,7 @@ lerna-debug.log*
 # Tauri
 src-tauri/target/
 src-tauri/WixTools/
-src-tauri/bin/
-src-tauri/gen/schemas/
-src-tauri/geth-data/
-
-# Downloaded binaries
-bin/
+src-tauri/gen/
 
 # Tauri executables
 *.exe

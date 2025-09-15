@@ -1,7 +1,7 @@
 {
   "productName": "Chiral Network",
   "version": "0.1.0",
-  "identifier": "com.chiralnetwork.app",
+  "identifier": "com.chiralnetwork",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
@@ -27,7 +27,7 @@
   },
   "bundle": {
     "active": true,
-    "category": "Network",
+    "category": "Utilities",
     "copyright": "",
     "linux": {
       "appimage": {

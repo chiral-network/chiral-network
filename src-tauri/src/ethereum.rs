@@ -70,6 +70,19 @@ impl GethProcess {
         false
     }
 
+    fn resolve_data_dir(&self, data_dir: &str) -> Result<PathBuf, String> {
+        let dir = PathBuf::from(data_dir);
+        if dir.is_absolute() {
+            return Ok(dir);
+        }
+        let exe_dir = std::env::current_exe()
+            .map_err(|e| format!("Failed to get exe path: {}", e))?
+            .parent()
+            .ok_or("Failed to get exe dir")?
+            .to_path_buf();
+        Ok(exe_dir.join(dir))
+    }
+
     pub fn start(&mut self, data_dir: &str, miner_address: Option<&str>) -> Result<(), String> {
         // Check if we already have a tracked child process
         if self.child.is_some() {
@@ -163,13 +176,13 @@ impl GethProcess {
 
         let genesis_path = project_dir.join("genesis.json");
 
-        // Check if datadir needs initialization
-        let data_path = PathBuf::from(data_dir);
+        // Resolve data directory relative to the executable dir if it's relative
+        let data_path = self.resolve_data_dir(data_dir)?;
         if !data_path.join("geth").exists() {
             // Initialize with genesis
             let init_output = Command::new(&geth_path)
                 .arg("--datadir")
-                .arg(data_dir)
+                .arg(&data_path)
                 .arg("init")
                 .arg(&genesis_path)
                 .output()
@@ -186,7 +199,7 @@ impl GethProcess {
 
         let mut cmd = Command::new(&geth_path);
         cmd.arg("--datadir")
-            .arg(data_dir)
+            .arg(&data_path)
             .arg("--networkid")
             .arg("98765")
             .arg("--bootnodes")
@@ -221,7 +234,7 @@ impl GethProcess {
         }
         
         // Create log file for geth output
-        let log_path = PathBuf::from(data_dir).join("geth.log");
+        let log_path = data_path.join("geth.log");
         let log_file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -776,8 +789,19 @@ pub async fn get_network_difficulty() -> Result<String, String> {
 }
 
 pub fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String> {
+    // Resolve relative data_dir against the executable directory
+    let exe_dir = std::env::current_exe()
+        .map_err(|e| format!("Failed to get exe path: {}", e))?
+        .parent()
+        .ok_or("Failed to get exe dir")?
+        .to_path_buf();
+    let data_path = if Path::new(data_dir).is_absolute() {
+        PathBuf::from(data_dir)
+    } else {
+        exe_dir.join(data_dir)
+    };
     // Try to get blocks mined from logs first
-    let log_path = Path::new(data_dir).join("geth.log");
+    let log_path = data_path.join("geth.log");
     
     // If log doesn't exist, return defaults (blocks will be calculated from balance in frontend)
     if !log_path.exists() {
@@ -881,7 +905,18 @@ pub fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String> {
 }
 
 pub fn get_mining_logs(data_dir: &str, lines: usize) -> Result<Vec<String>, String> {
-    let log_path = PathBuf::from(data_dir).join("geth.log");
+    // Resolve relative data_dir against the executable directory
+    let exe_dir = std::env::current_exe()
+        .map_err(|e| format!("Failed to get exe path: {}", e))?
+        .parent()
+        .ok_or("Failed to get exe dir")?
+        .to_path_buf();
+    let data_path = if Path::new(data_dir).is_absolute() {
+        PathBuf::from(data_dir)
+    } else {
+        exe_dir.join(data_dir)
+    };
+    let log_path = data_path.join("geth.log");
     
     if !log_path.exists() {
         return Ok(vec!["No logs available yet.".to_string()]);
