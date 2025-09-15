@@ -7,11 +7,12 @@
   import Label from '$lib/components/ui/label.svelte'
   import DropDown from "$lib/components/ui/dropDown.svelte";
   import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw } from 'lucide-svelte'
-  import { onDestroy, onMount } from 'svelte'
+  import { onDestroy, onMount, getContext } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { etcAccount, miningState } from '$lib/stores'
   import { getVersion } from "@tauri-apps/api/app";
   import { t } from 'svelte-i18n';
+  import { goto } from '@mateothegreat/svelte5-router';
 
   // Interfaces - MiningHistoryPoint is now defined in stores.ts
   
@@ -134,6 +135,8 @@
   let intensityWarning = '';
 
   let validationError: string | null = null;
+
+  const navigation = getContext('navigation') as { setCurrentPage: (page: string) => void };
   
   // Computed values for actual threads based on intensity
   const maxThreads = cpuThreads
@@ -756,7 +759,7 @@
           <div class="flex items-center gap-2">
             <AlertCircle class="h-4 w-4 text-yellow-500 flex-shrink-0" />
             <p class="text-sm text-yellow-600">
-              {$t('mining.errors.gethNotRunning')} <a href="/network" class="underline font-medium">{$t('mining.networkPage')}</a>
+              {$t('mining.errors.gethNotRunning')} <button on:click={() => { navigation.setCurrentPage('network'); goto('/network'); }} class="underline font-medium">{$t('mining.networkPage')}</button>
             </p>
           </div>
         </div>
@@ -766,7 +769,7 @@
           <div class="flex items-center gap-2">
             <AlertCircle class="h-4 w-4 text-blue-500 flex-shrink-0" />
             <p class="text-sm text-blue-600">
-              {$t('mining.errors.noAccountLink')} <a href="/account" class="underline font-medium">{$t('mining.accountPage')}</a>
+              {$t('mining.errors.noAccountLink')} <button on:click={() => { navigation.setCurrentPage('account'); goto('/account'); }} class="underline font-medium">{$t('mining.accountPage')}</button>
             </p>
           </div>
         </div>

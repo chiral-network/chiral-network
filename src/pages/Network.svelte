@@ -12,6 +12,7 @@
   import { dhtService, DEFAULT_BOOTSTRAP_NODE } from '$lib/dht'
   import { Clipboard } from "lucide-svelte"
   import { t } from 'svelte-i18n';
+  import { showToast } from '$lib/toast';
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -285,6 +286,10 @@
   }
 
   function runDiscovery() {
+    if (dhtStatus !== 'connected') {
+      showToast($t('network.errors.dhtNotConnected'), 'error');
+      return;
+    }
     discoveryRunning = true
     
     // Simulate discovering new peers
@@ -831,8 +836,8 @@
         </div>
         <div>
           <p class="text-sm text-muted-foreground">{$t('network.bandwidth')}</p>
-          <p class="text-sm font-bold">↓ {$networkStats.avgDownloadSpeed.toFixed(1)} MB/s</p>
-          <p class="text-sm font-bold">↑ {$networkStats.avgUploadSpeed.toFixed(1)} MB/s</p>
+          <p class="text-sm font-bold">↓ {dhtStatus === 'connected' ? $networkStats.avgDownloadSpeed.toFixed(1) : '0.0'} MB/s</p>
+          <p class="text-sm font-bold">↑ {dhtStatus === 'connected' ? $networkStats.avgUploadSpeed.toFixed(1) : '0.0'} MB/s</p>
         </div>
       </div>
     </Card>
