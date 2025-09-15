@@ -319,24 +319,70 @@
   }
   
   function connectToPeer() {
-    if (!newPeerAddress) return
-    
-    const newPeer = {
-      id: `peer-${Date.now()}`,
-      address: newPeerAddress,
-      nickname: `DirectPeer${Math.floor(Math.random() * 100)}`,
-      status: 'online' as const,
-      reputation: 0,
-      sharedFiles: 0,
-      totalSize: 0,
-      joinDate: new Date(),
-      lastSeen: new Date(),
-      location: 'Unknown'
-    }
-    
-    peers.update(p => [...p, newPeer])
-    newPeerAddress = ''
+  if (!newPeerAddress.trim()) return
+  
+  const trimmedAddress = newPeerAddress.trim()
+  
+  // Parse IP and port first to check for duplicates properly
+  const [ip, portStr] = trimmedAddress.split(':')
+  const port = portStr ? parseInt(portStr) : 8080
+  const fullAddress = portStr ? trimmedAddress : `${ip}:${port}`
+  
+  // Check if peer with this exact IP:port combination already exists
+  const existingPeer = $peers.find(peer => peer.address === fullAddress)
+  if (existingPeer) {
+    showToast($t('Peer Already Connected'), 'error')
+    return
   }
+  
+  // Basic IP format validation (supports IP:port format)
+  const ipPortRegex = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$/
+  if (!ipPortRegex.test(trimmedAddress)) {
+    showToast($t('Invalid IP Format'), 'error')
+    return
+  }
+  
+  // Validate IP ranges (0-255 for each octet)
+  const ipParts = ip.split('.').map(Number)
+  if (ipParts.some(part => part < 0 || part > 255)) {
+    showToast($t('Invalid IP Range'), 'error')
+    return
+  }
+  
+  // Validate port range
+  if (port < 1 || port > 65535) {
+    showToast($t('Invalid Port Number'), 'error')
+    return
+  }
+  
+  // Create new peer
+  const newPeer = {
+    id: `peer-${Date.now()}`,
+    address: fullAddress, // Use the normalized IP:port format
+    nickname: `DirectPeer${Math.floor(Math.random() * 100)}`,
+    status: 'online' as const,
+    reputation: 0,
+    sharedFiles: 0,
+    totalSize: 0,
+    joinDate: new Date(),
+    lastSeen: new Date(),
+    location: 'Unknown'
+  }
+  
+  // Add to peers list
+  peers.update(p => [...p, newPeer])
+  
+  // Update network stats
+  networkStats.update(s => ({
+    ...s,
+    totalPeers: s.totalPeers + 1,
+    onlinePeers: s.onlinePeers + 1
+  }))
+  
+  // Clear input and show success
+  newPeerAddress = ''
+  showToast($t('Peer Connected Successfully'), 'success')
+}
   
   function refreshStats() {
     networkStats.update(s => ({
