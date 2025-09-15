@@ -106,7 +106,16 @@
     },
     "errors": {
         "downloadOnlyTauri": "카이럴 노드 다운로드는 데스크톱 앱에서만 사용할 수 있습니다. Tauri 데스크톱 버전을 다운로드하여 실행하세요."
-    }
+    },
+    "maxConnections": "최대 연결 수",
+    "port": "포트",
+    "uploadLimit": "업로드 제한 (MB/s)",
+    "downloadLimit": "다운로드 제한 (MB/s)",
+    "userLocation": "사용자 위치",
+    "locationHint": "더 나은 성능을 위해 가까운 피어에 연결하는 데 도움이 됩니다.",
+    "enableUpnp": "UPnP 활성화",
+    "enableNat": "NAT 포트 매핑 활성화",
+    "enableDht": "DHT 활성화"
   },
 
   "regions.usEast": "미국 동부",
