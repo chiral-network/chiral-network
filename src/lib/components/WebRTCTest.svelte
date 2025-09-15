@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { createWebRTCSession, type IceServer } from '$lib/services/webrtcService';
+  import { createWebRTCSession, type IceServer, type WebRTCSession } from '$lib/services/webrtcService';
 
   // Configurable ICE servers (edit in UI or pass as props)
   export let iceServers: IceServer[] = [
@@ -8,6 +8,7 @@
   ];
 
   // Simple manual signaling demo (paste JSON SDP/candidates)
+  // SDP/ICE textareas
   let localSDP = '';
   let remoteSDP = '';
   let newRemoteCandidate = '';
@@ -18,41 +19,72 @@
   let isProcessingAnswer = false;
   let isAddingCandidate = false;
 
-  const session = createWebRTCSession({
-    iceServers,
-    isInitiator: true,
-    onLocalDescription: (sdp) => {
-      localSDP = JSON.stringify(sdp, null, 2); // Pretty format JSON
-      log = [`Local description set. Share this with remote.`, ...log];
-    },
-    onLocalIceCandidate: (cand) => {
-      // Store candidates for manual sharing if needed
-      log = [`Local ICE candidate: ${JSON.stringify(cand)}`, ...log];
-    },
-    onMessage: (data) => {
-      log = [`recv: ${typeof data === 'string' ? data : '[binary]'}`, ...log];
-    },
-    onConnectionStateChange: (state) => {
-      log = [`connection: ${state}`, ...log];
-    },
-    onDataChannelOpen: () => {
-      log = ['DataChannel open', ...log];
-    },
-    onDataChannelClose: () => {
-      log = ['DataChannel closed', ...log];
-    },
-    onError: (e) => {
-      log = [`error: ${String(e)}`, ...log];
-      // Reset loading states on error
-      isCreatingOffer = false;
-      isProcessingAnswer = false;
-      isAddingCandidate = false;
-    },
-  });
+  // Role: 'initiator' or 'responder'
+  let role: 'initiator' | 'responder' = 'initiator';
 
-  // expose stores for template auto-subscription
-  const connectionState = session.connectionState;
-  const channelState = session.channelState;
+  // Active WebRTC session and stores
+  let session: WebRTCSession;
+  let connectionState;
+  let channelState;
+
+  function resetUiState() {
+    localSDP = '';
+    remoteSDP = '';
+    newRemoteCandidate = '';
+    isCreatingOffer = false;
+    isProcessingAnswer = false;
+    isAddingCandidate = false;
+    log = [];
+  }
+
+  function createSession() {
+    // Close any existing session first
+    try { session?.close(); } catch {}
+
+    session = createWebRTCSession({
+      iceServers,
+      isInitiator: role === 'initiator',
+      onLocalDescription: (sdp) => {
+        localSDP = JSON.stringify(sdp, null, 2);
+        log = [`Local description set. Share this with remote.`, ...log];
+      },
+      onLocalIceCandidate: (cand) => {
+        log = [`Local ICE candidate: ${JSON.stringify(cand)}`, ...log];
+      },
+      onMessage: (data) => {
+        log = [`recv: ${typeof data === 'string' ? data : '[binary]'}`, ...log];
+      },
+      onConnectionStateChange: (state) => {
+        log = [`connection: ${state}`, ...log];
+      },
+      onDataChannelOpen: () => {
+        log = ['DataChannel open', ...log];
+      },
+      onDataChannelClose: () => {
+        log = ['DataChannel closed', ...log];
+      },
+      onError: (e) => {
+        log = [`error: ${String(e)}`, ...log];
+        isCreatingOffer = false;
+        isProcessingAnswer = false;
+        isAddingCandidate = false;
+      },
+    });
+
+    // expose stores for template auto-subscription
+    connectionState = session.connectionState;
+    channelState = session.channelState;
+  }
+
+  // Initialize session on mount
+  createSession();
+
+  function switchRole(newRole: 'initiator' | 'responder') {
+    if (role === newRole) return;
+    role = newRole;
+    resetUiState();
+    createSession();
+  }
 
   async function startOffer() {
     if (isCreatingOffer) return;
@@ -89,6 +121,33 @@
       log = ['Remote answer accepted', ...log];
     } catch (error) {
       log = [`Failed to accept remote answer: ${String(error)}`, ...log];
+    } finally {
+      isProcessingAnswer = false;
+    }
+  }
+
+  async function acceptOfferCreateAnswer() {
+    if (!remoteSDP.trim()) {
+      log = ['Error: No remote SDP (offer) provided', ...log];
+      return;
+    }
+
+    if (isProcessingAnswer) return;
+
+    try {
+      isProcessingAnswer = true;
+      const parsedSDP = JSON.parse(remoteSDP);
+
+      if (!parsedSDP.type || !parsedSDP.sdp || parsedSDP.type !== 'offer') {
+        throw new Error('Invalid SDP: expected an offer with type and sdp');
+      }
+
+      const answer = await session.acceptOfferCreateAnswer(parsedSDP);
+      // localSDP is already set by onLocalDescription, but ensure it's available
+      localSDP = JSON.stringify(answer, null, 2);
+      log = ['Offer accepted. Created answer. Share with remote.', ...log];
+    } catch (error) {
+      log = [`Failed to accept offer: ${String(error)}`, ...log];
     } finally {
       isProcessingAnswer = false;
     }
@@ -161,78 +220,139 @@
     </div>
   </div>
 
+  <div class="flex items-center gap-3">
+    <label class="text-sm">Role:</label>
+    <div class="flex items-center gap-2">
+      <label class="text-sm flex items-center gap-1">
+        <input type="radio" name="role" value="initiator" checked={role === 'initiator'} on:change={() => switchRole('initiator')} />
+        Initiator
+      </label>
+      <label class="text-sm flex items-center gap-1">
+        <input type="radio" name="role" value="responder" checked={role === 'responder'} on:change={() => switchRole('responder')} />
+        Responder
+      </label>
+    </div>
+  </div>
+
   <div class="flex gap-2 flex-wrap">
-    <button 
-      class="px-2 py-1 border rounded disabled:opacity-50 disabled:cursor-not-allowed" 
-      on:click={startOffer}
-      disabled={isCreatingOffer}
-    >
-      {isCreatingOffer ? 'Creating...' : 'Create Offer'}
-    </button>
-    
-    <button 
-      class="px-2 py-1 border rounded disabled:opacity-50 disabled:cursor-not-allowed" 
-      on:click={sendMessage} 
+    {#if role === 'initiator'}
+      <button
+        class="px-2 py-1 border rounded disabled:opacity-50 disabled:cursor-not-allowed"
+        on:click={startOffer}
+        disabled={isCreatingOffer}
+      >
+        {isCreatingOffer ? 'Creating...' : 'Create Offer'}
+      </button>
+    {:else}
+      <button
+        class="px-2 py-1 border rounded disabled:opacity-50 disabled:cursor-not-allowed"
+        on:click={acceptOfferCreateAnswer}
+        disabled={isProcessingAnswer || !remoteSDP.trim()}
+      >
+        {isProcessingAnswer ? 'Processing...' : 'Accept Offer & Create Answer'}
+      </button>
+    {/if}
+
+    <button
+      class="px-2 py-1 border rounded disabled:opacity-50 disabled:cursor-not-allowed"
+      on:click={sendMessage}
       disabled={$channelState !== 'open'}
     >
       Send Message
     </button>
-    
+
     <button class="px-2 py-1 border rounded" on:click={clearLog}>
       Clear Log
     </button>
   </div>
 
   <div class="grid md:grid-cols-2 gap-3">
-    <div>
-      <div class="flex items-center justify-between mb-1">
-        <label class="text-sm font-medium">Local SDP (send to remote)</label>
-        {#if localSDP}
-          <button 
-            class="text-xs px-2 py-1 border rounded hover:bg-gray-50"
-            on:click={() => copyToClipboard(localSDP)}
+    {#if role === 'initiator'}
+      <div>
+        <div class="flex items-center justify-between mb-1">
+          <label class="text-sm font-medium">Local SDP (Offer) — send to remote</label>
+          {#if localSDP}
+            <button
+              class="text-xs px-2 py-1 border rounded hover:bg-gray-50"
+              on:click={() => copyToClipboard(localSDP)}
+            >
+              Copy
+            </button>
+          {/if}
+        </div>
+        <textarea
+          class="w-full h-32 p-2 border rounded text-xs font-mono"
+          readonly
+          bind:value={localSDP}
+          placeholder="Local offer SDP will appear here after creating offer"
+        ></textarea>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium mb-1">Remote SDP (paste Answer here)</label>
+        <textarea
+          class="w-full h-32 p-2 border rounded text-xs font-mono"
+          bind:value={remoteSDP}
+          placeholder="Paste the remote peer's answer SDP here"
+        ></textarea>
+        <div class="mt-2">
+          <button
+            class="px-2 py-1 border rounded disabled:opacity-50 disabled:cursor-not-allowed"
+            on:click={acceptRemoteAnswer}
+            disabled={isProcessingAnswer || !remoteSDP.trim()}
           >
-            Copy
+            {isProcessingAnswer ? 'Processing...' : 'Accept Answer'}
           </button>
-        {/if}
+        </div>
       </div>
-      <textarea 
-        class="w-full h-32 p-2 border rounded text-xs font-mono" 
-        readonly 
-        bind:value={localSDP}
-        placeholder="Local SDP will appear here after creating offer"
-      ></textarea>
-    </div>
-    
-    <div>
-      <label class="block text-sm font-medium mb-1">Remote SDP (paste answer here)</label>
-      <textarea 
-        class="w-full h-32 p-2 border rounded text-xs font-mono" 
-        bind:value={remoteSDP}
-        placeholder="Paste the remote peer's answer SDP here"
-      ></textarea>
-      <div class="mt-2">
-        <button 
-          class="px-2 py-1 border rounded disabled:opacity-50 disabled:cursor-not-allowed" 
-          on:click={acceptRemoteAnswer}
-          disabled={isProcessingAnswer || !remoteSDP.trim()}
-        >
-          {isProcessingAnswer ? 'Processing...' : 'Accept Answer'}
-        </button>
+    {:else}
+      <div>
+        <label class="block text-sm font-medium mb-1">Remote SDP (paste Offer here)</label>
+        <textarea
+          class="w-full h-32 p-2 border rounded text-xs font-mono"
+          bind:value={remoteSDP}
+          placeholder="Paste the remote peer's offer SDP here"
+        ></textarea>
+        <div class="mt-2 text-xs text-gray-600">
+          After pasting the offer, click "Accept Offer & Create Answer" above.
+        </div>
       </div>
-    </div>
+
+      <div>
+        <div class="flex items-center justify-between mb-1">
+          <label class="text-sm font-medium">Local SDP (Answer) — send to remote</label>
+          {#if localSDP}
+            <button
+              class="text-xs px-2 py-1 border rounded hover:bg-gray-50"
+              on:click={() => copyToClipboard(localSDP)}
+            >
+              Copy
+            </button>
+          {/if}
+        </div>
+        <textarea
+          class="w-full h-32 p-2 border rounded text-xs font-mono"
+          readonly
+          bind:value={localSDP}
+          placeholder="Your generated answer SDP will appear here"
+        ></textarea>
+      </div>
+    {/if}
   </div>
 
   <div>
     <label class="block text-sm font-medium mb-1">Remote ICE Candidate (JSON)</label>
-    <textarea 
-      class="w-full h-20 p-2 border rounded text-xs font-mono" 
+    <textarea
+      class="w-full h-20 p-2 border rounded text-xs font-mono"
       bind:value={newRemoteCandidate}
       placeholder={`{"candidate": "...", "sdpMLineIndex": 0, "sdpMid": "..."}`}
     ></textarea>
+    <div class="mt-2 flex items-center gap-2 text-xs text-gray-600">
+      Paste candidates received from the other peer and click Add Candidate.
+    </div>
     <div class="mt-2">
-      <button 
-        class="px-2 py-1 border rounded disabled:opacity-50 disabled:cursor-not-allowed" 
+      <button
+        class="px-2 py-1 border rounded disabled:opacity-50 disabled:cursor-not-allowed"
         on:click={addCandidate}
         disabled={isAddingCandidate || !newRemoteCandidate.trim()}
       >
