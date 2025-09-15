@@ -501,6 +501,8 @@
     "last5Minutes": "지난 5분",
     "logs": "채굴 로그",
     "noLogs": "사용 가능한 로그가 아직 없습니다...",
+    "wrapLogs": "줄바꿈",
+    "filterByLevel": "레벨별 필터",
     "autoRefresh": "자동 새로고침",
     "on": "켜짐",
     "off": "꺼짐",

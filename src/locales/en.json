@@ -494,6 +494,8 @@
     "logs": "Mining Logs",
     "noLogs": "No logs available yet...",
     "autoRefresh": "Auto-refresh",
+    "wrapLogs": "Wrap",
+    "filterByLevel": "Filter by level",
     "on": "ON",
     "off": "OFF",
     "refresh": "Refresh",

@@ -67,6 +67,62 @@
   let showLogs = false
   let logs: string[] = []
   let logsInterval: number | null = null
+  // simplified log view — no font/wrap controls
+  // Auto-refresh toggle for logs modal
+  let autoRefresh: boolean = true
+  // Wrap toggle for logs (true = wrap lines, false = preserve long lines with horizontal scroll)
+  let wrapLogs: boolean = true
+
+  // Log filtering
+  let logFilters: { [key: string]: boolean } = {
+    error: true,
+    warn: true,
+    info: true,
+    other: true
+  }
+
+  // Computed filtered logs
+  $: filteredLogs = logs.filter(log => {
+    const level = detectLogLevel(log)
+    return logFilters[level]
+  })
+
+  // Determine log level from a log line and return a semantic level
+  function detectLogLevel(line: string): 'error' | 'warn' | 'info' | 'other' {
+    if (!line) return 'other'
+    const l = line.toLowerCase()
+    if (l.includes('error') || l.includes('err') || l.includes('fatal')) return 'error'
+    if (l.includes('warn') || l.includes('warning')) return 'warn'
+    if (l.includes('info') || l.includes('[i]') || l.includes('notice')) return 'info'
+    return 'other'
+  }
+
+  // Map level to Tailwind classes (text color + subtle opacity for less-important levels)
+  function logLevelClass(line: string): string {
+    const level = detectLogLevel(line)
+    switch (level) {
+      case 'error':
+        return 'text-red-400'
+      case 'warn':
+        return 'text-amber-400'
+      case 'info':
+        return 'text-blue-300'
+      default:
+        return 'text-muted-foreground'
+    }
+  }
+
+  // Parse a log line and extract a severity prefix (if present) and the rest of the message.
+  // Example: "INFO [09-14|16:32:29.577] Message..." -> { prefix: 'INFO', rest: '[09-14|16:32:29.577] Message...' }
+  function splitLogPrefix(line: string): { prefix: string | null; rest: string } {
+    if (!line) return { prefix: null, rest: '' }
+    // Match leading ALL-CAPS token (usually INFO, WARN, ERROR, DEBUG) optionally followed by a timestamp bracket
+    const m = line.match(/^([A-Z]{3,7})\b\s*(.*)$/)
+    if (m) {
+      return { prefix: m[1], rest: m[2] }
+    }
+    return { prefix: null, rest: line }
+  }
 
 
 
@@ -471,8 +527,10 @@
     showLogs = !showLogs
     if (showLogs) {
       fetchLogs()
-      // Start auto-refresh of logs
-      logsInterval = setInterval(fetchLogs, 2000) as unknown as number
+      // Start auto-refresh of logs if enabled
+      if (autoRefresh) {
+        logsInterval = setInterval(fetchLogs, 2000) as unknown as number
+      }
     } else {
       // Stop auto-refresh
       if (logsInterval) {
@@ -910,6 +968,7 @@
       <p class="text-xs text-muted-foreground text-center mt-2">{$t('mining.last5Minutes')}</p>
     </Card>
   {/if}
+  </div>
 
   <!-- Logs Modal -->
   {#if showLogs}
@@ -921,20 +980,67 @@
             <X class="h-4 w-4" />
           </Button>
         </div>
-        <div class="flex-1 overflow-auto p-4 bg-black/90 font-mono text-xs">
-          {#if logs.length === 0}
-            <p class="text-gray-400">{$t('mining.noLogs')}</p>
-          {:else}
-            {#each logs as log}
-              <div class="text-green-400 whitespace-pre-wrap break-all">{log}</div>
-            {/each}
+        <div class="flex-1 p-4">
+          {#if filteredLogs.length === 0}
+            <p class="text-xs text-muted-foreground">{$t('mining.noLogs')}</p>
+            {:else}
+            <div class="bg-secondary/50 rounded-lg p-2 max-h-[60vh] overflow-y-auto text-left font-mono text-xs">
+              <!-- When wrapping is disabled, allow horizontal scroll and preserve whitespace -->
+              <div class={wrapLogs ? 'w-full' : 'w-full overflow-x-auto'}>
+                {#each filteredLogs.slice(-500) as log}
+                  {@const split = splitLogPrefix(log)}
+                  <p class="font-mono {wrapLogs ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'}">
+                    {#if split.prefix}
+                      <span class={logLevelClass(split.prefix)}>{split.prefix}</span>
+                      <span class="text-muted-foreground"> {split.rest}</span>
+                    {:else}
+                      <span class="text-muted-foreground">{split.rest}</span>
+                    {/if}
+                  </p>
+                {/each}
+              </div>
+            </div>
           {/if}
         </div>
+
         <div class="p-4 border-t flex items-center justify-between">
-          <p class="text-sm text-muted-foreground">
-            {$t('mining.autoRefresh')}: {logsInterval ? $t('mining.on') : $t('mining.off')}
-          </p>
-          <div class="flex gap-2">
+          <div class="flex items-center gap-3">
+            <input id="auto-refresh" type="checkbox" bind:checked={autoRefresh} on:change={() => {
+              // If modal is open, start/stop the interval immediately
+              if (showLogs) {
+                if (autoRefresh && !logsInterval) {
+                  logsInterval = setInterval(fetchLogs, 2000) as unknown as number
+                } else if (!autoRefresh && logsInterval) {
+                  clearInterval(logsInterval)
+                  logsInterval = null
+                }
+              }
+            }} />
+            <label for="auto-refresh" class="text-sm text-muted-foreground">{$t('mining.autoRefresh')}</label>
+            
+            <!-- Wrap toggle -->
+            <div class="flex items-center gap-2 ml-3">
+              <input id="wrap-logs" type="checkbox" bind:checked={wrapLogs} />
+              <label for="wrap-logs" class="text-sm text-muted-foreground">{$t('mining.wrapLogs')}</label>
+            </div>
+          </div>
+
+          <!-- Log Level Filters -->
+          <div class="flex items-center gap-2">
+            <span class="text-sm text-muted-foreground">{$t('mining.filterByLevel')}:</span>
+            <div class="flex gap-1">
+              {#each Object.entries(logFilters) as [level, enabled]}
+                <button
+                  class="px-2 py-1 text-xs rounded {enabled ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground'}"
+                  on:click={() => logFilters[level] = !enabled}
+                >
+                  {level.toUpperCase()}
+                </button>
+              {/each}
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2">
             <Button size="sm" variant="outline" on:click={fetchLogs}>
               <RefreshCw class="h-3 w-3 mr-1" />
               {$t('mining.refresh')}
@@ -947,4 +1053,3 @@
       </Card>
     </div>
   {/if}
-</div>
