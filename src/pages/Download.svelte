@@ -16,6 +16,86 @@
   let filterStatus = 'all' // 'all', 'active', 'paused', 'queued', 'completed', 'failed'
   let activeSimulations = new Set<string>() // Track files with active progress simulations
 
+  // Add notification related variables
+  let currentNotification: HTMLElement | null = null
+
+  // Show notification function
+  function showNotification(message: string, type: 'success' | 'error' | 'info' | 'warning' = 'success', duration = 4000) {
+    // Remove existing notification
+    if (currentNotification) {
+      currentNotification.remove()
+      currentNotification = null
+    }
+    
+    const colors = {
+      success: '#22c55e',
+      error: '#ef4444', 
+      info: '#3b82f6',
+      warning: '#f59e0b'
+    }
+    
+    const notification = document.createElement('div')
+    notification.style.cssText = `
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: ${colors[type]};
+      color: white;
+      padding: 12px 16px;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      z-index: 10000;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 14px;
+      font-weight: 500;
+      max-width: 320px;
+      animation: slideInRight 0.3s ease-out;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    `
+    
+    // Add CSS animation styles
+    if (!document.querySelector('#download-notification-styles')) {
+      const style = document.createElement('style')
+      style.id = 'download-notification-styles'
+      style.textContent = `
+        @keyframes slideInRight {
+          from { transform: translateX(100%); opacity: 0; }
+          to { transform: translateX(0); opacity: 1; }
+        }
+      `
+      document.head.appendChild(style)
+    }
+    
+    notification.innerHTML = `
+      <span>${message}</span>
+      <button onclick="this.parentElement.remove()" style="
+        background: none;
+        border: none;
+        color: white;
+        font-size: 18px;
+        cursor: pointer;
+        padding: 0;
+        margin-left: 8px;
+        opacity: 0.8;
+      ">×</button>
+    `
+    
+    document.body.appendChild(notification)
+    currentNotification = notification
+    
+    // Auto remove
+    setTimeout(() => {
+      if (notification.parentNode) {
+        notification.remove()
+        if (currentNotification === notification) {
+          currentNotification = null
+        }
+      }
+    }, duration)
+  }
+
   // Function to validate and correct maxConcurrentDownloads
   function validateMaxConcurrent() {
     // If empty or invalid, revert to last valid value
@@ -163,29 +243,72 @@
     }
   }
   
-  function startDownload() {
-    if (!searchHash) return
-    
-    const newFile = {
-      id: `download-${Date.now()}`,
-      name: 'File_' + searchHash.substring(0, 8) + '.dat',
-      hash: searchHash,
-      size: Math.floor(Math.random() * 100000000),
-      price: Math.random() * 5,
-      status: 'queued' as const,
-      priority: 'normal' as const
-    }
-    
-    // prevents duplicates in files or queue 
-    const exists = [...$files, ...$downloadQueue].some(f => f.hash === searchHash)
-    if (exists) {
-      // Don't clear searchHash if file exists - keep it for search highlighting
+  // Enhanced startDownload function with search and download status notifications
+  async function startDownload() {
+    if (!searchHash) {
+      showNotification("Please enter a file hash", 'warning')
       return
     }
     
-    downloadQueue.update(q => [...q, newFile])
-    if (autoStartQueue) {
-      processQueue()
+    // Check for duplicates
+    const exists = [...$files, ...$downloadQueue].some(f => f.hash === searchHash)
+    if (exists) {
+      showNotification("File already exists in download list", 'warning')
+      return
+    }
+    
+    try {
+      // Step 1: Show search start notification
+      showNotification("🔍 Searching for file...", 'info', 2000)
+      
+      // Step 2: Simulate search process (replace with actual search API if available)
+      await new Promise(resolve => setTimeout(resolve, 1500))
+      
+      // Step 3: Simulate search results (assumes file can always be found)
+      // In actual implementation, you would call real search API
+      const fileFound = Math.random() > 0.2 // 80% chance to find file
+      
+      if (!fileFound) {
+        showNotification("❌ File not found, please check the hash", 'error', 5000)
+        return
+      }
+      
+      // Step 4: File found, show success notification
+      showNotification("✅ File found! Adding to download queue...", 'success')
+      
+      // Create new download item
+      const newFile = {
+        id: `download-${Date.now()}`,
+        name: 'File_' + searchHash.substring(0, 8) + '.dat',
+        hash: searchHash,
+        size: Math.floor(Math.random() * 100000000),
+        price: Math.random() * 5,
+        status: 'queued' as const,
+        priority: 'normal' as const
+      }
+      
+      downloadQueue.update(q => [...q, newFile])
+      
+      // Step 5: Show download start notification
+      setTimeout(() => {
+        showNotification("📥 File added to download queue", 'success')
+      }, 1000)
+      
+      if (autoStartQueue) {
+        processQueue()
+        // If auto-start is enabled, show additional notification
+        setTimeout(() => {
+          showNotification("⚡ Download started automatically", 'info')
+        }, 2000)
+      }
+      
+      // Clear input
+      searchHash = ''
+      
+    } catch (error) {
+      // Error handling
+      console.error('Search download failed:', error)
+      showNotification("❌ Search failed: " + (error.message || 'Unknown error'), 'error', 6000)
     }
   }
 
@@ -272,12 +395,16 @@ function clearSearch() {
           if (currentProgress > 20 && currentProgress < 80 && Math.random() < 0.05) {
             clearInterval(interval)
             activeSimulations.delete(fileId)
+            // Download failure notification
+            showNotification(`❌ Download failed: ${file.name}`, 'error')
             return { ...file, status: 'failed' }
           }
 
           if (newProgress >= 100) {
             clearInterval(interval)
             activeSimulations.delete(fileId)
+            // Download completion notification
+            showNotification(`🎉 Download completed: ${file.name}`, 'success')
             return { ...file, progress: 100, status: 'completed' }
           }
           return { ...file, progress: newProgress }
