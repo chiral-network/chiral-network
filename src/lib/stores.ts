@@ -70,6 +70,8 @@ export interface PeerInfo {
   location?: string;
 }
 
+export const suspiciousActivity = writable<{ type: string; description: string; date: string; severity: 'low' | 'medium' | 'high' }[]>([]);
+
 export interface ChatMessage {
   id: string;
   peerId: string;
