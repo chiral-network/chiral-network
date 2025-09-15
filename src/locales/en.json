@@ -535,5 +535,69 @@
     "stopSharing": "Stop sharing",
     "noFilesShared": "No files shared yet",
     "addFilesHint2": "Add files to start sharing on the network"
+  },
+  "download": {
+    "title": "Download Files",
+    "subtitle": "Download files from the Chiral Network using their hash",
+    "addNew": "Add New Download",
+    "addNewSubtitle": "Enter a file hash to search for and download from the network",
+    "placeholder": "Enter file hash (e.g., QmZ4tDuvesekqMD...)",
+    "clearInput": "Clear input",
+    "searchAndDownload": "Search & Download",
+    "downloads": "Downloads",
+    "searchPlaceholder": "Search downloads...",
+    "clearSearch": "Clear search",
+    "filters": {
+      "all": "All",
+      "active": "Active",
+      "paused": "Paused",
+      "queued": "Queued",
+      "completed": "Completed",
+      "canceled": "Canceled",
+      "failed": "Failed"
+    },
+    "settings": {
+      "maxConcurrent": "Max Concurrent",
+      "autoStart": "Auto-Start",
+      "toggleAutoStart": "Toggle auto-start queue {status}"
+    },
+    "status": {
+      "noDownloads": "No downloads yet. Enter a file name or hash above to start downloading.",
+      "noActive": "No active downloads.",
+      "noPaused": "No paused downloads.",
+      "noQueued": "No files in queue.",
+      "noCompleted": "No completed downloads.",
+      "noFailed": "No failed downloads."
+    },
+    "file": {
+      "hash": "Hash",
+      "queue": "Queue",
+      "progress": "Progress"
+    },
+    "priority": {
+      "low": "Low",
+      "normal": "Normal",
+      "high": "High"
+    },
+    "actions": {
+      "start": "Start",
+      "pause": "Pause",
+      "resume": "Resume",
+      "remove": "Remove",
+      "cancel": "Cancel",
+      "openFile": "Open File"
+    },
+    "notifications": {
+      "enterHash": "Please enter a file hash",
+      "alreadyExists": "File already exists in download list",
+      "searching": "🔍 Searching for file...",
+      "notFound": "❌ File not found, please check the hash",
+      "found": "✅ File found! Adding to download queue...",
+      "addedToQueue": "📥 File added to download queue",
+      "autostart": "⚡ Download started automatically",
+      "searchFailed": "❌ Search failed: {error}",
+      "downloadFailed": "❌ Download failed: {name}",
+      "downloadCompleted": "🎉 Download completed: {name}"
+    }
   }
 }

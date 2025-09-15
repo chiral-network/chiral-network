@@ -543,5 +543,69 @@
     "stopSharing": "공유 중지",
     "noFilesShared": "아직 공유된 파일이 없습니다",
     "addFilesHint2": "네트워크에서 공유를 시작하려면 파일을 추가하세요"
+  },
+  "download": {
+    "title": "파일 다운로드",
+    "subtitle": "해시를 사용하여 Chiral 네트워크에서 파일 다운로드",
+    "addNew": "새 다운로드 추가",
+    "addNewSubtitle": "네트워크에서 파일을 검색하고 다운로드하려면 파일 해시를 입력하세요",
+    "placeholder": "파일 해시 입력 (예: QmZ4tDuvesekqMD...)",
+    "clearInput": "입력 지우기",
+    "searchAndDownload": "검색 및 다운로드",
+    "downloads": "다운로드",
+    "searchPlaceholder": "다운로드 검색...",
+    "clearSearch": "검색 지우기",
+    "filters": {
+      "all": "전체",
+      "active": "활성",
+      "paused": "일시 중지됨",
+      "queued": "대기 중",
+      "completed": "완료됨",
+      "canceled": "취소됨",
+      "failed": "실패함"
+    },
+    "settings": {
+      "maxConcurrent": "최대 동시",
+      "autoStart": "자동 시작",
+      "toggleAutoStart": "자동 시작 큐 {status} 전환"
+    },
+    "status": {
+      "noDownloads": "아직 다운로드 없음. 위에서 파일 이름이나 해시를 입력하여 다운로드를 시작하세요.",
+      "noActive": "활성 다운로드 없음.",
+      "noPaused": "일시 중지된 다운로드 없음.",
+      "noQueued": "큐에 파일 없음.",
+      "noCompleted": "완료된 다운로드 없음.",
+      "noFailed": "실패한 다운로드 없음."
+    },
+    "file": {
+      "hash": "해시",
+      "queue": "큐",
+      "progress": "진행률"
+    },
+    "priority": {
+      "low": "낮음",
+      "normal": "보통",
+      "high": "높음"
+    },
+    "actions": {
+      "start": "시작",
+      "pause": "일시 중지",
+      "resume": "재개",
+      "remove": "제거",
+      "cancel": "취소",
+      "openFile": "파일 열기"
+    },
+    "notifications": {
+      "enterHash": "파일 해시를 입력하세요",
+      "alreadyExists": "파일이 이미 다운로드 목록에 있습니다",
+      "searching": "🔍 파일 검색 중...",
+      "notFound": "❌ 파일을 찾을 수 없습니다. 해시를 확인하세요",
+      "found": "✅ 파일을 찾았습니다! 다운로드 큐에 추가 중...",
+      "addedToQueue": "📥 파일이 다운로드 큐에 추가되었습니다",
+      "autostart": "⚡ 다운로드가 자동으로 시작되었습니다",
+      "searchFailed": "❌ 검색 실패: {error}",
+      "downloadFailed": "❌ 다운로드 실패: {name}",
+      "downloadCompleted": "🎉 다운로드 완료: {name}"
+    }
   }
 }
