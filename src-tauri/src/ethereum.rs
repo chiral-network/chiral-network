@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufRead};
 
+//Structs 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EthAccount {
     pub address: String,
@@ -19,6 +20,16 @@ pub struct AccountInfo {
     pub address: String,
     pub balance: String,
 }
+//Mined Block Struct to return to frontend  
+#[derive(Debug, Serialize)]
+pub struct MinedBlock {
+    pub hash: String, 
+    pub nonce: Option<String>, 
+    pub difficulty: Option<String>, 
+    pub timestamp: u64, 
+    pub number: u64, 
+    pub reward: Option<f64>, //Chiral Earned
+} 
 
 pub struct GethProcess {
     child: Option<Child>,
@@ -964,6 +975,130 @@ pub async fn get_mined_blocks_count(miner_address: &str) -> Result<u64, String> 
     }
     
     Ok(blocks_mined)
+}
+
+//Fetching Recent Blocks Mined by address, scanning backwards from latest 
+pub async fn get_recent_mined_blocks(
+    miner_address: &str,
+    lookback: u64,
+    limit: usize,
+) -> Result<Vec<MinedBlock>, String> {
+    let client = reqwest::Client::new();
+
+    // Fetch latest block number
+    let latest_v = client
+        .post("http://127.0.0.1:8545")
+        .json(&serde_json::json!({ 
+            "jsonrpc": "2.0",
+            "method": "eth_blockNumber",
+            "params": [],
+            "id": 1
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("RPC send: {e}"))?
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("RPC parse: {e}"))?;
+
+    let latest_hex: &str = latest_v["result"].as_str().ok_or("Invalid eth_blockNumber")?;
+    let latest = u64::from_str_radix(latest_hex.trim_start_matches("0x"), 16)
+        .map_err(|e| format!("hex parse: {e}"))?;
+
+    let start = latest.saturating_sub(lookback);
+    let target = miner_address.to_lowercase();
+
+    let mut out: Vec<MinedBlock> = Vec::new();
+
+    for n in (start..=latest).rev() {
+        if out.len() >= limit { break; }
+
+        let block_v = client
+            .post("http://127.0.0.1:8545")
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "eth_getBlockByNumber",
+                "params": [format!("0x{:x}", n), false],
+                "id": 1
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("RPC send: {e}"))?
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|e| format!("RPC parse: {e}"))?;
+
+        if block_v.get("result").is_none() { continue; }
+        let b = &block_v["result"];
+
+        let miner = b.get("author").and_then(|x| x.as_str())
+            .or_else(|| b.get("miner").and_then(|x| x.as_str()))
+            .unwrap_or("")
+            .to_lowercase();
+
+        if miner != target { continue; }
+
+        let hash = b.get("hash").and_then(|x| x.as_str()).unwrap_or_default().to_string();
+        let nonce = b.get("nonce").and_then(|x| x.as_str()).map(|s| s.to_string());
+        let difficulty = b.get("difficulty").and_then(|x| x.as_str()).map(|s| s.to_string());
+        let timestamp = b.get("timestamp").and_then(|x| x.as_str())
+            .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+            .unwrap_or(0);
+        let number = b.get("number").and_then(|x| x.as_str())
+            .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+            .unwrap_or(n);
+
+        // Compute miner reward by changes in balance from block to block (balance@n - balance@(n-1))
+        // This approximates the value of the block as this isn't publicly available.
+        let reward = {
+            // Balance at block n
+            let bal_n_v = client
+                .post("http://127.0.0.1:8545")
+                .json(&serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": "eth_getBalance",
+                    "params": [target, format!("0x{:x}", number)],
+                    "id": 1
+                }))
+                .send().await
+                .map_err(|e| format!("RPC send: {e}"))?
+                .json::<serde_json::Value>().await
+                .map_err(|e| format!("RPC parse: {e}"))?;
+
+            let bal_prev_v = client
+                .post("http://127.0.0.1:8545")
+                .json(&serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": "eth_getBalance",
+                    "params": [target, format!("0x{:x}", number.saturating_sub(1))],
+                    "id": 1
+                }))
+                .send().await
+                .map_err(|e| format!("RPC send: {e}"))?
+                .json::<serde_json::Value>().await
+                .map_err(|e| format!("RPC parse: {e}"))?;
+
+            let parse_u128 = |hex_str: &str| -> Option<u128> {
+                let s = hex_str.trim_start_matches("0x");
+                u128::from_str_radix(s, 16).ok()
+            };
+
+            let bal_n = bal_n_v.get("result").and_then(|v| v.as_str()).and_then(parse_u128);
+            let bal_prev = bal_prev_v.get("result").and_then(|v| v.as_str()).and_then(parse_u128);
+            if let (Some(bn), Some(bp)) = (bal_n, bal_prev) {
+                let delta_wei = bn.saturating_sub(bp);
+                // Convert to ether-like units (divide by 1e18)
+                let reward = (delta_wei as f64) / 1_000_000_000_000_000_000f64;
+                Some(reward)
+            } else {
+                None
+            }
+        };
+
+        out.push(MinedBlock { hash, nonce, difficulty, timestamp, number, reward });
+    }
+
+    Ok(out)
 }
 
 pub async fn get_network_hashrate() -> Result<String, String> {
