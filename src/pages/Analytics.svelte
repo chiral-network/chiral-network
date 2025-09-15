@@ -460,7 +460,7 @@
     </Card>
 
     <Card class="p-6">
-      <h3 class="text-md font-medium mb-4">{$t('analytics.latencyRecent')}</h3>
+      <h3 class="text-lg font-semibold mb-4">{$t('analytics.latencyRecent')}</h3> 
       <div class="flex h-48 gap-2">
         <!-- Y-axis labels -->
         <div class="flex flex-col justify-between text-xs text-muted-foreground pr-2">
