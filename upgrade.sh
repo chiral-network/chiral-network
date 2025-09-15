@@ -53,9 +53,9 @@ if [ -f "src-tauri/tauri.conf.json" ]; then
     cp "src-tauri/tauri.conf.json" "$BACKUP_DIR/"
 fi
 
-if [ -d "bin/geth-data" ]; then
+if [ -d "src-tauri/bin/geth-data" ]; then
     echo "  • Backing up geth data (this may take a moment)..."
-    cp -r "bin/geth-data" "$BACKUP_DIR/" 2>/dev/null || true
+    cp -r "src-tauri/bin/geth-data" "$BACKUP_DIR/" 2>/dev/null || true
 fi
 
 echo -e "${GREEN}Step 3: Cleaning build artifacts...${NC}"
