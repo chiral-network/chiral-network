@@ -33,10 +33,12 @@
     }
     
     let currentPage = getPathName(window.location.pathname);
+    let loading = true;
     
-    onMount(()=>{
+    onMount(async ()=>{
       // setup i18n
-      setupI18n();
+      await setupI18n();
+      loading = false;
 
       // set the currentPage var
       syncFromUrl();
@@ -248,6 +250,7 @@
       <div class="p-6">
         <!-- <Router {routes} /> -->
          
+        {#if !loading}
         <Router
           {routes}
           statuses={{
@@ -257,6 +260,7 @@
             })
           }}
         />
+        {/if}
       </div>
     </div>
   </div>
