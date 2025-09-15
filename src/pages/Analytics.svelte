@@ -11,7 +11,7 @@
   let downloadedFiles: any[] = []
   let totalUploaded = 0
   let totalDownloaded = 0
-  let earningsHistory: any[] = []
+  // let earningsHistory: any[] = []
   let storageUsed = 0
   let bandwidthUsed = { upload: 0, download: 0 }
   
@@ -44,11 +44,18 @@
     bestLatency = latencies[0]
   }
 
+  type Earning = {
+    date: string;
+    earnings: number;
+    cumulative: number;
+  };
 
   // Dynamic earnings history chart values
-  let hoveredDay: typeof earningsHistory[0] | null = null;
+  let hoveredDay: Earning | null = null;
   let hoveredIndex: number | null = null;
   let periodPreset: string = '30d';
+  let startDateInput = '';
+  let endDateInput = '';
   // Chart type toggle - NEW
   let chartType: 'bar' | 'line' = 'bar';
   // Use a single array for the date range
@@ -59,9 +66,49 @@
     { label: $t('analytics.periods.thisMonth'), value: 'month' },
     { label: $t('analytics.periods.lastMonth'), value: 'lastmonth' },
     { label: $t('analytics.periods.ytd'), value: 'ytd' },
-    // { label: 'Custom…', value: 'custom' }
+    { label: 'Custom', value: 'custom' }
   ];
   const MAX_BARS = 60;
+  $: {
+    if (periodPreset === 'custom' && startDateInput && endDateInput) {
+      // Create dates based on local timezone midnight to prevent off-by-one errors
+      const start = new Date(startDateInput + 'T00:00:00');
+      const end = new Date(endDateInput + 'T00:00:00');
+      if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+        customDateRange = [start, end];
+      }
+    }
+  }
+
+  // Function for dynamic data generation
+  function generateMockHistory(start: Date, end: Date) {
+    const history = [];
+    let cumulative = 0; // We can simulate a running total if needed
+    let d = new Date(start);
+
+    // Use the start date to create a deterministic "random" seed
+    const seed = start.getTime() / 100000;
+    
+    while (d <= end) {
+      // Use a sine wave based on the day of the year for seasonal variation
+      const dayOfYear = (d.getTime() - new Date(d.getFullYear(), 0, 0).getTime()) / 86400000;
+      const seasonalFactor = (Math.sin((dayOfYear / 365.25) * 2 * Math.PI) + 1.2); //
+      
+      // Create a pseudo-random value based on the date for daily jitter
+      const dailyJitter = Math.sin(d.getTime() / 100000 + seed) * 10 - 5;
+      
+      const dailyEarning = Math.max(0, 5 * seasonalFactor + dailyJitter);
+      cumulative += dailyEarning;
+
+      history.push({
+        date: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+        earnings: dailyEarning,
+        cumulative: cumulative
+      });
+      d.setDate(d.getDate() + 1);
+    }
+    return history;
+  }
 
   // Calculate statistics
   $: {
@@ -76,87 +123,43 @@
 
   $: filteredHistory = (() => {
     const now = new Date();
-
-    // Helper to format date string
-    function formatDate(date: Date) {
-      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-    }
-
-    // Helper to pad missing days
-    function padHistory(start: Date, end: Date) {
-      const days = [];
-      let d = new Date(start);
-      while (d <= end) {
-        const dateStr = formatDate(d);
-        const found = earningsHistory.find(e => e.date === dateStr);
-        days.push(found ? found : { date: dateStr, earnings: 0, cumulative: 0 });
-        d.setDate(d.getDate() + 1);
-      }
-      return days;
-    }
+    let start: Date | null = null;
+    let end: Date | null = new Date(now);
 
     if (periodPreset === '7d') {
-      const start = new Date(now);
+      start = new Date(now);
       start.setDate(now.getDate() - 6);
-      return padHistory(start, now);
-    }
-    if (periodPreset === '30d') {
-      const start = new Date(now);
+    } else if (periodPreset === '30d') {
+      start = new Date(now);
       start.setDate(now.getDate() - 29);
-      return padHistory(start, now);
+    } else if (periodPreset === 'month') {
+      start = new Date(now.getFullYear(), now.getMonth(), 1);
+      end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    } else if (periodPreset === 'lastmonth') {
+      start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      end = new Date(now.getFullYear(), now.getMonth(), 0);
+    } else if (periodPreset === 'ytd') {
+      start = new Date(now.getFullYear(), 0, 1);
+    } else if (periodPreset === 'custom' && customDateRange[0] && customDateRange[1]) {
+      start = customDateRange[0];
+      end = customDateRange[1];
     }
-    if (periodPreset === 'month') {
-      const start = new Date(now.getFullYear(), now.getMonth(), 1);
-      const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-      return padHistory(start, end);
+
+    if (start && end && start <= end) {
+      // Generate data dynamically for the calculated range
+      return generateMockHistory(start, end);
     }
-    if (periodPreset === 'lastmonth') {
-      const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const end = new Date(now.getFullYear(), now.getMonth(), 0);
-      return padHistory(start, end);
-    }
-    if (periodPreset === 'ytd') {
-      const start = new Date(now.getFullYear(), 0, 1);
-      return padHistory(start, now);
-    }
-    if (
-            periodPreset === 'custom' &&
-            customDateRange[0] &&
-            customDateRange[1]
-    ) {
-      const start = new Date(customDateRange[0]);
-      const end = new Date(customDateRange[1]);
-      if (start > end) return [];
-      return padHistory(start, end);
-    }
-    return earningsHistory;
+    
+    // Return empty array if the range is invalid or not set
+    return [];
   })();
 
   function handlePresetChange(value: string) {
     periodPreset = value;
   }
 
-  // Generate mock earnings history once on mount
-  onMount(() => {
-    const days = 365;
-    const history = []
-    let cumulative = 0
-
-    for (let i = days; i >= 0; i--) {
-      const date = new Date()
-      date.setDate(date.getDate() - i)
-      const dailyEarning = Math.random() * 20
-      cumulative += dailyEarning
-
-      history.push({
-        date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-        earnings: dailyEarning,
-        cumulative: cumulative
-      })
-    }
-
-    earningsHistory = history
-    
+  // Generate mock latency history once on mount
+  onMount(() => {    
     // Generate mock latency history (last 30 points)
     const lhist: { date: string; latency: number }[] = []
     for (let i = 29; i >= 0; i--) {
@@ -634,6 +637,25 @@
         </button>
       {/each}
     </div>
+
+    {#if periodPreset === 'custom'}
+      <div class="flex items-center gap-2 mb-4 p-2 bg-muted rounded-md">
+        <label for="start-date" class="text-sm text-muted-foreground">From:</label>
+        <input
+          type="date"
+          id="start-date"
+          bind:value={startDateInput}
+          class="bg-background border rounded px-2 py-1 text-sm"
+        />
+        <label for="end-date" class="text-sm text-muted-foreground">To:</label>
+        <input
+          type="date"
+          id="end-date"
+          bind:value={endDateInput}
+          class="bg-background border rounded px-2 py-1 text-sm"
+        />
+      </div>
+    {/if}
 
     <!-- Chart with Y-axis -->
     <div class="flex h-48 gap-2">
