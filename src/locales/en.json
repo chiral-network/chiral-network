@@ -106,7 +106,16 @@
     },
     "errors": {
         "downloadOnlyTauri": "Chiral Node download is only available in the desktop app. Please download and run the Tauri desktop version."
-    }
+    },
+    "maxConnections": "Max Connections",
+    "port": "Port",
+    "uploadLimit": "Upload Limit (MB/s)",
+    "downloadLimit": "Download Limit (MB/s)",
+    "userLocation": "User Location",
+    "locationHint": "Helps connect to closer peers for better performance.",
+    "enableUpnp": "Enable UPnP",
+    "enableNat": "Enable NAT Port Mapping",
+    "enableDht": "Enable DHT"
   },
 
   "regions.usEast": "US East",
@@ -424,7 +433,13 @@
     "min": "Min:",
     "max": "Max:",
     "suspiciousActivity": "Suspicious Activity Alerts",
-    "noSuspiciousActivity": "No suspicious activity detected"
+    "noSuspiciousActivity": "No suspicious activity detected",
+    "unusualUpload": "Unusual Upload",
+    "unusualUploadDesc": "File > 1GB uploaded unusually fast",
+    "multipleLogins": "Multiple Logins",
+    "multipleLoginsDesc": "User logged in from different countries in 5 mins",
+    "failedDownloads": "Failed Downloads",
+    "failedDownloadsDesc": "Several failed download attempts detected"
   },
   "proxy": {
     "title": "Proxy Network",

@@ -106,7 +106,16 @@
     },
     "errors": {
         "downloadOnlyTauri": "카이럴 노드 다운로드는 데스크톱 앱에서만 사용할 수 있습니다. Tauri 데스크톱 버전을 다운로드하여 실행하세요."
-    }
+    },
+    "maxConnections": "최대 연결 수",
+    "port": "포트",
+    "uploadLimit": "업로드 제한 (MB/s)",
+    "downloadLimit": "다운로드 제한 (MB/s)",
+    "userLocation": "사용자 위치",
+    "locationHint": "더 나은 성능을 위해 가까운 피어에 연결하는 데 도움이 됩니다.",
+    "enableUpnp": "UPnP 활성화",
+    "enableNat": "NAT 포트 매핑 활성화",
+    "enableDht": "DHT 활성화"
   },
 
   "regions.usEast": "미국 동부",
@@ -432,7 +441,13 @@
     "min": "최소:",
     "max": "최대:",
     "suspiciousActivity": "의심스러운 활동 알림",
-    "noSuspiciousActivity": "의심스러운 활동이 감지되지 않았습니다"
+    "noSuspiciousActivity": "의심스러운 활동이 감지되지 않았습니다",
+    "unusualUpload": "비정상적인 업로드",
+    "unusualUploadDesc": "1GB 이상의 파일이 비정상적으로 빠르게 업로드되었습니다",
+    "multipleLogins": "다중 로그인",
+    "multipleLoginsDesc": "5분 이내에 다른 국가에서 로그인했습니다",
+    "failedDownloads": "실패한 다운로드",
+    "failedDownloadsDesc": "여러 번의 실패한 다운로드 시도가 감지되었습니다"
   },
   "proxy": {
     "title": "프록시 네트워크",

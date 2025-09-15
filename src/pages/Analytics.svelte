@@ -781,7 +781,7 @@
   </Card>
 
   <Card class="p-6">
-  <h2 class="text-lg font-semibold mb-4">Suspicious Activity Alerts</h2>
+  <h2 class="text-lg font-semibold mb-4">{$t('analytics.suspiciousActivity')}</h2>
   {#if $suspiciousActivity.length > 0}
     <div class="space-y-2">
       {#each $suspiciousActivity as alert}
@@ -804,7 +804,7 @@
       {/each}
     </div>
   {:else}
-    <p class="text-sm text-muted-foreground text-center py-4">No suspicious activity detected</p>
+    <p class="text-sm text-muted-foreground text-center py-4">{$t('analytics.noSuspiciousActivity')}</p>
   {/if}
 </Card>
 
