@@ -400,7 +400,7 @@
     "latencyHint": "0–50 ms (great), 50–150 ms (ok), >150 ms (poor)",
     "nodesReporting": "Nodes Reporting",
     "sampleSize": "Sample Size",
-    "latencyRecent": "Latency (recent)",
+    "latencyRecent": "Latency (Recent)",
     "topEarningFiles": "Top Earning Files",
     "seeders": "seeders",
     "noEarningsYet": "No earnings yet",
