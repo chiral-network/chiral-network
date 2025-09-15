@@ -433,7 +433,13 @@
     "min": "Min:",
     "max": "Max:",
     "suspiciousActivity": "Suspicious Activity Alerts",
-    "noSuspiciousActivity": "No suspicious activity detected"
+    "noSuspiciousActivity": "No suspicious activity detected",
+    "unusualUpload": "Unusual Upload",
+    "unusualUploadDesc": "File > 1GB uploaded unusually fast",
+    "multipleLogins": "Multiple Logins",
+    "multipleLoginsDesc": "User logged in from different countries in 5 mins",
+    "failedDownloads": "Failed Downloads",
+    "failedDownloadsDesc": "Several failed download attempts detected"
   },
   "proxy": {
     "title": "Proxy Network",

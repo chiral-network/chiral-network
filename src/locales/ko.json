@@ -441,7 +441,13 @@
     "min": "최소:",
     "max": "최대:",
     "suspiciousActivity": "의심스러운 활동 알림",
-    "noSuspiciousActivity": "의심스러운 활동이 감지되지 않았습니다"
+    "noSuspiciousActivity": "의심스러운 활동이 감지되지 않았습니다",
+    "unusualUpload": "비정상적인 업로드",
+    "unusualUploadDesc": "1GB 이상의 파일이 비정상적으로 빠르게 업로드되었습니다",
+    "multipleLogins": "다중 로그인",
+    "multipleLoginsDesc": "5분 이내에 다른 국가에서 로그인했습니다",
+    "failedDownloads": "실패한 다운로드",
+    "failedDownloadsDesc": "여러 번의 실패한 다운로드 시도가 감지되었습니다"
   },
   "proxy": {
     "title": "프록시 네트워크",
