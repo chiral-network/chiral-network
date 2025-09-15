@@ -95,19 +95,17 @@
 {#if showConfirmDialog && nodeToRemove}
   <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
     <div class="bg-white rounded-lg p-6 max-w-md w-full mx-4">
-      <h3 class="text-lg font-semibold mb-4">{$t('proxy.confirmRemove') || 'Confirm Removal'}</h3>
+      <h3 class="text-lg font-semibold mb-4">Confirm Removal</h3>
       <p class="text-muted-foreground mb-6">
-        {$t('proxy.confirmRemoveMessage') || 'Are you sure you want to remove the proxy node'} 
-        <span class="font-medium">{nodeToRemove.address}</span>?
-        {$t('proxy.confirmRemoveWarning') || 'This action cannot be undone.'}
+        Confirm the removal of proxy node <span class="font-medium">{nodeToRemove.address}</span>
       </p>
       <div class="flex gap-3 justify-end">
         <Button variant="outline" on:click={cancelRemoveNode}>
-          {$t('proxy.cancel') || 'Cancel'}
+          Cancel
         </Button>
         <Button variant="destructive" on:click={confirmRemoveNode}>
           <Trash2 class="h-4 w-4 mr-2" />
-          {$t('proxy.remove') || 'Remove'}
+          Remove
         </Button>
       </div>
     </div>
