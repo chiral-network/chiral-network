@@ -21,10 +21,10 @@
   import { homeDir } from "@tauri-apps/api/path";
   import { getVersion } from "@tauri-apps/api/app";
   import { userLocation } from "$lib/stores";
-  import { changeLocale, loadLocale } from '../i18n/i18n';
-  import { t } from 'svelte-i18n';
-  import { get } from 'svelte/store';
-
+  import { changeLocale, loadLocale } from "../i18n/i18n";
+  import { t } from "svelte-i18n";
+  import { get } from "svelte/store";
+  import { showToast } from "$lib/toast";
 
   let showResetConfirmModal = false;
   // Settings state
@@ -72,23 +72,25 @@
   let mounted = false;
   let clearingCache = false;
   let cacheCleared = false;
-  let importExportFeedback: { message: string; type: 'success' | 'error' } | null = null;
+  let importExportFeedback: {
+    message: string;
+    type: "success" | "error";
+  } | null = null;
 
   const locations = [
-    { value: 'US-East', label: 'US East' },
-    { value: 'US-West', label: 'US West' },
-    { value: 'EU-West', label: 'Europe West' },
-    { value: 'Asia-Pacific', label: 'Asia Pacific' }
+    { value: "US-East", label: "US East" },
+    { value: "US-West", label: "US West" },
+    { value: "EU-West", label: "Europe West" },
+    { value: "Asia-Pacific", label: "Asia Pacific" },
   ];
 
   let languages = [];
   $: languages = [
-    { value: 'en', label: $t("language.english") },
-    { value: 'es', label: $t("language.spanish") },
-    { value: 'zh', label: $t("language.chinese") },
-    { value: 'ko', label: $t("language.korean") }
+    { value: "en", label: $t("language.english") },
+    { value: "es", label: $t("language.spanish") },
+    { value: "zh", label: $t("language.chinese") },
+    { value: "ko", label: $t("language.korean") },
   ];
-
 
   // Check for changes
   $: hasChanges = JSON.stringify(settings) !== JSON.stringify(savedSettings);
@@ -99,6 +101,7 @@
     savedSettings = { ...settings };
     userLocation.set(settings.userLocation);
     importExportFeedback = null;
+    showToast("Settings Updated!");
   }
 
   function handleConfirmReset() {
@@ -112,58 +115,60 @@
   }
 
   async function selectStoragePath() {
-  const tr = get(t);
-  try {
-    // Try Tauri first
-    await getVersion(); // only works in Tauri
-    const home = await homeDir();
-    const result = await open({
-      directory: true,
-      multiple: false,
-      defaultPath: settings.storagePath.startsWith("~/")
-        ? settings.storagePath.replace("~", home)
-        : settings.storagePath,
-      title: tr("storage.selectLocationTitle"),
-    });
+    const tr = get(t);
+    try {
+      // Try Tauri first
+      await getVersion(); // only works in Tauri
+      const home = await homeDir();
+      const result = await open({
+        directory: true,
+        multiple: false,
+        defaultPath: settings.storagePath.startsWith("~/")
+          ? settings.storagePath.replace("~", home)
+          : settings.storagePath,
+        title: tr("storage.selectLocationTitle"),
+      });
 
-    if (typeof result === "string") {
-      settings.storagePath = result.replace(home, "~");
-    }
-  } catch {
-    // Fallback for browser environment
-    if ('showDirectoryPicker' in window) {
-      // Use File System Access API (Chrome/Edge)
-      try {
-        const directoryHandle = await (window as any).showDirectoryPicker();
-        settings.storagePath = directoryHandle.name;
-      } catch (err: any) {
-        if (err.name !== 'AbortError') {
-          console.error('Directory picker error:', err);
-        }
+      if (typeof result === "string") {
+        settings.storagePath = result.replace(home, "~");
       }
-    } else {
-      // Fallback: let user type path manually
-      const newPath = prompt(
-        `${tr("storage.enterPathPrompt")} ( ${tr("storage.browserNoPicker")} )`,
-        settings.storagePath
-      );
-      if (newPath) {
-        settings.storagePath = newPath;
+    } catch {
+      // Fallback for browser environment
+      if ("showDirectoryPicker" in window) {
+        // Use File System Access API (Chrome/Edge)
+        try {
+          const directoryHandle = await (window as any).showDirectoryPicker();
+          settings.storagePath = directoryHandle.name;
+        } catch (err: any) {
+          if (err.name !== "AbortError") {
+            console.error("Directory picker error:", err);
+          }
+        }
+      } else {
+        // Fallback: let user type path manually
+        const newPath = prompt(
+          `${tr("storage.enterPathPrompt")} ( ${tr("storage.browserNoPicker")} )`,
+          settings.storagePath
+        );
+        if (newPath) {
+          settings.storagePath = newPath;
+        }
       }
     }
   }
-}
 
   async function clearCache() {
     clearingCache = true;
     // Clear application cache
     console.log("Clearing cache...");
     // Simulate cache clearing work
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    await new Promise((resolve) => setTimeout(resolve, 1500));
     clearingCache = false;
     cacheCleared = true;
     // Reset success state after 2 seconds
-    setTimeout(() => { cacheCleared = false; }, 2000);
+    setTimeout(() => {
+      cacheCleared = false;
+    }, 2000);
   }
 
   function exportSettings() {
@@ -177,8 +182,10 @@
     a.click();
     URL.revokeObjectURL(url);
     importExportFeedback = {
-      message: $t('advanced.exportSuccess', { default: "Settings exported to your browser's download folder." }),
-      type: 'success'
+      message: $t("advanced.exportSuccess", {
+        default: "Settings exported to your browser's download folder.",
+      }),
+      type: "success",
     };
   }
 
@@ -194,14 +201,18 @@
         saveSettings(); // This saves, updates savedSettings, and clears any old feedback.
         // Now we set the new feedback for the import action.
         importExportFeedback = {
-          message: $t('advanced.importSuccess', { default: 'Settings imported successfully.' }),
-          type: 'success'
+          message: $t("advanced.importSuccess", {
+            default: "Settings imported successfully.",
+          }),
+          type: "success",
         };
       } catch (err) {
         console.error("Failed to import settings:", err);
         importExportFeedback = {
-          message: $t('advanced.importError', { default: 'Invalid JSON file. Please select a valid export.' }),
-          type: 'error'
+          message: $t("advanced.importError", {
+            default: "Invalid JSON file. Please select a valid export.",
+          }),
+          type: "error",
         };
       }
     };
@@ -211,7 +222,7 @@
     (event.target as HTMLInputElement).value = "";
   }
 
-  onMount(async() => {
+  onMount(async () => {
     // Load settings from local storage
     const stored = localStorage.getItem("chiralSettings");
     if (stored) {
@@ -222,7 +233,7 @@
         console.error("Failed to load settings:", e);
       }
     }
-
+    
      const saved = await loadLocale();                    // 'en' | 'ko' | null
      const initial = saved || 'en';
      selectedLanguage = initial;       // Syncronize dropdown display value
@@ -238,14 +249,22 @@
    }
 
   const limits = {
-    maxStorageSize:     { min: 10,   max: 10000, label: "Max Storage Size (GB)" },
-    cleanupThreshold:   { min: 50,   max: 100,   label: "Auto-Cleanup Threshold (%)" },
-    maxConnections:     { min: 10,   max: 200,   label: "Max Connections" },
-    port:               { min: 1024, max: 65535, label: "Port" },
-    uploadBandwidth:    { min: 0,    max: Infinity, label: "Upload Limit (MB/s)" },
-    downloadBandwidth:  { min: 0,    max: Infinity, label: "Download Limit (MB/s)" },
-    chunkSize:          { min: 64,   max: 1024,  label: "Chunk Size (KB)" },
-    cacheSize:          { min: 256,  max: 8192,  label: "Cache Size (MB)" },
+    maxStorageSize: { min: 10, max: 10000, label: "Max Storage Size (GB)" },
+    cleanupThreshold: {
+      min: 50,
+      max: 100,
+      label: "Auto-Cleanup Threshold (%)",
+    },
+    maxConnections: { min: 10, max: 200, label: "Max Connections" },
+    port: { min: 1024, max: 65535, label: "Port" },
+    uploadBandwidth: { min: 0, max: Infinity, label: "Upload Limit (MB/s)" },
+    downloadBandwidth: {
+      min: 0,
+      max: Infinity,
+      label: "Download Limit (MB/s)",
+    },
+    chunkSize: { min: 64, max: 1024, label: "Chunk Size (KB)" },
+    cacheSize: { min: 256, max: 8192, label: "Cache Size (MB)" },
   } as const;
 
   let errors: Record<string, string | null> = {};
@@ -255,7 +274,7 @@
     return `${label} must be between ${min} and ${max}.`;
   }
 
-  function validate(settings : any) {
+  function validate(settings: any) {
     const next: Record<string, string | null> = {};
     for (const [key, cfg] of Object.entries(limits)) {
       const val = Number((settings as any)[key]);
@@ -265,7 +284,7 @@
       }
       next[key] = null;
     }
-    console.log(next)
+    console.log(next);
     errors = next;
   }
 
@@ -274,7 +293,6 @@
 
   // Valid when no error messages remain
   $: isValid = Object.values(errors).every((e) => !e);
-
 </script>
 
 <div class="space-y-6">
@@ -286,7 +304,9 @@
       </p>
     </div>
     {#if hasChanges}
-      <Badge variant="outline" class="text-orange-500">{$t("badges.unsaved")}</Badge>
+      <Badge variant="outline" class="text-orange-500"
+        >{$t("badges.unsaved")}</Badge
+      >
     {/if}
   </div>
 
@@ -307,7 +327,11 @@
             placeholder="~/ChiralNetwork/Storage"
             class="flex-1"
           />
-          <Button variant="outline" on:click={selectStoragePath} aria-label={$t("storage.locationPick")}>
+          <Button
+            variant="outline"
+            on:click={selectStoragePath}
+            aria-label={$t("storage.locationPick")}
+          >
             <FolderOpen class="h-4 w-4" />
           </Button>
         </div>
@@ -330,7 +354,8 @@
         </div>
 
         <div>
-          <Label for="cleanup-threshold">{$t("storage.cleanupThreshold")}</Label>
+          <Label for="cleanup-threshold">{$t("storage.cleanupThreshold")}</Label
+          >
           <Input
             id="cleanup-threshold"
             type="number"
@@ -435,7 +460,7 @@
         <DropDown
           id="user-location"
           options={locations}
-          bind:value={settings.userLocation}  
+          bind:value={settings.userLocation}
         />
         <p class="text-xs text-muted-foreground mt-1">
           {$t("network.locationHint")}
@@ -679,9 +704,20 @@
       </div>
 
       <div class="flex flex-wrap gap-2">
-        <Button variant="outline" size="xs" on:click={clearCache} disabled={clearingCache || cacheCleared}>
-          <RefreshCw class="h-4 w-4 mr-2 {clearingCache ? 'animate-spin' : ''}" />
-          {clearingCache ? $t('button.clearing') : cacheCleared ? $t('button.cleared') : $t('button.clearCache')}
+        <Button
+          variant="outline"
+          size="xs"
+          on:click={clearCache}
+          disabled={clearingCache || cacheCleared}
+        >
+          <RefreshCw
+            class="h-4 w-4 mr-2 {clearingCache ? 'animate-spin' : ''}"
+          />
+          {clearingCache
+            ? $t("button.clearing")
+            : cacheCleared
+              ? $t("button.cleared")
+              : $t("button.clearCache")}
         </Button>
         <Button variant="outline" size="xs" on:click={exportSettings}>
           {$t("advanced.exportSettings")}
@@ -707,7 +743,12 @@
       </div>
 
       {#if importExportFeedback}
-        <div class="mt-4 p-3 rounded-md text-sm {importExportFeedback.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}">
+        <div
+          class="mt-4 p-3 rounded-md text-sm {importExportFeedback.type ===
+          'success'
+            ? 'bg-green-100 text-green-800'
+            : 'bg-red-100 text-red-800'}"
+        >
           {importExportFeedback.message}
         </div>
       {/if}
@@ -716,11 +757,7 @@
 
   <!-- Action Buttons -->
   <div class="flex flex-wrap items-center justify-between gap-2">
-    <Button 
-      variant="destructive" 
-      size="xs" 
-      on:click={openResetConfirm}
-    >
+    <Button variant="destructive" size="xs" on:click={openResetConfirm}>
       {$t("actions.resetDefaults")}
     </Button>
 
@@ -729,19 +766,19 @@
         variant="outline"
         size="xs"
         disabled={!hasChanges}
-        class={`transition-colors duration-200 ${!hasChanges ? 'cursor-not-allowed opacity-50' : ''}`}
+        class={`transition-colors duration-200 ${!hasChanges ? "cursor-not-allowed opacity-50" : ""}`}
       >
-        {$t('actions.cancel')}
+        {$t("actions.cancel")}
       </Button>
 
       <Button
         size="xs"
         on:click={saveSettings}
         disabled={!hasChanges || !isValid}
-        class={`transition-colors duration-200 ${(!hasChanges || !isValid) ? 'cursor-not-allowed opacity-50' : ''}`}
+        class={`transition-colors duration-200 ${!hasChanges || !isValid ? "cursor-not-allowed opacity-50" : ""}`}
       >
         <Save class="h-4 w-4 mr-2" />
-        {$t('actions.save')}
+        {$t("actions.save")}
       </Button>
     </div>
   </div>
@@ -772,7 +809,10 @@
         {$t("confirm.resetBody")}
       </p>
       <div class="flex justify-end gap-3">
-        <Button variant="outline" on:click={() => (showResetConfirmModal = false)}>
+        <Button
+          variant="outline"
+          on:click={() => (showResetConfirmModal = false)}
+        >
           {$t("actions.cancel")}
         </Button>
         <Button variant="destructive" on:click={handleConfirmReset}>
