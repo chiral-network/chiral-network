@@ -253,12 +253,33 @@
       return
     }
     
-    // Check for duplicates
-    const exists = [...$files, ...$downloadQueue].some(f => f.hash === searchHash)
-    if (exists) {
-      showNotification(tr('download.notifications.alreadyExists'), 'warning')
+    // Check for ALL duplicates (including uploaded files)
+const allFiles = [...$files, ...$downloadQueue]
+const existingFile = allFiles.find(f => f.hash === searchHash)
+
+if (existingFile) {
+  // Handle different scenarios
+  if (existingFile.status === 'seeding' || existingFile.status === 'uploaded') {
+    // User is trying to download a file they're already sharing
+    const shouldContinue = confirm(
+      `You're already sharing a file with this hash (${existingFile.name}). ` +
+      `Do you want to download it anyway? `
+    )
+    
+    if (!shouldContinue) {
+      showNotification('Download canceled by user', 'info')
       return
     }
+    
+    // Show additional info message
+    showNotification('Downloading file that you are already sharing', 'warning', 3000)
+    
+  } else {
+    // File is already in download queue/completed/etc.
+    showNotification('File is already in your download list', 'warning')
+    return
+  }
+}
     
     try {
       // Step 1: Show search start notification

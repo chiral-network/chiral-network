@@ -12,8 +12,22 @@
   let proxyEnabled = true
   let isAddressValid = true
   let showConfirmDialog = false
-  let nodeToRemove = null
+  let nodeToRemove: any = null
   const validAddressRegex = /^[a-zA-Z0-9.-]+:[0-9]{1,5}$/
+  let statusFilter = 'all'
+
+  $: filteredNodes = $proxyNodes.filter(node => {
+      if (statusFilter === 'all') {
+          return true
+      }
+      return node.status === statusFilter
+  })
+
+  
+  $: sortedNodes = [...filteredNodes].sort((a, b) => {
+      const statusOrder = { 'online': 1, 'connecting': 2, 'offline': 3 };
+      return statusOrder[a.status] - statusOrder[b.status];
+  });
 
   function addNode() {
       const validAddressRegex = /^[a-zA-Z0-9.-]+:[0-9]{1,5}$/
@@ -95,19 +109,17 @@
 {#if showConfirmDialog && nodeToRemove}
   <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
     <div class="bg-white rounded-lg p-6 max-w-md w-full mx-4">
-      <h3 class="text-lg font-semibold mb-4">{$t('proxy.confirmRemove') || 'Confirm Removal'}</h3>
+      <h3 class="text-lg font-semibold mb-4">Confirm Removal</h3>
       <p class="text-muted-foreground mb-6">
-        {$t('proxy.confirmRemoveMessage') || 'Are you sure you want to remove the proxy node'} 
-        <span class="font-medium">{nodeToRemove.address}</span>?
-        {$t('proxy.confirmRemoveWarning') || 'This action cannot be undone.'}
+        Confirm the removal of proxy node <span class="font-medium">{nodeToRemove.address}</span>
       </p>
       <div class="flex gap-3 justify-end">
         <Button variant="outline" on:click={cancelRemoveNode}>
-          {$t('proxy.cancel') || 'Cancel'}
+          Cancel
         </Button>
         <Button variant="destructive" on:click={confirmRemoveNode}>
           <Trash2 class="h-4 w-4 mr-2" />
-          {$t('proxy.remove') || 'Remove'}
+          Remove
         </Button>
       </div>
     </div>
@@ -205,9 +217,22 @@
   </Card>
   
   <Card class="p-6">
-    <h2 class="text-lg font-semibold mb-4">{$t('proxy.proxyNodes')}</h2>
+    <div class="flex items-center justify-between mb-4">
+        <h2 class="text-lg font-semibold">{$t('proxy.proxyNodes')}</h2>
+        <div>
+            <select
+                bind:value={statusFilter}
+                class="p-2 rounded-md border border-gray-300 text-sm"
+            >
+                <option value="all">{$t('All')}</option>
+                <option value="online">{$t('Online')}</option>
+                <option value="offline">{$t('Offline')}</option>
+                <option value="connecting">{$t('Connecting')}</option>
+            </select>
+        </div>
+    </div>
     <div class="space-y-3">
-      {#each $proxyNodes as node}
+      {#each sortedNodes as node}
         <div class="p-4 bg-secondary rounded-lg">
           <div class="flex items-center justify-between mb-3">
             <div class="flex items-center gap-3">
