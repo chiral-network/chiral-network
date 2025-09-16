@@ -70,3 +70,8 @@ debug/
 # Package manager locks (keep package-lock.json for npm)
 yarn.lock
 pnpm-lock.yaml
+# Local Python venv
+.venv-pdf/
+
+# Local Python venv
+.venv-pdf/

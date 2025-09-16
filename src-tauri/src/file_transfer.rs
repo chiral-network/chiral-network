@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
-use tracing::{info, error, debug};
+use tracing::{debug, error, info};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileRequest {
@@ -21,17 +21,32 @@ pub struct FileResponse {
 
 #[derive(Debug)]
 pub enum FileTransferCommand {
-    UploadFile { file_path: String, file_name: String },
-    DownloadFile { file_hash: String, output_path: String },
+    UploadFile {
+        file_path: String,
+        file_name: String,
+    },
+    DownloadFile {
+        file_hash: String,
+        output_path: String,
+    },
     GetStoredFiles,
 }
 
 #[derive(Debug, Clone)]
 pub enum FileTransferEvent {
-    FileUploaded { file_hash: String, file_name: String },
-    FileDownloaded { file_path: String },
-    FileNotFound { file_hash: String },
-    Error { message: String },
+    FileUploaded {
+        file_hash: String,
+        file_name: String,
+    },
+    FileDownloaded {
+        file_path: String,
+    },
+    FileNotFound {
+        file_hash: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 pub struct FileTransferService {
@@ -67,37 +82,53 @@ impl FileTransferService {
     ) {
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
-                FileTransferCommand::UploadFile { file_path, file_name } => {
-                    match Self::handle_upload_file(&file_path, &file_name, &stored_files).await {
-                        Ok(file_hash) => {
-                            let _ = event_tx.send(FileTransferEvent::FileUploaded {
+                FileTransferCommand::UploadFile {
+                    file_path,
+                    file_name,
+                } => match Self::handle_upload_file(&file_path, &file_name, &stored_files).await {
+                    Ok(file_hash) => {
+                        let _ = event_tx
+                            .send(FileTransferEvent::FileUploaded {
                                 file_hash: file_hash.clone(),
                                 file_name: file_name.clone(),
-                            }).await;
-                            info!("File uploaded successfully: {} -> {}", file_name, file_hash);
-                        }
-                        Err(e) => {
-                            let error_msg = format!("Upload failed: {}", e);
-                            let _ = event_tx.send(FileTransferEvent::Error {
-                                message: error_msg.clone(),
-                            }).await;
-                            error!("File upload failed: {}", error_msg);
-                        }
+                            })
+                            .await;
+                        info!("File uploaded successfully: {} -> {}", file_name, file_hash);
                     }
-                }
-                FileTransferCommand::DownloadFile { file_hash, output_path } => {
-                    match Self::handle_download_file(&file_hash, &output_path, &stored_files).await {
+                    Err(e) => {
+                        let error_msg = format!("Upload failed: {}", e);
+                        let _ = event_tx
+                            .send(FileTransferEvent::Error {
+                                message: error_msg.clone(),
+                            })
+                            .await;
+                        error!("File upload failed: {}", error_msg);
+                    }
+                },
+                FileTransferCommand::DownloadFile {
+                    file_hash,
+                    output_path,
+                } => {
+                    match Self::handle_download_file(&file_hash, &output_path, &stored_files).await
+                    {
                         Ok(()) => {
-                            let _ = event_tx.send(FileTransferEvent::FileDownloaded {
-                                file_path: output_path.clone(),
-                            }).await;
-                            info!("File downloaded successfully: {} -> {}", file_hash, output_path);
+                            let _ = event_tx
+                                .send(FileTransferEvent::FileDownloaded {
+                                    file_path: output_path.clone(),
+                                })
+                                .await;
+                            info!(
+                                "File downloaded successfully: {} -> {}",
+                                file_hash, output_path
+                            );
                         }
                         Err(e) => {
                             let error_msg = format!("Download failed: {}", e);
-                            let _ = event_tx.send(FileTransferEvent::Error {
-                                message: error_msg.clone(),
-                            }).await;
+                            let _ = event_tx
+                                .send(FileTransferEvent::Error {
+                                    message: error_msg.clone(),
+                                })
+                                .await;
                             error!("File download failed: {}", error_msg);
                         }
                     }
@@ -116,18 +147,19 @@ impl FileTransferService {
         stored_files: &Arc<Mutex<HashMap<String, (String, Vec<u8>)>>>,
     ) -> Result<String, String> {
         // Read the file
-        let file_data = tokio::fs::read(file_path).await
+        let file_data = tokio::fs::read(file_path)
+            .await
             .map_err(|e| format!("Failed to read file: {}", e))?;
-        
+
         // Calculate file hash
         let file_hash = Self::calculate_file_hash(&file_data);
-        
+
         // Store the file in memory (in a real implementation, this would be persistent storage)
         {
             let mut files = stored_files.lock().await;
             files.insert(file_hash.clone(), (file_name.to_string(), file_data));
         }
-        
+
         Ok(file_hash)
     }
 
@@ -139,52 +171,71 @@ impl FileTransferService {
         // Check if we have the file locally
         let (file_name, file_data) = {
             let files = stored_files.lock().await;
-            files.get(file_hash)
+            files
+                .get(file_hash)
                 .ok_or_else(|| "File not found locally".to_string())?
                 .clone()
         };
 
         // Write the file to the output path
-        tokio::fs::write(output_path, file_data).await
+        tokio::fs::write(output_path, file_data)
+            .await
             .map_err(|e| format!("Failed to write file: {}", e))?;
-        
+
         info!("File downloaded: {} -> {}", file_name, output_path);
         Ok(())
     }
 
     pub fn calculate_file_hash(data: &[u8]) -> String {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(data);
         format!("{:x}", hasher.finalize())
     }
 
     pub async fn upload_file(&self, file_path: String, file_name: String) -> Result<(), String> {
-        self.cmd_tx.send(FileTransferCommand::UploadFile { file_path, file_name }).await
+        self.cmd_tx
+            .send(FileTransferCommand::UploadFile {
+                file_path,
+                file_name,
+            })
+            .await
             .map_err(|e| e.to_string())
     }
 
-    pub async fn download_file(&self, file_hash: String, output_path: String) -> Result<(), String> {
-        self.cmd_tx.send(FileTransferCommand::DownloadFile { file_hash, output_path }).await
+    pub async fn download_file(
+        &self,
+        file_hash: String,
+        output_path: String,
+    ) -> Result<(), String> {
+        self.cmd_tx
+            .send(FileTransferCommand::DownloadFile {
+                file_hash,
+                output_path,
+            })
+            .await
             .map_err(|e| e.to_string())
     }
 
     pub async fn get_stored_files(&self) -> Result<Vec<(String, String)>, String> {
         let files = self.stored_files.lock().await;
-        Ok(files.iter().map(|(hash, (name, _))| (hash.clone(), name.clone())).collect())
+        Ok(files
+            .iter()
+            .map(|(hash, (name, _))| (hash.clone(), name.clone()))
+            .collect())
     }
 
     pub async fn drain_events(&self, max: usize) -> Vec<FileTransferEvent> {
         let mut events = Vec::new();
         let mut event_rx = self.event_rx.lock().await;
-        
+
         for _ in 0..max {
             match event_rx.try_recv() {
                 Ok(event) => events.push(event),
                 Err(_) => break,
             }
         }
-        
+
         events
     }
 
