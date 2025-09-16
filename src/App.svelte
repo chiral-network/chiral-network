@@ -182,10 +182,16 @@
             }}
             class="w-full group"
             aria-current={currentPage === item.id ? 'page' : undefined}
+            title={sidebarCollapsed ? item.label : undefined}
+            aria-label={item.label}
           >
             <div class="flex items-center {sidebarCollapsed ? 'justify-center' : ''} rounded {currentPage === item.id ? 'bg-gray-200' : 'group-hover:bg-gray-100'}">
-              <span class="flex items-center justify-center rounded w-10 h-10">
+              <span class="flex items-center justify-center rounded w-10 h-10 relative">
                 <svelte:component this={item.icon} class="h-5 w-5" />
+                {#if sidebarCollapsed}
+                  <!-- CSS tooltip for collapsed state (appears on hover) -->
+                  <span class="tooltip absolute left-full ml-2 top-1/2 -translate-y-1/2 hidden whitespace-nowrap rounded bg-black text-white text-xs px-2 py-1 z-50">{item.label}</span>
+                {/if}
               </span>
               {#if !sidebarCollapsed}
                 <span class="flex-1 px-2 py-1 text-left">{item.label}</span>
