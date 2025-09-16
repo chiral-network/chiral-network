@@ -25,6 +25,7 @@
   import { t } from "svelte-i18n";
   import { get } from "svelte/store";
   import { showToast } from "$lib/toast";
+  import { invoke } from "@tauri-apps/api/core";
 
   let showResetConfirmModal = false;
   // Settings state
@@ -291,6 +292,21 @@
 
   // Valid when no error messages remain
   $: isValid = Object.values(errors).every((e) => !e);
+
+  let freeSpaceGB: number | null = null;
+  let maxStorageError: string | null = null;
+
+  onMount(async () => {
+    freeSpaceGB = await invoke('get_available_storage');
+  });
+
+  $: {
+    if (freeSpaceGB !== null && settings.maxStorageSize > freeSpaceGB) {
+      maxStorageError = `Insufficient disk space. Only ${freeSpaceGB} GB available.`;
+    } else {
+      maxStorageError = null;
+    }
+  }
 </script>
 
 <div class="space-y-6">
@@ -337,18 +353,27 @@
 
       <div class="grid grid-cols-2 gap-4">
         <div>
-          <Label for="max-storage">{$t("storage.maxSize")}</Label>
-          <Input
-            id="max-storage"
-            type="number"
-            bind:value={settings.maxStorageSize}
-            min="10"
-            max="10000"
-            class="mt-2"
-          />
-          {#if errors.maxStorageSize}
-            <p class="mt-1 text-sm text-red-500">{errors.maxStorageSize}</p>
-          {/if}
+          <div class="flex items-center">
+            <div class="flex-1">
+              <Label for="max-storage">{$t("storage.maxSize")}</Label>
+              {#if freeSpaceGB !== null}
+                <span class="ml-2 text-xs text-muted-foreground whitespace-nowrap mt-6">
+                  {freeSpaceGB} GB available
+                </span>
+              {/if}
+              <Input
+                id="max-storage"
+                type="number"
+                bind:value={settings.maxStorageSize}
+                min="10"
+                max={freeSpaceGB ?? 10000}
+                class={`mt-2 ${maxStorageError ? 'border-red-500 focus:border-red-500 ring-red-500' : ''}`}
+              />
+              {#if maxStorageError}
+                <p class="mt-1 text-sm text-red-500">{maxStorageError}</p>
+              {/if}
+            </div>
+          </div>
         </div>
 
         <div>
@@ -773,8 +798,8 @@
       <Button
         size="xs"
         on:click={saveSettings}
-        disabled={!hasChanges || !isValid}
-        class={`transition-colors duration-200 ${!hasChanges || !isValid ? "cursor-not-allowed opacity-50" : ""}`}
+        disabled={!hasChanges || !!maxStorageError}
+        class={`transition-colors duration-200 ${!hasChanges || !!maxStorageError ? "cursor-not-allowed opacity-50" : ""}`}
       >
         <Save class="h-4 w-4 mr-2" />
         {$t("actions.save")}
