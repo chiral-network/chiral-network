@@ -96,6 +96,10 @@
   $: hasChanges = JSON.stringify(settings) !== JSON.stringify(savedSettings);
 
   function saveSettings() {
+    if (!isValid || maxStorageError) {
+      return;
+    }
+
     // Save to local storage
     localStorage.setItem("chiralSettings", JSON.stringify(settings));
     savedSettings = { ...settings };
@@ -283,7 +287,6 @@
       }
       next[key] = null;
     }
-    console.log(next);
     errors = next;
   }
 
@@ -291,6 +294,7 @@
   $: validate(settings);
 
   // Valid when no error messages remain
+  let isValid = true;
   $: isValid = Object.values(errors).every((e) => !e);
 
   let freeSpaceGB: number | null = null;
@@ -798,8 +802,8 @@
       <Button
         size="xs"
         on:click={saveSettings}
-        disabled={!hasChanges || !!maxStorageError}
-        class={`transition-colors duration-200 ${!hasChanges || !!maxStorageError ? "cursor-not-allowed opacity-50" : ""}`}
+        disabled={!hasChanges || !!maxStorageError || !isValid}
+        class={`transition-colors duration-200 ${!hasChanges || !!maxStorageError || !isValid ? "cursor-not-allowed opacity-50" : ""}`}
       >
         <Save class="h-4 w-4 mr-2" />
         {$t("actions.save")}
