@@ -17,6 +17,7 @@
   let lastValidMaxConcurrent = 3 // Store the last valid value
   let autoStartQueue = true
   let filterStatus = 'all' // 'all', 'active', 'paused', 'queued', 'completed', 'failed'
+  let pendingDownloadConfirmations = new Map<string, boolean>() // Track confirmation status for downloads
   let activeSimulations = new Set<string>() // Track files with active progress simulations
 
   // Add notification related variables
@@ -261,18 +262,19 @@
       // Handle different scenarios
       if (existingFile.status === 'seeding' || existingFile.status === 'uploaded') {
         // User is trying to download a file they're already sharing
+        // Show confirmation dialog IMMEDIATELY and block until user responds
         const shouldContinue = confirm(
           `You're already sharing a file with this hash (${existingFile.name}). ` +
-          `Do you want to download it anyway? `
-        )
+          `Do you want to download it anyway?`
+        );
         
         if (!shouldContinue) {
-          showNotification('Download canceled by user', 'info')
-          return
+          showNotification('Download canceled by user', 'info');
+          return;
         }
         
         // Show additional info message
-        showNotification('Downloading file that you are already sharing', 'warning', 3000)
+        showNotification('Downloading file that you are already sharing', 'warning', 3000);
         
       } else {
         // File is already in download queue/completed/etc.
@@ -418,11 +420,13 @@ function clearSearch() {
       return;
     }
 
+    // Confirmation is already handled in startDownload function
+    // Proceed directly to file dialog
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       const { save } = await import('@tauri-apps/plugin-dialog');
       
-      // Let user choose where to save the file
+      // NOW let user choose where to save the file (only after confirmation)
       const outputPath = await save({
         defaultPath: fileToDownload.name,
         filters: [{
