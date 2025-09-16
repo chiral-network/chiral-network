@@ -16,6 +16,11 @@
   import { showToast } from '$lib/toast'
   import { get } from 'svelte/store'
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
+  
+  // HD wallet imports
+  import MnemonicWizard from '$lib/components/wallet/MnemonicWizard.svelte'
+  import AccountList from '$lib/components/wallet/AccountList.svelte'
+  // HD helpers are used within MnemonicWizard/AccountList components
 
 
   // Check if running in Tauri environment
@@ -59,6 +64,14 @@
   let loadKeystorePassword = '';
   let isLoadingFromKeystore = false;
   let keystoreLoadMessage = '';
+  
+  // HD wallet state (frontend only)
+  let showMnemonicWizard = false;
+  let mnemonicMode: 'create' | 'import' = 'create';
+  let hdMnemonic: string = '';
+  let hdPassphrase: string = '';
+  type HDAccountItem = { index: number; change: number; address: string; label?: string; privateKeyHex?: string };
+  let hdAccounts: HDAccountItem[] = [];
   
 
   let Html5QrcodeScanner: InstanceType<typeof Html5QrcodeScannerClass> | null = null;
@@ -605,6 +618,33 @@
     }
   }
 
+  // HD wallet handlers
+  function openCreateMnemonic() {
+    mnemonicMode = 'create';
+    showMnemonicWizard = true;
+  }
+  function openImportMnemonic() {
+    mnemonicMode = 'import';
+    showMnemonicWizard = true;
+  }
+  function closeMnemonicWizard() {
+    showMnemonicWizard = false;
+  }
+  async function completeMnemonicWizard(ev: { mnemonic: string, passphrase: string, account: { address: string, privateKeyHex: string, index: number, change: number }, name?: string }) {
+    showMnemonicWizard = false;
+    hdMnemonic = ev.mnemonic;
+    hdPassphrase = ev.passphrase || '';
+    // set first account
+    hdAccounts = [{ index: ev.account.index, change: ev.account.change, address: ev.account.address, privateKeyHex: ev.account.privateKeyHex, label: ev.name || 'Account 0' }];
+    // set as active
+    etcAccount.set({ address: ev.account.address, private_key: '0x' + ev.account.privateKeyHex });
+    wallet.update(w => ({ ...w, address: ev.account.address }));
+    if (isGethRunning) { await fetchBalance(); }
+  }
+  function onHDAccountsChange(updated: HDAccountItem[]) {
+    hdAccounts = updated;
+  }
+
   async function loadKeystoreAccountsList() {
     try {
       if (isTauri) {
@@ -907,8 +947,16 @@
   <div>
     <h1 class="text-3xl font-bold">{$t('account.title')}</h1>
     <p class="text-muted-foreground mt-2">{$t('account.subtitle')}</p>
-  </div>
-  
+</div>
+
+{#if showMnemonicWizard}
+  <MnemonicWizard
+    mode={mnemonicMode}
+    onCancel={closeMnemonicWizard}
+    onComplete={completeMnemonicWizard}
+  />
+{/if}
+
   <div class="grid grid-cols-1 {$etcAccount ? 'md:grid-cols-2' : ''} gap-4">
     <Card class="p-6">
       <div class="flex items-center justify-between mb-4">
@@ -929,6 +977,14 @@
               <Plus class="h-4 w-4 mr-2" />
               {isCreatingAccount ? $t('actions.creating') : $t('actions.createAccount')}
             </Button>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <Button variant="outline" class="w-full" on:click={openCreateMnemonic}>
+                <KeyRound class="h-4 w-4 mr-2" /> Create via Recovery Phrase
+              </Button>
+              <Button variant="outline" class="w-full" on:click={openImportMnemonic}>
+                <Import class="h-4 w-4 mr-2" /> Import Recovery Phrase
+              </Button>
+            </div>
             
             <div class="space-y-2">
               <Input
@@ -1121,6 +1177,25 @@
          {/if}
       </div>
     </Card>
+
+    {#if hdMnemonic}
+      <Card class="p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-lg font-semibold">HD Wallet</h2>
+          <div class="flex gap-2">
+            <Button variant="outline" on:click={openCreateMnemonic}>New</Button>
+            <Button variant="outline" on:click={openImportMnemonic}>Import</Button>
+          </div>
+        </div>
+        <p class="text-sm text-muted-foreground mb-4">Path m/44'/{98765}'/0'/0/*</p>
+        <AccountList
+          mnemonic={hdMnemonic}
+          passphrase={hdPassphrase}
+          accounts={hdAccounts}
+          onAccountsChange={onHDAccountsChange}
+        />
+      </Card>
+    {/if}
     
     {#if $etcAccount}
     <Card class="p-6">
