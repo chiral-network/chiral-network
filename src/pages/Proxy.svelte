@@ -12,8 +12,22 @@
   let proxyEnabled = true
   let isAddressValid = true
   let showConfirmDialog = false
-  let nodeToRemove = null
+  let nodeToRemove: any = null
   const validAddressRegex = /^[a-zA-Z0-9.-]+:[0-9]{1,5}$/
+  let statusFilter = 'all'
+
+  $: filteredNodes = $proxyNodes.filter(node => {
+      if (statusFilter === 'all') {
+          return true
+      }
+      return node.status === statusFilter
+  })
+
+  
+  $: sortedNodes = [...filteredNodes].sort((a, b) => {
+      const statusOrder = { 'online': 1, 'connecting': 2, 'offline': 3 };
+      return statusOrder[a.status] - statusOrder[b.status];
+  });
 
   function addNode() {
       const validAddressRegex = /^[a-zA-Z0-9.-]+:[0-9]{1,5}$/
@@ -203,9 +217,22 @@
   </Card>
   
   <Card class="p-6">
-    <h2 class="text-lg font-semibold mb-4">{$t('proxy.proxyNodes')}</h2>
+    <div class="flex items-center justify-between mb-4">
+        <h2 class="text-lg font-semibold">{$t('proxy.proxyNodes')}</h2>
+        <div>
+            <select
+                bind:value={statusFilter}
+                class="p-2 rounded-md border border-gray-300 text-sm"
+            >
+                <option value="all">{$t('All')}</option>
+                <option value="online">{$t('Online')}</option>
+                <option value="offline">{$t('Offline')}</option>
+                <option value="connecting">{$t('Connecting')}</option>
+            </select>
+        </div>
+    </div>
     <div class="space-y-3">
-      {#each $proxyNodes as node}
+      {#each sortedNodes as node}
         <div class="p-4 bg-secondary rounded-lg">
           <div class="flex items-center justify-between mb-3">
             <div class="flex items-center gap-3">
