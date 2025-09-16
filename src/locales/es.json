@@ -547,7 +547,7 @@
     "sharedFiles": "Archivos compartidos",
     "files": "archivos",
     "total": "total",
-    "tip": "💡 Consejo: También puedes arrastrar y soltar archivos aquí para agregarlos",
+    "tip": "Consejo: También puedes arrastrar y soltar archivos aquí para agregarlos",
     "addMoreFiles": "Agregar más archivos",
     "hash": "Hash",
     "seeder": "semilla{count, plural, =1 {} other {s}}",
@@ -613,14 +613,14 @@
     "notifications": {
       "enterHash": "Por favor introduce un hash de archivo",
       "alreadyExists": "El archivo ya existe en la lista de descargas",
-      "searching": "🔍 Buscando archivo...",
-      "notFound": "❌ Archivo no encontrado, verifica el hash",
-      "found": "✅ ¡Archivo encontrado! Agregando a la cola de descargas...",
-      "addedToQueue": "📥 Archivo agregado a la cola de descargas",
-      "autostart": "⚡ La descarga se inició automáticamente",
-      "searchFailed": "❌ Búsqueda fallida: {error}",
-      "downloadFailed": "❌ Descarga fallida: {name}",
-      "downloadCompleted": "🎉 Descarga completada: {name}"
+      "searching": "Buscando archivo...",
+      "notFound": "Archivo no encontrado, verifica el hash",
+      "found": "¡Archivo encontrado! Agregando a la cola de descargas...",
+      "addedToQueue": "Archivo agregado a la cola de descargas",
+      "autostart": "La descarga se inició automáticamente",
+      "searchFailed": "Búsqueda fallida: {error}",
+      "downloadFailed": "Descarga fallida: {name}",
+      "downloadCompleted": "Descarga completada: {name}"
     }
   }
 }
