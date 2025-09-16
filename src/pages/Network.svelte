@@ -13,6 +13,7 @@
   import { Clipboard } from "lucide-svelte"
   import { t } from 'svelte-i18n';
   import { showToast } from '$lib/toast';
+  import DropDown from '$lib/components/ui/dropDown.svelte'
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -934,53 +935,50 @@
   <Card class="p-6">
       <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
           <h2 class="text-lg font-semibold">{$t('network.connectedPeers.title', { values: { count: $peers.length } })}</h2>
-          <div class="flex items-center gap-2">
-              <Label for="sort">{$t('network.connectedPeers.sortBy')}</Label>
-              <select
-                      id="sort"
-                      bind:value={sortBy}
-                      class="border rounded px-2 py-1 text-sm"
-              >
-                  <option value="reputation">{$t('network.connectedPeers.reputation')}</option>
-                  <option value="sharedFiles">{$t('network.connectedPeers.sharedFiles')}</option>
-                  <option value="totalSize">{$t('network.connectedPeers.totalSize')}</option>
-                  <option value="nickname">{$t('network.connectedPeers.name')}</option>
-                  <option value="location">{$t('network.connectedPeers.location')}</option>
-                  <option value="joinDate">{$t('network.connectedPeers.joinDate')}</option>
-                  <option value="lastSeen">{$t('network.connectedPeers.lastSeen')}</option>
-                  <option value="status">{$t('network.connectedPeers.status')}</option>
-              </select>
-              <select
-                      id="sort-direction"
-                      bind:value={sortDirection}
-                      class="border rounded px-2 py-1 text-sm"
-              >
-                  {#if sortBy === 'reputation'}
-                      <option value="desc">{$t('network.connectedPeers.highest')}</option>
-                      <option value="asc">{$t('network.connectedPeers.lowest')}</option>
-                  {:else if sortBy === 'sharedFiles'}
-                      <option value="desc">{$t('network.connectedPeers.most')}</option>
-                      <option value="asc">{$t('network.connectedPeers.least')}</option>
-                  {:else if sortBy === 'totalSize'}
-                      <option value="desc">{$t('network.connectedPeers.largest')}</option>
-                      <option value="asc">{$t('network.connectedPeers.smallest')}</option>
-                  {:else if sortBy === 'joinDate'}
-                      <option value="desc">{$t('network.connectedPeers.newest')}</option>
-                      <option value="asc">{$t('network.connectedPeers.oldest')}</option>
-                  {:else if sortBy === 'lastSeen'}
-                      <option value="desc">{$t('network.connectedPeers.mostRecent')}</option>
-                      <option value="asc">{$t('network.connectedPeers.leastRecent')}</option>
-                  {:else if sortBy === 'location'}
-                      <option value="asc">{$t('network.connectedPeers.closest')}</option>
-                      <option value="desc">{$t('network.connectedPeers.farthest')}</option>
-                  {:else if sortBy === 'status'}
-                      <option value="asc">{$t('network.connectedPeers.online')}</option>
-                      <option value="desc">{$t('network.connectedPeers.offline')}</option>
-                  {:else if sortBy === 'nickname'}
-                      <option value="asc">{$t('network.connectedPeers.aToZ')}</option>
-                      <option value="desc">{$t('network.connectedPeers.zToA')}</option>
-                  {/if}
-              </select>
+      <div class="flex items-center gap-2">
+        <Label for="sort" class="flex items-center">
+    <span class="text-base">{$t('network.connectedPeers.sortBy')}</span>
+        </Label>
+        <DropDown
+        id="sort"
+        options={[
+          { value: 'reputation', label: $t('network.connectedPeers.reputation') },
+          { value: 'sharedFiles', label: $t('network.connectedPeers.sharedFiles') },
+          { value: 'totalSize', label: $t('network.connectedPeers.totalSize') },
+          { value: 'nickname', label: $t('network.connectedPeers.name') },
+          { value: 'location', label: $t('network.connectedPeers.location') },
+          { value: 'joinDate', label: $t('network.connectedPeers.joinDate') },
+          { value: 'lastSeen', label: $t('network.connectedPeers.lastSeen') },
+          { value: 'status', label: $t('network.connectedPeers.status') }
+        ]}
+        bind:value={sortBy}
+        compact={true}
+        />
+
+        <DropDown
+        id="sort-direction"
+        options={
+          sortBy === 'reputation'
+          ? [ { value: 'desc', label: $t('network.connectedPeers.highest') }, { value: 'asc', label: $t('network.connectedPeers.lowest') } ]
+          : sortBy === 'sharedFiles'
+          ? [ { value: 'desc', label: $t('network.connectedPeers.most') }, { value: 'asc', label: $t('network.connectedPeers.least') } ]
+          : sortBy === 'totalSize'
+          ? [ { value: 'desc', label: $t('network.connectedPeers.largest') }, { value: 'asc', label: $t('network.connectedPeers.smallest') } ]
+          : sortBy === 'joinDate'
+          ? [ { value: 'desc', label: $t('network.connectedPeers.newest') }, { value: 'asc', label: $t('network.connectedPeers.oldest') } ]
+          : sortBy === 'lastSeen'
+          ? [ { value: 'desc', label: $t('network.connectedPeers.mostRecent') }, { value: 'asc', label: $t('network.connectedPeers.leastRecent') } ]
+          : sortBy === 'location'
+          ? [ { value: 'asc', label: $t('network.connectedPeers.closest') }, { value: 'desc', label: $t('network.connectedPeers.farthest') } ]
+          : sortBy === 'status'
+          ? [ { value: 'asc', label: $t('network.connectedPeers.online') }, { value: 'desc', label: $t('network.connectedPeers.offline') } ]
+          : sortBy === 'nickname'
+          ? [ { value: 'asc', label: $t('network.connectedPeers.aToZ') }, { value: 'desc', label: $t('network.connectedPeers.zToA') } ]
+          : [ { value: 'desc', label: 'Desc' }, { value: 'asc', label: 'Asc' } ]
+        }
+        bind:value={sortDirection}
+        compact={true}
+        />
           </div>
       </div>
     <div class="space-y-3">
