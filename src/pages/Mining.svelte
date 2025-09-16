@@ -248,14 +248,8 @@
             $miningState.hashRate = formatHashRate(hashRateFromLogs)
             if (blocksFound > $miningState.blocksFound) {
               const newBlocks = blocksFound - $miningState.blocksFound;
-              // const rewardPerBlock = 5.0;
-              // $miningState.totalRewards += newBlocks * rewardPerBlock;
               $miningState.blocksFound = blocksFound; 
               //Visualization Now Handled By Backend
-              // Add each new block to recentBlocks
-              // for (let i = 0; i < newBlocks; i++) {
-              //   findBlock();
-              // }
             }
           } else if ($miningState.activeThreads > 0) {
             // Fall back to simulation if no log data yet
@@ -307,11 +301,6 @@
         const timeDelta = (Date.now() - lastHashUpdate) / 1000 // seconds
         totalHashes += Math.floor(hashRateNum * timeDelta)
         lastHashUpdate = Date.now()
-        
-        // Simulate finding blocks occasionally (very low probability) -> No More Simulating Blocks 
-        // if (Math.random() < 0.001) {
-        //   findBlock()
-        // }
       }
     } catch (e) {
       console.error('Failed to update mining stats:', e)
@@ -357,11 +346,7 @@
         if (results[4] !== undefined) {
           const blocksMined = results[4] as number;
           if (blocksMined > $miningState.blocksFound) {
-            // const newBlocks = blocksMined - $miningState.blocksFound;
             $miningState.blocksFound = blocksMined;
-            // for (let i = 0; i < newBlocks; i++) {
-            //   findBlock();
-            // }
           }
         }
       }
@@ -463,22 +448,7 @@
       console.error('Failed to stop mining:', e)
     }
   }
-  
-  // function findBlock() {
-  //   $miningState.blocksFound++
-  //   const reward = 5 + Math.random() * 2
-  //   $miningState.totalRewards += reward
-    
-  //   $miningState.recentBlocks = [{
-  //     id: `block-${Date.now()}`,
-  //     hash: `0x${Math.random().toString(16).substring(2, 10)}...${Math.random().toString(16).substring(2, 6)}`,
-  //     reward: reward,
-  //     timestamp: new Date(),
-  //     difficulty: currentDifficulty,
-  //     nonce: Math.floor(Math.random() * 1000000)
-  //   }, ...($miningState.recentBlocks ?? []).slice(0, 4)]
-  // } 
-  
+
   // Simulation removed; recent blocks come from backend
 
   // Keep a set of hashes we've already shown to avoid duplicates
