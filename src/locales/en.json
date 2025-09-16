@@ -130,6 +130,23 @@
   "language.chinese": "中文",
   "language.korean": "한국어",
 
+  "nav": {
+    "expandSidebar": "Expand sidebar",
+    "collapseSidebar": "Collapse sidebar",
+    "menu": "Menu",
+    "download": "Download",
+    "upload": "Upload",
+    "network": "Network",
+    "mining": "Mining",
+    "proxy": "Proxy",
+    "analytics": "Analytics",
+    "account": "Account",
+    "settings": "Settings",
+    "closeMobileMenu": "Close mobile menu",
+    "connected": "Connected",
+    "disconnected": "Disconnected"
+  },
+
   "privacy.title": "Privacy & Security",
   "privacy.enableProxy": "Enable proxy routing for anonymity",
   "privacy.enableEncryption": "Enable end-to-end encryption",

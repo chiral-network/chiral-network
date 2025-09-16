@@ -15,6 +15,7 @@
     import {onMount, setContext} from 'svelte';
     import { tick } from 'svelte';
     import { setupI18n } from '../src/i18n/i18n';
+    import { t } from 'svelte-i18n';
     import SimpleToast from '$lib/components/SimpleToast.svelte';
     import { startNetworkMonitoring } from '$lib/services/networkService';
     // gets path name not entire url:
@@ -79,16 +80,25 @@
         })
     }
 
-    const menuItems = [
-      { id: 'download', label: 'Download', icon: Download },
-      { id: 'upload', label: 'Upload', icon: Upload },
-      { id: 'network', label: 'Network', icon: Globe },
-      { id: 'mining', label: 'Mining', icon: Cpu },
-      { id: 'proxy', label: 'Proxy', icon: Shield },
-      { id: 'analytics', label: 'Analytics', icon: BarChart3 },
-      { id: 'account', label: 'Account', icon: Wallet },
-      { id: 'settings', label: 'Settings', icon: Settings },
-    ]
+    type MenuItem = {
+      id: string;
+      label: string;
+      icon: typeof Upload;
+    };
+
+    let menuItems: MenuItem[] = [];
+    $: if (!loading) {
+      menuItems = [
+        { id: 'download', label: $t('nav.download'), icon: Download },
+        { id: 'upload', label: $t('nav.upload'), icon: Upload },
+        { id: 'network', label: $t('nav.network'), icon: Globe },
+        { id: 'mining', label: $t('nav.mining'), icon: Cpu },
+        { id: 'proxy', label: $t('nav.proxy'), icon: Shield },
+        { id: 'analytics', label: $t('nav.analytics'), icon: BarChart3 },
+        { id: 'account', label: $t('nav.account'), icon: Wallet },
+        { id: 'settings', label: $t('nav.settings'), icon: Settings },
+      ]
+    }
 
     // routes to be used:
     const routes: RouteConfig[] = [
@@ -133,6 +143,7 @@
   </script>
   
   <div class="flex h-screen bg-background">
+    {#if !loading}
     <!-- Desktop Sidebar -->
     <div class="hidden md:block {sidebarCollapsed ? 'w-16' : 'w-64'} bg-card border-r transition-all">
       <nav class="p-2 space-y-2">
@@ -140,21 +151,21 @@
         <div class="flex items-center justify-between px-2 py-2 mb-2">
           <div class="flex items-center">
             <button
-              aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              aria-label={$t(sidebarCollapsed ? 'nav.expandSidebar' : 'nav.collapseSidebar')}
               class="p-2 rounded transition-colors hover:bg-gray-100"
               on:click={() => sidebarCollapsed = !sidebarCollapsed}
             >
               <Menu class="h-5 w-5" />
             </button>
             {#if !sidebarCollapsed}
-              <span class="ml-2 font-bold text-base">Menu</span>
+              <span class="ml-2 font-bold text-base">{$t('nav.menu')}</span>
             {/if}
           </div>
   
           {#if !sidebarCollapsed}
             <div class="flex items-center gap-2 text-xs">
               <div class="w-2 h-2 rounded-full {$networkStatus === 'connected' ? 'bg-green-500' : 'bg-red-500'}"></div>
-              <span class="text-muted-foreground">{$networkStatus}</span>
+              <span class="text-muted-foreground">{$networkStatus === 'connected' ? $t('nav.connected') : $t('nav.disconnected')}</span>
             </div>
           {:else}
             <div class="w-2 h-2 rounded-full {$networkStatus === 'connected' ? 'bg-green-500' : 'bg-red-500'}"></div>
@@ -201,7 +212,7 @@
     class="fixed inset-0 bg-black bg-opacity-50 z-40 md:hidden"
     role="button"
     tabindex="0"
-    aria-label="Close mobile menu"
+    aria-label={$t('nav.closeMobileMenu')}
     on:click={() => mobileMenuOpen = false}
     on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { mobileMenuOpen = false } }}
   ></div>
@@ -211,13 +222,13 @@
     <!-- Mobile Header -->
     <div class="flex justify-between items-center p-4 border-b">
       <!-- Left side -->
-      <span class="font-bold text-base">Menu</span>
+      <span class="font-bold text-base">{$t('nav.menu')}</span>
 
       <!-- Right side -->
       <div class="flex items-center gap-3">
         <div class="flex items-center gap-2">
           <div class="w-2 h-2 rounded-full {$networkStatus === 'connected' ? 'bg-green-500' : 'bg-red-500'}"></div>
-          <span class="text-muted-foreground text-sm">{$networkStatus}</span>
+          <span class="text-muted-foreground text-sm">{$networkStatus === 'connected' ? $t('nav.connected') : $t('nav.disconnected')}</span>
         </div>
         <button on:click={() => mobileMenuOpen = false}>
           <X class="h-6 w-6" />
@@ -243,6 +254,7 @@
       {/each}
     </nav>
   </div>
+{/if}
 {/if}
 
     <!-- Main Content -->
