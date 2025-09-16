@@ -6,6 +6,7 @@
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
   import DropDown from "$lib/components/ui/dropDown.svelte";
+  import type { MiningHistoryPoint } from '$lib/stores';
   import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw } from 'lucide-svelte'
   import { onDestroy, onMount, getContext } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
@@ -162,6 +163,10 @@
 
   // Button disabled if either warning exists
   $: isInvalid = !!threadsWarning || !!intensityWarning;
+
+
+  let hoveredPoint: MiningHistoryPoint | null = null;
+  let hoveredIndex: number | null = null;
 
   onMount(async () => {
     try{
@@ -904,7 +909,7 @@
         {$t('mining.noBlocksFound')}
       </p>
     {:else}
-      <div class="space-y-2">
+      <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
         {#each $miningState.recentBlocks ?? [] as block}
           <div class="flex items-center justify-between p-3 bg-secondary rounded-lg">
             <div class="flex items-center gap-3">
@@ -942,64 +947,129 @@
         <Button size="sm" variant={chartType === 'line' ? 'default' : 'outline'} on:click={() => chartType = 'line'}>{$t('mining.line')}</Button>
       </div>
 
-      <!-- Chart Rendering -->
-      {#if chartType === 'bar'}
-        <div class="h-32 flex items-end gap-1">
-          {#each ($miningState.miningHistory || []) as point}
-            <div
-                    class="flex-1 bg-primary/20 hover:bg-primary/30 transition-all rounded-t"
-                    style="height: {(point.hashRate / Math.max(...($miningState.miningHistory || []).map(h => h.hashRate))) * 100}%; transition: height 0.5s ease;"
-                    title="{formatHashRate(point.hashRate)}"
-            ></div>
-          {/each}
+      <!-- Chart with Y-axis, gradients, tooltips, and axis labels -->
+      <div class="flex h-48 gap-2">
+        <!-- Y-axis labels -->
+        <div class="flex flex-col justify-between text-xs text-muted-foreground pr-2">
+          <span>{Math.max(...($miningState.miningHistory || []).map(h => h.hashRate)).toFixed(0)} H/s</span>
+          <span>{(Math.max(...($miningState.miningHistory || []).map(h => h.hashRate)) / 2).toFixed(0)} H/s</span>
+          <span>0</span>
         </div>
-      {:else}
-        <div class="relative w-full h-32">
-          <svg class="w-full h-full border border-border rounded" viewBox="0 0 400 128" preserveAspectRatio="xMinYMax meet">
-            <!-- Grid background -->
-            <defs>
-              <pattern id="$miningState.hashRateGrid" width="40" height="32" patternUnits="userSpaceOnUse">
-                <path d="M 40 0 L 0 0 0 32" fill="none" stroke="hsl(var(--border))" stroke-width="0.5" opacity="0.3"/>
-              </pattern>
-            </defs>
-            <rect width="100%" height="100%" fill="url(#$miningState.hashRateGrid)" />
 
-            <!-- Data line with proper scaling -->
-            <polyline
-                    fill="none"
-                    stroke="hsl(var(--primary))"
-                    stroke-width="3"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    points={($miningState.miningHistory || []).map((point, i) => {
-        const x = (i / Math.max(($miningState.miningHistory || []).length - 1, 1)) * 380 + 10; // 10px margin
-        const maxHash = Math.max(...($miningState.miningHistory || []).map(h => h.hashRate)) || 1;
-        const y = 118 - ((point.hashRate / maxHash) * 100); // 10px margin top/bottom
-        return `${x},${y}`;
-      }).join(" ")}
-            />
+        <div class="relative flex-1">
+          <!-- Gridlines -->
+          <div class="absolute inset-0 flex flex-col justify-between">
+            <div class="border-t border-muted-foreground/20"></div>
+            <div class="border-t border-muted-foreground/20"></div>
+            <div class="border-t border-muted-foreground/20"></div>
+          </div>
 
-            <!-- Data points -->
-            {#each ($miningState.miningHistory || []) as point, i}
-              {@const x = (i / Math.max(($miningState.miningHistory || []).length - 1, 1)) * 380 + 10}
-              {@const maxHash = Math.max(...($miningState.miningHistory || []).map(h => h.hashRate)) || 1}
-              {@const y = 118 - ((point.hashRate / maxHash) * 100)}
-              <circle
-                      cx={x}
-                      cy={y}
-                      r="4"
-                      fill="hsl(var(--primary))"
-                      stroke="hsl(var(--background))"
-                      stroke-width="2"
-                      class="hover:r-6 transition-all cursor-pointer"
-              >
-                <title>{formatHashRate(point.hashRate)} at {new Date(point.timestamp).toLocaleTimeString()}</title>
-              </circle>
-            {/each}
-          </svg>
+          {#if chartType === 'bar'}
+            <!-- Bar Chart -->
+            <div class="flex items-end gap-1 h-full">
+              {#each ($miningState.miningHistory || []) as point, i}
+                <div
+                  role="button"
+                  tabindex="0"
+                  class="flex-1 bg-gradient-to-t from-blue-400/40 to-blue-500/80 hover:from-blue-500/60 hover:to-blue-600/90 transition-all rounded-t-md shadow-sm relative group"
+                  style="height: {(point.hashRate / Math.max(...($miningState.miningHistory || []).map(h => h.hashRate))) * 100}%"
+                  title="{formatHashRate(point.hashRate)}"
+                  on:mouseenter={() => { hoveredPoint = point; hoveredIndex = i; }}
+                  on:mouseleave={() => { hoveredPoint = null; hoveredIndex = null; }}
+                  aria-label={formatHashRate(point.hashRate) + ' at ' + new Date(point.timestamp).toLocaleTimeString()}
+                >
+                  {#if hoveredIndex === i && hoveredPoint}
+                    <div
+                      class="absolute left-1/2 -translate-x-1/2 -top-8 z-10 px-2 py-1 rounded bg-primary text-white text-xs shadow-lg pointer-events-none"
+                      style="white-space:nowrap;"
+                    >
+                      {formatHashRate(hoveredPoint.hashRate)}<br/>{new Date(hoveredPoint.timestamp).toLocaleTimeString()}
+                      <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-6 border-l-transparent border-r-6 border-r-transparent border-t-6 border-t-primary"></span>
+                    </div>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <!-- Line Chart -->
+            <div class="relative h-full">
+              <svg class="w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+                <!-- Line -->
+                <polyline
+                  fill="none"
+                  stroke="rgb(59, 130, 246)"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  points={($miningState.miningHistory || []).map((point, i) => {
+                    const x = (i / Math.max(($miningState.miningHistory || []).length - 1, 1)) * 100;
+                    const maxHash = Math.max(...($miningState.miningHistory || []).map(h => h.hashRate)) || 1;
+                    const y = 100 - ((point.hashRate / maxHash) * 100);
+                    return `${x},${y}`;
+                  }).join(' ')}
+                  class="drop-shadow-sm"
+                />
+                <!-- Area under the line -->
+                <polygon
+                  fill="url(#miningGradient)"
+                  opacity="0.3"
+                  points={($miningState.miningHistory || []).map((point, i) => {
+                    const x = (i / Math.max(($miningState.miningHistory || []).length - 1, 1)) * 100;
+                    const maxHash = Math.max(...($miningState.miningHistory || []).map(h => h.hashRate)) || 1;
+                    const y = 100 - ((point.hashRate / maxHash) * 100);
+                    return `${x},${y}`;
+                  }).join(' ') + ` 100,100 0,100`}
+                />
+                <!-- Data points -->
+                {#each ($miningState.miningHistory || []) as point, i}
+                  <circle
+                    cx={i / Math.max(($miningState.miningHistory || []).length - 1, 1) * 100}
+                    cy={100 - ((point.hashRate / Math.max(...($miningState.miningHistory || []).map(h => h.hashRate)) || 1) * 100)}
+                    r="1.2"
+                    fill="rgb(59, 130, 246)"
+                    stroke="white"
+                    stroke-width="0.2"
+                    class="cursor-pointer hover:r-2 transition-all"
+                    role="button"
+                    tabindex="0"
+                    aria-label={formatHashRate(point.hashRate) + ' at ' + new Date(point.timestamp).toLocaleTimeString()}
+                    on:mouseenter={() => { hoveredPoint = point; hoveredIndex = i; }}
+                    on:mouseleave={() => { hoveredPoint = null; hoveredIndex = null; }}
+                  />
+                {/each}
+                <!-- Gradient definition -->
+                <defs>
+                  <linearGradient id="miningGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                    <stop offset="0%" style="stop-color:rgb(59, 130, 246);stop-opacity:0.4" />
+                    <stop offset="100%" style="stop-color:rgb(59, 130, 246);stop-opacity:0.05" />
+                  </linearGradient>
+                </defs>
+              </svg>
+
+              <!-- Tooltip for line chart -->
+              {#if hoveredPoint && hoveredIndex !== null}
+                <div
+                  class="absolute z-10 px-2 py-1 rounded bg-primary text-white text-xs shadow-lg pointer-events-none"
+                  style="
+                    left: {(hoveredIndex / Math.max(($miningState.miningHistory || []).length - 1, 1)) * 100}%;
+                    top: {100 - ((hoveredPoint.hashRate / Math.max(...($miningState.miningHistory || []).map(h => h.hashRate)) || 1) * 100)}%;
+                    transform: translate(-50%, -100%);
+                    margin-top: -8px;
+                    white-space: nowrap;"
+                >
+                  {formatHashRate(hoveredPoint.hashRate)}<br/>{new Date(hoveredPoint.timestamp).toLocaleTimeString()}
+                  <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-6 border-l-transparent border-r-6 border-r-transparent border-t-6 border-t-primary"></span>
+                </div>
+              {/if}
+            </div>
+          {/if}
         </div>
-      {/if}
-
+      </div>
+      <!-- X-axis labels -->
+      <div class="flex justify-between mt-2 text-xs text-muted-foreground">
+        <span>{($miningState.miningHistory || [])[0] ? new Date(($miningState.miningHistory || [])[0].timestamp).toLocaleTimeString() : ''}</span>
+        <span>{($miningState.miningHistory || [])[($miningState.miningHistory || []).length - 1] ? new Date(($miningState.miningHistory || [])[($miningState.miningHistory || []).length - 1].timestamp).toLocaleTimeString() : ''}</span>
+      </div>
       <p class="text-xs text-muted-foreground text-center mt-2">{$t('mining.last5Minutes')}</p>
     </Card>
   {/if}

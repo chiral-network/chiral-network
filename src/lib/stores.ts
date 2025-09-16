@@ -258,7 +258,7 @@ interface RecentBlock {
   nonce: number;
 }
 
-interface MiningHistoryPoint {
+export interface MiningHistoryPoint {
   timestamp: number;
   hashRate: number;
   power: number;
