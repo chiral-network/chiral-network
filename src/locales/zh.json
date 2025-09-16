@@ -1,5 +1,5 @@
 {
-    "settings.title": "设置",
+  "settings.title": "设置",
   "settings.subtitle": "配置你的Chiral网络偏好",
 
   "badges.unsaved": "未保存的更改",
@@ -130,6 +130,23 @@
   "language.chinese": "中文",
   "language.korean": "한국어",
 
+  "nav": {
+    "menu": "菜单",
+    "download": "下载",
+    "upload": "上传",
+    "network": "网络",
+    "mining": "挖矿",
+    "proxy": "代理",
+    "analytics": "分析",
+    "account": "账户",
+    "settings": "设置",
+    "connected": "已连接",
+    "disconnected": "未连接",
+    "expandSidebar": "展开侧边栏",
+    "collapseSidebar": "收起侧边栏",
+    "closeMobileMenu": "关闭移动菜单"
+  },
+
   "privacy.title": "隐私与安全",
   "privacy.enableProxy": "启用代理路由以保持匿名",
   "privacy.enableEncryption": "启用端到端加密",
@@ -226,7 +243,7 @@
     }
   },
 
-    "transactions": {
+  "transactions": {
     "title": "交易历史",
     "manual": "手动交易",
     "empty": {
@@ -623,5 +640,4 @@
       "downloadCompleted": "🎉 下载完成：{name}"
     }
   }
-
 }
