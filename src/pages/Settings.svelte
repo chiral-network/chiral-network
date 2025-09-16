@@ -68,7 +68,8 @@
   let savedSettings = { ...defaultSettings };
   let hasChanges = false;
   let fileInputEl: HTMLInputElement | null = null;
-  let selectedLanguage = 'en';
+  let selectedLanguage: string | undefined = undefined;
+  let mounted = false;
   let clearingCache = false;
   let cacheCleared = false;
   let importExportFeedback: { message: string; type: 'success' | 'error' } | null = null;
@@ -222,23 +223,19 @@
       }
     }
 
-    const i18nLang = await loadLocale();          // e.g. "ko" | "en" | null
-    if (i18nLang) {
-      selectedLanguage = i18nLang;
-
-      (settings as any).language = i18nLang;
-      (savedSettings as any).language = i18nLang;
-    } else if ((settings as any).language) {
-
-      selectedLanguage = (settings as any).language;
-      await changeLocale(selectedLanguage);
-    }
+     const saved = await loadLocale();                    // 'en' | 'ko' | null
+     const initial = saved || 'en';
+     selectedLanguage = initial;       // Syncronize dropdown display value
+     // (From root, setupI18n() has already been called, so only once here)
+     mounted = true;
   });
 
-  $: if (selectedLanguage) {
-    changeLocale(selectedLanguage);
-    (settings as any).language = selectedLanguage;
-  }
+   function onLanguageChange(lang: string) {
+     selectedLanguage = lang;
+     changeLocale(lang);               // Save + update global state (yes, i18n.ts takes care of saving)
+     (settings as any).language = lang;
+     saveSettings();                   // If you want to reflect in settings as well
+   }
 
   const limits = {
     maxStorageSize:     { min: 10,   max: 10000, label: "Max Storage Size (GB)" },
@@ -495,6 +492,7 @@
           id="language-select"
           options={languages}
           bind:value={selectedLanguage}
+          on:change={(e) => onLanguageChange(e.detail.value)}
         />
       </div>
     </div>
