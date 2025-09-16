@@ -1,7 +1,7 @@
 <script lang="ts">
   import Card from '$lib/components/ui/card.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
-  import { File, X, Plus, FolderOpen } from 'lucide-svelte'
+  import { File as FileIcon, X, Plus, FolderOpen } from 'lucide-svelte'
   import { files } from '$lib/stores'
   import { t } from 'svelte-i18n';
   
@@ -74,7 +74,7 @@
         const fileHash = await invoke('upload_file_data_to_network', {
           fileName: file.name,
           fileData: fileData
-        });
+        }) as string;
         
         const newFile = {
           id: `file-${Date.now()}-${i}`,
@@ -189,7 +189,7 @@
           {#each $files.filter(f => f.status === 'seeding' || f.status === 'uploaded') as file}
             <div class="flex flex-wrap items-center justify-between gap-2 p-3 bg-secondary rounded-lg hover:bg-secondary/80 transition-colors">
               <div class="flex items-center gap-3 min-w-0">
-                <File class="h-4 w-4 text-muted-foreground" />
+                <FileIcon class="h-4 w-4 text-muted-foreground" />
                 <div class="flex-1 min-w-0">
                   <p class="text-sm font-medium truncate">{file.name}</p>
                   <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1">

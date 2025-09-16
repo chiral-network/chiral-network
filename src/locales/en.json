@@ -105,7 +105,7 @@
       "noPeers": "No peers connected. Run discovery to find peers."
     },
     "errors": {
-        "downloadOnlyTauri": "Chiral Node download is only available in the desktop app. Please download and run the Tauri desktop version."
+      "downloadOnlyTauri": "Chiral Node download is only available in the desktop app. Please download and run the Tauri desktop version."
     },
     "maxConnections": "Max Connections",
     "port": "Port",
@@ -564,7 +564,7 @@
     "sharedFiles": "Shared Files",
     "files": "files",
     "total": "total",
-    "tip": "💡 Tip: You can also drag and drop files here to add them",
+    "tip": "Tip: You can also drag and drop files here to add them",
     "addMoreFiles": "Add More Files",
     "hash": "Hash",
     "seeder": "seeder{count, plural, =1 {} other {s}}",
@@ -630,14 +630,14 @@
     "notifications": {
       "enterHash": "Please enter a file hash",
       "alreadyExists": "File already exists in download list",
-      "searching": "🔍 Searching for file...",
-      "notFound": "❌ File not found, please check the hash",
-      "found": "✅ File found! Adding to download queue...",
-      "addedToQueue": "📥 File added to download queue",
-      "autostart": "⚡ Download started automatically",
-      "searchFailed": "❌ Search failed: {error}",
-      "downloadFailed": "❌ Download failed: {name}",
-      "downloadCompleted": "🎉 Download completed: {name}"
+      "searching": "Searching for file...",
+      "notFound": "File not found, please check the hash",
+      "found": "File found! Adding to download queue...",
+      "addedToQueue": "File added to download queue",
+      "autostart": "Download started automatically",
+      "searchFailed": "Search failed: {error}",
+      "downloadFailed": "Download failed: {name}",
+      "downloadCompleted": "Download completed: {name}"
     }
   }
 }

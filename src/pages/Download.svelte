@@ -5,7 +5,7 @@
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
-  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, File, FolderOpen } from 'lucide-svelte'
+  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen } from 'lucide-svelte'
   import { files, downloadQueue } from '$lib/stores'
   import { t } from 'svelte-i18n'
   import { get } from 'svelte/store'
@@ -17,7 +17,6 @@
   let lastValidMaxConcurrent = 3 // Store the last valid value
   let autoStartQueue = true
   let filterStatus = 'all' // 'all', 'active', 'paused', 'queued', 'completed', 'failed'
-  let pendingDownloadConfirmations = new Map<string, boolean>() // Track confirmation status for downloads
   let activeSimulations = new Set<string>() // Track files with active progress simulations
 
   // Add notification related variables
@@ -262,18 +261,7 @@
       // Handle different scenarios
       if (existingFile.status === 'seeding' || existingFile.status === 'uploaded') {
         // User is trying to download a file they're already sharing
-        // Show confirmation dialog IMMEDIATELY and block until user responds
-        const shouldContinue = confirm(
-          `You're already sharing a file with this hash (${existingFile.name}). ` +
-          `Do you want to download it anyway?`
-        );
-        
-        if (!shouldContinue) {
-          showNotification('Download canceled by user', 'info');
-          return;
-        }
-        
-        // Show additional info message
+        // Show warning but proceed anyway
         showNotification('Downloading file that you are already sharing', 'warning', 3000);
         
       } else {
@@ -305,7 +293,11 @@
         console.log('DHT search failed:', e);
       }
       
-      // Step 4: Create new download item
+      // Step 4: Skip validation for now - let download fail naturally
+      // This avoids Tauri initialization issues
+      // The download will fail later in simulateDownloadProgress if needed
+      
+      // Step 5: Create new download item and add to queue
       const newFile = {
         id: `download-${Date.now()}`,
         name: 'File_' + searchHash.substring(0, 8) + '.dat',
@@ -318,17 +310,13 @@
       
       downloadQueue.update(q => [...q, newFile])
       
-      // Step 5: Show download start notification
-      setTimeout(() => {
-        showNotification(tr('download.notifications.addedToQueue'), 'success')
-      }, 1000)
+      // Step 6: Show download start notification
+      showNotification(tr('download.notifications.addedToQueue'), 'success')
       
       if (autoStartQueue) {
         processQueue()
-        // If auto-start is enabled, show additional notification
-        setTimeout(() => {
-          showNotification(tr('download.notifications.autostart'), 'info')
-        }, 2000)
+        // Don't show "automatically started" message immediately
+        // It will be shown in simulateDownloadProgress if download actually starts
       }
       
       // Clear input
@@ -421,13 +409,12 @@ function clearSearch() {
       return;
     }
 
-    // Confirmation is already handled in startDownload function
     // Proceed directly to file dialog
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       const { save } = await import('@tauri-apps/plugin-dialog');
       
-      // NOW let user choose where to save the file (only after confirmation)
+      // Show file save dialog
       const outputPath = await save({
         defaultPath: fileToDownload.name,
         filters: [{
@@ -446,6 +433,9 @@ function clearSearch() {
         ));
         return;
       }
+      
+      // Show "automatically started" message now that download is proceeding
+      showNotification(tr('download.notifications.autostart'), 'info');
       
       // Start the actual download
       files.update(f => f.map(file => 
