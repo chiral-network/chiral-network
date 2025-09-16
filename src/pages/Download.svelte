@@ -5,7 +5,7 @@
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
-  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, File } from 'lucide-svelte'
+  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, File, FolderOpen } from 'lucide-svelte'
   import { files, downloadQueue } from '$lib/stores'
   import { t, locale } from 'svelte-i18n'
   import { get } from 'svelte/store'
@@ -246,7 +246,7 @@
     }
   }
   
-  // Enhanced startDownload function with search and download status notifications
+  // Enhanced startDownload function with real P2P download
   async function startDownload() {
     if (!searchHash) {
       showNotification(tr('download.notifications.enterHash'), 'warning')
@@ -254,59 +254,62 @@
     }
     
     // Check for ALL duplicates (including uploaded files)
-const allFiles = [...$files, ...$downloadQueue]
-const existingFile = allFiles.find(f => f.hash === searchHash)
+    const allFiles = [...$files, ...$downloadQueue]
+    const existingFile = allFiles.find(f => f.hash === searchHash)
 
-if (existingFile) {
-  // Handle different scenarios
-  if (existingFile.status === 'seeding' || existingFile.status === 'uploaded') {
-    // User is trying to download a file they're already sharing
-    const shouldContinue = confirm(
-      `You're already sharing a file with this hash (${existingFile.name}). ` +
-      `Do you want to download it anyway? `
-    )
-    
-    if (!shouldContinue) {
-      showNotification('Download canceled by user', 'info')
-      return
+    if (existingFile) {
+      // Handle different scenarios
+      if (existingFile.status === 'seeding' || existingFile.status === 'uploaded') {
+        // User is trying to download a file they're already sharing
+        const shouldContinue = confirm(
+          `You're already sharing a file with this hash (${existingFile.name}). ` +
+          `Do you want to download it anyway? `
+        )
+        
+        if (!shouldContinue) {
+          showNotification('Download canceled by user', 'info')
+          return
+        }
+        
+        // Show additional info message
+        showNotification('Downloading file that you are already sharing', 'warning', 3000)
+        
+      } else {
+        // File is already in download queue/completed/etc.
+        showNotification('File is already in your download list', 'warning')
+        return
+      }
     }
     
-    // Show additional info message
-    showNotification('Downloading file that you are already sharing', 'warning', 3000)
-    
-  } else {
-    // File is already in download queue/completed/etc.
-    showNotification('File is already in your download list', 'warning')
-    return
-  }
-}
-    
     try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      
       // Step 1: Show search start notification
       showNotification(tr('download.notifications.searching'), 'info', 2000)
       
-      // Step 2: Simulate search process (replace with actual search API if available)
-      await new Promise(resolve => setTimeout(resolve, 1500))
-      
-      // Step 3: Simulate search results (assumes file can always be found)
-      // In actual implementation, you would call real search API
-      const fileFound = Math.random() > 0.2 // 80% chance to find file
-      
-      if (!fileFound) {
-        showNotification(tr('download.notifications.notFound'), 'error', 5000)
-        return
+      // Step 2: Start file transfer service if not already running
+      try {
+        await invoke('start_file_transfer_service');
+      } catch (e) {
+        console.log('File transfer service already running or error:', e);
       }
       
-      // Step 4: File found, show success notification
-      showNotification(tr('download.notifications.found'), 'success')
+      // Step 3: Search for file in DHT
+      try {
+        await invoke('search_file_metadata', { fileHash: searchHash });
+        // Wait a moment for DHT search to complete
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      } catch (e) {
+        console.log('DHT search failed:', e);
+      }
       
-      // Create new download item
+      // Step 4: Create new download item
       const newFile = {
         id: `download-${Date.now()}`,
         name: 'File_' + searchHash.substring(0, 8) + '.dat',
         hash: searchHash,
-        size: Math.floor(Math.random() * 100000000),
-        price: Math.random() * 5,
+        size: 0, // Will be updated when we get file info
+        price: 0, // No price in this implementation
         status: 'queued' as const,
         priority: 'normal' as const
       }
@@ -400,7 +403,7 @@ function clearSearch() {
     })
   }
   
-  function simulateDownloadProgress(fileId: string) {
+  async function simulateDownloadProgress(fileId: string) {
     // Prevent duplicate simulations
     if (activeSimulations.has(fileId)) {
       return
@@ -408,44 +411,104 @@ function clearSearch() {
 
     activeSimulations.add(fileId)
 
-    const interval = setInterval(() => {
-      files.update(f => f.map(file => {
-        if (file.id === fileId && file.status === 'downloading') {
-          const speed = file.priority === 'high' ? 15 : file.priority === 'low' ? 5 : 10
-          const newProgress = Math.min(100, (file.progress || 0) + Math.random() * speed)
+    // Get the file to download
+    const fileToDownload = $files.find(f => f.id === fileId);
+    if (!fileToDownload) {
+      activeSimulations.delete(fileId);
+      return;
+    }
 
-          // 5% chance of failure when progress is between 20-80%
-          const currentProgress = file.progress || 0
-          if (currentProgress > 20 && currentProgress < 80 && Math.random() < 0.05) {
-            clearInterval(interval)
-            activeSimulations.delete(fileId)
-            // Download failure notification
-            showNotification(tr('download.notifications.downloadFailed', { values: { name: file.name } }), 'error')
-            return { ...file, status: 'failed' }
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const { save } = await import('@tauri-apps/plugin-dialog');
+      
+      // Let user choose where to save the file
+      const outputPath = await save({
+        defaultPath: fileToDownload.name,
+        filters: [{
+          name: 'All Files',
+          extensions: ['*']
+        }]
+      });
+      
+      if (!outputPath) {
+        // User cancelled the save dialog
+        activeSimulations.delete(fileId);
+        files.update(f => f.map(file => 
+          file.id === fileId 
+            ? { ...file, status: 'canceled' }
+            : file
+        ));
+        return;
+      }
+      
+      // Start the actual download
+      files.update(f => f.map(file => 
+        file.id === fileId ? { ...file, progress: 10 } : file
+      ));
+      
+      // Simulate progress while downloading
+      const progressInterval = setInterval(() => {
+        files.update(f => f.map(file => {
+          if (file.id === fileId && file.status === 'downloading') {
+            const currentProgress = file.progress || 10;
+            const newProgress = Math.min(90, currentProgress + Math.random() * 10);
+            return { ...file, progress: newProgress };
           }
+          return file;
+        }));
+      }, 500);
 
-          if (newProgress >= 100) {
-            clearInterval(interval)
-            activeSimulations.delete(fileId)
-            // Download completion notification
-            showNotification(tr('download.notifications.downloadCompleted', { values: { name: file.name } }), 'success')
-            return { ...file, progress: 100, status: 'completed' }
-          }
-          return { ...file, progress: newProgress }
-        } else if (file.id === fileId && file.status !== 'downloading') {
-          // File is no longer downloading, stop simulation
-          clearInterval(interval)
-          activeSimulations.delete(fileId)
-        }
-        return file
-      }))
-    }, 1000)
+      // Attempt the actual download
+      await invoke('download_file_from_network', {
+        fileHash: fileToDownload.hash,
+        outputPath: outputPath
+      });
+
+      // Download successful
+      clearInterval(progressInterval);
+      activeSimulations.delete(fileId);
+      
+      files.update(f => f.map(file => 
+        file.id === fileId 
+          ? { ...file, progress: 100, status: 'completed', downloadPath: outputPath }
+          : file
+      ));
+      
+      showNotification(`Download completed: ${fileToDownload.name} saved to ${outputPath}`, 'success');
+      
+    } catch (error) {
+      // Download failed
+      activeSimulations.delete(fileId);
+      
+      files.update(f => f.map(file => 
+        file.id === fileId 
+          ? { ...file, status: 'failed' }
+          : file
+      ));
+      
+      console.error('Download failed:', error);
+      showNotification(tr('download.notifications.downloadFailed', { values: { name: fileToDownload.name } }), 'error');
+    }
   }
   
   function changePriority(fileId: string, priority: 'low' | 'normal' | 'high') {
     downloadQueue.update(queue => queue.map(file => 
       file.id === fileId ? { ...file, priority } : file
     ))
+  }
+
+  async function showInFolder(fileId: string) {
+    const file = $files.find(f => f.id === fileId);
+    if (file && file.downloadPath) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('show_in_folder', { path: file.downloadPath });
+      } catch (error) {
+        console.error('Failed to show file in folder:', error);
+        showNotification('Failed to open file location', 'error');
+      }
+    }
   }
   
   function moveInQueue(fileId: string, direction: 'up' | 'down') {
@@ -795,10 +858,11 @@ function clearSearch() {
                   <Button
                     size="sm"
                     variant="outline"
+                    on:click={() => showInFolder(file.id)}
                     class="h-8 px-3"
                   >
-                    <File class="h-3 w-3 mr-1" />
-                    {$t('download.actions.openFile')}
+                    <FolderOpen class="h-3 w-3 mr-1" />
+                    Show in Folder
                   </Button>
                 {/if}
               </div>

@@ -51,20 +51,60 @@
     files.update(f => f.filter(file => file.id !== fileId))
   }
   
-  function addFiles(filesToAdd: any[]) {
-    // Generate hashes and add to store
-    const newFiles = filesToAdd.map((file, i) => ({
-      id: `file-${Date.now()}-${i}`,
-      name: file.name,
-      hash: `Qm${Math.random().toString(36).substring(2, 15)}${Math.random().toString(36).substring(2, 15)}`,
-      size: file.size,
-      status: 'seeding' as const,
-      seeders: 1,
-      leechers: 0,
-      uploadDate: new Date()
-    }))
+  async function addFiles(filesToAdd: File[]) {
+    const { invoke } = await import('@tauri-apps/api/core');
     
-    files.update(f => [...f, ...newFiles])
+    // Start file transfer service if not already running
+    try {
+      await invoke('start_file_transfer_service');
+    } catch (e) {
+      console.log('File transfer service already running or error:', e);
+    }
+    
+    // Upload each file and get real hash
+    for (let i = 0; i < filesToAdd.length; i++) {
+      const file = filesToAdd[i];
+      
+      try {
+        // Read the file content as ArrayBuffer
+        const arrayBuffer = await file.arrayBuffer();
+        const fileData = Array.from(new Uint8Array(arrayBuffer));
+        
+        // Upload the file data directly
+        const fileHash = await invoke('upload_file_data_to_network', {
+          fileName: file.name,
+          fileData: fileData
+        });
+        
+        const newFile = {
+          id: `file-${Date.now()}-${i}`,
+          name: file.name,
+          hash: fileHash,
+          size: file.size,
+          status: 'seeding' as const,
+          seeders: 1,
+          leechers: 0,
+          uploadDate: new Date()
+        };
+        
+        files.update(f => [...f, newFile]);
+        
+      } catch (error) {
+        console.error('Failed to upload file:', error);
+        // Still add to store but mark as failed
+        const newFile = {
+          id: `file-${Date.now()}-${i}`,
+          name: file.name,
+          hash: `error-${Date.now()}`,
+          size: file.size,
+          status: 'failed' as const,
+          seeders: 0,
+          leechers: 0,
+          uploadDate: new Date()
+        };
+        files.update(f => [...f, newFile]);
+      }
+    }
   }
   
   function formatFileSize(bytes: number): string {

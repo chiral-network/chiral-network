@@ -7,6 +7,7 @@ mod ethereum;
 mod keystore;
 mod geth_downloader;
 mod dht;
+mod file_transfer;
 mod headless;
 
 use ethereum::{
@@ -18,6 +19,8 @@ use ethereum::{
 use keystore::Keystore;
 use geth_downloader::GethDownloader;
 use dht::{DhtService, FileMetadata, DhtEvent};
+use file_transfer::{FileTransferService, FileTransferEvent};
+use tracing::{info, warn};
 use sysinfo::{Components, System, MINIMUM_CPU_UPDATE_INTERVAL};
 use systemstat::{Platform, System as SystemStat};
 use std::{sync::{Arc, Mutex}, time::Instant};
@@ -32,6 +35,7 @@ struct AppState {
     downloader: Arc<GethDownloader>,
     miner_address: Mutex<Option<String>>,
     dht: Mutex<Option<Arc<DhtService>>>,
+    file_transfer: Mutex<Option<Arc<FileTransferService>>>,
 }
 
 #[tauri::command]
@@ -466,6 +470,213 @@ fn detect_locale() -> String {
     sys_locale::get_locale().unwrap_or_else(|| "en-US".into())
 }
 
+#[tauri::command]
+async fn start_file_transfer_service(state: State<'_, AppState>) -> Result<(), String> {
+    {
+        let ft_guard = state.file_transfer.lock().map_err(|e| e.to_string())?;
+        if ft_guard.is_some() {
+            return Err("File transfer service is already running".to_string());
+        }
+    }
+    
+    let file_transfer_service = FileTransferService::new()
+        .await
+        .map_err(|e| format!("Failed to start file transfer service: {}", e))?;
+    
+    {
+        let mut ft_guard = state.file_transfer.lock().map_err(|e| e.to_string())?;
+        *ft_guard = Some(Arc::new(file_transfer_service));
+    }
+    
+    Ok(())
+}
+
+#[tauri::command]
+async fn upload_file_to_network(
+    state: State<'_, AppState>,
+    file_path: String,
+    file_name: String,
+) -> Result<String, String> {
+    let ft = {
+        let ft_guard = state.file_transfer.lock().map_err(|e| e.to_string())?;
+        ft_guard.as_ref().cloned()
+    };
+    
+    if let Some(ft) = ft {
+        // Upload the file
+        ft.upload_file(file_path.clone(), file_name.clone()).await?;
+        
+        // Get the file hash by reading the file and calculating it
+        let file_data = tokio::fs::read(&file_path).await
+            .map_err(|e| format!("Failed to read file: {}", e))?;
+        let file_hash = file_transfer::FileTransferService::calculate_file_hash(&file_data);
+        
+        // Also publish to DHT if it's running
+        let dht = {
+            let dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
+            dht_guard.as_ref().cloned()
+        };
+        
+        if let Some(dht) = dht {
+            let metadata = FileMetadata {
+                file_hash: file_hash.clone(),
+                file_name: file_name.clone(),
+                file_size: file_data.len() as u64,
+                seeders: vec![],
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+                mime_type: None,
+            };
+            
+            if let Err(e) = dht.publish_file(metadata).await {
+                warn!("Failed to publish file metadata to DHT: {}", e);
+            }
+        }
+        
+        Ok(file_hash)
+    } else {
+        Err("File transfer service is not running".to_string())
+    }
+}
+
+#[tauri::command]
+async fn download_file_from_network(
+    state: State<'_, AppState>,
+    file_hash: String,
+    output_path: String,
+) -> Result<(), String> {
+    let ft = {
+        let ft_guard = state.file_transfer.lock().map_err(|e| e.to_string())?;
+        ft_guard.as_ref().cloned()
+    };
+    
+    if let Some(ft) = ft {
+        // First try to download from local storage
+        match ft.download_file(file_hash.clone(), output_path.clone()).await {
+            Ok(()) => {
+                info!("File downloaded successfully from local storage");
+                return Ok(());
+            }
+            Err(_) => {
+                // File not found locally, would need to implement P2P download here
+                // For now, return an error
+                return Err("File not found in local storage. P2P download not yet implemented.".to_string());
+            }
+        }
+    } else {
+        Err("File transfer service is not running".to_string())
+    }
+}
+
+#[tauri::command]
+async fn upload_file_data_to_network(
+    state: State<'_, AppState>,
+    file_name: String,
+    file_data: Vec<u8>,
+) -> Result<String, String> {
+    let ft = {
+        let ft_guard = state.file_transfer.lock().map_err(|e| e.to_string())?;
+        ft_guard.as_ref().cloned()
+    };
+    
+    if let Some(ft) = ft {
+        // Calculate file hash from the data
+        let file_hash = file_transfer::FileTransferService::calculate_file_hash(&file_data);
+        
+        // Store the file data directly in memory
+        let file_size = file_data.len() as u64;
+        ft.store_file_data(file_hash.clone(), file_name.clone(), file_data).await;
+        
+        // Also publish to DHT if it's running
+        let dht = {
+            let dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
+            dht_guard.as_ref().cloned()
+        };
+        
+        if let Some(dht) = dht {
+            let metadata = FileMetadata {
+                file_hash: file_hash.clone(),
+                file_name: file_name.clone(),
+                file_size: file_size,
+                seeders: vec![],
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+                mime_type: None,
+            };
+            
+            if let Err(e) = dht.publish_file(metadata).await {
+                warn!("Failed to publish file metadata to DHT: {}", e);
+            }
+        }
+        
+        Ok(file_hash)
+    } else {
+        Err("File transfer service is not running".to_string())
+    }
+}
+
+#[tauri::command]
+async fn show_in_folder(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .args(["/select,", &path])
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+    
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-R", &path])
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .args([&std::path::Path::new(&path).parent().unwrap_or(std::path::Path::new("/"))])
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+    
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_file_transfer_events(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let ft = {
+        let ft_guard = state.file_transfer.lock().map_err(|e| e.to_string())?;
+        ft_guard.as_ref().cloned()
+    };
+    
+    if let Some(ft) = ft {
+        let events = ft.drain_events(100).await;
+        let mapped: Vec<String> = events.into_iter().map(|e| match e {
+            FileTransferEvent::FileUploaded { file_hash, file_name } => {
+                format!("file_uploaded:{}:{}", file_hash, file_name)
+            }
+            FileTransferEvent::FileDownloaded { file_path } => {
+                format!("file_downloaded:{}", file_path)
+            }
+            FileTransferEvent::FileNotFound { file_hash } => {
+                format!("file_not_found:{}", file_hash)
+            }
+            FileTransferEvent::Error { message } => {
+                format!("error:{}", message)
+            }
+        }).collect();
+        Ok(mapped)
+    } else {
+        Ok(vec![])
+    }
+}
+
 fn main() {
     // Initialize logging for debug builds
     #[cfg(debug_assertions)]
@@ -508,6 +719,7 @@ fn main() {
             downloader: Arc::new(GethDownloader::new()),
             miner_address: Mutex::new(None),
             dht: Mutex::new(None),
+            file_transfer: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
@@ -543,7 +755,13 @@ fn main() {
             get_dht_events,
             detect_locale,
             get_dht_peer_count,
-            get_dht_peer_id
+            get_dht_peer_id,
+            start_file_transfer_service,
+            upload_file_to_network,
+            upload_file_data_to_network,
+            download_file_from_network,
+            get_file_transfer_events,
+            show_in_folder
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
