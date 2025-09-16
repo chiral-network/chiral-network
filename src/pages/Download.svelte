@@ -7,7 +7,7 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, File } from 'lucide-svelte'
   import { files, downloadQueue } from '$lib/stores'
-  import { t, locale } from 'svelte-i18n'
+  import { t } from 'svelte-i18n'
   import { get } from 'svelte/store'
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
   
@@ -332,7 +332,8 @@ if (existingFile) {
     } catch (error) {
       // Error handling
       console.error('Search download failed:', error)
-      showNotification(tr('download.notifications.searchFailed', { values: { error: error.message || 'Unknown error' } }), 'error', 6000)
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      showNotification(tr('download.notifications.searchFailed', { values: { error: errorMessage } }), 'error', 6000)
     }
   }
 

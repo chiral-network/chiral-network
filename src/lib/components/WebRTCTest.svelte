@@ -221,7 +221,7 @@
   </div>
 
   <div class="flex items-center gap-3">
-    <label class="text-sm">Role:</label>
+    <span class="text-sm">Role:</span>
     <div class="flex items-center gap-2">
       <label class="text-sm flex items-center gap-1">
         <input type="radio" name="role" value="initiator" checked={role === 'initiator'} on:change={() => switchRole('initiator')} />
@@ -270,7 +270,7 @@
     {#if role === 'initiator'}
       <div>
         <div class="flex items-center justify-between mb-1">
-          <label class="text-sm font-medium">Local SDP (Offer) — send to remote</label>
+          <label for="local-sdp-offer" class="text-sm font-medium">Local SDP (Offer) — send to remote</label>
           {#if localSDP}
             <button
               class="text-xs px-2 py-1 border rounded hover:bg-gray-50"
@@ -281,6 +281,7 @@
           {/if}
         </div>
         <textarea
+          id="local-sdp-offer"
           class="w-full h-32 p-2 border rounded text-xs font-mono"
           readonly
           bind:value={localSDP}
@@ -289,8 +290,9 @@
       </div>
 
       <div>
-        <label class="block text-sm font-medium mb-1">Remote SDP (paste Answer here)</label>
+        <label for="remote-sdp-answer" class="block text-sm font-medium mb-1">Remote SDP (paste Answer here)</label>
         <textarea
+          id="remote-sdp-answer"
           class="w-full h-32 p-2 border rounded text-xs font-mono"
           bind:value={remoteSDP}
           placeholder="Paste the remote peer's answer SDP here"
@@ -307,8 +309,9 @@
       </div>
     {:else}
       <div>
-        <label class="block text-sm font-medium mb-1">Remote SDP (paste Offer here)</label>
+        <label for="remote-sdp-offer" class="block text-sm font-medium mb-1">Remote SDP (paste Offer here)</label>
         <textarea
+          id="remote-sdp-offer"
           class="w-full h-32 p-2 border rounded text-xs font-mono"
           bind:value={remoteSDP}
           placeholder="Paste the remote peer's offer SDP here"
@@ -320,7 +323,7 @@
 
       <div>
         <div class="flex items-center justify-between mb-1">
-          <label class="text-sm font-medium">Local SDP (Answer) — send to remote</label>
+          <label for="local-sdp-answer" class="text-sm font-medium">Local SDP (Answer) — send to remote</label>
           {#if localSDP}
             <button
               class="text-xs px-2 py-1 border rounded hover:bg-gray-50"
@@ -331,6 +334,7 @@
           {/if}
         </div>
         <textarea
+          id="local-sdp-answer"
           class="w-full h-32 p-2 border rounded text-xs font-mono"
           readonly
           bind:value={localSDP}
@@ -341,8 +345,9 @@
   </div>
 
   <div>
-    <label class="block text-sm font-medium mb-1">Remote ICE Candidate (JSON)</label>
+    <label for="remote-ice-candidate" class="block text-sm font-medium mb-1">Remote ICE Candidate (JSON)</label>
     <textarea
+      id="remote-ice-candidate"
       class="w-full h-20 p-2 border rounded text-xs font-mono"
       bind:value={newRemoteCandidate}
       placeholder={`{"candidate": "...", "sdpMLineIndex": 0, "sdpMid": "..."}`}
@@ -363,7 +368,7 @@
 
   <div>
     <div class="flex items-center justify-between mb-1">
-      <label class="text-sm font-medium">Log ({log.length} entries)</label>
+      <span class="text-sm font-medium">Log ({log.length} entries)</span>
       <button class="text-xs px-2 py-1 border rounded hover:bg-gray-50" on:click={clearLog}>
         Clear
       </button>

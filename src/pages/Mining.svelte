@@ -247,7 +247,6 @@
             // Use actual hash rate from logs
             $miningState.hashRate = formatHashRate(hashRateFromLogs)
             if (blocksFound > $miningState.blocksFound) {
-              const newBlocks = blocksFound - $miningState.blocksFound;
               $miningState.blocksFound = blocksFound; 
               //Visualization Now Handled By Backend
             }

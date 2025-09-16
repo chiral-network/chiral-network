@@ -158,11 +158,11 @@
                     <p class="text-xs text-muted-foreground truncate">{formatFileSize(file.size)}</p>
                     {#if file.seeders !== undefined}
                       <span class="text-xs text-muted-foreground">•</span>
-                      <p class="text-xs text-green-600">{file.seeders || 1} {$t('upload.seeder', { count: file.seeders || 1 })}</p>
+                      <p class="text-xs text-green-600">{file.seeders || 1} {$t('upload.seeder', { values: { count: file.seeders || 1 } })}</p>
                     {/if}
                     {#if file.leechers && file.leechers > 0}
                       <span class="text-xs text-muted-foreground">•</span>
-                      <p class="text-xs text-orange-600">{file.leechers} {$t('upload.leecher', { count: file.leechers })}</p>
+                      <p class="text-xs text-orange-600">{file.leechers} {$t('upload.leecher', { values: { count: file.leechers } })}</p>
                     {/if}
                   </div>
                 </div>
