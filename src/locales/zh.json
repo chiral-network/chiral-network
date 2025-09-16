@@ -1,0 +1,627 @@
+{
+    "settings.title": "设置",
+  "settings.subtitle": "配置你的Chiral网络偏好",
+
+  "badges.unsaved": "未保存的更改",
+
+  "storage.title": "存储",
+  "storage.location": "存储位置",
+  "storage.locationPick": "选择存储位置",
+  "storage.selectLocationTitle": "选择存储位置",
+  "storage.enterPathPrompt": "输入存储路径",
+  "storage.browserNoPicker": "Tauri文件选择器在浏览器中不可用",
+  "storage.maxSize": "最大存储大小 (GB)",
+  "storage.cleanupThreshold": "自动清理阈值 (%)",
+  "storage.enableCleanup": "存储已满时启用自动清理",
+
+  "network": {
+    "title": "网络概览",
+    "subtitle": "监控网络状态并发现节点",
+    "nodeStatus": "Chiral节点状态",
+    "status": {
+      "notInstalled": "未安装",
+      "downloading": "下载中...",
+      "starting": "启动中...",
+      "connected": "已连接",
+      "disconnected": "已断开"
+    },
+    "download": {
+      "progress": "进度",
+      "notFound": "未找到Chiral节点二进制文件",
+      "prompt": "下载Core-Geth二进制文件以运行本地节点",
+      "button": "下载Chiral节点 (~50 MB)",
+      "starting": "开始下载..."
+    },
+    "startingNode": "正在启动Chiral节点...",
+    "pleaseWait": "请稍候，这可能需要一些时间。",
+    "notRunning": "Chiral节点未运行",
+    "startNode": "启动Chiral节点",
+    "chiralPeers": "Chiral节点",
+    "chainId": "链ID",
+    "nodeAddress": "节点地址",
+    "copied": "已复制！",
+    "copy": "复制",
+    "stopNode": "停止Chiral节点",
+    "dht": {
+      "title": "DHT网络",
+      "notConnected": "DHT未连接",
+      "connectionError": "连接错误",
+      "retry": "重试连接",
+      "connect": "连接到DHT网络",
+      "stop": "停止DHT",
+      "log": "连接日志",
+      "connectingToBootstrap": "正在连接引导节点...",
+      "attempt": "尝试 #{connectionAttempts}",
+      "port": "DHT端口",
+      "peers": "已连接节点",
+      "peerId": "节点ID",
+      "bootstrapNode": "引导节点",
+      "recentEvents": "最近事件",
+      "disconnect": "断开DHT"
+    },
+    "networkStatus": "网络状态",
+    "dhtPeers": "DHT节点",
+    "networkSize": "网络规模",
+    "bandwidth": "带宽",
+    "peerDiscovery": {
+      "title": "节点发现",
+      "discovering": "发现中...",
+      "run": "运行发现",
+      "directConnect": "直接连接",
+      "placeholder": "输入节点地址 (IP:端口 或 节点ID)",
+      "connect": "连接"
+    },
+    "connectedPeers": {
+      "title": "已连接节点 ({count})",
+      "sortBy": "排序方式",
+      "reputation": "信誉",
+      "sharedFiles": "共享文件",
+      "totalSize": "总大小",
+      "name": "名称",
+      "location": "位置",
+      "joinDate": "加入日期",
+      "lastSeen": "上次在线",
+      "status": "状态",
+      "highest": "最高",
+      "lowest": "最低",
+      "most": "最多",
+      "least": "最少",
+      "largest": "最大",
+      "smallest": "最小",
+      "newest": "最新",
+      "oldest": "最早",
+      "mostRecent": "最近",
+      "leastRecent": "最久",
+      "closest": "最近",
+      "farthest": "最远",
+      "online": "在线",
+      "offline": "离线",
+      "aToZ": "A → Z",
+      "zToA": "Z → A",
+      "anonymous": "匿名",
+      "unknown": "未知",
+      "joined": "加入",
+      "now": "现在",
+      "noPeers": "没有已连接节点。运行发现以找到节点。"
+    },
+    "errors": {
+      "downloadOnlyTauri": "Chiral节点下载仅在桌面应用中可用。请下载并运行Tauri桌面版本。"
+    },
+    "maxConnections": "最大连接数",
+    "port": "端口",
+    "uploadLimit": "上传限制 (MB/s)",
+    "downloadLimit": "下载限制 (MB/s)",
+    "userLocation": "用户位置",
+    "locationHint": "帮助连接附近节点以获得更好性能。",
+    "enableUpnp": "启用UPnP",
+    "enableNat": "启用NAT端口映射",
+    "enableDht": "启用DHT"
+  },
+
+  "regions.usEast": "美国东部",
+  "regions.usWest": "美国西部",
+  "regions.euWest": "西欧",
+  "regions.apac": "亚太地区",
+
+  "language.title": "语言",
+  "language.select": "选择语言",
+  "language.english": "English",
+  "language.spanish": "Español",
+  "language.chinese": "中文",
+  "language.korean": "한국어",
+
+  "privacy.title": "隐私与安全",
+  "privacy.enableProxy": "启用代理路由以保持匿名",
+  "privacy.enableEncryption": "启用端到端加密",
+  "privacy.anonymousMode": "匿名模式（隐藏所有身份信息）",
+  "privacy.shareAnalytics": "共享匿名使用分析",
+
+  "notifications.title": "通知",
+  "notifications.enable": "启用桌面通知",
+  "notifications.notifyComplete": "下载完成时通知",
+  "notifications.notifyError": "错误通知",
+  "notifications.soundAlerts": "播放声音提醒",
+
+  "advanced.title": "高级",
+  "advanced.chunkSize": "分块大小 (KB)",
+  "advanced.cacheSize": "缓存大小 (MB)",
+  "advanced.logLevel": "日志级别",
+  "advanced.logError": "错误",
+  "advanced.logWarn": "警告",
+  "advanced.logInfo": "信息",
+  "advanced.logDebug": "调试",
+  "advanced.autoUpdate": "自动安装更新",
+  "advanced.clearCache": "清除缓存",
+  "advanced.exportSettings": "导出设置",
+  "advanced.importSettings": "导入设置",
+  "advanced.invalidJsonAlert": "无效的JSON文件。请选择有效的导出文件。",
+
+  "actions.resetDefaults": "重置为默认值",
+  "actions.cancel": "取消",
+  "actions.save": "保存设置",
+  "actions.confirm": "确认重置",
+
+  "confirm.title": "你确定吗？",
+  "confirm.resetBody": "所有设置将恢复为默认值。此操作会立即保存。",
+
+  "validation.min": "{label} 必须 ≥ {min}。",
+  "validation.between": "{label} 必须在 {min} 和 {max} 之间。",
+
+  "button": {
+    "clearCache": "清除缓存",
+    "clearing": "正在清除...",
+    "cleared": "✓ 已清除！"
+  },
+
+  "account": {
+    "title": "账户",
+    "subtitle": "管理你的钱包和账户设置"
+  },
+
+  "wallet": {
+    "title": "Chiral网络钱包",
+    "balance": "余额",
+    "totalEarned": "总收入",
+    "totalSpent": "总支出",
+    "address": "Chiral地址",
+    "qrModal": {
+      "title": "你的Chiral地址",
+      "alt": "Chiral地址二维码"
+    },
+    "export": "导出钱包",
+    "exportSuccess": "钱包导出成功！",
+    "cta": {
+      "intro": "通过创建或导入账户开始使用Chiral网络：",
+      "or": "或"
+    },
+    "privateKey": "私钥"
+  },
+
+  "transfer": {
+    "title": "发送Chiral币",
+    "recipient": {
+      "label": "接收方地址",
+      "aria": "接收方地址输入框",
+      "placeholder": "0x...",
+      "characters": "字符",
+      "remaining": "剩余",
+      "over": "超出",
+      "scanQr": "扫描二维码",
+      "scanQrTitle": "扫描二维码"
+    },
+    "amount": {
+      "label": "数量 (Chiral)",
+      "max": "最大",
+      "placeholder": ""
+    },
+    "available": "可用：{amount} Chiral",
+    "send": "发送交易",
+    "sendingIn": "{seconds}s 后发送 (点击取消)",
+    "viewPending": "查看待处理交易",
+    "pending": {
+      "title": "待处理交易",
+      "noDetails": "没有可用的待处理交易详情。",
+      "count": "{count} 笔待处理交易",
+      "none": "无待处理交易"
+    }
+  },
+
+    "transactions": {
+    "title": "交易历史",
+    "manual": "手动交易",
+    "empty": {
+      "title": "还没有交易",
+      "desc": "当你发送或接收Chiral时，交易将显示在这里"
+    },
+    "item": {
+      "from": "来自",
+      "to": "发送至"
+    }
+  },
+
+  "keystore": {
+    "title": "保存到本地存储",
+    "desc": "将你的私钥安全地保存在此设备中，并使用密码加密。",
+    "success": "成功！私钥已保存到存储。",
+    "successSimulated": "成功！（模拟）私钥已保存。",
+    "error": "错误: {error}",
+    "load": {
+      "title": "从存储加载",
+      "select": "选择账户",
+      "empty": "未在存储中找到账户。",
+      "success": "账户加载成功",
+      "successSimulated": "账户已加载（演示模式）",
+      "error": "加载账户时出错: {error}"
+    }
+  },
+
+  "blacklist": {
+    "title": "黑名单管理",
+    "subtitle": "屏蔽恶意或不需要的地址",
+    "add": {
+      "title": "添加新条目",
+      "address": "Chiral地址",
+      "addressPlaceholder": "0x1234567890abcdef...",
+      "reason": "屏蔽原因",
+      "remaining": "剩余 {remaining} 个字符",
+      "submit": "添加到黑名单"
+    },
+    "quickReasons": {
+      "label": "快速原因：",
+      "spam": "垃圾信息",
+      "fraud": "欺诈",
+      "malicious": "恶意活动",
+      "harassment": "骚扰",
+      "scam": "骗局"
+    },
+    "list": {
+      "title": "黑名单地址",
+      "emptyTitle": "黑名单中没有地址",
+      "emptyDesc": "在上方添加地址以阻止交易和交互",
+      "noMatch": "没有与 \"{q}\" 匹配的黑名单地址",
+      "addedAt": "添加于 {date}",
+      "showing": "显示 {shown} / {total} 个黑名单地址"
+    },
+    "actions": {
+      "clearAll": "清空全部",
+      "export": "导出黑名单",
+      "exportTitle": "将黑名单导出为JSON文件",
+      "import": "导入黑名单",
+      "copyAddress": "复制地址"
+    },
+    "errors": {
+      "alreadyExists": "该地址已在黑名单中。",
+      "ownAddress": "不能将你自己的地址添加到黑名单。"
+    },
+    "confirm": {
+      "remove": "是否将 {address} 移出黑名单？",
+      "removeAll": "是否移除黑名单中的 {count} 个地址？"
+    },
+    "import": {
+      "success": "已成功导入 {count} 个条目",
+      "none": "未找到可导入的新条目",
+      "invalid": "文件格式无效：未找到黑名单数据",
+      "parseError": "文件格式无效：请选择有效的JSON文件"
+    }
+  },
+
+  "filters": {
+    "type": "类型",
+    "typeAll": "全部",
+    "typeSent": "已发送",
+    "typeReceived": "已接收",
+    "from": "来自",
+    "to": "发送至",
+    "sort": "排序",
+    "sortNewest": "最新 → 最早",
+    "sortOldest": "最早 → 最新",
+    "reset": "重置"
+  },
+
+  "actions": {
+    "createAccount": "创建新账户",
+    "creating": "正在创建...",
+    "importAccount": "导入已有账户",
+    "importing": "正在导入...",
+    "unlockAccount": "解锁账户",
+    "unlocking": "正在解锁...",
+    "copy": "复制",
+    "show": "显示",
+    "hide": "隐藏",
+    "close": "关闭",
+    "saveKey": "保存密钥",
+    "saving": "正在保存...",
+    "save": "保存",
+    "saveSettings": "保存设置",
+    "cancel": "取消",
+    "remove": "删除",
+    "edit": "编辑",
+    "resetDefaults": "重置为默认值",
+    "lockWallet": "锁定钱包"
+  },
+
+  "placeholders": {
+    "importPrivateKey": "输入私钥以导入",
+    "password": "输入一个安全的密码",
+    "unlockPassword": "输入密码以解锁",
+    "searchBlacklist": "搜索黑名单...",
+    "reason": "输入原因..."
+  },
+
+  "tooltips": {
+    "showQr": "显示二维码",
+    "clearSearch": "清除搜索"
+  },
+
+  "aria": {
+    "copyAddress": "复制地址",
+    "copyPrivateKey": "复制私钥",
+    "showQr": "显示二维码"
+  },
+
+  "warnings": {
+    "neverSharePrivateKey": "切勿与任何人分享你的私钥"
+  },
+
+  "errors": {
+    "address": {
+      "mustStartWith0x": "地址必须以0x开头。",
+      "mustBe42": "地址必须正好是42个字符。",
+      "mustBeHex": "地址必须包含有效的十六进制字符 (0-9, a-f, A-F)"
+    },
+    "amount": {
+      "invalid": "请输入大于0的有效数量。",
+      "min": "数量必须至少为 {min} Chiral。",
+      "insufficient": "余额不足：缺少 {more} Chiral。"
+    },
+    "exportFailed": "导出失败。请重试。",
+    "createAccount": "无法创建账户: {error}"
+  },
+
+  "messages": {
+    "copied": "已复制！",
+    "failed": "失败！"
+  },
+  "analytics": {
+    "title": "分析面板",
+    "subtitle": "监控你的表现和网络活动",
+    "totalEarnings": "总收益",
+    "earningsThisWeek": "本周 +12.5%",
+    "storageUsed": "已用存储",
+    "filesShared": "已分享文件",
+    "downloaded": "已下载",
+    "reputation": "声誉",
+    "bandwidthUsage": "带宽使用量（今日）",
+    "upload": "上传",
+    "download": "下载",
+    "totalBandwidthUsed": "已用总带宽",
+    "networkActivity": "网络活动",
+    "activeUploads": "活跃上传",
+    "activeDownloads": "活跃下载",
+    "queuedDownloads": "排队下载",
+    "totalTransactions": "总交易数",
+    "networkFiles": "网络文件",
+    "networkLatency": "网络延迟",
+    "average": "平均",
+    "p95": "P95",
+    "best": "最佳",
+    "currentAvg": "当前平均",
+    "latencyHint": "0–50 ms（优秀），50–150 ms（可接受），>150 ms（较差）",
+    "nodesReporting": "上报节点",
+    "sampleSize": "样本大小",
+    "latencyRecent": "延迟（近期）",
+    "topEarningFiles": "收益最高的文件",
+    "seeders": "做种者",
+    "noEarningsYet": "尚无收益",
+    "popularFiles": "热门文件",
+    "leechers": "下载者",
+    "noFilesYet": "尚无文件",
+    "earningsHistory": "收益历史",
+    "bars": "柱状",
+    "line": "折线",
+    "periods": {
+      "7d": "最近 7 天",
+      "30d": "最近 30 天",
+      "thisMonth": "本月",
+      "lastMonth": "上月",
+      "ytd": "年初至今",
+      "custom": "自定义"
+    },
+    "from": "从：",
+    "to": "到：",
+    "ms": "毫秒",
+    "min": "最小：",
+    "max": "最大：",
+    "suspiciousActivity": "可疑活动警报",
+    "noSuspiciousActivity": "未检测到可疑活动",
+    "unusualUpload": "异常上传",
+    "unusualUploadDesc": "文件 > 1 GB 上传速度异常快",
+    "multipleLogins": "多次登录",
+    "multipleLoginsDesc": "用户在 5 分钟内从不同国家登录",
+    "failedDownloads": "下载失败",
+    "failedDownloadsDesc": "检测到多次下载失败尝试"
+  },
+  "proxy": {
+    "title": "代理网络",
+    "subtitle": "管理你的代理节点和网络设置",
+    "status": "代理状态",
+    "active": "活跃",
+    "inactive": "非活跃",
+    "activeNodes": "活跃节点",
+    "totalBandwidth": "总带宽",
+    "settings": "代理设置",
+    "proxy": "代理",
+    "addNode": "添加代理节点",
+    "enterAddress": "输入节点地址（例如 192.168.1.100:8080）",
+    "addNodeButton": "添加节点",
+    "invalidAddress": "请输入有效的代理地址（例如 192.168.1.100:8080）",
+    "proxyNodes": "代理节点",
+    "bandwidth": "带宽",
+    "latency": "延迟",
+    "disconnect": "断开连接",
+    "connect": "连接",
+    "remove": "移除",
+    "alreadyAdded": "该代理地址已添加！"
+  },
+  "mining": {
+    "title": "挖矿",
+    "subtitle": "贡献计算能力以保障网络并赚取奖励",
+    "hashRate": "算力",
+    "threads": "线程",
+    "notMining": "未挖矿",
+    "totalRewards": "总奖励",
+    "blocksFound": "已发现区块",
+    "powerUsage": "能耗",
+    "hw": "硬件",
+    "temperature": "温度",
+    "control": "挖矿控制",
+    "active": "挖矿中",
+    "stopped": "挖矿已停止",
+    "pool": "矿池",
+    "cpuThreads": "CPU 线程（可用 {cpuThreads}）",
+    "intensity": "挖矿强度（%）",
+    "session": "会话",
+    "totalHashes": "总哈希数",
+    "stop": "停止挖矿",
+    "start": "开始挖矿",
+    "showLogs": "显示挖矿日志",
+    "networkPage": "网络页面",
+    "accountPage": "账户页面",
+    "networkStats": "网络统计",
+    "networkHashRate": "网络算力",
+    "networkDifficulty": "网络难度",
+    "blockHeight": "区块高度",
+    "blockReward": "区块奖励",
+    "estTimeToBlock": "预计出块时间",
+    "calculating": "计算中...",
+    "activeMiners": "活跃矿工",
+    "poolInfo": "矿池信息",
+    "soloInfo": "你正在单独挖矿。所有区块奖励归你，但找到区块可能需要更长时间。",
+    "yourShare": "你的份额",
+    "poolFee": "矿池手续费",
+    "minPayout": "最低支付",
+    "na": "无",
+    "poolHashRate": "矿池算力",
+    "poolMiners": "矿池矿工",
+    "paymentMethod": "支付方式",
+    "recentBlocks": "最近发现的区块",
+    "noBlocksFound": "尚未发现区块。开始挖矿以获得奖励！",
+    "blockFound": "发现区块！",
+    "hash": "哈希",
+    "nonce": "随机数",
+    "hashRateHistory": "算力历史",
+    "chartType": "图表类型",
+    "bar": "柱状",
+    "line": "折线",
+    "last5Minutes": "最近 5 分钟",
+    "logs": "挖矿日志",
+    "noLogs": "暂无日志...",
+    "autoRefresh": "自动刷新",
+    "wrapLogs": "自动换行",
+    "filterByLevel": "按级别筛选",
+    "on": "开启",
+    "off": "关闭",
+    "refresh": "刷新",
+    "clear": "清除",
+    "pools": {
+      "solo": "单人挖矿",
+      "pool1": "ChiralPool #1",
+      "pool2": "ChiralPool #2",
+      "community": "社区矿池"
+    },
+    "errors": {
+      "threads": "线程数必须在 1 到 {cpuThreads} 之间",
+      "intensity": "强度必须在 1 到 100 之间",
+      "noAccount": "请先在账户页面创建 Chiral 网络账户",
+      "gethNotRunning": "Chiral 节点未运行。请在网络页面启动",
+      "noAccountLink": "请在账户页面创建 Chiral 网络账户"
+    },
+    "starting": "正在启动挖矿...（可能需要重启节点）"
+  },
+  "upload": {
+    "title": "上传文件",
+    "subtitle": "在 Chiral 网络中分享你的文件",
+    "dropFiles": "将文件拖放到此处分享",
+    "dropFilesHint": "将文件拖到此卡片的任意位置，或点击下方的“添加文件”",
+    "addFiles": "添加文件",
+    "sharedFiles": "已分享文件",
+    "files": "文件",
+    "total": "总计",
+    "tip": "💡 提示：你也可以将文件拖到此处添加",
+    "addMoreFiles": "添加更多文件",
+    "hash": "哈希",
+    "seeder": "做种者{count, plural, =1 {} other {们}}",
+    "leecher": "下载者{count, plural, =1 {} other {们}}",
+    "seeding": "正在分享",
+    "copyHash": "复制哈希",
+    "hashCopied": "哈希已复制！",
+    "stopSharing": "停止分享",
+    "noFilesShared": "尚无已分享文件",
+    "addFilesHint2": "添加文件以开始在网络中分享"
+  },
+  "download": {
+    "title": "下载文件",
+    "subtitle": "使用哈希从 Chiral 网络下载文件",
+    "addNew": "添加新下载",
+    "addNewSubtitle": "输入文件哈希以从网络搜索并下载",
+    "placeholder": "输入文件哈希（例如 QmZ4tDuvesekqMD...）",
+    "clearInput": "清除输入",
+    "searchAndDownload": "搜索并下载",
+    "downloads": "下载",
+    "searchPlaceholder": "搜索下载...",
+    "clearSearch": "清除搜索",
+    "filters": {
+      "all": "全部",
+      "active": "活跃",
+      "paused": "已暂停",
+      "queued": "排队中",
+      "completed": "已完成",
+      "canceled": "已取消",
+      "failed": "失败"
+    },
+    "settings": {
+      "maxConcurrent": "最大并发数",
+      "autoStart": "自动开始",
+      "toggleAutoStart": "切换队列自动开始 {status}"
+    },
+    "status": {
+      "noDownloads": "暂无下载。请输入文件名或哈希以开始下载。",
+      "noActive": "没有活跃下载。",
+      "noPaused": "没有已暂停的下载。",
+      "noQueued": "没有排队文件。",
+      "noCompleted": "没有已完成的下载。",
+      "noFailed": "没有失败的下载。"
+    },
+    "file": {
+      "hash": "哈希",
+      "queue": "队列",
+      "progress": "进度"
+    },
+    "priority": {
+      "low": "低",
+      "normal": "普通",
+      "high": "高"
+    },
+    "actions": {
+      "start": "开始",
+      "pause": "暂停",
+      "resume": "继续",
+      "remove": "移除",
+      "cancel": "取消",
+      "openFile": "打开文件"
+    },
+    "notifications": {
+      "enterHash": "请输入文件哈希",
+      "alreadyExists": "该文件已存在于下载列表",
+      "searching": "🔍 正在搜索文件...",
+      "notFound": "❌ 未找到文件，请检查哈希",
+      "found": "✅ 找到文件！已添加到下载队列...",
+      "addedToQueue": "📥 文件已添加到下载队列",
+      "autostart": "⚡ 下载已自动开始",
+      "searchFailed": "❌ 搜索失败：{error}",
+      "downloadFailed": "❌ 下载失败：{name}",
+      "downloadCompleted": "🎉 下载完成：{name}"
+    }
+  }
+
+}

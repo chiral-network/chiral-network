@@ -127,8 +127,8 @@
   "language.select": "Seleccionar idioma",
   "language.english": "Inglés",
   "language.spanish": "Español",
-  "language.chinese": "Chino",
-  "language.korean": "Coreano",
+  "language.chinese": "中文",
+  "language.korean": "한국어",
 
   "privacy.title": "Privacidad y seguridad",
   "privacy.enableProxy": "Habilitar enrutamiento por proxy para anonimato",
