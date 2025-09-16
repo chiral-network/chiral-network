@@ -926,7 +926,7 @@
           <Input
             id="peer-address"
             bind:value={newPeerAddress}
-            placeholder="/ip4/192.168.1.100/tcp/4001/p2p/12D3Koo..."
+            placeholder={$t('network.peerDiscovery.placeholder')}
             class="flex-1 min-w-0 break-all"
           />
           <Button on:click={connectToPeer} disabled={!newPeerAddress}>
