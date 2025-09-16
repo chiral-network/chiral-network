@@ -16,6 +16,12 @@
   let renameIndex: number | null = null
   let renameValue = ''
 
+  function short(addr: string, prefix = 10, suffix = 8): string {
+    if (!addr) return ''
+    if (addr.length <= prefix + suffix + 3) return addr
+    return `${addr.slice(0, prefix)}…${addr.slice(-suffix)}`
+  }
+
   function selectAccount(acc: AccountItem) {
     etcAccount.set({ address: acc.address, private_key: acc.privateKeyHex || '' })
     wallet.update(w => ({ ...w, address: acc.address }))
@@ -60,32 +66,45 @@
 </script>
 
 <Card class="p-4 space-y-3">
-  <div class="flex items-center justify-between">
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 items-center">
     <h3 class="font-semibold">Accounts</h3>
-    <Button on:click={addNext}>Derive Next</Button>
+    <div class="w-full sm:w-auto sm:justify-self-end">
+      <Button class="w-full sm:w-auto" on:click={addNext}>Derive Next</Button>
+    </div>
   </div>
   <div class="space-y-2">
     {#each accounts as acc}
-      <div class="border rounded-md p-3 flex items-center justify-between gap-3">
+      <div class="border rounded-md p-3 space-y-3">
+        <!-- Top: name + address -->
         <div class="min-w-0">
           <div class="flex items-center gap-2">
             <span class="text-sm text-muted-foreground">#{acc.index}</span>
             {#if renameIndex === acc.index}
-              <Input class="h-8 text-sm" bind:value={renameValue} on:keydown={(e) => { const ev = (e as unknown as KeyboardEvent); if (ev.key === 'Enter') commitRename(acc) }} />
+              <Input class="h-8 text-sm w-full sm:w-48" bind:value={renameValue} on:keydown={(e) => { const ev = (e as unknown as KeyboardEvent); if (ev.key === 'Enter') commitRename(acc) }} />
             {:else}
               <span class="font-medium truncate">{acc.label || 'Account ' + acc.index}</span>
             {/if}
           </div>
-          <div class="text-xs text-muted-foreground truncate">{acc.address}</div>
+          <div class="mt-1 text-xs text-muted-foreground font-mono min-w-0" title={acc.address}>
+            <!-- Responsive middle truncation to keep hash readable without overflow -->
+            <span class="sm:hidden">{short(acc.address, 6, 4)}</span>
+            <span class="hidden sm:inline md:hidden">{short(acc.address, 8, 6)}</span>
+            <span class="hidden md:inline">{short(acc.address, 10, 8)}</span>
+          </div>
         </div>
-        <div class="flex gap-2">
+        <!-- Bottom: buttons -->
+        <div class="flex flex-wrap gap-2 w-full">
           {#if renameIndex === acc.index}
-            <Button size="sm" variant="outline" on:click={() => commitRename(acc)}>Save</Button>
+            <Button class="w-full xs:w-auto whitespace-nowrap text-xs h-8 px-2" size="sm" variant="outline" on:click={() => commitRename(acc)}>Save</Button>
           {:else}
-            <Button size="sm" variant="outline" on:click={() => startRename(acc)}>Rename</Button>
+            <Button class="w-full xs:w-auto whitespace-nowrap text-xs h-8 px-2" size="sm" variant="outline" on:click={() => startRename(acc)}>Rename</Button>
           {/if}
-          <Button size="sm" variant="outline" on:click={() => saveToKeystore(acc)}>Save to Keystore</Button>
-          <Button size="sm" on:click={() => selectAccount(acc)}>Select</Button>
+          <Button class="w-full xs:w-auto whitespace-nowrap text-xs h-8 px-2" size="sm" variant="outline" on:click={() => saveToKeystore(acc)}>
+            <span class="hidden lg:inline">Save to Keystore</span>
+            <span class="hidden md:inline lg:hidden">Save Key</span>
+            <span class="md:hidden">Save</span>
+          </Button>
+          <Button class="w-full xs:w-auto whitespace-nowrap text-xs h-8 px-2" size="sm" on:click={() => selectAccount(acc)}>Select</Button>
         </div>
       </div>
     {/each}
