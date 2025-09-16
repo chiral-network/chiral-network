@@ -17,7 +17,7 @@ pub struct CliArgs {
     #[arg(long, default_value = "4001")]
     pub dht_port: u16,
 
-    /// Bootstrap nodes to connect to (can be specified multiple times)
+    /// Bootstrap node to connect to (can be specified multiple times)
     #[arg(long)]
     pub bootstrap: Vec<String>,
 
@@ -55,8 +55,11 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
     let mut bootstrap_nodes = args.bootstrap.clone();
     if bootstrap_nodes.is_empty() && args.dht_port != 4001 {
         // Don't connect to self if we're running on port 4001
-        bootstrap_nodes.push("/ip4/130.245.173.105/tcp/4001".to_string());
-        info!("Using default bootstrap node: 130.245.173.105:4001");
+        // Use reliable IP-based bootstrap node
+        bootstrap_nodes.extend([
+            "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ".to_string(),
+        ]);
+        info!("Using default bootstrap node: {:?}", bootstrap_nodes);
     }
     
     // Start DHT node

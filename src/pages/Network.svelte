@@ -58,7 +58,7 @@
   let dhtStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
   let dhtPeerId: string | null = null
   let dhtPort = 4001
-  let dhtBootstrapNode = DEFAULT_BOOTSTRAP_NODE
+  let dhtBootstrapNode = DEFAULT_BOOTSTRAP_NODE || 'No bootstrap node configured'
   let dhtEvents: string[] = []
   let dhtPeerCount = 0
   let dhtError: string | null = null
@@ -142,7 +142,7 @@
         try {
           const peerId = await dhtService.start({
             port: dhtPort,
-            bootstrapNodes: [dhtBootstrapNode]
+            bootstrapNodes: [DEFAULT_BOOTSTRAP_NODE]
           })
           dhtPeerId = peerId
           // Also ensure the service knows its own peer ID
@@ -177,15 +177,16 @@
       
       // Try to connect to bootstrap node
       let connectionSuccessful = false
-      if (dhtBootstrapNode) {
-        console.log('Attempting to connect to bootstrap node:', dhtBootstrapNode)
-        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to ${dhtBootstrapNode}...`]
+      if (DEFAULT_BOOTSTRAP_NODE) {
+        console.log('Attempting to connect to bootstrap node:', DEFAULT_BOOTSTRAP_NODE)
+        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to bootstrap node...`]
         
         // Add another small delay to show the connection attempt
         await new Promise(resolve => setTimeout(resolve, 1000))
         
         try {
-          await dhtService.connectPeer(dhtBootstrapNode)
+          // Try connecting to the bootstrap node
+          await dhtService.connectPeer(DEFAULT_BOOTSTRAP_NODE)
           console.log('Connection initiated to bootstrap node')
           connectionSuccessful = true
           dhtEvents = [...dhtEvents, `✓ Connection initiated to bootstrap node (waiting for handshake...)`]
@@ -200,26 +201,38 @@
             }
           }, 3000)
         } catch (error: any) {
-          console.warn('Cannot connect to bootstrap node:', error)
-          connectionSuccessful = false
+          console.warn('Cannot connect to bootstrap nodes:', error)
           
           // Parse and improve error messages
           let errorMessage = error.toString ? error.toString() : String(error)
           
           if (errorMessage.includes('DHT not started')) {
             errorMessage = 'DHT service not initialized properly. Try stopping and restarting.'
+            connectionSuccessful = false
           } else if (errorMessage.includes('DHT networking not implemented')) {
             errorMessage = 'P2P networking not available (requires libp2p implementation)'
+            connectionSuccessful = false
           } else if (errorMessage.includes('already running')) {
             errorMessage = 'DHT already running on this port'
-          } else if (errorMessage.includes('Connection refused')) {
-            errorMessage = 'Bootstrap node is not reachable or offline'
-          } else if (errorMessage.includes('timeout')) {
-            errorMessage = 'Connection timed out - bootstrap node may be unreachable'
+            connectionSuccessful = true
+          } else if (errorMessage.includes('Connection refused') || errorMessage.includes('timeout') || errorMessage.includes('rsa') || errorMessage.includes('Transport')) {
+            // These are expected bootstrap connection failures - DHT can still work
+            errorMessage = 'Bootstrap nodes unreachable - running in standalone mode'
+            connectionSuccessful = true
+            dhtEvents = [...dhtEvents, `⚠ Bootstrap connection failed but DHT is operational`]
+            dhtEvents = [...dhtEvents, `ℹ Other nodes can connect to you at: /ip4/YOUR_IP/tcp/${dhtPort}/p2p/${dhtPeerId?.slice(0, 16)}...`]
+            dhtEvents = [...dhtEvents, `💡 To connect with others, share your connection address above`]
+          } else {
+            errorMessage = 'Unknown connection error - running in standalone mode'
+            connectionSuccessful = true
           }
           
-          dhtError = errorMessage
-          dhtEvents = [...dhtEvents, `✗ Connection failed: ${errorMessage}`]
+          if (!connectionSuccessful) {
+            dhtError = errorMessage
+            dhtEvents = [...dhtEvents, `✗ Connection failed: ${errorMessage}`]
+          } else {
+            dhtEvents = [...dhtEvents, `⚠ ${errorMessage}`]
+          }
         }
       }
       
@@ -913,7 +926,7 @@
           <Input
             id="peer-address"
             bind:value={newPeerAddress}
-            placeholder={$t('network.peerDiscovery.placeholder')}
+            placeholder="/ip4/192.168.1.100/tcp/4001/p2p/12D3Koo..."
             class="flex-1 min-w-0 break-all"
           />
           <Button on:click={connectToPeer} disabled={!newPeerAddress}>
