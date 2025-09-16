@@ -9,7 +9,7 @@
   import { onMount, onDestroy } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
-  import { dhtService, DEFAULT_BOOTSTRAP_NODE } from '$lib/dht'
+  import { dhtService, DEFAULT_BOOTSTRAP_NODES } from '$lib/dht'
   import { Clipboard } from "lucide-svelte"
   import { t } from 'svelte-i18n';
   import { showToast } from '$lib/toast';
@@ -58,7 +58,7 @@
   let dhtStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
   let dhtPeerId: string | null = null
   let dhtPort = 4001
-  let dhtBootstrapNode = DEFAULT_BOOTSTRAP_NODE || 'No bootstrap node configured'
+  let dhtBootstrapNode = DEFAULT_BOOTSTRAP_NODES[0] || 'No bootstrap nodes configured'
   let dhtEvents: string[] = []
   let dhtPeerCount = 0
   let dhtError: string | null = null
@@ -142,7 +142,7 @@
         try {
           const peerId = await dhtService.start({
             port: dhtPort,
-            bootstrapNodes: [DEFAULT_BOOTSTRAP_NODE]
+            bootstrapNodes: DEFAULT_BOOTSTRAP_NODES
           })
           dhtPeerId = peerId
           // Also ensure the service knows its own peer ID
@@ -175,21 +175,21 @@
         }
       }
       
-      // Try to connect to bootstrap node
+      // Try to connect to bootstrap nodes
       let connectionSuccessful = false
-      if (DEFAULT_BOOTSTRAP_NODE) {
-        console.log('Attempting to connect to bootstrap node:', DEFAULT_BOOTSTRAP_NODE)
-        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to bootstrap node...`]
+      if (DEFAULT_BOOTSTRAP_NODES.length > 0) {
+        console.log('Attempting to connect to bootstrap nodes:', DEFAULT_BOOTSTRAP_NODES)
+        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to ${DEFAULT_BOOTSTRAP_NODES.length} bootstrap node(s)...`]
         
         // Add another small delay to show the connection attempt
         await new Promise(resolve => setTimeout(resolve, 1000))
         
         try {
-          // Try connecting to the bootstrap node
-          await dhtService.connectPeer(DEFAULT_BOOTSTRAP_NODE)
-          console.log('Connection initiated to bootstrap node')
+          // Try connecting to the first available bootstrap node
+          await dhtService.connectPeer(DEFAULT_BOOTSTRAP_NODES[0])
+          console.log('Connection initiated to bootstrap nodes')
           connectionSuccessful = true
-          dhtEvents = [...dhtEvents, `✓ Connection initiated to bootstrap node (waiting for handshake...)`]
+          dhtEvents = [...dhtEvents, `✓ Connection initiated to bootstrap nodes (waiting for handshake...)`]
           
           // Poll for actual connection after a delay
           setTimeout(async () => {
@@ -197,7 +197,7 @@
             if (dhtPeerCountResult > 0) {
               dhtEvents = [...dhtEvents, `✓ Successfully connected! Peers: ${dhtPeerCountResult}`]
             } else {
-              dhtEvents = [...dhtEvents, `⚠ Connection pending... (bootstrap node may be unreachable)`]
+              dhtEvents = [...dhtEvents, `⚠ Connection pending... (bootstrap nodes may be unreachable)`]
             }
           }, 3000)
         } catch (error: any) {

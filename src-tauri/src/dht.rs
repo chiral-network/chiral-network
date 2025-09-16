@@ -181,9 +181,9 @@ async fn run_dht_node(
                             if error.to_string().contains("rsa") {
                                 error!("   ℹ Hint: This node uses RSA keys. Enable 'rsa' feature if needed.");
                             } else if error.to_string().contains("Timeout") {
-                                warn!("   ℹ Hint: Bootstrap node may be unreachable or overloaded.");
+                                warn!("   ℹ Hint: Bootstrap nodes may be unreachable or overloaded.");
                             } else if error.to_string().contains("Connection refused") {
-                                warn!("   ℹ Hint: Bootstrap node is not accepting connections.");
+                                warn!("   ℹ Hint: Bootstrap nodes are not accepting connections.");
                             } else if error.to_string().contains("Transport") {
                                 warn!("   ℹ Hint: Transport protocol negotiation failed.");
                             }
@@ -355,7 +355,7 @@ impl DhtService {
                     Ok(_) => {
                         info!("✓ Initiated connection to bootstrap: {}", bootstrap_addr);
                         successful_connections += 1;
-                        // Add bootstrap node to Kademlia routing table if it has a peer ID
+                        // Add bootstrap nodes to Kademlia routing table if it has a peer ID
                         if let Some(peer_id) = addr.iter().find_map(|p| {
                             if let libp2p::multiaddr::Protocol::P2p(peer) = p {
                                 Some(peer)

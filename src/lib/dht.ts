@@ -1,9 +1,10 @@
 // DHT configuration and utilities
 import { invoke } from "@tauri-apps/api/core";
 
-// Default bootstrap node
-export const DEFAULT_BOOTSTRAP_NODE =
-  "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ";
+// Default bootstrap nodes for network connectivity
+export const DEFAULT_BOOTSTRAP_NODES = [
+  "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
+];
 
 export interface DhtConfig {
   port: number;
@@ -42,10 +43,10 @@ export class DhtService {
     const port = config?.port || 4001;
     let bootstrapNodes = config?.bootstrapNodes || [];
 
-    // Use default bootstrap node if none provided
+    // Use default bootstrap nodes if none provided
     if (bootstrapNodes.length === 0) {
-      bootstrapNodes = [DEFAULT_BOOTSTRAP_NODE];
-      console.log("Using default bootstrap node for network connectivity");
+      bootstrapNodes = DEFAULT_BOOTSTRAP_NODES;
+      console.log("Using default bootstrap nodes for network connectivity");
     } else {
       console.log(`Using ${bootstrapNodes.length} custom bootstrap nodes`);
     }

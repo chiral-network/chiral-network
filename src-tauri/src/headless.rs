@@ -17,7 +17,7 @@ pub struct CliArgs {
     #[arg(long, default_value = "4001")]
     pub dht_port: u16,
 
-    /// Bootstrap node to connect to (can be specified multiple times)
+    /// Bootstrap nodes to connect to (can be specified multiple times)
     #[arg(long)]
     pub bootstrap: Vec<String>,
 
@@ -51,15 +51,15 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
     info!("Starting Chiral Network in headless mode");
     info!("DHT Port: {}", args.dht_port);
     
-    // Add default bootstrap node if no custom ones specified
+    // Add default bootstrap nodes if no custom ones specified
     let mut bootstrap_nodes = args.bootstrap.clone();
     if bootstrap_nodes.is_empty() && args.dht_port != 4001 {
         // Don't connect to self if we're running on port 4001
-        // Use reliable IP-based bootstrap node
+        // Use reliable IP-based bootstrap nodes
         bootstrap_nodes.extend([
             "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ".to_string(),
         ]);
-        info!("Using default bootstrap node: {:?}", bootstrap_nodes);
+        info!("Using default bootstrap nodes: {:?}", bootstrap_nodes);
     }
     
     // Start DHT node
@@ -116,7 +116,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             match dht_service.connect_peer(bootstrap_addr.clone()).await {
                 Ok(_) => {
                     info!("Connected to bootstrap: {}", bootstrap_addr);
-                    // In a real implementation, the bootstrap node would add us as a peer
+                    // In a real implementation, the bootstrap nodes would add us as a peer
                     // For now, simulate this by adding the bootstrap as a connected peer
                 }
                 Err(e) => error!("Failed to connect to {}: {}", bootstrap_addr, e),
