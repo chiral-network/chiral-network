@@ -61,6 +61,14 @@
   let chartType: 'bar' | 'line' = 'bar';
   // Use a single array for the date range
   let customDateRange: [Date | null, Date | null] = [null, null];
+
+  function formatDateForInput(date: Date): string {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
   $: periodPresets = [
     { label: $t('analytics.periods.7d'), value: '7d' },
     { label: $t('analytics.periods.30d'), value: '30d' },
@@ -71,12 +79,32 @@
   ];
   const MAX_BARS = 60;
   $: {
-    if (periodPreset === 'custom' && startDateInput && endDateInput) {
-      // Create dates based on local timezone midnight to prevent off-by-one errors
-      const start = new Date(startDateInput + 'T00:00:00');
-      const end = new Date(endDateInput + 'T00:00:00');
-      if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
-        customDateRange = [start, end];
+    if (periodPreset === 'custom') {
+      if (startDateInput && endDateInput) {
+        // Create dates based on local timezone midnight to prevent off-by-one errors
+        const parsedStart = new Date(startDateInput + 'T00:00:00');
+        const parsedEnd = new Date(endDateInput + 'T00:00:00');
+
+        if (!isNaN(parsedStart.getTime()) && !isNaN(parsedEnd.getTime())) {
+          if (parsedStart <= parsedEnd) {
+            customDateRange = [parsedStart, parsedEnd];
+          } else {
+            customDateRange = [parsedEnd, parsedStart];
+            const normalizedStart = formatDateForInput(parsedEnd);
+            const normalizedEnd = formatDateForInput(parsedStart);
+
+            if (startDateInput !== normalizedStart) {
+              startDateInput = normalizedStart;
+            }
+            if (endDateInput !== normalizedEnd) {
+              endDateInput = normalizedEnd;
+            }
+          }
+        } else {
+          customDateRange = [null, null];
+        }
+      } else {
+        customDateRange = [null, null];
       }
     }
   }
@@ -157,6 +185,38 @@
 
   function handlePresetChange(value: string) {
     periodPreset = value;
+
+    if (value === 'custom') {
+      const fallbackEnd = endDateInput
+        ? new Date(endDateInput + 'T00:00:00')
+        : new Date();
+
+      if (!endDateInput || isNaN(fallbackEnd.getTime())) {
+        const endForInput = isNaN(fallbackEnd.getTime()) ? new Date() : fallbackEnd;
+        endDateInput = formatDateForInput(endForInput);
+      }
+
+      if (!startDateInput) {
+        const baseEnd = endDateInput
+          ? new Date(endDateInput + 'T00:00:00')
+          : new Date();
+        if (!isNaN(baseEnd.getTime())) {
+          const defaultStart = new Date(baseEnd);
+          defaultStart.setDate(baseEnd.getDate() - 6);
+          startDateInput = formatDateForInput(defaultStart);
+        }
+      }
+
+      if (startDateInput && endDateInput) {
+        const parsedStart = new Date(startDateInput + 'T00:00:00');
+        const parsedEnd = new Date(endDateInput + 'T00:00:00');
+
+        if (!isNaN(parsedStart.getTime()) && !isNaN(parsedEnd.getTime()) && parsedStart > parsedEnd) {
+          startDateInput = formatDateForInput(parsedEnd);
+          endDateInput = formatDateForInput(parsedStart);
+        }
+      }
+    }
   }
 
   // Generate mock latency history once on mount
@@ -647,14 +707,14 @@
 
     {#if periodPreset === 'custom'}
       <div class="flex items-center gap-2 mb-4 p-2 bg-muted rounded-md">
-        <label for="start-date" class="text-sm text-muted-foreground">From:</label>
+        <label for="start-date" class="text-sm text-muted-foreground">{$t('analytics.from')}</label>
         <input
           type="date"
           id="start-date"
           bind:value={startDateInput}
           class="bg-background border rounded px-2 py-1 text-sm"
         />
-        <label for="end-date" class="text-sm text-muted-foreground">To:</label>
+        <label for="end-date" class="text-sm text-muted-foreground">{$t('analytics.to')}</label>
         <input
           type="date"
           id="end-date"
