@@ -174,7 +174,9 @@
 
     await checkGethStatus()
     await updateNetworkStats()
-    
+    try {
+      seenHashes = new Set(($miningState.recentBlocks ?? []).map((b: any) => b.hash))
+    } catch{} 
     // If mining is already active from before, restore session and update stats
     if ($miningState.isMining) {
       // Restore session start time if it exists
@@ -191,7 +193,8 @@
     // Start polling for mining stats
     statsInterval = setInterval(async () => {
       if ($miningState.isMining) {
-        await updateMiningStats()
+        await updateMiningStats() 
+        await appendNewBlocksFromBackend()
       }
       await updateNetworkStats()
       if (isTauri) {
@@ -245,13 +248,8 @@
             $miningState.hashRate = formatHashRate(hashRateFromLogs)
             if (blocksFound > $miningState.blocksFound) {
               const newBlocks = blocksFound - $miningState.blocksFound;
-              const rewardPerBlock = 5.0;
-              $miningState.totalRewards += newBlocks * rewardPerBlock;
-              $miningState.blocksFound = blocksFound;
-              // Add each new block to recentBlocks
-              for (let i = 0; i < newBlocks; i++) {
-                findBlock();
-              }
+              $miningState.blocksFound = blocksFound; 
+              //Visualization Now Handled By Backend
             }
           } else if ($miningState.activeThreads > 0) {
             // Fall back to simulation if no log data yet
@@ -303,11 +301,6 @@
         const timeDelta = (Date.now() - lastHashUpdate) / 1000 // seconds
         totalHashes += Math.floor(hashRateNum * timeDelta)
         lastHashUpdate = Date.now()
-        
-        // Simulate finding blocks occasionally (very low probability)
-        if (Math.random() < 0.001) {
-          findBlock()
-        }
       }
     } catch (e) {
       console.error('Failed to update mining stats:', e)
@@ -353,11 +346,7 @@
         if (results[4] !== undefined) {
           const blocksMined = results[4] as number;
           if (blocksMined > $miningState.blocksFound) {
-            const newBlocks = blocksMined - $miningState.blocksFound;
             $miningState.blocksFound = blocksMined;
-            for (let i = 0; i < newBlocks; i++) {
-              findBlock();
-            }
           }
         }
       }
@@ -459,21 +448,64 @@
       console.error('Failed to stop mining:', e)
     }
   }
-  
-  function findBlock() {
-    $miningState.blocksFound++
-    const reward = 5 + Math.random() * 2
-    $miningState.totalRewards += reward
-    
-    $miningState.recentBlocks = [{
-      id: `block-${Date.now()}`,
-      hash: `0x${Math.random().toString(16).substring(2, 10)}...${Math.random().toString(16).substring(2, 6)}`,
-      reward: reward,
-      timestamp: new Date(),
-      difficulty: currentDifficulty,
-      nonce: Math.floor(Math.random() * 1000000)
-    }, ...($miningState.recentBlocks ?? []).slice(0, 4)]
+
+  // Simulation removed; recent blocks come from backend
+
+  // Keep a set of hashes we've already shown to avoid duplicates
+  let seenHashes = new Set<string>();
+
+  function pushRecentBlock(b: {
+    hash: string;
+    nonce?: number;
+    difficulty?: number;
+    timestamp?: Date;
+    number?: number;
+    reward?: number;
+  }) {
+    const item = {
+      id: `block-${b.hash}-${b.timestamp?.getTime() ?? Date.now()}`,
+      hash: b.hash,
+      reward: typeof b.reward === "number" ? b.reward : blockReward,
+      timestamp: b.timestamp ?? new Date(),
+      difficulty: b.difficulty ?? currentDifficulty,
+      nonce: b.nonce ?? 0,
+      number: b.number ?? 0,
+    };
+    $miningState.recentBlocks = [item, ...($miningState.recentBlocks ?? [])].slice(0, 50);
   }
+
+  async function appendNewBlocksFromBackend() {
+    try {
+      if (!($etcAccount && $miningState.isMining)) return;
+      const lookback = 2000;
+      const limit = 50;
+      const blocks = await invoke('get_recent_mined_blocks_pub', {
+        address: $etcAccount.address,
+        lookback,
+        limit
+      }) as Array<{ hash: string, nonce?: string, difficulty?: string, timestamp: number, number: number, reward?: number }>;
+      for (const b of blocks) {
+        if (seenHashes.has(b.hash)) continue;
+        seenHashes.add(b.hash);
+        pushRecentBlock({
+          hash: b.hash,
+          nonce: b.nonce ? parseInt(b.nonce, 16) : undefined,
+          difficulty: b.difficulty ? parseInt(b.difficulty, 16) : undefined,
+          timestamp: new Date((b.timestamp || 0) * 1000),
+          number: b.number,
+          reward: typeof b.reward === 'number' ? b.reward : undefined
+        });
+      }
+      // Hard de-duplication by hash as a safety net
+      const uniq = new Map<string, any>();
+      for (const it of ($miningState.recentBlocks ?? [])) {
+        if (!uniq.has(it.hash)) uniq.set(it.hash, it);
+      }
+  $miningState.recentBlocks = Array.from(uniq.values()).slice(0, 50);
+    } catch (e) {
+      console.error('Failed to append recent blocks:', e);
+    } 
+  } 
   
   function formatUptime(now: number = Date.now()) {
     const uptime = now - sessionStartTime
@@ -542,7 +574,8 @@
       }
     }
   }
-  
+  let pools: { value: string; label: string }[] = []
+
   // Mock pool options
   $: pools = [
     { value: 'solo', label: $t('mining.pools.solo') },
@@ -1055,4 +1088,4 @@
         </div>
       </Card>
     </div>
-  {/if}
+  {/if} 
