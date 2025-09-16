@@ -69,7 +69,6 @@
   let hasChanges = false;
   let fileInputEl: HTMLInputElement | null = null;
   let selectedLanguage: string | undefined = undefined;
-  let mounted = false;
   let clearingCache = false;
   let cacheCleared = false;
   let importExportFeedback: {
@@ -236,9 +235,8 @@
 
     const saved = await loadLocale(); // 'en' | 'ko' | null
     const initial = saved || "en";
-    selectedLanguage = initial; // Syncronize dropdown display value
+    selectedLanguage = initial; // Synchronize dropdown display value
     // (From root, setupI18n() has already been called, so only once here)
-    mounted = true;
   });
 
   function onLanguageChange(lang: string) {
