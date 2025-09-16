@@ -26,6 +26,7 @@ export interface FileItem {
   uploadSpeed?: number;
   timeRemaining?: number;
   visualOrder?: number; // For maintaining user's intended visual order
+  downloadPath?: string; // Path where the file was downloaded
 }
 
 export interface ProxyNode {
@@ -102,15 +103,6 @@ export interface BlacklistEntry {
 const dummyFiles: FileItem[] = [
   {
     id: "0",
-    name: "Image.jpg",
-    hash: "QmZ4tDuvesekqME",
-    size: 1024000,
-    status: "downloading",
-    progress: 50,
-    visualOrder: 0,
-  },
-  {
-    id: "1",
     name: "Video.mp4",
     hash: "QmZ4tDuvesekqMF",
     size: 50331648,
@@ -119,7 +111,7 @@ const dummyFiles: FileItem[] = [
     visualOrder: 1,
   },
   {
-    id: "2",
+    id: "1",
     name: "Document.pdf",
     hash: "QmZ4tDuvesekqMD",
     size: 2048576,
@@ -128,7 +120,7 @@ const dummyFiles: FileItem[] = [
     visualOrder: 2,
   },
   {
-    id: "3",
+    id: "2",
     name: "Archive.zip",
     hash: "QmZ4tDuvesekqMG",
     size: 10485760,
@@ -243,7 +235,7 @@ const dummyNetworkStats: NetworkStats = {
 export const files = writable<FileItem[]>(dummyFiles);
 export const proxyNodes = writable<ProxyNode[]>(dummyProxyNodes);
 export const wallet = writable<WalletInfo>(dummyWallet);
-export const activeDownloads = writable<number>(2);
+export const activeDownloads = writable<number>(1);
 
 // Import real network status
 import { networkStatus } from "./services/networkService";
