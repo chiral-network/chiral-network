@@ -10,14 +10,14 @@
     import SettingsPage from './pages/Settings.svelte'
     import MiningPage from './pages/Mining.svelte'
     import NotFound from './pages/NotFound.svelte'
-    import { networkStatus } from '$lib/stores'
+    import { networkStatus } from './lib/stores'
     import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
     import {onMount, setContext} from 'svelte';
     import { tick } from 'svelte';
-    import { setupI18n } from '../src/i18n/i18n';
+    import { setupI18n } from './i18n/i18n';
     import { t } from 'svelte-i18n';
-    import SimpleToast from '$lib/components/SimpleToast.svelte';
-    import { startNetworkMonitoring } from '$lib/services/networkService';
+    import SimpleToast from './lib/components/SimpleToast.svelte';
+    import { startNetworkMonitoring } from './lib/services/networkService';
     // gets path name not entire url:
     // ex: http://locatlhost:1420/download -> /download
     
