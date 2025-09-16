@@ -35,25 +35,26 @@
     let currentPage = getPathName(window.location.pathname);
     let loading = true;
     
-    onMount(async ()=>{
-      // setup i18n
-      await setupI18n();
-      loading = false;
+    onMount(() => {
+      let stopNetworkMonitoring: () => void = () => {};
 
-      // set the currentPage var
-      syncFromUrl();
+      (async () => {
+        // setup i18n
+        await setupI18n();
+        loading = false;
 
-      // Start network monitoring
-      const stopNetworkMonitoring = startNetworkMonitoring();
+        // set the currentPage var
+        syncFromUrl();
 
-      // popstate - event that tracks history of current tab 
-      // (i.e. clicking on new url or going back)
+        // Start network monitoring
+        stopNetworkMonitoring = startNetworkMonitoring();
+      })();
+
+      // popstate - event that tracks history of current tab
       const onPop = () => syncFromUrl();
-
-      // triggers onPop to make sure currentPage variable is up to date
       window.addEventListener('popstate', onPop);
 
-      //  cleanup when component unmounts for removing duplicate event listeners. 
+      // cleanup
       return () => {
         window.removeEventListener('popstate', onPop);
         stopNetworkMonitoring();
