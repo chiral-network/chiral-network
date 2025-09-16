@@ -233,20 +233,20 @@
         console.error("Failed to load settings:", e);
       }
     }
-    
-     const saved = await loadLocale();                    // 'en' | 'ko' | null
-     const initial = saved || 'en';
-     selectedLanguage = initial;       // Syncronize dropdown display value
-     // (From root, setupI18n() has already been called, so only once here)
-     mounted = true;
+
+    const saved = await loadLocale(); // 'en' | 'ko' | null
+    const initial = saved || "en";
+    selectedLanguage = initial; // Syncronize dropdown display value
+    // (From root, setupI18n() has already been called, so only once here)
+    mounted = true;
   });
 
-   function onLanguageChange(lang: string) {
-     selectedLanguage = lang;
-     changeLocale(lang);               // Save + update global state (yes, i18n.ts takes care of saving)
-     (settings as any).language = lang;
-     saveSettings();                   // If you want to reflect in settings as well
-   }
+  function onLanguageChange(lang: string) {
+    selectedLanguage = lang;
+    changeLocale(lang); // Save + update global state (yes, i18n.ts takes care of saving)
+    (settings as any).language = lang;
+    saveSettings(); // If you want to reflect in settings as well
+  }
 
   const limits = {
     maxStorageSize: { min: 10, max: 10000, label: "Max Storage Size (GB)" },
@@ -766,6 +766,7 @@
         variant="outline"
         size="xs"
         disabled={!hasChanges}
+        on:click={() => (settings = { ...savedSettings })}
         class={`transition-colors duration-200 ${!hasChanges ? "cursor-not-allowed opacity-50" : ""}`}
       >
         {$t("actions.cancel")}
