@@ -551,14 +551,6 @@
           downloadProgress = event.payload as typeof downloadProgress
         })
       }
-      
-      // Auto-start geth if installed but not running
-      if (isGethInstalled && !isGethRunning) {
-        await startGethNode()
-      }
-      
-      // Auto-start DHT
-      await startDht()
     }
     
     initAsync()
