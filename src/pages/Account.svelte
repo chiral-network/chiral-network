@@ -1189,7 +1189,6 @@
               type="text"
               inputmode="decimal"
               bind:value={rawAmountInput}
-              placeholder={$t('transfer.amount.placeholder')}
               class="mt-2"
               data-form-type="other"
               data-lpignore="true"

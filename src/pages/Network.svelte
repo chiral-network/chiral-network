@@ -9,7 +9,7 @@
   import { onMount, onDestroy } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
-  import { dhtService, DEFAULT_BOOTSTRAP_NODE } from '$lib/dht'
+  import { dhtService, DEFAULT_BOOTSTRAP_NODES } from '$lib/dht'
   import { Clipboard } from "lucide-svelte"
   import { t } from 'svelte-i18n';
   import { showToast } from '$lib/toast';
@@ -58,7 +58,7 @@
   let dhtStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
   let dhtPeerId: string | null = null
   let dhtPort = 4001
-  let dhtBootstrapNode = DEFAULT_BOOTSTRAP_NODE
+  let dhtBootstrapNode = DEFAULT_BOOTSTRAP_NODES[0] || 'No bootstrap nodes configured'
   let dhtEvents: string[] = []
   let dhtPeerCount = 0
   let dhtError: string | null = null
@@ -142,7 +142,7 @@
         try {
           const peerId = await dhtService.start({
             port: dhtPort,
-            bootstrapNodes: [dhtBootstrapNode]
+            bootstrapNodes: DEFAULT_BOOTSTRAP_NODES
           })
           dhtPeerId = peerId
           // Also ensure the service knows its own peer ID
@@ -175,20 +175,21 @@
         }
       }
       
-      // Try to connect to bootstrap node
+      // Try to connect to bootstrap nodes
       let connectionSuccessful = false
-      if (dhtBootstrapNode) {
-        console.log('Attempting to connect to bootstrap node:', dhtBootstrapNode)
-        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to ${dhtBootstrapNode}...`]
+      if (DEFAULT_BOOTSTRAP_NODES.length > 0) {
+        console.log('Attempting to connect to bootstrap nodes:', DEFAULT_BOOTSTRAP_NODES)
+        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to ${DEFAULT_BOOTSTRAP_NODES.length} bootstrap node(s)...`]
         
         // Add another small delay to show the connection attempt
         await new Promise(resolve => setTimeout(resolve, 1000))
         
         try {
-          await dhtService.connectPeer(dhtBootstrapNode)
-          console.log('Connection initiated to bootstrap node')
+          // Try connecting to the first available bootstrap node
+          await dhtService.connectPeer(DEFAULT_BOOTSTRAP_NODES[0])
+          console.log('Connection initiated to bootstrap nodes')
           connectionSuccessful = true
-          dhtEvents = [...dhtEvents, `✓ Connection initiated to bootstrap node (waiting for handshake...)`]
+          dhtEvents = [...dhtEvents, `✓ Connection initiated to bootstrap nodes (waiting for handshake...)`]
           
           // Poll for actual connection after a delay
           setTimeout(async () => {
@@ -196,30 +197,42 @@
             if (dhtPeerCountResult > 0) {
               dhtEvents = [...dhtEvents, `✓ Successfully connected! Peers: ${dhtPeerCountResult}`]
             } else {
-              dhtEvents = [...dhtEvents, `⚠ Connection pending... (bootstrap node may be unreachable)`]
+              dhtEvents = [...dhtEvents, `⚠ Connection pending... (bootstrap nodes may be unreachable)`]
             }
           }, 3000)
         } catch (error: any) {
-          console.warn('Cannot connect to bootstrap node:', error)
-          connectionSuccessful = false
+          console.warn('Cannot connect to bootstrap nodes:', error)
           
           // Parse and improve error messages
           let errorMessage = error.toString ? error.toString() : String(error)
           
           if (errorMessage.includes('DHT not started')) {
             errorMessage = 'DHT service not initialized properly. Try stopping and restarting.'
+            connectionSuccessful = false
           } else if (errorMessage.includes('DHT networking not implemented')) {
             errorMessage = 'P2P networking not available (requires libp2p implementation)'
+            connectionSuccessful = false
           } else if (errorMessage.includes('already running')) {
             errorMessage = 'DHT already running on this port'
-          } else if (errorMessage.includes('Connection refused')) {
-            errorMessage = 'Bootstrap node is not reachable or offline'
-          } else if (errorMessage.includes('timeout')) {
-            errorMessage = 'Connection timed out - bootstrap node may be unreachable'
+            connectionSuccessful = true
+          } else if (errorMessage.includes('Connection refused') || errorMessage.includes('timeout') || errorMessage.includes('rsa') || errorMessage.includes('Transport')) {
+            // These are expected bootstrap connection failures - DHT can still work
+            errorMessage = 'Bootstrap nodes unreachable - running in standalone mode'
+            connectionSuccessful = true
+            dhtEvents = [...dhtEvents, `⚠ Bootstrap connection failed but DHT is operational`]
+            dhtEvents = [...dhtEvents, `ℹ Other nodes can connect to you at: /ip4/YOUR_IP/tcp/${dhtPort}/p2p/${dhtPeerId?.slice(0, 16)}...`]
+            dhtEvents = [...dhtEvents, `💡 To connect with others, share your connection address above`]
+          } else {
+            errorMessage = 'Unknown connection error - running in standalone mode'
+            connectionSuccessful = true
           }
           
-          dhtError = errorMessage
-          dhtEvents = [...dhtEvents, `✗ Connection failed: ${errorMessage}`]
+          if (!connectionSuccessful) {
+            dhtError = errorMessage
+            dhtEvents = [...dhtEvents, `✗ Connection failed: ${errorMessage}`]
+          } else {
+            dhtEvents = [...dhtEvents, `⚠ ${errorMessage}`]
+          }
         }
       }
       
@@ -319,24 +332,70 @@
   }
   
   function connectToPeer() {
-    if (!newPeerAddress) return
-    
-    const newPeer = {
-      id: `peer-${Date.now()}`,
-      address: newPeerAddress,
-      nickname: `DirectPeer${Math.floor(Math.random() * 100)}`,
-      status: 'online' as const,
-      reputation: 0,
-      sharedFiles: 0,
-      totalSize: 0,
-      joinDate: new Date(),
-      lastSeen: new Date(),
-      location: 'Unknown'
-    }
-    
-    peers.update(p => [...p, newPeer])
-    newPeerAddress = ''
+  if (!newPeerAddress.trim()) return
+  
+  const trimmedAddress = newPeerAddress.trim()
+  
+  // Parse IP and port first to check for duplicates properly
+  const [ip, portStr] = trimmedAddress.split(':')
+  const port = portStr ? parseInt(portStr) : 8080
+  const fullAddress = portStr ? trimmedAddress : `${ip}:${port}`
+  
+  // Check if peer with this exact IP:port combination already exists
+  const existingPeer = $peers.find(peer => peer.address === fullAddress)
+  if (existingPeer) {
+    showToast($t('Peer Already Connected'), 'error')
+    return
   }
+  
+  // Basic IP format validation (supports IP:port format)
+  const ipPortRegex = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$/
+  if (!ipPortRegex.test(trimmedAddress)) {
+    showToast($t('Invalid IP Format'), 'error')
+    return
+  }
+  
+  // Validate IP ranges (0-255 for each octet)
+  const ipParts = ip.split('.').map(Number)
+  if (ipParts.some(part => part < 0 || part > 255)) {
+    showToast($t('Invalid IP Range'), 'error')
+    return
+  }
+  
+  // Validate port range
+  if (port < 1 || port > 65535) {
+    showToast($t('Invalid Port Number'), 'error')
+    return
+  }
+  
+  // Create new peer
+  const newPeer = {
+    id: `peer-${Date.now()}`,
+    address: fullAddress, // Use the normalized IP:port format
+    nickname: `DirectPeer${Math.floor(Math.random() * 100)}`,
+    status: 'online' as const,
+    reputation: 0,
+    sharedFiles: 0,
+    totalSize: 0,
+    joinDate: new Date(),
+    lastSeen: new Date(),
+    location: 'Unknown'
+  }
+  
+  // Add to peers list
+  peers.update(p => [...p, newPeer])
+  
+  // Update network stats
+  networkStats.update(s => ({
+    ...s,
+    totalPeers: s.totalPeers + 1,
+    onlinePeers: s.onlinePeers + 1
+  }))
+  
+  // Clear input and show success
+  newPeerAddress = ''
+  showToast($t('Peer Connected Successfully'), 'success')
+}
   
   function refreshStats() {
     networkStats.update(s => ({

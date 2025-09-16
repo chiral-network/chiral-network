@@ -7,6 +7,9 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, File } from 'lucide-svelte'
   import { files, downloadQueue } from '$lib/stores'
+  import { t, locale } from 'svelte-i18n'
+  import { get } from 'svelte/store'
+  const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
   
   let searchHash = ''  // For downloading new files
   let searchFilter = ''  // For searching existing downloads
@@ -246,20 +249,41 @@
   // Enhanced startDownload function with search and download status notifications
   async function startDownload() {
     if (!searchHash) {
-      showNotification("Please enter a file hash", 'warning')
+      showNotification(tr('download.notifications.enterHash'), 'warning')
       return
     }
     
-    // Check for duplicates
-    const exists = [...$files, ...$downloadQueue].some(f => f.hash === searchHash)
-    if (exists) {
-      showNotification("File already exists in download list", 'warning')
+    // Check for ALL duplicates (including uploaded files)
+const allFiles = [...$files, ...$downloadQueue]
+const existingFile = allFiles.find(f => f.hash === searchHash)
+
+if (existingFile) {
+  // Handle different scenarios
+  if (existingFile.status === 'seeding' || existingFile.status === 'uploaded') {
+    // User is trying to download a file they're already sharing
+    const shouldContinue = confirm(
+      `You're already sharing a file with this hash (${existingFile.name}). ` +
+      `Do you want to download it anyway? `
+    )
+    
+    if (!shouldContinue) {
+      showNotification('Download canceled by user', 'info')
       return
     }
+    
+    // Show additional info message
+    showNotification('Downloading file that you are already sharing', 'warning', 3000)
+    
+  } else {
+    // File is already in download queue/completed/etc.
+    showNotification('File is already in your download list', 'warning')
+    return
+  }
+}
     
     try {
       // Step 1: Show search start notification
-      showNotification("🔍 Searching for file...", 'info', 2000)
+      showNotification(tr('download.notifications.searching'), 'info', 2000)
       
       // Step 2: Simulate search process (replace with actual search API if available)
       await new Promise(resolve => setTimeout(resolve, 1500))
@@ -269,12 +293,12 @@
       const fileFound = Math.random() > 0.2 // 80% chance to find file
       
       if (!fileFound) {
-        showNotification("❌ File not found, please check the hash", 'error', 5000)
+        showNotification(tr('download.notifications.notFound'), 'error', 5000)
         return
       }
       
       // Step 4: File found, show success notification
-      showNotification("✅ File found! Adding to download queue...", 'success')
+      showNotification(tr('download.notifications.found'), 'success')
       
       // Create new download item
       const newFile = {
@@ -291,14 +315,14 @@
       
       // Step 5: Show download start notification
       setTimeout(() => {
-        showNotification("📥 File added to download queue", 'success')
+        showNotification(tr('download.notifications.addedToQueue'), 'success')
       }, 1000)
       
       if (autoStartQueue) {
         processQueue()
         // If auto-start is enabled, show additional notification
         setTimeout(() => {
-          showNotification("⚡ Download started automatically", 'info')
+          showNotification(tr('download.notifications.autostart'), 'info')
         }, 2000)
       }
       
@@ -308,7 +332,7 @@
     } catch (error) {
       // Error handling
       console.error('Search download failed:', error)
-      showNotification("❌ Search failed: " + (error.message || 'Unknown error'), 'error', 6000)
+      showNotification(tr('download.notifications.searchFailed', { values: { error: error.message || 'Unknown error' } }), 'error', 6000)
     }
   }
 
@@ -396,7 +420,7 @@ function clearSearch() {
             clearInterval(interval)
             activeSimulations.delete(fileId)
             // Download failure notification
-            showNotification(`❌ Download failed: ${file.name}`, 'error')
+            showNotification(tr('download.notifications.downloadFailed', { values: { name: file.name } }), 'error')
             return { ...file, status: 'failed' }
           }
 
@@ -404,7 +428,7 @@ function clearSearch() {
             clearInterval(interval)
             activeSimulations.delete(fileId)
             // Download completion notification
-            showNotification(`🎉 Download completed: ${file.name}`, 'success')
+            showNotification(tr('download.notifications.downloadCompleted', { values: { name: file.name } }), 'success')
             return { ...file, progress: 100, status: 'completed' }
           }
           return { ...file, progress: newProgress }
@@ -450,23 +474,23 @@ function clearSearch() {
 
 <div class="space-y-6">
   <div>
-    <h1 class="text-3xl font-bold">Download Files</h1>
-    <p class="text-muted-foreground mt-2">Download files from the Chiral Network using their hash</p>
+    <h1 class="text-3xl font-bold">{$t('download.title')}</h1>
+    <p class="text-muted-foreground mt-2">{$t('download.subtitle')}</p>
   </div>
   
   <Card class="p-6">
     <div class="space-y-4">
       <div>
-        <Label for="hash-input" class="text-base font-medium">Add New Download</Label>
+        <Label for="hash-input" class="text-base font-medium">{$t('download.addNew')}</Label>
         <p class="text-sm text-muted-foreground mt-1 mb-3">
-          Enter a file hash to search for and download from the network
+          {$t('download.addNewSubtitle')}
         </p>
         <div class="flex flex-col sm:flex-row gap-3">
           <div class="relative flex-1">
             <Input
               id="hash-input"
               bind:value={searchHash}
-              placeholder="Enter file hash (e.g., QmZ4tDuvesekqMD...)"
+              placeholder={$t('download.placeholder')}
               class="pr-10 h-10"
             />
             {#if searchHash}
@@ -474,7 +498,7 @@ function clearSearch() {
                 on:click={clearSearch}
                 class="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 hover:bg-muted rounded-full transition-colors"
                 type="button"
-                aria-label="Clear input"
+                aria-label={$t('download.clearInput')}
               >
                 <X class="h-4 w-4 text-muted-foreground hover:text-foreground" />
               </button>
@@ -486,7 +510,7 @@ function clearSearch() {
             class="h-10 px-6"
           >
             <Search class="h-4 w-4 mr-2" />
-            Search & Download
+            {$t('download.searchAndDownload')}
           </Button>
         </div>
       </div>
@@ -498,13 +522,13 @@ function clearSearch() {
     <!-- Header Section -->
     <div class="space-y-4 mb-6">
       <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <h2 class="text-xl font-semibold">Downloads</h2>
+        <h2 class="text-xl font-semibold">{$t('download.downloads')}</h2>
         
         <!-- Search Bar -->
         <div class="relative w-full sm:w-80">
           <Input
             bind:value={searchFilter}
-            placeholder="Search downloads..."
+            placeholder={$t('download.searchPlaceholder')}
             class="pr-8"
           />
           {#if searchFilter}
@@ -512,7 +536,7 @@ function clearSearch() {
               on:click={() => searchFilter = ''}
               class="absolute right-2 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground"
               type="button"
-              title="Clear search"
+              title={$t('download.clearSearch')}
             >
               ×
             </button>
@@ -532,7 +556,7 @@ function clearSearch() {
             on:click={() => filterStatus = 'all'}
             class="text-xs"
           >
-            All ({allFilteredDownloads.length})
+            {$t('download.filters.all')} ({allFilteredDownloads.length})
           </Button>
           <Button
             size="sm"
@@ -540,7 +564,7 @@ function clearSearch() {
             on:click={() => filterStatus = 'active'}
             class="text-xs"
           >
-            Active ({activeCount})
+            {$t('download.filters.active')} ({activeCount})
           </Button>
           <Button
             size="sm"
@@ -548,7 +572,7 @@ function clearSearch() {
             on:click={() => filterStatus = 'paused'}
             class="text-xs"
           >
-            Paused ({pausedCount})
+            {$t('download.filters.paused')} ({pausedCount})
           </Button>
           <Button
             size="sm"
@@ -556,7 +580,7 @@ function clearSearch() {
             on:click={() => filterStatus = 'queued'}
             class="text-xs"
           >
-            Queued ({queuedCount})
+            {$t('download.filters.queued')} ({queuedCount})
           </Button>
           <Button
             size="sm"
@@ -564,7 +588,7 @@ function clearSearch() {
             on:click={() => filterStatus = 'completed'}
             class="text-xs"
           >
-            Completed ({completedCount})
+            {$t('download.filters.completed')} ({completedCount})
           </Button>
           <Button
             size="sm"
@@ -572,7 +596,7 @@ function clearSearch() {
             on:click={() => filterStatus = 'canceled'}
             class="text-xs"
           >
-            Canceled ({allFilteredDownloads.filter(f => f.status === 'canceled').length})
+            {$t('download.filters.canceled')} ({allFilteredDownloads.filter(f => f.status === 'canceled').length})
           </Button>
           <Button
             size="sm"
@@ -580,7 +604,7 @@ function clearSearch() {
             on:click={() => filterStatus = 'failed'}
             class="text-xs"
           >
-            Failed ({failedCount})
+            {$t('download.filters.failed')} ({failedCount})
           </Button>
         </div>
         
@@ -588,7 +612,7 @@ function clearSearch() {
         <div class="flex flex-wrap items-center gap-4 text-sm">
           <div class="flex items-center gap-2">
             <Settings class="h-4 w-4 text-muted-foreground" />
-            <Label class="font-medium">Max Concurrent:</Label>
+            <Label class="font-medium">{$t('download.settings.maxConcurrent')}:</Label>
             <input
               type="number"
               bind:value={maxConcurrentDownloads}
@@ -601,10 +625,10 @@ function clearSearch() {
           </div>
           
           <div class="flex items-center gap-2">
-            <Label class="font-medium">Auto-Start:</Label>
+            <Label class="font-medium">{$t('download.settings.autoStart')}:</Label>
             <button
               type="button"
-              aria-label="Toggle auto-start queue {autoStartQueue ? 'off' : 'on'}"
+              aria-label={$t('download.settings.toggleAutoStart', { values: { status: autoStartQueue ? 'off' : 'on' } })}
               on:click={() => autoStartQueue = !autoStartQueue}
               class="relative inline-flex h-4 w-8 items-center rounded-full transition-colors focus:outline-none"
               class:bg-green-500={autoStartQueue}
@@ -623,17 +647,17 @@ function clearSearch() {
     {#if filteredDownloads.length === 0}
       <p class="text-sm text-muted-foreground text-center py-8">
         {#if filterStatus === 'all'}
-          No downloads yet. Enter a file name or hash above to start downloading.
+          {$t('download.status.noDownloads')}
         {:else if filterStatus === 'active'}
-          No active downloads.
+          {$t('download.status.noActive')}
         {:else if filterStatus === 'paused'}
-          No paused downloads.
+          {$t('download.status.noPaused')}
         {:else if filterStatus === 'queued'}
-          No files in queue.
+          {$t('download.status.noQueued')}
         {:else if filterStatus === 'completed'}
-          No completed downloads.
+          {$t('download.status.noCompleted')}
         {:else}
-          No failed downloads.
+          {$t('download.status.noFailed')}
         {/if}
       </p>
     {:else}
@@ -672,7 +696,7 @@ function clearSearch() {
                   <div class="flex-1 min-w-0">
                     <h3 class="font-medium text-sm truncate mb-1">{file.name}</h3>
                     <p class="text-xs text-muted-foreground truncate mb-2">
-                      Hash: {file.hash}
+                      {$t('download.file.hash')}: {file.hash}
                     </p>
                     <div class="flex items-center gap-2 flex-wrap">
                       <Badge variant="outline" class="text-xs">
@@ -687,9 +711,9 @@ function clearSearch() {
                           }}
                           class="text-xs px-2 py-1 border rounded bg-background h-6"
                         >
-                          <option value="low">Low</option>
-                          <option value="normal">Normal</option>
-                          <option value="high">High</option>
+                          <option value="low">{$t('download.priority.low')}</option>
+                          <option value="normal">{$t('download.priority.normal')}</option>
+                          <option value="high">{$t('download.priority.high')}</option>
                         </select>
                       {/if}
                     </div>
@@ -706,7 +730,7 @@ function clearSearch() {
                   'bg-red-500 text-white border-red-500'
                 }
                 >
-                  {file.status === 'queued' ? `Queue #${$downloadQueue.indexOf(file) + 1}` : file.status}
+                  {file.status === 'queued' ? `${$t('download.file.queue')} #${$downloadQueue.indexOf(file) + 1}` : file.status}
                 </Badge>
               </div>
             </div>
@@ -716,7 +740,7 @@ function clearSearch() {
               <div class="px-4 pb-2">
                 <div class="bg-muted/50 rounded-lg p-3">
                   <div class="flex items-center justify-between text-sm mb-2">
-                    <span class="font-medium">Progress</span>
+                    <span class="font-medium">{$t('download.file.progress')}</span>
                     <span class="text-muted-foreground">{(file.progress || 0).toFixed(2)}%</span>
                   </div>
                   <Progress 
@@ -740,7 +764,7 @@ function clearSearch() {
                       class="h-8 px-3"
                     >
                       <Play class="h-3 w-3 mr-1" />
-                      Start
+                      {$t('download.actions.start')}
                     </Button>
                   {:else}
                     <Button
@@ -751,10 +775,10 @@ function clearSearch() {
                     >
                       {#if file.status === 'downloading'}
                         <Pause class="h-3 w-3 mr-1" />
-                        Pause
+                        {$t('download.actions.pause')}
                       {:else}
                         <Play class="h-3 w-3 mr-1" />
-                        Resume
+                        {$t('download.actions.resume')}
                       {/if}
                     </Button>
                   {/if}
@@ -765,7 +789,7 @@ function clearSearch() {
                     class="h-8 px-3"
                   >
                     <X class="h-3 w-3 mr-1" />
-                    {file.status === 'queued' ? 'Remove' : 'Cancel'}
+                    {file.status === 'queued' ? $t('download.actions.remove') : $t('download.actions.cancel')}
                   </Button>
                 {:else if file.status === 'completed'}
                   <Button
@@ -774,7 +798,7 @@ function clearSearch() {
                     class="h-8 px-3"
                   >
                     <File class="h-3 w-3 mr-1" />
-                    Open File
+                    {$t('download.actions.openFile')}
                   </Button>
                 {/if}
               </div>

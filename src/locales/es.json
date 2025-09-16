@@ -1,0 +1,626 @@
+{
+  "settings.title": "Configuración",
+  "settings.subtitle": "Configura tus preferencias de la Red Chiral",
+
+  "badges.unsaved": "Cambios no guardados",
+
+  "storage.title": "Almacenamiento",
+  "storage.location": "Ubicación de almacenamiento",
+  "storage.locationPick": "Elegir ubicación de almacenamiento",
+  "storage.selectLocationTitle": "Seleccionar ubicación de almacenamiento",
+  "storage.enterPathPrompt": "Ingresar ruta de almacenamiento",
+  "storage.browserNoPicker": "Selector de archivos Tauri no disponible en el navegador",
+  "storage.maxSize": "Tamaño máximo de almacenamiento (GB)",
+  "storage.cleanupThreshold": "Umbral de limpieza automática (%)",
+  "storage.enableCleanup": "Habilitar limpieza automática cuando el almacenamiento esté lleno",
+
+  "network": {
+    "title": "Resumen de red",
+    "subtitle": "Supervisa el estado de la red y descubre pares",
+    "nodeStatus": "Estado del nodo Chiral",
+    "status": {
+      "notInstalled": "No instalado",
+      "downloading": "Descargando...",
+      "starting": "Iniciando...",
+      "connected": "Conectado",
+      "disconnected": "Desconectado"
+    },
+    "download": {
+      "progress": "Progreso",
+      "notFound": "Binario del nodo Chiral no encontrado",
+      "prompt": "Descarga el binario Core-Geth para ejecutar un nodo local",
+      "button": "Descargar Nodo Chiral (~50 MB)",
+      "starting": "Iniciando descarga..."
+    },
+    "startingNode": "Iniciando nodo Chiral...",
+    "pleaseWait": "Por favor espera, esto puede tardar un momento.",
+    "notRunning": "El nodo Chiral no se está ejecutando",
+    "startNode": "Iniciar Nodo Chiral",
+    "chiralPeers": "Pares Chiral",
+    "chainId": "ID de cadena",
+    "nodeAddress": "Dirección del nodo",
+    "copied": "¡Copiado!",
+    "copy": "Copiar",
+    "stopNode": "Detener Nodo Chiral",
+    "dht": {
+      "title": "Red DHT",
+      "notConnected": "El DHT no está conectado",
+      "connectionError": "Error de conexión",
+      "retry": "Reintentar conexión",
+      "connect": "Conectar a la red DHT",
+      "stop": "Detener DHT",
+      "log": "Registro de conexión",
+      "connectingToBootstrap": "Conectando al nodo bootstrap...",
+      "attempt": "Intento #{connectionAttempts}",
+      "port": "Puerto DHT",
+      "peers": "Pares conectados",
+      "peerId": "ID de par",
+      "bootstrapNode": "Nodo bootstrap",
+      "recentEvents": "Eventos recientes",
+      "disconnect": "Desconectar del DHT"
+    },
+    "networkStatus": "Estado de la red",
+    "dhtPeers": "Pares DHT",
+    "networkSize": "Tamaño de la red",
+    "bandwidth": "Ancho de banda",
+    "peerDiscovery": {
+      "title": "Descubrimiento de pares",
+      "discovering": "Descubriendo...",
+      "run": "Ejecutar descubrimiento",
+      "directConnect": "Conexión directa",
+      "placeholder": "Introduce dirección de par (IP:Puerto o ID de par)",
+      "connect": "Conectar"
+    },
+    "connectedPeers": {
+      "title": "Pares conectados ({count})",
+      "sortBy": "Ordenar por",
+      "reputation": "Reputación",
+      "sharedFiles": "Archivos compartidos",
+      "totalSize": "Tamaño total",
+      "name": "Nombre",
+      "location": "Ubicación",
+      "joinDate": "Fecha de unión",
+      "lastSeen": "Última vez visto",
+      "status": "Estado",
+      "highest": "Más alto",
+      "lowest": "Más bajo",
+      "most": "Más",
+      "least": "Menos",
+      "largest": "Más grande",
+      "smallest": "Más pequeño",
+      "newest": "Más reciente",
+      "oldest": "Más antiguo",
+      "mostRecent": "Más reciente",
+      "leastRecent": "Menos reciente",
+      "closest": "Más cercano",
+      "farthest": "Más lejano",
+      "online": "En línea",
+      "offline": "Desconectado",
+      "aToZ": "A → Z",
+      "zToA": "Z → A",
+      "anonymous": "Anónimo",
+      "unknown": "Desconocido",
+      "joined": "Unido",
+      "now": "Ahora",
+      "noPeers": "No hay pares conectados. Ejecuta descubrimiento para encontrar pares."
+    },
+    "errors": {
+      "downloadOnlyTauri": "La descarga del Nodo Chiral solo está disponible en la aplicación de escritorio. Descarga y ejecuta la versión de escritorio Tauri."
+    },
+    "maxConnections": "Máx. conexiones",
+    "port": "Puerto",
+    "uploadLimit": "Límite de subida (MB/s)",
+    "downloadLimit": "Límite de descarga (MB/s)",
+    "userLocation": "Ubicación del usuario",
+    "locationHint": "Ayuda a conectar con pares cercanos para un mejor rendimiento.",
+    "enableUpnp": "Habilitar UPnP",
+    "enableNat": "Habilitar mapeo de puertos NAT",
+    "enableDht": "Habilitar DHT"
+  },
+
+  "regions.usEast": "EE. UU. Este",
+  "regions.usWest": "EE. UU. Oeste",
+  "regions.euWest": "Europa Occidental",
+  "regions.apac": "Asia-Pacífico",
+
+  "language.title": "Idioma",
+  "language.select": "Seleccionar idioma",
+  "language.english": "Inglés",
+  "language.spanish": "Español",
+  "language.chinese": "Chino",
+  "language.korean": "Coreano",
+
+  "privacy.title": "Privacidad y seguridad",
+  "privacy.enableProxy": "Habilitar enrutamiento por proxy para anonimato",
+  "privacy.enableEncryption": "Habilitar cifrado de extremo a extremo",
+  "privacy.anonymousMode": "Modo anónimo (ocultar toda información identificativa)",
+  "privacy.shareAnalytics": "Compartir analíticas de uso anónimas",
+
+  "notifications.title": "Notificaciones",
+  "notifications.enable": "Habilitar notificaciones de escritorio",
+  "notifications.notifyComplete": "Notificar cuando finalicen las descargas",
+  "notifications.notifyError": "Notificar errores",
+  "notifications.soundAlerts": "Reproducir alertas sonoras",
+
+  "advanced.title": "Avanzado",
+  "advanced.chunkSize": "Tamaño de fragmento (KB)",
+  "advanced.cacheSize": "Tamaño de caché (MB)",
+  "advanced.logLevel": "Nivel de registro",
+  "advanced.logError": "Error",
+  "advanced.logWarn": "Advertencia",
+  "advanced.logInfo": "Información",
+  "advanced.logDebug": "Depuración",
+  "advanced.autoUpdate": "Instalar actualizaciones automáticamente",
+  "advanced.clearCache": "Borrar caché",
+  "advanced.exportSettings": "Exportar configuración",
+  "advanced.importSettings": "Importar configuración",
+  "advanced.invalidJsonAlert": "Archivo JSON no válido. Selecciona una exportación válida.",
+
+  "actions.resetDefaults": "Restablecer valores predeterminados",
+  "actions.cancel": "Cancelar",
+  "actions.save": "Guardar configuración",
+  "actions.confirm": "Confirmar restablecimiento",
+
+  "confirm.title": "¿Estás seguro?",
+  "confirm.resetBody": "Todos los ajustes se restablecerán a sus valores predeterminados. Esta acción se guardará inmediatamente.",
+
+  "validation.min": "{label} debe ser ≥ {min}.",
+  "validation.between": "{label} debe estar entre {min} y {max}.",
+
+  "button": {
+    "clearCache": "Borrar caché",
+    "clearing": "Borrando...",
+    "cleared": "✓ ¡Borrado!"
+  },
+
+  "account": {
+    "title": "Cuenta",
+    "subtitle": "Gestiona tu monedero y la configuración de tu cuenta"
+  },
+
+  "wallet": {
+    "title": "Billetera de la Red Chiral",
+    "balance": "Saldo",
+    "totalEarned": "Total ganado",
+    "totalSpent": "Total gastado",
+    "address": "Dirección Chiral",
+    "qrModal": {
+      "title": "Tu dirección Chiral",
+      "alt": "Código QR de la dirección Chiral"
+    },
+    "export": "Exportar billetera",
+    "exportSuccess": "¡Billetera exportada con éxito!",
+    "cta": {
+      "intro": "Comienza con la Red Chiral creando o importando una cuenta:",
+      "or": "O"
+    },
+    "privateKey": "Clave privada"
+  },
+
+  "transfer": {
+    "title": "Enviar monedas Chiral",
+    "recipient": {
+      "label": "Dirección del destinatario",
+      "aria": "Campo de entrada de dirección del destinatario",
+      "placeholder": "0x...",
+      "characters": "caracteres",
+      "remaining": "restantes",
+      "over": "superados",
+      "scanQr": "Escanear código QR",
+      "scanQrTitle": "Escanear código QR"
+    },
+    "amount": {
+      "label": "Cantidad (Chiral)",
+      "max": "Máx.",
+      "placeholder": ""
+    },
+    "available": "Disponible: {amount} Chiral",
+    "send": "Enviar transacción",
+    "sendingIn": "Enviando en {seconds}s (Toca para cancelar)",
+    "viewPending": "Ver transacciones pendientes",
+    "pending": {
+      "title": "Transacciones pendientes",
+      "noDetails": "No hay detalles de transacciones pendientes disponibles.",
+      "count": "{count} transacción{count !== 1 ? 'es' : ''} pendiente{count !== 1 ? 's' : ''}",
+      "none": "Transacciones pendientes"
+    }
+  },
+
+  "transactions": {
+    "title": "Historial de transacciones",
+    "manual": "Transacción manual",
+    "empty": {
+      "title": "Aún no hay transacciones",
+      "desc": "Las transacciones aparecerán aquí cuando envíes o recibas Chiral"
+    },
+    "item": {
+      "from": "De",
+      "to": "Para"
+    }
+  },
+
+  "keystore": {
+    "title": "Guardar en almacén local",
+    "desc": "Guarda tu clave privada de forma segura en este equipo, cifrada con una contraseña.",
+    "success": "¡Éxito! Clave privada guardada en el almacén.",
+    "successSimulated": "¡Éxito! (Simulado) Clave privada guardada.",
+    "error": "Error: {error}",
+    "load": {
+      "title": "Cargar desde el almacén",
+      "select": "Seleccionar cuenta",
+      "empty": "No se encontraron cuentas en el almacén.",
+      "success": "Cuenta cargada correctamente",
+      "successSimulated": "Cuenta cargada (modo demo)",
+      "error": "Error al cargar la cuenta: {error}"
+    }
+  },
+
+  "blacklist": {
+    "title": "Gestión de lista negra",
+    "subtitle": "Bloquea direcciones maliciosas o no deseadas",
+    "add": {
+      "title": "Agregar nueva entrada",
+      "address": "Dirección Chiral",
+      "addressPlaceholder": "0x1234567890abcdef...",
+      "reason": "Razón para bloquear",
+      "remaining": "{remaining} caracteres restantes",
+      "submit": "Agregar a la lista negra"
+    },
+    "quickReasons": {
+      "label": "Razones rápidas:",
+      "spam": "Spam",
+      "fraud": "Fraude",
+      "malicious": "Actividad maliciosa",
+      "harassment": "Acoso",
+      "scam": "Estafa"
+    },
+    "list": {
+      "title": "Direcciones en lista negra",
+      "emptyTitle": "No hay direcciones en la lista negra",
+      "emptyDesc": "Agrega direcciones arriba para bloquear transacciones e interacciones",
+      "noMatch": "Ninguna dirección en la lista negra coincide con \"{q}\"",
+      "addedAt": "Agregada el {date}",
+      "showing": "Mostrando {shown} de {total} direcciones en la lista negra"
+    },
+    "actions": {
+      "clearAll": "Limpiar todo",
+      "export": "Exportar lista negra",
+      "exportTitle": "Exportar lista negra a archivo JSON",
+      "import": "Importar lista negra",
+      "copyAddress": "Copiar dirección"
+    },
+    "errors": {
+      "alreadyExists": "Esta dirección ya está en la lista negra.",
+      "ownAddress": "No puedes agregar tu propia dirección a la lista negra."
+    },
+    "confirm": {
+      "remove": "¿Quitar {address} de la lista negra?",
+      "removeAll": "¿Quitar las {count} direcciones de la lista negra?"
+    },
+    "import": {
+      "success": "Se importaron {count} entradas correctamente",
+      "none": "No se encontraron nuevas entradas válidas para importar",
+      "invalid": "Formato de archivo inválido: no se encontraron datos de lista negra",
+      "parseError": "Formato de archivo inválido: selecciona un archivo JSON válido"
+    }
+  },
+
+  "filters": {
+    "type": "Tipo",
+    "typeAll": "Todas",
+    "typeSent": "Enviadas",
+    "typeReceived": "Recibidas",
+    "from": "De",
+    "to": "Para",
+    "sort": "Ordenar",
+    "sortNewest": "Más recientes → Más antiguas",
+    "sortOldest": "Más antiguas → Más recientes",
+    "reset": "Restablecer"
+  },
+
+  "actions": {
+    "createAccount": "Crear nueva cuenta",
+    "creating": "Creando...",
+    "importAccount": "Importar cuenta existente",
+    "importing": "Importando...",
+    "unlockAccount": "Desbloquear cuenta",
+    "unlocking": "Desbloqueando...",
+    "copy": "Copiar",
+    "show": "Mostrar",
+    "hide": "Ocultar",
+    "close": "Cerrar",
+    "saveKey": "Guardar clave",
+    "saving": "Guardando...",
+    "save": "Guardar",
+    "saveSettings": "Guardar configuración",
+    "cancel": "Cancelar",
+    "remove": "Eliminar",
+    "edit": "Editar",
+    "resetDefaults": "Restablecer valores predeterminados",
+    "lockWallet": "Bloquear billetera"
+  },
+
+  "placeholders": {
+    "importPrivateKey": "Introduce la clave privada para importar",
+    "password": "Introduce una contraseña segura",
+    "unlockPassword": "Introduce la contraseña para desbloquear",
+    "searchBlacklist": "Buscar en la lista negra...",
+    "reason": "Introduce la razón..."
+  },
+
+  "tooltips": {
+    "showQr": "Mostrar código QR",
+    "clearSearch": "Borrar búsqueda"
+  },
+
+  "aria": {
+    "copyAddress": "Copiar dirección",
+    "copyPrivateKey": "Copiar clave privada",
+    "showQr": "Mostrar código QR"
+  },
+
+  "warnings": {
+    "neverSharePrivateKey": "Nunca compartas tu clave privada con nadie"
+  },
+
+  "errors": {
+    "address": {
+      "mustStartWith0x": "La dirección debe comenzar con 0x.",
+      "mustBe42": "La dirección debe tener exactamente 42 caracteres.",
+      "mustBeHex": "La dirección debe contener caracteres hexadecimales válidos (0-9, a-f, A-F)"
+    },
+    "amount": {
+      "invalid": "Introduce una cantidad válida mayor que 0.",
+      "min": "La cantidad debe ser al menos {min} Chiral.",
+      "insufficient": "Saldo insuficiente: faltan {more} Chiral."
+    },
+    "exportFailed": "La exportación falló. Inténtalo de nuevo.",
+    "createAccount": "No se pudo crear la cuenta: {error}"
+  },
+
+  "messages": {
+    "copied": "¡Copiado!",
+    "failed": "¡Fallido!"
+  },
+  "analytics": {
+    "title": "Panel de análisis",
+    "subtitle": "Supervisa tu rendimiento y la actividad de la red",
+    "totalEarnings": "Ganancias totales",
+    "earningsThisWeek": "+12.5% esta semana",
+    "storageUsed": "Almacenamiento usado",
+    "filesShared": "Archivos compartidos",
+    "downloaded": "descargado",
+    "reputation": "Reputación",
+    "bandwidthUsage": "Uso de ancho de banda (hoy)",
+    "upload": "Subida",
+    "download": "Descarga",
+    "totalBandwidthUsed": "Ancho de banda total usado",
+    "networkActivity": "Actividad de la red",
+    "activeUploads": "Subidas activas",
+    "activeDownloads": "Descargas activas",
+    "queuedDownloads": "Descargas en cola",
+    "totalTransactions": "Transacciones totales",
+    "networkFiles": "Archivos de la red",
+    "networkLatency": "Latencia de la red",
+    "average": "Promedio",
+    "p95": "P95",
+    "best": "Mejor",
+    "currentAvg": "Promedio actual",
+    "latencyHint": "0–50 ms (excelente), 50–150 ms (aceptable), >150 ms (deficiente)",
+    "nodesReporting": "Nodos informando",
+    "sampleSize": "Tamaño de muestra",
+    "latencyRecent": "Latencia (reciente)",
+    "topEarningFiles": "Archivos con más ganancias",
+    "seeders": "semillas",
+    "noEarningsYet": "Aún no hay ganancias",
+    "popularFiles": "Archivos populares",
+    "leechers": "descargadores",
+    "noFilesYet": "Aún no hay archivos",
+    "earningsHistory": "Historial de ganancias",
+    "bars": "Barras",
+    "line": "Línea",
+    "periods": {
+      "7d": "Últimos 7 días",
+      "30d": "Últimos 30 días",
+      "thisMonth": "Este mes",
+      "lastMonth": "Mes pasado",
+      "ytd": "Año en curso",
+      "custom": "Personalizado"
+    },
+    "from": "Desde:",
+    "to": "Hasta:",
+    "ms": "ms",
+    "min": "Mín.:",
+    "max": "Máx.:",
+    "suspiciousActivity": "Alertas de actividad sospechosa",
+    "noSuspiciousActivity": "No se detectó actividad sospechosa",
+    "unusualUpload": "Subida inusual",
+    "unusualUploadDesc": "Archivo > 1 GB subido inusualmente rápido",
+    "multipleLogins": "Múltiples inicios de sesión",
+    "multipleLoginsDesc": "El usuario inició sesión desde distintos países en 5 minutos",
+    "failedDownloads": "Descargas fallidas",
+    "failedDownloadsDesc": "Se detectaron varios intentos de descarga fallidos"
+  },
+  "proxy": {
+    "title": "Red proxy",
+    "subtitle": "Administra tus nodos proxy y la configuración de red",
+    "status": "Estado del proxy",
+    "active": "Activo",
+    "inactive": "Inactivo",
+    "activeNodes": "Nodos activos",
+    "totalBandwidth": "Ancho de banda total",
+    "settings": "Configuración de proxy",
+    "proxy": "Proxy",
+    "addNode": "Agregar nodo proxy",
+    "enterAddress": "Introduce la dirección del nodo (p. ej., 192.168.1.100:8080)",
+    "addNodeButton": "Agregar nodo",
+    "invalidAddress": "Introduce una dirección de proxy válida (p. ej., 192.168.1.100:8080)",
+    "proxyNodes": "Nodos proxy",
+    "bandwidth": "Ancho de banda",
+    "latency": "Latencia",
+    "disconnect": "Desconectar",
+    "connect": "Conectar",
+    "remove": "Eliminar",
+    "alreadyAdded": "¡Esta dirección de proxy ya se ha agregado!"
+  },
+  "mining": {
+    "title": "Minería",
+    "subtitle": "Contribuye potencia de cómputo para asegurar la red y ganar recompensas",
+    "hashRate": "Tasa de hash",
+    "threads": "hilos",
+    "notMining": "Sin minería",
+    "totalRewards": "Recompensas totales",
+    "blocksFound": "bloques encontrados",
+    "powerUsage": "Consumo de energía",
+    "hw": "H/W",
+    "temperature": "Temperatura",
+    "control": "Control de minería",
+    "active": "Minería activa",
+    "stopped": "Minería detenida",
+    "pool": "Grupo de minería",
+    "cpuThreads": "Hilos de CPU ({cpuThreads} disponibles)",
+    "intensity": "Intensidad de minería (%)",
+    "session": "Sesión",
+    "totalHashes": "Hashes totales",
+    "stop": "Detener minería",
+    "start": "Iniciar minería",
+    "showLogs": "Mostrar registros de minería",
+    "networkPage": "Página de red",
+    "accountPage": "Página de cuenta",
+    "networkStats": "Estadísticas de la red",
+    "networkHashRate": "Tasa de hash de la red",
+    "networkDifficulty": "Dificultad de la red",
+    "blockHeight": "Altura de bloque",
+    "blockReward": "Recompensa por bloque",
+    "estTimeToBlock": "Tiempo estimado para bloque",
+    "calculating": "Calculando...",
+    "activeMiners": "Mineros activos",
+    "poolInfo": "Información del pool",
+    "soloInfo": "Estás minando en solitario. Todas las recompensas de bloque serán tuyas, pero encontrar bloques puede tardar más.",
+    "yourShare": "Tu participación",
+    "poolFee": "Comisión del pool",
+    "minPayout": "Pago mínimo",
+    "na": "N/D",
+    "poolHashRate": "Tasa de hash del pool",
+    "poolMiners": "Mineros del pool",
+    "paymentMethod": "Método de pago",
+    "recentBlocks": "Bloques recientes encontrados",
+    "noBlocksFound": "Aún no se han encontrado bloques. ¡Empieza a minar para ganar recompensas!",
+    "blockFound": "¡Bloque encontrado!",
+    "hash": "Hash",
+    "nonce": "Nonce",
+    "hashRateHistory": "Historial de tasa de hash",
+    "chartType": "Tipo de gráfico",
+    "bar": "Barra",
+    "line": "Línea",
+    "last5Minutes": "Últimos 5 minutos",
+    "logs": "Registros de minería",
+    "noLogs": "Aún no hay registros...",
+    "autoRefresh": "Autorefrescar",
+    "wrapLogs": "Ajustar",
+    "filterByLevel": "Filtrar por nivel",
+    "on": "ENCENDIDO",
+    "off": "APAGADO",
+    "refresh": "Actualizar",
+    "clear": "Limpiar",
+    "pools": {
+      "solo": "Minería en solitario",
+      "pool1": "ChiralPool #1",
+      "pool2": "ChiralPool #2",
+      "community": "Pool de la comunidad"
+    },
+    "errors": {
+      "threads": "Los hilos deben estar entre 1 y {cpuThreads}",
+      "intensity": "La intensidad debe estar entre 1 y 100",
+      "noAccount": "Primero crea una cuenta de la Red Chiral en la página de Cuenta",
+      "gethNotRunning": "El nodo Chiral no se está ejecutando. Inícialo desde la página de Red",
+      "noAccountLink": "Por favor crea una cuenta de la Red Chiral desde la"
+    },
+    "starting": "Iniciando minería... (puede reiniciar el nodo si es necesario)"
+  },
+  "upload": {
+    "title": "Subir archivos",
+    "subtitle": "Comparte tus archivos en la Red Chiral",
+    "dropFiles": "Suelta archivos aquí para compartir",
+    "dropFilesHint": "Arrastra y suelta archivos en cualquier lugar de esta tarjeta, o haz clic en \"Agregar archivos\" abajo",
+    "addFiles": "Agregar archivos",
+    "sharedFiles": "Archivos compartidos",
+    "files": "archivos",
+    "total": "total",
+    "tip": "💡 Consejo: También puedes arrastrar y soltar archivos aquí para agregarlos",
+    "addMoreFiles": "Agregar más archivos",
+    "hash": "Hash",
+    "seeder": "semilla{count, plural, =1 {} other {s}}",
+    "leecher": "descargador{count, plural, =1 {} other {es}}",
+    "seeding": "Compartiendo",
+    "copyHash": "Copiar hash",
+    "hashCopied": "¡Hash copiado!",
+    "stopSharing": "Dejar de compartir",
+    "noFilesShared": "Aún no hay archivos compartidos",
+    "addFilesHint2": "Agrega archivos para empezar a compartir en la red"
+  },
+  "download": {
+    "title": "Descargar archivos",
+    "subtitle": "Descarga archivos de la Red Chiral usando su hash",
+    "addNew": "Agregar nueva descarga",
+    "addNewSubtitle": "Introduce un hash de archivo para buscarlo y descargarlo desde la red",
+    "placeholder": "Introduce el hash del archivo (p. ej., QmZ4tDuvesekqMD...)",
+    "clearInput": "Limpiar entrada",
+    "searchAndDownload": "Buscar y descargar",
+    "downloads": "Descargas",
+    "searchPlaceholder": "Buscar descargas...",
+    "clearSearch": "Borrar búsqueda",
+    "filters": {
+      "all": "Todas",
+      "active": "Activas",
+      "paused": "Pausadas",
+      "queued": "En cola",
+      "completed": "Completadas",
+      "canceled": "Canceladas",
+      "failed": "Fallidas"
+    },
+    "settings": {
+      "maxConcurrent": "Máx. concurrentes",
+      "autoStart": "Inicio automático",
+      "toggleAutoStart": "Alternar inicio automático de la cola {status}"
+    },
+    "status": {
+      "noDownloads": "Aún no hay descargas. Introduce un nombre de archivo o hash arriba para comenzar a descargar.",
+      "noActive": "No hay descargas activas.",
+      "noPaused": "No hay descargas pausadas.",
+      "noQueued": "No hay archivos en cola.",
+      "noCompleted": "No hay descargas completadas.",
+      "noFailed": "No hay descargas fallidas."
+    },
+    "file": {
+      "hash": "Hash",
+      "queue": "Cola",
+      "progress": "Progreso"
+    },
+    "priority": {
+      "low": "Baja",
+      "normal": "Normal",
+      "high": "Alta"
+    },
+    "actions": {
+      "start": "Iniciar",
+      "pause": "Pausar",
+      "resume": "Reanudar",
+      "remove": "Eliminar",
+      "cancel": "Cancelar",
+      "openFile": "Abrir archivo"
+    },
+    "notifications": {
+      "enterHash": "Por favor introduce un hash de archivo",
+      "alreadyExists": "El archivo ya existe en la lista de descargas",
+      "searching": "🔍 Buscando archivo...",
+      "notFound": "❌ Archivo no encontrado, verifica el hash",
+      "found": "✅ ¡Archivo encontrado! Agregando a la cola de descargas...",
+      "addedToQueue": "📥 Archivo agregado a la cola de descargas",
+      "autostart": "⚡ La descarga se inició automáticamente",
+      "searchFailed": "❌ Búsqueda fallida: {error}",
+      "downloadFailed": "❌ Descarga fallida: {name}",
+      "downloadCompleted": "🎉 Descarga completada: {name}"
+    }
+  }
+}

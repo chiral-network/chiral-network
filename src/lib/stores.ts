@@ -185,7 +185,7 @@ const dummyWallet: WalletInfo = {
 const dummyPeers: PeerInfo[] = [
   {
     id: "peer1",
-    address: "192.168.1.50",
+    address: "192.168.1.50:8080",
     nickname: "AliceNode",
     status: "online",
     reputation: 4.8,
@@ -197,7 +197,7 @@ const dummyPeers: PeerInfo[] = [
   },
   {
     id: "peer2",
-    address: "10.0.0.25",
+    address: "10.0.0.25:8080",
     nickname: "BobStorage",
     status: "offline",
     reputation: 4.5,
@@ -209,7 +209,7 @@ const dummyPeers: PeerInfo[] = [
   },
   {
     id: "peer3",
-    address: "172.16.0.100",
+    address: "172.16.0.100:8080",
     nickname: "CharlieShare",
     status: "away",
     reputation: 4.2,
