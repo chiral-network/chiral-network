@@ -175,7 +175,21 @@ async fn run_dht_node(
                         info!("📡 Now listening on: {}", address);
                     }
                     SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
-                        error!("❌ Outgoing connection error to {:?}: {}", peer_id, error);
+                        if let Some(peer_id) = peer_id {
+                            error!("❌ Outgoing connection error to {}: {}", peer_id, error);
+                            // Check if this is a bootstrap connection error
+                            if error.to_string().contains("rsa") {
+                                error!("   ℹ Hint: This node uses RSA keys. Enable 'rsa' feature if needed.");
+                            } else if error.to_string().contains("Timeout") {
+                                warn!("   ℹ Hint: Bootstrap nodes may be unreachable or overloaded.");
+                            } else if error.to_string().contains("Connection refused") {
+                                warn!("   ℹ Hint: Bootstrap nodes are not accepting connections.");
+                            } else if error.to_string().contains("Transport") {
+                                warn!("   ℹ Hint: Transport protocol negotiation failed.");
+                            }
+                        } else {
+                            error!("❌ Outgoing connection error to unknown peer: {}", error);
+                        }
                         let _ = event_tx.send(DhtEvent::Error(format!("Connection failed: {}", error))).await;
                     }
                     SwarmEvent::IncomingConnectionError { error, .. } => {
@@ -332,13 +346,16 @@ impl DhtService {
         
         // Connect to bootstrap nodes
         info!("Bootstrap nodes to connect: {:?}", bootstrap_nodes);
+        let mut successful_connections = 0;
+        let total_bootstrap_nodes = bootstrap_nodes.len();
         for bootstrap_addr in &bootstrap_nodes {
             info!("Attempting to connect to bootstrap: {}", bootstrap_addr);
             if let Ok(addr) = bootstrap_addr.parse::<Multiaddr>() {
                 match swarm.dial(addr.clone()) {
                     Ok(_) => {
                         info!("✓ Initiated connection to bootstrap: {}", bootstrap_addr);
-                        // Add bootstrap node to Kademlia routing table if it has a peer ID
+                        successful_connections += 1;
+                        // Add bootstrap nodes to Kademlia routing table if it has a peer ID
                         if let Some(peer_id) = addr.iter().find_map(|p| {
                             if let libp2p::multiaddr::Protocol::P2p(peer) = p {
                                 Some(peer)
@@ -356,10 +373,16 @@ impl DhtService {
             }
         }
         
-        // Trigger initial bootstrap if we have bootstrap nodes
+        // Trigger initial bootstrap if we have any bootstrap nodes (even if connection failed)
         if !bootstrap_nodes.is_empty() {
             let _ = swarm.behaviour_mut().kademlia.bootstrap();
-            info!("Triggered initial Kademlia bootstrap");
+            info!("Triggered initial Kademlia bootstrap (attempted {}/{} connections)", successful_connections, total_bootstrap_nodes);
+            if successful_connections == 0 {
+                warn!("⚠ No bootstrap connections succeeded - node will operate in standalone mode");
+                warn!("  Other nodes can still connect to this node directly");
+            }
+        } else {
+            info!("No bootstrap nodes provided - starting in standalone mode");
         }
         
         let (cmd_tx, cmd_rx) = mpsc::channel(100);
