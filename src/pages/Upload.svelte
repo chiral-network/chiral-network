@@ -52,28 +52,29 @@
   }
   
   async function addFiles(filesToAdd: File[]) {
-    // TODO: Replace with your actual upload logic or API call
     for (let i = 0; i < filesToAdd.length; i++) {
       const file = filesToAdd[i];
-      
       try {
-        // Example: Just add file to store with a dummy hash
+        // Compute SHA-256 hash of file
+        const arrayBuffer = await file.arrayBuffer();
+        const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        const fileHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+
         const newFile = {
           id: `file-${Date.now()}-${i}`,
           name: file.name,
-          hash: `dummy-hash-${Date.now()}-${i}`,
+          hash: fileHash,
           size: file.size,
           status: 'seeding' as const,
           seeders: 1,
           leechers: 0,
           uploadDate: new Date()
         };
-        
+
         files.update(f => [...f, newFile]);
-        
       } catch (error) {
         console.error('Failed to upload file:', error);
-        // Still add to store but mark as failed
         const newFile = {
           id: `file-${Date.now()}-${i}`,
           name: file.name,
