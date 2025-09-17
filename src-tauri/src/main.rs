@@ -3,34 +3,37 @@
     windows_subsystem = "windows"
 )]
 
-mod ethereum;
-mod keystore;
-mod geth_downloader;
 mod dht;
+mod ethereum;
 mod file_transfer;
+mod geth_downloader;
 mod headless;
+mod keystore;
 
+use dht::{DhtEvent, DhtMetricsSnapshot, DhtService, FileMetadata};
 use ethereum::{
-    create_new_account, get_account_from_private_key, get_balance, get_peer_count,
-    start_mining, stop_mining, get_mining_status, get_hashrate, get_block_number,
-    get_network_difficulty, get_network_hashrate, get_mining_logs, get_mining_performance,
-    get_mined_blocks_count, get_recent_mined_blocks, EthAccount, GethProcess, MinedBlock
+    create_new_account, get_account_from_private_key, get_balance, get_block_number, get_hashrate,
+    get_mined_blocks_count, get_mining_logs, get_mining_performance, get_mining_status,
+    get_network_difficulty, get_network_hashrate, get_peer_count, get_recent_mined_blocks,
+    start_mining, stop_mining, EthAccount, GethProcess, MinedBlock,
 };
-use keystore::Keystore;
+use file_transfer::{FileTransferEvent, FileTransferService};
+use fs2::available_space;
 use geth_downloader::GethDownloader;
-use dht::{DhtService, FileMetadata, DhtEvent};
-use file_transfer::{FileTransferService, FileTransferEvent};
-use tracing::{info, warn};
+use keystore::Keystore;
+use std::path::Path;
+use std::{
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 use sysinfo::{Components, System, MINIMUM_CPU_UPDATE_INTERVAL};
 use systemstat::{Platform, System as SystemStat};
-use std::{sync::{Arc, Mutex}, time::Instant};
-use std::path::Path;
-use fs2::available_space;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, Emitter, State
+    Emitter, Manager, State,
 };
+use tracing::{info, warn};
 
 struct AppState {
     geth: Mutex<GethProcess>,
@@ -64,14 +67,21 @@ async fn stop_geth_node(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn save_account_to_keystore(address: String, private_key: String, password: String) -> Result<(), String> {
+async fn save_account_to_keystore(
+    address: String,
+    private_key: String,
+    password: String,
+) -> Result<(), String> {
     let mut keystore = Keystore::load()?;
     keystore.add_account(address, &private_key, &password)?;
     Ok(())
 }
 
 #[tauri::command]
-async fn load_account_from_keystore(address: String, password: String) -> Result<EthAccount, String> {
+async fn load_account_from_keystore(
+    address: String,
+    password: String,
+) -> Result<EthAccount, String> {
     let keystore = Keystore::load()?;
 
     // Get decrypted private key from keystore
@@ -116,13 +126,18 @@ async fn check_geth_binary(state: State<'_, AppState>) -> Result<bool, String> {
 }
 
 #[tauri::command]
-async fn download_geth_binary(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+async fn download_geth_binary(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let downloader = state.downloader.clone();
     let app_handle = app.clone();
 
-    downloader.download_geth(move |progress| {
-        let _ = app_handle.emit("geth-download-progress", progress);
-    }).await
+    downloader
+        .download_geth(move |progress| {
+            let _ = app_handle.emit("geth-download-progress", progress);
+        })
+        .await
 }
 
 #[tauri::command]
@@ -133,7 +148,12 @@ async fn set_miner_address(state: State<'_, AppState>, address: String) -> Resul
 }
 
 #[tauri::command]
-async fn start_miner(state: State<'_, AppState>, address: String, threads: u32, data_dir: String) -> Result<(), String> {
+async fn start_miner(
+    state: State<'_, AppState>,
+    address: String,
+    threads: u32,
+    data_dir: String,
+) -> Result<(), String> {
     // Store the miner address for future geth restarts
     {
         let mut miner_address = state.miner_address.lock().map_err(|e| e.to_string())?;
@@ -198,7 +218,10 @@ async fn start_miner(state: State<'_, AppState>, address: String, threads: u32, 
                     return Err("Geth failed to start up within 30 seconds".to_string());
                 }
 
-                println!("Waiting for geth to start up... (attempt {}/{})", attempts, max_attempts);
+                println!(
+                    "Waiting for geth to start up... (attempt {}/{})",
+                    attempts, max_attempts
+                );
             }
 
             // Try mining again without setting etherbase (it's set via command line now)
@@ -227,8 +250,8 @@ async fn start_miner(state: State<'_, AppState>, address: String, threads: u32, 
             } else {
                 Ok(())
             }
-        },
-        Err(e) => Err(format!("Failed to start mining: {}", e))
+        }
+        Err(e) => Err(format!("Failed to start mining: {}", e)),
     }
 }
 
@@ -274,11 +297,19 @@ async fn get_blocks_mined(address: String) -> Result<u64, String> {
     get_mined_blocks_count(&address).await
 }
 #[tauri::command]
-async fn get_recent_mined_blocks_pub(address:String, lookback:u64, limit:usize) -> Result<Vec<MinedBlock>, String> {
+async fn get_recent_mined_blocks_pub(
+    address: String,
+    lookback: u64,
+    limit: usize,
+) -> Result<Vec<MinedBlock>, String> {
     get_recent_mined_blocks(&address, lookback, limit).await
 }
 #[tauri::command]
-async fn start_dht_node(state: State<'_, AppState>, port: u16, bootstrap_nodes: Vec<String>) -> Result<String, String> {
+async fn start_dht_node(
+    state: State<'_, AppState>,
+    port: u16,
+    bootstrap_nodes: Vec<String>,
+) -> Result<String, String> {
     {
         let dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
         if dht_guard.is_some() {
@@ -305,8 +336,16 @@ async fn start_dht_node(state: State<'_, AppState>, port: u16, bootstrap_nodes: 
 
 #[tauri::command]
 async fn stop_dht_node(state: State<'_, AppState>) -> Result<(), String> {
-    let mut dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
-    *dht_guard = None;
+    let dht = {
+        let mut dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
+        dht_guard.take()
+    };
+
+    if let Some(dht) = dht {
+        dht.shutdown()
+            .await
+            .map_err(|e| format!("Failed to stop DHT: {}", e))?;
+    }
     Ok(())
 }
 
@@ -399,6 +438,20 @@ async fn get_dht_peer_id(state: State<'_, AppState>) -> Result<Option<String>, S
 }
 
 #[tauri::command]
+async fn get_dht_health(state: State<'_, AppState>) -> Result<Option<DhtMetricsSnapshot>, String> {
+    let dht = {
+        let dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
+        dht_guard.as_ref().cloned()
+    };
+
+    if let Some(dht) = dht {
+        Ok(Some(dht.metrics_snapshot().await))
+    } else {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
 async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, String> {
     let dht = {
         let dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
@@ -408,19 +461,20 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
     if let Some(dht) = dht {
         let events = dht.drain_events(100).await;
         // Convert events to concise human-readable strings for the UI
-        let mapped: Vec<String> = events.into_iter().map(|e| match e {
-            DhtEvent::PeerDiscovered(p) => format!("peer_discovered:{}", p),
-            DhtEvent::PeerConnected(p) => format!("peer_connected:{}", p),
-            DhtEvent::PeerDisconnected(p) => format!("peer_disconnected:{}", p),
-            DhtEvent::FileDiscovered(meta) => format!(
-                "file_discovered:{}:{}:{}",
-                meta.file_hash,
-                meta.file_name,
-                meta.file_size
-            ),
-            DhtEvent::FileNotFound(hash) => format!("file_not_found:{}", hash),
-            DhtEvent::Error(err) => format!("error:{}", err),
-        }).collect();
+        let mapped: Vec<String> = events
+            .into_iter()
+            .map(|e| match e {
+                DhtEvent::PeerDiscovered(p) => format!("peer_discovered:{}", p),
+                DhtEvent::PeerConnected(p) => format!("peer_connected:{}", p),
+                DhtEvent::PeerDisconnected(p) => format!("peer_disconnected:{}", p),
+                DhtEvent::FileDiscovered(meta) => format!(
+                    "file_discovered:{}:{}:{}",
+                    meta.file_hash, meta.file_name, meta.file_size
+                ),
+                DhtEvent::FileNotFound(hash) => format!("file_not_found:{}", hash),
+                DhtEvent::Error(err) => format!("error:{}", err),
+            })
+            .collect();
         Ok(mapped)
     } else {
         Ok(vec![])
@@ -509,7 +563,8 @@ async fn upload_file_to_network(
         ft.upload_file(file_path.clone(), file_name.clone()).await?;
 
         // Get the file hash by reading the file and calculating it
-        let file_data = tokio::fs::read(&file_path).await
+        let file_data = tokio::fs::read(&file_path)
+            .await
             .map_err(|e| format!("Failed to read file: {}", e))?;
         let file_hash = file_transfer::FileTransferService::calculate_file_hash(&file_data);
 
@@ -556,7 +611,10 @@ async fn download_file_from_network(
 
     if let Some(ft) = ft {
         // First try to download from local storage
-        match ft.download_file(file_hash.clone(), output_path.clone()).await {
+        match ft
+            .download_file(file_hash.clone(), output_path.clone())
+            .await
+        {
             Ok(()) => {
                 info!("File downloaded successfully from local storage");
                 return Ok(());
@@ -564,7 +622,10 @@ async fn download_file_from_network(
             Err(_) => {
                 // File not found locally, would need to implement P2P download here
                 // For now, return an error
-                return Err("File not found in local storage. P2P download not yet implemented.".to_string());
+                return Err(
+                    "File not found in local storage. P2P download not yet implemented."
+                        .to_string(),
+                );
             }
         }
     } else {
@@ -589,7 +650,8 @@ async fn upload_file_data_to_network(
 
         // Store the file data directly in memory
         let file_size = file_data.len() as u64;
-        ft.store_file_data(file_hash.clone(), file_name.clone(), file_data).await;
+        ft.store_file_data(file_hash.clone(), file_name.clone(), file_data)
+            .await;
 
         // Also publish to DHT if it's running
         let dht = {
@@ -642,7 +704,9 @@ async fn show_in_folder(path: String) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
         std::process::Command::new("xdg-open")
-            .args([&std::path::Path::new(&path).parent().unwrap_or(std::path::Path::new("/"))])
+            .args([&std::path::Path::new(&path)
+                .parent()
+                .unwrap_or(std::path::Path::new("/"))])
             .spawn()
             .map_err(|e| format!("Failed to open folder: {}", e))?;
     }
@@ -659,20 +723,26 @@ async fn get_file_transfer_events(state: State<'_, AppState>) -> Result<Vec<Stri
 
     if let Some(ft) = ft {
         let events = ft.drain_events(100).await;
-        let mapped: Vec<String> = events.into_iter().map(|e| match e {
-            FileTransferEvent::FileUploaded { file_hash, file_name } => {
-                format!("file_uploaded:{}:{}", file_hash, file_name)
-            }
-            FileTransferEvent::FileDownloaded { file_path } => {
-                format!("file_downloaded:{}", file_path)
-            }
-            FileTransferEvent::FileNotFound { file_hash } => {
-                format!("file_not_found:{}", file_hash)
-            }
-            FileTransferEvent::Error { message } => {
-                format!("error:{}", message)
-            }
-        }).collect();
+        let mapped: Vec<String> = events
+            .into_iter()
+            .map(|e| match e {
+                FileTransferEvent::FileUploaded {
+                    file_hash,
+                    file_name,
+                } => {
+                    format!("file_uploaded:{}:{}", file_hash, file_name)
+                }
+                FileTransferEvent::FileDownloaded { file_path } => {
+                    format!("file_downloaded:{}", file_path)
+                }
+                FileTransferEvent::FileNotFound { file_hash } => {
+                    format!("file_not_found:{}", file_hash)
+                }
+                FileTransferEvent::Error { message } => {
+                    format!("error:{}", message)
+                }
+            })
+            .collect();
         Ok(mapped)
     } else {
         Ok(vec![])
@@ -692,11 +762,13 @@ fn main() {
         use tracing_subscriber::{fmt, prelude::*, EnvFilter};
         tracing_subscriber::registry()
             .with(fmt::layer())
-            .with(EnvFilter::from_default_env()
-                .add_directive("chiral_network=info".parse().unwrap())
-                .add_directive("libp2p=info".parse().unwrap())
-                .add_directive("libp2p_kad=debug".parse().unwrap())
-                .add_directive("libp2p_swarm=debug".parse().unwrap()))
+            .with(
+                EnvFilter::from_default_env()
+                    .add_directive("chiral_network=info".parse().unwrap())
+                    .add_directive("libp2p=info".parse().unwrap())
+                    .add_directive("libp2p_kad=debug".parse().unwrap())
+                    .add_directive("libp2p_swarm=debug".parse().unwrap()),
+            )
             .init();
     }
 
@@ -762,6 +834,7 @@ fn main() {
             connect_to_peer,
             get_dht_events,
             detect_locale,
+            get_dht_health,
             get_dht_peer_count,
             get_dht_peer_id,
             start_file_transfer_service,

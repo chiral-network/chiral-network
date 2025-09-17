@@ -3,12 +3,12 @@ use secp256k1::{PublicKey, Secp256k1, SecretKey};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha3::{Digest, Keccak256};
-use std::process::{Child, Command, Stdio};
-use std::path::{Path, PathBuf};
 use std::fs::{File, OpenOptions};
-use std::io::{BufReader, BufRead};
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 
-//Structs 
+//Structs
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EthAccount {
     pub address: String,
@@ -20,16 +20,16 @@ pub struct AccountInfo {
     pub address: String,
     pub balance: String,
 }
-//Mined Block Struct to return to frontend  
+//Mined Block Struct to return to frontend
 #[derive(Debug, Serialize)]
 pub struct MinedBlock {
-    pub hash: String, 
-    pub nonce: Option<String>, 
-    pub difficulty: Option<String>, 
-    pub timestamp: u64, 
-    pub number: u64, 
+    pub hash: String,
+    pub nonce: Option<String>,
+    pub difficulty: Option<String>,
+    pub timestamp: u64,
+    pub number: u64,
     pub reward: Option<f64>, //Chiral Earned
-} 
+}
 
 pub struct GethProcess {
     child: Option<Child>,
@@ -45,7 +45,7 @@ impl GethProcess {
         if self.child.is_some() {
             return true;
         }
-        
+
         // Also check if geth is actually running on port 8545
         // This handles cases where the app restarted but geth is still running
         if let Ok(response) = std::process::Command::new("curl")
@@ -66,7 +66,7 @@ impl GethProcess {
                 }
             }
         }
-        
+
         false
     }
 
@@ -88,11 +88,11 @@ impl GethProcess {
         if self.child.is_some() {
             return Ok(()); // Already running, no need to start again
         }
-        
+
         // Always kill any existing geth processes before starting
         // This ensures we don't have multiple instances running
         println!("Cleaning up any existing geth processes...");
-        
+
         // First try to stop via HTTP if it's running
         if self.is_running() {
             let _ = Command::new("curl")
@@ -107,27 +107,27 @@ impl GethProcess {
                 .output();
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
-        
+
         // Force kill any remaining geth processes
         #[cfg(unix)]
         {
             // Kill by name pattern
             let _ = Command::new("pkill")
-                .arg("-9")  // Force kill
+                .arg("-9") // Force kill
                 .arg("-f")
                 .arg("geth.*--datadir.*geth-data")
                 .output();
-                
+
             // Also try to kill by port usage (macOS compatible)
             let _ = Command::new("sh")
                 .arg("-c")
                 .arg("lsof -ti:8545,30303 | xargs kill -9 2>/dev/null || true")
                 .output();
-                
+
             // Give it a moment to clean up
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
-        
+
         // Final check - if still running, we have a problem
         if self.is_running() {
             println!("Error: Could not stop existing geth process");
@@ -140,18 +140,21 @@ impl GethProcess {
                     .output();
                 std::thread::sleep(std::time::Duration::from_millis(500));
             }
-            
+
             if self.is_running() {
-                return Err("Cannot stop existing geth process. Please manually kill it and try again.".to_string());
+                return Err(
+                    "Cannot stop existing geth process. Please manually kill it and try again."
+                        .to_string(),
+                );
             }
         }
-        
+
         println!("Geth cleanup complete, starting new instance...");
 
         // Use the GethDownloader to get the correct path
         let downloader = crate::geth_downloader::GethDownloader::new();
         let geth_path = downloader.geth_path();
-        
+
         if !geth_path.exists() {
             return Err("Geth binary not found. Please download it first.".to_string());
         }
@@ -189,8 +192,10 @@ impl GethProcess {
                 .map_err(|e| format!("Failed to initialize genesis: {}", e))?;
 
             if !init_output.status.success() {
-                return Err(format!("Failed to init genesis: {}", 
-                    String::from_utf8_lossy(&init_output.stderr)));
+                return Err(format!(
+                    "Failed to init genesis: {}",
+                    String::from_utf8_lossy(&init_output.stderr)
+                ));
             }
         }
 
@@ -219,11 +224,11 @@ impl GethProcess {
             .arg("50")
             // P2P discovery settings
             .arg("--port")
-            .arg("30303")  // P2P listening port
+            .arg("30303") // P2P listening port
             // Network address configuration
             .arg("--nat")
-            .arg("any");  // Allow NAT traversal and external connections
-        
+            .arg("any"); // Allow NAT traversal and external connections
+
         // Add miner address if provided
         if let Some(address) = miner_address {
             println!("Setting miner.etherbase to: {}", address);
@@ -232,7 +237,7 @@ impl GethProcess {
         } else {
             println!("No miner address provided, starting without etherbase");
         }
-        
+
         // Create log file for geth output
         let log_path = data_path.join("geth.log");
         let log_file = OpenOptions::new()
@@ -240,11 +245,12 @@ impl GethProcess {
             .append(true)
             .open(&log_path)
             .map_err(|e| format!("Failed to create log file: {}", e))?;
-        
+
         cmd.stdout(Stdio::from(log_file.try_clone().unwrap()))
             .stderr(Stdio::from(log_file));
-        
-        let child = cmd.spawn()
+
+        let child = cmd
+            .spawn()
             .map_err(|e| format!("Failed to start geth: {}", e))?;
 
         self.child = Some(child);
@@ -253,7 +259,7 @@ impl GethProcess {
 
     pub fn stop(&mut self) -> Result<(), String> {
         println!("Stopping geth process...");
-        
+
         // First try to kill the tracked child process
         if let Some(mut child) = self.child.take() {
             // Try to kill the process
@@ -262,7 +268,7 @@ impl GethProcess {
                     // Wait for the process to actually exit
                     let _ = child.wait();
                     println!("Tracked geth process terminated successfully");
-                },
+                }
                 Err(e) => {
                     println!("Failed to kill tracked geth process: {}", e);
                 }
@@ -270,20 +276,20 @@ impl GethProcess {
         } else {
             println!("No tracked child process, will kill by pattern");
         }
-        
+
         // Always kill any geth processes by name as a fallback
         // This handles orphaned processes
         #[cfg(unix)]
         {
             println!("Killing any geth processes by pattern...");
-            
+
             // Kill by process name
             let result = Command::new("pkill")
                 .arg("-9")
                 .arg("-f")
                 .arg("geth.*--datadir.*geth-data")
                 .output();
-                
+
             match result {
                 Ok(output) => {
                     if output.status.success() {
@@ -291,19 +297,19 @@ impl GethProcess {
                     } else {
                         println!("pkill returned non-zero (no processes found or error)");
                     }
-                },
-                Err(e) => println!("Failed to run pkill: {}", e)
+                }
+                Err(e) => println!("Failed to run pkill: {}", e),
             }
-            
+
             // Also kill by port usage
             let _ = Command::new("sh")
                 .arg("-c")
                 .arg("lsof -ti:8545,30303 | xargs kill -9 2>/dev/null || true")
                 .output();
-                
+
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
-        
+
         Ok(())
     }
 }
@@ -326,7 +332,7 @@ fn public_key_to_address(public_key: &PublicKey) -> String {
 pub fn create_new_account() -> Result<EthAccount, String> {
     let secp = Secp256k1::new();
     let (secret_key, public_key) = secp.generate_keypair(&mut OsRng);
-    
+
     let address = public_key_to_address(&public_key);
     let private_key = hex::encode(secret_key.as_ref());
 
@@ -338,20 +344,20 @@ pub fn create_new_account() -> Result<EthAccount, String> {
 
 pub fn get_account_from_private_key(private_key_hex: &str) -> Result<EthAccount, String> {
     let secp = Secp256k1::new();
-    
+
     // Remove 0x prefix if present
     let private_key_hex = if private_key_hex.starts_with("0x") {
         &private_key_hex[2..]
     } else {
         private_key_hex
     };
-    
-    let private_key_bytes = hex::decode(private_key_hex)
-        .map_err(|e| format!("Invalid hex private key: {}", e))?;
-    
+
+    let private_key_bytes =
+        hex::decode(private_key_hex).map_err(|e| format!("Invalid hex private key: {}", e))?;
+
     let secret_key = SecretKey::from_slice(&private_key_bytes)
         .map_err(|e| format!("Invalid private key: {}", e))?;
-    
+
     let public_key = PublicKey::from_secret_key(&secp, &secret_key);
     let address = public_key_to_address(&public_key);
 
@@ -363,84 +369,84 @@ pub fn get_account_from_private_key(private_key_hex: &str) -> Result<EthAccount,
 
 pub async fn get_balance(address: &str) -> Result<String, String> {
     let client = reqwest::Client::new();
-    
+
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "eth_getBalance",
         "params": [address, "latest"],
         "id": 1
     });
-    
+
     let response = client
         .post("http://127.0.0.1:8545")
         .json(&payload)
         .send()
         .await
         .map_err(|e| format!("Failed to send request: {}", e))?;
-    
+
     let json_response: serde_json::Value = response
         .json()
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
-    
+
     if let Some(error) = json_response.get("error") {
         return Err(format!("RPC error: {}", error));
     }
-    
+
     let balance_hex = json_response["result"]
         .as_str()
         .ok_or("Invalid balance response")?;
-    
+
     // Convert hex to decimal (wei)
     let balance_wei = u128::from_str_radix(&balance_hex[2..], 16)
         .map_err(|e| format!("Failed to parse balance: {}", e))?;
-    
+
     // Convert wei to ether (1 ether = 10^18 wei)
     let balance_ether = balance_wei as f64 / 1e18;
-    
+
     Ok(format!("{:.6}", balance_ether))
 }
 
 pub async fn get_peer_count() -> Result<u32, String> {
     let client = reqwest::Client::new();
-    
+
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "net_peerCount",
         "params": [],
         "id": 1
     });
-    
+
     let response = client
         .post("http://127.0.0.1:8545")
         .json(&payload)
         .send()
         .await
         .map_err(|e| format!("Failed to send request: {}", e))?;
-    
+
     let json_response: serde_json::Value = response
         .json()
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
-    
+
     if let Some(error) = json_response.get("error") {
         return Err(format!("RPC error: {}", error));
     }
-    
+
     let peer_count_hex = json_response["result"]
         .as_str()
         .ok_or("Invalid peer count response")?;
-    
+
     // Convert hex to decimal
     let peer_count = u32::from_str_radix(&peer_count_hex[2..], 16)
         .map_err(|e| format!("Failed to parse peer count: {}", e))?;
-    
+
     Ok(peer_count)
 }
 
 pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), String> {
     let client = reqwest::Client::new();
-    
+
     // First, ensure geth is ready to accept RPC calls
     let mut attempts = 0;
     let max_attempts = 10; // 10 seconds max wait
@@ -465,15 +471,18 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
                 }
             }
         }
-        
+
         attempts += 1;
         if attempts >= max_attempts {
-            return Err("Geth RPC endpoint is not responding. Please ensure the Chiral node is running.".to_string());
+            return Err(
+                "Geth RPC endpoint is not responding. Please ensure the Chiral node is running."
+                    .to_string(),
+            );
         }
-        
+
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     }
-    
+
     // First try to set the etherbase using miner_setEtherbase
     let set_etherbase = json!({
         "jsonrpc": "2.0",
@@ -481,26 +490,26 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
         "params": [miner_address],
         "id": 1
     });
-    
+
     let response = client
         .post("http://127.0.0.1:8545")
         .json(&set_etherbase)
         .send()
         .await
         .map_err(|e| format!("Failed to set etherbase: {}", e))?;
-    
+
     let json_response: serde_json::Value = response
         .json()
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
-    
+
     // Check if setting etherbase worked
     if let Some(error) = json_response.get("error") {
         eprintln!("Could not set etherbase via RPC: {}", error);
         // Return error to trigger restart
         return Err(format!("{}", error));
     }
-    
+
     // Now start mining with the specified threads
     let start_mining = json!({
         "jsonrpc": "2.0",
@@ -508,91 +517,91 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
         "params": [threads],
         "id": 2
     });
-    
+
     let response = client
         .post("http://127.0.0.1:8545")
         .json(&start_mining)
         .send()
         .await
         .map_err(|e| format!("Failed to start mining: {}", e))?;
-    
+
     let json_response: serde_json::Value = response
         .json()
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
-    
+
     if let Some(error) = json_response.get("error") {
         return Err(format!("{}", error));
     }
-    
+
     Ok(())
 }
 
 pub async fn stop_mining() -> Result<(), String> {
     let client = reqwest::Client::new();
-    
+
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "miner_stop",
         "params": [],
         "id": 1
     });
-    
+
     let response = client
         .post("http://127.0.0.1:8545")
         .json(&payload)
         .send()
         .await
         .map_err(|e| format!("Failed to stop mining: {}", e))?;
-    
+
     let json_response: serde_json::Value = response
         .json()
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
-    
+
     if let Some(error) = json_response.get("error") {
         return Err(format!("Failed to stop mining: {}", error));
     }
-    
+
     Ok(())
 }
 
 pub async fn get_mining_status() -> Result<bool, String> {
     let client = reqwest::Client::new();
-    
+
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "eth_mining",
         "params": [],
         "id": 1
     });
-    
+
     let response = client
         .post("http://127.0.0.1:8545")
         .json(&payload)
         .send()
         .await
         .map_err(|e| format!("Failed to get mining status: {}", e))?;
-    
+
     let json_response: serde_json::Value = response
         .json()
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
-    
+
     if let Some(error) = json_response.get("error") {
         return Err(format!("RPC error: {}", error));
     }
-    
+
     let is_mining = json_response["result"]
         .as_bool()
         .ok_or("Invalid mining status response")?;
-    
+
     Ok(is_mining)
 }
 
 pub async fn get_hashrate() -> Result<String, String> {
     let client = reqwest::Client::new();
-    
+
     // First try eth_hashrate
     let payload = json!({
         "jsonrpc": "2.0",
@@ -600,19 +609,19 @@ pub async fn get_hashrate() -> Result<String, String> {
         "params": [],
         "id": 1
     });
-    
+
     let response = client
         .post("http://127.0.0.1:8545")
         .json(&payload)
         .send()
         .await
         .map_err(|e| format!("Failed to get hashrate: {}", e))?;
-    
+
     let json_response: serde_json::Value = response
         .json()
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
-    
+
     if let Some(error) = json_response.get("error") {
         // If eth_hashrate fails, try miner_hashrate as fallback
         let miner_payload = json!({
@@ -621,7 +630,7 @@ pub async fn get_hashrate() -> Result<String, String> {
             "params": [],
             "id": 1
         });
-        
+
         if let Ok(miner_response) = client
             .post("http://127.0.0.1:8545")
             .json(&miner_payload)
@@ -634,18 +643,20 @@ pub async fn get_hashrate() -> Result<String, String> {
                     if let Some(result) = miner_json.get("result") {
                         if let Some(hashrate_hex) = result.as_str() {
                             // Process with the same logic below
-                            let hex_str = if hashrate_hex.starts_with("0x") || hashrate_hex.starts_with("0X") {
+                            let hex_str = if hashrate_hex.starts_with("0x")
+                                || hashrate_hex.starts_with("0X")
+                            {
                                 &hashrate_hex[2..]
                             } else {
                                 hashrate_hex
                             };
-                            
+
                             let hashrate = if hex_str.is_empty() || hex_str == "0" {
                                 0
                             } else {
                                 u64::from_str_radix(hex_str, 16).unwrap_or(0)
                             };
-                            
+
                             let formatted = if hashrate >= 1_000_000_000 {
                                 format!("{:.2} GH/s", hashrate as f64 / 1_000_000_000.0)
                             } else if hashrate >= 1_000_000 {
@@ -655,37 +666,36 @@ pub async fn get_hashrate() -> Result<String, String> {
                             } else {
                                 format!("{} H/s", hashrate)
                             };
-                            
+
                             return Ok(formatted);
                         }
                     }
                 }
             }
         }
-        
+
         // If both fail, return original error
         return Err(format!("RPC error: {}", error));
     }
-    
+
     let hashrate_hex = json_response["result"]
         .as_str()
         .ok_or("Invalid hashrate response")?;
-    
+
     // Handle edge cases where hashrate might be "0x0" or invalid
     let hex_str = if hashrate_hex.starts_with("0x") || hashrate_hex.starts_with("0X") {
         &hashrate_hex[2..]
     } else {
         hashrate_hex
     };
-    
+
     // Convert hex to decimal, handle empty string or just "0"
     let hashrate = if hex_str.is_empty() || hex_str == "0" {
         0
     } else {
-        u64::from_str_radix(hex_str, 16)
-            .map_err(|e| format!("Failed to parse hashrate: {}", e))?
+        u64::from_str_radix(hex_str, 16).map_err(|e| format!("Failed to parse hashrate: {}", e))?
     };
-    
+
     // Convert to human-readable format (H/s, KH/s, MH/s, GH/s)
     let formatted = if hashrate >= 1_000_000_000 {
         format!("{:.2} GH/s", hashrate as f64 / 1_000_000_000.0)
@@ -696,50 +706,50 @@ pub async fn get_hashrate() -> Result<String, String> {
     } else {
         format!("{} H/s", hashrate)
     };
-    
+
     Ok(formatted)
 }
 
 pub async fn get_block_number() -> Result<u64, String> {
     let client = reqwest::Client::new();
-    
+
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "eth_blockNumber",
         "params": [],
         "id": 1
     });
-    
+
     let response = client
         .post("http://127.0.0.1:8545")
         .json(&payload)
         .send()
         .await
         .map_err(|e| format!("Failed to get block number: {}", e))?;
-    
+
     let json_response: serde_json::Value = response
         .json()
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
-    
+
     if let Some(error) = json_response.get("error") {
         return Err(format!("RPC error: {}", error));
     }
-    
+
     let block_hex = json_response["result"]
         .as_str()
         .ok_or("Invalid block number response")?;
-    
+
     // Convert hex to decimal
     let block_number = u64::from_str_radix(&block_hex[2..], 16)
         .map_err(|e| format!("Failed to parse block number: {}", e))?;
-    
+
     Ok(block_number)
 }
 
 pub async fn get_network_difficulty() -> Result<String, String> {
     let client = reqwest::Client::new();
-    
+
     // Get the latest block to extract difficulty
     let payload = json!({
         "jsonrpc": "2.0",
@@ -747,31 +757,31 @@ pub async fn get_network_difficulty() -> Result<String, String> {
         "params": ["latest", false],
         "id": 1
     });
-    
+
     let response = client
         .post("http://127.0.0.1:8545")
         .json(&payload)
         .send()
         .await
         .map_err(|e| format!("Failed to get block: {}", e))?;
-    
+
     let json_response: serde_json::Value = response
         .json()
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
-    
+
     if let Some(error) = json_response.get("error") {
         return Err(format!("RPC error: {}", error));
     }
-    
+
     let difficulty_hex = json_response["result"]["difficulty"]
         .as_str()
         .ok_or("Invalid difficulty response")?;
-    
+
     // Convert hex to decimal
     let difficulty = u128::from_str_radix(&difficulty_hex[2..], 16)
         .map_err(|e| format!("Failed to parse difficulty: {}", e))?;
-    
+
     // Format difficulty for display
     let formatted = if difficulty >= 1_000_000_000_000 {
         format!("{:.2}T", difficulty as f64 / 1_000_000_000_000.0)
@@ -784,7 +794,7 @@ pub async fn get_network_difficulty() -> Result<String, String> {
     } else {
         format!("{}", difficulty)
     };
-    
+
     Ok(formatted)
 }
 
@@ -802,38 +812,40 @@ pub fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String> {
     };
     // Try to get blocks mined from logs first
     let log_path = data_path.join("geth.log");
-    
+
     // If log doesn't exist, return defaults (blocks will be calculated from balance in frontend)
     if !log_path.exists() {
         // Return 0 blocks but a reasonable hashrate estimate based on CPU mining
         // Frontend will calculate blocks from actual balance
         return Ok((0, 85000.0)); // Default ~85KH/s for single thread CPU mining
     }
-    
+
     let file = File::open(&log_path).map_err(|e| format!("Failed to open log file: {}", e))?;
     let reader = BufReader::new(file);
-    
+
     let mut blocks_mined = 0u64;
     let mut recent_hashrates = Vec::new();
-    
+
     // Read last 2000 lines to get recent mining performance
-    let lines: Vec<String> = reader.lines()
+    let lines: Vec<String> = reader
+        .lines()
         .filter_map(Result::ok)
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
         .take(2000)
         .collect();
-    
+
     for line in &lines {
         // Look for various block mining success patterns
-        if line.contains("Successfully sealed new block") 
+        if line.contains("Successfully sealed new block")
             || line.contains("🔨 mined potential block")
             || line.contains("Block mined")
-            || (line.contains("mined") && line.contains("block")) {
+            || (line.contains("mined") && line.contains("block"))
+        {
             blocks_mined += 1;
         }
-        
+
         // Look for mining stats in logs
         // Geth may log lines like "Generating DAG" or mining-related performance
         if line.contains("Mining") && line.contains("hashrate") {
@@ -849,13 +861,13 @@ pub fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String> {
             }
         }
     }
-    
+
     // If we found explicit hashrates in logs, use the average
     if !recent_hashrates.is_empty() {
         let avg_hashrate = recent_hashrates.iter().sum::<f64>() / recent_hashrates.len() as f64;
         return Ok((blocks_mined, avg_hashrate));
     }
-    
+
     // Otherwise, estimate based on blocks found and difficulty
     // Look for the most recent block difficulty
     let mut last_difficulty = 0u64;
@@ -873,7 +885,7 @@ pub fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String> {
             }
         }
     }
-    
+
     // If we have blocks mined and difficulty, estimate hashrate
     // Hash rate ≈ (blocks_found * difficulty) / time_period
     // Since we're looking at recent logs, assume last ~10 minutes
@@ -882,7 +894,7 @@ pub fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String> {
         let estimated_hashrate = (blocks_mined as f64 * last_difficulty as f64) / time_window;
         return Ok((blocks_mined, estimated_hashrate));
     }
-    
+
     // If still no data, check for CPU miner initialization
     for line in &lines {
         if line.contains("Updated mining threads") || line.contains("Starting mining operation") {
@@ -900,7 +912,7 @@ pub fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String> {
             }
         }
     }
-    
+
     Ok((blocks_mined, 0.0))
 }
 
@@ -917,34 +929,30 @@ pub fn get_mining_logs(data_dir: &str, lines: usize) -> Result<Vec<String>, Stri
         exe_dir.join(data_dir)
     };
     let log_path = data_path.join("geth.log");
-    
+
     if !log_path.exists() {
         return Ok(vec!["No logs available yet.".to_string()]);
     }
-    
-    let file = File::open(&log_path)
-        .map_err(|e| format!("Failed to open log file: {}", e))?;
-    
+
+    let file = File::open(&log_path).map_err(|e| format!("Failed to open log file: {}", e))?;
+
     let reader = BufReader::new(file);
-    let all_lines: Vec<String> = reader
-        .lines()
-        .filter_map(Result::ok)
-        .collect();
-    
+    let all_lines: Vec<String> = reader.lines().filter_map(Result::ok).collect();
+
     // Get the last N lines
     let start = if all_lines.len() > lines {
         all_lines.len() - lines
     } else {
         0
     };
-    
+
     Ok(all_lines[start..].to_vec())
 }
 
 pub async fn get_mined_blocks_count(miner_address: &str) -> Result<u64, String> {
     let client = reqwest::Client::new();
     let mut blocks_mined = 0u64;
-    
+
     // Get the current block number
     let block_number_payload = json!({
         "jsonrpc": "2.0",
@@ -952,37 +960,37 @@ pub async fn get_mined_blocks_count(miner_address: &str) -> Result<u64, String> 
         "params": [],
         "id": 1
     });
-    
+
     let response = client
         .post("http://127.0.0.1:8545")
         .json(&block_number_payload)
         .send()
         .await
         .map_err(|e| format!("Failed to get block number: {}", e))?;
-    
+
     let json_response: serde_json::Value = response
         .json()
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
-    
+
     if let Some(error) = json_response.get("error") {
         return Err(format!("RPC error: {}", error));
     }
-    
+
     let block_hex = json_response["result"]
         .as_str()
         .ok_or("Invalid block number response")?;
-    
+
     let current_block = u64::from_str_radix(&block_hex[2..], 16)
         .map_err(|e| format!("Failed to parse block number: {}", e))?;
-    
+
     // Check recent blocks (last 100 or current block count, whichever is smaller)
     let blocks_to_check = std::cmp::min(100, current_block);
     let start_block = current_block.saturating_sub(blocks_to_check);
-    
+
     // Normalize the miner address for comparison
     let normalized_miner = miner_address.to_lowercase();
-    
+
     for block_num in start_block..=current_block {
         let block_payload = json!({
             "jsonrpc": "2.0",
@@ -990,7 +998,7 @@ pub async fn get_mined_blocks_count(miner_address: &str) -> Result<u64, String> 
             "params": [format!("0x{:x}", block_num), false],
             "id": 1
         });
-        
+
         if let Ok(response) = client
             .post("http://127.0.0.1:8545")
             .json(&block_payload)
@@ -1008,11 +1016,11 @@ pub async fn get_mined_blocks_count(miner_address: &str) -> Result<u64, String> 
             }
         }
     }
-    
+
     Ok(blocks_mined)
 }
 
-//Fetching Recent Blocks Mined by address, scanning backwards from latest 
+//Fetching Recent Blocks Mined by address, scanning backwards from latest
 pub async fn get_recent_mined_blocks(
     miner_address: &str,
     lookback: u64,
@@ -1023,7 +1031,7 @@ pub async fn get_recent_mined_blocks(
     // Fetch latest block number
     let latest_v = client
         .post("http://127.0.0.1:8545")
-        .json(&serde_json::json!({ 
+        .json(&serde_json::json!({
             "jsonrpc": "2.0",
             "method": "eth_blockNumber",
             "params": [],
@@ -1036,7 +1044,9 @@ pub async fn get_recent_mined_blocks(
         .await
         .map_err(|e| format!("RPC parse: {e}"))?;
 
-    let latest_hex: &str = latest_v["result"].as_str().ok_or("Invalid eth_blockNumber")?;
+    let latest_hex: &str = latest_v["result"]
+        .as_str()
+        .ok_or("Invalid eth_blockNumber")?;
     let latest = u64::from_str_radix(latest_hex.trim_start_matches("0x"), 16)
         .map_err(|e| format!("hex parse: {e}"))?;
 
@@ -1046,7 +1056,9 @@ pub async fn get_recent_mined_blocks(
     let mut out: Vec<MinedBlock> = Vec::new();
 
     for n in (start..=latest).rev() {
-        if out.len() >= limit { break; }
+        if out.len() >= limit {
+            break;
+        }
 
         let block_v = client
             .post("http://127.0.0.1:8545")
@@ -1063,23 +1075,43 @@ pub async fn get_recent_mined_blocks(
             .await
             .map_err(|e| format!("RPC parse: {e}"))?;
 
-        if block_v.get("result").is_none() { continue; }
+        if block_v.get("result").is_none() {
+            continue;
+        }
         let b = &block_v["result"];
 
-        let miner = b.get("author").and_then(|x| x.as_str())
+        let miner = b
+            .get("author")
+            .and_then(|x| x.as_str())
             .or_else(|| b.get("miner").and_then(|x| x.as_str()))
             .unwrap_or("")
             .to_lowercase();
 
-        if miner != target { continue; }
+        if miner != target {
+            continue;
+        }
 
-        let hash = b.get("hash").and_then(|x| x.as_str()).unwrap_or_default().to_string();
-        let nonce = b.get("nonce").and_then(|x| x.as_str()).map(|s| s.to_string());
-        let difficulty = b.get("difficulty").and_then(|x| x.as_str()).map(|s| s.to_string());
-        let timestamp = b.get("timestamp").and_then(|x| x.as_str())
+        let hash = b
+            .get("hash")
+            .and_then(|x| x.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let nonce = b
+            .get("nonce")
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string());
+        let difficulty = b
+            .get("difficulty")
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string());
+        let timestamp = b
+            .get("timestamp")
+            .and_then(|x| x.as_str())
             .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
             .unwrap_or(0);
-        let number = b.get("number").and_then(|x| x.as_str())
+        let number = b
+            .get("number")
+            .and_then(|x| x.as_str())
             .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
             .unwrap_or(n);
 
@@ -1095,9 +1127,11 @@ pub async fn get_recent_mined_blocks(
                     "params": [target, format!("0x{:x}", number)],
                     "id": 1
                 }))
-                .send().await
+                .send()
+                .await
                 .map_err(|e| format!("RPC send: {e}"))?
-                .json::<serde_json::Value>().await
+                .json::<serde_json::Value>()
+                .await
                 .map_err(|e| format!("RPC parse: {e}"))?;
 
             let bal_prev_v = client
@@ -1108,9 +1142,11 @@ pub async fn get_recent_mined_blocks(
                     "params": [target, format!("0x{:x}", number.saturating_sub(1))],
                     "id": 1
                 }))
-                .send().await
+                .send()
+                .await
                 .map_err(|e| format!("RPC send: {e}"))?
-                .json::<serde_json::Value>().await
+                .json::<serde_json::Value>()
+                .await
                 .map_err(|e| format!("RPC parse: {e}"))?;
 
             let parse_u128 = |hex_str: &str| -> Option<u128> {
@@ -1118,8 +1154,14 @@ pub async fn get_recent_mined_blocks(
                 u128::from_str_radix(s, 16).ok()
             };
 
-            let bal_n = bal_n_v.get("result").and_then(|v| v.as_str()).and_then(parse_u128);
-            let bal_prev = bal_prev_v.get("result").and_then(|v| v.as_str()).and_then(parse_u128);
+            let bal_n = bal_n_v
+                .get("result")
+                .and_then(|v| v.as_str())
+                .and_then(parse_u128);
+            let bal_prev = bal_prev_v
+                .get("result")
+                .and_then(|v| v.as_str())
+                .and_then(parse_u128);
             if let (Some(bn), Some(bp)) = (bal_n, bal_prev) {
                 let delta_wei = bn.saturating_sub(bp);
                 // Convert to ether-like units (divide by 1e18)
@@ -1130,7 +1172,14 @@ pub async fn get_recent_mined_blocks(
             }
         };
 
-        out.push(MinedBlock { hash, nonce, difficulty, timestamp, number, reward });
+        out.push(MinedBlock {
+            hash,
+            nonce,
+            difficulty,
+            timestamp,
+            number,
+            reward,
+        });
     }
 
     Ok(out)
@@ -1138,7 +1187,7 @@ pub async fn get_recent_mined_blocks(
 
 pub async fn get_network_hashrate() -> Result<String, String> {
     let client = reqwest::Client::new();
-    
+
     // First, try to get the actual network hashrate from eth_hashrate
     // This will return the sum of all miners that have submitted their hashrate
     let hashrate_payload = json!({
@@ -1147,7 +1196,7 @@ pub async fn get_network_hashrate() -> Result<String, String> {
         "params": [],
         "id": 1
     });
-    
+
     if let Ok(response) = client
         .post("http://127.0.0.1:8545")
         .json(&hashrate_payload)
@@ -1163,7 +1212,7 @@ pub async fn get_network_hashrate() -> Result<String, String> {
                     } else {
                         hashrate_hex
                     };
-                    
+
                     if !hex_str.is_empty() && hex_str != "0" {
                         if let Ok(hashrate) = u64::from_str_radix(hex_str, 16) {
                             if hashrate > 0 {
@@ -1185,7 +1234,7 @@ pub async fn get_network_hashrate() -> Result<String, String> {
             }
         }
     }
-    
+
     // If eth_hashrate returns 0 or fails, estimate from difficulty
     // For private networks, get the latest two blocks to calculate actual block time
     let latest_block = json!({
@@ -1194,31 +1243,31 @@ pub async fn get_network_hashrate() -> Result<String, String> {
         "params": ["latest", true],
         "id": 1
     });
-    
+
     let response = client
         .post("http://127.0.0.1:8545")
         .json(&latest_block)
         .send()
         .await
         .map_err(|e| format!("Failed to get block: {}", e))?;
-    
+
     let json_response: serde_json::Value = response
         .json()
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
-    
+
     if let Some(error) = json_response.get("error") {
         return Err(format!("RPC error: {}", error));
     }
-    
+
     let difficulty_hex = json_response["result"]["difficulty"]
         .as_str()
         .ok_or("Invalid difficulty response")?;
-    
+
     // Convert hex to decimal
     let difficulty = u128::from_str_radix(&difficulty_hex[2..], 16)
         .map_err(|e| format!("Failed to parse difficulty: {}", e))?;
-    
+
     // For Chiral private network, estimate network hashrate from difficulty
     // The relationship between hashrate and difficulty depends on the algorithm
     // For Ethash on a private network with CPU mining:
@@ -1226,7 +1275,7 @@ pub async fn get_network_hashrate() -> Result<String, String> {
     // This gives us the hash rate needed to mine a block at this difficulty
     let estimated_block_time = 15.0; // seconds (Ethereum default)
     let hashrate = difficulty as f64 / estimated_block_time;
-    
+
     // Convert to human-readable format
     let formatted = if hashrate >= 1_000_000_000_000.0 {
         format!("{:.2} TH/s", hashrate / 1_000_000_000_000.0)
@@ -1239,6 +1288,6 @@ pub async fn get_network_hashrate() -> Result<String, String> {
     } else {
         format!("{:.0} H/s", hashrate)
     };
-    
+
     Ok(formatted)
 }

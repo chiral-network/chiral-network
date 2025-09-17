@@ -57,7 +57,15 @@
       "peerId": "节点ID",
       "bootstrapNode": "引导节点",
       "recentEvents": "最近事件",
-      "disconnect": "断开DHT"
+      "disconnect": "断开DHT",
+      "health": {
+        "lastBootstrap": "最近一次引导",
+        "lastPeer": "最近一次节点事件",
+        "lastError": "最近错误",
+        "failures": "引导失败次数",
+        "never": "从未",
+        "none": "无记录"
+      }
     },
     "networkStatus": "网络状态",
     "dhtPeers": "DHT节点",
