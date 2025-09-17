@@ -7,6 +7,7 @@
   import { Shield, Globe, Activity, Plus, Power, Trash2 } from 'lucide-svelte'
   import { proxyNodes } from '$lib/stores'
   import { t } from 'svelte-i18n'
+  import DropDown from '$lib/components/ui/dropDown.svelte'
   
   let newNodeAddress = ''
   let proxyEnabled = true
@@ -15,6 +16,13 @@
   let nodeToRemove: any = null
   const validAddressRegex = /^[a-zA-Z0-9.-]+:[0-9]{1,5}$/
   let statusFilter = 'all'
+  
+  $: statusOptions = [
+    { value: 'all', label: $t('All') },
+    { value: 'online', label: $t('Online') },
+    { value: 'offline', label: $t('Offline') },
+    { value: 'connecting', label: $t('Connecting') }
+  ]
 
   $: filteredNodes = $proxyNodes.filter(node => {
       if (statusFilter === 'all') {
@@ -219,16 +227,11 @@
   <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
         <h2 class="text-lg font-semibold">{$t('proxy.proxyNodes')}</h2>
-        <div>
-            <select
+        <div class="w-40 flex-shrink-0">
+            <DropDown
                 bind:value={statusFilter}
-                class="p-2 rounded-md border border-gray-300 text-sm"
-            >
-                <option value="all">{$t('All')}</option>
-                <option value="online">{$t('Online')}</option>
-                <option value="offline">{$t('Offline')}</option>
-                <option value="connecting">{$t('Connecting')}</option>
-            </select>
+                options={statusOptions}
+            />
         </div>
     </div>
     <div class="space-y-3">
