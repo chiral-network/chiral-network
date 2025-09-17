@@ -54,6 +54,9 @@
   // Dynamic earnings history chart values
   let hoveredDay: Earning | null = null;
   let hoveredIndex: number | null = null;
+  let selectedDay: Earning | null = null;
+  let selectedIndex: number | null = null;
+  let lastChartSignature: string | null = null;
   let periodPreset: string = '30d';
   let startDateInput = '';
   let endDateInput = '';
@@ -61,6 +64,11 @@
   let chartType: 'bar' | 'line' = 'bar';
   // Use a single array for the date range
   let customDateRange: [Date | null, Date | null] = [null, null];
+
+  function clearSelection() {
+    selectedDay = null;
+    selectedIndex = null;
+  }
 
   function formatDateForInput(date: Date): string {
     const year = date.getFullYear();
@@ -185,6 +193,9 @@
 
   function handlePresetChange(value: string) {
     periodPreset = value;
+    clearSelection();
+    hoveredDay = null;
+    hoveredIndex = null;
 
     if (value === 'custom') {
       const fallbackEnd = endDateInput
@@ -293,6 +304,45 @@
   }
 
   $: chartData = aggregateData(filteredHistory, MAX_BARS);
+
+  $: {
+    const nextSignature = chartData.map((entry) => `${entry.date}|${entry.earnings}|${entry.cumulative}`).join('::');
+    if (lastChartSignature !== null && nextSignature !== lastChartSignature) {
+      clearSelection();
+      hoveredDay = null;
+      hoveredIndex = null;
+    }
+    lastChartSignature = nextSignature;
+  }
+
+  $: {
+    if (selectedIndex !== null) {
+      if (chartData[selectedIndex]) {
+        selectedDay = chartData[selectedIndex];
+      } else {
+        selectedDay = null;
+        selectedIndex = null;
+      }
+    } else {
+      selectedDay = null;
+    }
+  }
+
+  function selectDay(day: Earning, index: number) {
+    if (selectedIndex === index) {
+      clearSelection();
+    } else {
+      selectedDay = day;
+      selectedIndex = index;
+    }
+  }
+
+  function handleKeySelection(event: KeyboardEvent, day: Earning, index: number) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      selectDay(day, index);
+    }
+  }
 
   function formatSize(bytes: number): string {
     const units = ['B', 'KB', 'MB', 'GB', 'TB']
@@ -757,15 +807,27 @@
                       title="{day.date}: {day.earnings.toFixed(2)} Chiral"
                       on:mouseenter={() => { hoveredDay = day; hoveredIndex = i; }}
                       on:mouseleave={() => { hoveredDay = null; hoveredIndex = null; }}
+                      on:click={() => selectDay(day, i)}
+                      on:keydown={(event) => handleKeySelection(event, day, i)}
+                      aria-pressed={selectedIndex === i}
                       aria-label="{day.date}: {day.earnings.toFixed(2)} Chiral"
               >
-                {#if hoveredIndex === i && hoveredDay}
+                {#if selectedIndex === i && selectedDay}
                   <div
                           class="absolute left-1/2 -translate-x-1/2 -top-8 z-10 px-2 py-1 rounded bg-primary text-white text-xs shadow-lg pointer-events-none"
                           style="white-space:nowrap;"
                   >
-                    {hoveredDay.date}: {hoveredDay.earnings.toFixed(2)} Chiral
+                    {selectedDay.date}: {selectedDay.earnings.toFixed(2)} Chiral
                     <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-6 border-l-transparent border-r-6 border-r-transparent border-t-6 border-t-primary"></span>
+                  </div>
+                {/if}
+                {#if hoveredIndex === i && hoveredDay && hoveredIndex !== selectedIndex}
+                  <div
+                          class="absolute left-1/2 -translate-x-1/2 -top-8 z-20 px-2 py-1 rounded bg-muted-foreground text-background text-xs shadow-lg pointer-events-none"
+                          style="white-space:nowrap;"
+                  >
+                    {hoveredDay.date}: {hoveredDay.earnings.toFixed(2)} Chiral
+                    <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-6 border-l-transparent border-r-6 border-r-transparent border-t-6 border-t-muted-foreground"></span>
                   </div>
                 {/if}
               </div>
@@ -804,6 +866,9 @@
                         aria-label="Data point for {day.date}: {day.earnings} earnings"
                         on:mouseenter={() => { hoveredDay = day; hoveredIndex = i; }}
                         on:mouseleave={() => { hoveredDay = null; hoveredIndex = null; }}
+                        on:click={() => selectDay(day, i)}
+                        on:keydown={(event) => handleKeySelection(event, day, i)}
+                        aria-pressed={selectedIndex === i}
                 />
               {/each}
 
@@ -816,12 +881,12 @@
               </defs>
             </svg>
 
-            <!-- Tooltip for line chart -->
-            {#if hoveredDay && hoveredIndex !== null}
+            <!-- Tooltips for line chart -->
+            {#if hoveredDay && hoveredIndex !== null && hoveredIndex !== selectedIndex}
               <div
-                      class="absolute z-10 px-2 py-1 rounded bg-primary text-white text-xs shadow-lg pointer-events-none"
+                      class="absolute z-20 px-2 py-1 rounded bg-muted-foreground text-background text-xs shadow-lg pointer-events-none"
                       style="
-                  left: {(hoveredIndex / (chartData.length - 1)) * 100}%;
+                  left: {chartData.length > 1 ? (hoveredIndex / (chartData.length - 1)) * 100 : 50}%;
                   top: {100 - (hoveredDay.earnings / chartMax) * 100}%;
                   transform: translate(-50%, -100%);
                   margin-top: -8px;
@@ -829,6 +894,22 @@
                 "
               >
                 {hoveredDay.date}: {hoveredDay.earnings.toFixed(2)} Chiral
+                <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-6 border-l-transparent border-r-6 border-r-transparent border-t-6 border-t-muted-foreground"></span>
+              </div>
+            {/if}
+
+            {#if selectedDay && selectedIndex !== null}
+              <div
+                      class="absolute z-10 px-2 py-1 rounded bg-primary text-white text-xs shadow-lg pointer-events-none"
+                      style="
+                  left: {chartData.length > 1 ? (selectedIndex / (chartData.length - 1)) * 100 : 50}%;
+                  top: {100 - (selectedDay.earnings / chartMax) * 100}%;
+                  transform: translate(-50%, -100%);
+                  margin-top: -8px;
+                  white-space: nowrap;
+                "
+              >
+                {selectedDay.date}: {selectedDay.earnings.toFixed(2)} Chiral
                 <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-6 border-l-transparent border-r-6 border-r-transparent border-t-6 border-t-primary"></span>
               </div>
             {/if}
