@@ -18,6 +18,8 @@
     import { t } from 'svelte-i18n';
     import SimpleToast from './lib/components/SimpleToast.svelte';
     import { startNetworkMonitoring } from './lib/services/networkService';
+    import WebRTCSignallingTest from './lib/components/WebRTCSignallingTest.svelte'
+    // gets path name not entire url:
     import WebRTCTest from './lib/components/WebRTCTest.svelte'
         // gets path name not entire url:
     // ex: http://locatlhost:1420/download -> /download
@@ -98,6 +100,7 @@
         { id: 'proxy', label: $t('nav.proxy'), icon: Shield },
         { id: 'analytics', label: $t('nav.analytics'), icon: BarChart3 },
         { id: 'account', label: $t('nav.account'), icon: Wallet },
+        { id: 'webrtc-test', label: 'WebRTC Test (To be removed)', icon: Globe }, // Using Globe icon as placeholder
         { id: 'webtestrtc', label: 'WebTestRTC (To be removed later)', icon: Globe },
         { id: 'settings', label: $t('nav.settings'), icon: Settings },
       ]
@@ -135,6 +138,10 @@
       {
         path: "account",
         component: AccountPage,
+      },
+      {
+        path: "webrtc-test",
+        component: WebRTCSignallingTest
       },
       {
         path: "webtestrtc",

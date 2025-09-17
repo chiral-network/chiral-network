@@ -57,7 +57,15 @@
       "peerId": "ID de par",
       "bootstrapNode": "Nodo bootstrap",
       "recentEvents": "Eventos recientes",
-      "disconnect": "Desconectar del DHT"
+      "disconnect": "Desconectar del DHT",
+      "health": {
+        "lastBootstrap": "Último arranque",
+        "lastPeer": "Último evento de par",
+        "lastError": "Último error",
+        "failures": "Intentos fallidos",
+        "never": "Nunca",
+        "none": "No registrado"
+      }
     },
     "networkStatus": "Estado de la red",
     "dhtPeers": "Pares DHT",

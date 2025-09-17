@@ -57,7 +57,15 @@
       "peerId": "Peer ID",
       "bootstrapNode": "Bootstrap Node",
       "recentEvents": "Recent Events",
-      "disconnect": "Disconnect from DHT"
+      "disconnect": "Disconnect from DHT",
+      "health": {
+        "lastBootstrap": "Last bootstrap",
+        "lastPeer": "Last peer event",
+        "lastError": "Last error",
+        "failures": "Bootstrap failures",
+        "never": "Never",
+        "none": "None recorded"
+      }
     },
     "networkStatus": "Network Status",
     "dhtPeers": "DHT Peers",

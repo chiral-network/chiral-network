@@ -458,6 +458,25 @@
   // Keep a set of hashes we've already shown to avoid duplicates
   let seenHashes = new Set<string>();
 
+  // Pagination for recent blocks
+  let pageSizes = [5, 10, 20, 50]
+  let pageSize: number = 10
+  let currentPage: number = 1
+
+  // Derived values
+  $: totalBlocks = ($miningState.recentBlocks || []).length
+  $: totalPages = Math.max(1, Math.ceil(totalBlocks / pageSize))
+  $: {
+    // Clamp currentPage when totalPages or pageSize changes
+    if (currentPage > totalPages) currentPage = totalPages
+    if (currentPage < 1) currentPage = 1
+  }
+
+  // When recentBlocks array changes (new block added or removed) we rely on
+  // pushRecentBlock to set currentPage = 1 so the newest block is visible.
+
+  $: displayedBlocks = ($miningState.recentBlocks || []).slice((currentPage - 1) * pageSize, currentPage * pageSize)
+
   function pushRecentBlock(b: {
     hash: string;
     nonce?: number;
@@ -476,6 +495,8 @@
       number: b.number ?? 0,
     };
     $miningState.recentBlocks = [item, ...($miningState.recentBlocks ?? [])].slice(0, 50);
+    // Reset to first page so newly found blocks are visible
+    currentPage = 1
   }
 
   async function appendNewBlocksFromBackend() {
@@ -578,15 +599,133 @@
       }
     }
   }
-  let pools: { value: string; label: string }[] = []
+  // Pool structure with full configuration
+  interface Pool {
+    id: string
+    name: string
+    url: string
+    worker: string
+    password: string
+  }
 
-  // Mock pool options
-  $: pools = [
-    { value: 'solo', label: $t('mining.pools.solo') },
-    { value: 'pool1', label: $t('mining.pools.pool1') },
-    { value: 'pool2', label: $t('mining.pools.pool2') },
-    { value: 'pool3', label: $t('mining.pools.community') }
-  ]
+  let pools: Pool[] = []
+  let poolOptions: { value: string; label: string }[] = []
+
+  // Initialize with default pools
+  $: {
+    pools = [
+      { id: 'solo', name: 'Solo Mining', url: '', worker: '', password: '' },
+      { id: 'pool1', name: 'Pool 1', url: 'stratum://pool1.example.com:3333', worker: 'worker1', password: 'x' },
+      { id: 'pool2', name: 'Pool 2', url: 'stratum://pool2.example.com:3333', worker: 'worker2', password: 'x' },
+      { id: 'pool3', name: 'Community Pool', url: 'stratum://community.example.com:3333', worker: 'worker3', password: 'x' }
+    ]
+    
+    // Create dropdown options
+    poolOptions = pools.map(pool => ({
+      value: pool.id,
+      label: pool.name
+    }))
+  }
+
+  // Current pool management state
+  let poolConnected = false
+  let poolUrl = 'stratum://localhost:3333'
+  let poolWorker = 'worker1'
+  let poolPassword = 'x'
+  
+  // Pool management UI state
+  let showPoolManager = false
+  let editingPool: Pool | null = null
+  let newPool: Pool = { id: '', name: '', url: '', worker: '', password: '' }
+  let poolStats = {
+    connectedMiners: 0,
+    totalShares: 0,
+    currentDifficulty: 1000000,
+    poolHashrate: 0
+  }
+  let poolStatsInterval: ReturnType<typeof setInterval> | null = null
+
+  // Mock pool stats simulation
+  function startPoolStatsSimulation() {
+    if (poolStatsInterval) {
+      clearInterval(poolStatsInterval)
+    }
+    
+    poolStatsInterval = setInterval(() => {
+      if (poolConnected) {
+        // Simulate realistic pool stats
+        poolStats.connectedMiners = Math.max(1, poolStats.connectedMiners + Math.floor(Math.random() * 3) - 1)
+        poolStats.totalShares += Math.floor(Math.random() * 5)
+        poolStats.poolHashrate = poolStats.connectedMiners * (85000 + Math.random() * 15000) // 85-100 KH/s per miner
+        poolStats.currentDifficulty = 1000000 + Math.floor(Math.random() * 100000)
+      }
+    }, 3000) // Update every 3 seconds
+  }
+
+  function stopPoolStatsSimulation() {
+    if (poolStatsInterval) {
+      clearInterval(poolStatsInterval)
+      poolStatsInterval = null
+    }
+  }
+
+  // Pool management functions
+  function getCurrentPool(): Pool | null {
+    return pools.find(pool => pool.id === $miningState.selectedPool) || null
+  }
+
+  function updateCurrentPoolConfig() {
+    const currentPool = getCurrentPool()
+    if (currentPool) {
+      poolUrl = currentPool.url
+      poolWorker = currentPool.worker
+      poolPassword = currentPool.password
+    }
+  }
+
+  function addPool() {
+    if (newPool.name && newPool.url) {
+      const poolId = `pool_${Date.now()}`
+      pools = [...pools, { ...newPool, id: poolId }]
+      newPool = { id: '', name: '', url: '', worker: '', password: '' }
+      showPoolManager = false
+    }
+  }
+
+  function editPool(pool: Pool) {
+    editingPool = { ...pool }
+    showPoolManager = true
+  }
+
+  function savePool() {
+    if (editingPool && editingPool.name && editingPool.url) {
+      pools = pools.map(pool => 
+        pool.id === editingPool!.id ? editingPool! : pool
+      )
+      editingPool = null
+      showPoolManager = false
+    }
+  }
+
+  function deletePool(poolId: string) {
+    if (poolId !== 'solo') { // Don't delete solo mining
+      pools = pools.filter(pool => pool.id !== poolId)
+      if ($miningState.selectedPool === poolId) {
+        $miningState.selectedPool = 'solo'
+      }
+    }
+  }
+
+  function cancelPoolEdit() {
+    editingPool = null
+    newPool = { id: '', name: '', url: '', worker: '', password: '' }
+    showPoolManager = false
+  }
+
+  // Update pool config when selection changes
+  $: if ($miningState.selectedPool) {
+    updateCurrentPoolConfig()
+  }
   
   onDestroy(async () => {
     // Don't stop mining when leaving the page - preserve state
@@ -599,6 +738,9 @@
     }
     if (logsInterval) {
       clearInterval(logsInterval)
+    }
+    if (poolStatsInterval) {
+      clearInterval(poolStatsInterval)
     }
   })
 
@@ -676,6 +818,24 @@
         </div>
       </div>
     </Card>
+    
+    <!-- Pool Status Card (only show when pool is selected) -->
+    {#if $miningState.selectedPool !== 'solo'}
+      <Card class="p-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-sm text-muted-foreground">Pool Status</p>
+            <p class="text-2xl font-bold">{poolConnected ? 'Connected' : 'Disconnected'}</p>
+            <p class="text-xs text-muted-foreground mt-1">
+              {poolConnected ? `${poolStats.connectedMiners} miners` : 'Not connected to pool'}
+            </p>
+          </div>
+          <div class="p-2 {poolConnected ? 'bg-green-500/10' : 'bg-red-500/10'} rounded-lg">
+            <div class="w-3 h-3 rounded-full {poolConnected ? 'bg-green-500' : 'bg-red-500'}"></div>
+          </div>
+        </div>
+      </Card>
+    {/if}
   </div>
   
   <!-- Mining Control -->
@@ -691,14 +851,139 @@
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div class="relative">
           <Label for="pool-select">{$t('mining.pool')}</Label>
-          <DropDown
-            id="pool-select"
-            options={pools}
-            bind:value={$miningState.selectedPool}
-            disabled={$miningState.isMining}
-          />
-
+          <div class="flex gap-2 items-end">
+            <div class="flex-1">
+              <DropDown
+                id="pool-select"
+                options={poolOptions}
+                bind:value={$miningState.selectedPool}
+                disabled={$miningState.isMining}
+              />
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={$miningState.isMining}
+              on:click={() => showPoolManager = true}
+            >
+              Manage Pools
+            </Button>
+          </div>
         </div>
+        
+        <!-- Pool Management Mockup -->
+        {#if $miningState.selectedPool !== 'solo'}
+          <div class="col-span-full space-y-4 p-4 bg-muted/50 rounded-lg">
+            <h3 class="font-semibold text-lg">Pool Management</h3>
+            
+            <!-- Pool Configuration -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <Label for="pool-url">Pool URL</Label>
+                <Input
+                  id="pool-url"
+                  bind:value={poolUrl}
+                  placeholder="stratum://localhost:3333"
+                  disabled={$miningState.isMining}
+                  class="mt-2"
+                />
+              </div>
+              <div>
+                <Label for="pool-worker">Worker Name</Label>
+                <Input
+                  id="pool-worker"
+                  bind:value={poolWorker}
+                  placeholder="worker1"
+                  disabled={$miningState.isMining}
+                  class="mt-2"
+                />
+              </div>
+              <div>
+                <Label for="pool-password">Password</Label>
+                <Input
+                  id="pool-password"
+                  bind:value={poolPassword}
+                  placeholder="x"
+                  disabled={$miningState.isMining}
+                  class="mt-2"
+                />
+              </div>
+            </div>
+            
+            <!-- Connection Status -->
+            <div class="flex items-center gap-2">
+              <div class="w-2 h-2 rounded-full {poolConnected ? 'bg-green-500' : 'bg-red-500'}"></div>
+              <span class="text-sm font-medium">
+                {poolConnected ? 'Connected to Pool' : 'Not Connected'}
+              </span>
+            </div>
+            
+            <!-- Pool Actions -->
+            <div class="flex gap-2">
+              {#if !poolConnected}
+                <Button 
+                  disabled={$miningState.isMining}
+                  size="sm"
+                  on:click={() => {
+                    poolConnected = true
+                    startPoolStatsSimulation()
+                  }}
+                >
+                  Connect to Pool
+                </Button>
+              {:else}
+                <Button 
+                  disabled={$miningState.isMining}
+                  variant="outline"
+                  size="sm"
+                  on:click={() => {
+                    poolConnected = false
+                    stopPoolStatsSimulation()
+                  }}
+                >
+                  Disconnect
+                </Button>
+              {/if}
+              
+              <Button 
+                disabled={$miningState.isMining}
+                variant="secondary"
+                size="sm"
+              >
+                Start Pool Server
+              </Button>
+              <Button 
+                disabled={$miningState.isMining}
+                variant="destructive"
+                size="sm"
+              >
+                Stop Pool Server
+              </Button>
+            </div>
+            
+            <!-- Pool Statistics (when connected) -->
+            {#if poolConnected}
+              <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                <div>
+                  <p class="text-muted-foreground">Connected Miners</p>
+                  <p class="font-semibold">{poolStats.connectedMiners}</p>
+                </div>
+                <div>
+                  <p class="text-muted-foreground">Pool Hashrate</p>
+                  <p class="font-semibold">{poolStats.poolHashrate.toFixed(2)} H/s</p>
+                </div>
+                <div>
+                  <p class="text-muted-foreground">Total Shares</p>
+                  <p class="font-semibold">{poolStats.totalShares}</p>
+                </div>
+                <div>
+                  <p class="text-muted-foreground">Difficulty</p>
+                  <p class="font-semibold">{poolStats.currentDifficulty.toLocaleString()}</p>
+                </div>
+              </div>
+            {/if}
+          </div>
+        {/if}
         
         <div>
           <Label for="thread-count">{$t('mining.cpuThreads', { values: { cpuThreads } })}</Label>
@@ -909,28 +1194,51 @@
         {$t('mining.noBlocksFound')}
       </p>
     {:else}
-      <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
-        {#each $miningState.recentBlocks ?? [] as block}
-          <div class="flex items-center justify-between p-3 bg-secondary rounded-lg">
-            <div class="flex items-center gap-3">
-              <Award class="h-4 w-4 text-yellow-500" />
-              <div>
-                <p class="text-sm font-medium">{$t('mining.blockFound')}</p>
-                <p class="text-xs text-muted-foreground">
-                  {$t('mining.hash')}: {block.hash} • {$t('mining.nonce')}: {block.nonce}
+      <div class="space-y-2">
+        <div class="flex items-center justify-between mb-2">
+          <div class="flex items-center gap-2">
+            <label for="page-size-select" class="text-sm text-muted-foreground">{$t('Page Size')}:</label>
+            <select id="page-size-select" bind:value={pageSize} on:change={() => { currentPage = 1 }} class="px-2 py-1 rounded border bg-background text-sm">
+              {#each pageSizes as s}
+                <option value={s}>{s}</option>
+              {/each}
+            </select>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <button class="px-2 py-1 rounded border bg-background text-sm" on:click={() => { if (currentPage > 1) currentPage -= 1 }} disabled={currentPage <= 1}>
+              {$t('prev')}
+            </button>
+            <div class="text-sm text-muted-foreground">{currentPage} / {totalPages}</div>
+            <button class="px-2 py-1 rounded border bg-background text-sm" on:click={() => { if (currentPage < totalPages) currentPage += 1 }} disabled={currentPage >= totalPages}>
+              {$t('next')}
+            </button>
+          </div>
+        </div>
+
+        <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
+          {#each displayedBlocks ?? [] as block}
+            <div class="flex items-center justify-between p-3 bg-secondary rounded-lg">
+              <div class="flex items-center gap-3">
+                <Award class="h-4 w-4 text-yellow-500" />
+                <div>
+                  <p class="text-sm font-medium">{$t('mining.blockFound')}</p>
+                  <p class="text-xs text-muted-foreground">
+                    {$t('mining.hash')}: {block.hash} • {$t('mining.nonce')}: {block.nonce}
+                  </p>
+                </div>
+              </div>
+              <div class="text-right">
+                <Badge variant="outline" class="text-green-600">
+                  +{block.reward.toFixed(2)} Chiral
+                </Badge>
+                <p class="text-xs text-muted-foreground mt-1">
+                  {block.timestamp.toLocaleTimeString()}
                 </p>
               </div>
             </div>
-            <div class="text-right">
-              <Badge variant="outline" class="text-green-600">
-                +{block.reward.toFixed(2)} Chiral
-              </Badge>
-              <p class="text-xs text-muted-foreground mt-1">
-                {block.timestamp.toLocaleTimeString()}
-              </p>
-            </div>
-          </div>
-        {/each}
+          {/each}
+        </div>
       </div>
     {/if}
   </Card>
@@ -1156,5 +1464,150 @@
           </div>
         </div>
       </Card>
+    </div>
+  {/if}
+
+  <!-- Pool Management Modal -->
+  {#if showPoolManager}
+    <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div class="bg-background rounded-lg p-6 w-full max-w-2xl mx-4 max-h-[80vh] overflow-y-auto">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-xl font-semibold">
+            {editingPool ? 'Edit Pool' : 'Manage Pools'}
+          </h2>
+          <Button variant="ghost" size="sm" on:click={cancelPoolEdit}>
+            <X class="h-4 w-4" />
+          </Button>
+        </div>
+
+        <!-- Pool List -->
+        <div class="space-y-3 mb-6">
+          <h3 class="font-medium">Existing Pools</h3>
+          {#each pools as pool (pool.id)}
+            <div class="flex items-center justify-between p-3 border rounded-lg">
+              <div class="flex-1">
+                <div class="font-medium">{pool.name}</div>
+                <div class="text-sm text-muted-foreground">
+                  {pool.url || 'Solo Mining'}
+                  {#if pool.worker}
+                    • {pool.worker}
+                  {/if}
+                </div>
+              </div>
+              <div class="flex gap-2">
+                {#if pool.id !== 'solo'}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    on:click={() => editPool(pool)}
+                  >
+                    Edit
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    on:click={() => deletePool(pool.id)}
+                  >
+                    Delete
+                  </Button>
+                {/if}
+              </div>
+            </div>
+          {/each}
+        </div>
+
+        <!-- Add/Edit Pool Form -->
+        <div class="space-y-4">
+          <h3 class="font-medium">
+            {editingPool ? 'Edit Pool' : 'Add New Pool'}
+          </h3>
+          
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <Label for="pool-name">Pool Name</Label>
+              <Input
+                id="pool-name"
+                value={editingPool ? editingPool.name : newPool.name}
+                on:input={(e: Event) => {
+                  const target = e.target as HTMLInputElement
+                  if (editingPool) {
+                    editingPool.name = target.value
+                  } else {
+                    newPool.name = target.value
+                  }
+                }}
+                placeholder="My Mining Pool"
+                class="mt-2"
+              />
+            </div>
+            <div>
+              <Label for="pool-url">Pool URL</Label>
+              <Input
+                id="pool-url"
+                value={editingPool ? editingPool.url : newPool.url}
+                on:input={(e: Event) => {
+                  const target = e.target as HTMLInputElement
+                  if (editingPool) {
+                    editingPool.url = target.value
+                  } else {
+                    newPool.url = target.value
+                  }
+                }}
+                placeholder="stratum://pool.example.com:3333"
+                class="mt-2"
+              />
+            </div>
+            <div>
+              <Label for="pool-worker">Worker Name</Label>
+              <Input
+                id="pool-worker"
+                value={editingPool ? editingPool.worker : newPool.worker}
+                on:input={(e: Event) => {
+                  const target = e.target as HTMLInputElement
+                  if (editingPool) {
+                    editingPool.worker = target.value
+                  } else {
+                    newPool.worker = target.value
+                  }
+                }}
+                placeholder="worker1"
+                class="mt-2"
+              />
+            </div>
+            <div>
+              <Label for="pool-password">Password</Label>
+              <Input
+                id="pool-password"
+                value={editingPool ? editingPool.password : newPool.password}
+                on:input={(e: Event) => {
+                  const target = e.target as HTMLInputElement
+                  if (editingPool) {
+                    editingPool.password = target.value
+                  } else {
+                    newPool.password = target.value
+                  }
+                }}
+                placeholder="x"
+                class="mt-2"
+              />
+            </div>
+          </div>
+
+          <div class="flex gap-2 pt-4">
+            {#if editingPool}
+              <Button on:click={savePool}>
+                Save Changes
+              </Button>
+            {:else}
+              <Button on:click={addPool}>
+                Add Pool
+              </Button>
+            {/if}
+            <Button variant="outline" on:click={cancelPoolEdit}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      </div>
     </div>
   {/if} 

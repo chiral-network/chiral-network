@@ -3,7 +3,7 @@ use crate::dht::{DhtService, FileMetadata};
 use crate::ethereum::GethProcess;
 use clap::Parser;
 use tokio::signal;
-use tracing::{info, error};
+use tracing::{error, info};
 
 #[derive(Parser, Debug)]
 #[command(name = "chiral-network")]
@@ -50,28 +50,29 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
 
     info!("Starting Chiral Network in headless mode");
     info!("DHT Port: {}", args.dht_port);
-    
+
     // Add default bootstrap nodes if no custom ones specified
     let mut bootstrap_nodes = args.bootstrap.clone();
-    if bootstrap_nodes.is_empty() && args.dht_port != 4001 {
-        // Don't connect to self if we're running on port 4001
-        // Use reliable IP-based bootstrap nodes
+    let provided_bootstrap = !bootstrap_nodes.is_empty();
+    if !provided_bootstrap {
+        // Use reliable IP-based bootstrap nodes so fresh nodes can join the mesh
         bootstrap_nodes.extend([
-            "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ".to_string(),
+            "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ"
+                .to_string(),
         ]);
         info!("Using default bootstrap nodes: {:?}", bootstrap_nodes);
     }
-    
+
     // Start DHT node
     let dht_service = DhtService::new(args.dht_port, bootstrap_nodes.clone()).await?;
     let peer_id = dht_service.get_peer_id().await;
-    
+
     // Start the DHT running in background
     dht_service.run().await;
-    
+
     info!("✅ DHT node started");
     info!("📍 Local Peer ID: {}", peer_id);
-    
+
     if args.show_multiaddr {
         // Get local IP addresses
         let local_ip = get_local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
@@ -92,9 +93,9 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
     };
 
     // Add some example bootstrap data if this is a primary bootstrap node
-    if bootstrap_nodes.is_empty() {
+    if !provided_bootstrap {
         info!("Running as primary bootstrap node (no peers specified)");
-        
+
         // Publish some example metadata to seed the network
         let example_metadata = FileMetadata {
             file_hash: "QmBootstrap123Example".to_string(),
@@ -107,7 +108,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
                 .as_secs(),
             mime_type: Some("text/plain".to_string()),
         };
-        
+
         dht_service.publish_file(example_metadata).await?;
         info!("Published bootstrap file metadata");
     } else {
@@ -125,10 +126,10 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
     }
 
     info!("Bootstrap node is running. Press Ctrl+C to stop.");
-    
+
     // Keep the service running
     signal::ctrl_c().await?;
-    
+
     info!("Shutting down...");
     Ok(())
 }

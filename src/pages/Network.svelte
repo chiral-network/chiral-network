@@ -6,10 +6,12 @@
   import Label from '$lib/components/ui/label.svelte'
   import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Play, Square, Download, AlertCircle, Wifi } from 'lucide-svelte'
   import { peers, networkStats, networkStatus, userLocation, etcAccount } from '$lib/stores'
+  import { get } from 'svelte/store'
   import { onMount, onDestroy } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
   import { dhtService, DEFAULT_BOOTSTRAP_NODES } from '$lib/dht'
+  import type { DhtHealth } from '$lib/dht'
   import { Clipboard } from "lucide-svelte"
   import { t } from 'svelte-i18n';
   import { showToast } from '$lib/toast';
@@ -17,6 +19,7 @@
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+  const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
   
   let discoveryRunning = false
   let newPeerAddress = ''
@@ -62,6 +65,7 @@
   let dhtBootstrapNode = DEFAULT_BOOTSTRAP_NODES[0] || 'No bootstrap nodes configured'
   let dhtEvents: string[] = []
   let dhtPeerCount = 0
+  let dhtHealth: DhtHealth | null = null
   let dhtError: string | null = null
   let connectionAttempts = 0
   let dhtPollInterval: number | undefined
@@ -83,6 +87,15 @@
     }
     
     return `${size.toFixed(2)} ${units[unitIndex]}`
+  }
+
+  function formatHealthTimestamp(epoch: number | null): string {
+    if (!epoch) return tr('network.dht.health.never')
+    return new Date(epoch * 1000).toLocaleString()
+  }
+
+  function formatHealthMessage(value: string | null): string {
+    return value ?? tr('network.dht.health.none')
   }
   
   async function startDht() {
@@ -115,13 +128,20 @@
         dhtEvents = [...dhtEvents, `✓ DHT already running with peer ID: ${backendPeerId.slice(0, 16)}...`]
         
         // Check connection status immediately
-        const peerCount = await dhtService.getPeerCount()
-        dhtPeerCount = peerCount
-        
-        if (peerCount > 0) {
+        let currentPeers = 0
+        const health = await dhtService.getHealth()
+        if (health) {
+          dhtHealth = health
+          currentPeers = health.peerCount
+        } else {
+          currentPeers = await dhtService.getPeerCount()
+        }
+        dhtPeerCount = currentPeers
+
+        if (currentPeers > 0) {
           // Set status directly to connected without showing connecting first
           dhtStatus = 'connected'
-          dhtEvents = [...dhtEvents, `✓ Connected to ${peerCount} peer(s)`]
+          dhtEvents = [...dhtEvents, `✓ Connected to ${currentPeers} peer(s)`]
           startDhtPolling() // Start polling for updates
           return // Already connected, no need to continue
         } else {
@@ -241,6 +261,11 @@
       dhtStatus = connectionSuccessful ? 'connected' : 'disconnected'
       
       // Start polling for DHT events and peer count
+      const snapshot = await dhtService.getHealth()
+      if (snapshot) {
+        dhtHealth = snapshot
+        dhtPeerCount = snapshot.peerCount
+      }
       startDhtPolling()
     } catch (error: any) {
       console.error('Failed to start DHT:', error)
@@ -260,9 +285,17 @@
           dhtEvents = [...dhtEvents, ...events].slice(-10)
         }
         
-        const peerCount = await dhtService.getPeerCount()
-        dhtPeerCount = peerCount
-        
+        let peerCount = dhtPeerCount
+        const health = await dhtService.getHealth()
+        if (health) {
+          dhtHealth = health
+          peerCount = health.peerCount
+          dhtPeerCount = peerCount
+        } else {
+          peerCount = await dhtService.getPeerCount()
+          dhtPeerCount = peerCount
+        }
+
         // Update connection status based on peer count
         if (dhtStatus === 'connected' && peerCount === 0) {
           dhtStatus = 'disconnected'
@@ -283,6 +316,7 @@
       dhtPeerId = null
       dhtError = null
       connectionAttempts = 0
+      dhtHealth = null
       return
     }
     
@@ -293,6 +327,7 @@
       dhtError = null
       connectionAttempts = 0
       dhtEvents = [...dhtEvents, `✓ DHT stopped`]
+      dhtHealth = null
     } catch (error) {
       console.error('Failed to stop DHT:', error)
       dhtEvents = [...dhtEvents, `✗ Failed to stop DHT: ${error}`]
@@ -822,6 +857,30 @@
             </div>
             <p class="text-xs font-mono break-all">{dhtBootstrapNode}</p>
           </div>
+
+          {#if dhtHealth}
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-3">
+              <div class="bg-muted/40 rounded-lg p-3">
+                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.health.lastBootstrap')}</p>
+                <p class="text-sm font-medium mt-1">{formatHealthTimestamp(dhtHealth.lastBootstrap)}</p>
+              </div>
+              <div class="bg-muted/40 rounded-lg p-3">
+                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.health.lastPeer')}</p>
+                <p class="text-sm font-medium mt-1">{formatHealthTimestamp(dhtHealth.lastPeerEvent)}</p>
+              </div>
+              <div class="bg-muted/40 rounded-lg p-3">
+                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.health.lastError')}</p>
+                <p class="text-sm font-medium mt-1">{formatHealthMessage(dhtHealth.lastError)}</p>
+                {#if dhtHealth.lastErrorAt}
+                  <p class="text-xs text-muted-foreground mt-1">{formatHealthTimestamp(dhtHealth.lastErrorAt)}</p>
+                {/if}
+              </div>
+              <div class="bg-muted/40 rounded-lg p-3">
+                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.health.failures')}</p>
+                <p class="text-sm font-medium mt-1">{dhtHealth.bootstrapFailures}</p>
+              </div>
+            </div>
+          {/if}
           
           {#if dhtEvents.length > 0}
             <div class="pt-2">
@@ -939,8 +998,9 @@
         <Label for="sort" class="flex items-center">
     <span class="text-base">{$t('network.connectedPeers.sortBy')}</span>
         </Label>
-        <DropDown
-        id="sort"
+  <div class="w-40 flex-shrink-0">
+  <DropDown
+  id="sort"
         options={[
           { value: 'reputation', label: $t('network.connectedPeers.reputation') },
           { value: 'sharedFiles', label: $t('network.connectedPeers.sharedFiles') },
@@ -952,11 +1012,11 @@
           { value: 'status', label: $t('network.connectedPeers.status') }
         ]}
         bind:value={sortBy}
-        compact={true}
-        />
-
-        <DropDown
-        id="sort-direction"
+  />
+  </div>
+  <div class="w-40 flex-shrink-0">
+  <DropDown
+  id="sort-direction"
         options={
           sortBy === 'reputation'
           ? [ { value: 'desc', label: $t('network.connectedPeers.highest') }, { value: 'asc', label: $t('network.connectedPeers.lowest') } ]
@@ -977,8 +1037,8 @@
           : [ { value: 'desc', label: 'Desc' }, { value: 'asc', label: 'Asc' } ]
         }
         bind:value={sortDirection}
-        compact={true}
         />
+        </div>
           </div>
       </div>
     <div class="space-y-3">
