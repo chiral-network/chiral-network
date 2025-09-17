@@ -390,9 +390,21 @@ impl DhtService {
     pub async fn new(
         port: u16,
         bootstrap_nodes: Vec<String>,
+        secret: Option<String>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // Generate a new keypair for this node
-        let local_key = identity::Keypair::generate_ed25519();
+        // Generate a keypair either from the secret or randomly
+        let local_key = match secret {
+            Some(secret_str) => {
+                let secret_bytes = secret_str.as_bytes();
+                let mut seed = [0u8; 32];
+                for (i, &b) in secret_bytes.iter().take(32).enumerate() {
+                    seed[i] = b;
+                }
+                identity::Keypair::ed25519_from_bytes(seed)?
+            }
+            None => identity::Keypair::generate_ed25519(),
+        };
         let local_peer_id = PeerId::from(local_key.public());
         let peer_id_str = local_peer_id.to_string();
 
