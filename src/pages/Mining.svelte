@@ -458,6 +458,25 @@
   // Keep a set of hashes we've already shown to avoid duplicates
   let seenHashes = new Set<string>();
 
+  // Pagination for recent blocks
+  let pageSizes = [5, 10, 20, 50]
+  let pageSize: number = 10
+  let currentPage: number = 1
+
+  // Derived values
+  $: totalBlocks = ($miningState.recentBlocks || []).length
+  $: totalPages = Math.max(1, Math.ceil(totalBlocks / pageSize))
+  $: {
+    // Clamp currentPage when totalPages or pageSize changes
+    if (currentPage > totalPages) currentPage = totalPages
+    if (currentPage < 1) currentPage = 1
+  }
+
+  // When recentBlocks array changes (new block added or removed) we rely on
+  // pushRecentBlock to set currentPage = 1 so the newest block is visible.
+
+  $: displayedBlocks = ($miningState.recentBlocks || []).slice((currentPage - 1) * pageSize, currentPage * pageSize)
+
   function pushRecentBlock(b: {
     hash: string;
     nonce?: number;
@@ -476,6 +495,8 @@
       number: b.number ?? 0,
     };
     $miningState.recentBlocks = [item, ...($miningState.recentBlocks ?? [])].slice(0, 50);
+    // Reset to first page so newly found blocks are visible
+    currentPage = 1
   }
 
   async function appendNewBlocksFromBackend() {
@@ -909,28 +930,51 @@
         {$t('mining.noBlocksFound')}
       </p>
     {:else}
-      <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
-        {#each $miningState.recentBlocks ?? [] as block}
-          <div class="flex items-center justify-between p-3 bg-secondary rounded-lg">
-            <div class="flex items-center gap-3">
-              <Award class="h-4 w-4 text-yellow-500" />
-              <div>
-                <p class="text-sm font-medium">{$t('mining.blockFound')}</p>
-                <p class="text-xs text-muted-foreground">
-                  {$t('mining.hash')}: {block.hash} • {$t('mining.nonce')}: {block.nonce}
+      <div class="space-y-2">
+        <div class="flex items-center justify-between mb-2">
+          <div class="flex items-center gap-2">
+            <label for="page-size-select" class="text-sm text-muted-foreground">{$t('Page Size')}:</label>
+            <select id="page-size-select" bind:value={pageSize} on:change={() => { currentPage = 1 }} class="px-2 py-1 rounded border bg-background text-sm">
+              {#each pageSizes as s}
+                <option value={s}>{s}</option>
+              {/each}
+            </select>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <button class="px-2 py-1 rounded border bg-background text-sm" on:click={() => { if (currentPage > 1) currentPage -= 1 }} disabled={currentPage <= 1}>
+              {$t('prev')}
+            </button>
+            <div class="text-sm text-muted-foreground">{currentPage} / {totalPages}</div>
+            <button class="px-2 py-1 rounded border bg-background text-sm" on:click={() => { if (currentPage < totalPages) currentPage += 1 }} disabled={currentPage >= totalPages}>
+              {$t('next')}
+            </button>
+          </div>
+        </div>
+
+        <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
+          {#each displayedBlocks ?? [] as block}
+            <div class="flex items-center justify-between p-3 bg-secondary rounded-lg">
+              <div class="flex items-center gap-3">
+                <Award class="h-4 w-4 text-yellow-500" />
+                <div>
+                  <p class="text-sm font-medium">{$t('mining.blockFound')}</p>
+                  <p class="text-xs text-muted-foreground">
+                    {$t('mining.hash')}: {block.hash} • {$t('mining.nonce')}: {block.nonce}
+                  </p>
+                </div>
+              </div>
+              <div class="text-right">
+                <Badge variant="outline" class="text-green-600">
+                  +{block.reward.toFixed(2)} Chiral
+                </Badge>
+                <p class="text-xs text-muted-foreground mt-1">
+                  {block.timestamp.toLocaleTimeString()}
                 </p>
               </div>
             </div>
-            <div class="text-right">
-              <Badge variant="outline" class="text-green-600">
-                +{block.reward.toFixed(2)} Chiral
-              </Badge>
-              <p class="text-xs text-muted-foreground mt-1">
-                {block.timestamp.toLocaleTimeString()}
-              </p>
-            </div>
-          </div>
-        {/each}
+          {/each}
+        </div>
       </div>
     {/if}
   </Card>
