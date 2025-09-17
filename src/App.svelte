@@ -18,7 +18,6 @@
     import { t } from 'svelte-i18n';
     import SimpleToast from './lib/components/SimpleToast.svelte';
     import { startNetworkMonitoring } from './lib/services/networkService';
-    import WebRTCSignallingTest from './lib/components/WebRTCSignallingTest.svelte'
     // gets path name not entire url:
     // ex: http://locatlhost:1420/download -> /download
     
@@ -98,7 +97,6 @@
         { id: 'proxy', label: $t('nav.proxy'), icon: Shield },
         { id: 'analytics', label: $t('nav.analytics'), icon: BarChart3 },
         { id: 'account', label: $t('nav.account'), icon: Wallet },
-        { id: 'webrtc-test', label: 'WebRTC Test (To be removed)', icon: Globe }, // Using Globe icon as placeholder
         { id: 'settings', label: $t('nav.settings'), icon: Settings },
       ]
     }
@@ -135,10 +133,6 @@
       {
         path: "account",
         component: AccountPage,
-      },
-      {
-        path: "webrtc-test",
-        component: WebRTCSignallingTest
       },
       {
         path: "settings",
@@ -188,14 +182,11 @@
             }}
             class="w-full group"
             aria-current={currentPage === item.id ? 'page' : undefined}
-            title={sidebarCollapsed ? item.label : undefined}
-            aria-label={item.label}
           >
             <div class="flex items-center {sidebarCollapsed ? 'justify-center' : ''} rounded {currentPage === item.id ? 'bg-gray-200' : 'group-hover:bg-gray-100'}">
               <span class="flex items-center justify-center rounded w-10 h-10 relative">
                 <svelte:component this={item.icon} class="h-5 w-5" />
                 {#if sidebarCollapsed}
-                  <!-- CSS tooltip for collapsed state (appears on hover) -->
                   <span class="tooltip absolute left-full ml-2 top-1/2 -translate-y-1/2 hidden whitespace-nowrap rounded bg-black text-white text-xs px-2 py-1 z-50">{item.label}</span>
                 {/if}
               </span>
