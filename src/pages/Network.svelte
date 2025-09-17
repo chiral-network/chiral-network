@@ -766,6 +766,10 @@
         <div class="text-center py-4">
           <Wifi class="h-12 w-12 text-muted-foreground mx-auto mb-2" />
           <p class="text-sm text-muted-foreground mb-3">{$t('network.dht.notConnected')}</p>
+          <div class="px-8 my-4 text-left">
+            <Label for="dht-port" class="text-sm">{$t('network.dht.port')}</Label>
+            <Input id="dht-port" type="number" bind:value={dhtPort} class="mt-1" />
+          </div>
           {#if dhtError}
             <div class="bg-red-500/10 border border-red-500/20 rounded-lg p-3 mb-3 mx-4">
               <p class="text-xs text-red-400 font-medium mb-1">{$t('network.dht.connectionError')}:</p>
@@ -870,7 +874,7 @@
               </div>
               <div class="bg-muted/40 rounded-lg p-3">
                 <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.health.lastError')}</p>
-                <p class="text-sm font-medium mt-1">{formatHealthMessage(dhtHealth.lastError)}</p>
+                <p class="text-sm font-medium mt-1 break-words w-full">{formatHealthMessage(dhtHealth.lastError)}</p>
                 {#if dhtHealth.lastErrorAt}
                   <p class="text-xs text-muted-foreground mt-1">{formatHealthTimestamp(dhtHealth.lastErrorAt)}</p>
                 {/if}
