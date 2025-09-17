@@ -578,21 +578,44 @@
       }
     }
   }
-  let pools: { value: string; label: string }[] = []
+  // Pool structure with full configuration
+  interface Pool {
+    id: string
+    name: string
+    url: string
+    worker: string
+    password: string
+  }
 
-  // Mock pool options
-  $: pools = [
-    { value: 'solo', label: $t('mining.pools.solo') },
-    { value: 'pool1', label: $t('mining.pools.pool1') },
-    { value: 'pool2', label: $t('mining.pools.pool2') },
-    { value: 'pool3', label: $t('mining.pools.community') }
-  ]
+  let pools: Pool[] = []
+  let poolOptions: { value: string; label: string }[] = []
 
-  // Mock pool management state
+  // Initialize with default pools
+  $: {
+    pools = [
+      { id: 'solo', name: 'Solo Mining', url: '', worker: '', password: '' },
+      { id: 'pool1', name: 'Pool 1', url: 'stratum://pool1.example.com:3333', worker: 'worker1', password: 'x' },
+      { id: 'pool2', name: 'Pool 2', url: 'stratum://pool2.example.com:3333', worker: 'worker2', password: 'x' },
+      { id: 'pool3', name: 'Community Pool', url: 'stratum://community.example.com:3333', worker: 'worker3', password: 'x' }
+    ]
+    
+    // Create dropdown options
+    poolOptions = pools.map(pool => ({
+      value: pool.id,
+      label: pool.name
+    }))
+  }
+
+  // Current pool management state
   let poolConnected = false
   let poolUrl = 'stratum://localhost:3333'
   let poolWorker = 'worker1'
   let poolPassword = 'x'
+  
+  // Pool management UI state
+  let showPoolManager = false
+  let editingPool: Pool | null = null
+  let newPool: Pool = { id: '', name: '', url: '', worker: '', password: '' }
   let poolStats = {
     connectedMiners: 0,
     totalShares: 0,
@@ -623,6 +646,64 @@
       clearInterval(poolStatsInterval)
       poolStatsInterval = null
     }
+  }
+
+  // Pool management functions
+  function getCurrentPool(): Pool | null {
+    return pools.find(pool => pool.id === $miningState.selectedPool) || null
+  }
+
+  function updateCurrentPoolConfig() {
+    const currentPool = getCurrentPool()
+    if (currentPool) {
+      poolUrl = currentPool.url
+      poolWorker = currentPool.worker
+      poolPassword = currentPool.password
+    }
+  }
+
+  function addPool() {
+    if (newPool.name && newPool.url) {
+      const poolId = `pool_${Date.now()}`
+      pools = [...pools, { ...newPool, id: poolId }]
+      newPool = { id: '', name: '', url: '', worker: '', password: '' }
+      showPoolManager = false
+    }
+  }
+
+  function editPool(pool: Pool) {
+    editingPool = { ...pool }
+    showPoolManager = true
+  }
+
+  function savePool() {
+    if (editingPool && editingPool.name && editingPool.url) {
+      pools = pools.map(pool => 
+        pool.id === editingPool!.id ? editingPool! : pool
+      )
+      editingPool = null
+      showPoolManager = false
+    }
+  }
+
+  function deletePool(poolId: string) {
+    if (poolId !== 'solo') { // Don't delete solo mining
+      pools = pools.filter(pool => pool.id !== poolId)
+      if ($miningState.selectedPool === poolId) {
+        $miningState.selectedPool = 'solo'
+      }
+    }
+  }
+
+  function cancelPoolEdit() {
+    editingPool = null
+    newPool = { id: '', name: '', url: '', worker: '', password: '' }
+    showPoolManager = false
+  }
+
+  // Update pool config when selection changes
+  $: if ($miningState.selectedPool) {
+    updateCurrentPoolConfig()
   }
   
   onDestroy(async () => {
@@ -749,13 +830,24 @@
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div class="relative">
           <Label for="pool-select">{$t('mining.pool')}</Label>
-          <DropDown
-            id="pool-select"
-            options={pools}
-            bind:value={$miningState.selectedPool}
-            disabled={$miningState.isMining}
-          />
-
+          <div class="flex gap-2 items-end">
+            <div class="flex-1">
+              <DropDown
+                id="pool-select"
+                options={poolOptions}
+                bind:value={$miningState.selectedPool}
+                disabled={$miningState.isMining}
+              />
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={$miningState.isMining}
+              on:click={() => showPoolManager = true}
+            >
+              Manage Pools
+            </Button>
+          </div>
         </div>
         
         <!-- Pool Management Mockup -->
@@ -1328,5 +1420,150 @@
           </div>
         </div>
       </Card>
+    </div>
+  {/if}
+
+  <!-- Pool Management Modal -->
+  {#if showPoolManager}
+    <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div class="bg-background rounded-lg p-6 w-full max-w-2xl mx-4 max-h-[80vh] overflow-y-auto">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-xl font-semibold">
+            {editingPool ? 'Edit Pool' : 'Manage Pools'}
+          </h2>
+          <Button variant="ghost" size="sm" on:click={cancelPoolEdit}>
+            <X class="h-4 w-4" />
+          </Button>
+        </div>
+
+        <!-- Pool List -->
+        <div class="space-y-3 mb-6">
+          <h3 class="font-medium">Existing Pools</h3>
+          {#each pools as pool (pool.id)}
+            <div class="flex items-center justify-between p-3 border rounded-lg">
+              <div class="flex-1">
+                <div class="font-medium">{pool.name}</div>
+                <div class="text-sm text-muted-foreground">
+                  {pool.url || 'Solo Mining'}
+                  {#if pool.worker}
+                    • {pool.worker}
+                  {/if}
+                </div>
+              </div>
+              <div class="flex gap-2">
+                {#if pool.id !== 'solo'}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    on:click={() => editPool(pool)}
+                  >
+                    Edit
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    on:click={() => deletePool(pool.id)}
+                  >
+                    Delete
+                  </Button>
+                {/if}
+              </div>
+            </div>
+          {/each}
+        </div>
+
+        <!-- Add/Edit Pool Form -->
+        <div class="space-y-4">
+          <h3 class="font-medium">
+            {editingPool ? 'Edit Pool' : 'Add New Pool'}
+          </h3>
+          
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <Label for="pool-name">Pool Name</Label>
+              <Input
+                id="pool-name"
+                value={editingPool ? editingPool.name : newPool.name}
+                on:input={(e: Event) => {
+                  const target = e.target as HTMLInputElement
+                  if (editingPool) {
+                    editingPool.name = target.value
+                  } else {
+                    newPool.name = target.value
+                  }
+                }}
+                placeholder="My Mining Pool"
+                class="mt-2"
+              />
+            </div>
+            <div>
+              <Label for="pool-url">Pool URL</Label>
+              <Input
+                id="pool-url"
+                value={editingPool ? editingPool.url : newPool.url}
+                on:input={(e: Event) => {
+                  const target = e.target as HTMLInputElement
+                  if (editingPool) {
+                    editingPool.url = target.value
+                  } else {
+                    newPool.url = target.value
+                  }
+                }}
+                placeholder="stratum://pool.example.com:3333"
+                class="mt-2"
+              />
+            </div>
+            <div>
+              <Label for="pool-worker">Worker Name</Label>
+              <Input
+                id="pool-worker"
+                value={editingPool ? editingPool.worker : newPool.worker}
+                on:input={(e: Event) => {
+                  const target = e.target as HTMLInputElement
+                  if (editingPool) {
+                    editingPool.worker = target.value
+                  } else {
+                    newPool.worker = target.value
+                  }
+                }}
+                placeholder="worker1"
+                class="mt-2"
+              />
+            </div>
+            <div>
+              <Label for="pool-password">Password</Label>
+              <Input
+                id="pool-password"
+                value={editingPool ? editingPool.password : newPool.password}
+                on:input={(e: Event) => {
+                  const target = e.target as HTMLInputElement
+                  if (editingPool) {
+                    editingPool.password = target.value
+                  } else {
+                    newPool.password = target.value
+                  }
+                }}
+                placeholder="x"
+                class="mt-2"
+              />
+            </div>
+          </div>
+
+          <div class="flex gap-2 pt-4">
+            {#if editingPool}
+              <Button on:click={savePool}>
+                Save Changes
+              </Button>
+            {:else}
+              <Button on:click={addPool}>
+                Add Pool
+              </Button>
+            {/if}
+            <Button variant="outline" on:click={cancelPoolEdit}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      </div>
     </div>
   {/if} 
