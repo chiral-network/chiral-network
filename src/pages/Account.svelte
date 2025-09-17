@@ -343,11 +343,16 @@
     }
     isConfirming = false
     countdown = 0
+    // User intentionally cancelled during countdown
+    showToast('Transaction cancelled', 'warning')
   }
 
   function sendTransaction() {
     if (!isAddressValid || !isAmountValid || !isAddressValid || sendAmount <= 0) return
     
+    // Notify submission (mocked)
+    showToast('Transaction submitted', 'info')
+
     // Simulate transaction
     wallet.update(w => ({
       ...w,
@@ -381,6 +386,8 @@
         pendingTransactions: Math.max(0, w.pendingTransactions - 1)
       }))
       transactions.update(txs => txs.map(tx => tx.status === 'pending' ? { ...tx, status: 'completed' } : tx))
+      // Notify success (mocked)
+      showToast('Transaction confirmed', 'success')
     }, 3000)
   }
   
