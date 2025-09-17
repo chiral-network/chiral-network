@@ -700,18 +700,15 @@
 
       <div class="relative">
         <Label for="log-level">{$t("advanced.logLevel")}</Label>
-        <select
+        <DropDown
           id="log-level"
+          options={[
+            { value: "error", label: $t("advanced.logError") },
+            { value: "warn", label: $t("advanced.logWarn") },
+            { value: "info", label: $t("advanced.logInfo") },
+            { value: "debug", label: $t("advanced.logDebug") },
+          ]}
           bind:value={settings.logLevel}
-          class="w-full mt-2 px-3 py-2 border rounded-lg bg-background appearance-none"
-        >
-          <option value="error">{$t("advanced.logError")}</option>
-          <option value="warn">{$t("advanced.logWarn")}</option>
-          <option value="info">{$t("advanced.logInfo")}</option>
-          <option value="debug">{$t("advanced.logDebug")}</option>
-        </select>
-        <ChevronsUpDown
-          class="pointer-events-none absolute right-2 mt-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
         />
       </div>
 
