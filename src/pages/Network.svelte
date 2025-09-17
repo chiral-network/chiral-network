@@ -939,8 +939,9 @@
         <Label for="sort" class="flex items-center">
     <span class="text-base">{$t('network.connectedPeers.sortBy')}</span>
         </Label>
-        <DropDown
-        id="sort"
+  <div class="w-40 flex-shrink-0">
+  <DropDown
+  id="sort"
         options={[
           { value: 'reputation', label: $t('network.connectedPeers.reputation') },
           { value: 'sharedFiles', label: $t('network.connectedPeers.sharedFiles') },
@@ -952,11 +953,11 @@
           { value: 'status', label: $t('network.connectedPeers.status') }
         ]}
         bind:value={sortBy}
-        compact={true}
-        />
-
-        <DropDown
-        id="sort-direction"
+  />
+  </div>
+  <div class="w-40 flex-shrink-0">
+  <DropDown
+  id="sort-direction"
         options={
           sortBy === 'reputation'
           ? [ { value: 'desc', label: $t('network.connectedPeers.highest') }, { value: 'asc', label: $t('network.connectedPeers.lowest') } ]
@@ -977,8 +978,8 @@
           : [ { value: 'desc', label: 'Desc' }, { value: 'asc', label: 'Asc' } ]
         }
         bind:value={sortDirection}
-        compact={true}
         />
+        </div>
           </div>
       </div>
     <div class="space-y-3">
