@@ -139,9 +139,8 @@
       return sortDescending ? dateB.getTime() - dateA.getTime() : dateA.getTime() - dateB.getTime();
     });
 
-  // Validation logic
+  // Address validation
   $: {
-    // Address validation
     if (!recipientAddress) {
       addressWarning = '';
       isAddressValid = false;
@@ -158,8 +157,10 @@
       addressWarning = '';
       isAddressValid = true;
     }
+  }
 
-    // Amount validation
+  // Amount validation
+  $: {
     if (rawAmountInput === '') {
       validationWarning = '';
       isAmountValid = false;

@@ -3,12 +3,12 @@ import { writable } from 'svelte/store'
 interface SimpleToast {
   id: string
   message: string
-  type: 'success' | 'error'
+  type: 'success' | 'error' | 'info' | 'warning'
 }
 
 const toasts = writable<SimpleToast[]>([])
 
-export function showToast(message: string, type: 'success' | 'error' = 'success') {
+export function showToast(message: string, type: 'success' | 'error' | 'info' | 'warning' = 'success') {
   const id = Date.now().toString()
   
   // Add new notifications, with a maximum of 3 retained
