@@ -40,14 +40,13 @@ pub struct CliArgs {
     /// Generate multiaddr for this node (shows the address others can connect to)
     #[arg(long)]
     pub show_multiaddr: bool,
+
+    // Generate consistent peerid
+    #[arg(long)]
+    pub secret: Option<String>,
 }
 
 pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging
-    tracing_subscriber::fmt()
-        .with_env_filter(args.log_level)
-        .init();
-
     info!("Starting Chiral Network in headless mode");
     info!("DHT Port: {}", args.dht_port);
 
@@ -57,14 +56,14 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
     if !provided_bootstrap {
         // Use reliable IP-based bootstrap nodes so fresh nodes can join the mesh
         bootstrap_nodes.extend([
-            "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ"
+            "/ip4/54.198.145.146/tcp/4001/p2p/12D3KooWNHdYWRTe98KMF1cDXXqGXvNjd1SAchDaeP5o4MsoJLu2"
                 .to_string(),
         ]);
         info!("Using default bootstrap nodes: {:?}", bootstrap_nodes);
     }
 
     // Start DHT node
-    let dht_service = DhtService::new(args.dht_port, bootstrap_nodes.clone()).await?;
+    let dht_service = DhtService::new(args.dht_port, bootstrap_nodes.clone(), args.secret).await?;
     let peer_id = dht_service.get_peer_id().await;
 
     // Start the DHT running in background
