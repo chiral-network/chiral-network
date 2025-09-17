@@ -587,6 +587,43 @@
     { value: 'pool2', label: $t('mining.pools.pool2') },
     { value: 'pool3', label: $t('mining.pools.community') }
   ]
+
+  // Mock pool management state
+  let poolConnected = false
+  let poolUrl = 'stratum://localhost:3333'
+  let poolWorker = 'worker1'
+  let poolPassword = 'x'
+  let poolStats = {
+    connectedMiners: 0,
+    totalShares: 0,
+    currentDifficulty: 1000000,
+    poolHashrate: 0
+  }
+  let poolStatsInterval: ReturnType<typeof setInterval> | null = null
+
+  // Mock pool stats simulation
+  function startPoolStatsSimulation() {
+    if (poolStatsInterval) {
+      clearInterval(poolStatsInterval)
+    }
+    
+    poolStatsInterval = setInterval(() => {
+      if (poolConnected) {
+        // Simulate realistic pool stats
+        poolStats.connectedMiners = Math.max(1, poolStats.connectedMiners + Math.floor(Math.random() * 3) - 1)
+        poolStats.totalShares += Math.floor(Math.random() * 5)
+        poolStats.poolHashrate = poolStats.connectedMiners * (85000 + Math.random() * 15000) // 85-100 KH/s per miner
+        poolStats.currentDifficulty = 1000000 + Math.floor(Math.random() * 100000)
+      }
+    }, 3000) // Update every 3 seconds
+  }
+
+  function stopPoolStatsSimulation() {
+    if (poolStatsInterval) {
+      clearInterval(poolStatsInterval)
+      poolStatsInterval = null
+    }
+  }
   
   onDestroy(async () => {
     // Don't stop mining when leaving the page - preserve state
@@ -599,6 +636,9 @@
     }
     if (logsInterval) {
       clearInterval(logsInterval)
+    }
+    if (poolStatsInterval) {
+      clearInterval(poolStatsInterval)
     }
   })
 
@@ -676,6 +716,24 @@
         </div>
       </div>
     </Card>
+    
+    <!-- Pool Status Card (only show when pool is selected) -->
+    {#if $miningState.selectedPool !== 'solo'}
+      <Card class="p-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-sm text-muted-foreground">Pool Status</p>
+            <p class="text-2xl font-bold">{poolConnected ? 'Connected' : 'Disconnected'}</p>
+            <p class="text-xs text-muted-foreground mt-1">
+              {poolConnected ? `${poolStats.connectedMiners} miners` : 'Not connected to pool'}
+            </p>
+          </div>
+          <div class="p-2 {poolConnected ? 'bg-green-500/10' : 'bg-red-500/10'} rounded-lg">
+            <div class="w-3 h-3 rounded-full {poolConnected ? 'bg-green-500' : 'bg-red-500'}"></div>
+          </div>
+        </div>
+      </Card>
+    {/if}
   </div>
   
   <!-- Mining Control -->
@@ -699,6 +757,120 @@
           />
 
         </div>
+        
+        <!-- Pool Management Mockup -->
+        {#if $miningState.selectedPool !== 'solo'}
+          <div class="col-span-full space-y-4 p-4 bg-muted/50 rounded-lg">
+            <h3 class="font-semibold text-lg">Pool Management</h3>
+            
+            <!-- Pool Configuration -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <Label for="pool-url">Pool URL</Label>
+                <Input
+                  id="pool-url"
+                  bind:value={poolUrl}
+                  placeholder="stratum://localhost:3333"
+                  disabled={$miningState.isMining}
+                  class="mt-2"
+                />
+              </div>
+              <div>
+                <Label for="pool-worker">Worker Name</Label>
+                <Input
+                  id="pool-worker"
+                  bind:value={poolWorker}
+                  placeholder="worker1"
+                  disabled={$miningState.isMining}
+                  class="mt-2"
+                />
+              </div>
+              <div>
+                <Label for="pool-password">Password</Label>
+                <Input
+                  id="pool-password"
+                  bind:value={poolPassword}
+                  placeholder="x"
+                  disabled={$miningState.isMining}
+                  class="mt-2"
+                />
+              </div>
+            </div>
+            
+            <!-- Connection Status -->
+            <div class="flex items-center gap-2">
+              <div class="w-2 h-2 rounded-full {poolConnected ? 'bg-green-500' : 'bg-red-500'}"></div>
+              <span class="text-sm font-medium">
+                {poolConnected ? 'Connected to Pool' : 'Not Connected'}
+              </span>
+            </div>
+            
+            <!-- Pool Actions -->
+            <div class="flex gap-2">
+              {#if !poolConnected}
+                <Button 
+                  disabled={$miningState.isMining}
+                  size="sm"
+                  on:click={() => {
+                    poolConnected = true
+                    startPoolStatsSimulation()
+                  }}
+                >
+                  Connect to Pool
+                </Button>
+              {:else}
+                <Button 
+                  disabled={$miningState.isMining}
+                  variant="outline"
+                  size="sm"
+                  on:click={() => {
+                    poolConnected = false
+                    stopPoolStatsSimulation()
+                  }}
+                >
+                  Disconnect
+                </Button>
+              {/if}
+              
+              <Button 
+                disabled={$miningState.isMining}
+                variant="secondary"
+                size="sm"
+              >
+                Start Pool Server
+              </Button>
+              <Button 
+                disabled={$miningState.isMining}
+                variant="destructive"
+                size="sm"
+              >
+                Stop Pool Server
+              </Button>
+            </div>
+            
+            <!-- Pool Statistics (when connected) -->
+            {#if poolConnected}
+              <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                <div>
+                  <p class="text-muted-foreground">Connected Miners</p>
+                  <p class="font-semibold">{poolStats.connectedMiners}</p>
+                </div>
+                <div>
+                  <p class="text-muted-foreground">Pool Hashrate</p>
+                  <p class="font-semibold">{poolStats.poolHashrate.toFixed(2)} H/s</p>
+                </div>
+                <div>
+                  <p class="text-muted-foreground">Total Shares</p>
+                  <p class="font-semibold">{poolStats.totalShares}</p>
+                </div>
+                <div>
+                  <p class="text-muted-foreground">Difficulty</p>
+                  <p class="font-semibold">{poolStats.currentDifficulty.toLocaleString()}</p>
+                </div>
+              </div>
+            {/if}
+          </div>
+        {/if}
         
         <div>
           <Label for="thread-count">{$t('mining.cpuThreads', { values: { cpuThreads } })}</Label>
