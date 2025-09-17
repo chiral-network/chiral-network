@@ -3,7 +3,7 @@
   import Card from '$lib/components/ui/card.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound } from 'lucide-svelte'
+  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText } from 'lucide-svelte'
   import DropDown from "$lib/components/ui/dropDown.svelte";
   import { wallet, etcAccount, blacklist } from '$lib/stores'
   import { writable, derived } from 'svelte/store'
@@ -618,6 +618,50 @@
     }
   }
 
+  async function loadPrivateKeyFromFile() {
+    try {
+      // Create a file input element
+      const fileInput = document.createElement('input');
+      fileInput.type = 'file';
+      fileInput.accept = '.json';
+      fileInput.style.display = 'none';
+      
+      // Handle file selection
+      fileInput.onchange = async (event) => {
+        const file = (event.target as HTMLInputElement).files?.[0];
+        if (!file) return;
+        
+        try {
+          const fileContent = await file.text();
+          const accountData = JSON.parse(fileContent);
+          
+          // Validate the JSON structure
+          if (!accountData.privateKey) {
+            showToast('Invalid file format: privateKey field not found', 'error');
+            return;
+          }
+          
+          // Extract and set the private key
+          importPrivateKey = accountData.privateKey;
+          showToast('Private key loaded from file successfully!', 'success');
+          
+        } catch (error) {
+          console.error('Error reading file:', error);
+          showToast('Error reading file: ' + String(error), 'error');
+        }
+      };
+      
+      // Trigger file selection
+      document.body.appendChild(fileInput);
+      fileInput.click();
+      document.body.removeChild(fileInput);
+      
+    } catch (error) {
+      console.error('Error loading file:', error);
+      showToast('Error loading file: ' + String(error), 'error');
+    }
+  }
+
   // HD wallet handlers
   function openCreateMnemonic() {
     mnemonicMode = 'create';
@@ -987,16 +1031,28 @@
             </div>
             
             <div class="space-y-2">
-              <Input
-                type="text"
-                bind:value={importPrivateKey}
-                placeholder={$t('placeholders.importPrivateKey')}
-                class="w-full"
-                autocomplete="off"
-                data-form-type="other"
-                data-lpignore="true"
-                spellcheck="false"
-              />
+              <div class="flex w-full">
+                <Input
+                  type="text"
+                  bind:value={importPrivateKey}
+                  placeholder={$t('placeholders.importPrivateKey')}
+                  class="flex-1 rounded-r-none border-r-0"
+                  autocomplete="off"
+                  data-form-type="other"
+                  data-lpignore="true"
+                  spellcheck="false"
+                />
+                <Button 
+                  variant="outline"
+                  size="default"
+                  on:click={loadPrivateKeyFromFile}
+                  class="rounded-l-none border-l-0 bg-gray-200 hover:bg-gray-300 border-gray-300 text-gray-900 shadow-sm"
+                  title="Import private key from wallet JSON"
+                >
+                  <FileText class="h-4 w-4 mr-2" />
+                  Load from Wallet
+                </Button>
+              </div>
               <Button 
                 class="w-full" 
                 variant="outline"
