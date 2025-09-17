@@ -500,7 +500,11 @@
             <span class="text-sm">{$t('analytics.currentAvg')}</span>
             <span class="text-sm font-medium">{avgLatency.toFixed(0)} ms</span>
           </div>
-          <Progress value={Math.min(avgLatency, 300)} max={300} />
+          <Progress
+            value={Math.min(avgLatency, 300)}
+            max={300}
+            indicatorClass="bg-gradient-to-r from-emerald-400 via-yellow-400 to-red-500"
+          />
           <p class="text-xs text-muted-foreground mt-1">
             {$t('analytics.latencyHint')}
           </p>
