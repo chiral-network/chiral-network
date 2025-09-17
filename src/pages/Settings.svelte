@@ -289,7 +289,7 @@
 
   // Revalidate whenever settings change
   $: validate(settings);
-
+  
   // Valid when no error messages remain
   $: isValid = Object.values(errors).every((e) => !e);
 
