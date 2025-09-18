@@ -590,7 +590,9 @@
     "hashCopied": "Hash copied!",
     "stopSharing": "Stop sharing",
     "noFilesShared": "No files shared yet",
-    "addFilesHint2": "Add files to start sharing on the network"
+    "addFilesHint2": "Add files to start sharing on the network",
+    "duplicateSkipped": "{count, plural, one {Already sharing this file. Skipped duplicate.} other {Skipped {count} duplicate files.}}",
+    "filesAdded": "{count, plural, one {Added 1 file to sharing list.} other {Added {count} files to sharing list.}}"
   },
   "download": {
     "title": "Download Files",
