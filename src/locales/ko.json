@@ -597,7 +597,9 @@
     "hashCopied": "해시 복사됨!",
     "stopSharing": "공유 중지",
     "noFilesShared": "아직 공유된 파일이 없습니다",
-    "addFilesHint2": "네트워크에서 공유를 시작하려면 파일을 추가하세요"
+    "addFilesHint2": "네트워크에서 공유를 시작하려면 파일을 추가하세요",
+    "duplicateSkipped": "{count, plural, one {이미 공유 중인 파일입니다. 중복 항목을 건너뛰었습니다.} other {중복 파일 {count}개를 건너뛰었습니다.}}",
+    "filesAdded": "{count, plural, one {공유 목록에 파일 1개를 추가했습니다.} other {공유 목록에 파일 {count}개를 추가했습니다.}}"
   },
   "download": {
     "title": "파일 다운로드",

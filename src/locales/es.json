@@ -582,7 +582,9 @@
     "hashCopied": "¡Hash copiado!",
     "stopSharing": "Dejar de compartir",
     "noFilesShared": "Aún no hay archivos compartidos",
-    "addFilesHint2": "Agrega archivos para empezar a compartir en la red"
+    "addFilesHint2": "Agrega archivos para empezar a compartir en la red",
+    "duplicateSkipped": "{count, plural, one {Este archivo ya se está compartiendo. Duplicado omitido.} other {Se omitieron {count} archivos duplicados.}}",
+    "filesAdded": "{count, plural, one {Se agregó 1 archivo a la lista de compartidos.} other {Se agregaron {count} archivos a la lista de compartidos.}}"
   },
   "download": {
     "title": "Descargar archivos",

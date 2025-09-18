@@ -4,7 +4,11 @@
   import { File as FileIcon, X, Plus, FolderOpen } from 'lucide-svelte'
   import { files } from '$lib/stores'
   import { t } from 'svelte-i18n';
-  
+  import { get } from 'svelte/store'
+  import { showToast } from '$lib/toast'
+  import { isDuplicateHash } from '$lib/uploadHelpers.js'
+  const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
+
   let isDragging = false
   let dragCounter = 0
   let fileInput: HTMLInputElement
@@ -52,6 +56,9 @@
   }
   
   async function addFiles(filesToAdd: File[]) {
+    let duplicateCount = 0
+    let addedCount = 0
+
     for (let i = 0; i < filesToAdd.length; i++) {
       const file = filesToAdd[i];
       try {
@@ -60,6 +67,11 @@
         const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
         const hashArray = Array.from(new Uint8Array(hashBuffer));
         const fileHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+
+        if (isDuplicateHash(get(files), fileHash)) {
+          duplicateCount++
+          continue;
+        }
 
         const newFile = {
           id: `file-${Date.now()}-${i}`,
@@ -73,6 +85,7 @@
         };
 
         files.update(f => [...f, newFile]);
+        addedCount++;
       } catch (error) {
         console.error('Failed to upload file:', error);
         const newFile = {
@@ -87,6 +100,14 @@
         };
         files.update(f => [...f, newFile]);
       }
+    }
+
+    if (duplicateCount > 0) {
+      showToast(tr('upload.duplicateSkipped', { count: duplicateCount }), 'warning')
+    }
+
+    if (addedCount > 0) {
+      showToast(tr('upload.filesAdded', { count: addedCount }), 'success')
     }
   }
   

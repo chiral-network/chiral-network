@@ -589,7 +589,9 @@
     "hashCopied": "哈希已复制！",
     "stopSharing": "停止分享",
     "noFilesShared": "尚无已分享文件",
-    "addFilesHint2": "添加文件以开始在网络中分享"
+    "addFilesHint2": "添加文件以开始在网络中分享",
+    "duplicateSkipped": "{count, plural, one {该文件已在分享列表中，已跳过重复项。} other {已跳过 {count} 个重复文件。}}",
+    "filesAdded": "{count, plural, one {已将 1 个文件添加到分享列表。} other {已将 {count} 个文件添加到分享列表。}}"
   },
   "download": {
     "title": "下载文件",
