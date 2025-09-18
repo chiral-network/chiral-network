@@ -108,6 +108,11 @@
   let filterDateTo: string = '';
   let sortDescending: boolean = true;
   
+  // Fee preset (UI stub only)
+  let feePreset: 'low' | 'market' | 'fast' = 'market'
+  let estimatedFeeDisplay: string = '—'
+  let estimatedFeeNumeric: number = 0
+  
   // Confirmation for sending transaction
   let isConfirming = false
   let countdown = 0
@@ -134,9 +139,8 @@
       return sortDescending ? dateB.getTime() - dateA.getTime() : dateA.getTime() - dateB.getTime();
     });
 
-  // Validation logic
+  // Address validation
   $: {
-    // Address validation
     if (!recipientAddress) {
       addressWarning = '';
       isAddressValid = false;
@@ -153,8 +157,10 @@
       addressWarning = '';
       isAddressValid = true;
     }
+  }
 
-    // Amount validation
+  // Amount validation
+  $: {
     if (rawAmountInput === '') {
       validationWarning = '';
       isAmountValid = false;
@@ -174,6 +180,10 @@
         validationWarning = tr('errors.amount.insufficient', { more: (inputValue - $wallet.balance).toFixed(2) });
         isAmountValid = false;
         sendAmount = 0;
+      } else if (inputValue + estimatedFeeNumeric > $wallet.balance) {
+        validationWarning = tr('errors.amount.insufficientWithFee', { more: (inputValue + estimatedFeeNumeric - $wallet.balance).toFixed(2) });
+        isAmountValid = false;
+        sendAmount = 0;
       } else {
         // Valid amount
         validationWarning = '';
@@ -182,6 +192,10 @@
       }
     }
   }
+
+  // Mock estimated fee calculation (UI-only) - separate from validation
+  $: estimatedFeeNumeric = rawAmountInput && parseFloat(rawAmountInput) > 0 ? parseFloat((parseFloat(rawAmountInput) * { low: 0.0025, market: 0.005, fast: 0.01 }[feePreset]).toFixed(4)) : 0
+  $: estimatedFeeDisplay = rawAmountInput && parseFloat(rawAmountInput) > 0 ? `${estimatedFeeNumeric.toFixed(4)} Chiral` : '—'
 
   // Blacklist address validation (same as Send Coins validation)
   $: {
@@ -343,11 +357,16 @@
     }
     isConfirming = false
     countdown = 0
+    // User intentionally cancelled during countdown
+    showToast('Transaction cancelled', 'warning')
   }
 
   function sendTransaction() {
     if (!isAddressValid || !isAmountValid || !isAddressValid || sendAmount <= 0) return
     
+    // Notify submission (mocked)
+    showToast('Transaction submitted', 'info')
+
     // Simulate transaction
     wallet.update(w => ({
       ...w,
@@ -381,6 +400,8 @@
         pendingTransactions: Math.max(0, w.pendingTransactions - 1)
       }))
       transactions.update(txs => txs.map(tx => tx.status === 'pending' ? { ...tx, status: 'completed' } : tx))
+      // Notify success (mocked)
+      showToast('Transaction confirmed', 'success')
     }, 3000)
   }
   
@@ -1343,6 +1364,16 @@
             {#if validationWarning}
               <p class="text-xs text-red-500 font-medium">{validationWarning}</p>
             {/if}
+          </div>
+          
+          <!-- Fee selector (UI stub) -->
+          <div class="mt-3">
+            <div class="inline-flex rounded-md border overflow-hidden">
+              <button type="button" class="px-3 py-1 text-xs {feePreset === 'low' ? 'bg-foreground text-background' : 'bg-background'}" on:click={() => feePreset = 'low'}>{$t('fees.low')}</button>
+              <button type="button" class="px-3 py-1 text-xs border-l {feePreset === 'market' ? 'bg-foreground text-background' : 'bg-background'}" on:click={() => feePreset = 'market'}>{$t('fees.market')}</button>
+              <button type="button" class="px-3 py-1 text-xs border-l {feePreset === 'fast' ? 'bg-foreground text-background' : 'bg-background'}" on:click={() => feePreset = 'fast'}>{$t('fees.fast')}</button>
+            </div>
+            <p class="text-xs text-muted-foreground mt-2">{$t('fees.estimated')}: {estimatedFeeDisplay}</p>
           </div>
         
         </div>
