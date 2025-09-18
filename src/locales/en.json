@@ -56,6 +56,8 @@
       "peers": "Connected Peers",
       "peerId": "Peer ID",
       "bootstrapNode": "Bootstrap Node",
+      "listenAddresses": "Listening Addresses",
+      "noListenAddresses": "No listening addresses yet",
       "recentEvents": "Recent Events",
       "disconnect": "Disconnect from DHT",
       "health": {

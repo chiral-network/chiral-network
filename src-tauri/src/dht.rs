@@ -63,6 +63,7 @@ struct DhtMetrics {
     last_error_at: Option<SystemTime>,
     last_error: Option<String>,
     bootstrap_failures: u64,
+    listen_addrs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -74,6 +75,7 @@ pub struct DhtMetricsSnapshot {
     pub last_error: Option<String>,
     pub last_error_at: Option<u64>,
     pub bootstrap_failures: u64,
+    pub listen_addrs: Vec<String>,
 }
 
 impl DhtMetricsSnapshot {
@@ -89,6 +91,16 @@ impl DhtMetricsSnapshot {
             last_error: metrics.last_error,
             last_error_at: metrics.last_error_at.and_then(to_secs),
             bootstrap_failures: metrics.bootstrap_failures,
+            listen_addrs: metrics.listen_addrs,
+        }
+    }
+}
+
+impl DhtMetrics {
+    fn record_listen_addr(&mut self, addr: &Multiaddr) {
+        let addr_str = addr.to_string();
+        if !self.listen_addrs.iter().any(|existing| existing == &addr_str) {
+            self.listen_addrs.push(addr_str);
         }
     }
 }
@@ -227,6 +239,9 @@ async fn run_dht_node(
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
                         info!("📡 Now listening on: {}", address);
+                        if let Ok(mut m) = metrics.try_lock() {
+                            m.record_listen_addr(&address);
+                        }
                     }
                     SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
                         if let Ok(mut m) = metrics.try_lock() {
@@ -623,5 +638,27 @@ mod tests {
 
         let snapshot = service.metrics_snapshot().await;
         assert_eq!(snapshot.peer_count, 0);
+    }
+
+    #[test]
+    fn metrics_snapshot_carries_listen_addrs() {
+        let mut metrics = DhtMetrics::default();
+        metrics
+            .record_listen_addr(&"/ip4/127.0.0.1/tcp/4001".parse::<Multiaddr>().unwrap());
+        metrics
+            .record_listen_addr(&"/ip4/0.0.0.0/tcp/4001".parse::<Multiaddr>().unwrap());
+        // Duplicate should be ignored
+        metrics
+            .record_listen_addr(&"/ip4/127.0.0.1/tcp/4001".parse::<Multiaddr>().unwrap());
+
+        let snapshot = DhtMetricsSnapshot::from(metrics, 5);
+        assert_eq!(snapshot.peer_count, 5);
+        assert_eq!(snapshot.listen_addrs.len(), 2);
+        assert!(snapshot
+            .listen_addrs
+            .contains(&"/ip4/127.0.0.1/tcp/4001".to_string()));
+        assert!(snapshot
+            .listen_addrs
+            .contains(&"/ip4/0.0.0.0/tcp/4001".to_string()));
     }
 }

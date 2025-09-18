@@ -56,6 +56,8 @@
       "peers": "연결된 피어",
       "peerId": "피어 ID",
       "bootstrapNode": "부트스트랩 노드",
+      "listenAddresses": "리스닝 주소",
+      "noListenAddresses": "아직 리스닝 주소가 없습니다",
       "recentEvents": "최근 이벤트",
       "disconnect": "DHT에서 연결 끊기",
       "health": {
