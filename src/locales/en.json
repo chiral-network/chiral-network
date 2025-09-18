@@ -263,6 +263,21 @@
     "item": {
       "from": "From",
       "to": "To"
+    },
+    "searchPlaceholder": "Search transactions...",
+    "noResults": "No transactions found matching your filters",
+    "receipt": {
+      "title": "Transaction Receipt",
+      "from": "From Address",
+      "to": "To Address",
+      "hash": "Transaction Hash",
+      "blockNumber": "Block Number",
+      "gasInfo": "Gas Information",
+      "gasUsed": "Gas Used",
+      "gasPrice": "Gas Price",
+      "fee": "Transaction Fee",
+      "timestamp": "Timestamp",
+      "nonce": "Nonce"
     }
   },
 
