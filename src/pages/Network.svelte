@@ -11,6 +11,7 @@
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
   import { dhtService, DEFAULT_BOOTSTRAP_NODES } from '$lib/dht'
+  import { resetConnectionAttempts } from '$lib/dhtHelpers.js'
   import type { DhtHealth } from '$lib/dht'
   import { Clipboard } from "lucide-svelte"
   import { t } from 'svelte-i18n';
@@ -259,6 +260,7 @@
       
       // Set status based on connection result
       dhtStatus = connectionSuccessful ? 'connected' : 'disconnected'
+      connectionAttempts = resetConnectionAttempts(connectionAttempts, connectionSuccessful)
       
       // Start polling for DHT events and peer count
       const snapshot = await dhtService.getHealth()
