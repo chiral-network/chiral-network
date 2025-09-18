@@ -274,6 +274,33 @@
       dhtEvents = [...dhtEvents, `✗ Failed to start DHT: ${dhtError}`]
     }
   }
+
+  // Ensure UI reflects backend DHT state when returning to this tab
+  async function syncDhtStatusOnMount() {
+    if (!isTauri) return
+    try {
+      const backendPeerId = await invoke<string | null>('get_dht_peer_id')
+      if (backendPeerId) {
+        dhtPeerId = backendPeerId
+        dhtService.setPeerId(backendPeerId)
+
+        // Pull health/peers and update UI without attempting a restart
+        const health = await dhtService.getHealth()
+        if (health) {
+          dhtHealth = health
+          dhtPeerCount = health.peerCount
+        } else {
+          dhtPeerCount = await dhtService.getPeerCount()
+        }
+
+        // Set status and resume polling if needed
+        dhtStatus = dhtPeerCount > 0 ? 'connected' : 'disconnected'
+        startDhtPolling()
+      }
+    } catch (e) {
+      console.warn('Failed to sync DHT status on mount:', e)
+    }
+  }
   
   function startDhtPolling() {
     if (dhtPollInterval) return // Already polling
@@ -580,6 +607,9 @@
       await checkGethStatus()
       
       // DHT check will happen in startDht()
+
+      // Also passively sync DHT state if it's already running
+      await syncDhtStatusOnMount()
       
       // Listen for download progress updates (only in Tauri)
       if (isTauri) {
