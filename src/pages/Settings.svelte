@@ -311,6 +311,89 @@
       maxStorageError = null;
     }
   }
+
+  let search = '';
+
+// Section keys for reset
+const sectionKeys = {
+  storage: [
+    'storagePath', 'maxStorageSize', 'autoCleanup', 'cleanupThreshold'
+  ],
+  network: [
+    'maxConnections', 'uploadBandwidth', 'downloadBandwidth', 'port', 'enableUPnP', 'enableNAT', 'userLocation', 'enableDHT', 'enableIPFS'
+  ],
+  privacy: [
+    'enableProxy', 'enableEncryption', 'anonymousMode', 'shareAnalytics'
+  ],
+  notifications: [
+    'enableNotifications', 'notifyOnComplete', 'notifyOnError', 'soundAlerts'
+  ],
+  advanced: [
+    'chunkSize', 'cacheSize', 'logLevel', 'autoUpdate'
+  ]
+};
+
+function resetSection(section) {
+  for (const key of sectionKeys[section]) {
+    settings[key] = defaultSettings[key];
+  }
+  showToast(`${section.charAt(0).toUpperCase() + section.slice(1)} settings reset.`);
+}
+const sectionLabels: Record<string, string[]> = {
+  storage: [
+    $t("storage.title"),
+    $t("storage.location"),
+    $t("storage.maxSize"),
+    $t("storage.cleanupThreshold"),
+    $t("storage.enableCleanup"),
+  ],
+  network: [
+    $t("network.title"),
+    $t("network.maxConnections"),
+    $t("network.port"),
+    $t("network.uploadLimit"),
+    $t("network.downloadLimit"),
+    $t("network.userLocation"),
+    $t("network.enableUpnp"),
+    $t("network.enableNat"),
+    $t("network.enableDht"),
+  ],
+  language: [
+    $t("language.title"),
+    $t("language.select"),
+  ],
+  privacy: [
+    $t("privacy.title"),
+    $t("privacy.enableProxy"),
+    $t("privacy.enableEncryption"),
+    $t("privacy.anonymousMode"),
+    $t("privacy.shareAnalytics"),
+  ],
+  notifications: [
+    $t("notifications.title"),
+    $t("notifications.enable"),
+    $t("notifications.notifyComplete"),
+    $t("notifications.notifyError"),
+    $t("notifications.soundAlerts"),
+  ],
+  advanced: [
+    $t("advanced.title"),
+    $t("advanced.chunkSize"),
+    $t("advanced.cacheSize"),
+    $t("advanced.logLevel"),
+    $t("advanced.autoUpdate"),
+    $t("advanced.exportSettings"),
+    $t("advanced.importSettings"),
+  ],
+};
+
+function sectionMatches(section: string, query: string) {
+  if (!query) return true;
+  const labels = sectionLabels[section] || [];
+  return labels.some((label) =>
+    label.toLowerCase().includes(query.toLowerCase())
+  );
+}
 </script>
 
 <div class="space-y-6">
@@ -328,11 +411,22 @@
     {/if}
   </div>
 
+  <!-- Search bar for filtering settings -->
+  <div class="mb-4 flex items-center gap-2">
+    <Input
+      type="text"
+      placeholder="Search settings..."
+      bind:value={search}
+      class="w-full max-w-md"
+    />
+  </div>
+
   <!-- Storage Settings -->
-  <Card class="p-6">
-    <div class="flex items-center gap-2 mb-4">
-      <HardDrive class="h-5 w-5" />
-      <h2 class="text-lg font-semibold">{$t("storage.title")}</h2>
+  {#if sectionMatches("storage", search)}
+    <Card class="p-6 mb-8">
+    <div class="flex items-center gap-3 mb-6">
+      <HardDrive class="h-6 w-6 text-blue-600" />
+      <h2 class="text-xl font-semibold text-black">{$t("storage.title")}</h2>
     </div>
 
     <div class="space-y-4">
@@ -410,12 +504,14 @@
       </div>
     </div>
   </Card>
+  {/if}
 
   <!-- Network Settings -->
-  <Card class="p-6">
-    <div class="flex items-center gap-2 mb-4">
-      <Wifi class="h-5 w-5" />
-      <h2 class="text-lg font-semibold">{$t("network.title")}</h2>
+  {#if sectionMatches("network", search)}
+    <Card class="p-6 mb-8">
+    <div class="flex items-center gap-3 mb-6">
+      <Wifi class="h-6 w-6 text-blue-600" />
+      <h2 class="text-xl font-semibold text-black">{$t("network.title")}</h2>
     </div>
 
     <div class="space-y-4">
@@ -530,11 +626,13 @@
       </div>
     </div>
   </Card>
+  {/if}
 
   <!-- Language Settings -->
-  <Card class="p-6">
-    <div class="flex items-center gap-2 mb-4">
-      <h2 class="text-lg font-semibold">{$t("language.title")}</h2>
+  {#if sectionMatches("language", search)}
+    <Card class="p-6 mb-8">
+    <div class="flex items-center gap-3 mb-6">
+      <h2 class="text-xl font-semibold text-black">{$t("language.title")}</h2>
     </div>
 
     <div class="space-y-4">
@@ -549,12 +647,14 @@
       </div>
     </div>
   </Card>
+  {/if}
 
   <!-- Privacy Settings -->
-  <Card class="p-6">
-    <div class="flex items-center gap-2 mb-4">
-      <Shield class="h-5 w-5" />
-      <h2 class="text-lg font-semibold">{$t("privacy.title")}</h2>
+  {#if sectionMatches("privacy", search)}
+    <Card class="p-6 mb-8">
+    <div class="flex items-center gap-3 mb-6">
+      <Shield class="h-6 w-6 text-blue-600" />
+      <h2 class="text-xl font-semibold text-black">{$t("privacy.title")}</h2>
     </div>
 
     <div class="space-y-2">
@@ -603,12 +703,14 @@
       </div>
     </div>
   </Card>
+  {/if}
 
   <!-- Notifications -->
-  <Card class="p-6">
-    <div class="flex items-center gap-2 mb-4">
-      <Bell class="h-5 w-5" />
-      <h2 class="text-lg font-semibold">{$t("notifications.title")}</h2>
+  {#if sectionMatches("notifications", search)}
+    <Card class="p-6 mb-8">
+    <div class="flex items-center gap-3 mb-6">
+      <Bell class="h-6 w-6 text-blue-600" />
+      <h2 class="text-xl font-semibold text-black">{$t("notifications.title")}</h2>
     </div>
 
     <div class="space-y-2">
@@ -661,12 +763,14 @@
       {/if}
     </div>
   </Card>
+  {/if}
 
   <!-- Advanced Settings -->
-  <Card class="p-6">
-    <div class="flex items-center gap-2 mb-4">
-      <Database class="h-5 w-5" />
-      <h2 class="text-lg font-semibold">{$t("advanced.title")}</h2>
+  {#if sectionMatches("advanced", search)}
+    <Card class="p-6 mb-8">
+    <div class="flex items-center gap-3 mb-6">
+      <Database class="h-6 w-6 text-blue-600" />
+      <h2 class="text-xl font-semibold text-black">{$t("advanced.title")}</h2>
     </div>
 
     <div class="space-y-4">
@@ -778,6 +882,7 @@
       {/if}
     </div>
   </Card>
+  {/if}
 
   <!-- Action Buttons -->
   <div class="flex flex-wrap items-center justify-between gap-2">
