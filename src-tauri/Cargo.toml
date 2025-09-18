@@ -26,6 +26,8 @@ hex = "0.4"
 sha3 = "0.10"
 sha2 = "0.10"
 aes-gcm = "0.10"
+x25519-dalek = { version = "2.0", features = ["serde"] }
+hkdf = "0.12"
 pbkdf2 = "0.12"
 aes = "0.8"
 ctr = "0.9"
