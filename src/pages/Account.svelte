@@ -22,6 +22,10 @@
   import AccountList from '$lib/components/wallet/AccountList.svelte'
   // HD helpers are used within MnemonicWizard/AccountList components
 
+  // Transaction components
+  import TransactionList from '$lib/components/TransactionList.svelte'
+  import TransactionReceipt from '$lib/components/TransactionReceipt.svelte'
+
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -72,6 +76,10 @@
   let hdPassphrase: string = '';
   type HDAccountItem = { index: number; change: number; address: string; label?: string; privateKeyHex?: string };
   let hdAccounts: HDAccountItem[] = [];
+
+  // Transaction receipt modal state
+  let selectedTransaction: any = null;
+  let showTransactionReceipt = false;
   
 
   let Html5QrcodeScanner: InstanceType<typeof Html5QrcodeScannerClass> | null = null;
@@ -107,6 +115,7 @@
   let filterDateFrom: string = '';
   let filterDateTo: string = '';
   let sortDescending: boolean = true;
+  let searchQuery: string = '';
   
   // Fee preset (UI stub only)
   let feePreset: 'low' | 'market' | 'fast' = 'market'
@@ -130,7 +139,15 @@
       const txDate = tx.date instanceof Date ? tx.date : new Date(tx.date);
       const fromOk = !filterDateFrom || txDate >= new Date(filterDateFrom + 'T00:00:00'); // the start of day
       const toOk = !filterDateTo || txDate <= new Date(filterDateTo + 'T23:59:59'); // and the end of day to include full date ranges
-      return matchesType && fromOk && toOk;
+      
+      // Search filter
+      const matchesSearch = !searchQuery || 
+        tx.description?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        tx.to?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        tx.from?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        tx.id.toString().includes(searchQuery);
+      
+      return matchesType && fromOk && toOk && matchesSearch;
     })
     .slice()
     .sort((a, b) => {
@@ -408,6 +425,16 @@
   function formatDate(date: Date): string {
     const loc = get(locale) || 'en-US'
     return new Intl.DateTimeFormat(loc, { month: 'short', day: 'numeric', year: 'numeric' }).format(date)
+  }
+
+  function handleTransactionClick(tx: any) {
+    selectedTransaction = tx;
+    showTransactionReceipt = true;
+  }
+
+  function closeTransactionReceipt() {
+    showTransactionReceipt = false;
+    selectedTransaction = null;
   }
 
   // Ensure wallet.pendingTransactions matches actual pending transactions
@@ -1420,16 +1447,36 @@
         {/if}
         </div>
       </form>
-    </Card>
+  </Card>
   {/if}
+
+
   </div>
-  
+
   {#if $etcAccount}
-  <Card class="p-6">
+  <!-- Transaction History Section - Full Width -->
+  <Card class="p-6 mt-4">
     <div class="flex items-center justify-between mb-4">
       <h2 class="text-lg font-semibold">{$t('transactions.title')}</h2>
       <History class="h-5 w-5 text-muted-foreground" />
     </div>
+    
+    <!-- Search Bar -->
+    <div class="mb-4">
+      <div class="relative">
+        <svg class="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+        </svg>
+        <input
+          type="text"
+          bind:value={searchQuery}
+          placeholder={tr('transactions.searchPlaceholder')}
+          class="w-full pl-10 pr-4 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+        />
+      </div>
+    </div>
+
+    <!-- Filters -->
     <div class="flex flex-wrap gap-4 mb-4 items-end">
       <div>
         <label for="filter-type" class="block text-xs font-medium mb-1">{$t('filters.type')}</label>
@@ -1455,14 +1502,26 @@
       </div>
       <div class="flex-1"></div>
       <div class="flex flex-col gap-1 items-end">
-        <button type="button" class="border rounded px-3 py-1 text-sm bg-muted hover:bg-muted/70 transition-colors" on:click={() => { filterType = 'all'; filterDateFrom = ''; filterDateTo = ''; sortDescending = true; }}>
+        <button type="button" class="border rounded px-3 py-1 text-sm bg-muted hover:bg-muted/70 transition-colors" on:click={() => { filterType = 'all'; filterDateFrom = ''; filterDateTo = ''; sortDescending = true; searchQuery = ''; }}>
           {$t('filters.reset')}
         </button>
       </div>
     </div>
+
+    <!-- Transaction List -->
     <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
       {#each filteredTransactions as tx}
-        <div class="flex items-center justify-between p-3 bg-secondary rounded-lg">
+        <div 
+          class="flex items-center justify-between p-3 bg-secondary rounded-lg hover:bg-secondary/80 cursor-pointer transition-colors"
+          on:click={() => handleTransactionClick(tx)}
+          on:keydown={(e) => {
+            if (e.key === 'Enter') {
+              handleTransactionClick(tx)
+            }
+          }}
+          role="button"
+          tabindex="0"
+        >
           <div class="flex items-center gap-3">
             {#if tx.type === 'received'}
               <ArrowDownLeft class="h-4 w-4 text-green-500" />
@@ -1493,6 +1552,7 @@
       {/if}
     </div>
   </Card>
+  {/if}
 
   <Card class="p-6">
     <div class="flex items-center gap-2 mb-4">
@@ -1784,5 +1844,12 @@
       
     </div>
   </Card>
-  {/if}
+
+  <!-- Transaction Receipt Modal -->
+  <TransactionReceipt
+    transaction={selectedTransaction}
+    isOpen={showTransactionReceipt}
+    onClose={closeTransactionReceipt}
+  />
+
 </div>
