@@ -14,7 +14,6 @@
     Bell,
     RefreshCw,
     Database,
-    ChevronsUpDown,
   } from "lucide-svelte";
   import { onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";

@@ -4,6 +4,7 @@
   export let value: number = 0
   export let max: number = 100
   let className: string | null | undefined = undefined
+  export let indicatorClass: string | null | undefined = 'bg-primary'
   export { className as class }
   
   $: percentage = Math.min(100, Math.max(0, (value / max) * 100))
@@ -14,7 +15,7 @@
   {...$$restProps}
 >
   <div
-    class="h-full bg-primary rounded-full transition-all duration-200"
+    class={cn('h-full rounded-full transition-all duration-200', indicatorClass)}
     style="width: {percentage}%"
     role="progressbar"
     aria-valuemin={0}
