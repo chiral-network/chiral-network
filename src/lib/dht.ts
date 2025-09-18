@@ -28,6 +28,7 @@ export interface DhtHealth {
   lastError: string | null;
   lastErrorAt: number | null;
   bootstrapFailures: number;
+  listenAddrs: string[];
 }
 
 export class DhtService {

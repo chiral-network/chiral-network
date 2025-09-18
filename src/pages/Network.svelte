@@ -76,6 +76,7 @@
   let copiedNodeAddr = false
   let copiedPeerId = false
   let copiedBootstrap = false
+  let copiedListenAddr: string | null = null
 
   function formatSize(bytes: number): string {
     const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
@@ -346,6 +347,7 @@
       dhtError = null
       connectionAttempts = 0
       dhtHealth = null
+      copiedListenAddr = null
       return
     }
     
@@ -357,6 +359,7 @@
       connectionAttempts = 0
       dhtEvents = [...dhtEvents, `✓ DHT stopped`]
       dhtHealth = null
+      copiedListenAddr = null
     } catch (error) {
       console.error('Failed to stop DHT:', error)
       dhtEvents = [...dhtEvents, `✗ Failed to stop DHT: ${error}`]
@@ -893,6 +896,36 @@
             </div>
             <p class="text-xs font-mono break-all">{dhtBootstrapNode}</p>
           </div>
+
+          {#if dhtHealth?.listenAddrs && dhtHealth.listenAddrs.length > 0}
+            <div class="pt-2 space-y-2">
+              <p class="text-sm text-muted-foreground">{$t('network.dht.listenAddresses')}</p>
+              {#each dhtHealth.listenAddrs as addr}
+                <div class="bg-muted/40 rounded-lg px-3 py-2">
+                  <div class="flex items-start justify-between gap-2">
+                    <p class="text-xs font-mono break-all flex-1">{addr}</p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      class="h-7 px-2 flex-shrink-0"
+                      on:click={async () => {
+                        await copy(addr)
+                        copiedListenAddr = addr
+                        setTimeout(() => (copiedListenAddr = null), 1200)
+                      }}
+                    >
+                      <Clipboard class="h-3.5 w-3.5 mr-1" />
+                      {copiedListenAddr === addr ? $t('network.copied') : $t('network.copy')}
+                    </Button>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {:else if dhtStatus === 'connected'}
+            <div class="pt-2">
+              <p class="text-xs text-muted-foreground">{$t('network.dht.noListenAddresses')}</p>
+            </div>
+          {/if}
 
           {#if dhtHealth}
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-3">

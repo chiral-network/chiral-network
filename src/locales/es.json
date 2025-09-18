@@ -56,6 +56,8 @@
       "peers": "Pares conectados",
       "peerId": "ID de par",
       "bootstrapNode": "Nodo bootstrap",
+      "listenAddresses": "Direcciones de escucha",
+      "noListenAddresses": "Sin direcciones de escucha aún",
       "recentEvents": "Eventos recientes",
       "disconnect": "Desconectar del DHT",
       "health": {
