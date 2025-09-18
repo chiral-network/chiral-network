@@ -313,31 +313,6 @@
 
   let search = '';
 
-// Section keys for reset
-const sectionKeys = {
-  storage: [
-    'storagePath', 'maxStorageSize', 'autoCleanup', 'cleanupThreshold'
-  ],
-  network: [
-    'maxConnections', 'uploadBandwidth', 'downloadBandwidth', 'port', 'enableUPnP', 'enableNAT', 'userLocation', 'enableDHT', 'enableIPFS'
-  ],
-  privacy: [
-    'enableProxy', 'enableEncryption', 'anonymousMode', 'shareAnalytics'
-  ],
-  notifications: [
-    'enableNotifications', 'notifyOnComplete', 'notifyOnError', 'soundAlerts'
-  ],
-  advanced: [
-    'chunkSize', 'cacheSize', 'logLevel', 'autoUpdate'
-  ]
-};
-
-function resetSection(section) {
-  for (const key of sectionKeys[section]) {
-    settings[key] = defaultSettings[key];
-  }
-  showToast(`${section.charAt(0).toUpperCase() + section.slice(1)} settings reset.`);
-}
 const sectionLabels: Record<string, string[]> = {
   storage: [
     $t("storage.title"),
@@ -416,7 +391,7 @@ function sectionMatches(section: string, query: string) {
       type="text"
       placeholder="Search settings..."
       bind:value={search}
-      class="w-full max-w-md"
+      class="w-full"
     />
   </div>
 

@@ -177,11 +177,11 @@
         isAmountValid = false;
         sendAmount = 0;
       } else if (inputValue > $wallet.balance) {
-        validationWarning = tr('errors.amount.insufficient', { more: (inputValue - $wallet.balance).toFixed(2) });
+        validationWarning = tr('errors.amount.insufficient', { values: { more: (inputValue - $wallet.balance).toFixed(2) } });
         isAmountValid = false;
         sendAmount = 0;
       } else if (inputValue + estimatedFeeNumeric > $wallet.balance) {
-        validationWarning = tr('errors.amount.insufficientWithFee', { more: (inputValue + estimatedFeeNumeric - $wallet.balance).toFixed(2) });
+        validationWarning = tr('errors.amount.insufficientWithFee', { values: { more: (inputValue + estimatedFeeNumeric - $wallet.balance).toFixed(2) } });
         isAmountValid = false;
         sendAmount = 0;
       } else {
