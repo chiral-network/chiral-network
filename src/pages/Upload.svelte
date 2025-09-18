@@ -52,30 +52,15 @@
   }
   
   async function addFiles(filesToAdd: File[]) {
-    const { invoke } = await import('@tauri-apps/api/core');
-    
-    // Start file transfer service if not already running
-    try {
-      await invoke('start_file_transfer_service');
-    } catch (e) {
-      console.log('File transfer service already running or error:', e);
-    }
-    
-    // Upload each file and get real hash
     for (let i = 0; i < filesToAdd.length; i++) {
       const file = filesToAdd[i];
-      
       try {
-        // Read the file content as ArrayBuffer
+        // Compute SHA-256 hash of file
         const arrayBuffer = await file.arrayBuffer();
-        const fileData = Array.from(new Uint8Array(arrayBuffer));
-        
-        // Upload the file data directly
-        const fileHash = await invoke('upload_file_data_to_network', {
-          fileName: file.name,
-          fileData: fileData
-        }) as string;
-        
+        const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        const fileHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+
         const newFile = {
           id: `file-${Date.now()}-${i}`,
           name: file.name,
@@ -86,12 +71,10 @@
           leechers: 0,
           uploadDate: new Date()
         };
-        
+
         files.update(f => [...f, newFile]);
-        
       } catch (error) {
         console.error('Failed to upload file:', error);
-        // Still add to store but mark as failed
         const newFile = {
           id: `file-${Date.now()}-${i}`,
           name: file.name,
@@ -235,7 +218,7 @@
                   aria-label="Stop sharing file"
                 >
                   <X class="h-4 w-4" />
-                </button>
+               
               </div>
             </div>
           {/each}
