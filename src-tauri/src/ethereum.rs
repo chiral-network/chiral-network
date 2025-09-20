@@ -227,7 +227,10 @@ impl GethProcess {
             .arg("30303") // P2P listening port
             // Network address configuration
             .arg("--nat")
-            .arg("any"); // Allow NAT traversal and external connections
+            .arg("any");
+
+        // Add this line to set a shorter IPC path
+        cmd.arg("--ipcpath").arg("/tmp/chiral-geth.ipc");
 
         // Add miner address if provided
         if let Some(address) = miner_address {
