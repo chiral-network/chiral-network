@@ -821,6 +821,7 @@ dependencies = [
  "fs2",
  "futures-util",
  "hex",
+ "hkdf",
  "hmac",
  "libp2p",
  "pbkdf2 0.12.2",
@@ -845,6 +846,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "x25519-dalek",
  "zip",
 ]
 
@@ -1150,6 +1152,7 @@ dependencies = [
  "digest",
  "fiat-crypto",
  "rustc_version",
+ "serde",
  "subtle",
  "zeroize",
 ]
