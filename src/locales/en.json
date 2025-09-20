@@ -108,7 +108,65 @@
         "downloadOnlyTauri": "Chiral Node download is only available in the desktop app. Please download and run the Tauri desktop version."
     }
   },
-
+  "download": {
+    "title": "Download Files",
+    "subtitle": "Download files from the Chiral Network",
+    "addNew": "Add New Download",
+    "addNewSubtitle": "Enter a file hash (e.g., Qm... or a magnet link) to start a new download.",
+    "placeholder": "Enter file hash or magnet link",
+    "clearInput": "Clear input",
+    "searchAndDownload": "Search & Download",
+    "downloads": "Downloads",
+    "searchPlaceholder": "Search your downloads...",
+    "clearSearch": "Clear search",
+    "filters": {
+      "all": "All",
+      "active": "Active",
+      "paused": "Paused",
+      "queued": "Queued",
+      "completed": "Completed",
+      "canceled": "Canceled",
+      "failed": "Failed"
+    },
+    "settings": {
+      "maxConcurrent": "Max Concurrent",
+      "autoStart": "Auto-start",
+      "toggleAutoStart": "Toggle auto-start {status}"
+    },
+    "status": {
+      "noDownloads": "You haven't started any downloads yet.",
+      "noActive": "No active downloads.",
+      "noPaused": "No paused downloads.",
+      "noQueued": "No downloads in the queue.",
+      "noCompleted": "No completed downloads.",
+      "noFailed": "No failed downloads."
+    },
+    "file": {
+      "hash": "Hash",
+      "queue": "Queue",
+      "progress": "Progress"
+    },
+    "priority": {
+      "low": "Low",
+      "normal": "Normal",
+      "high": "High"
+    },
+    "actions": {
+      "start": "Start",
+      "pause": "Pause",
+      "resume": "Resume",
+      "remove": "Remove",
+      "cancel": "Cancel"
+    },
+    "notifications": {
+      "enterHash": "Please enter a file hash to start downloading.",
+      "searching": "Searching for file metadata in the DHT...",
+      "addedToQueue": "File added to the download queue.",
+      "autostart": "Download automatically started.",
+      "searchFailed": "Search failed: {error}",
+      "downloadFailed": "Download failed for {name}."
+    }
+  },
   "regions.usEast": "US East",
   "regions.usWest": "US West",
   "regions.euWest": "Europe West",
