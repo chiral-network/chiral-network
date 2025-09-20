@@ -1,5 +1,4 @@
 <script lang="ts">
-  import Card from '$lib/components/ui/card.svelte'
   import Button from '$lib/components/ui/button.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import { 
@@ -161,7 +160,8 @@
     on:keydown={handleKeydown}
     role="dialog"
     aria-modal="true"
-    aria-labelledby="receipt-title"
+    aria-labelledby="receipt-title" 
+    tabindex="-1"
   >
   <!-- Modal -->
   <div class="w-full max-w-3xl max-h-[90vh] overflow-hidden bg-white dark:bg-gray-900 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 flex flex-col relative">
@@ -248,9 +248,9 @@
           <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <!-- From Address -->
             <div class="space-y-2">
-              <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              <p class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 {tr('transactions.receipt.from')}
-              </label>
+              </p>
               <div class="group relative">
                 <div class="flex items-center space-x-3 p-4 bg-gray-50 dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
                   <div class="w-10 h-10 bg-blue-100 dark:bg-blue-900/20 rounded-lg flex items-center justify-center">
@@ -273,9 +273,9 @@
 
             <!-- To Address -->
             <div class="space-y-2">
-              <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              <p class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 {tr('transactions.receipt.to')}
-              </label>
+              </p>
               <div class="group relative">
                 <div class="flex items-center space-x-3 p-4 bg-gray-50 dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
                   <div class="w-10 h-10 bg-green-100 dark:bg-green-900/20 rounded-lg flex items-center justify-center">
@@ -298,9 +298,9 @@
 
             <!-- Transaction Hash -->
             <div class="space-y-2">
-              <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              <p class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 {tr('transactions.receipt.hash')}
-              </label>
+              </p>
               <div class="group relative">
                 <div class="flex items-center space-x-3 p-4 bg-gray-50 dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
                   <div class="w-10 h-10 bg-purple-100 dark:bg-purple-900/20 rounded-lg flex items-center justify-center">
@@ -323,9 +323,9 @@
 
             <!-- Block Number -->
             <div class="space-y-2">
-              <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              <p class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 {tr('transactions.receipt.blockNumber')}
-              </label>
+              </p>
               <div class="group relative">
                 <div class="flex items-center space-x-3 p-4 bg-gray-50 dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
                   <div class="w-10 h-10 bg-orange-100 dark:bg-orange-900/20 rounded-lg flex items-center justify-center">
@@ -356,9 +356,9 @@
           </h3>
           <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div class="space-y-2">
-              <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              <p class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 {tr('transactions.receipt.gasUsed')}
-              </label>
+              </p>
               <div class="p-4 bg-gradient-to-r from-blue-50 to-blue-100 dark:from-blue-900/20 dark:to-blue-800/20 rounded-xl border border-blue-200 dark:border-blue-700">
                 <div class="flex items-center space-x-3">
                   <div class="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center">
@@ -371,9 +371,9 @@
               </div>
             </div>
             <div class="space-y-2">
-              <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              <p class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 {tr('transactions.receipt.gasPrice')}
-              </label>
+              </p>
               <div class="p-4 bg-gradient-to-r from-green-50 to-green-100 dark:from-green-900/20 dark:to-green-800/20 rounded-xl border border-green-200 dark:border-green-700">
                 <div class="flex items-center space-x-3">
                   <div class="w-8 h-8 bg-green-500 rounded-lg flex items-center justify-center">
@@ -386,9 +386,9 @@
               </div>
             </div>
             <div class="space-y-2">
-              <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              <p class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 {tr('transactions.receipt.fee')}
-              </label>
+              </p>
               <div class="p-4 bg-gradient-to-r from-purple-50 to-purple-100 dark:from-purple-900/20 dark:to-purple-800/20 rounded-xl border border-purple-200 dark:border-purple-700">
                 <div class="flex items-center space-x-3">
                   <div class="w-8 h-8 bg-purple-500 rounded-lg flex items-center justify-center">
@@ -412,9 +412,9 @@
           
           <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div class="space-y-2">
-              <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              <p class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 {tr('transactions.receipt.timestamp')}
-              </label>
+              </p>
               <div class="p-4 bg-gradient-to-r from-indigo-50 to-indigo-100 dark:from-indigo-900/20 dark:to-indigo-800/20 rounded-xl border border-indigo-200 dark:border-indigo-700">
                 <div class="flex items-center space-x-3">
                   <div class="w-8 h-8 bg-indigo-500 rounded-lg flex items-center justify-center">
@@ -432,9 +432,9 @@
               </div>
             </div>
             <div class="space-y-2">
-              <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              <p class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 {tr('transactions.receipt.nonce')}
-              </label>
+              </p>
               <div class="p-4 bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-700 rounded-xl border border-gray-200 dark:border-gray-600">
                 <div class="flex items-center space-x-3">
                   <div class="w-8 h-8 bg-gray-500 rounded-lg flex items-center justify-center">
