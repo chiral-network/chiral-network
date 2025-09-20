@@ -18,6 +18,7 @@
     import { t } from 'svelte-i18n';
     import SimpleToast from './lib/components/SimpleToast.svelte';
     import { startNetworkMonitoring } from './lib/services/networkService';
+    import { fileService } from '$lib/services/fileService';
     // gets path name not entire url:
     // ex: http://locatlhost:1420/download -> /download
     
@@ -43,6 +44,14 @@
         // setup i18n
         await setupI18n();
         loading = false;
+
+        // Initialize backend services (File Transfer, DHT)
+        try {
+          await fileService.initializeServices();
+          console.log('Backend services (File Transfer, DHT) initialized successfully.');
+        } catch (error) {
+          console.error('Failed to initialize backend services:', error);
+        }
 
         // set the currentPage var
         syncFromUrl();
@@ -282,3 +291,4 @@
   </div>
   <!-- add Toast  -->
 <SimpleToast />
+  
