@@ -7,6 +7,7 @@
   import { get } from 'svelte/store'
   import { showToast } from '$lib/toast'
   import { isDuplicateHash } from '$lib/uploadHelpers.js'
+  import { fileService } from '$lib/services/fileService'
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
 
   let isDragging = false
@@ -62,11 +63,8 @@
     for (let i = 0; i < filesToAdd.length; i++) {
       const file = filesToAdd[i];
       try {
-        // Compute SHA-256 hash of file
-        const arrayBuffer = await file.arrayBuffer();
-        const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        const fileHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        // Use the fileService to call the backend 'upload_file_data_to_network' command
+        const fileHash = await fileService.uploadFile(file);
 
         if (isDuplicateHash(get(files), fileHash)) {
           duplicateCount++
@@ -87,27 +85,17 @@
         files.update(f => [...f, newFile]);
         addedCount++;
       } catch (error) {
-        console.error('Failed to upload file:', error);
-        const newFile = {
-          id: `file-${Date.now()}-${i}`,
-          name: file.name,
-          hash: `error-${Date.now()}`,
-          size: file.size,
-          status: 'failed' as const,
-          seeders: 0,
-          leechers: 0,
-          uploadDate: new Date()
-        };
-        files.update(f => [...f, newFile]);
+        console.error(`Failed to upload file "${file.name}":`, error);
+        showToast(tr('upload.fileFailed', { values: { name: file.name, error: String(error) } }), 'error');
       }
     }
 
     if (duplicateCount > 0) {
-      showToast(tr('upload.duplicateSkipped', { count: duplicateCount }), 'warning')
+      showToast(tr('upload.duplicateSkipped', { values: { count: duplicateCount } }), 'warning')
     }
 
     if (addedCount > 0) {
-      showToast(tr('upload.filesAdded', { count: addedCount }), 'success')
+      showToast(tr('upload.filesAdded', { values: { count: addedCount } }), 'success')
     }
   }
   
