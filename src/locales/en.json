@@ -56,18 +56,8 @@
       "peers": "Connected Peers",
       "peerId": "Peer ID",
       "bootstrapNode": "Bootstrap Node",
-      "listenAddresses": "Listening Addresses",
-      "noListenAddresses": "No listening addresses yet",
       "recentEvents": "Recent Events",
-      "disconnect": "Disconnect from DHT",
-      "health": {
-        "lastBootstrap": "Last bootstrap",
-        "lastPeer": "Last peer event",
-        "lastError": "Last error",
-        "failures": "Bootstrap failures",
-        "never": "Never",
-        "none": "None recorded"
-      }
+      "disconnect": "Disconnect from DHT"
     },
     "networkStatus": "Network Status",
     "dhtPeers": "DHT Peers",
@@ -115,17 +105,8 @@
       "noPeers": "No peers connected. Run discovery to find peers."
     },
     "errors": {
-      "downloadOnlyTauri": "Chiral Node download is only available in the desktop app. Please download and run the Tauri desktop version."
-    },
-    "maxConnections": "Max Connections",
-    "port": "Port",
-    "uploadLimit": "Upload Limit (MB/s)",
-    "downloadLimit": "Download Limit (MB/s)",
-    "userLocation": "User Location",
-    "locationHint": "Helps connect to closer peers for better performance.",
-    "enableUpnp": "Enable UPnP",
-    "enableNat": "Enable NAT Port Mapping",
-    "enableDht": "Enable DHT"
+        "downloadOnlyTauri": "Chiral Node download is only available in the desktop app. Please download and run the Tauri desktop version."
+    }
   },
 
   "regions.usEast": "US East",
@@ -141,8 +122,6 @@
   "language.korean": "한국어",
 
   "nav": {
-    "expandSidebar": "Expand sidebar",
-    "collapseSidebar": "Collapse sidebar",
     "menu": "Menu",
     "download": "Download",
     "upload": "Upload",
@@ -152,9 +131,11 @@
     "analytics": "Analytics",
     "account": "Account",
     "settings": "Settings",
-    "closeMobileMenu": "Close mobile menu",
     "connected": "Connected",
-    "disconnected": "Disconnected"
+    "disconnected": "Disconnected",
+    "expandSidebar": "Expand sidebar",
+    "collapseSidebar": "Collapse sidebar",
+    "closeMobileMenu": "Close mobile menu"
   },
 
   "privacy.title": "Privacy & Security",
@@ -263,29 +244,7 @@
     "item": {
       "from": "From",
       "to": "To"
-    },
-    "searchPlaceholder": "Search transactions...",
-    "noResults": "No transactions found matching your filters",
-    "receipt": {
-      "title": "Transaction Receipt",
-      "from": "From Address",
-      "to": "To Address",
-      "hash": "Transaction Hash",
-      "blockNumber": "Block Number",
-      "gasInfo": "Gas Information",
-      "gasUsed": "Gas Used",
-      "gasPrice": "Gas Price",
-      "fee": "Transaction Fee",
-      "timestamp": "Timestamp",
-      "nonce": "Nonce"
     }
-  },
-
-  "fees": {
-    "low": "Low",
-    "market": "Market",
-    "fast": "Fast",
-    "estimated": "Estimated fee"
   },
 
   "keystore": {
@@ -421,8 +380,7 @@
     "amount": {
       "invalid": "Please enter a valid amount greater than 0.",
       "min": "Amount must be at least {min} Chiral.",
-      "insufficient": "Insufficient balance - Need {more} more Chiral.",
-      "insufficientWithFee": "Insufficient balance (amount + fee) - Need {more} more Chiral."
+      "insufficient": "Insufficient balance - Need {more} more Chiral."
     },
     "exportFailed": "Export failed. Please try again.",
     "createAccount": "Failed to create account: {error}"
@@ -459,7 +417,7 @@
     "latencyHint": "0–50 ms (great), 50–150 ms (ok), >150 ms (poor)",
     "nodesReporting": "Nodes Reporting",
     "sampleSize": "Sample Size",
-    "latencyRecent": "Latency (Recent)",
+    "latencyRecent": "Latency (recent)",
     "topEarningFiles": "Top Earning Files",
     "seeders": "seeders",
     "noEarningsYet": "No earnings yet",
@@ -474,22 +432,8 @@
       "30d": "Last 30 days",
       "thisMonth": "This Month",
       "lastMonth": "Last Month",
-      "ytd": "Year to Date",
-      "custom": "Custom"
-    },
-    "from": "From:",
-    "to": "To:",
-    "ms": "ms",
-    "min": "Min:",
-    "max": "Max:",
-    "suspiciousActivity": "Suspicious Activity Alerts",
-    "noSuspiciousActivity": "No suspicious activity detected",
-    "unusualUpload": "Unusual Upload",
-    "unusualUploadDesc": "File > 1GB uploaded unusually fast",
-    "multipleLogins": "Multiple Logins",
-    "multipleLoginsDesc": "User logged in from different countries in 5 mins",
-    "failedDownloads": "Failed Downloads",
-    "failedDownloadsDesc": "Several failed download attempts detected"
+      "ytd": "Year to Date"
+    }
   },
   "proxy": {
     "title": "Proxy Network",
@@ -597,7 +541,7 @@
     "sharedFiles": "Shared Files",
     "files": "files",
     "total": "total",
-    "tip": "Tip: You can also drag and drop files here to add them",
+    "tip": "💡 Tip: You can also drag and drop files here to add them",
     "addMoreFiles": "Add More Files",
     "hash": "Hash",
     "seeder": "seeder{count, plural, =1 {} other {s}}",
@@ -608,71 +552,8 @@
     "stopSharing": "Stop sharing",
     "noFilesShared": "No files shared yet",
     "addFilesHint2": "Add files to start sharing on the network",
-    "duplicateSkipped": "{count, plural, one {Already sharing this file. Skipped duplicate.} other {Skipped {count} duplicate files.}}",
-    "filesAdded": "{count, plural, one {Added 1 file to sharing list.} other {Added {count} files to sharing list.}}"
-  },
-  "download": {
-    "title": "Download Files",
-    "subtitle": "Download files from the Chiral Network using their hash",
-    "addNew": "Add New Download",
-    "addNewSubtitle": "Enter a file hash to search for and download from the network",
-    "placeholder": "Enter file hash (e.g., QmZ4tDuvesekqMD...)",
-    "clearInput": "Clear input",
-    "searchAndDownload": "Search & Download",
-    "downloads": "Downloads",
-    "searchPlaceholder": "Search downloads...",
-    "clearSearch": "Clear search",
-    "filters": {
-      "all": "All",
-      "active": "Active",
-      "paused": "Paused",
-      "queued": "Queued",
-      "completed": "Completed",
-      "canceled": "Canceled",
-      "failed": "Failed"
-    },
-    "settings": {
-      "maxConcurrent": "Max Concurrent",
-      "autoStart": "Auto-Start",
-      "toggleAutoStart": "Toggle auto-start queue {status}"
-    },
-    "status": {
-      "noDownloads": "No downloads yet. Enter a file name or hash above to start downloading.",
-      "noActive": "No active downloads.",
-      "noPaused": "No paused downloads.",
-      "noQueued": "No files in queue.",
-      "noCompleted": "No completed downloads.",
-      "noFailed": "No failed downloads."
-    },
-    "file": {
-      "hash": "Hash",
-      "queue": "Queue",
-      "progress": "Progress"
-    },
-    "priority": {
-      "low": "Low",
-      "normal": "Normal",
-      "high": "High"
-    },
-    "actions": {
-      "start": "Start",
-      "pause": "Pause",
-      "resume": "Resume",
-      "remove": "Remove",
-      "cancel": "Cancel",
-      "openFile": "Open File"
-    },
-    "notifications": {
-      "enterHash": "Please enter a file hash",
-      "alreadyExists": "File already exists in download list",
-      "searching": "Searching for file...",
-      "notFound": "File not found, please check the hash",
-      "found": "File found! Adding to download queue...",
-      "addedToQueue": "File added to download queue",
-      "autostart": "Download started automatically",
-      "searchFailed": "Search failed: {error}",
-      "downloadFailed": "Download failed: {name}",
-      "downloadCompleted": "Download completed: {name}"
-    }
+    "duplicateSkipped": "{count, plural, one {1 duplicate file was skipped.} other {{count} duplicate files were skipped.}}",
+    "filesAdded": "{count, plural, one {Added 1 file to the share list.} other {Added {count} files to the share list.}}",
+    "fileFailed": "Failed to share '{name}': {error}"
   }
 }
