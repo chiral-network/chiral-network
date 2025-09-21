@@ -1,4 +1,4 @@
-<script lang="ts">
+﻿<script lang="ts">
   import Card from '$lib/components/ui/card.svelte'
   import Button from '$lib/components/ui/button.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
@@ -10,7 +10,7 @@
   import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw } from 'lucide-svelte'
   import { onDestroy, onMount, getContext } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
-  import { etcAccount, miningState } from '$lib/stores'
+  import { etcAccount, miningState, transactions, type Transaction } from '$lib/stores'
   import { getVersion } from "@tauri-apps/api/app";
   import { t } from 'svelte-i18n';
   import { goto } from '@mateothegreat/svelte5-router';
@@ -35,7 +35,13 @@
   let lastHashUpdate = Date.now()
   let cpuThreads = navigator.hardwareConcurrency || 4
   let selectedThreads = Math.floor(cpuThreads / 2)
-  let error = ''
+  let error = '' 
+
+  //Local Stats 
+  let sessionStartRewards = 0; // snapshot of totalRewards at start 
+  let sessionStartBlocks = 0; // "blocks you foudn in session"
+
+
   
   // Network statistics
   let networkHashRate = '0 H/s'
@@ -412,7 +418,11 @@
       $miningState.activeThreads = actualThreads  // Use computed actualThreads
       totalHashes = 0 // Reset total hashes
       lastHashUpdate = Date.now()
-      startUptimeTimer()
+      startUptimeTimer() 
+
+      sessionStartRewards = $miningState.totalRewards ?? 0 
+      sessionStartBlocks = $miningState.blocksFound ?? 0
+
       
       // Start updating stats
       await updateMiningStats()
@@ -436,7 +446,27 @@
       await invoke('stop_miner')
       $miningState.isMining = false
       $miningState.hashRate = '0 H/s'
-      $miningState.activeThreads = 0
+      $miningState.activeThreads = 0 
+
+      const endRewards = $miningState.totalRewards ?? 0 
+      const endBlocks  = $miningState.blocksFound ?? 0
+      const sessionReward = Math.max(0, endRewards - sessionStartRewards)  
+      const sessionBlocks = Math.max(0, endBlocks - sessionStartBlocks)
+
+      const tx: Transaction = {
+        id: Date.now(),
+        type: 'received',
+        amount: sessionReward,
+        from: 'Mining rewards',
+        date: new Date(),
+        description: sessionBlocks > 0
+          ? `Mining session payout (${sessionBlocks} block${sessionBlocks === 1 ? '' : 's'})`
+          : 'Mining session payout',
+        status: 'completed'
+      }
+      transactions.update(list => [tx, ...list])
+
+
       // Clear session start time
       $miningState.sessionStartTime = undefined
       // Clear mining history when stopping

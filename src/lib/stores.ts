@@ -93,6 +93,17 @@ export interface NetworkStats {
   totalTransactions: number;
 }
 
+export interface Transaction {
+    id: number;
+    type: 'sent' | 'received';
+    amount: number;
+    to?: string;
+    from?: string;
+    date: Date;
+    description: string;
+    status: 'pending' | 'completed';
+}
+
 export interface BlacklistEntry {
   chiral_address: string;
   reason: string;
@@ -231,11 +242,51 @@ const dummyNetworkStats: NetworkStats = {
   totalTransactions: 98765,
 };
 
+const dummyTransactions: Transaction[] = [
+  {
+    id: 1,
+    type: 'received',
+    amount: 50.5,
+    from: '0x8765...4321',
+    date: new Date('2024-03-15'),
+    description: 'File purchase',
+    status: 'completed'
+  },
+  {
+    id: 2,
+    type: 'sent',
+    amount: 10.25,
+    to: '0x1234...5678',
+    date: new Date('2024-03-14'),
+    description: 'Proxy service',
+    status: 'completed'
+  },
+  {
+    id: 3,
+    type: 'received',
+    amount: 100,
+    from: '0xabcd...ef12',
+    date: new Date('2024-03-13'),
+    description: 'Upload reward',
+    status: 'completed'
+  },
+  {
+    id: 4,
+    type: 'sent',
+    amount: 5.5,
+    to: '0x9876...5432',
+    date: new Date('2024-03-12'),
+    description: 'File download',
+    status: 'completed'
+  }
+];
+
 // Stores
 export const files = writable<FileItem[]>(dummyFiles);
 export const proxyNodes = writable<ProxyNode[]>(dummyProxyNodes);
 export const wallet = writable<WalletInfo>(dummyWallet);
 export const activeDownloads = writable<number>(1);
+export const transactions = writable<Transaction[]>(dummyTransactions);
 
 // Import real network status
 import { networkStatus } from "./services/networkService";
