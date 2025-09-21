@@ -86,6 +86,20 @@ export class FileService {
   async showInFolder(path: string): Promise<void> {
     await invoke('show_in_folder', { path });
   }
+
+  /**
+   * Queries the backend for the amount of free disk space (in GB) the node can use.
+   * Returns null when the call fails so the UI can surface a retry affordance.
+   */
+  async getAvailableStorage(): Promise<number | null> {
+    try {
+      const storage = await invoke<number>('get_available_storage');
+      return Number.isFinite(storage) ? storage : null;
+    } catch (error) {
+      console.error('Failed to load available storage:', error);
+      return null;
+    }
+  }
 }
 
 // It's often useful to export a singleton instance of the service.
