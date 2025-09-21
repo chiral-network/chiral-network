@@ -593,7 +593,21 @@
     "noFilesShared": "尚无已分享文件",
     "addFilesHint2": "添加文件以开始在网络中分享",
     "duplicateSkipped": "{count, plural, one {该文件已在分享列表中，已跳过重复项。} other {已跳过 {count} 个重复文件。}}",
-    "filesAdded": "{count, plural, one {已将 1 个文件添加到分享列表。} other {已将 {count} 个文件添加到分享列表。}}"
+    "filesAdded": "{count, plural, one {已将 1 个文件添加到分享列表。} other {已将 {count} 个文件添加到分享列表。}}",
+    "fileFailed": "无法分享“{name}”：{error}",
+    "storage": {
+      "title": "本地存储",
+      "available": "可用 {space} GB",
+      "unknown": "无法获取可用空间",
+      "lowBadge": "空间不足",
+      "okBadge": "状态良好",
+      "unknownBadge": "未知",
+      "refresh": "刷新",
+      "lastChecked": "更新于 {time}",
+      "error": "无法检查磁盘空间",
+      "checking": "正在检查...",
+      "lowDescription": "可用空间过低可能导致无法继续分享文件。"
+    }
   },
   "download": {
     "title": "下载文件",

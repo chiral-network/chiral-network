@@ -1,18 +1,81 @@
 <script lang="ts">
   import Card from '$lib/components/ui/card.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
-  import { File as FileIcon, X, Plus, FolderOpen } from 'lucide-svelte'
+  import { File as FileIcon, X, Plus, FolderOpen, RefreshCw } from 'lucide-svelte'
   import { files } from '$lib/stores'
   import { t } from 'svelte-i18n';
   import { get } from 'svelte/store'
+  import { onMount } from 'svelte';
   import { showToast } from '$lib/toast'
-  import { isDuplicateHash } from '$lib/uploadHelpers.js'
+  import { getStorageStatus, isDuplicateHash } from '$lib/uploadHelpers.js'
   import { fileService } from '$lib/services/fileService'
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
 
   let isDragging = false
   let dragCounter = 0
   let fileInput: HTMLInputElement
+
+  const LOW_STORAGE_THRESHOLD = 5
+  let availableStorage: number | null = null
+  let storageStatus: 'unknown' | 'ok' | 'low' = 'unknown'
+  let isRefreshingStorage = false
+  let storageError: string | null = null
+  let lastChecked: Date | null = null
+
+  $: storageLabel = isRefreshingStorage
+    ? tr('upload.storage.checking')
+    : availableStorage !== null
+      ? tr('upload.storage.available', { values: { space: availableStorage.toLocaleString() } })
+      : tr('upload.storage.unknown')
+
+  $: storageBadgeClass =
+    storageStatus === 'low'
+      ? 'bg-destructive text-destructive-foreground'
+      : storageStatus === 'ok'
+        ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
+        : 'bg-muted text-muted-foreground'
+
+  $: storageBadgeText =
+    storageStatus === 'low'
+      ? tr('upload.storage.lowBadge')
+      : storageStatus === 'ok'
+        ? tr('upload.storage.okBadge')
+        : tr('upload.storage.unknownBadge')
+
+  $: lastCheckedLabel = lastChecked
+    ? tr('upload.storage.lastChecked', {
+        values: {
+          time: lastChecked.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        }
+      })
+    : null
+
+  $: showLowStorageDescription = storageStatus === 'low' && !isRefreshingStorage
+
+  async function refreshAvailableStorage() {
+    if (isRefreshingStorage) return
+    isRefreshingStorage = true
+    try {
+      const result = await fileService.getAvailableStorage()
+      storageStatus = getStorageStatus(result, LOW_STORAGE_THRESHOLD)
+
+      if (result === null) {
+        storageError = tr('upload.storage.error')
+        availableStorage = null
+        lastChecked = null
+      } else {
+        availableStorage = Math.max(0, Math.floor(result))
+        storageError = null
+        lastChecked = new Date()
+      }
+    } finally {
+      isRefreshingStorage = false
+    }
+  }
+
+  onMount(() => {
+    refreshAvailableStorage()
+  })
 
   function handleFileSelect(event: Event) {
     const input = event.target as HTMLInputElement
@@ -96,6 +159,7 @@
 
     if (addedCount > 0) {
       showToast(tr('upload.filesAdded', { values: { count: addedCount } }), 'success')
+      refreshAvailableStorage()
     }
   }
   
@@ -125,6 +189,33 @@
     <h1 class="text-3xl font-bold">{$t('upload.title')}</h1>
     <p class="text-muted-foreground mt-2">{$t('upload.subtitle')}</p>
   </div>
+
+  <Card class="p-4 flex flex-wrap items-start justify-between gap-4">
+    <div class="space-y-1">
+      <p class="text-sm font-semibold text-foreground">{$t('upload.storage.title')}</p>
+      <p class="text-sm text-muted-foreground">{storageLabel}</p>
+      {#if lastCheckedLabel}
+        <p class="text-xs text-muted-foreground">{lastCheckedLabel}</p>
+      {/if}
+      {#if showLowStorageDescription}
+        <p class="text-xs text-amber-600 dark:text-amber-400">{$t('upload.storage.lowDescription')}</p>
+      {/if}
+      {#if storageError}
+        <p class="text-xs text-destructive">{storageError}</p>
+      {/if}
+    </div>
+    <div class="flex items-center gap-3">
+      <Badge class={`text-xs font-medium ${storageBadgeClass}`}>{storageBadgeText}</Badge>
+      <button
+        class="inline-flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium border border-input bg-background hover:bg-muted disabled:opacity-60 disabled:cursor-not-allowed"
+        on:click={() => refreshAvailableStorage()}
+        disabled={isRefreshingStorage}
+        aria-label={$t('upload.storage.refresh')}>
+        <RefreshCw class={`h-4 w-4 mr-2 ${isRefreshingStorage ? 'animate-spin' : ''}`} />
+        {$t('upload.storage.refresh')}
+      </button>
+    </div>
+  </Card>
   
   <Card class="relative p-6 transition-all duration-200 border-dashed {isDragging ? 'border-primary bg-primary/5 scale-[1.01]' : 'border-muted-foreground/25 hover:border-muted-foreground/50'}">
     <div
