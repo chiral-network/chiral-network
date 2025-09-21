@@ -382,6 +382,19 @@
     "reason": "输入原因..."
   },
 
+  "password": {
+    "weak": "密码强度弱",
+    "medium": "密码强度中等",
+    "strong": "密码强度强",
+    "requirements": {
+      "length": "至少8个字符",
+      "uppercase": "一个大写字母",
+      "lowercase": "一个小写字母",
+      "number": "一个数字",
+      "special": "一个特殊字符"
+    }
+  },
+
   "tooltips": {
     "showQr": "显示二维码",
     "clearSearch": "清除搜索"
@@ -401,7 +414,8 @@
     "address": {
       "mustStartWith0x": "地址必须以0x开头。",
       "mustBe42": "地址必须正好是42个字符。",
-      "mustBeHex": "地址必须包含有效的十六进制字符 (0-9, a-f, A-F)"
+      "mustBeHex": "地址必须包含有效的十六进制字符 (0-9, a-f, A-F)",
+      "blacklisted": "该地址已被列入黑名单，无法接收交易"
     },
     "amount": {
       "invalid": "请输入大于0的有效数量。",
