@@ -106,7 +106,16 @@
     },
     "errors": {
         "downloadOnlyTauri": "Chiral Node download is only available in the desktop app. Please download and run the Tauri desktop version."
-    }
+    },
+    "maxConnections": "Max Connections",
+    "port": "Port",
+    "uploadLimit": "Upload Limit (MB/s)",
+    "downloadLimit": "Download Limit (MB/s)",
+    "userLocation": "User Location",
+    "locationHint": "Helps find closer peers for better performance.",
+    "enableUpnp": "Enable UPnP",
+    "enableNat": "Enable NAT Port Mapping",
+    "enableDht": "Enable DHT"
   },
   "download": {
     "title": "Download Files",
@@ -221,6 +230,9 @@
   "advanced.exportSettings": "Export Settings",
   "advanced.importSettings": "Import Settings",
   "advanced.invalidJsonAlert": "Invalid JSON file. Please select a valid export.",
+  "advanced.exportSuccess": "Settings exported to your browser's download folder.",
+  "advanced.importSuccess": "Settings imported successfully.",
+  "advanced.importError": "Invalid JSON file. Please select a valid export.",
 
   "actions.resetDefaults": "Reset to Defaults",
   "actions.cancel": "Cancel",
@@ -490,8 +502,13 @@
       "30d": "Last 30 days",
       "thisMonth": "This Month",
       "lastMonth": "Last Month",
-      "ytd": "Year to Date"
-    }
+      "ytd": "Year to Date",
+      "custom": "Custom"
+    },
+    "from": "From",
+    "to": "To",
+    "suspiciousActivity": "Suspicious Activity",
+    "noSuspiciousActivity": "No suspicious activity detected."
   },
   "proxy": {
     "title": "Proxy Network",
