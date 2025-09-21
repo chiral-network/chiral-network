@@ -4,7 +4,7 @@
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
-  import { Shield, Globe, Activity, Plus, Power, Trash2 } from 'lucide-svelte'
+  import { Shield, ShieldCheck, ShieldX, Globe, Activity, Plus, Power, Trash2 } from 'lucide-svelte'
   import { proxyNodes } from '$lib/stores'
   import { t } from 'svelte-i18n'
   import DropDown from '$lib/components/ui/dropDown.svelte'
@@ -135,20 +135,56 @@
 {/if}
 
 <div class="space-y-6">
-  <div>
-    <h1 class="text-3xl font-bold">{$t('proxy.title')}</h1>
-    <p class="text-muted-foreground mt-2">{$t('proxy.subtitle')}</p>
+  <!-- Enhanced header with dynamic visual feedback -->
+  <div class="text-center space-y-4">
+    <div class="flex items-center justify-center gap-3">
+      <div class="relative">
+        {#if proxyEnabled}
+          <ShieldCheck class="h-10 w-10 text-green-500 animate-pulse" />
+          <div class="absolute inset-0 h-10 w-10 bg-green-500/20 rounded-lg blur-lg animate-pulse"></div>
+        {:else}
+          <ShieldX class="h-10 w-10 text-red-500" />
+        {/if}
+      </div>
+      <h1 class="text-3xl font-bold bg-gradient-to-r from-foreground to-foreground/80 bg-clip-text">{$t('proxy.title')}</h1>
+    </div>
+    <p class="text-muted-foreground text-lg">{$t('proxy.subtitle')}</p>
+    
+    <!-- Status indicator -->
+    <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full transition-all duration-300 {proxyEnabled ? 'bg-green-500/10 text-green-600' : 'bg-red-500/10 text-red-600'}">
+      <div class="w-2 h-2 rounded-full {proxyEnabled ? 'bg-green-500 animate-pulse' : 'bg-red-500'}"></div>
+      <span class="text-sm font-medium">{proxyEnabled ? 'Network Protected' : 'Network Exposed'}</span>
+    </div>
   </div>
   
   <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-    <Card class="p-4">
+    <Card class="p-4 transition-all duration-300 hover:shadow-lg">
       <div class="flex items-center gap-3">
-        <div class="p-2 bg-primary/10 rounded-lg">
-          <Shield class="h-5 w-5 text-primary" />
+        <div class="relative p-2 rounded-lg transition-all duration-300 {proxyEnabled ? 'bg-green-500/10 shadow-green-500/20 shadow-lg' : 'bg-red-500/10 shadow-red-500/20 shadow-lg'}">
+          {#if proxyEnabled}
+            <ShieldCheck class="h-5 w-5 text-green-500 transition-all duration-300" />
+            <!-- Active glow effect -->
+            <div class="absolute inset-0 rounded-lg bg-green-500/20 animate-pulse"></div>
+          {:else}
+            <ShieldX class="h-5 w-5 text-red-500 transition-all duration-300" />
+            <!-- Inactive pulse effect -->
+            <div class="absolute inset-0 rounded-lg bg-red-500/10"></div>
+          {/if}
         </div>
         <div>
           <p class="text-sm text-muted-foreground">{$t('proxy.status')}</p>
-          <p class="text-xl font-bold">{proxyEnabled ? $t('proxy.active') : $t('proxy.inactive')}</p>
+          <p class="text-xl font-bold transition-colors duration-300 {proxyEnabled ? 'text-green-600' : 'text-red-600'}">{proxyEnabled ? $t('proxy.active') : $t('proxy.inactive')}</p>
+          {#if proxyEnabled}
+            <div class="flex items-center gap-1 mt-1">
+              <div class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+              <span class="text-xs text-green-600 font-medium">Protected</span>
+            </div>
+          {:else}
+            <div class="flex items-center gap-1 mt-1">
+              <div class="w-2 h-2 bg-red-500 rounded-full"></div>
+              <span class="text-xs text-red-600 font-medium">Vulnerable</span>
+            </div>
+          {/if}
         </div>
       </div>
     </Card>
@@ -178,24 +214,46 @@
     </Card>
   </div>
   
-  <Card class="p-6">
+  <Card class="p-6 transition-all duration-300 hover:shadow-lg">
     <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold">{$t('proxy.settings')}</h2>
-      <div class="flex items-center gap-2">
-        <span class="text-sm text-black">{$t('proxy.proxy')}</span>
+      <div class="flex items-center gap-3">
+        <h2 class="text-lg font-semibold">{$t('proxy.settings')}</h2>
+        {#if proxyEnabled}
+          <div class="flex items-center gap-1 px-2 py-1 bg-green-100 rounded-full">
+            <ShieldCheck class="h-3 w-3 text-green-600" />
+            <span class="text-xs text-green-600 font-medium">Secured</span>
+          </div>
+        {:else}
+          <div class="flex items-center gap-1 px-2 py-1 bg-red-100 rounded-full">
+            <ShieldX class="h-3 w-3 text-red-600" />
+            <span class="text-xs text-red-600 font-medium">Disabled</span>
+          </div>
+        {/if}
+      </div>
+      <div class="flex items-center gap-3">
+        <span class="text-sm font-medium transition-colors duration-300 {proxyEnabled ? 'text-green-600' : 'text-gray-500'}">{$t('proxy.proxy')}</span>
         <button
           type="button"
           role="switch"
           aria-checked={proxyEnabled}
           aria-label="Toggle proxy {proxyEnabled ? 'off' : 'on'}"
           on:click={() => (proxyEnabled = !proxyEnabled)}
-          class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none 
-             {proxyEnabled ? 'bg-green-500' : 'bg-gray-300'}"
+          class="group relative inline-flex h-7 w-12 items-center rounded-full transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 hover:scale-105
+             {proxyEnabled ? 'bg-green-500 focus:ring-green-500 shadow-lg shadow-green-500/30' : 'bg-gray-300 focus:ring-gray-400'}"
           >
           <span
-            class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform
+            class="inline-block h-5 w-5 transform rounded-full bg-white transition-all duration-300 shadow-lg group-hover:scale-110
                {proxyEnabled ? 'translate-x-6' : 'translate-x-1'}"
-          ></span>
+          >
+            <!-- Mini icon inside toggle -->
+            <div class="flex items-center justify-center w-full h-full">
+              {#if proxyEnabled}
+                <ShieldCheck class="h-2.5 w-2.5 text-green-500" />
+              {:else}
+                <ShieldX class="h-2.5 w-2.5 text-gray-400" />
+              {/if}
+            </div>
+          </span>
         </button>
       </div>
     </div>
