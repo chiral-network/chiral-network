@@ -1,6 +1,7 @@
 use sha2::{Sha256, Digest};
 use aes_gcm::{Aes256Gcm, Key, Nonce, KeyInit};
 use aes_gcm::aead::{Aead, OsRng};
+use rand::RngCore;
 use std::fs::{File, self};
 use std::io::{Read, Error, Write};
 use std::path::{Path, PathBuf};
@@ -12,7 +13,7 @@ use crate::crypto::{encrypt_aes_key, EncryptedAesKeyBundle};
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct ChunkInfo {
     pub index: u32,
-    pub hash: String
+    pub hash: String,
     pub size: usize,
     pub encrypted_size: usize,
 }
