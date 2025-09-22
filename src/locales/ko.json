@@ -286,7 +286,8 @@
       "success": "계정을 성공적으로 불러왔습니다!",
       "successSimulated": "시뮬레이션된 계정 불러오기 성공!",
       "error": "오류: {error}",
-      "savePassword": "이 컴퓨터에 비밀번호 저장",
+      "savePassword": "이 컴퓨터에 비밀번호 저장 (30일 후 만료)",
+      "savePasswordWarning": "경고: 비밀번호를 로컬에 저장하는 것은 편리하지만 보안에 취약합니다. 주의해서 사용하세요.",
       "addressMismatch": "복호화 오류: 주소가 일치하지 않습니다."
     }
   },
@@ -390,6 +391,19 @@
     "unlockPassword": "잠금 해제를 위해 비밀번호를 입력하세요",
     "searchBlacklist": "블랙리스트 검색…",
     "reason": "사유 입력…"
+  },
+
+  "password": {
+    "weak": "약한 비밀번호",
+    "medium": "중간 강도",
+    "strong": "강력한 비밀번호",
+    "requirements": {
+      "length": "최소 8자 이상",
+      "uppercase": "대문자 1개 포함",
+      "lowercase": "소문자 1개 포함",
+      "number": "숫자 1개 포함",
+      "special": "특수문자 1개 포함"
+    }
   },
 
   "tooltips": {

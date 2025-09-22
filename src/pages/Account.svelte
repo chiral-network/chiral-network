@@ -19,6 +19,28 @@
   import { get } from 'svelte/store'
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
   
+  // Basic obfuscation for locally stored passwords. NOT for cryptographic security.
+  const OBFUSCATION_KEY = 'chiral-network-p@ssw0rd-key'; // A simple key
+
+  function obfuscate(text: string): string {
+    const textBytes = new TextEncoder().encode(text);
+    const keyBytes = new TextEncoder().encode(OBFUSCATION_KEY);
+    const resultBytes = textBytes.map((byte, i) => byte ^ keyBytes[i % keyBytes.length]);
+    return btoa(String.fromCharCode(...resultBytes)); // Base64 encode to handle binary data
+  }
+
+  function deobfuscate(base64Text: string): string {
+    try {
+      const resultBytes = [...atob(base64Text)].map(char => char.charCodeAt(0));
+      const keyBytes = new TextEncoder().encode(OBFUSCATION_KEY);
+      const textBytes = resultBytes.map((byte, i) => byte ^ keyBytes[i % keyBytes.length]);
+      return new TextDecoder().decode(new Uint8Array(textBytes));
+    } catch (e) {
+      console.error("Deobfuscation failed", e);
+      return ''; // Return empty string on failure
+    }
+  }
+
   // HD wallet imports
   import MnemonicWizard from '$lib/components/wallet/MnemonicWizard.svelte'
   import AccountList from '$lib/components/wallet/AccountList.svelte'
@@ -1256,6 +1278,9 @@
                       {$t('keystore.load.savePassword')}
                     </label>
                   </div>
+                  <div class="text-xs text-muted-foreground p-2 bg-yellow-50 border border-yellow-200 rounded-md">
+                    {$t('keystore.load.savePasswordWarning')}
+                  </div>
                   <Button
                     class="w-full"
                     variant="outline"
@@ -1587,35 +1612,83 @@
 
     <!-- Filters -->
     <div class="flex flex-wrap gap-4 mb-4 items-end">
-      <div>
-        <label for="filter-type" class="block text-xs font-medium mb-1">{$t('filters.type')}</label>
-        <select id="filter-type" bind:value={filterType} class="border rounded px-2 py-1 text-sm">
-          <option value="all">{$t('filters.typeAll')}</option>
-          <option value="sent">{$t('filters.typeSent')}</option>
-          <option value="received">{$t('filters.typeReceived')}</option>
-        </select>
-      </div>
-      <div>
-        <label for="filter-date-from" class="block text-xs font-medium mb-1">{$t('filters.from')}</label>
-        <input id="filter-date-from" type="date" bind:value={filterDateFrom} class="border rounded px-2 py-1 text-sm" />
-      </div>
-      <div>
-        <label for="filter-date-to" class="block text-xs font-medium mb-1">{$t('filters.to')}</label>
-        <input id="filter-date-to" type="date" bind:value={filterDateTo} class="border rounded px-2 py-1 text-sm" />
-      </div>
-      <div>
-        <label for="sort-button" class="block text-xs font-medium mb-1">{$t('filters.sort')}</label>
-        <button id="sort-button" type="button" class="border rounded px-3 py-1 text-sm bg-white hover:bg-gray-100 transition-colors w-full" on:click={() => { sortDescending = !sortDescending; }} aria-pressed={sortDescending}>
-          {sortDescending ? $t('filters.sortNewest') : $t('filters.sortOldest')}
-        </button>
-      </div>
-      <div class="flex-1"></div>
-      <div class="flex flex-col gap-1 items-end">
-        <button type="button" class="border rounded px-3 py-1 text-sm bg-muted hover:bg-muted/70 transition-colors" on:click={() => { filterType = 'all'; filterDateFrom = ''; filterDateTo = ''; sortDescending = true; searchQuery = ''; }}>
-          {$t('filters.reset')}
-        </button>
+  <div>
+    <label for="filter-type" class="block text-xs font-medium mb-1">
+      {$t('filters.type')}
+    </label>
+    <div class="relative">
+      <select
+        id="filter-type"
+        bind:value={filterType}
+        class="appearance-none border rounded pl-3 pr-10 py-2 text-sm h-9 bg-white cursor-pointer hover:bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+      >
+        <option value="all">{$t('filters.typeAll')}</option>
+        <option value="sent">{$t('filters.typeSent')}</option>
+        <option value="received">{$t('filters.typeReceived')}</option>
+      </select>
+      <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4-4 4 4m0 6l-4 4-4-4"></path></svg>
       </div>
     </div>
+  </div>
+
+  <div>
+    <label for="filter-date-from" class="block text-xs font-medium mb-1">
+      {$t('filters.from')}
+    </label>
+    <input
+      id="filter-date-from"
+      type="date"
+      bind:value={filterDateFrom}
+      class="border rounded px-3 py-2 text-sm h-9 bg-white hover:bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+    />
+  </div>
+
+  <div>
+    <label for="filter-date-to" class="block text-xs font-medium mb-1">
+      {$t('filters.to')}
+    </label>
+    <input
+      id="filter-date-to"
+      type="date"
+      bind:value={filterDateTo}
+      class="border rounded px-3 py-2 text-sm h-9 bg-white hover:bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+    />
+  </div>
+
+  <div>
+    <label for="sort-button" class="block text-xs font-medium mb-1">
+      {$t('filters.sort')}
+    </label>
+    <button
+      id="sort-button"
+      type="button"
+      class="border rounded px-3 py-2 text-sm h-9 bg-white hover:bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 w-full text-left"
+      on:click={() => { sortDescending = !sortDescending; }}
+      aria-pressed={sortDescending}
+    >
+      {sortDescending ? $t('filters.sortNewest') : $t('filters.sortOldest')}
+    </button>
+  </div>
+
+  <div class="flex-1"></div>
+
+  <div class="flex flex-col gap-1 items-end">
+    <button
+      type="button"
+      class="border rounded px-3 py-2 text-sm h-9 bg-gray-100 hover:bg-gray-200 transition-colors"
+      on:click={() => { 
+        filterType = 'all'; 
+        filterDateFrom = ''; 
+        filterDateTo = ''; 
+        sortDescending = true; 
+        searchQuery = ''; 
+      }}
+    >
+      {$t('filters.reset')}
+    </button>
+  </div>
+</div>
 
     <!-- Transaction List -->
     <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
