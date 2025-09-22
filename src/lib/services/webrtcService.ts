@@ -1,5 +1,5 @@
 import { writable, type Writable } from "svelte/store";
-import type { SignalingService } from "./signallingService";
+import type { SignalingService } from "./signalingService";
 
 export type IceServer = RTCIceServer;
 
