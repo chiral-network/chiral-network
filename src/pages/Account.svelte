@@ -6,8 +6,8 @@
   import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText } from 'lucide-svelte'
   import DropDown from "$lib/components/ui/dropDown.svelte";
   import { wallet, etcAccount, blacklist} from '$lib/stores' 
-  import { transactions, type Transaction } from '$lib/stores';
-  import { writable, derived } from 'svelte/store'
+  import { transactions } from '$lib/stores';
+  import { derived } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
   import QRCode from 'qrcode'
   import { Html5QrcodeScanner as Html5QrcodeScannerClass } from 'html5-qrcode'
@@ -25,7 +25,6 @@
   // HD helpers are used within MnemonicWizard/AccountList components
 
   // Transaction components
-  import TransactionList from '$lib/components/TransactionList.svelte'
   import TransactionReceipt from '$lib/components/TransactionReceipt.svelte'
 
 
@@ -1634,7 +1633,7 @@
               <div class="h-1 flex-1 bg-gray-200 rounded-full overflow-hidden">
                 <div
                   class="h-full transition-all duration-300 {passwordStrength === 'strong' ? 'bg-green-500 w-full' : passwordStrength === 'medium' ? 'bg-yellow-500 w-2/3' : 'bg-red-500 w-1/3'}"
-                />
+                ></div>
               </div>
               <span class="text-xs {passwordStrength === 'strong' ? 'text-green-600' : passwordStrength === 'medium' ? 'text-yellow-600' : 'text-red-600'}">
                 {passwordFeedback}
