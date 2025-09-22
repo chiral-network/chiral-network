@@ -310,9 +310,21 @@
     
     dhtPollInterval = setInterval(async () => {
       try {
-        const events = await dhtService.getEvents()
+        const events = await dhtService.getEvents() as any[]
         if (events.length > 0) {
-          dhtEvents = [...dhtEvents, ...events].slice(-10)
+          const formattedEvents = events.map(event => {
+            if (event.peerDisconnected) {
+              return `✗ Peer disconnected: ${event.peerDisconnected.peer_id.slice(0, 12)}... (Reason: ${event.peerDisconnected.cause})`
+            } else if (event.peerConnected) {
+              return `✓ Peer connected: ${event.peerConnected.slice(0, 12)}...`
+            } else if (event.peerDiscovered) {
+              return `ℹ Peer discovered: ${event.peerDiscovered.slice(0, 12)}...`
+            } else if (event.error) {
+              return `✗ Error: ${event.error}`
+            }
+            return JSON.stringify(event) // Fallback for other event types
+          })
+          dhtEvents = [...dhtEvents, ...formattedEvents].slice(-10)
         }
         
         let peerCount = dhtPeerCount
