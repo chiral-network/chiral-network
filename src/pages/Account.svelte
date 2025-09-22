@@ -1045,7 +1045,6 @@
 
   function logout() {
     // Clear the account details from memory, effectively logging out
-    loadKeystoreAccountsList()
     etcAccount.set(null);
 
     // Reset wallet state to defaults
@@ -1058,13 +1057,25 @@
       pendingTransactions: 0,
     }));
 
-    // Clear any other sensitive state that might be in component memory
+    // Explicitly nullify sensitive component state variables to assist garbage collection.
     privateKeyVisible = false;
     keystorePassword = '';
     loadKeystorePassword = '';
     importPrivateKey = '';
 
+    // For enhanced security, clear any session-related data from browser storage.
+    // This helps ensure no sensitive information like private keys persists in localStorage.
+    // Note: This will clear ALL data for this domain (e.g., settings, blacklist).
+    if (typeof window !== 'undefined') {
+      window.localStorage?.clear();
+      window.sessionStorage?.clear();
+    }
+
     console.log('Session cleared, wallet locked.');
+    showToast('Wallet locked and session data cleared', 'success');
+    
+    // Refresh the list of keystore accounts for the login view
+    loadKeystoreAccountsList();
   }
 
   async function generateAndShowQrCode(){
