@@ -5,7 +5,8 @@
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import { ShieldCheck, ShieldX, Globe, Activity, Plus, Power, Trash2 } from 'lucide-svelte'
-  import { proxyNodes } from '$lib/stores'
+  import { onMount } from 'svelte';
+  import { proxyNodes, connectProxy, disconnectProxy, listProxies } from '$lib/proxy';
   import { t } from 'svelte-i18n'
   import DropDown from '$lib/components/ui/dropDown.svelte'
   
@@ -37,8 +38,12 @@
       return statusOrder[a.status] - statusOrder[b.status];
   });
 
+  
+  onMount(() => {
+      listProxies();
+  });
+
   function addNode() {
-      const validAddressRegex = /^[a-zA-Z0-9.-]+:[0-9]{1,5}$/
       const isDuplicate = $proxyNodes.some(node => node.address === newNodeAddress.trim())
       if (isDuplicate) {
           alert($t('proxy.alreadyAdded'))
@@ -50,42 +55,19 @@
           return
       }
 
-      const newNode = {
-          id: `node-${Date.now()}`,
-          address: newNodeAddress.trim(),
-          status: 'connecting' as const,
-          bandwidth: 0,
-          latency: 999,
-          region: 'Unknown'
-      }
-
-      proxyNodes.update(nodes => [...nodes, newNode])
+      // For now, we'll use a dummy token.
+      connectProxy(newNodeAddress.trim(), "dummy-token");
       newNodeAddress = ''
-
-      // Simulate connection
-      setTimeout(() => {
-          proxyNodes.update(nodes => nodes.map(node => {
-              if (node.id === newNode.id) {
-                  return {
-                      ...node,
-                      status: 'online',
-                      bandwidth: Math.floor(Math.random() * 100),
-                      latency: Math.floor(Math.random() * 100)
-                  }
-              }
-              return node
-          }))
-      }, 2000)
   }
 
-  function requestRemoveNode(nodeId: string) {
-    nodeToRemove = $proxyNodes.find(node => node.id === nodeId)
+  function requestRemoveNode(node: any) {
+    nodeToRemove = node;
     showConfirmDialog = true
   }
 
   function confirmRemoveNode() {
     if (nodeToRemove) {
-      proxyNodes.update(nodes => nodes.filter(node => node.id !== nodeToRemove.id))
+      disconnectProxy(nodeToRemove.address)
     }
     showConfirmDialog = false
     nodeToRemove = null
@@ -95,18 +77,16 @@
     showConfirmDialog = false
     nodeToRemove = null
   }
-  
-  function toggleNode(nodeId: string) {
-    proxyNodes.update(nodes => nodes.map(node => {
-      if (node.id === nodeId) {
-        return {
-          ...node,
-          status: node.status === 'online' ? 'offline' : 'online'
-        }
+
+  function toggleNode(node: any) {
+      if (node.status === 'online') {
+          disconnectProxy(node.address);
+      } else {
+          // For now, we'll use a dummy token.
+          connectProxy(node.address, "dummy-token");
       }
-      return node
-    }))
   }
+
   
   $: activeNodes = $proxyNodes.filter(n => n.status === 'online').length
   $: totalBandwidth = $proxyNodes.reduce((sum, n) => sum + (n.status === 'online' ? n.bandwidth : 0), 0)
@@ -329,7 +309,7 @@
             <Button
               size="sm"
               variant="destructive"
-              on:click={() => requestRemoveNode(node.id)}
+              on:click={() => requestRemoveNode(node)}
             >
               <Trash2 class="h-3 w-3 mr-1" />
               {$t('proxy.remove')}
