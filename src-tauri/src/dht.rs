@@ -5,6 +5,8 @@ use libp2p::kad::Behaviour as Kademlia;
 use libp2p::kad::Event as KademliaEvent;
 use libp2p::kad::{Config as KademliaConfig, GetRecordOk, PutRecordOk, QueryResult};
 use libp2p::mdns::{tokio::Behaviour as Mdns, Event as MdnsEvent};
+use libp2p::ping;
+use libp2p::{autonat, dcutr};
 use libp2p::{
     identify, identity,
     kad::{self, store::MemoryStore, Mode, Record},
@@ -36,6 +38,9 @@ pub struct DhtBehaviour {
     kademlia: Kademlia<MemoryStore>,
     identify: identify::Behaviour,
     mdns: Mdns,
+    ping: ping::Behaviour,
+    autonat: autonat::Behaviour,
+    dcutr: dcutr::Behaviour,
 }
 
 #[derive(Debug)]
@@ -65,6 +70,7 @@ struct DhtMetrics {
     last_error: Option<String>,
     bootstrap_failures: u64,
     listen_addrs: Vec<String>,
+    nat_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -77,6 +83,7 @@ pub struct DhtMetricsSnapshot {
     pub last_error_at: Option<u64>,
     pub bootstrap_failures: u64,
     pub listen_addrs: Vec<String>,
+    pub nat_status: Option<String>,
 }
 
 impl DhtMetricsSnapshot {
@@ -93,6 +100,7 @@ impl DhtMetricsSnapshot {
             last_error_at: metrics.last_error_at.and_then(to_secs),
             bootstrap_failures: metrics.bootstrap_failures,
             listen_addrs: metrics.listen_addrs,
+            nat_status: metrics.nat_status,
         }
     }
 }
@@ -203,9 +211,16 @@ async fn run_dht_node(
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Kademlia(kad_event)) => {
                         handle_kademlia_event(kad_event, &event_tx).await;
                     }
-                    SwarmEvent::Behaviour(DhtBehaviourEvent::Identify(identify_event)) => {
+            SwarmEvent::Behaviour(DhtBehaviourEvent::Identify(identify_event)) => {
                         handle_identify_event(identify_event, &mut swarm, &event_tx).await;
                     }
+            SwarmEvent::Behaviour(DhtBehaviourEvent::Ping(_)) => {}
+            SwarmEvent::Behaviour(DhtBehaviourEvent::Autonat(ev)) => {
+                if let Ok(mut m) = metrics.try_lock() {
+                    m.nat_status = Some(format!("{:?}", ev));
+                }
+            }
+            SwarmEvent::Behaviour(DhtBehaviourEvent::Dcutr(_)) => {}
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Mdns(mdns_event)) => {
                         handle_mdns_event(mdns_event, &mut swarm, &event_tx).await;
                     }
@@ -449,10 +464,22 @@ impl DhtService {
         // mDNS for local peer discovery
         let mdns = Mdns::new(Default::default(), local_peer_id)?;
 
+        // Build additional behaviours for NAT traversal
+        let ping_behaviour = ping::Behaviour::new(ping::Config::new().with_interval(Duration::from_secs(15)));
+        let autonat_behaviour = autonat::Behaviour::new(
+            local_peer_id,
+            autonat::Config::default(),
+        );
+        // DCUtR enables direct connection upgrades (benefits from relays when available)
+        let dcutr_behaviour = dcutr::Behaviour::new(local_peer_id);
+
         let behaviour = DhtBehaviour {
             kademlia,
             identify,
             mdns,
+            ping: ping_behaviour,
+            autonat: autonat_behaviour,
+            dcutr: dcutr_behaviour,
         };
 
         // Create the swarm
@@ -469,9 +496,9 @@ impl DhtService {
             )
             .build();
 
-        // Listen on the specified port
+        // Listen on TCP and also enable relay and QUIC if needed in future
         let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", port).parse()?;
-        swarm.listen_on(listen_addr)?;
+        swarm.listen_on(listen_addr.clone())?;
         info!("DHT listening on port: {}", port);
 
         // Connect to bootstrap nodes

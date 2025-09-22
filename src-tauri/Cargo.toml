@@ -42,7 +42,7 @@ futures-util = "0.3"
 systemstat = "0.2.5"
 sysinfo = "0.31"
 sys-locale = "0.3"
-libp2p = { version = "0.54", features = ["kad", "mdns", "noise", "tcp", "yamux", "identify", "gossipsub", "macros", "tokio", "rsa", "request-response"] }
+libp2p = { version = "0.54", features = ["kad", "mdns", "noise", "tcp", "yamux", "identify", "gossipsub", "macros", "tokio", "rsa", "request-response", "relay", "autonat", "dcutr", "ping"] }
 async-std = { version = "1.12", features = ["attributes"] }
 async-trait = "0.1"
 tracing = "0.1"

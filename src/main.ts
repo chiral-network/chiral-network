@@ -1,6 +1,7 @@
 import { mount } from "svelte";
 import App from "./App.svelte";
 import "./styles/globals.css";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 
 console.log("Main.ts loading...");
 
@@ -8,6 +9,10 @@ const target = document.getElementById("app");
 console.log("Target element:", target);
 
 let app: any = null;
+
+// Expose a minimal, namespaced helper for DevTools without relying on window.__TAURI__
+// Usage in DevTools: __chiralInvoke('get_nat_status').then(console.log)
+(globalThis as any).__chiralInvoke = tauriInvoke;
 
 if (!target) {
   console.error("Could not find app element!");
