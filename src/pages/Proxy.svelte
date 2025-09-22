@@ -4,7 +4,7 @@
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
-  import { Shield, ShieldCheck, ShieldX, Globe, Activity, Plus, Power, Trash2 } from 'lucide-svelte'
+  import { ShieldCheck, ShieldX, Globe, Activity, Plus, Power, Trash2 } from 'lucide-svelte'
   import { proxyNodes } from '$lib/stores'
   import { t } from 'svelte-i18n'
   import DropDown from '$lib/components/ui/dropDown.svelte'
@@ -135,26 +135,9 @@
 {/if}
 
 <div class="space-y-6">
-  <!-- Enhanced header with dynamic visual feedback -->
-  <div class="text-center space-y-4">
-    <div class="flex items-center justify-center gap-3">
-      <div class="relative">
-        {#if proxyEnabled}
-          <ShieldCheck class="h-10 w-10 text-green-500 animate-pulse" />
-          <div class="absolute inset-0 h-10 w-10 bg-green-500/20 rounded-lg blur-lg animate-pulse"></div>
-        {:else}
-          <ShieldX class="h-10 w-10 text-red-500" />
-        {/if}
-      </div>
-      <h1 class="text-3xl font-bold bg-gradient-to-r from-foreground to-foreground/80 bg-clip-text">{$t('proxy.title')}</h1>
-    </div>
-    <p class="text-muted-foreground text-lg">{$t('proxy.subtitle')}</p>
-    
-    <!-- Status indicator -->
-    <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full transition-all duration-300 {proxyEnabled ? 'bg-green-500/10 text-green-600' : 'bg-red-500/10 text-red-600'}">
-      <div class="w-2 h-2 rounded-full {proxyEnabled ? 'bg-green-500 animate-pulse' : 'bg-red-500'}"></div>
-      <span class="text-sm font-medium">{proxyEnabled ? 'Network Protected' : 'Network Exposed'}</span>
-    </div>
+  <div>
+    <h1 class="text-3xl font-bold">{$t('proxy.title')}</h1>
+    <p class="text-muted-foreground mt-2">{$t('proxy.subtitle')}</p>
   </div>
   
   <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
