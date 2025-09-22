@@ -7,6 +7,9 @@ export class SignalingService {
   public connected: Writable<boolean> = writable(false);
   public peers: Writable<string[]> = writable([]);
 
+  // handler for WebRTC signaling messages
+  private onMessageHandler: ((msg: any) => void) | null = null;
+
   constructor(private url: string = "ws://localhost:3000") {
     this.clientId = crypto.randomUUID();
   }
@@ -34,6 +37,9 @@ export class SignalingService {
           
           if (message.type === "peers") {
             this.peers.set(message.peers);
+          } else {
+            // Forward other messages (offer/answer/candidate)
+            this.onMessageHandler?.(message);
           }
         };
 
@@ -55,10 +61,26 @@ export class SignalingService {
     });
   }
 
+  //Set a callback for incoming signaling messages
+  setOnMessage(handler: (msg: any) => void) {
+    this.onMessageHandler = handler;
+  }
+
+  // Send a signaling message to another peer
+  send(msg: any) {
+    if (!this.ws) throw new Error("WebSocket not connected");
+    this.ws.send(JSON.stringify({ ...msg, from: this.clientId }));
+  }
+
   disconnect(): void {
     this.ws?.close();
     this.ws = null;
     this.connected.set(false);
     this.peers.set([]);
+  }
+
+  // Expose this client’s ID
+  getClientId(): string {
+    return this.clientId;
   }
 }
