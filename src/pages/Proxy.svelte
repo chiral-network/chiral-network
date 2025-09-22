@@ -4,7 +4,7 @@
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
-  import { Shield, ShieldCheck, ShieldX, Globe, Activity, Plus, Power, Trash2 } from 'lucide-svelte'
+  import { ShieldCheck, ShieldX, Globe, Activity, Plus, Power, Trash2 } from 'lucide-svelte'
   import { proxyNodes } from '$lib/stores'
   import { t } from 'svelte-i18n'
   import DropDown from '$lib/components/ui/dropDown.svelte'
