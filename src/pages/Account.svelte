@@ -6,8 +6,8 @@
   import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText } from 'lucide-svelte'
   import DropDown from "$lib/components/ui/dropDown.svelte";
   import { wallet, etcAccount, blacklist} from '$lib/stores' 
-  import { transactions, type Transaction } from '$lib/stores';
-  import { writable, derived } from 'svelte/store'
+  import { transactions } from '$lib/stores';
+  import { derived } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
   import QRCode from 'qrcode'
   import { Html5QrcodeScanner as Html5QrcodeScannerClass } from 'html5-qrcode'
@@ -25,7 +25,6 @@
   // HD helpers are used within MnemonicWizard/AccountList components
 
   // Transaction components
-  import TransactionList from '$lib/components/TransactionList.svelte'
   import TransactionReceipt from '$lib/components/TransactionReceipt.svelte'
 
 
@@ -1046,7 +1045,6 @@
 
   function logout() {
     // Clear the account details from memory, effectively logging out
-    loadKeystoreAccountsList()
     etcAccount.set(null);
 
     // Reset wallet state to defaults
@@ -1059,13 +1057,25 @@
       pendingTransactions: 0,
     }));
 
-    // Clear any other sensitive state that might be in component memory
+    // Explicitly nullify sensitive component state variables to assist garbage collection.
     privateKeyVisible = false;
     keystorePassword = '';
     loadKeystorePassword = '';
     importPrivateKey = '';
 
+    // For enhanced security, clear any session-related data from browser storage.
+    // This helps ensure no sensitive information like private keys persists in localStorage.
+    // Note: This will clear ALL data for this domain (e.g., settings, blacklist).
+    if (typeof window !== 'undefined') {
+      window.localStorage?.clear();
+      window.sessionStorage?.clear();
+    }
+
     console.log('Session cleared, wallet locked.');
+    showToast('Wallet locked and session data cleared', 'success');
+    
+    // Refresh the list of keystore accounts for the login view
+    loadKeystoreAccountsList();
   }
 
   async function generateAndShowQrCode(){
@@ -1461,11 +1471,7 @@
               <circle cx="12" cy="10" r="8" />
               <polyline points="12,6 12,10 16,14" />
             </svg>
-            {#if $pendingCount > 0}
-              {$t('transfer.pending.count', { values: { count: $pendingCount } })}
-            {:else}
-              {$t('transfer.pending.none')}
-            {/if}
+            {$t('transfer.pending.count', { values: { count: $pendingCount } })}
           </span>
         </Button>
         {#if showPending}
@@ -1634,7 +1640,7 @@
               <div class="h-1 flex-1 bg-gray-200 rounded-full overflow-hidden">
                 <div
                   class="h-full transition-all duration-300 {passwordStrength === 'strong' ? 'bg-green-500 w-full' : passwordStrength === 'medium' ? 'bg-yellow-500 w-2/3' : 'bg-red-500 w-1/3'}"
-                />
+                ></div>
               </div>
               <span class="text-xs {passwordStrength === 'strong' ? 'text-green-600' : passwordStrength === 'medium' ? 'text-yellow-600' : 'text-red-600'}">
                 {passwordFeedback}

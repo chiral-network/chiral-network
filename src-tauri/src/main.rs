@@ -477,7 +477,8 @@ fn get_cpu_temperature() -> Option<f32> {
         }
         LAST_UPDATE = Some(Instant::now());
     }
-    // Try sysinfo first (works on some platforms including M1 macs)
+    
+    // Try sysinfo first (works on some platforms including M1 macs and some Windows)
     let mut sys = System::new_all();
     sys.refresh_cpu_all();
     let components = Components::new_with_refreshed_list();
@@ -488,7 +489,7 @@ fn get_cpu_temperature() -> Option<f32> {
         .iter()
         .filter(|c| {
             let label = c.label().to_lowercase();
-            label.contains("cpu") || label.contains("package") || label.contains("tdie")
+            label.contains("cpu") || label.contains("package") || label.contains("tdie") || label.contains("core") || label.contains("thermal")
         })
         .map(|c| {
             core_count += 1;
@@ -498,12 +499,64 @@ fn get_cpu_temperature() -> Option<f32> {
     if core_count > 0 {
         return Some(sum / core_count as f32);
     }
-    // handles Windows case?
+    
+    // Windows-specific temperature detection methods
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(temp) = get_windows_temperature() {
+            return Some(temp);
+        }
+    }
+    
+    // Fallback for other platforms
     let stat_sys = SystemStat::new();
     if let Ok(temp) = stat_sys.cpu_temp() {
         return Some(temp);
     }
 
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn get_windows_temperature() -> Option<f32> {
+    use std::process::Command;
+    
+    // Method 1: Try the fastest method first - HighPrecisionTemperature from WMI
+    if let Ok(output) = Command::new("powershell")
+        .args([
+            "-Command",
+            "Get-WmiObject -Query \"SELECT HighPrecisionTemperature FROM Win32_PerfRawData_Counters_ThermalZoneInformation\" | Select-Object -First 1 -ExpandProperty HighPrecisionTemperature"
+        ])
+        .output()
+    {
+        if let Ok(output_str) = String::from_utf8(output.stdout) {
+            if let Ok(temp_tenths_kelvin) = output_str.trim().parse::<f32>() {
+                let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
+                if temp_celsius > 0.0 && temp_celsius < 150.0 {
+                    return Some(temp_celsius);
+                }
+            }
+        }
+    }
+    
+    // Method 2: Fallback to regular Temperature field
+    if let Ok(output) = Command::new("powershell")
+        .args([
+            "-Command",
+            "Get-WmiObject -Query \"SELECT Temperature FROM Win32_PerfRawData_Counters_ThermalZoneInformation\" | Select-Object -First 1 -ExpandProperty Temperature"
+        ])
+        .output()
+    {
+        if let Ok(output_str) = String::from_utf8(output.stdout) {
+            if let Ok(temp_tenths_kelvin) = output_str.trim().parse::<f32>() {
+                let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
+                if temp_celsius > 0.0 && temp_celsius < 150.0 {
+                    return Some(temp_celsius);
+                }
+            }
+        }
+    }
+    
     None
 }
 #[tauri::command]
