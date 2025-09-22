@@ -1337,25 +1337,6 @@
          {/if}
       </div>
     </Card>
-
-    {#if hdMnemonic}
-      <Card class="p-6">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="text-lg font-semibold">HD Wallet</h2>
-          <div class="flex gap-2">
-            <Button variant="outline" on:click={openCreateMnemonic}>New</Button>
-            <Button variant="outline" on:click={openImportMnemonic}>Import</Button>
-          </div>
-        </div>
-        <p class="text-sm text-muted-foreground mb-4">Path m/44'/{98765}'/0'/0/*</p>
-        <AccountList
-          mnemonic={hdMnemonic}
-          passphrase={hdPassphrase}
-          accounts={hdAccounts}
-          onAccountsChange={onHDAccountsChange}
-        />
-      </Card>
-    {/if}
     
     {#if $etcAccount}
     <Card class="p-6">
@@ -1510,6 +1491,24 @@
   </div>
 
   {#if $etcAccount}
+    {#if hdMnemonic}
+        <Card class="p-6">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-lg font-semibold">HD Wallet</h2>
+            <div class="flex gap-2">
+              <Button variant="outline" on:click={openCreateMnemonic}>New</Button>
+              <Button variant="outline" on:click={openImportMnemonic}>Import</Button>
+            </div>
+          </div>
+          <p class="text-sm text-muted-foreground mb-4">Path m/44'/{98765}'/0'/0/*</p>
+          <AccountList
+            mnemonic={hdMnemonic}
+            passphrase={hdPassphrase}
+            accounts={hdAccounts}
+            onAccountsChange={onHDAccountsChange}
+          />
+        </Card>
+    {/if}
   <!-- Transaction History Section - Full Width -->
   <Card class="p-6 mt-4">
     <div class="flex items-center justify-between mb-4">
