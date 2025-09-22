@@ -5,7 +5,7 @@
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
-  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, Star, Zap } from 'lucide-svelte'
+  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, Star, Zap, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation } from 'lucide-svelte'
   import { files, downloadQueue } from '$lib/stores'
   import { t } from 'svelte-i18n'
   import { get } from 'svelte/store'
@@ -102,6 +102,74 @@
         }
       }
     }, duration)
+  }
+
+  function getFileIcon(fileName: string) {
+    const extension = fileName.split('.').pop()?.toLowerCase() || '';
+
+    switch (extension) {
+      case 'pdf':
+      case 'doc':
+      case 'docx':
+      case 'txt':
+      case 'rtf':
+        return FileText;
+
+      case 'jpg':
+      case 'jpeg':
+      case 'png':
+      case 'gif':
+      case 'bmp':
+      case 'svg':
+      case 'webp':
+        return FileImage;
+
+      case 'mp4':
+      case 'avi':
+      case 'mov':
+      case 'wmv':
+      case 'flv':
+      case 'webm':
+      case 'mkv':
+        return FileVideo;
+
+      case 'mp3':
+      case 'wav':
+      case 'flac':
+      case 'aac':
+      case 'ogg':
+        return FileAudio;
+
+      case 'zip':
+      case 'rar':
+      case '7z':
+      case 'tar':
+      case 'gz':
+        return Archive;
+
+      case 'js':
+      case 'ts':
+      case 'html':
+      case 'css':
+      case 'py':
+      case 'java':
+      case 'cpp':
+      case 'c':
+      case 'php':
+        return Code;
+
+      case 'xls':
+      case 'xlsx':
+      case 'csv':
+        return FileSpreadsheet;
+
+      case 'ppt':
+      case 'pptx':
+        return Presentation;
+
+      default:
+        return FileIcon;
+    }
   }
 
   // Function to validate and correct maxConcurrentDownloads
@@ -764,77 +832,66 @@ function clearSearch() {
             {:else}
               <div class="space-y-4">
                 {#each searchResults as result}
-                  <div class="border rounded-lg p-4 bg-muted/30">
+                  <div class="p-3 bg-secondary rounded-lg hover:bg-secondary/80 transition-colors">
                     <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-                      <div class="flex-1">
-                        <div class="flex items-center justify-between mb-2">
-                          <div class="flex items-center gap-3">
-                            <h4 class="font-semibold">{result.fileName}</h4>
-                            <Badge variant="secondary">{(result.fileSize / 1024 / 1024).toFixed(1)} MB</Badge>
+                      <div class="flex items-start gap-3 flex-1">
+                        <svelte:component this={getFileIcon(result.fileName)} class="h-4 w-4 text-muted-foreground mt-0.5" />
+                        <div class="flex-1 min-w-0">
+                          <div class="flex items-center gap-3 mb-1">
+                            <h4 class="font-semibold text-sm truncate">{result.fileName}</h4>
+                            <Badge class="text-xs font-semibold bg-muted-foreground/20 text-foreground border-0 px-2 py-0.5">{(result.fileSize / 1024 / 1024).toFixed(1)} MB</Badge>
                           </div>
-                          <div class="sm:hidden">
-                            <Button
-                              on:click={() => downloadFromSearchResult(result)}
-                              class="ml-4"
-                              size="sm"
-                            >
-                              Download
-                            </Button>
+                          <div class="flex items-center gap-x-3 gap-y-1 mt-1">
+                            <p class="text-xs text-muted-foreground truncate">Hash: {result.fileHash}</p>
+                            <span class="text-xs text-muted-foreground">•</span>
+                            <span class="flex items-center gap-1">
+                              <span class="w-2 h-2 bg-green-500 rounded-full"></span>
+                              <span class="text-xs text-muted-foreground">{result.seeders} seeders</span>
+                            </span>
+                            <span class="text-xs text-muted-foreground">•</span>
+                            <span class="flex items-center gap-1">
+                              <span class="w-2 h-2 bg-blue-500 rounded-full"></span>
+                              <span class="text-xs text-muted-foreground">{result.leechers} leechers</span>
+                            </span>
                           </div>
-                        </div>
 
-                        <div class="flex items-center gap-4 text-sm text-muted-foreground mb-3">
-                          <span class="flex items-center gap-1">
-                            <span class="w-2 h-2 bg-green-500 rounded-full"></span>
-                            {result.seeders} seeders
-                          </span>
-                          <span class="flex items-center gap-1">
-                            <span class="w-2 h-2 bg-blue-500 rounded-full"></span>
-                            {result.leechers} leechers
-                          </span>
-                        </div>
-
-                        <div class="text-xs text-muted-foreground">
-                          <p class="mb-1">Hash: {result.fileHash}</p>
-                          <p>Available from {result.peers.length} seeder(s)</p>
-                        </div>
-
-                        <!-- Peer list -->
-                        <div class="mt-3">
-                          <details class="text-sm">
-                            <summary class="cursor-pointer text-muted-foreground hover:text-foreground">
-                              View available peers
-                            </summary>
-                            <div class="mt-2 space-y-2">
-                              {#each result.peers as peer}
-                                <div class="flex items-center p-2 border rounded w-full">
-                                  <div class="flex items-center gap-2 flex-1">
-                                    <span class="font-semibold text-sm">{peer.nickname}</span>
-                                    <Badge variant="outline" class="text-xs border-yellow-400 text-yellow-600">
-                                      <Star class="h-3 w-3 mr-1 fill-yellow-400 text-yellow-400" />
-                                      {peer.reputation}
-                                    </Badge>
-                                    <Badge variant="outline" class="text-xs {peer.connection === 'fast' ? 'border-green-500 text-green-600' : peer.connection === 'average' ? 'border-yellow-400 text-yellow-600' : 'border-red-500 text-red-600'}">
-                                      <Zap class="h-3 w-3 mr-1 {peer.connection === 'fast' ? 'fill-green-500 text-green-500' : peer.connection === 'average' ? 'fill-yellow-400 text-yellow-400' : 'text-red-500 fill-red-500'}" />
-                                      {peer.connection}
-                                    </Badge>
-                                  </div>
-                                </div>
-                              {/each}
-                            </div>
-                          </details>
                         </div>
                       </div>
 
-                      <div class="hidden sm:flex flex-col gap-2">
+                      <div class="flex items-center gap-2">
                         <Button
                           on:click={() => downloadFromSearchResult(result)}
-                          class="w-auto"
+                          size="sm"
                         >
                           Download
                         </Button>
                       </div>
                     </div>
+
+                    <!-- Peer list spanning full width -->
+                    <details class="text-xs mt-2 ml-7">
+                      <summary class="cursor-pointer text-muted-foreground hover:text-foreground">
+                        View available peers
+                      </summary>
+                      <div class="mt-2 space-y-1">
+                        {#each result.peers as peer}
+                          <div class="flex items-center py-1">
+                            <span class="text-sm text-foreground mr-1">•</span>
+                            <span class="text-sm text-foreground">{peer.nickname}</span>
+                            <div class="flex items-center gap-2 ml-3">
+                              <Badge variant="outline" class="text-xs border-yellow-400 text-yellow-600">
+                                <Star class="h-3 w-3 mr-1 fill-yellow-400 text-yellow-400" />
+                                {peer.reputation}
+                              </Badge>
+                              <Badge variant="outline" class="text-xs {peer.connection === 'fast' ? 'border-green-500 text-green-600' : peer.connection === 'average' ? 'border-yellow-400 text-yellow-600' : 'border-red-500 text-red-600'}">
+                                <Zap class="h-3 w-3 mr-1 {peer.connection === 'fast' ? 'fill-green-500 text-green-500' : peer.connection === 'average' ? 'fill-yellow-400 text-yellow-400' : 'text-red-500 fill-red-500'}" />
+                                {peer.connection}
+                              </Badge>
+                            </div>
+                          </div>
+                        {/each}
+                      </div>
+                    </details>
                   </div>
                 {/each}
               </div>
@@ -991,9 +1048,9 @@ function clearSearch() {
     {:else}
       <div class="space-y-3">
         {#each filteredDownloads as file, index}
-          <div class="bg-card border rounded-lg overflow-hidden hover:shadow-md transition-shadow">
+          <div class="p-3 bg-secondary rounded-lg hover:bg-secondary/80 transition-colors">
             <!-- File Header -->
-            <div class="p-4 pb-2">
+            <div class="pb-2">
               <div class="flex items-start justify-between gap-4">
                 <div class="flex items-start gap-3 flex-1 min-w-0">
                   <!-- Queue Controls -->
@@ -1021,15 +1078,20 @@ function clearSearch() {
                   {/if}
                   
                   <!-- File Info -->
-                  <div class="flex-1 min-w-0">
-                    <h3 class="font-medium text-sm truncate mb-1">{file.name}</h3>
-                    <p class="text-xs text-muted-foreground truncate mb-2">
-                      {$t('download.file.hash')}: {file.hash}
-                    </p>
+                  <div class="flex items-start gap-3 flex-1 min-w-0">
+                    <svelte:component this={getFileIcon(file.name)} class="h-4 w-4 text-muted-foreground mt-0.5" />
+                    <div class="flex-1 min-w-0">
+                      <div class="flex items-center gap-3 mb-1">
+                        <h3 class="font-semibold text-sm truncate">{file.name}</h3>
+                        <Badge class="text-xs font-semibold bg-muted-foreground/20 text-foreground border-0 px-2 py-0.5">
+                          {formatFileSize(file.size)}
+                        </Badge>
+                      </div>
+                      <div class="flex items-center gap-x-3 gap-y-1 mt-1">
+                        <p class="text-xs text-muted-foreground truncate">{$t('download.file.hash')}: {file.hash}</p>
+                      </div>
+                    </div>
                     <div class="flex items-center gap-2 flex-wrap">
-                      <Badge variant="outline" class="text-xs">
-                        {formatFileSize(file.size)}
-                      </Badge>
                       {#if file.status === 'queued'}
                         <select
                           value={file.priority || 'normal'}
@@ -1065,23 +1127,21 @@ function clearSearch() {
             
             <!-- Progress Section -->
             {#if file.status === 'downloading' || file.status === 'paused'}
-              <div class="px-4 pb-2">
-                <div class="bg-muted/50 rounded-lg p-3">
-                  <div class="flex items-center justify-between text-sm mb-2">
-                    <span class="font-medium">{$t('download.file.progress')}</span>
-                    <span class="text-muted-foreground">{(file.progress || 0).toFixed(2)}%</span>
-                  </div>
-                  <Progress 
-                    value={file.progress || 0} 
-                    max={100} 
-                    class="h-2 bg-muted [&>div]:bg-green-500" 
-                  />
+              <div class="pb-2 ml-7">
+                <div class="flex items-center justify-between text-sm mb-1">
+                  <span class="text-foreground">{$t('download.file.progress')}</span>
+                  <span class="text-foreground">{(file.progress || 0).toFixed(2)}%</span>
                 </div>
+                <Progress
+                  value={file.progress || 0}
+                  max={100}
+                  class="h-2 bg-background [&>div]:bg-green-500 w-full"
+                />
               </div>
             {/if}
             
             <!-- Action Buttons -->
-            <div class="px-4 pb-4">
+            <div class="pt-2 ml-7">
               <div class="flex flex-wrap gap-2">
                 {#if file.status === 'downloading' || file.status === 'paused' || file.status === 'queued'}
                   {#if file.status === 'queued'}
@@ -1089,7 +1149,7 @@ function clearSearch() {
                       size="sm"
                       variant="default"
                       on:click={() => startQueuedDownload(file.id)}
-                      class="h-8 px-3"
+                      class="h-7 px-3 text-sm"
                     >
                       <Play class="h-3 w-3 mr-1" />
                       {$t('download.actions.start')}
@@ -1099,7 +1159,7 @@ function clearSearch() {
                       size="sm"
                       variant="outline"
                       on:click={() => togglePause(file.id)}
-                      class="h-8 px-3"
+                      class="h-7 px-3 text-sm"
                     >
                       {#if file.status === 'downloading'}
                         <Pause class="h-3 w-3 mr-1" />
@@ -1114,7 +1174,7 @@ function clearSearch() {
                     size="sm"
                     variant="destructive"
                     on:click={() => cancelDownload(file.id)}
-                    class="h-8 px-3"
+                    class="h-7 px-3 text-sm"
                   >
                     <X class="h-3 w-3 mr-1" />
                     {file.status === 'queued' ? $t('download.actions.remove') : $t('download.actions.cancel')}
@@ -1124,7 +1184,7 @@ function clearSearch() {
                     size="sm"
                     variant="outline"
                     on:click={() => showInFolder(file.id)}
-                    class="h-8 px-3"
+                    class="h-7 px-3 text-sm"
                   >
                     <FolderOpen class="h-3 w-3 mr-1" />
                     Show in Folder
