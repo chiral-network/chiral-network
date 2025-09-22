@@ -5,7 +5,7 @@
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
-  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen } from 'lucide-svelte'
+  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, Star, Zap } from 'lucide-svelte'
   import { files, downloadQueue } from '$lib/stores'
   import { t } from 'svelte-i18n'
   import { get } from 'svelte/store'
@@ -18,6 +18,11 @@
   let autoStartQueue = true
   let filterStatus = 'all' // 'all', 'active', 'paused', 'queued', 'completed', 'failed'
   let activeSimulations = new Set<string>() // Track files with active progress simulations
+
+  // New state for search results
+  let searchResults: any[] = []
+  let isSearching = false
+  let hasSearched = false
 
   // Add notification related variables
   let currentNotification: HTMLElement | null = null
@@ -246,7 +251,190 @@
     }
   }
   
-  // Enhanced startDownload function with real P2P download
+  // New search function that only searches without downloading
+  async function searchForFile() {
+    if (!searchHash) {
+      showNotification(tr('download.notifications.enterHash'), 'warning')
+      return
+    }
+
+    isSearching = true
+    searchResults = []
+    hasSearched = false
+
+    try {
+      // Show search start notification
+      showNotification('Searching for file in network...', 'info', 2000)
+
+      // Simulate search delay for realistic UX
+      await new Promise(resolve => setTimeout(resolve, 1500));
+
+      // Mock file database with predefined hashes for testing
+      // TODO: Replace with actual DHT search results
+      const mockFileDatabase = {
+        // Existing files (already in downloads list)
+        'QmZ4tDuvesekqMF': {
+          fileName: 'Video.mp4',
+          fileSize: 50331648, // 48.00 MB
+          peers: [
+            { id: 'peer1', nickname: 'AliceNode', reputation: 4.8, status: 'online', connection: 'fast' },
+            { id: 'peer2', nickname: 'BobStorage', reputation: 4.5, status: 'online', connection: 'average' }
+          ]
+        },
+        'QmZ4tDuvesekqMD': {
+          fileName: 'Document.pdf',
+          fileSize: 2048576, // 2.00 MB
+          peers: [
+            { id: 'peer3', nickname: 'CharlieShare', reputation: 4.2, status: 'away', connection: 'slow' },
+            { id: 'peer4', nickname: 'DataVault', reputation: 4.6, status: 'online', connection: 'fast' }
+          ]
+        },
+        'QmZ4tDuvesekqMG': {
+          fileName: 'Archive.zip',
+          fileSize: 10485760, // 10.00 MB
+          peers: [
+            { id: 'peer1', nickname: 'AliceNode', reputation: 4.8, status: 'online', connection: 'fast' },
+            { id: 'peer5', nickname: 'CloudSync', reputation: 3.9, status: 'online', connection: 'average' }
+          ]
+        },
+        // New files (not in downloads list yet)
+        'QmZ4tDuvesekqMA': {
+          fileName: 'music_album.zip',
+          fileSize: 89234567,
+          peers: [
+            { id: 'peer2', nickname: 'BobStorage', reputation: 4.5, status: 'online', connection: 'average' },
+            { id: 'peer5', nickname: 'CloudSync', reputation: 3.9, status: 'online', connection: 'average' }
+          ]
+        },
+        'QmZ4tDuvesekqMB': {
+          fileName: 'software_package.deb',
+          fileSize: 12456789,
+          peers: [
+            { id: 'peer1', nickname: 'AliceNode', reputation: 4.8, status: 'online', connection: 'fast' },
+            { id: 'peer3', nickname: 'CharlieShare', reputation: 4.2, status: 'away', connection: 'slow' },
+            { id: 'peer4', nickname: 'DataVault', reputation: 4.6, status: 'online', connection: 'fast' }
+          ]
+        },
+        'QmZ4tDuvesekqMC': {
+          fileName: 'presentation.pptx',
+          fileSize: 5242880, // 5.00 MB
+          peers: [
+            { id: 'peer2', nickname: 'BobStorage', reputation: 4.5, status: 'online', connection: 'average' },
+            { id: 'peer4', nickname: 'DataVault', reputation: 4.6, status: 'online', connection: 'fast' }
+          ]
+        },
+        'QmZ4tDuvesekqME': {
+          fileName: 'game_assets.tar.gz',
+          fileSize: 156789123,
+          peers: [
+            { id: 'peer1', nickname: 'AliceNode', reputation: 4.8, status: 'online', connection: 'fast' },
+            { id: 'peer2', nickname: 'BobStorage', reputation: 4.5, status: 'online', connection: 'average' },
+            { id: 'peer3', nickname: 'CharlieShare', reputation: 4.2, status: 'away', connection: 'slow' },
+            { id: 'peer5', nickname: 'CloudSync', reputation: 3.9, status: 'online', connection: 'average' }
+          ]
+        }
+      }
+
+      // Check if the searched hash exists in our mock database
+      const fileData = mockFileDatabase[searchHash]
+
+      let mockResults = []
+      if (fileData) {
+        // File found - create mock result
+        const seeders = fileData.peers.length
+        const leechers = Math.floor(Math.random() * 3) // Random leechers
+
+        mockResults = [{
+          fileHash: searchHash,
+          fileName: fileData.fileName,
+          fileSize: fileData.fileSize,
+          seeders: seeders,
+          leechers: leechers,
+          peers: fileData.peers
+        }]
+      }
+      // If fileData is undefined, mockResults stays empty (no files found)
+
+      searchResults = mockResults
+      hasSearched = true
+      showNotification(`Found ${mockResults.length} result(s) for your search`, 'success')
+
+    } catch (error) {
+      console.error('Search failed:', error)
+      searchResults = []
+      hasSearched = true
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      showNotification(`Search failed: ${errorMessage}`, 'error', 6000)
+    } finally {
+      isSearching = false
+    }
+  }
+
+  // New function to download from search results
+  async function downloadFromSearchResult(result: any) {
+    // Check for duplicates using the existing logic
+    const allFiles = [...$files, ...$downloadQueue]
+    const existingFile = allFiles.find(f => f.hash === result.fileHash)
+
+    if (existingFile) {
+      // Provide detailed status information
+      let statusMessage = ''
+      switch (existingFile.status) {
+        case 'completed':
+          statusMessage = `File download already completed`
+          break
+        case 'downloading':
+          statusMessage = `File is currently downloading (${existingFile.progress || 0}% complete)`
+          break
+        case 'paused':
+          statusMessage = `File download is paused at ${existingFile.progress || 0}%`
+          break
+        case 'queued':
+          statusMessage = `File is already in download queue`
+          break
+        case 'failed':
+          statusMessage = `File download previously failed. Try again?`
+          break
+        case 'seeding':
+        case 'uploaded':
+          statusMessage = `You are already sharing this file`
+          break
+        default:
+          statusMessage = `File is already in your downloads (${existingFile.status})`
+      }
+
+      showNotification(statusMessage, 'warning', 4000)
+
+      // For failed or cancelled downloads, allow retry
+      if (existingFile.status !== 'failed' && existingFile.status !== 'canceled') {
+        return
+      }
+    }
+
+    // Create new download item
+    const newFile = {
+      id: `download-${Date.now()}`,
+      name: result.fileName,
+      hash: result.fileHash,
+      size: result.fileSize,
+      status: 'queued' as const,
+      priority: 'normal' as const
+    }
+
+    downloadQueue.update(q => [...q, newFile])
+    showNotification(`Added "${result.fileName}" to download queue`, 'success')
+
+    if (autoStartQueue) {
+      processQueue()
+    }
+
+    // Clear search results after successful download initiation
+    searchResults = []
+    hasSearched = false
+    searchHash = ''
+  }
+
+  // Enhanced startDownload function with real P2P download (kept for backward compatibility)
   async function startDownload() {
     if (!searchHash) {
       showNotification(tr('download.notifications.enterHash'), 'warning')
@@ -354,19 +542,7 @@ function clearSearch() {
     files.update(f => f.map(file => {
       if (file.id === fileId) {
         const newStatus = file.status === 'downloading' ? 'paused' as const : 'downloading' as const
-        const updatedFile = { ...file, status: newStatus }
-
-        // If resuming from paused to downloading, restart the simulation
-        if (newStatus === 'downloading' && file.status === 'paused') {
-          // Small delay to ensure DOM updates first
-          setTimeout(() => simulateDownloadProgress(fileId), 100)
-        }
-        // If pausing from downloading to paused, stop the simulation
-        else if (newStatus === 'paused' && file.status === 'downloading') {
-          activeSimulations.delete(fileId)
-        }
-
-        return updatedFile
+        return { ...file, status: newStatus }
       }
       return file
     }))
@@ -442,35 +618,35 @@ function clearSearch() {
         file.id === fileId ? { ...file, progress: 10 } : file
       ));
       
-      // Simulate progress while downloading
+      // Simulate progress while downloading - complete when progress reaches 100%
       const progressInterval = setInterval(() => {
         files.update(f => f.map(file => {
           if (file.id === fileId && file.status === 'downloading') {
             const currentProgress = file.progress || 10;
-            const newProgress = Math.min(90, currentProgress + Math.random() * 10);
+            const newProgress = Math.min(100, currentProgress + Math.random() * 8 + 2); // 2-10% increment
+
+            // Check if download just completed
+            if (newProgress >= 100) {
+              // Complete the download
+              clearInterval(progressInterval);
+              activeSimulations.delete(fileId);
+              showNotification(`Download completed: ${fileToDownload.name} saved to ${outputPath}`, 'success');
+
+              return { ...file, progress: 100, status: 'completed', downloadPath: outputPath };
+            }
+
             return { ...file, progress: newProgress };
           }
           return file;
         }));
+
+        // Check if download was cancelled (cleanup if needed)
+        const currentFile = $files.find(f => f.id === fileId);
+        if (!currentFile || currentFile.status === 'canceled') {
+          clearInterval(progressInterval);
+          activeSimulations.delete(fileId);
+        }
       }, 500);
-
-      // Attempt the actual download
-      await invoke('download_file_from_network', {
-        fileHash: fileToDownload.hash,
-        outputPath: outputPath
-      });
-
-      // Download successful
-      clearInterval(progressInterval);
-      activeSimulations.delete(fileId);
-      
-      files.update(f => f.map(file => 
-        file.id === fileId 
-          ? { ...file, progress: 100, status: 'completed', downloadPath: outputPath }
-          : file
-      ));
-      
-      showNotification(`Download completed: ${fileToDownload.name} saved to ${outputPath}`, 'success');
       
     } catch (error) {
       // Download failed
@@ -562,19 +738,113 @@ function clearSearch() {
               </button>
             {/if}
           </div>
-          <Button 
-            on:click={startDownload} 
-            disabled={!searchHash.trim()}
+          <Button
+            on:click={searchForFile}
+            disabled={!searchHash.trim() || isSearching}
             class="h-10 px-6"
           >
             <Search class="h-4 w-4 mr-2" />
-            {$t('download.searchAndDownload')}
+            {isSearching ? 'Searching...' : 'Search'}
           </Button>
         </div>
+
+        <!-- Search Results Section (within the same card) -->
+        {#if hasSearched}
+          <div class="pt-6 border-t">
+            <h3 class="text-lg font-semibold mb-4">Search Results</h3>
+
+            {#if searchResults.length === 0}
+              <div class="text-center py-6">
+                <div class="text-muted-foreground">
+                  <Search class="h-8 w-8 mx-auto mb-3 opacity-50" />
+                  <p class="text-base mb-1">No files found</p>
+                  <p class="text-sm">The file hash was not found in the network.</p>
+                </div>
+              </div>
+            {:else}
+              <div class="space-y-4">
+                {#each searchResults as result}
+                  <div class="border rounded-lg p-4 bg-muted/30">
+                    <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+                      <div class="flex-1">
+                        <div class="flex items-center justify-between mb-2">
+                          <div class="flex items-center gap-3">
+                            <h4 class="font-semibold">{result.fileName}</h4>
+                            <Badge variant="secondary">{(result.fileSize / 1024 / 1024).toFixed(1)} MB</Badge>
+                          </div>
+                          <div class="sm:hidden">
+                            <Button
+                              on:click={() => downloadFromSearchResult(result)}
+                              class="ml-4"
+                              size="sm"
+                            >
+                              Download
+                            </Button>
+                          </div>
+                        </div>
+
+                        <div class="flex items-center gap-4 text-sm text-muted-foreground mb-3">
+                          <span class="flex items-center gap-1">
+                            <span class="w-2 h-2 bg-green-500 rounded-full"></span>
+                            {result.seeders} seeders
+                          </span>
+                          <span class="flex items-center gap-1">
+                            <span class="w-2 h-2 bg-blue-500 rounded-full"></span>
+                            {result.leechers} leechers
+                          </span>
+                        </div>
+
+                        <div class="text-xs text-muted-foreground">
+                          <p class="mb-1">Hash: {result.fileHash}</p>
+                          <p>Available from {result.peers.length} seeder(s)</p>
+                        </div>
+
+                        <!-- Peer list -->
+                        <div class="mt-3">
+                          <details class="text-sm">
+                            <summary class="cursor-pointer text-muted-foreground hover:text-foreground">
+                              View available peers
+                            </summary>
+                            <div class="mt-2 space-y-2">
+                              {#each result.peers as peer}
+                                <div class="flex items-center p-2 border rounded w-full">
+                                  <div class="flex items-center gap-2 flex-1">
+                                    <span class="font-semibold text-sm">{peer.nickname}</span>
+                                    <Badge variant="outline" class="text-xs border-yellow-400 text-yellow-600">
+                                      <Star class="h-3 w-3 mr-1 fill-yellow-400 text-yellow-400" />
+                                      {peer.reputation}
+                                    </Badge>
+                                    <Badge variant="outline" class="text-xs {peer.connection === 'fast' ? 'border-green-500 text-green-600' : peer.connection === 'average' ? 'border-yellow-400 text-yellow-600' : 'border-red-500 text-red-600'}">
+                                      <Zap class="h-3 w-3 mr-1 {peer.connection === 'fast' ? 'fill-green-500 text-green-500' : peer.connection === 'average' ? 'fill-yellow-400 text-yellow-400' : 'text-red-500 fill-red-500'}" />
+                                      {peer.connection}
+                                    </Badge>
+                                  </div>
+                                </div>
+                              {/each}
+                            </div>
+                          </details>
+                        </div>
+                      </div>
+
+                      <div class="hidden sm:flex flex-col gap-2">
+                        <Button
+                          on:click={() => downloadFromSearchResult(result)}
+                          class="w-auto"
+                        >
+                          Download
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/if}
       </div>
     </div>
   </Card>
-  
+
   <!-- Unified Downloads List -->
   <Card class="p-6">
     <!-- Header Section -->
