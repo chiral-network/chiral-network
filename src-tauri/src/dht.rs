@@ -32,12 +32,14 @@ pub struct FileMetadata {
     pub mime_type: Option<String>,
 }
 
+use libp2p::ping;
+
 #[derive(NetworkBehaviour)]
 pub struct DhtBehaviour {
-    kademlia: Kademlia<MemoryStore>,
-    identify: identify::Behaviour,
-    mdns: Mdns,
-    ping: Ping,
+  kademlia: libp2p::kad::Behaviour<libp2p::kad::store::MemoryStore>,
+  identify: libp2p::identify::Behaviour,
+  mdns: libp2p::mdns::tokio::Behaviour,
+  ping: ping::Behaviour,
 }
 
 #[derive(Debug)]
@@ -52,11 +54,19 @@ pub enum DhtCommand {
 #[derive(Debug, Clone, Serialize)]
 pub enum DhtEvent {
     PeerDiscovered(String),
-    PeerConnected(String),
-    PeerDisconnected { peer_id: String, cause: String },
+    PeerConnected(String), // Replaced by ProxyStatus
+    PeerDisconnected(String), // Replaced by ProxyStatus
     FileDiscovered(FileMetadata),
     FileNotFound(String),
     Error(String),
+    ProxyStatus {
+        id: String,
+        address: String,
+        status: String,
+        latency_ms: Option<u64>,
+        error: Option<String>,
+    },
+    PeerRtt { peer: String, rtt_ms: u64 },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -211,8 +221,27 @@ async fn run_dht_node(
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Mdns(mdns_event)) => {
                         handle_mdns_event(mdns_event, &mut swarm, &event_tx).await;
                     }
-                    SwarmEvent::Behaviour(DhtBehaviourEvent::Ping(ping_event)) => {
-                        handle_ping_event(ping_event).await;
+                    SwarmEvent::Behaviour(DhtBehaviourEvent::Ping(ev)) => {
+                        match ev {
+                            libp2p::ping::Event { peer, result: Ok(rtt), .. } => {
+                                let _ = event_tx
+                                    .send(DhtEvent::PeerRtt {
+                                        peer: peer.to_string(),
+                                        rtt_ms: rtt.as_millis() as u64,
+                                    })
+                                    .await;
+                            }
+                            libp2p::ping::Event { peer, result: Err(libp2p::ping::Failure::Timeout), .. } => {
+                                let _ = event_tx
+                                    .send(DhtEvent::Error(format!("Ping timeout {}", peer)))
+                                    .await;
+                            }
+                            libp2p::ping::Event { peer, result: Err(e), .. } => {
+                                warn!("ping error with {}: {}", peer, e);
+                                // If needed, also send to UI
+                                // let _ = event_tx.send(DhtEvent::Error(format!("Ping error {}: {}", peer, e))).await;
+                            }
+                        }
                     }
                     SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                         info!("✅ CONNECTION ESTABLISHED with peer: {}", peer_id);
@@ -220,6 +249,15 @@ async fn run_dht_node(
 
                         // Add peer to Kademlia routing table
                         swarm.behaviour_mut().kademlia.add_address(&peer_id, endpoint.get_remote_address().clone());
+
+                        let remote_addr_str = endpoint.get_remote_address().to_string();
+                        let _ = event_tx.send(DhtEvent::ProxyStatus {
+                            id: peer_id.to_string(),
+                            address: remote_addr_str,
+                            status: "online".to_string(),
+                            latency_ms: None,
+                            error: None,
+                        }).await;
 
                         let peers_count = {
                             let mut peers = connected_peers.lock().await;
@@ -230,24 +268,25 @@ async fn run_dht_node(
                             m.last_success = Some(SystemTime::now());
                         }
                         info!("   Total connected peers: {}", peers_count);
-                        let _ = event_tx.send(DhtEvent::PeerConnected(peer_id.to_string())).await;
                     }
                     SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
-                        let cause_str = cause.map_or_else(
-                            || "Unknown".to_string(),
-                            |e| e.to_string()
-                        );
-                        warn!("❌ DISCONNECTED from peer: {} due to: {}", peer_id, cause_str);
+                        warn!("❌ DISCONNECTED from peer: {}", peer_id);
+                        warn!("   Cause: {:?}", cause);
+
+                        let _ = event_tx.send(DhtEvent::ProxyStatus {
+                            id: peer_id.to_string(),
+                            address: "".to_string(), // Address might not be known here
+                            status: "offline".to_string(),
+                            latency_ms: None,
+                            error: cause.as_ref().map(|c| c.to_string()),
+                        }).await;
+
                         let peers_count = {
                             let mut peers = connected_peers.lock().await;
                             peers.remove(&peer_id);
                             peers.len()
                         };
                         info!("   Remaining connected peers: {}", peers_count);
-                        let _ = event_tx.send(DhtEvent::PeerDisconnected { 
-                            peer_id: peer_id.to_string(),
-                            cause: cause_str
-                        }).await;
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
                         info!("📡 Now listening on: {}", address);
@@ -467,6 +506,7 @@ impl DhtService {
 
         // mDNS for local peer discovery
         let mdns = Mdns::new(Default::default(), local_peer_id)?;
+        let ping = ping::Behaviour::default();
 
         // Ping for keep-alive
         let ping = Ping::new(ping::Config::new());

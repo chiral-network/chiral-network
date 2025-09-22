@@ -311,6 +311,7 @@ async fn get_recent_mined_blocks_pub(
 }
 #[tauri::command]
 async fn start_dht_node(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     port: u16,
     bootstrap_nodes: Vec<String>,
@@ -330,10 +331,69 @@ async fn start_dht_node(
 
     // Start the DHT node running in background
     dht_service.run().await;
+    let dht_arc = Arc::new(dht_service);
+
+    // Spawn the event pump
+    let app_handle = app.clone();
+    let proxies_arc = state.proxies.clone();
+    let dht_clone_for_pump = dht_arc.clone();
+
+    tokio::spawn(async move {
+        use std::time::Duration;
+        loop {
+            // If the DHT service has been shut down, the weak reference will be None
+            let events = dht_clone_for_pump.drain_events(64).await;
+            if events.is_empty() {
+                // Avoid busy-waiting
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                // Check if the DHT is still alive before continuing
+                if Arc::strong_count(&dht_clone_for_pump) <= 1 { // 1 is the pump itself
+                    info!("DHT service appears to be shut down. Exiting event pump.");
+                    break;
+                }
+                continue;
+            }
+
+            for ev in events {
+                match ev {
+                    DhtEvent::ProxyStatus { id, address, status, latency_ms, error } => {
+                        let mut proxies = proxies_arc.lock().await;
+                        // upsert: find by id (peer id) or by address (initial connection url)
+                        if let Some(p) = proxies.iter_mut().find(|p| p.id == id || p.address == id || (!address.is_empty() && p.address == address)) {
+                            p.id = id.clone(); // always update to the real peer id
+                            if !address.is_empty() { p.address = address.clone(); }
+                            p.status = status.clone();
+                            if let Some(ms) = latency_ms { p.latency = ms as u32; }
+                            p.error = error.clone();
+                            let _ = app_handle.emit("proxy_status_update", p.clone());
+                        } else {
+                            let new_node = ProxyNode {
+                                id: id.clone(),
+                                address: if address.is_empty() { id.clone() } else { address.clone() },
+                                status,
+                                latency: latency_ms.unwrap_or(999) as u32,
+                                error,
+                            };
+                            proxies.push(new_node.clone());
+                            let _ = app_handle.emit("proxy_status_update", new_node);
+                        }
+                    }
+                    DhtEvent::PeerRtt { peer, rtt_ms } => {
+                        let mut proxies = proxies_arc.lock().await;
+                        if let Some(p) = proxies.iter_mut().find(|p| p.id == peer) {
+                            p.latency = rtt_ms as u32;
+                            let _ = app_handle.emit("proxy_status_update", p.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    });
 
     {
         let mut dht_guard = state.dht.lock().await;
-        *dht_guard = Some(Arc::new(dht_service));
+        *dht_guard = Some(dht_arc);
     }
 
     Ok(peer_id)
@@ -465,7 +525,29 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<DhtEvent>, Str
 
     if let Some(dht) = dht {
         let events = dht.drain_events(100).await;
-        Ok(events)
+        // Convert events to concise human-readable strings for the UI
+        let mapped: Vec<String> = events
+            .into_iter()
+            .map(|e| match e {
+                DhtEvent::PeerDiscovered(p) => format!("peer_discovered:{}", p),
+                DhtEvent::PeerConnected(p) => format!("peer_connected:{}", p),
+                DhtEvent::PeerDisconnected(p) => format!("peer_disconnected:{}", p),
+                DhtEvent::FileDiscovered(meta) => format!(
+                    "file_discovered:{}:{}:{}",
+                    meta.file_hash, meta.file_name, meta.file_size
+                ),
+                DhtEvent::FileNotFound(hash) => format!("file_not_found:{}", hash),
+                DhtEvent::Error(err) => format!("error:{}", err),
+                DhtEvent::ProxyStatus { id, address, status, latency_ms, error } => {
+                    let lat = latency_ms.map(|ms| format!("{ms}")).unwrap_or_else(|| "-".into());
+                    let err = error.unwrap_or_default();
+                    format!("proxy_status:{id}:{address}:{status}:{lat}{}", 
+                            if err.is_empty() { "".into() } else { format!(":{err}") })
+                }
+                DhtEvent::PeerRtt { peer, rtt_ms } => format!("peer_rtt:{peer}:{rtt_ms}"),
+            })
+            .collect();
+        Ok(mapped)
     } else {
         Ok(vec![])
     }
