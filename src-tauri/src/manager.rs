@@ -6,10 +6,10 @@ use rand::RngCore;
 use std::fs::{File, self};
 use std::io::{Read, Error, Write};
 use std::path::{Path, PathBuf};
-use x25519_dalek::PublicKey;
+use x25519_dalek::{EphemeralSecret, PublicKey};
 
 // Import the new crypto functions and the bundle struct
-use crate::crypto::{encrypt_aes_key, EncryptedAesKeyBundle};
+use crate::crypto::{decrypt_aes_key, encrypt_aes_key, EncryptedAesKeyBundle};
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct ChunkInfo {
@@ -132,6 +132,67 @@ impl ChunkManager {
     fn save_chunk(&self, hash: &str, data_with_nonce: &[u8]) -> Result<(), Error> {
         fs::create_dir_all(&self.storage_path)?;
         fs::write(self.storage_path.join(hash), data_with_nonce)?;
+        Ok(())
+    }
+
+    pub fn read_chunk(&self, hash: &str) -> Result<Vec<u8>, Error> {
+        fs::read(self.storage_path.join(hash))
+    }
+
+    fn decrypt_chunk(&self, data_with_nonce: &[u8], key: &Key<Aes256Gcm>) -> Result<Vec<u8>, String> {
+        let cipher = Aes256Gcm::new(key);
+        // AES-GCM nonce is 12 bytes. The nonce is prepended to the ciphertext.
+        if data_with_nonce.len() < 12 {
+            return Err("Encrypted data is too short to contain a nonce".to_string());
+        }
+        let (nonce_bytes, ciphertext) = data_with_nonce.split_at(12);
+        let nonce = Nonce::from_slice(nonce_bytes);
+
+        cipher
+            .decrypt(nonce, ciphertext)
+            .map_err(|e| format!("Chunk decryption failed: {}", e))
+    }
+
+    pub fn reassemble_and_decrypt_file(
+        &self,
+        chunks: &[ChunkInfo],
+        output_path: &Path,
+        encrypted_key_bundle: &EncryptedAesKeyBundle,
+        recipient_secret_key: &EphemeralSecret,
+    ) -> Result<(), String> {
+        let key_bytes = decrypt_aes_key(encrypted_key_bundle, recipient_secret_key)?;
+        let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
+
+        let mut output_file = File::create(output_path).map_err(|e| e.to_string())?;
+
+        // Assuming chunks are ordered by index. If not, they should be sorted first.
+        for chunk_info in chunks {
+            let encrypted_data_with_nonce =
+                self.read_chunk(&chunk_info.hash)
+                    .map_err(|e| format!("Failed to read chunk {}: {}", chunk_info.index, e))?;
+
+            let decrypted_data = self.decrypt_chunk(&encrypted_data_with_nonce, &key)?;
+
+            // Verify that the decrypted data matches the original hash
+            let calculated_hash = self.hash_chunk(&decrypted_data);
+            if calculated_hash != chunk_info.hash {
+                return Err(format!(
+                    "Hash mismatch for chunk {}. Data may be corrupt.",
+                    chunk_info.index
+                ));
+            }
+
+            // Also verify the size
+            if decrypted_data.len() != chunk_info.size {
+                return Err(format!(
+                    "Size mismatch for chunk {}. Expected {}, got {}.",
+                    chunk_info.index, chunk_info.size, decrypted_data.len()
+                ));
+            }
+
+            output_file.write_all(&decrypted_data).map_err(|e| e.to_string())?;
+        }
+
         Ok(())
     }
 
