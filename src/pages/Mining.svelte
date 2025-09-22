@@ -37,12 +37,6 @@
   let selectedThreads = Math.floor(cpuThreads / 2)
   let error = '' 
 
-  //Local Stats 
-  let sessionStartRewards = 0; // snapshot of totalRewards at start 
-  let sessionStartBlocks = 0; // "blocks you foudn in session"
-
-
-  
   // Network statistics
   let networkHashRate = '0 H/s'
   let networkDifficulty = '0'
@@ -445,10 +439,6 @@
       lastHashUpdate = Date.now()
       startUptimeTimer() 
 
-      sessionStartRewards = $miningState.totalRewards ?? 0 
-      sessionStartBlocks = $miningState.blocksFound ?? 0
-
-      
       // Start updating stats
       await updateMiningStats()
       
