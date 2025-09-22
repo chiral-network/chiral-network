@@ -348,13 +348,22 @@
         
         // Update total rewards from actual balance
         if (results[3] !== undefined) {
-          const balance = parseFloat(results[3])
-          if (!isNaN(balance) && balance > 0) {
-            // Use actual balance as total rewards
-            $miningState.totalRewards = balance
+          const balance = parseFloat(results[3]);
+          if (!isNaN(balance)) {
+            // Only update if backend balance is higher
+            if (balance > ($miningState.totalRewards ?? 0)) {
+              $miningState.totalRewards = balance;
+
+              // Mark all "pending" mining reward txs as completed
+              transactions.update(list =>
+                list.map(tx =>
+                  tx.status === 'pending' ? { ...tx, status: 'completed' } : tx
+                )
+              );
+            }
           }
         }
-        
+                
         // Update blocks mined from blockchain query
         if (results[4] !== undefined) {
           const blocksMined = results[4] as number;
@@ -464,24 +473,7 @@
       $miningState.hashRate = '0 H/s'
       $miningState.activeThreads = 0 
 
-      const endRewards = $miningState.totalRewards ?? 0 
-      const endBlocks  = $miningState.blocksFound ?? 0
-      const sessionReward = Math.max(0, endRewards - sessionStartRewards)  
-      const sessionBlocks = Math.max(0, endBlocks - sessionStartBlocks)
-
-      const tx: Transaction = {
-        id: Date.now(),
-        type: 'received',
-        amount: sessionReward,
-        from: 'Mining rewards',
-        date: new Date(),
-        description: sessionBlocks > 0
-          ? `Mining session payout (${sessionBlocks} block${sessionBlocks === 1 ? '' : 's'})`
-          : 'Mining session payout',
-        status: 'completed'
-      }
-      transactions.update(list => [tx, ...list])
-
+      // ❌ Remove session payout, since pushRecentBlock already logs rewards
 
       // Clear session start time
       $miningState.sessionStartTime = undefined
@@ -498,7 +490,6 @@
       console.error('Failed to stop mining:', e)
     }
   }
-
   // Simulation removed; recent blocks come from backend
 
   // Keep a set of hashes we've already shown to avoid duplicates
@@ -523,27 +514,47 @@
 
   $: displayedBlocks = ($miningState.recentBlocks || []).slice((currentPage - 1) * pageSize, currentPage * pageSize)
 
-  function pushRecentBlock(b: {
-    hash: string;
-    nonce?: number;
-    difficulty?: number;
-    timestamp?: Date;
-    number?: number;
-    reward?: number;
-  }) {
-    const item = {
-      id: `block-${b.hash}-${b.timestamp?.getTime() ?? Date.now()}`,
-      hash: b.hash,
-      reward: typeof b.reward === "number" ? b.reward : blockReward,
-      timestamp: b.timestamp ?? new Date(),
-      difficulty: b.difficulty ?? currentDifficulty,
-      nonce: b.nonce ?? 0,
-      number: b.number ?? 0,
-    };
-    $miningState.recentBlocks = [item, ...($miningState.recentBlocks ?? [])].slice(0, 50);
-    // Reset to first page so newly found blocks are visible
-    currentPage = 1
-  }
+function pushRecentBlock(b: {
+  hash: string;
+  nonce?: number;
+  difficulty?: number;
+  timestamp?: Date;
+  number?: number;
+  reward?: number;
+}) {
+  const reward = typeof b.reward === "number" ? b.reward : blockReward;
+
+  const item = {
+    id: `block-${b.hash}-${b.timestamp?.getTime() ?? Date.now()}`,
+    hash: b.hash,
+    reward,
+    timestamp: b.timestamp ?? new Date(),
+    difficulty: b.difficulty ?? currentDifficulty,
+    nonce: b.nonce ?? 0,
+    number: b.number ?? 0,
+  };
+
+  // Add block to recentBlocks
+  $miningState.recentBlocks = [item, ...($miningState.recentBlocks ?? [])].slice(0, 50);
+
+  // Reset pagination so newest block is visible
+  currentPage = 1;
+
+  // 💰 Immediately credit wallet balance (optimistic update)
+  $miningState.totalRewards = ($miningState.totalRewards ?? 0) + reward;
+
+  // 💳 Add a transaction entry for this block
+  const tx: Transaction = {
+    id: Date.now(),
+    type: 'received',
+    amount: reward,
+    from: 'Mining reward',
+    date: new Date(),
+    description: `Block reward (#${item.number})`,
+    status: 'pending' // mark as pending until backend confirms
+  };
+  transactions.update(list => [tx, ...list]);
+}
 
   async function appendNewBlocksFromBackend() {
     try {

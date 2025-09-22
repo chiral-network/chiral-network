@@ -1460,11 +1460,7 @@
               <circle cx="12" cy="10" r="8" />
               <polyline points="12,6 12,10 16,14" />
             </svg>
-            {#if $pendingCount > 0}
-              {$t('transfer.pending.count', { values: { count: $pendingCount } })}
-            {:else}
-              {$t('transfer.pending.none')}
-            {/if}
+            {$t('transfer.pending.count', { values: { count: $pendingCount } })}
           </span>
         </Button>
         {#if showPending}
