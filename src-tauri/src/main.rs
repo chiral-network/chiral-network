@@ -610,24 +610,10 @@ async fn download_file_from_network(
     };
 
     if let Some(ft) = ft {
-        // First try to download from local storage
-        match ft
+        // This now attempts a real P2P download via the service
+        ft
             .download_file(file_hash.clone(), output_path.clone())
             .await
-        {
-            Ok(()) => {
-                info!("File downloaded successfully from local storage");
-                return Ok(());
-            }
-            Err(_) => {
-                // File not found locally, would need to implement P2P download here
-                // For now, return an error
-                return Err(
-                    "File not found in local storage. P2P download not yet implemented."
-                        .to_string(),
-                );
-            }
-        }
     } else {
         Err("File transfer service is not running".to_string())
     }

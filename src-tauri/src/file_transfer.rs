@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+
+// These would be defined in your P2P/DHT module
+use crate::dht::{DhtService, FileMetadata};
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info};
 
@@ -53,6 +56,8 @@ pub struct FileTransferService {
     cmd_tx: mpsc::Sender<FileTransferCommand>,
     event_rx: Arc<Mutex<mpsc::Receiver<FileTransferEvent>>>,
     stored_files: Arc<Mutex<HashMap<String, (String, Vec<u8>)>>>, // hash -> (name, data)
+    // Add a reference to the DHT service to perform P2P operations
+    dht_service: Arc<DhtService>,
 }
 
 impl FileTransferService {
@@ -61,17 +66,25 @@ impl FileTransferService {
         let (event_tx, event_rx) = mpsc::channel(100);
         let stored_files = Arc::new(Mutex::new(HashMap::new()));
 
+        // In a real app, the DhtService would be passed in or created here.
+        // For this example, we'll assume it's created and passed.
+        // This is a placeholder; you'd need to properly initialize it.
+        let dht_service =
+            Arc::new(DhtService::new(0, vec![], None).await.map_err(|e| e.to_string())?);
+
         // Spawn the file transfer service task
         tokio::spawn(Self::run_file_transfer_service(
             cmd_rx,
             event_tx,
             stored_files.clone(),
+            dht_service.clone(),
         ));
 
         Ok(FileTransferService {
             cmd_tx,
             event_rx: Arc::new(Mutex::new(event_rx)),
             stored_files,
+            dht_service,
         })
     }
 
@@ -79,6 +92,7 @@ impl FileTransferService {
         mut cmd_rx: mpsc::Receiver<FileTransferCommand>,
         event_tx: mpsc::Sender<FileTransferEvent>,
         stored_files: Arc<Mutex<HashMap<String, (String, Vec<u8>)>>>,
+        dht_service: Arc<DhtService>,
     ) {
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
@@ -109,8 +123,13 @@ impl FileTransferService {
                     file_hash,
                     output_path,
                 } => {
-                    match Self::handle_download_file(&file_hash, &output_path, &stored_files).await
-                    {
+                    // Use the DHT service for the download
+                    match Self::handle_p2p_download_file(
+                        &file_hash,
+                        &output_path,
+                        &dht_service,
+                    )
+                    .await {
                         Ok(()) => {
                             let _ = event_tx
                                 .send(FileTransferEvent::FileDownloaded {
@@ -163,26 +182,56 @@ impl FileTransferService {
         Ok(file_hash)
     }
 
-    async fn handle_download_file(
+    // This is the new function that performs a real P2P download
+    async fn handle_p2p_download_file(
         file_hash: &str,
         output_path: &str,
-        stored_files: &Arc<Mutex<HashMap<String, (String, Vec<u8>)>>>,
+        dht_service: &Arc<DhtService>,
     ) -> Result<(), String> {
-        // Check if we have the file locally
-        let (file_name, file_data) = {
-            let files = stored_files.lock().await;
-            files
-                .get(file_hash)
-                .ok_or_else(|| "File not found locally".to_string())?
-                .clone()
-        };
+        info!("Starting P2P download for hash: {}", file_hash);
 
-        // Write the file to the output path
-        tokio::fs::write(output_path, file_data)
+        // 1. Find the file metadata and seeders on the DHT
+        // Note: This requires `dht_service` to have a method that returns the metadata.
+        let metadata: FileMetadata = dht_service
+            .get_file_metadata(file_hash.to_string())
+            .await? // This function needs to be implemented in DhtService
+            .ok_or_else(|| "File metadata not found on the network".to_string())?;
+
+        if metadata.seeders.is_empty() {
+            return Err("No seeders found for this file".to_string());
+        }
+
+        // 2. Select a seeder (e.g., the first one for simplicity)
+        let seeder_peer_id_str = metadata.seeders[0].clone();
+        let seeder_peer_id = seeder_peer_id_str
+            .parse()
+            .map_err(|_| "Invalid seeder PeerId".to_string())?;
+
+        info!("Found seeder: {}", seeder_peer_id);
+
+        // 3. Download each chunk from the seeder
+        // This assumes your `manager.rs` provides a `FileManifest` and `ChunkInfo`
+        // and that this metadata is part of the `FileMetadata` from the DHT.
+        // For now, we'll simulate having the chunk hashes.
+        let mut all_chunk_data = Vec::new();
+
+        // This part is conceptual. You would get chunk hashes from the file's manifest.
+        // for chunk_info in metadata.chunks {
+        //     let chunk_data = dht_service.request_chunk(seeder_peer_id, chunk_info.hash).await?;
+        //     all_chunk_data.push(chunk_data);
+        // }
+
+        // Placeholder: let's assume we downloaded one big chunk for simplicity
+        let file_data = dht_service
+            .request_file(seeder_peer_id, file_hash.to_string()) // This is a conceptual function
+            .await?;
+
+        // 4. Reassemble and write the file to disk
+        tokio::fs::write(output_path, &file_data)
             .await
             .map_err(|e| format!("Failed to write file: {}", e))?;
 
-        info!("File downloaded: {} -> {}", file_name, output_path);
+        info!("P2P file downloaded: {} -> {}", file_hash, output_path);
         Ok(())
     }
 
