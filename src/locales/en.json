@@ -299,7 +299,7 @@
     "pending": {
       "title": "Pending Transactions",
       "noDetails": "No pending transaction details available.",
-      "count": "{count} Pending Transaction{count !== 1 ? 's' : ''}",
+      "count": "{count, plural, one {# Pending Transaction} other {# Pending Transactions}}",
       "none": "Pending Transactions"
     }
   },
