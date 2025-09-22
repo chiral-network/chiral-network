@@ -457,7 +457,7 @@ async fn get_dht_health(state: State<'_, AppState>) -> Result<Option<DhtMetricsS
 }
 
 #[tauri::command]
-async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<DhtEvent>, String> {
     let dht = {
         let dht_guard = state.dht.lock().await;
         dht_guard.as_ref().cloned()
@@ -465,22 +465,7 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
 
     if let Some(dht) = dht {
         let events = dht.drain_events(100).await;
-        // Convert events to concise human-readable strings for the UI
-        let mapped: Vec<String> = events
-            .into_iter()
-            .map(|e| match e {
-                DhtEvent::PeerDiscovered(p) => format!("peer_discovered:{}", p),
-                DhtEvent::PeerConnected(p) => format!("peer_connected:{}", p),
-                DhtEvent::PeerDisconnected(p) => format!("peer_disconnected:{}", p),
-                DhtEvent::FileDiscovered(meta) => format!(
-                    "file_discovered:{}:{}:{}",
-                    meta.file_hash, meta.file_name, meta.file_size
-                ),
-                DhtEvent::FileNotFound(hash) => format!("file_not_found:{}", hash),
-                DhtEvent::Error(err) => format!("error:{}", err),
-            })
-            .collect();
-        Ok(mapped)
+        Ok(events)
     } else {
         Ok(vec![])
     }
@@ -823,7 +808,7 @@ fn main() {
             .with(
                 EnvFilter::from_default_env()
                     .add_directive("chiral_network=info".parse().unwrap())
-                    .add_directive("libp2p=info".parse().unwrap())
+                    .add_directive("libp2p=trace".parse().unwrap())
                     .add_directive("libp2p_kad=debug".parse().unwrap())
                     .add_directive("libp2p_swarm=debug".parse().unwrap()),
             )
