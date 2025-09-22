@@ -425,6 +425,19 @@
     "searchBlacklist": "Search blacklist...",
     "reason": "Enter reason..."
   },
+  
+  "password": {
+    "weak": "Weak password",
+    "medium": "Medium strength",
+    "strong": "Strong password",
+    "requirements": {
+      "length": "At least 8 characters",
+      "uppercase": "One uppercase letter",
+      "lowercase": "One lowercase letter", 
+      "number": "One number",
+      "special": "One special character"
+    }
+  },
 
   "tooltips": {
     "showQr": "Show QR Code",
@@ -445,7 +458,8 @@
     "address": {
       "mustStartWith0x": "Address must start with 0x.",
       "mustBe42": "Address must be exactly 42 characters long.",
-      "mustBeHex": "Address must contain valid hexadecimal characters (0-9, a-f, A-F)"
+      "mustBeHex": "Address must contain valid hexadecimal characters (0-9, a-f, A-F)",
+      "blacklisted": "This address is blacklisted and cannot receive transactions"
     },
     "amount": {
       "invalid": "Please enter a valid amount greater than 0.",

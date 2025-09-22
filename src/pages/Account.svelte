@@ -13,6 +13,7 @@
   import { Html5QrcodeScanner as Html5QrcodeScannerClass } from 'html5-qrcode'
   import { tick } from 'svelte'
   import { onMount } from 'svelte'
+  import { fade, fly } from 'svelte/transition'
   import { t, locale } from 'svelte-i18n'
   import { showToast } from '$lib/toast'
   import { get } from 'svelte/store'
@@ -71,6 +72,9 @@
   let loadKeystorePassword = '';
   let isLoadingFromKeystore = false;
   let keystoreLoadMessage = '';
+  let passwordStrength = '';
+  let isPasswordValid = false;
+  let passwordFeedback = '';
   
   // HD wallet state (frontend only)
   let showMnemonicWizard = false;
@@ -173,6 +177,9 @@
     } else if (!isValidAddress(recipientAddress)) {
       addressWarning = tr('errors.address.mustBeHex');
       isAddressValid = false;
+    } else if (isAddressBlacklisted(recipientAddress)) {
+      addressWarning = tr('errors.address.blacklisted');
+      isAddressValid = false;
     } else {
       addressWarning = '';
       isAddressValid = true;
@@ -209,6 +216,45 @@
         validationWarning = '';
         isAmountValid = true;
         sendAmount = inputValue;
+      }
+    }
+  }
+
+  // Add password validation logic
+  $: {
+    if (!keystorePassword) {
+      passwordStrength = '';
+      passwordFeedback = '';
+      isPasswordValid = false;
+    } else {
+      // Check password requirements
+      const hasMinLength = keystorePassword.length >= 8;
+      const hasUppercase = /[A-Z]/.test(keystorePassword);
+      const hasLowercase = /[a-z]/.test(keystorePassword);
+      const hasNumber = /[0-9]/.test(keystorePassword);
+      const hasSpecial = /[!@#$%^&*(),.?":{}|<>]/.test(keystorePassword);
+
+      // Calculate strength
+      let strength = 0;
+      if (hasMinLength) strength++;
+      if (hasUppercase) strength++;
+      if (hasLowercase) strength++;
+      if (hasNumber) strength++; 
+      if (hasSpecial) strength++;
+
+      // Set feedback based on strength
+      if (strength < 2) {
+        passwordStrength = 'weak';
+        passwordFeedback = tr('password.weak');
+        isPasswordValid = false;
+      } else if (strength < 4) {
+        passwordStrength = 'medium';
+        passwordFeedback = tr('password.medium');
+        isPasswordValid = false;
+      } else {
+        passwordStrength = 'strong';
+        passwordFeedback = tr('password.strong');
+        isPasswordValid = true;
       }
     }
   }
@@ -256,6 +302,13 @@
     
     const hexRegex = /^[a-fA-F0-9]+$/;
     return hexRegex.test(hexPart);
+  }
+
+  // Add helper function to check blacklist
+  function isAddressBlacklisted(address: string): boolean {
+    return $blacklist.some(entry => 
+      entry.chiral_address.toLowerCase() === address.toLowerCase()
+    );
   }
   
   function copyAddress() {
@@ -1524,6 +1577,8 @@
           }}
           role="button"
           tabindex="0"
+          in:fly={{ y: 20, duration: 300 }}
+          out:fade={{ duration: 200 }}
         >
           <div class="flex items-center gap-3">
             {#if tx.type === 'received'}
@@ -1567,16 +1622,37 @@
         {$t('keystore.desc')}
       </p>
       <div class="flex items-center gap-2">
-        <Input
-          type="password"
-          bind:value={keystorePassword}
-          placeholder={$t('placeholders.password')}
-          class="flex-1"
-          autocomplete="new-password"
-        />
+        <div class="flex-1">
+          <Input
+            type="password"
+            bind:value={keystorePassword}
+            placeholder={$t('placeholders.password')}
+            class="w-full {passwordStrength ? `border-${passwordStrength === 'strong' ? 'green' : passwordStrength === 'medium' ? 'yellow' : 'red'}-500` : ''}"
+            autocomplete="new-password"
+          />
+          {#if keystorePassword}
+            <div class="mt-1 flex items-center gap-2">
+              <div class="h-1 flex-1 bg-gray-200 rounded-full overflow-hidden">
+                <div
+                  class="h-full transition-all duration-300 {passwordStrength === 'strong' ? 'bg-green-500 w-full' : passwordStrength === 'medium' ? 'bg-yellow-500 w-2/3' : 'bg-red-500 w-1/3'}"
+                />
+              </div>
+              <span class="text-xs {passwordStrength === 'strong' ? 'text-green-600' : passwordStrength === 'medium' ? 'text-yellow-600' : 'text-red-600'}">
+                {passwordFeedback}
+              </span>
+            </div>
+            <ul class="text-xs text-muted-foreground mt-2 space-y-1">
+              <li class="{keystorePassword.length >= 8 ? 'text-green-600' : ''}">• {$t('password.requirements.length')}</li>
+              <li class="{/[A-Z]/.test(keystorePassword) ? 'text-green-600' : ''}">• {$t('password.requirements.uppercase')}</li>
+              <li class="{/[a-z]/.test(keystorePassword) ? 'text-green-600' : ''}">• {$t('password.requirements.lowercase')}</li>
+              <li class="{/[0-9]/.test(keystorePassword) ? 'text-green-600' : ''}">• {$t('password.requirements.number')}</li>
+              <li class="{/[!@#$%^&*(),.?":{}|<>]/.test(keystorePassword) ? 'text-green-600' : ''}">• {$t('password.requirements.special')}</li>
+            </ul>
+          {/if}
+        </div>
         <Button
           on:click={saveToKeystore}
-          disabled={!keystorePassword || isSavingToKeystore}
+          disabled={!isPasswordValid || isSavingToKeystore}
         >
           {#if isSavingToKeystore}
             {$t('actions.saving')}

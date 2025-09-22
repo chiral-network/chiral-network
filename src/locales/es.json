@@ -375,6 +375,19 @@
     "reason": "Introduce la razón..."
   },
 
+  "password": {
+    "weak": "Contraseña débil",
+    "medium": "Seguridad media",
+    "strong": "Contraseña fuerte",
+    "requirements": {
+      "length": "Mínimo 8 caracteres",
+      "uppercase": "Una letra mayúscula",
+      "lowercase": "Una letra minúscula",
+      "number": "Un número",
+      "special": "Un carácter especial"
+    }
+  },
+
   "tooltips": {
     "showQr": "Mostrar código QR",
     "clearSearch": "Borrar búsqueda"
@@ -394,7 +407,8 @@
     "address": {
       "mustStartWith0x": "La dirección debe comenzar con 0x.",
       "mustBe42": "La dirección debe tener exactamente 42 caracteres.",
-      "mustBeHex": "La dirección debe contener caracteres hexadecimales válidos (0-9, a-f, A-F)"
+      "mustBeHex": "La dirección debe contener caracteres hexadecimales válidos (0-9, a-f, A-F)",
+      "blacklisted": "Esta dirección está en la lista negra y no puede recibir transacciones"
     },
     "amount": {
       "invalid": "Introduce una cantidad válida mayor que 0.",
