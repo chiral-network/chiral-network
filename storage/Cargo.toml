@@ -1,0 +1,26 @@
+[package]
+name = "chiral-storage"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sha2 = "0.10"
+aes-gcm = "0.10"
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+hex = "0.4"
+tokio = { version = "1", features = ["full"] }
+warp = "0.3"
+bytes = "1.5"
+clap = { version = "4.4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3.8"
+tokio-test = "0.4"
+
+[[bin]]
+name = "storage-node"
+path = "src/api.rs"
