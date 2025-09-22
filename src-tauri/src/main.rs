@@ -513,6 +513,14 @@ fn get_cpu_temperature() -> Option<f32> {
         }
     }
     
+    // Linux-specific temperature detection methods
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(temp) = get_linux_temperature() {
+            return Some(temp);
+        }
+    }
+    
     // Fallback for other platforms
     let stat_sys = SystemStat::new();
     if let Ok(temp) = stat_sys.cpu_temp() {
@@ -564,6 +572,158 @@ fn get_windows_temperature() -> Option<f32> {
     
     None
 }
+
+#[cfg(target_os = "linux")]
+fn get_linux_temperature() -> Option<f32> {
+    use std::fs;
+    
+    // Method 1: Try sensors command first (most reliable and matches user expectations)
+    if let Ok(output) = std::process::Command::new("sensors")
+        .arg("-u")  // Raw output
+        .output()
+    {
+        if let Ok(output_str) = String::from_utf8(output.stdout) {
+            let lines: Vec<&str> = output_str.lines().collect();
+            let mut i = 0;
+            
+            while i < lines.len() {
+                let line = lines[i].trim();
+                
+                // Look for CPU package temperature section
+                if line.contains("Package id 0:") {
+                    // Look for temp1_input in the following lines
+                    for j in (i + 1)..(i + 10).min(lines.len()) {
+                        let temp_line = lines[j].trim();
+                        if temp_line.starts_with("temp1_input:") {
+                            if let Some(temp_str) = temp_line.split(':').nth(1) {
+                                if let Ok(temp) = temp_str.trim().parse::<f32>() {
+                                    if temp > 0.0 && temp < 150.0 {
+                                        return Some(temp);
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+                // Look for first core temperature as fallback
+                else if line.contains("Core 0:") {
+                    // Look for temp2_input (Core 0 uses temp2_input)
+                    for j in (i + 1)..(i + 10).min(lines.len()) {
+                        let temp_line = lines[j].trim();
+                        if temp_line.starts_with("temp2_input:") {
+                            if let Some(temp_str) = temp_line.split(':').nth(1) {
+                                if let Ok(temp) = temp_str.trim().parse::<f32>() {
+                                    if temp > 0.0 && temp < 150.0 {
+                                        return Some(temp);
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+                i += 1;
+            }
+        }
+    }
+    
+    // Method 2: Try thermal zones (fallback)
+    // Look for CPU thermal zones in /sys/class/thermal/
+    // Prioritize x86_pkg_temp as it's usually the most accurate for CPU package temperature
+    for i in 0..20 {
+        let type_path = format!("/sys/class/thermal/thermal_zone{}/type", i);
+        if let Ok(zone_type) = fs::read_to_string(&type_path) {
+            let zone_type = zone_type.trim().to_lowercase();
+            if zone_type == "x86_pkg_temp" {
+                let thermal_path = format!("/sys/class/thermal/thermal_zone{}/temp", i);
+                if let Ok(temp_str) = fs::read_to_string(&thermal_path) {
+                    if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
+                        let temp_celsius = temp_millidegrees as f32 / 1000.0;
+                        if temp_celsius > 0.0 && temp_celsius < 150.0 {
+                            return Some(temp_celsius);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Fallback to other CPU thermal zones
+    for i in 0..20 {
+        let type_path = format!("/sys/class/thermal/thermal_zone{}/type", i);
+        if let Ok(zone_type) = fs::read_to_string(&type_path) {
+            let zone_type = zone_type.trim().to_lowercase();
+            if zone_type.contains("cpu") || zone_type.contains("coretemp") || zone_type.contains("k10temp") {
+                let thermal_path = format!("/sys/class/thermal/thermal_zone{}/temp", i);
+                if let Ok(temp_str) = fs::read_to_string(&thermal_path) {
+                    if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
+                        let temp_celsius = temp_millidegrees as f32 / 1000.0;
+                        if temp_celsius > 0.0 && temp_celsius < 150.0 {
+                            return Some(temp_celsius);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Method 3: Try hwmon (hardware monitoring) interfaces
+    // Look for CPU temperature sensors in /sys/class/hwmon/
+    for i in 0..10 {
+        let hwmon_dir = format!("/sys/class/hwmon/hwmon{}", i);
+        
+        // Check if this hwmon device is for CPU temperature
+        let name_path = format!("{}/name", hwmon_dir);
+        if let Ok(name) = fs::read_to_string(&name_path) {
+            let name = name.trim().to_lowercase();
+            if name.contains("coretemp") || name.contains("k10temp") || 
+               name.contains("cpu") || name.contains("acpi") {
+                
+                // Try different temperature input files
+                for temp_input in 1..=8 {
+                    let temp_path = format!("{}/temp{}_input", hwmon_dir, temp_input);
+                    if let Ok(temp_str) = fs::read_to_string(&temp_path) {
+                        if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
+                            let temp_celsius = temp_millidegrees as f32 / 1000.0;
+                            if temp_celsius > 0.0 && temp_celsius < 150.0 {
+                                return Some(temp_celsius);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Method 4: Try reading from specific CPU temperature files
+    let cpu_temp_paths = [
+        "/sys/devices/platform/coretemp.0/hwmon/hwmon*/temp1_input",
+        "/sys/devices/platform/coretemp.0/temp1_input", 
+        "/sys/bus/platform/devices/coretemp.0/hwmon/hwmon*/temp*_input",
+        "/sys/devices/pci0000:00/0000:00:18.3/hwmon/hwmon*/temp1_input", // AMD
+    ];
+    
+    for pattern in &cpu_temp_paths {
+        if let Ok(paths) = glob::glob(pattern) {
+            for path_result in paths {
+                if let Ok(path) = path_result {
+                    if let Ok(temp_str) = fs::read_to_string(&path) {
+                        if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
+                            let temp_celsius = temp_millidegrees as f32 / 1000.0;
+                            if temp_celsius > 0.0 && temp_celsius < 150.0 {
+                                return Some(temp_celsius);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    None
+}
+
 #[tauri::command]
 fn detect_locale() -> String {
     sys_locale::get_locale().unwrap_or_else(|| "en-US".into())

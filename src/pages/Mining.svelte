@@ -50,13 +50,10 @@
   let estimatedTimeToBlock = 0
   $: powerConsumption = $miningState.activeThreads * 15
   $: efficiency = $miningState.hashRate === '0 H/s' ? 0 : parseHashRate($miningState.hashRate) / powerConsumption
-  let temperature = 45.0
+  let temperature = 0.0
   let hasRealTemperature = false
   let temperatureLoading = true // Add loading state for temperature checks
   let hasCompletedFirstCheck = false // Track if we've completed the first temperature check
-  $: if (!isTauri) {
-    temperature = 45 + ($miningState.activeThreads * 3.5)
-  }
 
   // Uptime tick (forces template to re-render every second while mining)
   let uptimeNow: number = Date.now()
@@ -442,11 +439,8 @@
       // Start updating stats
       await updateMiningStats()
       
-      // Update power and temperature estimates
+      // Update power consumption estimates
       powerConsumption = $miningState.activeThreads * 25 * ($miningState.minerIntensity / 100)
-      if (!isTauri) {
-        temperature = 45 + ($miningState.activeThreads * 3) + ($miningState.minerIntensity / 10)
-      }
       
       // Re-check geth status since it might have restarted
       isGethRunning = true
@@ -856,7 +850,7 @@ function pushRecentBlock(b: {
           {:else if hasRealTemperature}
             <p class="text-2xl font-bold {temperature > 80 ? 'text-red-500' : temperature > 70 ? 'text-orange-500' : temperature > 60 ? 'text-yellow-500' : 'text-green-500'}">{temperature.toFixed(1)}°C</p>
           {:else}
-            <p class="text-2xl font-bold text-gray-500">--°C</p>
+            <p class="text-2xl font-bold text-gray-500">N/A</p>
           {/if}
           <div class="mt-1">
             {#if temperatureLoading}
