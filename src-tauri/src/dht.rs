@@ -22,7 +22,8 @@ use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileMetadata {
-    pub file_hash: String,
+    /// The Merkle root of the file's chunks, which serves as its unique identifier.
+    pub file_hash: String, // This is the Merkle Root
     pub file_name: String,
     pub file_size: u64,
     pub seeders: Vec<String>,
