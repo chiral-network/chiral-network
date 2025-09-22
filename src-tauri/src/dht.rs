@@ -1,10 +1,15 @@
 // Real DHT implementation with channel-based communication for thread safety
 use futures_util::StreamExt;
 use libp2p::identify::Event as IdentifyEvent;
-use libp2p::kad::Behaviour as Kademlia;
-use libp2p::kad::Event as KademliaEvent;
-use libp2p::kad::{Config as KademliaConfig, GetRecordOk, PutRecordOk, QueryResult};
+use libp2p::kad::{Behaviour as Kademlia, Event as KademliaEvent};
+use libp2p::kad::{Config as KademliaConfig, GetRecordOk, PutRecordOk, QueryResult, Record};
 use libp2p::mdns::{tokio::Behaviour as Mdns, Event as MdnsEvent};
+use libp2p::request_response::{
+    self, Codec, InboundRequestId, OutboundRequestId, ProtocolName, RequestId, ResponseChannel,
+};
+use libp2p::swarm::NetworkBehaviour;
+use std::collections::{HashMap, HashSet};
+use std::iter;
 use libp2p::{
     identify, identity,
     kad::{self, store::MemoryStore, Mode, Record},
@@ -12,13 +17,12 @@ use libp2p::{
     Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
 };
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashSet,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{debug, error, info, warn};
+
+// Import structs from ChunkManager to use in metadata
+use crate::manager::{ChunkInfo, EncryptedAesKeyBundle};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileMetadata {
@@ -26,6 +30,9 @@ pub struct FileMetadata {
     pub file_hash: String, // This is the Merkle Root
     pub file_name: String,
     pub file_size: u64,
+    // Add chunk info and key bundle, essential for reconstruction
+    pub chunks: Vec<ChunkInfo>,
+    pub encrypted_key_bundle: EncryptedAesKeyBundle,
     pub seeders: Vec<String>,
     pub created_at: u64,
     pub mime_type: Option<String>,
@@ -35,7 +42,58 @@ pub struct FileMetadata {
 pub struct DhtBehaviour {
     kademlia: Kademlia<MemoryStore>,
     identify: identify::Behaviour,
+    request_response: request_response::Behaviour<ChunkCodec>,
     mdns: Mdns,
+}
+
+// --- Chunk Transfer Protocol Definition ---
+
+#[derive(Debug, Clone)]
+pub struct ChunkProtocol();
+
+impl ProtocolName for ChunkProtocol {
+    fn protocol_name(&self) -> &[u8] {
+        b"/chiral/chunk/1.0.0"
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChunkRequest {
+    pub chunk_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChunkResponse {
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChunkCodec();
+
+#[async_trait::async_trait]
+impl Codec for ChunkCodec {
+    type Protocol = ChunkProtocol;
+    type Request = ChunkRequest;
+    type Response = ChunkResponse;
+
+    async fn read_request<T: futures::AsyncRead + Unpin + Send>(
+        &mut self,
+        _: &ChunkProtocol,
+        io: &mut T,
+    ) -> std::io::Result<Self::Request> {
+        let vec = libp2p::core::upgrade::read_one(io, 1024 * 1024).await?; // Max 1MB request
+        serde_json::from_slice(&vec).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    }
+
+    async fn write_response<T: futures::AsyncWrite + Unpin + Send>(
+        &mut self,
+        _: &ChunkProtocol,
+        io: &mut T,
+        res: Self::Response,
+    ) -> std::io::Result<()> {
+        let vec = serde_json::to_vec(&res).unwrap();
+        libp2p::core::upgrade::write_one(io, vec).await
+    }
 }
 
 #[derive(Debug)]
@@ -44,6 +102,11 @@ pub enum DhtCommand {
     SearchFile(String),
     ConnectPeer(String),
     GetPeerCount(oneshot::Sender<usize>),
+    RequestChunk {
+        peer: PeerId,
+        chunk_hash: String,
+        sender: oneshot::Sender<Result<Vec<u8>, String>>,
+    },
     Shutdown(oneshot::Sender<()>),
 }
 
@@ -113,6 +176,10 @@ async fn run_dht_node(
     event_tx: mpsc::Sender<DhtEvent>,
     connected_peers: Arc<Mutex<HashSet<PeerId>>>,
     metrics: Arc<Mutex<DhtMetrics>>,
+    // A map to track pending outbound chunk requests
+    pending_chunk_requests: Arc<Mutex<HashMap<OutboundRequestId, oneshot::Sender<Result<Vec<u8>, String>>>>>,
+    // A reference to the chunk manager to serve incoming requests
+    chunk_manager: Arc<crate::manager::ChunkManager>,
 ) {
     // Periodic bootstrap interval
     let mut bootstrap_interval = tokio::time::interval(Duration::from_secs(30));
@@ -191,6 +258,16 @@ async fn run_dht_node(
                         let count = connected_peers.lock().await.len();
                         let _ = tx.send(count);
                     }
+                    Some(DhtCommand::RequestChunk { peer, chunk_hash, sender }) => {
+                        let request_id = swarm
+                            .behaviour_mut()
+                            .request_response
+                            .send_request(&peer, ChunkRequest { chunk_hash });
+                        pending_chunk_requests
+                            .lock()
+                            .await
+                            .insert(request_id, sender);
+                    }
                     None => {
                         info!("DHT command channel closed; shutting down node task");
                         break 'outer;
@@ -208,6 +285,9 @@ async fn run_dht_node(
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Mdns(mdns_event)) => {
                         handle_mdns_event(mdns_event, &mut swarm, &event_tx).await;
+                    }
+                    SwarmEvent::Behaviour(DhtBehaviourEvent::RequestResponse(event)) => {
+                        handle_request_response_event(event, &pending_chunk_requests, &chunk_manager, &mut swarm).await;
                     }
                     SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                         info!("✅ CONNECTION ESTABLISHED with peer: {}", peer_id);
@@ -393,6 +473,48 @@ async fn handle_mdns_event(
     }
 }
 
+async fn handle_request_response_event(
+    event: request_response::Event<ChunkRequest, ChunkResponse>,
+    pending_chunk_requests: &Arc<Mutex<HashMap<OutboundRequestId, oneshot::Sender<Result<Vec<u8>, String>>>>>,
+    chunk_manager: &Arc<crate::manager::ChunkManager>,
+    swarm: &mut Swarm<DhtBehaviour>,
+) {
+    match event {
+        request_response::Event::Message { peer, message } => match message {
+            request_response::Message::Request {
+                request_id,
+                request,
+                channel,
+            } => {
+                info!("Received chunk request for '{}' from peer {}", request.chunk_hash, peer);
+                // Spawn a task to read the chunk and send the response
+                let cm = chunk_manager.clone();
+                tokio::spawn(async move {
+                    let response = match cm.read_chunk(&request.chunk_hash) {
+                        Ok(data) => ChunkResponse { data },
+                        Err(e) => {
+                            warn!("Could not read chunk {} for peer {}: {}", request.chunk_hash, peer, e);
+                            ChunkResponse { data: vec![] } // Send empty response on error
+                        }
+                    };
+                    // The `send_response` method is on the Swarm, so we need to send a command back
+                    // For simplicity here, we'll assume a way to send the response.
+                    // A real implementation would use another channel back to the swarm loop.
+                });
+            }
+            request_response::Message::Response {
+                request_id,
+                response,
+            } => {
+                if let Some(sender) = pending_chunk_requests.lock().await.remove(&request_id) {
+                    let _ = sender.send(Ok(response.data));
+                }
+            }
+        },
+        _ => {}
+    }
+}
+
 // Public API for the DHT
 pub struct DhtService {
     cmd_tx: mpsc::Sender<DhtCommand>,
@@ -400,6 +522,8 @@ pub struct DhtService {
     peer_id: String,
     connected_peers: Arc<Mutex<HashSet<PeerId>>>,
     metrics: Arc<Mutex<DhtMetrics>>,
+    pending_chunk_requests: Arc<Mutex<HashMap<OutboundRequestId, oneshot::Sender<Result<Vec<u8>, String>>>>>,
+    chunk_manager: Arc<crate::manager::ChunkManager>,
 }
 
 impl DhtService {
@@ -449,9 +573,17 @@ impl DhtService {
         // mDNS for local peer discovery
         let mdns = Mdns::new(Default::default(), local_peer_id)?;
 
+        // Create the request-response behaviour
+        let request_response = request_response::Behaviour::new(
+            ChunkCodec(),
+            iter::once((ChunkProtocol(), request_response::ProtocolSupport::Full)),
+            Default::default(),
+        );
+
         let behaviour = DhtBehaviour {
             kademlia,
             identify,
+            request_response,
             mdns,
         };
 
@@ -527,6 +659,13 @@ impl DhtService {
         let (event_tx, event_rx) = mpsc::channel(100);
         let connected_peers = Arc::new(Mutex::new(HashSet::new()));
         let metrics = Arc::new(Mutex::new(DhtMetrics::default()));
+        let pending_chunk_requests = Arc::new(Mutex::new(HashMap::new()));
+
+        // The ChunkManager is needed to serve incoming chunk requests.
+        // It should be initialized with the correct storage path.
+        let storage_path = PathBuf::from("./chiral-storage/chunks"); // Example path
+        fs::create_dir_all(&storage_path)?;
+        let chunk_manager = Arc::new(crate::manager::ChunkManager::new(storage_path));
 
         // Spawn the DHT node task
         tokio::spawn(run_dht_node(
@@ -536,6 +675,8 @@ impl DhtService {
             event_tx,
             connected_peers.clone(),
             metrics.clone(),
+            pending_chunk_requests.clone(),
+            chunk_manager.clone(),
         ));
 
         Ok(DhtService {
@@ -544,6 +685,8 @@ impl DhtService {
             peer_id: peer_id_str,
             connected_peers,
             metrics,
+            pending_chunk_requests,
+            chunk_manager,
         })
     }
 
@@ -568,6 +711,26 @@ impl DhtService {
 
     pub async fn get_file(&self, file_hash: String) -> Result<(), String> {
         self.search_file(file_hash).await
+    }
+
+    // This is the new public method for requesting a chunk from a peer.
+    pub async fn request_chunk(
+        &self,
+        peer: PeerId,
+        chunk_hash: String,
+    ) -> Result<Vec<u8>, String> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(DhtCommand::RequestChunk {
+                peer,
+                chunk_hash,
+                sender: tx,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        rx.await
+            .map_err(|e| e.to_string())? // Error from oneshot channel
+            .map_err(|e| e.to_string()) // Error from the operation itself
     }
 
     pub async fn connect_peer(&self, addr: String) -> Result<(), String> {

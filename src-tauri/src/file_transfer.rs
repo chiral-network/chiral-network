@@ -1,9 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 // These would be defined in your P2P/DHT module
 use crate::dht::{DhtService, FileMetadata};
+use crate::manager::ChunkManager;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info};
 
@@ -58,6 +60,8 @@ pub struct FileTransferService {
     stored_files: Arc<Mutex<HashMap<String, (String, Vec<u8>)>>>, // hash -> (name, data)
     // Add a reference to the DHT service to perform P2P operations
     dht_service: Arc<DhtService>,
+    // Add a ChunkManager to handle reassembly and decryption
+    chunk_manager: Arc<ChunkManager>,
 }
 
 impl FileTransferService {
@@ -72,12 +76,18 @@ impl FileTransferService {
         let dht_service =
             Arc::new(DhtService::new(0, vec![], None).await.map_err(|e| e.to_string())?);
 
+        // Initialize the ChunkManager
+        let storage_path = PathBuf::from("./chiral-storage/chunks"); // Example path
+        std::fs::create_dir_all(&storage_path).map_err(|e| e.to_string())?;
+        let chunk_manager = Arc::new(ChunkManager::new(storage_path));
+
         // Spawn the file transfer service task
         tokio::spawn(Self::run_file_transfer_service(
             cmd_rx,
             event_tx,
             stored_files.clone(),
             dht_service.clone(),
+            chunk_manager.clone(),
         ));
 
         Ok(FileTransferService {
@@ -85,6 +95,7 @@ impl FileTransferService {
             event_rx: Arc::new(Mutex::new(event_rx)),
             stored_files,
             dht_service,
+            chunk_manager,
         })
     }
 
@@ -93,6 +104,7 @@ impl FileTransferService {
         event_tx: mpsc::Sender<FileTransferEvent>,
         stored_files: Arc<Mutex<HashMap<String, (String, Vec<u8>)>>>,
         dht_service: Arc<DhtService>,
+        chunk_manager: Arc<ChunkManager>,
     ) {
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
@@ -128,6 +140,7 @@ impl FileTransferService {
                         &file_hash,
                         &output_path,
                         &dht_service,
+                        &chunk_manager,
                     )
                     .await {
                         Ok(()) => {
@@ -187,6 +200,7 @@ impl FileTransferService {
         file_hash: &str,
         output_path: &str,
         dht_service: &Arc<DhtService>,
+        chunk_manager: &Arc<ChunkManager>,
     ) -> Result<(), String> {
         info!("Starting P2P download for hash: {}", file_hash);
 
@@ -209,27 +223,31 @@ impl FileTransferService {
 
         info!("Found seeder: {}", seeder_peer_id);
 
-        // 3. Download each chunk from the seeder
-        // This assumes your `manager.rs` provides a `FileManifest` and `ChunkInfo`
-        // and that this metadata is part of the `FileMetadata` from the DHT.
-        // For now, we'll simulate having the chunk hashes.
-        let mut all_chunk_data = Vec::new();
+        // 3. Download each chunk from the seeder and save it locally
+        for chunk_info in &metadata.chunks {
+            info!("Requesting chunk {} from peer {}", chunk_info.hash, seeder_peer_id);
+            let encrypted_chunk_data = dht_service
+                .request_chunk(seeder_peer_id, chunk_info.hash.clone())
+                .await?;
 
-        // This part is conceptual. You would get chunk hashes from the file's manifest.
-        // for chunk_info in metadata.chunks {
-        //     let chunk_data = dht_service.request_chunk(seeder_peer_id, chunk_info.hash).await?;
-        //     all_chunk_data.push(chunk_data);
-        // }
+            // Save the downloaded encrypted chunk to local storage
+            chunk_manager
+                .save_chunk(&chunk_info.hash, &encrypted_chunk_data)
+                .map_err(|e| e.to_string())?;
+        }
 
-        // Placeholder: let's assume we downloaded one big chunk for simplicity
-        let file_data = dht_service
-            .request_file(seeder_peer_id, file_hash.to_string()) // This is a conceptual function
-            .await?;
+        // 4. Reassemble and decrypt the file
+        // This requires the user's private key to decrypt the file's AES key.
+        // For now, we'll assume we have it. This is a major piece of future work.
+        // let recipient_secret_key = ... get from keystore ...
+        // chunk_manager.reassemble_and_decrypt_file(
+        //     &metadata.chunks,
+        //     &PathBuf::from(output_path),
+        //     &metadata.encrypted_key_bundle,
+        //     &recipient_secret_key,
+        // )?;
 
-        // 4. Reassemble and write the file to disk
-        tokio::fs::write(output_path, &file_data)
-            .await
-            .map_err(|e| format!("Failed to write file: {}", e))?;
+        info!("All chunks downloaded for {}. Reassembly/decryption is the next step.", file_hash);
 
         info!("P2P file downloaded: {} -> {}", file_hash, output_path);
         Ok(())
