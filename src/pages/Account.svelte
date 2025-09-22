@@ -1089,6 +1089,47 @@
       alert('Could not generate the QR code.');
     }
   }
+
+  let sessionTimeout = 600; // seconds (10 minutes)
+  let sessionTimer: number | null = null;
+  let lastActivity = Date.now();
+  let autoLockMessage = '';
+
+  function resetSessionTimer() {
+    lastActivity = Date.now();
+    if (sessionTimer) clearTimeout(sessionTimer);
+    sessionTimer = window.setTimeout(() => {
+      autoLockWallet();
+    }, sessionTimeout * 1000);
+  }
+
+  function autoLockWallet() {
+    logout();
+    autoLockMessage = 'Wallet auto-locked due to inactivity.';
+    showToast(autoLockMessage, 'warning');
+    setTimeout(() => autoLockMessage = '', 5000);
+  }
+
+  // Listen for user activity to reset timer
+  function setupSessionTimeout() {
+    const events = ['mousemove', 'keydown', 'mousedown', 'touchstart'];
+    for (const ev of events) {
+      window.addEventListener(ev, resetSessionTimer);
+    }
+    resetSessionTimer();
+    return () => {
+      for (const ev of events) {
+        window.removeEventListener(ev, resetSessionTimer);
+      }
+      if (sessionTimer) clearTimeout(sessionTimer);
+    };
+  }
+
+  onMount(() => {
+    const cleanup = setupSessionTimeout();
+    return cleanup;
+  })
+
 </script>
 
 <div class="space-y-6">
@@ -1929,5 +1970,11 @@
     isOpen={showTransactionReceipt}
     onClose={closeTransactionReceipt}
   />
+
+  {#if autoLockMessage}
+  <div class="fixed top-4 left-1/2 transform -translate-x-1/2 bg-yellow-100 text-yellow-800 px-4 py-2 rounded shadow z-50">
+    {autoLockMessage}
+  </div>
+{/if}
 
 </div>
