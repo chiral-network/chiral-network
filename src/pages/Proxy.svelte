@@ -121,7 +121,7 @@
   </div>
   
   <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-    <Card class="p-4 transition-all duration-300 hover:shadow-lg">
+    <Card class="p-4">
       <div class="flex items-center gap-3">
         <div class="relative p-2 rounded-lg transition-all duration-300 {proxyEnabled ? 'bg-green-500/10 shadow-green-500/20 shadow-lg' : 'bg-red-500/10 shadow-red-500/20 shadow-lg'}">
           {#if proxyEnabled}
@@ -177,7 +177,7 @@
     </Card>
   </div>
   
-  <Card class="p-6 transition-all duration-300 hover:shadow-lg">
+  <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
       <div class="flex items-center gap-3">
         <h2 class="text-lg font-semibold">{$t('proxy.settings')}</h2>
@@ -201,11 +201,11 @@
           aria-checked={proxyEnabled}
           aria-label="Toggle proxy {proxyEnabled ? 'off' : 'on'}"
           on:click={() => (proxyEnabled = !proxyEnabled)}
-          class="group relative inline-flex h-7 w-12 items-center rounded-full transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 hover:scale-105
+          class="group relative inline-flex h-7 w-12 items-center rounded-full transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2
              {proxyEnabled ? 'bg-green-500 focus:ring-green-500 shadow-lg shadow-green-500/30' : 'bg-gray-300 focus:ring-gray-400'}"
           >
           <span
-            class="inline-block h-5 w-5 transform rounded-full bg-white transition-all duration-300 shadow-lg group-hover:scale-110
+            class="inline-block h-5 w-5 transform rounded-full bg-white transition-all duration-300 shadow-lg
                {proxyEnabled ? 'translate-x-6' : 'translate-x-1'}"
           >
             <!-- Mini icon inside toggle -->
