@@ -405,8 +405,8 @@
 
       showNotification(statusMessage, 'warning', 4000)
 
-      // For failed downloads, allow retry
-      if (existingFile.status !== 'failed') {
+      // For failed or cancelled downloads, allow retry
+      if (existingFile.status !== 'failed' && existingFile.status !== 'canceled') {
         return
       }
     }
@@ -542,19 +542,7 @@ function clearSearch() {
     files.update(f => f.map(file => {
       if (file.id === fileId) {
         const newStatus = file.status === 'downloading' ? 'paused' as const : 'downloading' as const
-        const updatedFile = { ...file, status: newStatus }
-
-        // If resuming from paused to downloading, restart the simulation
-        if (newStatus === 'downloading' && file.status === 'paused') {
-          // Small delay to ensure DOM updates first
-          setTimeout(() => simulateDownloadProgress(fileId), 100)
-        }
-        // If pausing from downloading to paused, stop the simulation
-        else if (newStatus === 'paused' && file.status === 'downloading') {
-          activeSimulations.delete(fileId)
-        }
-
-        return updatedFile
+        return { ...file, status: newStatus }
       }
       return file
     }))
@@ -630,32 +618,35 @@ function clearSearch() {
         file.id === fileId ? { ...file, progress: 10 } : file
       ));
       
-      // Simulate progress while downloading
+      // Simulate progress while downloading - complete when progress reaches 100%
       const progressInterval = setInterval(() => {
         files.update(f => f.map(file => {
           if (file.id === fileId && file.status === 'downloading') {
             const currentProgress = file.progress || 10;
-            const newProgress = Math.min(90, currentProgress + Math.random() * 10);
+            const newProgress = Math.min(100, currentProgress + Math.random() * 8 + 2); // 2-10% increment
+
+            // Check if download just completed
+            if (newProgress >= 100) {
+              // Complete the download
+              clearInterval(progressInterval);
+              activeSimulations.delete(fileId);
+              showNotification(`Download completed: ${fileToDownload.name} saved to ${outputPath}`, 'success');
+
+              return { ...file, progress: 100, status: 'completed', downloadPath: outputPath };
+            }
+
             return { ...file, progress: newProgress };
           }
           return file;
         }));
+
+        // Check if download was cancelled (cleanup if needed)
+        const currentFile = $files.find(f => f.id === fileId);
+        if (!currentFile || currentFile.status === 'canceled') {
+          clearInterval(progressInterval);
+          activeSimulations.delete(fileId);
+        }
       }, 500);
-
-      // Simulate download completion after a realistic delay
-      await new Promise(resolve => setTimeout(resolve, 3000 + Math.random() * 2000)); // 3-5 seconds
-
-      // Mock download successful
-      clearInterval(progressInterval);
-      activeSimulations.delete(fileId);
-      
-      files.update(f => f.map(file => 
-        file.id === fileId 
-          ? { ...file, progress: 100, status: 'completed', downloadPath: outputPath }
-          : file
-      ));
-      
-      showNotification(`Download completed: ${fileToDownload.name} saved to ${outputPath}`, 'success');
       
     } catch (error) {
       // Download failed
