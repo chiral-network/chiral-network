@@ -57,6 +57,7 @@
   $: powerConsumption = $miningState.activeThreads * 15
   $: efficiency = $miningState.hashRate === '0 H/s' ? 0 : parseHashRate($miningState.hashRate) / powerConsumption
   let temperature = 45.0
+  let hasRealTemperature = false
   $: if (!isTauri) {
     temperature = 45 + ($miningState.activeThreads * 3.5)
   }
@@ -368,12 +369,15 @@
   async function updateCpuTemperature() {
     try {
       const temp = await invoke('get_cpu_temperature') as number
-      console.log(temp)
-      if (temp > 0) {
+      if (temp && temp > 0) {
         temperature = temp
+        hasRealTemperature = true
+      } else {
+        hasRealTemperature = false
       }
     } catch (e) {
       console.error('Failed to get CPU temperature:', e)
+      hasRealTemperature = false
     }
   }
   
@@ -834,17 +838,29 @@
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">{$t('mining.temperature')}</p>
-          <p class="text-2xl font-bold">{temperature.toFixed(1)}°C</p>
+          {#if hasRealTemperature}
+            <p class="text-2xl font-bold {temperature > 80 ? 'text-red-500' : temperature > 70 ? 'text-orange-500' : temperature > 60 ? 'text-yellow-500' : 'text-green-500'}">{temperature.toFixed(1)}°C</p>
+          {:else}
+            <p class="text-2xl font-bold text-gray-500">--°C</p>
+          {/if}
           <div class="mt-1">
-            <Progress 
-              value={temperature} 
-              max={100} 
-              class="h-1 {temperature > 80 ? 'bg-red-500' : temperature > 60 ? 'bg-yellow-500' : ''}"
-            />
+            {#if hasRealTemperature}
+              <Progress 
+                value={Math.min(temperature, 100)} 
+                max={100} 
+                class="h-2 {temperature > 80 ? '[&>div]:bg-red-500' : temperature > 70 ? '[&>div]:bg-orange-500' : temperature > 60 ? '[&>div]:bg-yellow-500' : '[&>div]:bg-green-500'}"
+              />
+              <p class="text-xs text-muted-foreground mt-1">
+                {temperature > 85 ? 'Critical' : temperature > 75 ? 'Hot' : temperature > 65 ? 'Warm' : 'Normal'}
+              </p>
+            {:else}
+              <Progress value={0} max={100} class="h-2 opacity-30" />
+              <p class="text-xs text-muted-foreground mt-1">Hardware sensor not available</p>
+            {/if}
           </div>
         </div>
-        <div class="p-2 bg-red-500/10 rounded-lg">
-          <Thermometer class="h-5 w-5 text-red-500" />
+        <div class="p-2 {hasRealTemperature ? (temperature > 80 ? 'bg-red-500/20' : temperature > 70 ? 'bg-orange-500/20' : temperature > 60 ? 'bg-yellow-500/20' : 'bg-green-500/20') : 'bg-gray-500/20'} rounded-lg">
+          <Thermometer class="h-5 w-5 {hasRealTemperature ? (temperature > 80 ? 'text-red-500' : temperature > 70 ? 'text-orange-500' : temperature > 60 ? 'text-yellow-500' : 'text-green-500') : 'text-gray-500'}" />
         </div>
       </div>
     </Card>
