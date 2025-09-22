@@ -7,7 +7,7 @@ use libp2p::mdns::{tokio::Behaviour as Mdns, Event as MdnsEvent};
 use libp2p::request_response::{
     self, Codec, InboundRequestId, OutboundRequestId, ProtocolName, RequestId, ResponseChannel,
 };
-use libp2p::swarm::NetworkBehaviour;
+use libp2p::kad::QueryId;
 use std::collections::{HashMap, HashSet};
 use std::iter;
 use libp2p::{
@@ -107,6 +107,10 @@ pub enum DhtCommand {
         chunk_hash: String,
         sender: oneshot::Sender<Result<Vec<u8>, String>>,
     },
+    GetFileMetadata {
+        file_hash: String,
+        sender: oneshot::Sender<Result<Option<FileMetadata>, String>>,
+    },
     Shutdown(oneshot::Sender<()>),
 }
 
@@ -178,6 +182,8 @@ async fn run_dht_node(
     metrics: Arc<Mutex<DhtMetrics>>,
     // A map to track pending outbound chunk requests
     pending_chunk_requests: Arc<Mutex<HashMap<OutboundRequestId, oneshot::Sender<Result<Vec<u8>, String>>>>>,
+    // A map to track pending metadata requests
+    pending_metadata_requests: Arc<Mutex<HashMap<QueryId, oneshot::Sender<Result<Option<FileMetadata>, String>>>>>,
     // A reference to the chunk manager to serve incoming requests
     chunk_manager: Arc<crate::manager::ChunkManager>,
 ) {
@@ -268,6 +274,15 @@ async fn run_dht_node(
                             .await
                             .insert(request_id, sender);
                     }
+                    Some(DhtCommand::GetFileMetadata { file_hash, sender }) => {
+                        let key = kad::RecordKey::new(&file_hash.as_bytes());
+                        let query_id = swarm.behaviour_mut().kademlia.get_record(key);
+                        info!("Initiated DHT GET record for query_id: {:?}", query_id);
+                        pending_metadata_requests
+                            .lock()
+                            .await
+                            .insert(query_id, sender);
+                    }
                     None => {
                         info!("DHT command channel closed; shutting down node task");
                         break 'outer;
@@ -277,8 +292,8 @@ async fn run_dht_node(
 
             event = swarm.next() => if let Some(event) = event {
                 match event {
-                    SwarmEvent::Behaviour(DhtBehaviourEvent::Kademlia(kad_event)) => {
-                        handle_kademlia_event(kad_event, &event_tx).await;
+                    SwarmEvent::Behaviour(DhtBehaviourEvent::Kademlia(kad_event @ KademliaEvent::OutboundQueryProgressed { id, .. })) => {
+                        handle_kademlia_event(kad_event, &event_tx, &pending_metadata_requests, id).await;
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Identify(identify_event)) => {
                         handle_identify_event(identify_event, &mut swarm, &event_tx).await;
@@ -371,32 +386,46 @@ async fn run_dht_node(
     }
 }
 
-async fn handle_kademlia_event(event: KademliaEvent, event_tx: &mpsc::Sender<DhtEvent>) {
+async fn handle_kademlia_event(
+    event: KademliaEvent,
+    event_tx: &mpsc::Sender<DhtEvent>,
+    pending_metadata_requests: &Arc<Mutex<HashMap<QueryId, oneshot::Sender<Result<Option<FileMetadata>, String>>>>>,
+    query_id: QueryId,
+) {
     match event {
         KademliaEvent::RoutingUpdated { peer, .. } => {
             debug!("Routing table updated with peer: {}", peer);
-        }
-        KademliaEvent::UnroutablePeer { peer } => {
-            warn!("Peer {} is unroutable", peer);
-        }
-        KademliaEvent::RoutablePeer { peer, .. } => {
-            debug!("Peer {} became routable", peer);
         }
         KademliaEvent::OutboundQueryProgressed { result, .. } => {
             match result {
                 QueryResult::GetRecord(Ok(ok)) => match ok {
                     GetRecordOk::FoundRecord(peer_record) => {
-                        // Try to parse file metadata from record value
-                        if let Ok(metadata) =
-                            serde_json::from_slice::<FileMetadata>(&peer_record.record.value)
-                        {
-                            let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
+                        let metadata_result = serde_json::from_slice::<FileMetadata>(&peer_record.record.value);
+                        
+                        if let Some(sender) = pending_metadata_requests.lock().await.remove(&query_id) {
+                            match metadata_result {
+                                Ok(metadata) => {
+                                    info!("Found record for pending request {:?}", query_id);
+                                    let _ = sender.send(Ok(Some(metadata)));
+                                }
+                                Err(e) => {
+                                    warn!("Failed to parse record for pending request {:?}: {}", query_id, e);
+                                    let _ = sender.send(Err(format!("Failed to parse record: {}", e)));
+                                }
+                            }
                         } else {
-                            debug!("Received non-file metadata record");
+                            // This was a general broadcast search, not a direct request
+                            if let Ok(metadata) = metadata_result {
+                                let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
+                            }
                         }
                     }
                     GetRecordOk::FinishedWithNoAdditionalRecord { .. } => {
-                        // No additional records; do nothing here
+                        // This can indicate the end of a query where the record was not found.
+                        if let Some(sender) = pending_metadata_requests.lock().await.remove(&query_id) {
+                            info!("GetRecord query {:?} finished with no results.", query_id);
+                            let _ = sender.send(Ok(None));
+                        }
                     }
                 },
                 QueryResult::GetRecord(Err(err)) => {
@@ -404,7 +433,11 @@ async fn handle_kademlia_event(event: KademliaEvent, event_tx: &mpsc::Sender<Dht
                     // If the error includes the key, emit FileNotFound
                     if let kad::GetRecordError::NotFound { key, .. } = err {
                         let file_hash = String::from_utf8_lossy(key.as_ref()).to_string();
-                        let _ = event_tx.send(DhtEvent::FileNotFound(file_hash)).await;
+                        if let Some(sender) = pending_metadata_requests.lock().await.remove(&query_id) {
+                            let _ = sender.send(Ok(None));
+                        } else {
+                            let _ = event_tx.send(DhtEvent::FileNotFound(file_hash)).await;
+                        }
                     }
                 }
                 QueryResult::PutRecord(Ok(PutRecordOk { key })) => {
@@ -523,6 +556,7 @@ pub struct DhtService {
     connected_peers: Arc<Mutex<HashSet<PeerId>>>,
     metrics: Arc<Mutex<DhtMetrics>>,
     pending_chunk_requests: Arc<Mutex<HashMap<OutboundRequestId, oneshot::Sender<Result<Vec<u8>, String>>>>>,
+    pending_metadata_requests: Arc<Mutex<HashMap<QueryId, oneshot::Sender<Result<Option<FileMetadata>, String>>>>>,
     chunk_manager: Arc<crate::manager::ChunkManager>,
 }
 
@@ -660,6 +694,7 @@ impl DhtService {
         let connected_peers = Arc::new(Mutex::new(HashSet::new()));
         let metrics = Arc::new(Mutex::new(DhtMetrics::default()));
         let pending_chunk_requests = Arc::new(Mutex::new(HashMap::new()));
+        let pending_metadata_requests = Arc::new(Mutex::new(HashMap::new()));
 
         // The ChunkManager is needed to serve incoming chunk requests.
         // It should be initialized with the correct storage path.
@@ -676,6 +711,7 @@ impl DhtService {
             connected_peers.clone(),
             metrics.clone(),
             pending_chunk_requests.clone(),
+            pending_metadata_requests.clone(),
             chunk_manager.clone(),
         ));
 
@@ -686,6 +722,7 @@ impl DhtService {
             connected_peers,
             metrics,
             pending_chunk_requests,
+            pending_metadata_requests,
             chunk_manager,
         })
     }
@@ -711,6 +748,24 @@ impl DhtService {
 
     pub async fn get_file(&self, file_hash: String) -> Result<(), String> {
         self.search_file(file_hash).await
+    }
+
+    pub async fn get_file_metadata(
+        &self,
+        file_hash: String,
+    ) -> Result<Option<FileMetadata>, String> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(DhtCommand::GetFileMetadata {
+                file_hash,
+                sender: tx,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        
+        // Wait for the response from the DHT task
+        rx.await.map_err(|e| e.to_string())? // Outer Result for channel errors
+               .map_err(|e| e.to_string()) // Inner Result for operation errors
     }
 
     // This is the new public method for requesting a chunk from a peer.

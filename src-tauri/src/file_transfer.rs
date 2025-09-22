@@ -208,7 +208,7 @@ impl FileTransferService {
         // Note: This requires `dht_service` to have a method that returns the metadata.
         let metadata: FileMetadata = dht_service
             .get_file_metadata(file_hash.to_string())
-            .await? // This function needs to be implemented in DhtService
+            .await?
             .ok_or_else(|| "File metadata not found on the network".to_string())?;
 
         if metadata.seeders.is_empty() {
@@ -238,16 +238,20 @@ impl FileTransferService {
 
         // 4. Reassemble and decrypt the file
         // This requires the user's private key to decrypt the file's AES key.
-        // For now, we'll assume we have it. This is a major piece of future work.
-        // let recipient_secret_key = ... get from keystore ...
-        // chunk_manager.reassemble_and_decrypt_file(
-        //     &metadata.chunks,
-        //     &PathBuf::from(output_path),
-        //     &metadata.encrypted_key_bundle,
-        //     &recipient_secret_key,
-        // )?;
+        // This is a major piece of future work that will require UI interaction to get the password.
+        info!(
+            "All chunks for {} downloaded. Reassembly and decryption is the next step.",
+            file_hash
+        );
 
-        info!("All chunks downloaded for {}. Reassembly/decryption is the next step.", file_hash);
+        // Example of the final step:
+        // let keystore = crate::keystore::Keystore::load()?;
+        // let private_key = keystore.get_account("USER_ADDRESS", "USER_PASSWORD")?;
+        // let secret_key = EphemeralSecret::new(&mut OsRng, &private_key); // This part needs correct crypto implementation
+        // chunk_manager.reassemble_and_decrypt_file(
+        //     &metadata.chunks, &PathBuf::from(output_path), &metadata.encrypted_key_bundle, &secret_key
+        // )?;
+        // info!("File reassembled and decrypted successfully!");
 
         info!("P2P file downloaded: {} -> {}", file_hash, output_path);
         Ok(())
