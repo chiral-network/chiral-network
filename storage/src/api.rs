@@ -362,7 +362,9 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
     use tempfile::TempDir;
+    use warp::http::StatusCode as HttpStatus;
 
     #[tokio::test]
     async fn test_store_and_retrieve_chunk() {
@@ -419,6 +421,168 @@ mod tests {
         assert_eq!(chunks.len(), 2);
         assert!(chunks.contains(&hash1));
         assert!(chunks.contains(&hash2));
+    }
+
+    #[tokio::test]
+    async fn test_load_missing_chunk_returns_error() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_path = temp_dir.path().to_path_buf();
+
+        let missing_hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+        let res = load_chunk_data(&storage_path, missing_hash).await;
+
+        assert!(res.is_err(), "expected error when loading missing chunk");
+    }
+
+    #[tokio::test]
+    async fn test_list_ignores_invalid_filenames() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_path = temp_dir.path().to_path_buf();
+
+        // Create a valid chunk file and an invalid named file
+        let valid_data = b"good";
+        let valid_hash = calculate_chunk_hash(valid_data);
+
+        store_chunk_data(&storage_path, &valid_hash, valid_data)
+            .await
+            .unwrap();
+
+        // Create an unrelated file that should be ignored
+        let invalid_name = storage_path.join("not-a-hash.txt");
+        tokio::fs::write(&invalid_name, b"ignore me").await.unwrap();
+
+        let chunks = list_stored_chunks(&storage_path).await.unwrap();
+
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], valid_hash);
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_chunk() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_path = temp_dir.path().to_path_buf();
+
+        let data1 = b"first";
+        let data2 = b"second";
+        // Use the same hash (simulate client choosing filename)
+        let hash = "a".repeat(64);
+
+        store_chunk_data(&storage_path, &hash, data1).await.unwrap();
+
+        let got1 = load_chunk_data(&storage_path, &hash).await.unwrap();
+        assert_eq!(got1, data1.to_vec());
+
+        // Overwrite
+        store_chunk_data(&storage_path, &hash, data2).await.unwrap();
+
+        let got2 = load_chunk_data(&storage_path, &hash).await.unwrap();
+        assert_eq!(got2, data2.to_vec());
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_writes_and_list() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_path = temp_dir.path().to_path_buf();
+
+        let mut handles = Vec::new();
+        let mut expected = HashSet::new();
+
+        for i in 0..10u8 {
+            let data = vec![i; 16];
+            let hash = calculate_chunk_hash(&data);
+            expected.insert(hash.clone());
+
+            let sp = storage_path.clone();
+            let h = tokio::spawn(async move {
+                store_chunk_data(&sp, &hash, &data).await.unwrap();
+            });
+
+            handles.push(h);
+        }
+
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        let chunks = list_stored_chunks(&storage_path).await.unwrap();
+        let got: HashSet<_> = chunks.into_iter().collect();
+
+        assert_eq!(got, expected);
+    }
+
+    // Integration-style tests using the warp filter to exercise the HTTP handlers
+    #[tokio::test]
+    async fn test_retrieve_invalid_hash_returns_400() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_path = temp_dir.path().to_path_buf();
+
+        let server = StorageNodeServer::new(storage_path, 0);
+        let api = server.create_api();
+
+        // invalid because not 64 hex characters
+        let resp = warp::test::request()
+            .method("GET")
+            .path("/chunks/invalid-hash")
+            .reply(&api)
+            .await;
+
+        assert_eq!(resp.status(), HttpStatus::BAD_REQUEST);
+
+        let body: ErrorResponse = serde_json::from_slice(resp.body()).unwrap();
+        assert_eq!(body.code, 400);
+        assert!(body.error.contains("Invalid chunk hash"));
+    }
+
+    #[tokio::test]
+    async fn test_store_chunk_header_mismatch_returns_400() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_path = temp_dir.path().to_path_buf();
+
+        let server = StorageNodeServer::new(storage_path, 0);
+        let api = server.create_api();
+
+        let data = b"hello";
+        let good_hash = calculate_chunk_hash(data);
+        // create a different but same-length hex string
+        let bad_hash = "f".repeat(64);
+        assert_ne!(good_hash, bad_hash);
+
+        let resp = warp::test::request()
+            .method("POST")
+            .path("/chunks")
+            .header("x-chunk-hash", bad_hash.as_str())
+            .body(data.as_ref())
+            .reply(&api)
+            .await;
+
+        assert_eq!(resp.status(), HttpStatus::BAD_REQUEST);
+
+        let body: ErrorResponse = serde_json::from_slice(resp.body()).unwrap();
+        assert_eq!(body.code, 400);
+        assert!(body.error.contains("Chunk hash mismatch"));
+    }
+
+    #[tokio::test]
+    async fn test_store_empty_body_returns_400() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_path = temp_dir.path().to_path_buf();
+
+        let server = StorageNodeServer::new(storage_path, 0);
+        let api = server.create_api();
+
+        let resp = warp::test::request()
+            .method("POST")
+            .path("/chunks")
+            .body(b"" as &[u8])
+            .reply(&api)
+            .await;
+
+        assert_eq!(resp.status(), HttpStatus::BAD_REQUEST);
+
+        let body: ErrorResponse = serde_json::from_slice(resp.body()).unwrap();
+        assert_eq!(body.code, 400);
+        assert!(body.error.contains("Empty chunk data"));
     }
 }
 
