@@ -72,6 +72,7 @@
   let loadKeystorePassword = '';
   let isLoadingFromKeystore = false;
   let keystoreLoadMessage = '';
+  let rememberKeystorePassword = false;
   let passwordStrength = '';
   let isPasswordValid = false;
   let passwordFeedback = '';
@@ -293,6 +294,11 @@
   
   // Prepare options for the DropDown component
   $: keystoreOptions = keystoreAccounts.map(acc => ({ value: acc, label: acc }));
+
+  // When logged out, if a keystore account is selected, try to load its saved password.
+  $: if (!$etcAccount && selectedKeystoreAccount) {
+    loadSavedPassword(selectedKeystoreAccount);
+  }
 
   // Enhanced address validation function
   function isValidAddress(address: string): boolean {
@@ -807,6 +813,25 @@
     }
   }
 
+  function loadSavedPassword(address: string) {
+    try {
+      const savedPasswordsRaw = localStorage.getItem('chiral_keystore_passwords');
+      if (savedPasswordsRaw) {
+        const savedPasswords = JSON.parse(savedPasswordsRaw);
+        if (savedPasswords[address]) {
+          loadKeystorePassword = savedPasswords[address];
+          rememberKeystorePassword = true;
+        } else {
+          // Clear if no password is saved for this account
+          loadKeystorePassword = '';
+          rememberKeystorePassword = false;
+        }
+      }
+    } catch (e) {
+      console.error("Failed to load saved password from localStorage", e);
+    }
+  }
+
   async function loadFromKeystore() {
     if (!selectedKeystoreAccount || !loadKeystorePassword) return;
 
@@ -828,6 +853,9 @@
             if (decryptedAccount.address.toLowerCase() !== selectedKeystoreAccount.toLowerCase()) {
                 throw new Error(tr('keystore.load.addressMismatch'));
             }
+
+            // Save or clear the password from local storage based on the checkbox
+            saveOrClearPassword(selectedKeystoreAccount, loadKeystorePassword);
 
             // Update stores with decrypted account
             etcAccount.set({
@@ -855,6 +883,8 @@
         } else {
             // Web demo mode simulation
             console.log('Simulating keystore load in web mode');
+            // Save or clear the password from local storage based on the checkbox
+            saveOrClearPassword(selectedKeystoreAccount, loadKeystorePassword);
             await new Promise(resolve => setTimeout(resolve, 1000));
             keystoreLoadMessage = tr('keystore.load.successSimulated');
         }
@@ -868,6 +898,23 @@
     } finally {
         isLoadingFromKeystore = false;
         setTimeout(() => keystoreLoadMessage = '', 4000);
+    }
+  }
+
+  function saveOrClearPassword(address: string, password: string) {
+    try {
+      const savedPasswordsRaw = localStorage.getItem('chiral_keystore_passwords');
+      let savedPasswords = savedPasswordsRaw ? JSON.parse(savedPasswordsRaw) : {};
+
+      if (rememberKeystorePassword) {
+        savedPasswords[address] = password;
+      } else {
+        delete savedPasswords[address];
+      }
+
+      localStorage.setItem('chiral_keystore_passwords', JSON.stringify(savedPasswords));
+    } catch (e) {
+      console.error("Failed to save password to localStorage", e);
     }
   }
 
@@ -1202,6 +1249,12 @@
                       class="w-full mt-1"
                       autocomplete="current-password"
                     />
+                  </div>
+                  <div class="flex items-center space-x-2">
+                    <input type="checkbox" id="remember-password" bind:checked={rememberKeystorePassword} />
+                    <label for="remember-password" class="text-sm font-medium leading-none">
+                      {$t('keystore.load.savePassword')}
+                    </label>
                   </div>
                   <Button
                     class="w-full"

@@ -329,7 +329,9 @@
       "empty": "No accounts found in keystore.",
       "success": "Account loaded successfully",
       "successSimulated": "Account loaded (demo mode)",
-      "error": "Failed to load account: {error}"
+      "error": "Failed to load account: {error}",
+      "savePassword": "Save password on this computer",
+      "addressMismatch": "Decryption error: address does not match."
     }
   },
 

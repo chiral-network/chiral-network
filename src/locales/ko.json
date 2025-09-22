@@ -285,7 +285,9 @@
       "empty": "키스토어에서 계정을 찾을 수 없습니다.",
       "success": "계정을 성공적으로 불러왔습니다!",
       "successSimulated": "시뮬레이션된 계정 불러오기 성공!",
-      "error": "오류: {error}"
+      "error": "오류: {error}",
+      "savePassword": "이 컴퓨터에 비밀번호 저장",
+      "addressMismatch": "복호화 오류: 주소가 일치하지 않습니다."
     }
   },
 
@@ -390,19 +392,6 @@
     "reason": "사유 입력…"
   },
 
-  "password": {
-    "weak": "취약한 비밀번호",
-    "medium": "보통 강도",
-    "strong": "강력한 비밀번호",
-    "requirements": {
-      "length": "최소 8자 이상",
-      "uppercase": "대문자 1개",
-      "lowercase": "소문자 1개",
-      "number": "숫자 1개",
-      "special": "특수문자 1개"
-    }
-  },
-
   "tooltips": {
     "showQr": "QR 코드 보기",
     "clearSearch": "검색 지우기"
@@ -422,8 +411,7 @@
     "address": {
       "mustStartWith0x": "주소는 0x로 시작해야 합니다.",
       "mustBe42": "주소 길이는 정확히 42자여야 합니다.",
-      "mustBeHex": "주소는 16진수 문자(0-9, a-f, A-F)만 포함해야 합니다.",
-      "blacklisted": "이 주소는 블랙리스트에 등록되어 있어 거래를 받을 수 없습니다"
+      "mustBeHex": "주소는 16진수 문자(0-9, a-f, A-F)만 포함해야 합니다."
     },
     "amount": {
       "invalid": "0보다 큰 올바른 금액을 입력하세요.",
