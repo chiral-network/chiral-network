@@ -857,7 +857,7 @@
       if (savedPasswordsRaw) {
         const savedPasswords = JSON.parse(savedPasswordsRaw);
         if (savedPasswords[address]) {
-          loadKeystorePassword = savedPasswords[address];
+          loadKeystorePassword = deobfuscate(savedPasswords[address]);
           rememberKeystorePassword = true;
         } else {
           // Clear if no password is saved for this account
@@ -945,7 +945,7 @@
       let savedPasswords = savedPasswordsRaw ? JSON.parse(savedPasswordsRaw) : {};
 
       if (rememberKeystorePassword) {
-        savedPasswords[address] = password;
+        savedPasswords[address] = obfuscate(password);
       } else {
         delete savedPasswords[address];
       }
@@ -1273,7 +1273,6 @@
     // This helps ensure no sensitive information like private keys persists in localStorage.
     // Note: This will clear ALL data for this domain (e.g., settings, blacklist).
     if (typeof window !== 'undefined') {
-      window.localStorage?.clear();
       window.sessionStorage?.clear();
     }
 
