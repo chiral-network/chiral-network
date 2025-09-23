@@ -397,6 +397,7 @@ impl FileTransferService {
 
     pub async fn store_file_data(&self, file_hash: String, file_name: String, file_data: Vec<u8>) {
         let mut stored_files = self.stored_files.lock().await;
-        stored_files.insert(file_hash, (file_name, file_data));
+        let chunks = Self::split_into_chunks(&file_data, 1024 * 1024);
+        stored_files.insert(file_hash, (file_name, chunks));
     }
 }
