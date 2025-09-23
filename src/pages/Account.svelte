@@ -953,6 +953,9 @@
       localStorage.setItem('chiral_keystore_passwords', JSON.stringify(savedPasswords));
     } catch (e) {
       console.error("Failed to save password to localStorage", e);
+    }
+  }
+
   // --- 2FA Functions ---
 
   // This would be called by the "Enable 2FA" button
@@ -1554,7 +1557,6 @@
               </div>
               {#if exportMessage}<p class="text-xs text-center mt-2 {exportMessage.includes('successfully') ? 'text-green-600' : 'text-red-600'}">{exportMessage}</p>{/if}
             </div>
-           </div>
          {/if}
       </div>
     </Card>
