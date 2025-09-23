@@ -17,8 +17,6 @@
   import { t, locale } from 'svelte-i18n'
   import { showToast } from '$lib/toast'
   import { get } from 'svelte/store'
-  import { totalEarned, totalSpent } from '$lib/stores';
-
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
   
   // Basic obfuscation for locally stored passwords. NOT for cryptographic security.
@@ -377,7 +375,70 @@
     });
   }
     
-  
+  function exportWallet() {
+    with2FA(async () => {
+      try {
+        const walletData = {
+          address: $etcAccount?.address,
+          privateKey: $etcAccount?.private_key,
+          balance: $wallet.balance,
+          totalEarned: $wallet.totalEarned,
+          totalSpent: $wallet.totalSpent,
+          pendingTransactions: $wallet.pendingTransactions,
+          exportDate: new Date().toISOString(),
+          version: "1.0"
+        };
+        
+        const dataStr = JSON.stringify(walletData, null, 2);
+        const dataBlob = new Blob([dataStr], { type: 'application/json' });
+        
+        // Check if the File System Access API is supported
+        if ('showSaveFilePicker' in window) {
+          try {
+            const fileHandle = await (window as any).showSaveFilePicker({
+              suggestedName: `chiral-wallet-export-${new Date().toISOString().split('T')[0]}.json`,
+              types: [{
+                description: 'JSON files',
+                accept: {
+                  'application/json': ['.json'],
+                },
+              }],
+            });
+            
+            const writable = await fileHandle.createWritable();
+            await writable.write(dataBlob);
+            await writable.close();
+
+            exportMessage = tr('wallet.exportSuccess');
+          } catch (error: any) {
+            if (error.name !== 'AbortError') {
+              throw error;
+            }
+            // User cancelled, don't show error message
+            return;
+          }
+        } else {
+          // Fallback for browsers that don't support File System Access API
+          const url = URL.createObjectURL(dataBlob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `chiral-wallet-export-${new Date().toISOString().split('T')[0]}.json`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+
+          exportMessage = tr('wallet.exportSuccess');
+        }
+        
+        setTimeout(() => exportMessage = '', 3000);
+      } catch (error) {
+        console.error('Export failed:', error);
+        exportMessage = tr('errors.exportFailed');
+        setTimeout(() => exportMessage = '', 3000);
+      }
+    });
+  }
   
   function handleSendClick() {
     if (!isAddressValid || !isAmountValid || sendAmount <= 0) return
@@ -428,6 +489,7 @@
       ...w,
       balance: w.balance - sendAmount,
       pendingTransactions: w.pendingTransactions + 1,
+      totalSpent: w.totalSpent + sendAmount
     }))
 
     transactions.update(txs => [
@@ -559,7 +621,7 @@
       }
       console.log('Running in web mode - using demo account')
     }
-    
+
     etcAccount.set(account)
     wallet.update(w => ({
       ...w,
@@ -2160,118 +2222,121 @@
             on:change={handleImportFile}
           />
         </div>
-        </Card>
-        
-        <!-- Transaction Receipt Modal -->
-        <TransactionReceipt
-          transaction={selectedTransaction}
-          isOpen={showTransactionReceipt}
-          onClose={closeTransactionReceipt}
-        />
-
-<!-- 2FA Setup Modal -->
-{#if show2faSetupModal && totpSetupInfo}
-  <div
-    class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
-    role="button"
-    tabindex="0"
-    on:click={() => show2faSetupModal = false}
-    on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') show2faSetupModal = false; }}
-  >
-    <div
-      class="bg-card p-6 rounded-lg shadow-xl w-full max-w-md text-card-foreground"
-      on:click|stopPropagation
-      role="dialog"
-      aria-modal="true"
-      on:keydown={(e) => { if (e.key === 'Escape') show2faSetupModal = false; }}
-    >
-      <h3 class="text-xl font-semibold mb-2">{$t('security.2fa.setup.title')}</h3>
-      <p class="text-sm text-muted-foreground mb-4">{$t('security.2fa.setup.step1')}</p>
       
-      <div class="flex flex-col md:flex-row gap-4 items-center bg-background p-4 rounded-lg">
-        <img src={totpSetupInfo.qrCodeDataUrl} alt="2FA QR Code" class="w-40 h-40 rounded-md border bg-white p-1" />
-        <div class="space-y-2">
-          <p class="text-sm">{$t('security.2fa.setup.scanAlt')}</p>
-          <p class="text-xs text-muted-foreground">{$t('security.2fa.setup.manualLabel')}</p>
-          <div class="flex items-center gap-2 bg-secondary p-2 rounded">
-            <code class="text-sm font-mono break-all">{totpSetupInfo.secret}</code>
-            <Button size="icon" variant="ghost" on:click={() => { navigator.clipboard.writeText(totpSetupInfo.secret); showToast('Copied!', 'success'); }}>
-              <Copy class="h-4 w-4" />
-            </Button>
+    </div>
+  </Card>
+
+  <!-- Transaction Receipt Modal -->
+  <TransactionReceipt
+    transaction={selectedTransaction}
+    isOpen={showTransactionReceipt}
+    onClose={closeTransactionReceipt}
+  />
+
+  <!-- 2FA Setup Modal -->
+  {#if show2faSetupModal && totpSetupInfo}
+    <div
+      class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+      role="button"
+      tabindex="0"
+      on:click={() => show2faSetupModal = false}
+      on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') show2faSetupModal = false; }}
+    >
+      <div
+        class="bg-card p-6 rounded-lg shadow-xl w-full max-w-md text-card-foreground"
+        on:click|stopPropagation
+        role="dialog"
+        aria-modal="true"
+        on:keydown={(e) => { if (e.key === 'Escape') show2faSetupModal = false; }}
+      >
+        <h3 class="text-xl font-semibold mb-2">{$t('security.2fa.setup.title')}</h3>
+        <p class="text-sm text-muted-foreground mb-4">{$t('security.2fa.setup.step1')}</p>
+        
+        <div class="flex flex-col md:flex-row gap-4 items-center bg-background p-4 rounded-lg">
+          <img src={totpSetupInfo.qrCodeDataUrl} alt="2FA QR Code" class="w-40 h-40 rounded-md border bg-white p-1" />
+          <div class="space-y-2">
+            <p class="text-sm">{$t('security.2fa.setup.scanAlt')}</p>
+            <p class="text-xs text-muted-foreground">{$t('security.2fa.setup.manualLabel')}</p>
+            <div class="flex items-center gap-2 bg-secondary p-2 rounded">
+              <code class="text-sm font-mono break-all">{totpSetupInfo.secret}</code>
+              <Button size="icon" variant="ghost" on:click={() => { navigator.clipboard.writeText(totpSetupInfo.secret); showToast('Copied!', 'success'); }}>
+                <Copy class="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         </div>
-      </div>
 
-      <p class="text-sm text-muted-foreground my-4">{$t('security.2fa.setup.step2')}</p>
-      <div class="space-y-2">
-        <Label for="totp-verify">{$t('security.2fa.setup.verifyLabel')}</Label>
-        <Input
-          id="totp-verify"
-          type="text"
-          bind:value={totpVerificationCode}
-          placeholder="123456"
-          inputmode="numeric"
-          autocomplete="one-time-code"
-          maxlength="6"
-        />
-        {#if twoFaErrorMessage}
-          <p class="text-sm text-red-500">{twoFaErrorMessage}</p>
-        {/if}
-      </div>
+        <p class="text-sm text-muted-foreground my-4">{$t('security.2fa.setup.step2')}</p>
+        <div class="space-y-2">
+          <Label for="totp-verify">{$t('security.2fa.setup.verifyLabel')}</Label>
+          <Input
+            id="totp-verify"
+            type="text"
+            bind:value={totpVerificationCode}
+            placeholder="123456"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            maxlength="6"
+          />
+          {#if twoFaErrorMessage}
+            <p class="text-sm text-red-500">{twoFaErrorMessage}</p>
+          {/if}
+        </div>
 
-      <div class="mt-6 flex justify-end gap-2">
-        <Button variant="outline" on:click={() => show2faSetupModal = false}>{$t('actions.cancel')}</Button>
-        <Button on:click={verifyAndEnable2FA} disabled={isVerifying2fa || totpVerificationCode.length < 6}>
-          {isVerifying2fa ? $t('actions.verifying') : $t('security.2fa.setup.verifyAndEnable')}
-        </Button>
+        <div class="mt-6 flex justify-end gap-2">
+          <Button variant="outline" on:click={() => show2faSetupModal = false}>{$t('actions.cancel')}</Button>
+          <Button on:click={verifyAndEnable2FA} disabled={isVerifying2fa || totpVerificationCode.length < 6}>
+            {isVerifying2fa ? $t('actions.verifying') : $t('security.2fa.setup.verifyAndEnable')}
+          </Button>
+        </div>
       </div>
     </div>
-  </div>
-{/if}
+  {/if}
 
-<!-- 2FA Action Prompt Modal -->
-{#if show2faPromptModal}
-  <div
-    class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
-    role="button"
-    tabindex="0"
-    on:click={() => { show2faPromptModal = false; actionToConfirm = null; }}
-    on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { show2faPromptModal = false; actionToConfirm = null; } }}
-  >
+  <!-- 2FA Action Prompt Modal -->
+  {#if show2faPromptModal}
     <div
-      class="bg-card p-6 rounded-lg shadow-xl w-full max-w-sm text-card-foreground"
-      on:click|stopPropagation
-      role="dialog"
-      aria-modal="true"
-      on:keydown={(e) => { if (e.key === 'Escape') { show2faPromptModal = false; actionToConfirm = null; } }}
+      class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+      role="button"
+      tabindex="0"
+      on:click={() => { show2faPromptModal = false; actionToConfirm = null; }}
+      on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { show2faPromptModal = false; actionToConfirm = null; } }}
     >
-      <h3 class="text-xl font-semibold mb-2">{$t('security.2fa.prompt.title')}</h3>
-      <p class="text-sm text-muted-foreground mb-4">{$t('security.2fa.prompt.subtitle')}</p>
-      
-      <div class="space-y-2">
-        <Label for="totp-action">{$t('security.2fa.prompt.label')}</Label>
-        <Input
-          id="totp-action"
-          type="text"
-          bind:value={totpActionCode}
-          placeholder="123456"
-          inputmode="numeric"
-          autocomplete="one-time-code"
-          maxlength="6"
-          autofocus
-        />
-        {#if twoFaErrorMessage}
-          <p class="text-sm text-red-500">{twoFaErrorMessage}</p>
-        {/if}
-      </div>
+      <div
+        class="bg-card p-6 rounded-lg shadow-xl w-full max-w-sm text-card-foreground"
+        on:click|stopPropagation
+        role="dialog"
+        aria-modal="true"
+        on:keydown={(e) => { if (e.key === 'Escape') { show2faPromptModal = false; actionToConfirm = null; } }}
+      >
+        <h3 class="text-xl font-semibold mb-2">{$t('security.2fa.prompt.title')}</h3>
+        <p class="text-sm text-muted-foreground mb-4">{$t('security.2fa.prompt.subtitle')}</p>
+        
+        <div class="space-y-2">
+          <Label for="totp-action">{$t('security.2fa.prompt.label')}</Label>
+          <Input
+            id="totp-action"
+            type="text"
+            bind:value={totpActionCode}
+            placeholder="123456"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            maxlength="6"
+            autofocus
+          />
+          {#if twoFaErrorMessage}
+            <p class="text-sm text-red-500">{twoFaErrorMessage}</p>
+          {/if}
+        </div>
 
-      <div class="mt-6 flex justify-end gap-2">
-        <Button variant="outline" on:click={() => { show2faPromptModal = false; actionToConfirm = null; }}>{$t('actions.cancel')}</Button>
-        <Button on:click={confirmActionWith2FA} disabled={isVerifyingAction || totpActionCode.length < 6}>
-          {isVerifyingAction ? $t('actions.verifying') : $t('actions.confirm')}
-        </Button>
+        <div class="mt-6 flex justify-end gap-2">
+          <Button variant="outline" on:click={() => { show2faPromptModal = false; actionToConfirm = null; }}>{$t('actions.cancel')}</Button>
+          <Button on:click={confirmActionWith2FA} disabled={isVerifyingAction || totpActionCode.length < 6}>
+            {isVerifyingAction ? $t('actions.verifying') : $t('actions.confirm')}
+          </Button>
+        </div>
       </div>
     </div>
-  </div>
-{/if}
+  {/if}
 
+</div>
