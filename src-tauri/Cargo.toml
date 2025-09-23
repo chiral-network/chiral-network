@@ -22,6 +22,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-store = "2"
 secp256k1 = { version = "0.24", features = ["rand", "serde"] }
 rand = "0.8"
+totp-rs = { version = "5.7.0", features = ["otpauth"] }
 hex = "0.4"
 sha3 = "0.10"
 sha2 = "0.10"

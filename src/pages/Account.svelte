@@ -956,29 +956,40 @@
     }
   }
 
+  // Reactive statement to check 2FA status when user logs in
+  $: if ($etcAccount && isTauri) {
+    check2faStatus();
+  }
+
+  async function check2faStatus() {
+    try {
+      is2faEnabled = await invoke('is_2fa_enabled');
+    } catch (error) {
+      console.error('Failed to check 2FA status:', error);
+      // is2faEnabled will remain false, which is a safe default.
+    }
+  }
+
   // --- 2FA Functions ---
 
   // This would be called by the "Enable 2FA" button
   async function setup2FA() {
-    // In a real app, this would come from the Rust backend
-    // RUST: `invoke('generate_totp_secret')` -> { secret: string, otpauth_url: string }
-    try {
-      // --- SIMULATION ---
-      // This is a dummy secret. Your backend should generate a cryptographically secure one.
-      const secret = 'JBSWY3DPEHPK3PXP' + Math.random().toString(36).substring(2, 10).toUpperCase();
-      const issuer = encodeURIComponent('Chiral Network');
-      const account = encodeURIComponent($etcAccount?.address.slice(0, 16) || 'user');
-      const otpauth_url = `otpauth://totp/${issuer}:${account}?secret=${secret}&issuer=${issuer}`;
-      const qrCodeDataUrl = await QRCode.toDataURL(otpauth_url);
-      // --- END SIMULATION ---
+    if (!isTauri) {
+      showToast('2FA is only available in the desktop app.', 'warning');
+      return;
+    }
 
-      totpSetupInfo = { secret, qrCodeDataUrl };
+    try {
+      const result = await invoke('generate_totp_secret') as { secret: string, otpauth_url: string };
+      const qrCodeDataUrl = await QRCode.toDataURL(result.otpauth_url);
+
+      totpSetupInfo = { secret: result.secret, qrCodeDataUrl };
       show2faSetupModal = true;
       totpVerificationCode = '';
       twoFaErrorMessage = '';
     } catch (err) {
       console.error('Failed to setup 2FA:', err);
-      showToast('Failed to start 2FA setup.', 'error');
+      showToast('Failed to start 2FA setup: ' + String(err), 'error');
     }
   }
 
@@ -989,20 +1000,18 @@
     twoFaErrorMessage = '';
 
     try {
-      // RUST: `invoke('verify_and_enable_totp', { secret: totpSetupInfo.secret, code: totpVerificationCode })` -> bool
-      // --- SIMULATION: We'll accept any 6-digit code for this demo. ---
-      await new Promise(r => setTimeout(r, 500));
-      const success = /^\d{6}$/.test(totpVerificationCode);
-      if (!success) throw new Error('Invalid verification code format.');
-      // --- END SIMULATION ---
+      const success = await invoke('verify_and_enable_totp', {
+        secret: totpSetupInfo.secret,
+        code: totpVerificationCode,
+      });
 
       if (success) {
-        // Persist that 2FA is enabled for the account.
         is2faEnabled = true; 
         show2faSetupModal = false;
         showToast('Two-Factor Authentication has been enabled!', 'success');
       } else {
         twoFaErrorMessage = 'Invalid code. Please try again.';
+        totpVerificationCode = '';
       }
     } catch (error) {
       twoFaErrorMessage = String(error);
@@ -1032,36 +1041,38 @@
     twoFaErrorMessage = '';
 
     try {
-      // RUST: `invoke('verify_totp_code', { code: totpActionCode })` -> bool
-      // --- SIMULATION: We'll accept any 6-digit code for this demo. ---
-      await new Promise(r => setTimeout(r, 500));
-      const success = /^\d{6}$/.test(totpActionCode);
-      if (!success) throw new Error('Invalid 2FA code.');
-      // --- END SIMULATION ---
+      const success = await invoke('verify_totp_code', { code: totpActionCode });
 
       if (success) {
         show2faPromptModal = false;
         actionToConfirm(); // Execute the original action
       } else {
         twoFaErrorMessage = 'Invalid code. Please try again.';
+        totpActionCode = ''; // Clear input on failure
       }
     } catch (error) {
       twoFaErrorMessage = String(error);
     } finally {
       isVerifyingAction = false;
-      actionToConfirm = null;
+      // Only clear the action if the modal was successfully closed
+      if (!show2faPromptModal) {
+        actionToConfirm = null;
+      }
     }
   }
 
   // To disable 2FA (this action is also protected by 2FA)
   function disable2FA() {
-      with2FA(() => {
-          // RUST: `invoke('disable_2fa')`
-          // --- SIMULATION ---
+    with2FA(async () => {
+      try {
+        await invoke('disable_2fa');
           is2faEnabled = false;
-          showToast('Two-Factor Authentication has been disabled.', 'warning');
-          // --- END SIMULATION ---
-      });
+        showToast('Two-Factor Authentication has been disabled.', 'warning');
+      } catch (error) {
+        console.error('Failed to disable 2FA:', error);
+        showToast('Failed to disable 2FA: ' + String(error), 'error');
+      }
+    });
   }
 
   function togglePrivateKeyVisibility() {
@@ -1882,7 +1893,7 @@
       <div class="flex items-center justify-between mb-4">
         <div>
           <h2 class="text-lg font-semibold">{$t('security.2fa.title')}</h2>
-          <p class="text-sm text-muted-foreground mt-1">{$t('security.2fa.subtitle')}</p>
+          <p class="text-sm text-muted-foreground mt-1">{$t('security.2fa.subtitle_clear')}</p>
         </div>
         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-muted-foreground"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
       </div>
@@ -1892,19 +1903,19 @@
             <div class="flex items-center gap-3">
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-green-600"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
               <div>
-                <p class="font-semibold text-green-800">{$t('security.2fa.enabledTitle')}</p>
-                <p class="text-sm text-green-700">{$t('security.2fa.enabledDesc')}</p>
+                <p class="font-semibold text-green-800">{$t('security.2fa.status.enabled')}</p>
+                <p class="text-sm text-green-700">{$t('security.2fa.status.enabled_desc')}</p>
               </div>
             </div>
             <Button variant="destructive" on:click={disable2FA}>{$t('security.2fa.disable')}</Button>
           </div>
         {:else}
           <div class="flex items-center justify-between p-4 border-2 border-dashed rounded-lg">
-            <p class="text-sm text-muted-foreground">{$t('security.2fa.disabledDesc')}</p>
+            <p class="text-sm text-muted-foreground">{$t('security.2fa.status.disabled_desc')}</p>
             <Button on:click={setup2FA}>{$t('security.2fa.enable')}</Button>
           </div>
         {/if}
-        <p class="text-xs text-muted-foreground">{$t('security.2fa.explanation')}</p>
+        <p class="text-sm text-muted-foreground">{$t('security.2fa.how_it_works')}</p>
       </div>
   </Card>
   {/if}
@@ -2245,13 +2256,13 @@
         on:keydown={(e) => { if (e.key === 'Escape') show2faSetupModal = false; }}
       >
         <h3 class="text-xl font-semibold mb-2">{$t('security.2fa.setup.title')}</h3>
-        <p class="text-sm text-muted-foreground mb-4">{$t('security.2fa.setup.step1')}</p>
+        <p class="text-sm text-muted-foreground mb-4">{$t('security.2fa.setup.step1_scan')}</p>
         
         <div class="flex flex-col md:flex-row gap-4 items-center bg-background p-4 rounded-lg">
           <img src={totpSetupInfo.qrCodeDataUrl} alt="2FA QR Code" class="w-40 h-40 rounded-md border bg-white p-1" />
           <div class="space-y-2">
             <p class="text-sm">{$t('security.2fa.setup.scanAlt')}</p>
-            <p class="text-xs text-muted-foreground">{$t('security.2fa.setup.manualLabel')}</p>
+            <p class="text-xs text-muted-foreground">{$t('security.2fa.setup.step2_manual')}</p>
             <div class="flex items-center gap-2 bg-secondary p-2 rounded">
               <code class="text-sm font-mono break-all">{totpSetupInfo.secret}</code>
               <Button size="icon" variant="ghost" on:click={() => { navigator.clipboard.writeText(totpSetupInfo.secret); showToast('Copied!', 'success'); }}>
@@ -2261,7 +2272,7 @@
           </div>
         </div>
 
-        <p class="text-sm text-muted-foreground my-4">{$t('security.2fa.setup.step2')}</p>
+        <p class="text-sm text-muted-foreground my-4">{$t('security.2fa.setup.step3_verify')}</p>
         <div class="space-y-2">
           <Label for="totp-verify">{$t('security.2fa.setup.verifyLabel')}</Label>
           <Input
@@ -2305,7 +2316,7 @@
         on:keydown={(e) => { if (e.key === 'Escape') { show2faPromptModal = false; actionToConfirm = null; } }}
       >
         <h3 class="text-xl font-semibold mb-2">{$t('security.2fa.prompt.title')}</h3>
-        <p class="text-sm text-muted-foreground mb-4">{$t('security.2fa.prompt.subtitle')}</p>
+        <p class="text-sm text-muted-foreground mb-4">{$t('security.2fa.prompt.enter_code')}</p>
         
         <div class="space-y-2">
           <Label for="totp-action">{$t('security.2fa.prompt.label')}</Label>
