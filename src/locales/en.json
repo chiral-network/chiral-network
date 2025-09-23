@@ -195,6 +195,7 @@
     "network": "Network",
     "mining": "Mining",
     "proxy": "Proxy",
+    "proxySelfTest": "Proxy Self-Test",
     "analytics": "Analytics",
     "account": "Account",
     "settings": "Settings",
@@ -272,7 +273,12 @@
       "intro": "Get started with Chiral Network by creating or importing an account:",
       "or": "Or"
     },
-    "privateKey": "Private Key"
+    "privateKey": "Private Key",
+    "hd": {
+      "create_via_phrase": "Create via Recovery Phrase",
+      "import_phrase": "Import Recovery Phrase",
+      "load_from_wallet": "Load from Wallet"
+    }
   },
 
   "transfer": {
@@ -299,7 +305,7 @@
     "pending": {
       "title": "Pending Transactions",
       "noDetails": "No pending transaction details available.",
-      "count": "{count} Pending Transaction{count !== 1 ? 's' : ''}",
+      "count": "{count, plural, one {# Pending Transaction} other {# Pending Transactions}}",
       "none": "Pending Transactions"
     }
   },

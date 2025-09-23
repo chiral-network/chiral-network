@@ -37,12 +37,6 @@
   let selectedThreads = Math.floor(cpuThreads / 2)
   let error = '' 
 
-  //Local Stats 
-  let sessionStartRewards = 0; // snapshot of totalRewards at start 
-  let sessionStartBlocks = 0; // "blocks you foudn in session"
-
-
-  
   // Network statistics
   let networkHashRate = '0 H/s'
   let networkDifficulty = '0'
@@ -56,10 +50,10 @@
   let estimatedTimeToBlock = 0
   $: powerConsumption = $miningState.activeThreads * 15
   $: efficiency = $miningState.hashRate === '0 H/s' ? 0 : parseHashRate($miningState.hashRate) / powerConsumption
-  let temperature = 45.0
-  $: if (!isTauri) {
-    temperature = 45 + ($miningState.activeThreads * 3.5)
-  }
+  let temperature = 0.0
+  let hasRealTemperature = false
+  let temperatureLoading = true // Add loading state for temperature checks
+  let hasCompletedFirstCheck = false // Track if we've completed the first temperature check
 
   // Uptime tick (forces template to re-render every second while mining)
   let uptimeNow: number = Date.now()
@@ -345,13 +339,22 @@
         
         // Update total rewards from actual balance
         if (results[3] !== undefined) {
-          const balance = parseFloat(results[3])
-          if (!isNaN(balance) && balance > 0) {
-            // Use actual balance as total rewards
-            $miningState.totalRewards = balance
+          const balance = parseFloat(results[3]);
+          if (!isNaN(balance)) {
+            // Only update if backend balance is higher
+            if (balance > ($miningState.totalRewards ?? 0)) {
+              $miningState.totalRewards = balance;
+
+              // Mark all "pending" mining reward txs as completed
+              transactions.update(list =>
+                list.map(tx =>
+                  tx.status === 'pending' ? { ...tx, status: 'completed' } : tx
+                )
+              );
+            }
           }
         }
-        
+                
         // Update blocks mined from blockchain query
         if (results[4] !== undefined) {
           const blocksMined = results[4] as number;
@@ -366,14 +369,27 @@
   }
 
   async function updateCpuTemperature() {
+    // Only show loading state for the very first check
+    if (!hasCompletedFirstCheck) {
+      temperatureLoading = true
+    }
+    
     try {
       const temp = await invoke('get_cpu_temperature') as number
-      console.log(temp)
-      if (temp > 0) {
+      if (temp && temp > 0) {
         temperature = temp
+        hasRealTemperature = true
+      } else {
+        hasRealTemperature = false
       }
     } catch (e) {
       console.error('Failed to get CPU temperature:', e)
+      hasRealTemperature = false
+    } finally {
+      if (!hasCompletedFirstCheck) {
+        temperatureLoading = false
+        hasCompletedFirstCheck = true
+      }
     }
   }
   
@@ -420,18 +436,11 @@
       lastHashUpdate = Date.now()
       startUptimeTimer() 
 
-      sessionStartRewards = $miningState.totalRewards ?? 0 
-      sessionStartBlocks = $miningState.blocksFound ?? 0
-
-      
       // Start updating stats
       await updateMiningStats()
       
-      // Update power and temperature estimates
+      // Update power consumption estimates
       powerConsumption = $miningState.activeThreads * 25 * ($miningState.minerIntensity / 100)
-      if (!isTauri) {
-        temperature = 45 + ($miningState.activeThreads * 3) + ($miningState.minerIntensity / 10)
-      }
       
       // Re-check geth status since it might have restarted
       isGethRunning = true
@@ -448,24 +457,7 @@
       $miningState.hashRate = '0 H/s'
       $miningState.activeThreads = 0 
 
-      const endRewards = $miningState.totalRewards ?? 0 
-      const endBlocks  = $miningState.blocksFound ?? 0
-      const sessionReward = Math.max(0, endRewards - sessionStartRewards)  
-      const sessionBlocks = Math.max(0, endBlocks - sessionStartBlocks)
-
-      const tx: Transaction = {
-        id: Date.now(),
-        type: 'received',
-        amount: sessionReward,
-        from: 'Mining rewards',
-        date: new Date(),
-        description: sessionBlocks > 0
-          ? `Mining session payout (${sessionBlocks} block${sessionBlocks === 1 ? '' : 's'})`
-          : 'Mining session payout',
-        status: 'completed'
-      }
-      transactions.update(list => [tx, ...list])
-
+      // ❌ Remove session payout, since pushRecentBlock already logs rewards
 
       // Clear session start time
       $miningState.sessionStartTime = undefined
@@ -482,7 +474,6 @@
       console.error('Failed to stop mining:', e)
     }
   }
-
   // Simulation removed; recent blocks come from backend
 
   // Keep a set of hashes we've already shown to avoid duplicates
@@ -507,27 +498,47 @@
 
   $: displayedBlocks = ($miningState.recentBlocks || []).slice((currentPage - 1) * pageSize, currentPage * pageSize)
 
-  function pushRecentBlock(b: {
-    hash: string;
-    nonce?: number;
-    difficulty?: number;
-    timestamp?: Date;
-    number?: number;
-    reward?: number;
-  }) {
-    const item = {
-      id: `block-${b.hash}-${b.timestamp?.getTime() ?? Date.now()}`,
-      hash: b.hash,
-      reward: typeof b.reward === "number" ? b.reward : blockReward,
-      timestamp: b.timestamp ?? new Date(),
-      difficulty: b.difficulty ?? currentDifficulty,
-      nonce: b.nonce ?? 0,
-      number: b.number ?? 0,
-    };
-    $miningState.recentBlocks = [item, ...($miningState.recentBlocks ?? [])].slice(0, 50);
-    // Reset to first page so newly found blocks are visible
-    currentPage = 1
-  }
+function pushRecentBlock(b: {
+  hash: string;
+  nonce?: number;
+  difficulty?: number;
+  timestamp?: Date;
+  number?: number;
+  reward?: number;
+}) {
+  const reward = typeof b.reward === "number" ? b.reward : blockReward;
+
+  const item = {
+    id: `block-${b.hash}-${b.timestamp?.getTime() ?? Date.now()}`,
+    hash: b.hash,
+    reward,
+    timestamp: b.timestamp ?? new Date(),
+    difficulty: b.difficulty ?? currentDifficulty,
+    nonce: b.nonce ?? 0,
+    number: b.number ?? 0,
+  };
+
+  // Add block to recentBlocks
+  $miningState.recentBlocks = [item, ...($miningState.recentBlocks ?? [])].slice(0, 50);
+
+  // Reset pagination so newest block is visible
+  currentPage = 1;
+
+  // 💰 Immediately credit wallet balance (optimistic update)
+  $miningState.totalRewards = ($miningState.totalRewards ?? 0) + reward;
+
+  // 💳 Add a transaction entry for this block
+  const tx: Transaction = {
+    id: Date.now(),
+    type: 'received',
+    amount: reward,
+    from: 'Mining reward',
+    date: new Date(),
+    description: `Block reward (#${item.number})`,
+    status: 'pending' // mark as pending until backend confirms
+  };
+  transactions.update(list => [tx, ...list]);
+}
 
   async function appendNewBlocksFromBackend() {
     try {
@@ -834,17 +845,33 @@
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">{$t('mining.temperature')}</p>
-          <p class="text-2xl font-bold">{temperature.toFixed(1)}°C</p>
+          {#if temperatureLoading}
+            <p class="text-2xl font-bold text-blue-500">--°C</p>
+          {:else if hasRealTemperature}
+            <p class="text-2xl font-bold {temperature > 80 ? 'text-red-500' : temperature > 70 ? 'text-orange-500' : temperature > 60 ? 'text-yellow-500' : 'text-green-500'}">{temperature.toFixed(1)}°C</p>
+          {:else}
+            <p class="text-2xl font-bold text-gray-500">N/A</p>
+          {/if}
           <div class="mt-1">
-            <Progress 
-              value={temperature} 
-              max={100} 
-              class="h-1 {temperature > 80 ? 'bg-red-500' : temperature > 60 ? 'bg-yellow-500' : ''}"
-            />
+            {#if temperatureLoading}
+              <p class="text-xs text-muted-foreground mt-1">Detecting temperature sensors...</p>
+            {:else if hasRealTemperature}
+              <Progress 
+                value={Math.min(temperature, 100)} 
+                max={100} 
+                class="h-2 {temperature > 80 ? '[&>div]:bg-red-500' : temperature > 70 ? '[&>div]:bg-orange-500' : temperature > 60 ? '[&>div]:bg-yellow-500' : '[&>div]:bg-green-500'}"
+              />
+              <p class="text-xs text-muted-foreground mt-1">
+                {temperature > 85 ? 'Critical' : temperature > 75 ? 'Hot' : temperature > 65 ? 'Warm' : 'Normal'}
+              </p>
+            {:else}
+              <Progress value={0} max={100} class="h-2 opacity-30" />
+              <p class="text-xs text-muted-foreground mt-1">Hardware sensor not available</p>
+            {/if}
           </div>
         </div>
-        <div class="p-2 bg-red-500/10 rounded-lg">
-          <Thermometer class="h-5 w-5 text-red-500" />
+        <div class="p-2 {temperatureLoading ? 'bg-blue-500/20' : hasRealTemperature ? (temperature > 80 ? 'bg-red-500/20' : temperature > 70 ? 'bg-orange-500/20' : temperature > 60 ? 'bg-yellow-500/20' : 'bg-green-500/20') : 'bg-gray-500/20'} rounded-lg">
+          <Thermometer class="h-5 w-5 {temperatureLoading ? 'text-blue-500 animate-pulse' : hasRealTemperature ? (temperature > 80 ? 'text-red-500' : temperature > 70 ? 'text-orange-500' : temperature > 60 ? 'text-yellow-500' : 'text-green-500') : 'text-gray-500'}" />
         </div>
       </div>
     </Card>

@@ -141,41 +141,6 @@ const dummyFiles: FileItem[] = [
   },
 ];
 
-const dummyProxyNodes: ProxyNode[] = [
-  {
-    id: "1",
-    address: "192.168.1.100:8080",
-    status: "online",
-    bandwidth: 100,
-    latency: 20,
-    region: "US-East",
-  },
-  {
-    id: "2",
-    address: "10.0.0.50:8080",
-    status: "online",
-    bandwidth: 50,
-    latency: 45,
-    region: "EU-West",
-  },
-  {
-    id: "3",
-    address: "172.16.0.10:8080",
-    status: "offline",
-    bandwidth: 0,
-    latency: 999,
-    region: "Asia-Pacific",
-  },
-  {
-    id: "4",
-    address: "192.168.2.25:8080",
-    status: "connecting",
-    bandwidth: 75,
-    latency: 30,
-    region: "US-West",
-  },
-];
-
 const dummyWallet: WalletInfo = {
   address: "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1",
   balance: 1000.5,
@@ -283,7 +248,6 @@ const dummyTransactions: Transaction[] = [
 
 // Stores
 export const files = writable<FileItem[]>(dummyFiles);
-export const proxyNodes = writable<ProxyNode[]>(dummyProxyNodes);
 export const wallet = writable<WalletInfo>(dummyWallet);
 export const activeDownloads = writable<number>(1);
 export const transactions = writable<Transaction[]>(dummyTransactions);
