@@ -1304,6 +1304,47 @@
       alert('Could not generate the QR code.');
     }
   }
+
+  let sessionTimeout = 600; // seconds (10 minutes)
+  let sessionTimer: number | null = null;
+  let lastActivity = Date.now();
+  let autoLockMessage = '';
+
+  function resetSessionTimer() {
+    lastActivity = Date.now();
+    if (sessionTimer) clearTimeout(sessionTimer);
+    sessionTimer = window.setTimeout(() => {
+      autoLockWallet();
+    }, sessionTimeout * 1000);
+  }
+
+  function autoLockWallet() {
+    logout();
+    autoLockMessage = 'Wallet auto-locked due to inactivity.';
+    showToast(autoLockMessage, 'warning');
+    setTimeout(() => autoLockMessage = '', 5000);
+  }
+
+  // Listen for user activity to reset timer
+  function setupSessionTimeout() {
+    const events = ['mousemove', 'keydown', 'mousedown', 'touchstart'];
+    for (const ev of events) {
+      window.addEventListener(ev, resetSessionTimer);
+    }
+    resetSessionTimer();
+    return () => {
+      for (const ev of events) {
+        window.removeEventListener(ev, resetSessionTimer);
+      }
+      if (sessionTimer) clearTimeout(sessionTimer);
+    };
+  }
+
+  onMount(() => {
+    const cleanup = setupSessionTimeout();
+    return cleanup;
+  })
+
 </script>
 
 <div class="space-y-6">
@@ -2228,110 +2269,9 @@
     onClose={closeTransactionReceipt}
   />
 
-  <!-- 2FA Setup Modal -->
-  {#if show2faSetupModal && totpSetupInfo}
-    <div
-      class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
-      role="button"
-      tabindex="0"
-      on:click={() => show2faSetupModal = false}
-      on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') show2faSetupModal = false; }}
-    >
-      <div
-        class="bg-card p-6 rounded-lg shadow-xl w-full max-w-md text-card-foreground"
-        on:click|stopPropagation
-        role="dialog"
-        aria-modal="true"
-        on:keydown={(e) => { if (e.key === 'Escape') show2faSetupModal = false; }}
-      >
-        <h3 class="text-xl font-semibold mb-2">{$t('security.2fa.setup.title')}</h3>
-        <p class="text-sm text-muted-foreground mb-4">{$t('security.2fa.setup.step1')}</p>
-        
-        <div class="flex flex-col md:flex-row gap-4 items-center bg-background p-4 rounded-lg">
-          <img src={totpSetupInfo.qrCodeDataUrl} alt="2FA QR Code" class="w-40 h-40 rounded-md border bg-white p-1" />
-          <div class="space-y-2">
-            <p class="text-sm">{$t('security.2fa.setup.scanAlt')}</p>
-            <p class="text-xs text-muted-foreground">{$t('security.2fa.setup.manualLabel')}</p>
-            <div class="flex items-center gap-2 bg-secondary p-2 rounded">
-              <code class="text-sm font-mono break-all">{totpSetupInfo.secret}</code>
-              <Button size="icon" variant="ghost" on:click={() => { navigator.clipboard.writeText(totpSetupInfo.secret); showToast('Copied!', 'success'); }}>
-                <Copy class="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-        </div>
-
-        <p class="text-sm text-muted-foreground my-4">{$t('security.2fa.setup.step2')}</p>
-        <div class="space-y-2">
-          <Label for="totp-verify">{$t('security.2fa.setup.verifyLabel')}</Label>
-          <Input
-            id="totp-verify"
-            type="text"
-            bind:value={totpVerificationCode}
-            placeholder="123456"
-            inputmode="numeric"
-            autocomplete="one-time-code"
-            maxlength="6"
-          />
-          {#if twoFaErrorMessage}
-            <p class="text-sm text-red-500">{twoFaErrorMessage}</p>
-          {/if}
-        </div>
-
-        <div class="mt-6 flex justify-end gap-2">
-          <Button variant="outline" on:click={() => show2faSetupModal = false}>{$t('actions.cancel')}</Button>
-          <Button on:click={verifyAndEnable2FA} disabled={isVerifying2fa || totpVerificationCode.length < 6}>
-            {isVerifying2fa ? $t('actions.verifying') : $t('security.2fa.setup.verifyAndEnable')}
-          </Button>
-        </div>
-      </div>
-    </div>
+  {#if autoLockMessage}
+  <div class="fixed top-0 left-0 w-full bg-yellow-100 text-yellow-800 text-center py-2 z-50">
+    {autoLockMessage}
+  </div>
   {/if}
-
-  <!-- 2FA Action Prompt Modal -->
-  {#if show2faPromptModal}
-    <div
-      class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
-      role="button"
-      tabindex="0"
-      on:click={() => { show2faPromptModal = false; actionToConfirm = null; }}
-      on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { show2faPromptModal = false; actionToConfirm = null; } }}
-    >
-      <div
-        class="bg-card p-6 rounded-lg shadow-xl w-full max-w-sm text-card-foreground"
-        on:click|stopPropagation
-        role="dialog"
-        aria-modal="true"
-        on:keydown={(e) => { if (e.key === 'Escape') { show2faPromptModal = false; actionToConfirm = null; } }}
-      >
-        <h3 class="text-xl font-semibold mb-2">{$t('security.2fa.prompt.title')}</h3>
-        <p class="text-sm text-muted-foreground mb-4">{$t('security.2fa.prompt.subtitle')}</p>
-        
-        <div class="space-y-2">
-          <Label for="totp-action">{$t('security.2fa.prompt.label')}</Label>
-          <Input
-            id="totp-action"
-            type="text"
-            bind:value={totpActionCode}
-            placeholder="123456"
-            inputmode="numeric"
-            autocomplete="one-time-code"
-            maxlength="6"
-            autofocus
-          />
-          {#if twoFaErrorMessage}
-            <p class="text-sm text-red-500">{twoFaErrorMessage}</p>
-          {/if}
-        </div>
-
-        <div class="mt-6 flex justify-end gap-2">
-          <Button variant="outline" on:click={() => { show2faPromptModal = false; actionToConfirm = null; }}>{$t('actions.cancel')}</Button>
-          <Button on:click={confirmActionWith2FA} disabled={isVerifyingAction || totpActionCode.length < 6}>
-            {isVerifyingAction ? $t('actions.verifying') : $t('actions.confirm')}
-          </Button>
-        </div>
-      </div>
-    </div>
-  {/if}
-
 </div>
