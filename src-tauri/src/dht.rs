@@ -1,25 +1,26 @@
-// Real DHT implementation with channel-based communication for thread safety
 use futures_util::StreamExt;
-use libp2p::identify::Event as IdentifyEvent;
-use libp2p::kad::Behaviour as Kademlia;
-use libp2p::kad::Event as KademliaEvent;
-use libp2p::kad::{Config as KademliaConfig, GetRecordOk, PutRecordOk, QueryResult};
-use libp2p::mdns::{tokio::Behaviour as Mdns, Event as MdnsEvent};
-use libp2p::ping::{self, Behaviour as Ping, Event as PingEvent};
+use futures::io::{AsyncRead, AsyncWrite, AsyncReadExt, AsyncWriteExt};
+
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use tokio::sync::{mpsc, oneshot, Mutex};
+use tracing::{debug, error, info, warn};
+use serde::{Deserialize, Serialize};
 use libp2p::{
-    identify, identity,
-    kad::{self, store::MemoryStore, Mode, Record},
+    identify::{self, Event as IdentifyEvent},
+    identity,
+    kad::{
+        self, store::MemoryStore, Behaviour as Kademlia, Config as KademliaConfig, Event as KademliaEvent,
+        Mode, Record, GetRecordOk, PutRecordOk, QueryResult
+    },
+    mdns::{tokio::Behaviour as Mdns, Event as MdnsEvent},
+    ping::{self, Behaviour as Ping, Event as PingEvent},
+    request_response as rr,
     swarm::{NetworkBehaviour, SwarmEvent},
     Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
 };
-use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashSet,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
-use tokio::sync::{mpsc, oneshot, Mutex};
-use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileMetadata {
@@ -33,11 +34,12 @@ pub struct FileMetadata {
 }
 
 #[derive(NetworkBehaviour)]
-pub struct DhtBehaviour {
-  kademlia: libp2p::kad::Behaviour<libp2p::kad::store::MemoryStore>,
-  identify: libp2p::identify::Behaviour,
-  mdns: libp2p::mdns::tokio::Behaviour,
-  ping: ping::Behaviour,
+struct DhtBehaviour {
+    kademlia: Kademlia<MemoryStore>,
+    identify: identify::Behaviour,
+    mdns: Mdns,
+    ping: ping::Behaviour,
+    proxy_rr: rr::Behaviour<ProxyCodec>,
 }
 
 #[derive(Debug)]
@@ -46,6 +48,7 @@ pub enum DhtCommand {
     SearchFile(String),
     ConnectPeer(String),
     GetPeerCount(oneshot::Sender<usize>),
+    Echo { peer: PeerId, payload: Vec<u8>, tx: oneshot::Sender<Result<Vec<u8>, String>> },
     Shutdown(oneshot::Sender<()>),
 }
 
@@ -89,6 +92,55 @@ pub struct DhtMetricsSnapshot {
     pub listen_addrs: Vec<String>,
 }
 
+// ------Proxy Protocol Implementation------
+#[derive(Clone, Debug, Default)]
+struct ProxyCodec;
+
+#[derive(Debug, Clone)]
+struct EchoRequest(pub Vec<u8>);
+#[derive(Debug, Clone)]
+struct EchoResponse(pub Vec<u8>);
+
+// 4byte LE length prefix
+async fn read_framed<T: AsyncRead + Unpin + Send>(io: &mut T) -> std::io::Result<Vec<u8>> {
+    let mut len_buf = [0u8; 4];
+    io.read_exact(&mut len_buf).await?;
+    let len = u32::from_le_bytes(len_buf) as usize;
+    let mut data = vec![0u8; len];
+    io.read_exact(&mut data).await?;
+    Ok(data)
+}
+async fn write_framed<T: AsyncWrite + Unpin + Send>(io: &mut T, data: Vec<u8>) -> std::io::Result<()> {
+    io.write_all(&(data.len() as u32).to_le_bytes()).await?;
+    io.write_all(&data).await?;
+    io.flush().await
+}
+
+#[async_trait::async_trait]
+impl rr::Codec for ProxyCodec {
+    type Protocol = String;
+    type Request  = EchoRequest;
+    type Response = EchoResponse;
+
+    async fn read_request<T>(&mut self, _: &Self::Protocol, io: &mut T) -> std::io::Result<Self::Request>
+    where T: AsyncRead + Unpin + Send {
+        Ok(EchoRequest(read_framed(io).await?))
+    }
+    async fn read_response<T>(&mut self, _: &Self::Protocol, io: &mut T) -> std::io::Result<Self::Response>
+    where T: AsyncRead + Unpin + Send {
+        Ok(EchoResponse(read_framed(io).await?))
+    }
+    async fn write_request<T>(&mut self, _: &Self::Protocol, io: &mut T, EchoRequest(data): EchoRequest) -> std::io::Result<()>
+    where T: AsyncWrite + Unpin + Send {
+        write_framed(io, data).await
+    }
+    async fn write_response<T>(&mut self, _: &Self::Protocol, io: &mut T, EchoResponse(data): EchoResponse) -> std::io::Result<()>
+    where T: AsyncWrite + Unpin + Send {
+        write_framed(io, data).await
+    }
+}
+// ------End Proxy Protocol Implementation------
+
 impl DhtMetricsSnapshot {
     fn from(metrics: DhtMetrics, peer_count: usize) -> Self {
         fn to_secs(ts: SystemTime) -> Option<u64> {
@@ -123,6 +175,7 @@ async fn run_dht_node(
     event_tx: mpsc::Sender<DhtEvent>,
     connected_peers: Arc<Mutex<HashSet<PeerId>>>,
     metrics: Arc<Mutex<DhtMetrics>>,
+    pending_echo: Arc<Mutex<HashMap<rr::OutboundRequestId, oneshot::Sender<Result<Vec<u8>, String>>>>>,
 ) {
     // Periodic bootstrap interval
     let mut bootstrap_interval = tokio::time::interval(Duration::from_secs(30));
@@ -200,6 +253,10 @@ async fn run_dht_node(
                     Some(DhtCommand::GetPeerCount(tx)) => {
                         let count = connected_peers.lock().await.len();
                         let _ = tx.send(count);
+                    }
+                    Some(DhtCommand::Echo { peer, payload, tx }) => {
+                        let id = swarm.behaviour_mut().proxy_rr.send_request(&peer, EchoRequest(payload));
+                        pending_echo.lock().await.insert(id, tx);
                     }
                     None => {
                         info!("DHT command channel closed; shutting down node task");
@@ -314,6 +371,44 @@ async fn run_dht_node(
                             error!("❌ Outgoing connection error to unknown peer: {}", error);
                         }
                         let _ = event_tx.send(DhtEvent::Error(format!("Connection failed: {}", error))).await;
+                    }
+                    SwarmEvent::Behaviour(DhtBehaviourEvent::ProxyRr(ev)) => {
+                        use libp2p::request_response::{Event as RREvent, Message, InboundFailure, OutboundFailure};
+
+                        match ev {
+                            RREvent::Message { peer: _, message } => match message {
+                                // Echo server
+                                Message::Request { request, channel, .. } => {
+                                    let EchoRequest(data) = request;
+                                    if let Err(err) = swarm
+                                        .behaviour_mut()
+                                        .proxy_rr
+                                        .send_response(channel, EchoResponse(data))
+                                    {
+                                        error!("send_response failed: {err:?}");
+                                    }
+                                }
+                                // Client response
+                                Message::Response { request_id, response } => {
+                                    if let Some(tx) = pending_echo.lock().await.remove(&request_id) {
+                                        let EchoResponse(data) = response;
+                                        let _ = tx.send(Ok(data));
+                                    }
+                                }
+                            },
+
+                            RREvent::OutboundFailure { request_id, error, .. } => {
+                                if let Some(tx) = pending_echo.lock().await.remove(&request_id) {
+                                    let _ = tx.send(Err(format!("outbound failure: {error:?}")));
+                                }
+                            }
+
+                            RREvent::InboundFailure { error, .. } => {
+                                warn!("inbound failure: {error:?}");
+                            }
+
+                            RREvent::ResponseSent { .. } => {}
+                        }
                     }
                     SwarmEvent::IncomingConnectionError { error, .. } => {
                         if let Ok(mut m) = metrics.try_lock() {
@@ -449,6 +544,18 @@ async fn handle_ping_event(event: PingEvent) {
     }
 }
 
+impl DhtService {
+    pub async fn echo(&self, peer_id: String, payload: Vec<u8>) -> Result<Vec<u8>, String> {
+        let peer: PeerId = peer_id.parse().map_err(|e| format!("invalid peer id: {e}"))?;
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(DhtCommand::Echo { peer, payload, tx })
+            .await
+            .map_err(|e| format!("send echo cmd: {e}"))?;
+        rx.await.map_err(|e| format!("echo await: {e}"))?
+    }
+}
+
 // Public API for the DHT
 pub struct DhtService {
     cmd_tx: mpsc::Sender<DhtCommand>,
@@ -456,6 +563,7 @@ pub struct DhtService {
     peer_id: String,
     connected_peers: Arc<Mutex<HashSet<PeerId>>>,
     metrics: Arc<Mutex<DhtMetrics>>,
+    pending_echo: Arc<Mutex<HashMap<rr::OutboundRequestId, oneshot::Sender<Result<Vec<u8>, String>>>>>,
 }
 
 impl DhtService {
@@ -504,16 +612,18 @@ impl DhtService {
 
         // mDNS for local peer discovery
         let mdns = Mdns::new(Default::default(), local_peer_id)?;
-        let ping = ping::Behaviour::default();
 
-        // Ping for keep-alive
-        let ping = Ping::new(ping::Config::new());
+        // Request-Response behaviour
+        let rr_cfg = rr::Config::default();
+        let protocols = std::iter::once(("/chiral/proxy/1.0.0".to_string(), rr::ProtocolSupport::Full));
+        let proxy_rr = rr::Behaviour::new(protocols, rr_cfg);
 
         let behaviour = DhtBehaviour {
             kademlia,
             identify,
             mdns,
-            ping,
+            ping: Ping::new(ping::Config::new()),
+            proxy_rr,
         };
 
         // Create the swarm
@@ -588,6 +698,7 @@ impl DhtService {
         let (event_tx, event_rx) = mpsc::channel(100);
         let connected_peers = Arc::new(Mutex::new(HashSet::new()));
         let metrics = Arc::new(Mutex::new(DhtMetrics::default()));
+        let pending_echo = Arc::new(Mutex::new(HashMap::new()));
 
         // Spawn the DHT node task
         tokio::spawn(run_dht_node(
@@ -597,6 +708,7 @@ impl DhtService {
             event_tx,
             connected_peers.clone(),
             metrics.clone(),
+            pending_echo.clone(),
         ));
 
         Ok(DhtService {
@@ -605,6 +717,7 @@ impl DhtService {
             peer_id: peer_id_str,
             connected_peers,
             metrics,
+            pending_echo,
         })
     }
 
