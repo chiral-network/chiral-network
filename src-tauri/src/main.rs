@@ -14,6 +14,7 @@ mod geth_downloader;
 mod webrtc_service;
 mod headless;
 mod keystore;
+mod pool;
 pub mod net;
 mod peer_selection;
 use crate::commands::proxy::{
@@ -187,11 +188,27 @@ async fn list_keystore_accounts() -> Result<Vec<String>, String> {
     Ok(keystore.list_accounts())
 }
 
+#[tauri::command(rename = "create_mining_pool")]
+async fn create_mining_pool_command(address: String) -> Result<(), String> {
+    pool::create_mining_pool(address).await
+}
+
+#[tauri::command(rename = "join_mining_pool")]
+async fn join_mining_pool_command(url: String, address: String) -> Result<(), String> {
+    pool::join_mining_pool(url, address).await
+}
+
+#[tauri::command(rename = "leave_mining_pool")]
+async fn leave_mining_pool_command() -> Result<(), String> {
+    pool::leave_mining_pool().await
+}
+
 #[tauri::command]
-async fn remove_account_from_keystore(address: String) -> Result<(), String> {
-    let mut keystore = Keystore::load()?;
-    keystore.remove_account(&address)?;
-    Ok(())
+async fn get_disk_space(path: String) -> Result<u64, String> {
+    match available_space(Path::new(&path)) {
+        Ok(space) => Ok(space),
+        Err(e) => Err(format!("Failed to get disk space: {}", e)),
+    }
 }
 
 #[tauri::command]
@@ -2447,12 +2464,14 @@ fn main() {
             save_account_to_keystore,
             load_account_from_keystore,
             list_keystore_accounts,
-            remove_account_from_keystore,
-            get_account_balance,
+            create_mining_pool_command,
+            join_mining_pool_command,
+            leave_mining_pool_command,
+            get_disk_space,
             send_chiral_transaction,
             queue_transaction,
             get_transaction_queue_status,
-            get_network_peer_count,
+            get_cpu_temperature,
             is_geth_running,
             check_geth_binary,
             get_geth_status,
