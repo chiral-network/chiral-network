@@ -30,6 +30,7 @@ use std::{
     time::Instant,
 };
 use sysinfo::{Components, System, MINIMUM_CPU_UPDATE_INTERVAL};
+use totp_rs::{Algorithm, Secret, TOTP};
 use systemstat::{Platform, System as SystemStat};
 use tauri::{
     menu::{Menu, MenuItem},
@@ -1040,6 +1041,75 @@ fn get_available_storage() -> f64 {
     (storage as f64 / 1024.0 / 1024.0 / 1024.0).floor()
 }
 
+// --- 2FA Commands ---
+
+#[derive(serde::Serialize)]
+struct TotpSetup {
+    secret: String,
+    otpauth_url: String,
+}
+
+#[tauri::command]
+fn generate_totp_secret() -> Result<TotpSetup, String> {
+    // Customize the issuer and account name.
+    // The account name should ideally be the user's identifier (e.g., email or username).
+    let issuer = "Chiral Network".to_string();
+    let account_name = "user@example.com".to_string(); // TODO: Replace with a real user identifier
+
+    // Generate a new secret using random bytes
+    use rand::RngCore;
+    let mut rng = rand::thread_rng();
+    let mut secret_bytes = [0u8; 20]; // 160-bit secret (recommended for SHA1)
+    rng.fill_bytes(&mut secret_bytes);
+    let secret = Secret::Raw(secret_bytes.to_vec());
+
+    // Create a TOTP object.
+    let totp = TOTP::new(
+        Algorithm::SHA1,
+        6,  // 6 digits
+        1,  // 1 second tolerance
+        30, // 30 second step
+        // Remove the & here - TOTP::new expects Vec<u8>, not &Vec<u8>
+        secret.to_bytes().map_err(|e| e.to_string())?,
+        Some(issuer),
+        account_name,
+    )
+    .map_err(|e| e.to_string())?;
+
+    let otpauth_url = totp.get_url();
+    // For totp-rs v5+, use to_encoded() to get the base32 string
+    let secret_string = secret.to_encoded().to_string();
+
+    Ok(TotpSetup {
+        secret: secret_string,
+        otpauth_url,
+    })
+}
+
+#[tauri::command]
+fn is_2fa_enabled() -> bool {
+    // TODO: Implement logic to check if 2FA is enabled for the current user
+    false
+}
+
+#[tauri::command]
+fn verify_and_enable_totp(_secret: String, _code: String) -> Result<bool, String> {
+    // TODO: Implement logic to verify the code and save the secret securely
+    Ok(true) // Placeholder
+}
+
+#[tauri::command]
+fn verify_totp_code(_code: String) -> Result<bool, String> {
+    // TODO: Implement logic to verify a code against the user's saved secret
+    Ok(true) // Placeholder
+}
+
+#[tauri::command]
+fn disable_2fa() -> Result<(), String> {
+    // TODO: Implement logic to disable 2FA for the user
+    Ok(())
+}
+
 fn main() {
     // Initialize logging for debug builds
     #[cfg(debug_assertions)]
@@ -1132,8 +1202,12 @@ fn main() {
             get_available_storage,
             proxy_connect,
             proxy_disconnect,
-            proxy_echo,
-            list_proxies
+            list_proxies,
+            generate_totp_secret,
+            is_2fa_enabled,
+            verify_and_enable_totp,
+            verify_totp_code,
+            disable_2fa,
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
