@@ -17,4 +17,9 @@ export default defineConfig({
       $lib: path.resolve("./src/lib"),
     },
   },
+  build: {
+    rollupOptions: {
+      external: ["@tauri-apps/api/tauri"],
+    },
+  },
 });

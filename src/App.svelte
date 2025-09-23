@@ -10,6 +10,7 @@
     import SettingsPage from './pages/Settings.svelte'
     import MiningPage from './pages/Mining.svelte'
     import NotFound from './pages/NotFound.svelte'
+    import ProxySelfTest from './routes/proxy-self-test.svelte'
     import { networkStatus } from './lib/stores'
     import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
     import {onMount, setContext} from 'svelte';
@@ -21,6 +22,8 @@
     import { fileService } from '$lib/services/fileService';
     // gets path name not entire url:
     // ex: http://locatlhost:1420/download -> /download
+
+    const DEV = import.meta.env.DEV;
     
     // get path name based on current url
     // if no path name, default to 'download'
@@ -107,6 +110,9 @@
         { id: 'analytics', label: $t('nav.analytics'), icon: BarChart3 },
         { id: 'account', label: $t('nav.account'), icon: Wallet },
         { id: 'settings', label: $t('nav.settings'), icon: Settings },
+
+        ...(import.meta.env.DEV ? [{ id: 'proxy-self-test', label: 'Proxy Self-Test', icon: Shield }] : [])
+
       ]
     }
 
@@ -146,6 +152,10 @@
       {
         path: "settings",
         component: SettingsPage
+      },
+      {
+        path: "proxy-self-test",
+        component: ProxySelfTest
       },
     ]
 

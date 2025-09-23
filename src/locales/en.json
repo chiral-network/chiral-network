@@ -195,6 +195,7 @@
     "network": "Network",
     "mining": "Mining",
     "proxy": "Proxy",
+    "proxySelfTest": "Proxy Self-Test",
     "analytics": "Analytics",
     "account": "Account",
     "settings": "Settings",

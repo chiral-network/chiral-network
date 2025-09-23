@@ -3,7 +3,8 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
   import { TrendingUp, Upload, DollarSign, HardDrive, Award, BarChart3, TrendingUp as LineChart } from 'lucide-svelte'
-  import { files, wallet, networkStats, proxyNodes } from '$lib/stores'
+  import { files, wallet, networkStats } from '$lib/stores';
+  import { proxyNodes } from '$lib/proxy';
   import { onMount } from 'svelte'
   import { t } from 'svelte-i18n'
   import { suspiciousActivity } from '$lib/stores'; // only import

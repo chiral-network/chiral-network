@@ -160,8 +160,8 @@
     on:keydown={handleKeydown}
     role="dialog"
     aria-modal="true"
-    aria-labelledby="receipt-title" 
-    tabindex="-1"
+    aria-labelledby="receipt-title"
+    tabindex="0"
   >
   <!-- Modal -->
   <div class="w-full max-w-3xl max-h-[90vh] overflow-hidden bg-white dark:bg-gray-900 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 flex flex-col relative">
@@ -248,15 +248,15 @@
           <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <!-- From Address -->
             <div class="space-y-2">
-              <p class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              <label for="from-address" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 {tr('transactions.receipt.from')}
-              </p>
+              </label>
               <div class="group relative">
                 <div class="flex items-center space-x-3 p-4 bg-gray-50 dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
                   <div class="w-10 h-10 bg-blue-100 dark:bg-blue-900/20 rounded-lg flex items-center justify-center">
                     <ArrowDownLeft class="w-5 h-5 text-blue-600" />
                   </div>
-                  <code class="flex-1 text-sm font-mono text-gray-900 dark:text-gray-100 truncate">
+                  <code id="from-address" class="flex-1 text-sm font-mono text-gray-900 dark:text-gray-100 truncate">
                     {formatAddress(txData.from || '')}
                   </code>
                   <Button
@@ -273,15 +273,15 @@
 
             <!-- To Address -->
             <div class="space-y-2">
-              <p class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              <label for="to-address" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 {tr('transactions.receipt.to')}
-              </p>
+              </label>
               <div class="group relative">
                 <div class="flex items-center space-x-3 p-4 bg-gray-50 dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
                   <div class="w-10 h-10 bg-green-100 dark:bg-green-900/20 rounded-lg flex items-center justify-center">
                     <ArrowUpRight class="w-5 h-5 text-green-600" />
                   </div>
-                  <code class="flex-1 text-sm font-mono text-gray-900 dark:text-gray-100 truncate">
+                  <code id="to-address" class="flex-1 text-sm font-mono text-gray-900 dark:text-gray-100 truncate">
                     {formatAddress(txData.to || '')}
                   </code>
                   <Button
@@ -298,15 +298,15 @@
 
             <!-- Transaction Hash -->
             <div class="space-y-2">
-              <p class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              <label for="tx-hash" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 {tr('transactions.receipt.hash')}
-              </p>
+              </label>
               <div class="group relative">
                 <div class="flex items-center space-x-3 p-4 bg-gray-50 dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
                   <div class="w-10 h-10 bg-purple-100 dark:bg-purple-900/20 rounded-lg flex items-center justify-center">
                     <Hash class="w-5 h-5 text-purple-600" />
                   </div>
-                  <code class="flex-1 text-sm font-mono text-gray-900 dark:text-gray-100 truncate">
+                  <code id="tx-hash" class="flex-1 text-sm font-mono text-gray-900 dark:text-gray-100 truncate">
                     {formatAddress(txData.hash)}
                   </code>
                   <Button
@@ -323,15 +323,15 @@
 
             <!-- Block Number -->
             <div class="space-y-2">
-              <p class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              <label for="block-number" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 {tr('transactions.receipt.blockNumber')}
-              </p>
+              </label>
               <div class="group relative">
                 <div class="flex items-center space-x-3 p-4 bg-gray-50 dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
                   <div class="w-10 h-10 bg-orange-100 dark:bg-orange-900/20 rounded-lg flex items-center justify-center">
                     <span class="text-orange-600 font-bold text-sm">#</span>
                   </div>
-                  <code class="flex-1 text-sm font-mono text-gray-900 dark:text-gray-100">
+                  <code id="block-number" class="flex-1 text-sm font-mono text-gray-900 dark:text-gray-100">
                     {txData.blockNumber.toLocaleString()}
                   </code>
                   <Button
@@ -356,45 +356,45 @@
           </h3>
           <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div class="space-y-2">
-              <p class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              <label for="gas-used" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 {tr('transactions.receipt.gasUsed')}
-              </p>
+              </label>
               <div class="p-4 bg-gradient-to-r from-blue-50 to-blue-100 dark:from-blue-900/20 dark:to-blue-800/20 rounded-xl border border-blue-200 dark:border-blue-700">
                 <div class="flex items-center space-x-3">
                   <div class="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center">
                     <span class="text-white font-bold text-sm">G</span>
                   </div>
-                  <code class="text-lg font-mono font-bold text-blue-900 dark:text-blue-100">
+                  <code id="gas-used" class="text-lg font-mono font-bold text-blue-900 dark:text-blue-100">
                     {txData.gasUsed.toLocaleString()}
                   </code>
                 </div>
               </div>
             </div>
             <div class="space-y-2">
-              <p class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              <label for="gas-price" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 {tr('transactions.receipt.gasPrice')}
-              </p>
+              </label>
               <div class="p-4 bg-gradient-to-r from-green-50 to-green-100 dark:from-green-900/20 dark:to-green-800/20 rounded-xl border border-green-200 dark:border-green-700">
                 <div class="flex items-center space-x-3">
                   <div class="w-8 h-8 bg-green-500 rounded-lg flex items-center justify-center">
                     <span class="text-white font-bold text-sm">P</span>
                   </div>
-                  <code class="text-lg font-mono font-bold text-green-900 dark:text-green-100">
+                  <code id="gas-price" class="text-lg font-mono font-bold text-green-900 dark:text-green-100">
                     {formatGasPrice(txData.gasPrice)}
                   </code>
                 </div>
               </div>
             </div>
             <div class="space-y-2">
-              <p class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              <label for="fee" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 {tr('transactions.receipt.fee')}
-              </p>
+              </label>
               <div class="p-4 bg-gradient-to-r from-purple-50 to-purple-100 dark:from-purple-900/20 dark:to-purple-800/20 rounded-xl border border-purple-200 dark:border-purple-700">
                 <div class="flex items-center space-x-3">
                   <div class="w-8 h-8 bg-purple-500 rounded-lg flex items-center justify-center">
                     <span class="text-white font-bold text-sm">F</span>
                   </div>
-                  <code class="text-lg font-mono font-bold text-purple-900 dark:text-purple-100">
+                  <code id="fee" class="text-lg font-mono font-bold text-purple-900 dark:text-purple-100">
                     {formatAmount(txData.fee)} CHR
                   </code>
                 </div>
@@ -412,10 +412,10 @@
           
           <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div class="space-y-2">
-              <p class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              <label for="timestamp" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 {tr('transactions.receipt.timestamp')}
-              </p>
-              <div class="p-4 bg-gradient-to-r from-indigo-50 to-indigo-100 dark:from-indigo-900/20 dark:to-indigo-800/20 rounded-xl border border-indigo-200 dark:border-indigo-700">
+              </label>
+              <div id="timestamp" class="p-4 bg-gradient-to-r from-indigo-50 to-indigo-100 dark:from-indigo-900/20 dark:to-indigo-800/20 rounded-xl border border-indigo-200 dark:border-indigo-700">
                 <div class="flex items-center space-x-3">
                   <div class="w-8 h-8 bg-indigo-500 rounded-lg flex items-center justify-center">
                     <Calendar class="w-4 h-4 text-white" />
@@ -432,15 +432,15 @@
               </div>
             </div>
             <div class="space-y-2">
-              <p class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              <label for="nonce" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 {tr('transactions.receipt.nonce')}
-              </p>
+              </label>
               <div class="p-4 bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-700 rounded-xl border border-gray-200 dark:border-gray-600">
                 <div class="flex items-center space-x-3">
                   <div class="w-8 h-8 bg-gray-500 rounded-lg flex items-center justify-center">
                     <span class="text-white font-bold text-sm">N</span>
                   </div>
-                  <code class="text-lg font-mono font-bold text-gray-900 dark:text-gray-100">
+                  <code id="nonce" class="text-lg font-mono font-bold text-gray-900 dark:text-gray-100">
                     {txData.nonce}
                   </code>
                 </div>
