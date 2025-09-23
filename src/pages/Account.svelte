@@ -1301,7 +1301,6 @@
 
           </div>
         {:else}
-          <div>
         <div>
           <p class="text-sm text-muted-foreground">{$t('wallet.balance')}</p>
           <p class="text-2xl font-bold">{$wallet.balance.toFixed(2)} Chiral</p>
