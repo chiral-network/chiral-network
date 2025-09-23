@@ -1207,9 +1207,7 @@ fn main() {
             is_2fa_enabled,
             verify_and_enable_totp,
             verify_totp_code,
-            disable_2fa
-            proxy_echo,
-            list_proxies
+            disable_2fa,
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
