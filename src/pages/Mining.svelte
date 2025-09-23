@@ -199,6 +199,11 @@
 
   let validationError: string | null = null;
 
+  // Pool mining state
+  let poolUrl: string = '';
+  let isPoolMining: boolean = false;
+  let poolError: string = '';
+
   const navigation = getContext('navigation') as { setCurrentPage: (page: string) => void };
   
   // Computed values for threads based on intensity
@@ -535,6 +540,54 @@
     }
   }
 
+  async function joinPool() {
+    if (!$etcAccount) {
+      poolError = 'Please create or import an account first.';
+      return;
+    }
+    if (!poolUrl) {
+      poolError = 'Please enter a valid pool URL (e.g., stratum+tcp://pool.example.com:3333)';
+      return;
+    }
+    poolError = '';
+    try {
+      await invoke('join_mining_pool', { url: poolUrl, address: $etcAccount.address });
+      isPoolMining = true; // Visually indicate pool mining is active
+    } catch (e) {
+      poolError = String(e);
+    }
+  }
+
+  async function leavePool() {
+    try {
+      await invoke('leave_mining_pool');
+      isPoolMining = false;
+    } catch (e) {
+      poolError = String(e);
+    }
+  }
+
+  async function createPool() {
+    if (!$etcAccount) {
+      poolError = 'Please create or import an account first.';
+      return;
+    }
+    poolError = '';
+    try {
+      await invoke('create_mining_pool', { address: $etcAccount.address });
+      // Maybe automatically join the created pool? For now, just a message.
+      poolUrl = 'stratum+tcp://127.0.0.1:3333'; // Example URL for local pool
+      poolError = 'Pool created locally. Enter the URL to join.';
+    } catch (e) {
+      poolError = String(e);
+    }
+  }
+
+  // Simulation removed; recent blocks come from backend
+
+  // Keep a set of hashes we've already shown to avoid duplicates
+  let seenHashes = new Set<string>();
+
   // Pagination for recent blocks
   let pageSizes = [5, 10, 20, 50]
   let pageSize: number = 10
@@ -735,7 +788,6 @@
 
   // Current pool management state
   let poolConnected = false
-  let poolUrl = 'stratum://localhost:3333'
   let poolWorker = 'worker1'
   let poolPassword = 'x'
   
@@ -1738,4 +1790,49 @@
         </div>
       </div>
     </div>
+  {/if}
+
+  <!-- Pool mining UI -->
+  {#if $miningState.selectedPool !== 'solo'}
+    <Card>
+      <div class="p-4">
+        <h3 class="text-lg font-semibold mb-2">Pool mining</h3>
+        <div class="space-y-4">
+          <div>
+            <Label for="pool-url">Pool URL</Label>
+            <Input
+              id="pool-url"
+              type="text"
+              placeholder="stratum+tcp://pool.example.com:3333"
+              bind:value={poolUrl}
+              disabled={isPoolMining}
+            />
+            {#if poolError}
+              <p class="text-red-500 text-sm mt-1">{poolError}</p>
+            {/if}
+          </div>
+
+          {#if isPoolMining}
+            <Button on:click={leavePool} class="w-full" variant="destructive">
+              <X class="mr-2 h-4 w-4" />
+              Leave Pool
+            </Button>
+          {:else}
+            <div class="grid grid-cols-2 gap-2">
+              <Button on:click={joinPool} class="w-full" disabled={!poolUrl}>
+                <Play class="mr-2 h-4 w-4" />
+                Join Pool
+              </Button>
+              <Button on:click={createPool} class="w-full" variant="secondary">
+                <Cpu class="mr-2 h-4 w-4" />
+                Create Pool
+              </Button>
+            </div>
+          {/if}
+          <p class="text-xs text-muted-foreground text-center pt-2">
+            Join a public pool or create your own to share rewards.
+          </p>
+        </div>
+      </div>
+    </Card>
   {/if}
