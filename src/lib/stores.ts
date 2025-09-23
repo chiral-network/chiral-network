@@ -1,4 +1,4 @@
-import { writable } from "svelte/store";
+import { writable, derived } from "svelte/store";
 
 export interface FileItem {
   id: string;
@@ -46,8 +46,6 @@ export interface WalletInfo {
   address: string;
   balance: number;
   pendingTransactions: number;
-  totalEarned: number;
-  totalSpent: number;
   stakedAmount?: number;
   miningRewards?: number;
   reputation?: number;
@@ -145,8 +143,6 @@ const dummyWallet: WalletInfo = {
   address: "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1",
   balance: 1000.5,
   pendingTransactions: 2,
-  totalEarned: 250.75,
-  totalSpent: 45.25,
 };
 
 // Additional dummy data
@@ -305,3 +301,14 @@ export const miningState = writable<MiningState>({
   recentBlocks: [],
   miningHistory: [],
 });
+
+
+export const totalEarned = derived(transactions, $txs =>
+  $txs.filter(tx => tx.type === 'received')
+      .reduce((sum, tx) => sum + tx.amount, 0)
+);
+
+export const totalSpent = derived(transactions, $txs =>
+  $txs.filter(tx => tx.type === 'sent')
+      .reduce((sum, tx) => sum + tx.amount, 0)
+);
