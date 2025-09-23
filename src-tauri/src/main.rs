@@ -6,13 +6,13 @@
 pub mod commands;
 mod dht;
 mod ethereum;
-pub mod net;
 mod file_transfer;
 mod geth_downloader;
 mod headless;
 mod keystore;
+pub mod net;
 
-use commands::proxy::{proxy_connect, proxy_disconnect, list_proxies, ProxyNode};
+use commands::proxy::{list_proxies, proxy_connect, proxy_disconnect, ProxyNode};
 use dht::{DhtEvent, DhtMetricsSnapshot, DhtService, FileMetadata};
 use ethereum::{
     create_new_account, get_account_from_private_key, get_balance, get_block_number, get_hashrate,
@@ -24,10 +24,15 @@ use file_transfer::{FileTransferEvent, FileTransferService};
 use fs2::available_space;
 use geth_downloader::GethDownloader;
 use keystore::Keystore;
-use std::path::Path;
+use serde::Serialize;
+use std::collections::VecDeque;
+use std::fs::File;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::{
-    sync::{Arc},
-    time::Instant,
+    io::{BufRead, BufReader},
+    sync::Arc,
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use sysinfo::{Components, System, MINIMUM_CPU_UPDATE_INTERVAL};
 use systemstat::{Platform, System as SystemStat};
@@ -347,7 +352,8 @@ async fn start_dht_node(
                 // Avoid busy-waiting
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 // Check if the DHT is still alive before continuing
-                if Arc::strong_count(&dht_clone_for_pump) <= 1 { // 1 is the pump itself
+                if Arc::strong_count(&dht_clone_for_pump) <= 1 {
+                    // 1 is the pump itself
                     info!("DHT service appears to be shut down. Exiting event pump.");
                     break;
                 }
@@ -356,14 +362,28 @@ async fn start_dht_node(
 
             for ev in events {
                 match ev {
-                    DhtEvent::ProxyStatus { id, address, status, latency_ms, error } => {
+                    DhtEvent::ProxyStatus {
+                        id,
+                        address,
+                        status,
+                        latency_ms,
+                        error,
+                    } => {
                         let mut proxies = proxies_arc.lock().await;
                         // upsert: find by id (peer id) or by address (initial connection url)
-                        if let Some(p) = proxies.iter_mut().find(|p| p.id == id || p.address == id || (!address.is_empty() && p.address == address)) {
+                        if let Some(p) = proxies.iter_mut().find(|p| {
+                            p.id == id
+                                || p.address == id
+                                || (!address.is_empty() && p.address == address)
+                        }) {
                             p.id = id.clone(); // always update to the real peer id
-                            if !address.is_empty() { p.address = address.clone(); }
+                            if !address.is_empty() {
+                                p.address = address.clone();
+                            }
                             p.status = status.clone();
-                            if let Some(ms) = latency_ms { p.latency = ms as u32; }
+                            if let Some(ms) = latency_ms {
+                                p.latency = ms as u32;
+                            }
                             p.error = error.clone();
                             let _ = app_handle.emit("proxy_status_update", p.clone());
                         } else {
@@ -538,11 +558,25 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                 ),
                 DhtEvent::FileNotFound(hash) => format!("file_not_found:{}", hash),
                 DhtEvent::Error(err) => format!("error:{}", err),
-                DhtEvent::ProxyStatus { id, address, status, latency_ms, error } => {
-                    let lat = latency_ms.map(|ms| format!("{ms}")).unwrap_or_else(|| "-".into());
+                DhtEvent::ProxyStatus {
+                    id,
+                    address,
+                    status,
+                    latency_ms,
+                    error,
+                } => {
+                    let lat = latency_ms
+                        .map(|ms| format!("{ms}"))
+                        .unwrap_or_else(|| "-".into());
                     let err = error.unwrap_or_default();
-                    format!("proxy_status:{id}:{address}:{status}:{lat}{}", 
-                            if err.is_empty() { "".into() } else { format!(":{err}") })
+                    format!(
+                        "proxy_status:{id}:{address}:{status}:{lat}{}",
+                        if err.is_empty() {
+                            "".into()
+                        } else {
+                            format!(":{err}")
+                        }
+                    )
                 }
                 DhtEvent::PeerRtt { peer, rtt_ms } => format!("peer_rtt:{peer}:{rtt_ms}"),
             })
@@ -564,7 +598,7 @@ fn get_cpu_temperature() -> Option<f32> {
         }
         LAST_UPDATE = Some(Instant::now());
     }
-    
+
     // Try sysinfo first (works on some platforms including M1 macs and some Windows)
     let mut sys = System::new_all();
     sys.refresh_cpu_all();
@@ -576,7 +610,11 @@ fn get_cpu_temperature() -> Option<f32> {
         .iter()
         .filter(|c| {
             let label = c.label().to_lowercase();
-            label.contains("cpu") || label.contains("package") || label.contains("tdie") || label.contains("core") || label.contains("thermal")
+            label.contains("cpu")
+                || label.contains("package")
+                || label.contains("tdie")
+                || label.contains("core")
+                || label.contains("thermal")
         })
         .map(|c| {
             core_count += 1;
@@ -586,7 +624,7 @@ fn get_cpu_temperature() -> Option<f32> {
     if core_count > 0 {
         return Some(sum / core_count as f32);
     }
-    
+
     // Windows-specific temperature detection methods
     #[cfg(target_os = "windows")]
     {
@@ -594,7 +632,7 @@ fn get_cpu_temperature() -> Option<f32> {
             return Some(temp);
         }
     }
-    
+
     // Linux-specific temperature detection methods
     #[cfg(target_os = "linux")]
     {
@@ -602,7 +640,7 @@ fn get_cpu_temperature() -> Option<f32> {
             return Some(temp);
         }
     }
-    
+
     // Fallback for other platforms
     let stat_sys = SystemStat::new();
     if let Ok(temp) = stat_sys.cpu_temp() {
@@ -615,7 +653,7 @@ fn get_cpu_temperature() -> Option<f32> {
 #[cfg(target_os = "windows")]
 fn get_windows_temperature() -> Option<f32> {
     use std::process::Command;
-    
+
     // Method 1: Try the fastest method first - HighPrecisionTemperature from WMI
     if let Ok(output) = Command::new("powershell")
         .args([
@@ -633,7 +671,7 @@ fn get_windows_temperature() -> Option<f32> {
             }
         }
     }
-    
+
     // Method 2: Fallback to regular Temperature field
     if let Ok(output) = Command::new("powershell")
         .args([
@@ -651,26 +689,26 @@ fn get_windows_temperature() -> Option<f32> {
             }
         }
     }
-    
+
     None
 }
 
 #[cfg(target_os = "linux")]
 fn get_linux_temperature() -> Option<f32> {
     use std::fs;
-    
+
     // Method 1: Try sensors command first (most reliable and matches user expectations)
     if let Ok(output) = std::process::Command::new("sensors")
-        .arg("-u")  // Raw output
+        .arg("-u") // Raw output
         .output()
     {
         if let Ok(output_str) = String::from_utf8(output.stdout) {
             let lines: Vec<&str> = output_str.lines().collect();
             let mut i = 0;
-            
+
             while i < lines.len() {
                 let line = lines[i].trim();
-                
+
                 // Look for CPU package temperature section
                 if line.contains("Package id 0:") {
                     // Look for temp1_input in the following lines
@@ -709,7 +747,7 @@ fn get_linux_temperature() -> Option<f32> {
             }
         }
     }
-    
+
     // Method 2: Try thermal zones (fallback)
     // Look for CPU thermal zones in /sys/class/thermal/
     // Prioritize x86_pkg_temp as it's usually the most accurate for CPU package temperature
@@ -730,13 +768,16 @@ fn get_linux_temperature() -> Option<f32> {
             }
         }
     }
-    
+
     // Fallback to other CPU thermal zones
     for i in 0..20 {
         let type_path = format!("/sys/class/thermal/thermal_zone{}/type", i);
         if let Ok(zone_type) = fs::read_to_string(&type_path) {
             let zone_type = zone_type.trim().to_lowercase();
-            if zone_type.contains("cpu") || zone_type.contains("coretemp") || zone_type.contains("k10temp") {
+            if zone_type.contains("cpu")
+                || zone_type.contains("coretemp")
+                || zone_type.contains("k10temp")
+            {
                 let thermal_path = format!("/sys/class/thermal/thermal_zone{}/temp", i);
                 if let Ok(temp_str) = fs::read_to_string(&thermal_path) {
                     if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
@@ -749,19 +790,21 @@ fn get_linux_temperature() -> Option<f32> {
             }
         }
     }
-    
+
     // Method 3: Try hwmon (hardware monitoring) interfaces
     // Look for CPU temperature sensors in /sys/class/hwmon/
     for i in 0..10 {
         let hwmon_dir = format!("/sys/class/hwmon/hwmon{}", i);
-        
+
         // Check if this hwmon device is for CPU temperature
         let name_path = format!("{}/name", hwmon_dir);
         if let Ok(name) = fs::read_to_string(&name_path) {
             let name = name.trim().to_lowercase();
-            if name.contains("coretemp") || name.contains("k10temp") || 
-               name.contains("cpu") || name.contains("acpi") {
-                
+            if name.contains("coretemp")
+                || name.contains("k10temp")
+                || name.contains("cpu")
+                || name.contains("acpi")
+            {
                 // Try different temperature input files
                 for temp_input in 1..=8 {
                     let temp_path = format!("{}/temp{}_input", hwmon_dir, temp_input);
@@ -777,15 +820,15 @@ fn get_linux_temperature() -> Option<f32> {
             }
         }
     }
-    
+
     // Method 4: Try reading from specific CPU temperature files
     let cpu_temp_paths = [
         "/sys/devices/platform/coretemp.0/hwmon/hwmon*/temp1_input",
-        "/sys/devices/platform/coretemp.0/temp1_input", 
+        "/sys/devices/platform/coretemp.0/temp1_input",
         "/sys/bus/platform/devices/coretemp.0/hwmon/hwmon*/temp*_input",
         "/sys/devices/pci0000:00/0000:00:18.3/hwmon/hwmon*/temp1_input", // AMD
     ];
-    
+
     for pattern in &cpu_temp_paths {
         if let Ok(paths) = glob::glob(pattern) {
             for path_result in paths {
@@ -802,7 +845,7 @@ fn get_linux_temperature() -> Option<f32> {
             }
         }
     }
-    
+
     None
 }
 
@@ -1040,6 +1083,143 @@ fn get_available_storage() -> f64 {
     (storage as f64 / 1024.0 / 1024.0 / 1024.0).floor()
 }
 
+const DEFAULT_GETH_DATA_DIR: &str = "./bin/geth-data";
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GethStatusPayload {
+    installed: bool,
+    running: bool,
+    binary_path: Option<String>,
+    data_dir: String,
+    data_dir_exists: bool,
+    log_path: Option<String>,
+    log_available: bool,
+    log_lines: usize,
+    version: Option<String>,
+    last_logs: Vec<String>,
+    last_updated: u64,
+}
+
+fn resolve_geth_data_dir(data_dir: &str) -> Result<PathBuf, String> {
+    let dir = PathBuf::from(data_dir);
+    if dir.is_absolute() {
+        return Ok(dir);
+    }
+
+    let exe_dir = std::env::current_exe()
+        .map_err(|e| format!("Failed to get executable path: {}", e))?
+        .parent()
+        .ok_or_else(|| "Failed to determine executable directory".to_string())?
+        .to_path_buf();
+
+    Ok(exe_dir.join(dir))
+}
+
+fn read_last_lines(path: &Path, max_lines: usize) -> Result<Vec<String>, String> {
+    let file = File::open(path).map_err(|e| format!("Failed to open log file: {}", e))?;
+    let reader = BufReader::new(file);
+    let mut buffer = VecDeque::with_capacity(max_lines);
+
+    for line in reader.lines() {
+        let line = line.map_err(|e| format!("Failed to read log file: {}", e))?;
+        if buffer.len() == max_lines {
+            buffer.pop_front();
+        }
+        buffer.push_back(line);
+    }
+
+    Ok(buffer.into_iter().collect())
+}
+
+#[tauri::command]
+async fn get_geth_status(
+    state: State<'_, AppState>,
+    data_dir: Option<String>,
+    log_lines: Option<usize>,
+) -> Result<GethStatusPayload, String> {
+    let requested_lines = log_lines.unwrap_or(40).clamp(1, 200);
+    let data_dir_value = data_dir.unwrap_or_else(|| DEFAULT_GETH_DATA_DIR.to_string());
+
+    let running = {
+        let geth = state.geth.lock().await;
+        geth.is_running()
+    };
+
+    let downloader = state.downloader.clone();
+    let geth_path = downloader.geth_path();
+    let installed = geth_path.exists();
+    let binary_path = installed.then(|| geth_path.to_string_lossy().into_owned());
+
+    let data_path = resolve_geth_data_dir(&data_dir_value)?;
+    let data_dir_exists = data_path.exists();
+    let log_path = data_path.join("geth.log");
+    let log_available = log_path.exists();
+
+    let last_logs = if log_available {
+        match read_last_lines(&log_path, requested_lines) {
+            Ok(lines) => lines,
+            Err(err) => {
+                warn!("Failed to read geth logs: {}", err);
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
+    let version = if installed {
+        match Command::new(&geth_path).arg("version").output() {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if stdout.is_empty() {
+                    None
+                } else {
+                    Some(stdout)
+                }
+            }
+            Ok(output) => {
+                warn!(
+                    "geth version command exited with status {:?}",
+                    output.status.code()
+                );
+                None
+            }
+            Err(err) => {
+                warn!("Failed to execute geth version: {}", err);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let last_updated = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let log_path_string = if log_available {
+        Some(log_path.to_string_lossy().into_owned())
+    } else {
+        None
+    };
+
+    Ok(GethStatusPayload {
+        installed,
+        running,
+        binary_path,
+        data_dir: data_dir_value,
+        data_dir_exists,
+        log_path: log_path_string,
+        log_available,
+        log_lines: requested_lines,
+        version,
+        last_logs,
+        last_updated,
+    })
+}
+
 fn main() {
     // Initialize logging for debug builds
     #[cfg(debug_assertions)]
@@ -1100,6 +1280,7 @@ fn main() {
             get_network_peer_count,
             is_geth_running,
             check_geth_binary,
+            get_geth_status,
             download_geth_binary,
             set_miner_address,
             start_miner,

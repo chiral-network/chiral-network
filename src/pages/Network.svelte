@@ -4,6 +4,7 @@
   import Button from '$lib/components/ui/button.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
+  import GethStatusCard from '$lib/components/GethStatusCard.svelte'
   import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Play, Square, Download, AlertCircle, Wifi } from 'lucide-svelte'
   import { peers, networkStats, networkStatus, userLocation, etcAccount } from '$lib/stores'
   import { get } from 'svelte/store'
@@ -11,6 +12,7 @@
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
   import { dhtService, DEFAULT_BOOTSTRAP_NODES } from '$lib/dht'
+  import { getStatus as fetchGethStatus, type GethStatus } from '$lib/services/gethService'
   import { resetConnectionAttempts } from '$lib/dhtHelpers.js'
   import type { DhtHealth } from '$lib/dht'
   import { Clipboard } from "lucide-svelte"
@@ -58,6 +60,7 @@
   let peerCount = 0
   let peerCountInterval: ReturnType<typeof setInterval> | undefined
   let chainId = 98765
+  let gethStatusCardRef: { refresh?: () => Promise<void> } | null = null
   
   // DHT variables
   let dhtStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
@@ -485,6 +488,27 @@
       onlinePeers: Math.floor(s.totalPeers * (0.6 + Math.random() * 0.3))
     }))
   }
+
+  function applyGethStatus(status: GethStatus) {
+    const wasRunning = isGethRunning
+    isGethInstalled = status.installed
+    isGethRunning = status.running
+    isStartingNode = false
+
+    if (status.running && !wasRunning) {
+      startPolling()
+    } else if (!status.running && wasRunning) {
+      if (peerCountInterval) {
+        clearInterval(peerCountInterval)
+        peerCountInterval = undefined
+      }
+      peerCount = 0
+    }
+  }
+
+  function handleGethStatusChange(event: CustomEvent<GethStatus>) {
+    applyGethStatus(event.detail)
+  }
   
   async function checkGethStatus() {
     if (!isTauri) {
@@ -494,17 +518,13 @@
       isStartingNode = false
       return
     }
-    
+
     try {
-      // First check if geth is installed
-      isGethInstalled = await invoke('check_geth_binary') as boolean
-      
-      if (isGethInstalled) {
-        isGethRunning = await invoke('is_geth_running') as boolean
-        if (isGethRunning) {
-          isStartingNode = false
-          startPolling()
-        }
+      if (gethStatusCardRef?.refresh) {
+        await gethStatusCardRef.refresh()
+      } else {
+        const status = await fetchGethStatus(dataDir, 1)
+        applyGethStatus(status)
       }
     } catch (error) {
       console.error('Failed to check geth status:', error)
@@ -532,9 +552,15 @@
       isDownloading = false
       // Auto-start after download
       await startGethNode()
+      if (gethStatusCardRef?.refresh) {
+        await gethStatusCardRef.refresh()
+      }
     } catch (e) {
       downloadError = String(e)
       isDownloading = false
+      if (gethStatusCardRef?.refresh) {
+        await gethStatusCardRef.refresh()
+      }
     }
   }
 
@@ -561,6 +587,9 @@
       await invoke('start_geth_node', { dataDir })
       isGethRunning = true
       startPolling()
+      if (gethStatusCardRef?.refresh) {
+        await gethStatusCardRef.refresh()
+      }
     } catch (error) {
       console.error('Failed to start geth node:', error)
       alert('Failed to start Chiral node: ' + error)
@@ -583,6 +612,9 @@
       if (peerCountInterval) {
         clearInterval(peerCountInterval)
         peerCountInterval = undefined
+      }
+      if (gethStatusCardRef?.refresh) {
+        await gethStatusCardRef.refresh()
       }
     } catch (error) {
       console.error('Failed to stop geth node:', error)
@@ -789,6 +821,14 @@
       {/if}
     </div>
   </Card>
+
+  <GethStatusCard
+    bind:this={gethStatusCardRef}
+    dataDir={dataDir}
+    logLines={60}
+    refreshIntervalMs={10000}
+    on:status={handleGethStatusChange}
+  />
   
   <!-- DHT Network Status Card -->
   <Card class="p-6">

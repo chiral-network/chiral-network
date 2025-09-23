@@ -34,10 +34,10 @@ pub struct FileMetadata {
 
 #[derive(NetworkBehaviour)]
 pub struct DhtBehaviour {
-  kademlia: libp2p::kad::Behaviour<libp2p::kad::store::MemoryStore>,
-  identify: libp2p::identify::Behaviour,
-  mdns: libp2p::mdns::tokio::Behaviour,
-  ping: ping::Behaviour,
+    kademlia: libp2p::kad::Behaviour<libp2p::kad::store::MemoryStore>,
+    identify: libp2p::identify::Behaviour,
+    mdns: libp2p::mdns::tokio::Behaviour,
+    ping: ping::Behaviour,
 }
 
 #[derive(Debug)]
@@ -52,7 +52,7 @@ pub enum DhtCommand {
 #[derive(Debug, Clone, Serialize)]
 pub enum DhtEvent {
     PeerDiscovered(String),
-    PeerConnected(String), // Replaced by ProxyStatus
+    PeerConnected(String),    // Replaced by ProxyStatus
     PeerDisconnected(String), // Replaced by ProxyStatus
     FileDiscovered(FileMetadata),
     FileNotFound(String),
@@ -64,7 +64,10 @@ pub enum DhtEvent {
         latency_ms: Option<u64>,
         error: Option<String>,
     },
-    PeerRtt { peer: String, rtt_ms: u64 },
+    PeerRtt {
+        peer: String,
+        rtt_ms: u64,
+    },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -110,7 +113,11 @@ impl DhtMetricsSnapshot {
 impl DhtMetrics {
     fn record_listen_addr(&mut self, addr: &Multiaddr) {
         let addr_str = addr.to_string();
-        if !self.listen_addrs.iter().any(|existing| existing == &addr_str) {
+        if !self
+            .listen_addrs
+            .iter()
+            .any(|existing| existing == &addr_str)
+        {
             self.listen_addrs.push(addr_str);
         }
     }
@@ -718,13 +725,10 @@ mod tests {
     #[test]
     fn metrics_snapshot_carries_listen_addrs() {
         let mut metrics = DhtMetrics::default();
-        metrics
-            .record_listen_addr(&"/ip4/127.0.0.1/tcp/4001".parse::<Multiaddr>().unwrap());
-        metrics
-            .record_listen_addr(&"/ip4/0.0.0.0/tcp/4001".parse::<Multiaddr>().unwrap());
+        metrics.record_listen_addr(&"/ip4/127.0.0.1/tcp/4001".parse::<Multiaddr>().unwrap());
+        metrics.record_listen_addr(&"/ip4/0.0.0.0/tcp/4001".parse::<Multiaddr>().unwrap());
         // Duplicate should be ignored
-        metrics
-            .record_listen_addr(&"/ip4/127.0.0.1/tcp/4001".parse::<Multiaddr>().unwrap());
+        metrics.record_listen_addr(&"/ip4/127.0.0.1/tcp/4001".parse::<Multiaddr>().unwrap());
 
         let snapshot = DhtMetricsSnapshot::from(metrics, 5);
         assert_eq!(snapshot.peer_count, 5);

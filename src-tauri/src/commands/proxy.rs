@@ -1,18 +1,18 @@
 use crate::dht::DhtService; // Assuming DhtService is accessible here
 use crate::AppState;
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, State};
 use tauri::Emitter;
+use tauri::{AppHandle, Manager, State};
 use tokio::sync::Mutex;
 use tracing::info;
 
 #[derive(Clone, serde::Serialize)]
 pub struct ProxyNode {
-  pub id: String,
-  pub address: String,
-  pub status: String,
-  pub latency: u32,
-  pub error: Option<String>,
+    pub id: String,
+    pub address: String,
+    pub status: String,
+    pub latency: u32,
+    pub error: Option<String>,
 }
 
 fn normalize_to_multiaddr(input: &str) -> Result<String, String> {
@@ -32,9 +32,9 @@ fn normalize_to_multiaddr(input: &str) -> Result<String, String> {
         // host:port or 127.0.0.1:4001
         let (host, port) = input.split_once(':').ok_or("invalid host:port")?;
         if host.chars().all(|c| c.is_ascii_digit() || c == '.') {
-             Ok(format!("/ip4/{host}/tcp/{port}"))
+            Ok(format!("/ip4/{host}/tcp/{port}"))
         } else {
-             Ok(format!("/dns4/{host}/tcp/{port}"))
+            Ok(format!("/dns4/{host}/tcp/{port}"))
         }
     } else {
         Err(format!("unsupported address format: {}", input))
