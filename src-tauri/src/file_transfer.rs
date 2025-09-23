@@ -277,7 +277,6 @@ impl FileTransferService {
                         maps.get(&file_hash).cloned()
                     };
                     debug!("GetChunkMap command received: {} {:?}", file_hash, chunk_map);
-                    // You may want to emit an event or return this via a Tauri command
                 }
             }
         }
