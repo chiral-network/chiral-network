@@ -20,7 +20,20 @@
   let activeSimulations = new Set<string>() // Track files with active progress simulations
 
   // New state for search results
-  let searchResults: any[] = []
+  let searchResults: Array<{
+    fileHash: string;
+    fileName: string;
+    fileSize: number;
+    seeders: number;
+    leechers: number;
+    peers: Array<{
+      id: string;
+      nickname: string;
+      reputation: number;
+      status: string;
+      connection: string;
+    }>;
+  }> = []
   let isSearching = false
   let hasSearched = false
 
@@ -339,7 +352,17 @@
 
       // Mock file database with predefined hashes for testing
       // TODO: Replace with actual DHT search results
-      const mockFileDatabase = {
+      const mockFileDatabase: Record<string, {
+        fileName: string;
+        fileSize: number;
+        peers: Array<{
+          id: string;
+          nickname: string;
+          reputation: number;
+          status: string;
+          connection: string;
+        }>;
+      }> = {
         // Existing files (already in downloads list)
         'QmZ4tDuvesekqMF': {
           fileName: 'Video.mp4',
@@ -406,7 +429,7 @@
       // Check if the searched hash exists in our mock database
       const fileData = mockFileDatabase[searchHash]
 
-      let mockResults = []
+      let mockResults: typeof searchResults = []
       if (fileData) {
         // File found - create mock result
         const seeders = fileData.peers.length
@@ -439,7 +462,7 @@
   }
 
   // New function to download from search results
-  async function downloadFromSearchResult(result: any) {
+  async function downloadFromSearchResult(result: typeof searchResults[0]) {
     // Check for duplicates using the existing logic
     const allFiles = [...$files, ...$downloadQueue]
     const existingFile = allFiles.find(f => f.hash === result.fileHash)
@@ -503,6 +526,7 @@
   }
 
   // Enhanced startDownload function with real P2P download (kept for backward compatibility)
+  // @ts-ignore - Function kept for backward compatibility
   async function startDownload() {
     if (!searchHash) {
       showNotification(tr('download.notifications.enterHash'), 'warning')
@@ -655,8 +679,10 @@ function clearSearch() {
 
     // Proceed directly to file dialog
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const { save } = await import('@tauri-apps/plugin-dialog');
+      const [, { save }] = await Promise.all([
+        import('@tauri-apps/api/core'),
+        import('@tauri-apps/plugin-dialog')
+      ]);
       
       // Show file save dialog
       const outputPath = await save({

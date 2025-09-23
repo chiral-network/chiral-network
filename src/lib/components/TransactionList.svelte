@@ -15,7 +15,6 @@
   } from 'lucide-svelte'
   import { t } from 'svelte-i18n'
   import { get } from 'svelte/store'
-  import { showToast } from '$lib/toast'
 
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
 
@@ -185,19 +184,19 @@
             options={statusOptions}
             bind:value={statusFilter}
             placeholder="Status"
-            class="min-w-[120px]"
+            className="min-w-[120px]"
           />
           <DropDown
             options={typeOptions}
             bind:value={typeFilter}
             placeholder="Type"
-            class="min-w-[120px]"
+            className="min-w-[120px]"
           />
           <DropDown
             options={sortOptions}
             bind:value={sortBy}
             placeholder="Sort by"
-            class="min-w-[120px]"
+            className="min-w-[120px]"
           />
           <Button
             variant="outline"
@@ -238,7 +237,7 @@
           class="p-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer transition-colors"
           on:click={() => handleTransactionClick(tx)}
           on:keydown={(e) => {
-            if (e.key === 'Enter') {
+            if ((e as unknown as KeyboardEvent).key === 'Enter') {
               handleTransactionClick(tx)
             }
           }}
