@@ -221,7 +221,12 @@
       "intro": "새 계정을 만들거나 기존 계정을 가져와 카이럴 네트워크를 시작하세요:",
       "or": "또는"
     },
-    "privateKey": "개인 키"
+    "privateKey": "개인 키",
+    "hd": {
+      "create_via_phrase": "복구 구문으로 생성",
+      "import_phrase": "복구 구문 가져오기",
+      "load_from_wallet": "지갑에서 불러오기"
+    }
   },
 
   "transfer": {
