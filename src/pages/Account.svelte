@@ -17,6 +17,8 @@
   import { t, locale } from 'svelte-i18n'
   import { showToast } from '$lib/toast'
   import { get } from 'svelte/store'
+  import { totalEarned, totalSpent } from '$lib/stores';
+
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
   
   // HD wallet imports
@@ -339,8 +341,8 @@
         address: $etcAccount?.address,
         privateKey: $etcAccount?.private_key,
         balance: $wallet.balance,
-        totalEarned: $wallet.totalEarned,
-        totalSpent: $wallet.totalSpent,
+        totalEarned: get(totalEarned),
+        totalSpent: get(totalSpent),
         pendingTransactions: $wallet.pendingTransactions,
         exportDate: new Date().toISOString(),
         version: "1.0"
@@ -445,7 +447,6 @@
       ...w,
       balance: w.balance - sendAmount,
       pendingTransactions: w.pendingTransactions + 1,
-      totalSpent: w.totalSpent + sendAmount
     }))
 
     transactions.update(txs => [
@@ -581,9 +582,14 @@
     etcAccount.set(account)
     wallet.update(w => ({
       ...w,
-      address: account.address
+      address: account.address,
+      balance: 0,
+      pendingTransactions: 0
     }))
-    
+
+    // 🔹 Reset transaction history for new account
+    transactions.set([])
+
     showToast('Account Created Successfully!', 'success')
     
     if (isGethRunning) {
@@ -1232,11 +1238,11 @@
             <div class="grid grid-cols-2 gap-4 mt-4">
           <div>
             <p class="text-xs text-muted-foreground">{$t('wallet.totalEarned')}</p>
-            <p class="text-sm font-medium text-green-600">+{$wallet.totalEarned.toFixed(2)} Chiral</p>
+            <p class="text-sm font-medium text-green-600">+{$totalEarned.toFixed(2)} Chiral</p>
           </div>
           <div>
             <p class="text-xs text-muted-foreground">{$t('wallet.totalSpent')}</p>
-            <p class="text-sm font-medium text-red-600">-{$wallet.totalSpent.toFixed(2)} Chiral</p>
+            <p class="text-sm font-medium text-red-600">-{$totalSpent.toFixed(2)} Chiral</p>
           </div>
         </div>
         
@@ -1925,5 +1931,5 @@
     isOpen={showTransactionReceipt}
     onClose={closeTransactionReceipt}
   />
-
+  
 </div>
