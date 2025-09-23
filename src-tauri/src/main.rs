@@ -367,15 +367,15 @@ async fn start_dht_node(
                             p.error = error.clone();
                             let _ = app_handle.emit("proxy_status_update", p.clone());
                         } else {
-                            let new_node = ProxyNode {
-                                id: id.clone(),
-                                address: if address.is_empty() { id.clone() } else { address.clone() },
-                                status,
-                                latency: latency_ms.unwrap_or(999) as u32,
-                                error,
-                            };
-                            proxies.push(new_node.clone());
-                            let _ = app_handle.emit("proxy_status_update", new_node);
+                            // let new_node = ProxyNode {
+                            //     id: id.clone(),
+                            //     address: if address.is_empty() { id.clone() } else { address.clone() },
+                            //     status,
+                            //     latency: latency_ms.unwrap_or(999) as u32,
+                            //     error,
+                            // };
+                            // proxies.push(new_node.clone());
+                            // let _ = app_handle.emit("proxy_status_update", new_node);
                         }
                     }
                     DhtEvent::PeerRtt { peer, rtt_ms } => {
@@ -517,7 +517,7 @@ async fn get_dht_health(state: State<'_, AppState>) -> Result<Option<DhtMetricsS
 }
 
 #[tauri::command]
-async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<DhtEvent>, String> {
+async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, String> {
     let dht = {
         let dht_guard = state.dht.lock().await;
         dht_guard.as_ref().cloned()

@@ -32,8 +32,6 @@ pub struct FileMetadata {
     pub mime_type: Option<String>,
 }
 
-use libp2p::ping;
-
 #[derive(NetworkBehaviour)]
 pub struct DhtBehaviour {
   kademlia: libp2p::kad::Behaviour<libp2p::kad::store::MemoryStore>,
