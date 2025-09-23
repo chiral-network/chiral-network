@@ -414,6 +414,40 @@
     }
   },
 
+  "security": {
+    "2fa": {
+      "title": "2-Factor Authentication (2FA)",
+      "subtitle_clear": "Add an extra layer of security to your account.",
+      
+      "status": {
+        "enabled": "2FA is Enabled",
+        "enabled_desc": "Sensitive actions now require a verification code.",
+        "disabled_desc": "Enable 2FA for better account security."
+      },
+      
+      "how_it_works": "When enabled, you'll need a code from an authenticator app (like Google Authenticator or Authy) for sensitive actions.",
+
+      "enable": "Enable 2FA",
+      "disable": "Disable",
+
+      "setup": {
+        "title": "Set Up 2FA",
+        "step1_scan": "1. Scan the QR code with your authenticator app.",
+        "scanAlt": "Can't scan?",
+        "step2_manual": "Or, enter this key manually:",
+        "step3_verify": "2. Enter the 6-digit code from your app to verify.",
+        "verifyLabel": "Verification Code",
+        "verifyAndEnable": "Verify & Enable"
+      },
+
+      "prompt": {
+        "title": "2FA Required",
+        "enter_code": "Enter the 6-digit code from your authenticator app to continue.",
+        "label": "Authentication Code"
+      }
+    }
+  },
+
   "filters": {
     "type": "Type",
     "typeAll": "All",
@@ -446,7 +480,9 @@
     "remove": "Remove",
     "edit": "Edit",
     "resetDefaults": "Reset to Defaults",
-    "lockWallet": "Lock Wallet"
+    "lockWallet": "Lock Wallet",
+    "verifying": "Verifying...",
+    "confirm": "Confirm"
   },
 
   "placeholders": {

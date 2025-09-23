@@ -506,7 +506,8 @@ function pushRecentBlock(b: {
   number?: number;
   reward?: number;
 }) {
-  const reward = typeof b.reward === "number" ? b.reward : blockReward;
+
+  const reward = typeof b.reward === "number" ? b.reward : 0;
 
   const item = {
     id: `block-${b.hash}-${b.timestamp?.getTime() ?? Date.now()}`,
@@ -524,20 +525,19 @@ function pushRecentBlock(b: {
   // Reset pagination so newest block is visible
   currentPage = 1;
 
-  // 💰 Immediately credit wallet balance (optimistic update)
-  $miningState.totalRewards = ($miningState.totalRewards ?? 0) + reward;
-
-  // 💳 Add a transaction entry for this block
-  const tx: Transaction = {
-    id: Date.now(),
-    type: 'received',
-    amount: reward,
-    from: 'Mining reward',
-    date: new Date(),
-    description: `Block reward (#${item.number})`,
-    status: 'pending' // mark as pending until backend confirms
-  };
-  transactions.update(list => [tx, ...list]);
+  // 💳 Still log the transaction, but keep status pending
+  if (reward > 0) {
+    const tx: Transaction = {
+      id: Date.now(),
+      type: 'received',
+      amount: reward,
+      from: 'Mining reward',
+      date: new Date(),
+      description: `Block reward (#${item.number})`,
+      status: 'pending' // will flip to 'completed' when backend confirms
+    };
+    transactions.update(list => [tx, ...list]);
+  }
 }
 
   async function appendNewBlocksFromBackend() {
