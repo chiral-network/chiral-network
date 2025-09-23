@@ -382,8 +382,8 @@
           address: $etcAccount?.address,
           privateKey: $etcAccount?.private_key,
           balance: $wallet.balance,
-          totalEarned: $wallet.totalEarned,
-          totalSpent: $wallet.totalSpent,
+          totalEarned: get(totalEarned),
+          totalSpent: get(totalSpent),
           pendingTransactions: $wallet.pendingTransactions,
           exportDate: new Date().toISOString(),
           version: "1.0"
@@ -489,7 +489,6 @@
       ...w,
       balance: w.balance - sendAmount,
       pendingTransactions: w.pendingTransactions + 1,
-      totalSpent: w.totalSpent + sendAmount
     }))
 
     transactions.update(txs => [
