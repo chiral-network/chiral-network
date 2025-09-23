@@ -221,7 +221,12 @@
       "intro": "通过创建或导入账户开始使用Chiral网络：",
       "or": "或"
     },
-    "privateKey": "私钥"
+    "privateKey": "私钥",
+    "hd": {
+      "create_via_phrase": "通过恢复短语创建",
+      "import_phrase": "导入恢复短语",
+      "load_from_wallet": "从钱包加载"
+    }
   },
 
   "transfer": {

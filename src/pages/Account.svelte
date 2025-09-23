@@ -1274,10 +1274,10 @@
             </Button>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <Button variant="outline" class="w-full" on:click={openCreateMnemonic}>
-                <KeyRound class="h-4 w-4 mr-2" /> Create via Recovery Phrase
+                <KeyRound class="h-4 w-4 mr-2" /> {$t('wallet.hd.create_via_phrase')}
               </Button>
               <Button variant="outline" class="w-full" on:click={openImportMnemonic}>
-                <Import class="h-4 w-4 mr-2" /> Import Recovery Phrase
+                <Import class="h-4 w-4 mr-2" /> {$t('wallet.hd.import_phrase')}
               </Button>
             </div>
             
@@ -1301,7 +1301,7 @@
                   title="Import private key from wallet JSON"
                 >
                   <FileText class="h-4 w-4 mr-2" />
-                  Load from Wallet
+                  {$t('wallet.hd.load_from_wallet')}
                 </Button>
               </div>
               <Button 
