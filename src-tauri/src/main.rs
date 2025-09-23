@@ -12,7 +12,7 @@ mod geth_downloader;
 mod headless;
 mod keystore;
 
-use commands::proxy::{proxy_connect, proxy_disconnect, list_proxies, ProxyNode};
+use commands::proxy::{proxy_connect, proxy_disconnect, list_proxies, proxy_echo, ProxyNode};
 use dht::{DhtEvent, DhtMetricsSnapshot, DhtService, FileMetadata};
 use ethereum::{
     create_new_account, get_account_from_private_key, get_balance, get_block_number, get_hashrate,
@@ -1208,6 +1208,8 @@ fn main() {
             verify_and_enable_totp,
             verify_totp_code,
             disable_2fa
+            proxy_echo,
+            list_proxies
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())

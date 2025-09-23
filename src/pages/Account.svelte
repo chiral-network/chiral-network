@@ -17,6 +17,8 @@
   import { t, locale } from 'svelte-i18n'
   import { showToast } from '$lib/toast'
   import { get } from 'svelte/store'
+  import { totalEarned, totalSpent } from '$lib/stores';
+
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
   
   // Basic obfuscation for locally stored passwords. NOT for cryptographic security.
@@ -382,8 +384,8 @@
           address: $etcAccount?.address,
           privateKey: $etcAccount?.private_key,
           balance: $wallet.balance,
-          totalEarned: $wallet.totalEarned,
-          totalSpent: $wallet.totalSpent,
+          totalEarned: get(totalEarned),
+          totalSpent: get(totalSpent),
           pendingTransactions: $wallet.pendingTransactions,
           exportDate: new Date().toISOString(),
           version: "1.0"
@@ -489,7 +491,6 @@
       ...w,
       balance: w.balance - sendAmount,
       pendingTransactions: w.pendingTransactions + 1,
-      totalSpent: w.totalSpent + sendAmount
     }))
 
     transactions.update(txs => [
@@ -621,13 +622,18 @@
       }
       console.log('Running in web mode - using demo account')
     }
-    
+
     etcAccount.set(account)
     wallet.update(w => ({
       ...w,
-      address: account.address
+      address: account.address,
+      balance: 0,
+      pendingTransactions: 0
     }))
-    
+
+    // 🔹 Reset transaction history for new account
+    transactions.set([])
+
     showToast('Account Created Successfully!', 'success')
     
     if (isGethRunning) {
@@ -1315,6 +1321,47 @@
       alert('Could not generate the QR code.');
     }
   }
+
+  let sessionTimeout = 600; // seconds (10 minutes)
+  let sessionTimer: number | null = null;
+  let lastActivity = Date.now();
+  let autoLockMessage = '';
+
+  function resetSessionTimer() {
+    lastActivity = Date.now();
+    if (sessionTimer) clearTimeout(sessionTimer);
+    sessionTimer = window.setTimeout(() => {
+      autoLockWallet();
+    }, sessionTimeout * 1000);
+  }
+
+  function autoLockWallet() {
+    logout();
+    autoLockMessage = 'Wallet auto-locked due to inactivity.';
+    showToast(autoLockMessage, 'warning');
+    setTimeout(() => autoLockMessage = '', 5000);
+  }
+
+  // Listen for user activity to reset timer
+  function setupSessionTimeout() {
+    const events = ['mousemove', 'keydown', 'mousedown', 'touchstart'];
+    for (const ev of events) {
+      window.addEventListener(ev, resetSessionTimer);
+    }
+    resetSessionTimer();
+    return () => {
+      for (const ev of events) {
+        window.removeEventListener(ev, resetSessionTimer);
+      }
+      if (sessionTimer) clearTimeout(sessionTimer);
+    };
+  }
+
+  onMount(() => {
+    const cleanup = setupSessionTimeout();
+    return cleanup;
+  })
+
 </script>
 
 <div class="space-y-6">
@@ -1466,11 +1513,11 @@
             <div class="grid grid-cols-2 gap-4 mt-4">
           <div>
             <p class="text-xs text-muted-foreground">{$t('wallet.totalEarned')}</p>
-            <p class="text-sm font-medium text-green-600">+{$wallet.totalEarned.toFixed(2)} Chiral</p>
+            <p class="text-sm font-medium text-green-600">+{$totalEarned.toFixed(2)} Chiral</p>
           </div>
           <div>
             <p class="text-xs text-muted-foreground">{$t('wallet.totalSpent')}</p>
-            <p class="text-sm font-medium text-red-600">-{$wallet.totalSpent.toFixed(2)} Chiral</p>
+            <p class="text-sm font-medium text-red-600">-{$totalSpent.toFixed(2)} Chiral</p>
           </div>
         </div>
         
@@ -2343,6 +2390,9 @@
         </div>
       </div>
     </div>
+  {#if autoLockMessage}
+  <div class="fixed top-0 left-0 w-full bg-yellow-100 text-yellow-800 text-center py-2 z-50">
+    {autoLockMessage}
+  </div>
   {/if}
-
 </div>
