@@ -20,7 +20,6 @@ use std::{
 };
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{debug, error, info, warn};
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileMetadata {
     /// The Merkle root of the file's chunks, which serves as its unique identifier.
@@ -406,8 +405,19 @@ async fn handle_identify_event(
         IdentifyEvent::Received { peer_id, info, .. } => {
             info!("Identified peer {}: {:?}", peer_id, info.protocol_version);
             // Add identified peer to Kademlia routing table
-            for addr in info.listen_addrs {
-                swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
+            if peer_id != *swarm.local_peer_id() {
+                for addr in info.listen_addrs {
+                    let mut dont = false;
+                    for listener_addr in swarm.listeners() {
+                        // Compare IP + port only
+                        if addr == *listener_addr {
+                            dont = true;
+                        }
+                    }
+                    if !dont {
+                        swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
+                    }
+                }
             }
         }
         IdentifyEvent::Sent { peer_id, .. } => {
