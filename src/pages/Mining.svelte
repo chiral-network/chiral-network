@@ -54,6 +54,7 @@
   let hasRealTemperature = false
   let temperatureLoading = true // Add loading state for temperature checks
   let hasCompletedFirstCheck = false // Track if we've completed the first temperature check
+  let temperatureUnit: 'C' | 'F' = 'C'
 
   // Uptime tick (forces template to re-render every second while mining)
   let uptimeNow: number = Date.now()
@@ -88,6 +89,13 @@
     const level = detectLogLevel(log)
     return logFilters[level]
   })
+
+  $: displayedTemperature = temperatureUnit === 'F' ? toFahrenheit(temperature).toFixed(1) : temperature.toFixed(1);
+
+  // Function to convert Celsius to Fahrenheit
+  function toFahrenheit(celsius: number): number {
+    return (celsius * 9/5) + 32;
+  }
 
   // Determine log level from a log line and return a semantic level
   function detectLogLevel(line: string): 'error' | 'warn' | 'info' | 'other' {
@@ -848,7 +856,7 @@ function pushRecentBlock(b: {
           {#if temperatureLoading}
             <p class="text-2xl font-bold text-blue-500">--°C</p>
           {:else if hasRealTemperature}
-            <p class="text-2xl font-bold {temperature > 80 ? 'text-red-500' : temperature > 70 ? 'text-orange-500' : temperature > 60 ? 'text-yellow-500' : 'text-green-500'}">{temperature.toFixed(1)}°C</p>
+            <p class="text-2xl font-bold {temperature > 80 ? 'text-red-500' : temperature > 70 ? 'text-orange-500' : temperature > 60 ? 'text-yellow-500' : 'text-green-500'}">{displayedTemperature}°{temperatureUnit}</p>
           {:else}
             <p class="text-2xl font-bold text-gray-500">N/A</p>
           {/if}
@@ -870,8 +878,13 @@ function pushRecentBlock(b: {
             {/if}
           </div>
         </div>
-        <div class="p-2 {temperatureLoading ? 'bg-blue-500/20' : hasRealTemperature ? (temperature > 80 ? 'bg-red-500/20' : temperature > 70 ? 'bg-orange-500/20' : temperature > 60 ? 'bg-yellow-500/20' : 'bg-green-500/20') : 'bg-gray-500/20'} rounded-lg">
-          <Thermometer class="h-5 w-5 {temperatureLoading ? 'text-blue-500 animate-pulse' : hasRealTemperature ? (temperature > 80 ? 'text-red-500' : temperature > 70 ? 'text-orange-500' : temperature > 60 ? 'text-yellow-500' : 'text-green-500') : 'text-gray-500'}" />
+        <div class="flex flex-col gap-2">
+            <Button size="icon" variant="outline" on:click={() => temperatureUnit = temperatureUnit === 'C' ? 'F' : 'C'}>
+                {temperatureUnit === 'C' ? '°F' : '°C'}
+            </Button>
+            <div class="p-2 {temperatureLoading ? 'bg-blue-500/20' : hasRealTemperature ? (temperature > 80 ? 'bg-red-500/20' : temperature > 70 ? 'bg-orange-500/20' : temperature > 60 ? 'bg-yellow-500/20' : 'bg-green-500/20') : 'bg-gray-500/20'} rounded-lg">
+                <Thermometer class="h-5 w-5 {temperatureLoading ? 'text-blue-500 animate-pulse' : hasRealTemperature ? (temperature > 80 ? 'text-red-500' : temperature > 70 ? 'text-orange-500' : temperature > 60 ? 'text-yellow-500' : 'text-green-500') : 'text-gray-500'}" />
+            </div>
         </div>
       </div>
     </Card>
