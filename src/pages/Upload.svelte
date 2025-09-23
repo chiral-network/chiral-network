@@ -1,11 +1,11 @@
 <script lang="ts">
   import Card from '$lib/components/ui/card.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
-  import { File as FileIcon, X, Plus, FolderOpen, FileText, Image, Music, Video, Archive, Code, FileSpreadsheet, Zap, Upload, Download, RefreshCw } from 'lucide-svelte'
+  import { File as FileIcon, X, Plus, FolderOpen, FileText, Image, Music, Video, Archive, Code, FileSpreadsheet, Upload, Download, RefreshCw } from 'lucide-svelte'
   import { files } from '$lib/stores'
   import { t } from 'svelte-i18n';
   import { get } from 'svelte/store'
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { showToast } from '$lib/toast'
   import { getStorageStatus, isDuplicateHash } from '$lib/uploadHelpers.js'
   import { fileService } from '$lib/services/fileService'
@@ -206,7 +206,6 @@
   }
 
   // Hash copied popup state
-  import { tick } from 'svelte';
   let copiedHash: string | null = null;
   let showCopied = false;
   async function handleCopy(hash: string) {

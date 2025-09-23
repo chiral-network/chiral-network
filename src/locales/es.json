@@ -221,7 +221,12 @@
       "intro": "Comienza con la Red Chiral creando o importando una cuenta:",
       "or": "O"
     },
-    "privateKey": "Clave privada"
+    "privateKey": "Clave Privada",
+    "hd": {
+      "create_via_phrase": "Crear con Frase de Recuperación",
+      "import_phrase": "Importar Frase de Recuperación",
+      "load_from_wallet": "Cargar desde Billetera"
+    }
   },
 
   "transfer": {
