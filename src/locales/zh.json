@@ -290,7 +290,10 @@
       "empty": "未在存储中找到账户。",
       "success": "账户加载成功",
       "successSimulated": "账户已加载（演示模式）",
-      "error": "加载账户时出错: {error}"
+      "error": "加载账户时出错: {error}",
+      "savePassword": "在这台电脑上保存密码（30天后过期）",
+      "savePasswordWarning": "警告：在本地保存密码虽然方便，但安全性较低。请谨慎使用。",
+      "addressMismatch": "解密错误：地址不匹配。"
     }
   },
 
@@ -386,15 +389,15 @@
     "searchBlacklist": "搜索黑名单...",
     "reason": "输入原因..."
   },
-
+  
   "password": {
-    "weak": "密码强度弱",
-    "medium": "密码强度中等",
-    "strong": "密码强度强",
+    "weak": "弱密码",
+    "medium": "中等强度",
+    "strong": "强密码",
     "requirements": {
       "length": "至少8个字符",
       "uppercase": "一个大写字母",
-      "lowercase": "一个小写字母",
+      "lowercase": "一个小写字母", 
       "number": "一个数字",
       "special": "一个特殊字符"
     }
@@ -419,8 +422,7 @@
     "address": {
       "mustStartWith0x": "地址必须以0x开头。",
       "mustBe42": "地址必须正好是42个字符。",
-      "mustBeHex": "地址必须包含有效的十六进制字符 (0-9, a-f, A-F)",
-      "blacklisted": "该地址已被列入黑名单，无法接收交易"
+      "mustBeHex": "地址必须包含有效的十六进制字符 (0-9, a-f, A-F)"
     },
     "amount": {
       "invalid": "请输入大于0的有效数量。",
