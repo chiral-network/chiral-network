@@ -17,6 +17,8 @@
   import { t, locale } from 'svelte-i18n'
   import { showToast } from '$lib/toast'
   import { get } from 'svelte/store'
+  import { wallet, transactions, totalEarned, totalSpent } from '$lib/stores';
+
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
   
   // Basic obfuscation for locally stored passwords. NOT for cryptographic security.
