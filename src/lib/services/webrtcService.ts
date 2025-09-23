@@ -1,4 +1,5 @@
 import { writable, type Writable } from "svelte/store";
+import type { SignalingService } from "./signalingService";
 
 export type IceServer = RTCIceServer;
 
@@ -8,6 +9,8 @@ export type WebRTCOptions = {
   ordered?: boolean;
   maxRetransmits?: number;
   isInitiator?: boolean; // if true, create datachannel + offer
+  peerId?: string; // target peer to connect with
+  signaling?: SignalingService; // signaling service instance
   onLocalDescription?: (sdp: RTCSessionDescriptionInit) => void;
   onLocalIceCandidate?: (candidate: RTCIceCandidateInit) => void;
   onMessage?: (data: ArrayBuffer | string) => void;
@@ -16,6 +19,12 @@ export type WebRTCOptions = {
   onDataChannelClose?: () => void;
   onError?: (e: unknown) => void;
 };
+
+// Strongly typed signaling messages
+type SignalingMessage =
+  | { type: "offer"; sdp: RTCSessionDescriptionInit; from: string; to?: string }
+  | { type: "answer"; sdp: RTCSessionDescriptionInit; from: string; to?: string }
+  | { type: "candidate"; candidate: RTCIceCandidateInit; from: string; to?: string };
 
 export type WebRTCSession = {
   pc: RTCPeerConnection;
@@ -32,6 +41,7 @@ export type WebRTCSession = {
   // messaging
   send: (data: string | ArrayBuffer | Blob) => void;
   close: () => void;
+  peerId?: string;
 };
 
 const defaultIceServers: IceServer[] = [
@@ -46,6 +56,8 @@ export function createWebRTCSession(opts: WebRTCOptions = {}): WebRTCSession {
     ordered = true,
     maxRetransmits,
     isInitiator = true,
+    peerId,
+    signaling,
     onLocalDescription,
     onLocalIceCandidate,
     onMessage,
@@ -89,6 +101,13 @@ export function createWebRTCSession(opts: WebRTCOptions = {}): WebRTCSession {
   pc.onicecandidate = (ev) => {
     if (ev.candidate) {
       onLocalIceCandidate?.(ev.candidate.toJSON());
+      if (signaling && peerId) {
+        signaling.send({
+          type: "candidate",
+          candidate: ev.candidate.toJSON(),
+          to: peerId,
+        });
+      }
     }
   };
 
@@ -105,6 +124,11 @@ export function createWebRTCSession(opts: WebRTCOptions = {}): WebRTCSession {
     await pc.setLocalDescription(offer);
     const sdp = pc.localDescription!;
     onLocalDescription?.(sdp);
+    
+    if (signaling && peerId) {
+      signaling.send({ type: "offer", sdp, to: peerId });
+    }
+
     return sdp;
   }
 
@@ -140,10 +164,34 @@ export function createWebRTCSession(opts: WebRTCOptions = {}): WebRTCSession {
   function close() {
     try {
       channel?.close();
-    } catch {}
+    } catch (e) {
+      console.error("DataChannel close error:", e);
+    }
     try {
       pc.close();
-    } catch {}
+    } catch (e) {
+      console.error("RTCPeerConnection close error:", e);
+    }
+  }
+
+  // Hook into signaling for remote messages
+  if (signaling && peerId) {
+    signaling.setOnMessage(async (msg: SignalingMessage) => {
+      if (msg.from !== peerId) return;
+
+      try {
+        if (msg.type === "offer") {
+          const answer = await acceptOfferCreateAnswer(msg.sdp);
+          signaling.send({ type: "answer", sdp: answer, to: peerId });
+        } else if (msg.type === "answer") {
+          await acceptAnswer(msg.sdp);
+        } else if (msg.type === "candidate") {
+          await addRemoteIceCandidate(msg.candidate);
+        }
+      } catch (e) {
+        console.error("Error handling signaling message:", e);
+      }
+    });
   }
 
   return {
@@ -157,5 +205,6 @@ export function createWebRTCSession(opts: WebRTCOptions = {}): WebRTCSession {
     addRemoteIceCandidate,
     send,
     close,
+    peerId,
   };
 }

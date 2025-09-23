@@ -4,8 +4,9 @@
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
-  import { Shield, ShieldCheck, ShieldX, Globe, Activity, Plus, Power, Trash2 } from 'lucide-svelte'
-  import { proxyNodes } from '$lib/stores'
+  import { ShieldCheck, ShieldX, Globe, Activity, Plus, Power, Trash2 } from 'lucide-svelte'
+  import { onMount } from 'svelte';
+  import { proxyNodes, connectProxy, disconnectProxy, listProxies } from '$lib/proxy';
   import { t } from 'svelte-i18n'
   import DropDown from '$lib/components/ui/dropDown.svelte'
   
@@ -37,8 +38,12 @@
       return statusOrder[a.status] - statusOrder[b.status];
   });
 
+  
+  onMount(() => {
+      listProxies();
+  });
+
   function addNode() {
-      const validAddressRegex = /^[a-zA-Z0-9.-]+:[0-9]{1,5}$/
       const isDuplicate = $proxyNodes.some(node => node.address === newNodeAddress.trim())
       if (isDuplicate) {
           alert($t('proxy.alreadyAdded'))
@@ -50,42 +55,19 @@
           return
       }
 
-      const newNode = {
-          id: `node-${Date.now()}`,
-          address: newNodeAddress.trim(),
-          status: 'connecting' as const,
-          bandwidth: 0,
-          latency: 999,
-          region: 'Unknown'
-      }
-
-      proxyNodes.update(nodes => [...nodes, newNode])
+      // For now, we'll use a dummy token.
+      connectProxy(newNodeAddress.trim(), "dummy-token");
       newNodeAddress = ''
-
-      // Simulate connection
-      setTimeout(() => {
-          proxyNodes.update(nodes => nodes.map(node => {
-              if (node.id === newNode.id) {
-                  return {
-                      ...node,
-                      status: 'online',
-                      bandwidth: Math.floor(Math.random() * 100),
-                      latency: Math.floor(Math.random() * 100)
-                  }
-              }
-              return node
-          }))
-      }, 2000)
   }
 
-  function requestRemoveNode(nodeId: string) {
-    nodeToRemove = $proxyNodes.find(node => node.id === nodeId)
+  function requestRemoveNode(node: any) {
+    nodeToRemove = node;
     showConfirmDialog = true
   }
 
   function confirmRemoveNode() {
     if (nodeToRemove) {
-      proxyNodes.update(nodes => nodes.filter(node => node.id !== nodeToRemove.id))
+      disconnectProxy(nodeToRemove.address)
     }
     showConfirmDialog = false
     nodeToRemove = null
@@ -95,18 +77,16 @@
     showConfirmDialog = false
     nodeToRemove = null
   }
-  
-  function toggleNode(nodeId: string) {
-    proxyNodes.update(nodes => nodes.map(node => {
-      if (node.id === nodeId) {
-        return {
-          ...node,
-          status: node.status === 'online' ? 'offline' : 'online'
-        }
+
+  function toggleNode(node: any) {
+      if (node.status === 'online') {
+          disconnectProxy(node.address);
+      } else {
+          // For now, we'll use a dummy token.
+          connectProxy(node.address, "dummy-token");
       }
-      return node
-    }))
   }
+
   
   $: activeNodes = $proxyNodes.filter(n => n.status === 'online').length
   $: totalBandwidth = $proxyNodes.reduce((sum, n) => sum + (n.status === 'online' ? n.bandwidth : 0), 0)
@@ -135,30 +115,13 @@
 {/if}
 
 <div class="space-y-6">
-  <!-- Enhanced header with dynamic visual feedback -->
-  <div class="text-center space-y-4">
-    <div class="flex items-center justify-center gap-3">
-      <div class="relative">
-        {#if proxyEnabled}
-          <ShieldCheck class="h-10 w-10 text-green-500 animate-pulse" />
-          <div class="absolute inset-0 h-10 w-10 bg-green-500/20 rounded-lg blur-lg animate-pulse"></div>
-        {:else}
-          <ShieldX class="h-10 w-10 text-red-500" />
-        {/if}
-      </div>
-      <h1 class="text-3xl font-bold bg-gradient-to-r from-foreground to-foreground/80 bg-clip-text">{$t('proxy.title')}</h1>
-    </div>
-    <p class="text-muted-foreground text-lg">{$t('proxy.subtitle')}</p>
-    
-    <!-- Status indicator -->
-    <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full transition-all duration-300 {proxyEnabled ? 'bg-green-500/10 text-green-600' : 'bg-red-500/10 text-red-600'}">
-      <div class="w-2 h-2 rounded-full {proxyEnabled ? 'bg-green-500 animate-pulse' : 'bg-red-500'}"></div>
-      <span class="text-sm font-medium">{proxyEnabled ? 'Network Protected' : 'Network Exposed'}</span>
-    </div>
+  <div>
+    <h1 class="text-3xl font-bold">{$t('proxy.title')}</h1>
+    <p class="text-muted-foreground mt-2">{$t('proxy.subtitle')}</p>
   </div>
   
   <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-    <Card class="p-4 transition-all duration-300 hover:shadow-lg">
+    <Card class="p-4">
       <div class="flex items-center gap-3">
         <div class="relative p-2 rounded-lg transition-all duration-300 {proxyEnabled ? 'bg-green-500/10 shadow-green-500/20 shadow-lg' : 'bg-red-500/10 shadow-red-500/20 shadow-lg'}">
           {#if proxyEnabled}
@@ -214,7 +177,7 @@
     </Card>
   </div>
   
-  <Card class="p-6 transition-all duration-300 hover:shadow-lg">
+  <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
       <div class="flex items-center gap-3">
         <h2 class="text-lg font-semibold">{$t('proxy.settings')}</h2>
@@ -238,11 +201,11 @@
           aria-checked={proxyEnabled}
           aria-label="Toggle proxy {proxyEnabled ? 'off' : 'on'}"
           on:click={() => (proxyEnabled = !proxyEnabled)}
-          class="group relative inline-flex h-7 w-12 items-center rounded-full transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 hover:scale-105
+          class="group relative inline-flex h-7 w-12 items-center rounded-full transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2
              {proxyEnabled ? 'bg-green-500 focus:ring-green-500 shadow-lg shadow-green-500/30' : 'bg-gray-300 focus:ring-gray-400'}"
           >
           <span
-            class="inline-block h-5 w-5 transform rounded-full bg-white transition-all duration-300 shadow-lg group-hover:scale-110
+            class="inline-block h-5 w-5 transform rounded-full bg-white transition-all duration-300 shadow-lg
                {proxyEnabled ? 'translate-x-6' : 'translate-x-1'}"
           >
             <!-- Mini icon inside toggle -->
@@ -346,7 +309,7 @@
             <Button
               size="sm"
               variant="destructive"
-              on:click={() => requestRemoveNode(node.id)}
+              on:click={() => requestRemoveNode(node)}
             >
               <Trash2 class="h-3 w-3 mr-1" />
               {$t('proxy.remove')}
