@@ -6,8 +6,8 @@
   import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText } from 'lucide-svelte'
   import DropDown from "$lib/components/ui/dropDown.svelte";
   import { wallet, etcAccount, blacklist} from '$lib/stores' 
-  import { transactions, type Transaction } from '$lib/stores';
-  import { writable, derived } from 'svelte/store'
+  import { transactions } from '$lib/stores';
+  import { derived } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
   import QRCode from 'qrcode'
   import { Html5QrcodeScanner as Html5QrcodeScannerClass } from 'html5-qrcode'
@@ -47,7 +47,6 @@
   // HD helpers are used within MnemonicWizard/AccountList components
 
   // Transaction components
-  import TransactionList from '$lib/components/TransactionList.svelte'
   import TransactionReceipt from '$lib/components/TransactionReceipt.svelte'
 
 
@@ -111,6 +110,19 @@
   let selectedTransaction: any = null;
   let showTransactionReceipt = false;
   
+  // 2FA State
+  // In a real app, this status should be loaded with the user's account data.
+  let is2faEnabled = false; 
+  let show2faSetupModal = false;
+  let show2faPromptModal = false;
+  let totpSetupInfo: { secret: string; qrCodeDataUrl: string } | null = null;
+  let totpVerificationCode = '';
+  let isVerifying2fa = false;
+  let actionToConfirm: (() => any) | null = null;
+  let totpActionCode = '';
+  let isVerifyingAction = false;
+  let twoFaErrorMessage = '';
+
 
   let Html5QrcodeScanner: InstanceType<typeof Html5QrcodeScannerClass> | null = null;
   
@@ -350,78 +362,82 @@
 }
 
   function copyPrivateKey() {
-    const privateKeyToCopy = $etcAccount ? $etcAccount.private_key : '';
-    if (privateKeyToCopy) {
-      navigator.clipboard.writeText(privateKeyToCopy);
-      privateKeyCopyMessage = tr('messages.copied');
-    }
-    else {
-      privateKeyCopyMessage = tr('messages.failed');
-    }
-    setTimeout(() => privateKeyCopyMessage = '', 1500);
+    with2FA(() => {
+      const privateKeyToCopy = $etcAccount ? $etcAccount.private_key : '';
+      if (privateKeyToCopy) {
+        navigator.clipboard.writeText(privateKeyToCopy);
+        privateKeyCopyMessage = tr('messages.copied');
+      }
+      else {
+        privateKeyCopyMessage = tr('messages.failed');
+      }
+      setTimeout(() => privateKeyCopyMessage = '', 1500);
+    });
   }
     
-  async function exportWallet() {
-    try {
-      const walletData = {
-        address: $etcAccount?.address,
-        privateKey: $etcAccount?.private_key,
-        balance: $wallet.balance,
-        totalEarned: $wallet.totalEarned,
-        totalSpent: $wallet.totalSpent,
-        pendingTransactions: $wallet.pendingTransactions,
-        exportDate: new Date().toISOString(),
-        version: "1.0"
-      };
-      
-      const dataStr = JSON.stringify(walletData, null, 2);
-      const dataBlob = new Blob([dataStr], { type: 'application/json' });
-      
-      // Check if the File System Access API is supported
-      if ('showSaveFilePicker' in window) {
-        try {
-          const fileHandle = await (window as any).showSaveFilePicker({
-            suggestedName: `chiral-wallet-export-${new Date().toISOString().split('T')[0]}.json`,
-            types: [{
-              description: 'JSON files',
-              accept: {
-                'application/json': ['.json'],
-              },
-            }],
-          });
-          
-          const writable = await fileHandle.createWritable();
-          await writable.write(dataBlob);
-          await writable.close();
+  function exportWallet() {
+    with2FA(async () => {
+      try {
+        const walletData = {
+          address: $etcAccount?.address,
+          privateKey: $etcAccount?.private_key,
+          balance: $wallet.balance,
+          totalEarned: $wallet.totalEarned,
+          totalSpent: $wallet.totalSpent,
+          pendingTransactions: $wallet.pendingTransactions,
+          exportDate: new Date().toISOString(),
+          version: "1.0"
+        };
+        
+        const dataStr = JSON.stringify(walletData, null, 2);
+        const dataBlob = new Blob([dataStr], { type: 'application/json' });
+        
+        // Check if the File System Access API is supported
+        if ('showSaveFilePicker' in window) {
+          try {
+            const fileHandle = await (window as any).showSaveFilePicker({
+              suggestedName: `chiral-wallet-export-${new Date().toISOString().split('T')[0]}.json`,
+              types: [{
+                description: 'JSON files',
+                accept: {
+                  'application/json': ['.json'],
+                },
+              }],
+            });
+            
+            const writable = await fileHandle.createWritable();
+            await writable.write(dataBlob);
+            await writable.close();
+
+            exportMessage = tr('wallet.exportSuccess');
+          } catch (error: any) {
+            if (error.name !== 'AbortError') {
+              throw error;
+            }
+            // User cancelled, don't show error message
+            return;
+          }
+        } else {
+          // Fallback for browsers that don't support File System Access API
+          const url = URL.createObjectURL(dataBlob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `chiral-wallet-export-${new Date().toISOString().split('T')[0]}.json`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
 
           exportMessage = tr('wallet.exportSuccess');
-        } catch (error: any) {
-          if (error.name !== 'AbortError') {
-            throw error;
-          }
-          // User cancelled, don't show error message
-          return;
         }
-      } else {
-        // Fallback for browsers that don't support File System Access API
-        const url = URL.createObjectURL(dataBlob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `chiral-wallet-export-${new Date().toISOString().split('T')[0]}.json`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-
-        exportMessage = tr('wallet.exportSuccess');
+        
+        setTimeout(() => exportMessage = '', 3000);
+      } catch (error) {
+        console.error('Export failed:', error);
+        exportMessage = tr('errors.exportFailed');
+        setTimeout(() => exportMessage = '', 3000);
       }
-      
-      setTimeout(() => exportMessage = '', 3000);
-    } catch (error) {
-      console.error('Export failed:', error);
-      exportMessage = tr('errors.exportFailed');
-      setTimeout(() => exportMessage = '', 3000);
-    }
+    });
   }
   
   function handleSendClick() {
@@ -433,7 +449,7 @@
       return
     }
 
-    startCountdown()
+    with2FA(startCountdown);
   }
 
   function startCountdown() {
@@ -937,6 +953,123 @@
       localStorage.setItem('chiral_keystore_passwords', JSON.stringify(savedPasswords));
     } catch (e) {
       console.error("Failed to save password to localStorage", e);
+  // --- 2FA Functions ---
+
+  // This would be called by the "Enable 2FA" button
+  async function setup2FA() {
+    // In a real app, this would come from the Rust backend
+    // RUST: `invoke('generate_totp_secret')` -> { secret: string, otpauth_url: string }
+    try {
+      // --- SIMULATION ---
+      // This is a dummy secret. Your backend should generate a cryptographically secure one.
+      const secret = 'JBSWY3DPEHPK3PXP' + Math.random().toString(36).substring(2, 10).toUpperCase();
+      const issuer = encodeURIComponent('Chiral Network');
+      const account = encodeURIComponent($etcAccount?.address.slice(0, 16) || 'user');
+      const otpauth_url = `otpauth://totp/${issuer}:${account}?secret=${secret}&issuer=${issuer}`;
+      const qrCodeDataUrl = await QRCode.toDataURL(otpauth_url);
+      // --- END SIMULATION ---
+
+      totpSetupInfo = { secret, qrCodeDataUrl };
+      show2faSetupModal = true;
+      totpVerificationCode = '';
+      twoFaErrorMessage = '';
+    } catch (err) {
+      console.error('Failed to setup 2FA:', err);
+      showToast('Failed to start 2FA setup.', 'error');
+    }
+  }
+
+  // Called from the setup modal to verify and enable 2FA
+  async function verifyAndEnable2FA() {
+    if (!totpSetupInfo || !totpVerificationCode) return;
+    isVerifying2fa = true;
+    twoFaErrorMessage = '';
+
+    try {
+      // RUST: `invoke('verify_and_enable_totp', { secret: totpSetupInfo.secret, code: totpVerificationCode })` -> bool
+      // --- SIMULATION: We'll accept any 6-digit code for this demo. ---
+      await new Promise(r => setTimeout(r, 500));
+      const success = /^\d{6}$/.test(totpVerificationCode);
+      if (!success) throw new Error('Invalid verification code format.');
+      // --- END SIMULATION ---
+
+      if (success) {
+        // Persist that 2FA is enabled for the account.
+        is2faEnabled = true; 
+        show2faSetupModal = false;
+        showToast('Two-Factor Authentication has been enabled!', 'success');
+      } else {
+        twoFaErrorMessage = 'Invalid code. Please try again.';
+      }
+    } catch (error) {
+      twoFaErrorMessage = String(error);
+    } finally {
+      isVerifying2fa = false;
+    }
+  }
+
+  // This is the main wrapper for protected actions
+  function with2FA(action: () => any) {
+    if (!is2faEnabled) {
+      action();
+      return;
+    }
+    
+    // If 2FA is enabled, show the prompt
+    actionToConfirm = action;
+    totpActionCode = '';
+    twoFaErrorMessage = '';
+    show2faPromptModal = true;
+  }
+
+  // Called from the 2FA prompt modal
+  async function confirmActionWith2FA() {
+    if (!actionToConfirm || !totpActionCode) return;
+    isVerifyingAction = true;
+    twoFaErrorMessage = '';
+
+    try {
+      // RUST: `invoke('verify_totp_code', { code: totpActionCode })` -> bool
+      // --- SIMULATION: We'll accept any 6-digit code for this demo. ---
+      await new Promise(r => setTimeout(r, 500));
+      const success = /^\d{6}$/.test(totpActionCode);
+      if (!success) throw new Error('Invalid 2FA code.');
+      // --- END SIMULATION ---
+
+      if (success) {
+        show2faPromptModal = false;
+        actionToConfirm(); // Execute the original action
+      } else {
+        twoFaErrorMessage = 'Invalid code. Please try again.';
+      }
+    } catch (error) {
+      twoFaErrorMessage = String(error);
+    } finally {
+      isVerifyingAction = false;
+      actionToConfirm = null;
+    }
+  }
+
+  // To disable 2FA (this action is also protected by 2FA)
+  function disable2FA() {
+      with2FA(() => {
+          // RUST: `invoke('disable_2fa')`
+          // --- SIMULATION ---
+          is2faEnabled = false;
+          showToast('Two-Factor Authentication has been disabled.', 'warning');
+          // --- END SIMULATION ---
+      });
+  }
+
+  function togglePrivateKeyVisibility() {
+    if (privateKeyVisible) {
+        // Hiding doesn't need 2FA
+        privateKeyVisible = false;
+    } else {
+        // Showing needs 2FA
+        with2FA(() => {
+            privateKeyVisible = true;
+        });
     }
   }
 
@@ -1115,7 +1248,6 @@
 
   function logout() {
     // Clear the account details from memory, effectively logging out
-    loadKeystoreAccountsList()
     etcAccount.set(null);
 
     // Reset wallet state to defaults
@@ -1128,13 +1260,25 @@
       pendingTransactions: 0,
     }));
 
-    // Clear any other sensitive state that might be in component memory
+    // Explicitly nullify sensitive component state variables to assist garbage collection.
     privateKeyVisible = false;
     keystorePassword = '';
     loadKeystorePassword = '';
     importPrivateKey = '';
 
+    // For enhanced security, clear any session-related data from browser storage.
+    // This helps ensure no sensitive information like private keys persists in localStorage.
+    // Note: This will clear ALL data for this domain (e.g., settings, blacklist).
+    if (typeof window !== 'undefined') {
+      window.localStorage?.clear();
+      window.sessionStorage?.clear();
+    }
+
     console.log('Session cleared, wallet locked.');
+    showToast('Wallet locked and session data cleared', 'success');
+    
+    // Refresh the list of keystore accounts for the login view
+    loadKeystoreAccountsList();
   }
 
   async function generateAndShowQrCode(){
@@ -1196,10 +1340,10 @@
             </Button>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <Button variant="outline" class="w-full" on:click={openCreateMnemonic}>
-                <KeyRound class="h-4 w-4 mr-2" /> Create via Recovery Phrase
+                <KeyRound class="h-4 w-4 mr-2" /> {$t('wallet.hd.create_via_phrase')}
               </Button>
               <Button variant="outline" class="w-full" on:click={openImportMnemonic}>
-                <Import class="h-4 w-4 mr-2" /> Import Recovery Phrase
+                <Import class="h-4 w-4 mr-2" /> {$t('wallet.hd.import_phrase')}
               </Button>
             </div>
             
@@ -1223,7 +1367,7 @@
                   title="Import private key from wallet JSON"
                 >
                   <FileText class="h-4 w-4 mr-2" />
-                  Load from Wallet
+                  {$t('wallet.hd.load_from_wallet')}
                 </Button>
               </div>
               <Button 
@@ -1392,7 +1536,7 @@
                   size="sm"
                   variant="outline"
                   class="w-16"
-                  on:click={() => privateKeyVisible = !privateKeyVisible}
+                  on:click={togglePrivateKeyVisibility}
                 >
                   {privateKeyVisible ? $t('actions.hide') : $t('actions.show')}
                 </Button>
@@ -1415,25 +1559,6 @@
          {/if}
       </div>
     </Card>
-
-    {#if hdMnemonic}
-      <Card class="p-6">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="text-lg font-semibold">HD Wallet</h2>
-          <div class="flex gap-2">
-            <Button variant="outline" on:click={openCreateMnemonic}>New</Button>
-            <Button variant="outline" on:click={openImportMnemonic}>Import</Button>
-          </div>
-        </div>
-        <p class="text-sm text-muted-foreground mb-4">Path m/44'/{98765}'/0'/0/*</p>
-        <AccountList
-          mnemonic={hdMnemonic}
-          passphrase={hdPassphrase}
-          accounts={hdAccounts}
-          onAccountsChange={onHDAccountsChange}
-        />
-      </Card>
-    {/if}
     
     {#if $etcAccount}
     <Card class="p-6">
@@ -1558,11 +1683,7 @@
               <circle cx="12" cy="10" r="8" />
               <polyline points="12,6 12,10 16,14" />
             </svg>
-            {#if $pendingCount > 0}
-              {$t('transfer.pending.count', { values: { count: $pendingCount } })}
-            {:else}
-              {$t('transfer.pending.none')}
-            {/if}
+            {$t('transfer.pending.count', { values: { count: $pendingCount } })}
           </span>
         </Button>
         {#if showPending}
@@ -1588,6 +1709,24 @@
   </div>
 
   {#if $etcAccount}
+    {#if hdMnemonic}
+        <Card class="p-6">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-lg font-semibold">HD Wallet</h2>
+            <div class="flex gap-2">
+              <Button variant="outline" on:click={openCreateMnemonic}>New</Button>
+              <Button variant="outline" on:click={openImportMnemonic}>Import</Button>
+            </div>
+          </div>
+          <p class="text-sm text-muted-foreground mb-4">Path m/44'/{98765}'/0'/0/*</p>
+          <AccountList
+            mnemonic={hdMnemonic}
+            passphrase={hdPassphrase}
+            accounts={hdAccounts}
+            onAccountsChange={onHDAccountsChange}
+          />
+        </Card>
+    {/if}
   <!-- Transaction History Section - Full Width -->
   <Card class="p-6 mt-4">
     <div class="flex items-center justify-between mb-4">
@@ -1738,6 +1877,38 @@
   </Card>
   {/if}
 
+  {#if $etcAccount}
+  <Card class="p-6">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h2 class="text-lg font-semibold">{$t('security.2fa.title')}</h2>
+          <p class="text-sm text-muted-foreground mt-1">{$t('security.2fa.subtitle')}</p>
+        </div>
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-muted-foreground"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+      </div>
+      <div class="space-y-4">
+        {#if is2faEnabled}
+          <div class="flex items-center justify-between p-3 bg-green-50 border border-green-200 rounded-lg">
+            <div class="flex items-center gap-3">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-green-600"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+              <div>
+                <p class="font-semibold text-green-800">{$t('security.2fa.enabledTitle')}</p>
+                <p class="text-sm text-green-700">{$t('security.2fa.enabledDesc')}</p>
+              </div>
+            </div>
+            <Button variant="destructive" on:click={disable2FA}>{$t('security.2fa.disable')}</Button>
+          </div>
+        {:else}
+          <div class="flex items-center justify-between p-4 border-2 border-dashed rounded-lg">
+            <p class="text-sm text-muted-foreground">{$t('security.2fa.disabledDesc')}</p>
+            <Button on:click={setup2FA}>{$t('security.2fa.enable')}</Button>
+          </div>
+        {/if}
+        <p class="text-xs text-muted-foreground">{$t('security.2fa.explanation')}</p>
+      </div>
+  </Card>
+  {/if}
+
   <Card class="p-6">
     <div class="flex items-center gap-2 mb-4">
       <KeyRound class="h-5 w-5 text-muted-foreground" />
@@ -1761,7 +1932,7 @@
               <div class="h-1 flex-1 bg-gray-200 rounded-full overflow-hidden">
                 <div
                   class="h-full transition-all duration-300 {passwordStrength === 'strong' ? 'bg-green-500 w-full' : passwordStrength === 'medium' ? 'bg-yellow-500 w-2/3' : 'bg-red-500 w-1/3'}"
-                />
+                ></div>
               </div>
               <span class="text-xs {passwordStrength === 'strong' ? 'text-green-600' : passwordStrength === 'medium' ? 'text-yellow-600' : 'text-red-600'}">
                 {passwordFeedback}
@@ -2056,5 +2227,111 @@
     isOpen={showTransactionReceipt}
     onClose={closeTransactionReceipt}
   />
+
+  <!-- 2FA Setup Modal -->
+  {#if show2faSetupModal && totpSetupInfo}
+    <div
+      class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+      role="button"
+      tabindex="0"
+      on:click={() => show2faSetupModal = false}
+      on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') show2faSetupModal = false; }}
+    >
+      <div
+        class="bg-card p-6 rounded-lg shadow-xl w-full max-w-md text-card-foreground"
+        on:click|stopPropagation
+        role="dialog"
+        aria-modal="true"
+        on:keydown={(e) => { if (e.key === 'Escape') show2faSetupModal = false; }}
+      >
+        <h3 class="text-xl font-semibold mb-2">{$t('security.2fa.setup.title')}</h3>
+        <p class="text-sm text-muted-foreground mb-4">{$t('security.2fa.setup.step1')}</p>
+        
+        <div class="flex flex-col md:flex-row gap-4 items-center bg-background p-4 rounded-lg">
+          <img src={totpSetupInfo.qrCodeDataUrl} alt="2FA QR Code" class="w-40 h-40 rounded-md border bg-white p-1" />
+          <div class="space-y-2">
+            <p class="text-sm">{$t('security.2fa.setup.scanAlt')}</p>
+            <p class="text-xs text-muted-foreground">{$t('security.2fa.setup.manualLabel')}</p>
+            <div class="flex items-center gap-2 bg-secondary p-2 rounded">
+              <code class="text-sm font-mono break-all">{totpSetupInfo.secret}</code>
+              <Button size="icon" variant="ghost" on:click={() => { navigator.clipboard.writeText(totpSetupInfo.secret); showToast('Copied!', 'success'); }}>
+                <Copy class="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        <p class="text-sm text-muted-foreground my-4">{$t('security.2fa.setup.step2')}</p>
+        <div class="space-y-2">
+          <Label for="totp-verify">{$t('security.2fa.setup.verifyLabel')}</Label>
+          <Input
+            id="totp-verify"
+            type="text"
+            bind:value={totpVerificationCode}
+            placeholder="123456"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            maxlength="6"
+          />
+          {#if twoFaErrorMessage}
+            <p class="text-sm text-red-500">{twoFaErrorMessage}</p>
+          {/if}
+        </div>
+
+        <div class="mt-6 flex justify-end gap-2">
+          <Button variant="outline" on:click={() => show2faSetupModal = false}>{$t('actions.cancel')}</Button>
+          <Button on:click={verifyAndEnable2FA} disabled={isVerifying2fa || totpVerificationCode.length < 6}>
+            {isVerifying2fa ? $t('actions.verifying') : $t('security.2fa.setup.verifyAndEnable')}
+          </Button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- 2FA Action Prompt Modal -->
+  {#if show2faPromptModal}
+    <div
+      class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+      role="button"
+      tabindex="0"
+      on:click={() => { show2faPromptModal = false; actionToConfirm = null; }}
+      on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { show2faPromptModal = false; actionToConfirm = null; } }}
+    >
+      <div
+        class="bg-card p-6 rounded-lg shadow-xl w-full max-w-sm text-card-foreground"
+        on:click|stopPropagation
+        role="dialog"
+        aria-modal="true"
+        on:keydown={(e) => { if (e.key === 'Escape') { show2faPromptModal = false; actionToConfirm = null; } }}
+      >
+        <h3 class="text-xl font-semibold mb-2">{$t('security.2fa.prompt.title')}</h3>
+        <p class="text-sm text-muted-foreground mb-4">{$t('security.2fa.prompt.subtitle')}</p>
+        
+        <div class="space-y-2">
+          <Label for="totp-action">{$t('security.2fa.prompt.label')}</Label>
+          <Input
+            id="totp-action"
+            type="text"
+            bind:value={totpActionCode}
+            placeholder="123456"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            maxlength="6"
+            autofocus
+          />
+          {#if twoFaErrorMessage}
+            <p class="text-sm text-red-500">{twoFaErrorMessage}</p>
+          {/if}
+        </div>
+
+        <div class="mt-6 flex justify-end gap-2">
+          <Button variant="outline" on:click={() => { show2faPromptModal = false; actionToConfirm = null; }}>{$t('actions.cancel')}</Button>
+          <Button on:click={confirmActionWith2FA} disabled={isVerifyingAction || totpActionCode.length < 6}>
+            {isVerifyingAction ? $t('actions.verifying') : $t('actions.confirm')}
+          </Button>
+        </div>
+      </div>
+    </div>
+  {/if}
 
 </div>
