@@ -2390,6 +2390,7 @@
         </div>
       </div>
     </div>
+  {/if}
   {#if autoLockMessage}
   <div class="fixed top-0 left-0 w-full bg-yellow-100 text-yellow-800 text-center py-2 z-50">
     {autoLockMessage}
