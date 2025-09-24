@@ -11,8 +11,10 @@ export interface ProxyNode {
 }
 
 export const proxyNodes = writable<ProxyNode[]>([]);
+export const echoInbox = writable<{from:string,text?:string,bytes:number,ts:number}[]>([]);
 
 let unlisten: UnlistenFn | null = null;
+let unlistenEcho: (()=>void)|undefined;
 
 export async function initProxyEvents() {
   if (typeof window === 'undefined') return; // SSR guard
@@ -33,6 +35,12 @@ export async function initProxyEvents() {
       return [...nodes, updated];
     });
   });
+
+  const un = await listen('proxy_echo_rx', (e) => {
+    const m = e.payload as {from:string, text?:string, bytes?:number};
+    echoInbox.update(xs => [{ from: m.from, text: m.text, bytes: m.bytes ?? 0, ts: Date.now() }, ...xs].slice(0,100));
+  });
+  unlistenEcho = un;
 }
 
 export function disposeProxyEvents() {
@@ -40,6 +48,7 @@ export function disposeProxyEvents() {
     unlisten();
     unlisten = null;
   }
+  unlistenEcho?.();
 }
 
 export async function connectProxy(url: string, token: string) {
