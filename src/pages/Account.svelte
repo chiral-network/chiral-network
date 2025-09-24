@@ -1967,6 +1967,7 @@
   </Card>
   {/if}
 
+  {#if $etcAccount}
   <Card class="p-6">
     <div class="flex items-center gap-2 mb-4">
       <KeyRound class="h-5 w-5 text-muted-foreground" />
@@ -2021,7 +2022,9 @@
       {/if}
     </div>
   </Card>
-
+  {/if}
+  
+  {#if $etcAccount}
   <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
       <div>
@@ -2278,6 +2281,7 @@
       
     </div>
   </Card>
+  {/if}
 
   <!-- Transaction Receipt Modal -->
   <TransactionReceipt
