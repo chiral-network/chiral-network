@@ -352,16 +352,33 @@
       entry.chiral_address.toLowerCase() === address.toLowerCase()
     );
   }
-  
+
   function copyAddress() {
-  const addressToCopy = $etcAccount ? $etcAccount.address : $wallet.address;
-  navigator.clipboard.writeText(addressToCopy);
-  
-  
-  showToast('Address copied to clipboard!', 'success')
-  
-  
-}
+    const addressToCopy = $etcAccount ? $etcAccount.address : $wallet.address;
+    navigator.clipboard.writeText(addressToCopy);
+    
+    
+    showToast('Address copied to clipboard!', 'success')
+  }
+
+  function generateDemoAddress() {
+    const chars = '0123456789abcdef';
+    let address = '0x';
+    for (let i = 0; i < 40; i++) {
+      address += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return address;
+  }
+
+  function generateDemoPrivateKey() {
+    const chars = '0123456789abcdef';
+    let privateKey = '0x';
+    for (let i = 0; i < 64; i++) {
+      privateKey += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return privateKey;
+  }
+
 
   function copyPrivateKey() {
     with2FA(() => {
@@ -612,8 +629,9 @@
     if (isTauri) {
       account = await invoke('create_chiral_account') as { address: string, private_key: string, blacklist: Object[] }
     } else {
-      const demoAddress = '0x' + Math.random().toString(16).substr(2, 40)
-      const demoPrivateKey = '0x' + Math.random().toString(16).substr(2, 64)
+      const demoAddress = generateDemoAddress()
+      const demoPrivateKey = generateDemoPrivateKey()
+
       const demoBlackList = [{node_id: 169245, name: "Jane"}]
       account = {
         address: demoAddress,
@@ -738,7 +756,7 @@
       if (isTauri) {
         account = await invoke('import_chiral_account', { privateKey: importPrivateKey }) as { address: string, private_key: string }
       } else {
-        const demoAddress = '0x' + Math.random().toString(16).substr(2, 40)
+        const demoAddress = generateDemoAddress();
         account = {
           address: demoAddress,
           private_key: importPrivateKey
@@ -1967,6 +1985,7 @@
   </Card>
   {/if}
 
+  {#if $etcAccount}
   <Card class="p-6">
     <div class="flex items-center gap-2 mb-4">
       <KeyRound class="h-5 w-5 text-muted-foreground" />
@@ -2021,7 +2040,9 @@
       {/if}
     </div>
   </Card>
-
+  {/if}
+  
+  {#if $etcAccount}
   <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
       <div>
@@ -2278,6 +2299,7 @@
       
     </div>
   </Card>
+  {/if}
 
   <!-- Transaction Receipt Modal -->
   <TransactionReceipt

@@ -465,8 +465,6 @@
       $miningState.hashRate = '0 H/s'
       $miningState.activeThreads = 0 
 
-      // ❌ Remove session payout, since pushRecentBlock already logs rewards
-
       // Clear session start time
       $miningState.sessionStartTime = undefined
       // Clear mining history when stopping
@@ -533,15 +531,15 @@ function pushRecentBlock(b: {
   // Reset pagination so newest block is visible
   currentPage = 1;
 
-  // 💳 Still log the transaction, but keep status pending
   if (reward > 0) {
+    const last4 = b.hash.slice(-4); // grab last 4 chars of hash
     const tx: Transaction = {
       id: Date.now(),
       type: 'received',
       amount: reward,
       from: 'Mining reward',
       date: new Date(),
-      description: `Block reward (#${item.number})`,
+      description: `Block Reward (…${last4})`,
       status: 'pending' // will flip to 'completed' when backend confirms
     };
     transactions.update(list => [tx, ...list]);

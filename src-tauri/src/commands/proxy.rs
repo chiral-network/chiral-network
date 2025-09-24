@@ -1,4 +1,4 @@
-use crate::dht::DhtService; // Assuming DhtService is accessible here
+use crate::dht::DhtService;
 use crate::AppState;
 use tauri::{AppHandle, State};
 use tauri::Emitter;
@@ -89,18 +89,20 @@ pub(crate) async fn proxy_disconnect(
 }
 
 #[tauri::command]
-pub async fn list_proxies(state: State<'_, AppState>) -> Result<Vec<ProxyNode>, String> {
+pub(crate) async fn list_proxies(state: State<'_, AppState>) -> Result<Vec<ProxyNode>, String> {
     let proxies = state.proxies.lock().await;
     Ok(proxies.clone())
 }
 
 #[tauri::command]
-pub async fn proxy_echo(
+pub(crate) async fn proxy_echo(
     state: State<'_, AppState>,
     peer_id: String,
     payload: Vec<u8>,
 ) -> Result<Vec<u8>, String> {
     let dht_guard = state.dht.lock().await;
-    let dht: &DhtService = dht_guard.as_ref().ok_or_else(|| "DHT not running".to_string())?;
+    let dht: &DhtService = dht_guard
+        .as_ref()
+        .ok_or_else(|| "DHT not running".to_string())?;
     dht.echo(peer_id, payload).await
 }

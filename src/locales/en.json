@@ -1,9 +1,7 @@
 {
   "settings.title": "Settings",
   "settings.subtitle": "Configure your Chiral Network preferences",
-
   "badges.unsaved": "Unsaved changes",
-
   "storage.title": "Storage",
   "storage.location": "Storage Location",
   "storage.locationPick": "Pick storage location",
@@ -13,7 +11,6 @@
   "storage.maxSize": "Max Storage Size (GB)",
   "storage.cleanupThreshold": "Auto-Cleanup Threshold (%)",
   "storage.enableCleanup": "Enable automatic cleanup when storage is full",
-
   "network": {
     "title": "Network Overview",
     "subtitle": "Monitor network health and discover peers",
@@ -41,30 +38,30 @@
     "nodeAddress": "Node Address",
     "copied": "Copied!",
     "copy": "Copy",
-  "stopNode": "Stop Chiral Node",
-  "geth": {
-    "title": "Node Lifecycle",
-    "subtitle": "Monitor installation, runtime, and logs for the bundled Geth instance.",
-    "refresh": "Refresh status",
-    "desktopOnly": "Available in the desktop app only.",
-    "installed": "Binary",
-    "installedYes": "Installed",
-    "installedNo": "Missing",
-    "binaryMissing": "Binary path unavailable",
-    "running": "Runtime",
-    "runningYes": "Running",
-    "runningNo": "Stopped",
-    "versionUnknown": "Version unavailable",
-    "dataDir": "Data directory",
-    "dataDirMissing": "Directory does not exist",
-    "logHeading": "Recent logs",
-    "logEmpty": "No log entries yet.",
-    "logUnavailable": "Log file not found.",
-    "logTruncated": "Showing the last {count} lines.",
-    "errorGeneric": "Could not load Geth status.",
-    "lastUpdated": "Updated {time}"
-  },
-  "dht": {
+    "stopNode": "Stop Chiral Node",
+    "geth": {
+      "title": "Node Lifecycle",
+      "subtitle": "Monitor installation, runtime, and logs for the bundled Geth instance.",
+      "refresh": "Refresh status",
+      "desktopOnly": "Available in the desktop app only.",
+      "installed": "Binary",
+      "installedYes": "Installed",
+      "installedNo": "Missing",
+      "binaryMissing": "Binary path unavailable",
+      "running": "Runtime",
+      "runningYes": "Running",
+      "runningNo": "Stopped",
+      "versionUnknown": "Version unavailable",
+      "dataDir": "Data directory",
+      "dataDirMissing": "Directory does not exist",
+      "logHeading": "Recent logs",
+      "logEmpty": "No log entries yet.",
+      "logUnavailable": "Log file not found.",
+      "logTruncated": "Showing the last {count} lines.",
+      "errorGeneric": "Could not load Geth status.",
+      "lastUpdated": "Updated {time}"
+    },
+    "dht": {
       "title": "DHT Network",
       "notConnected": "DHT is not connected",
       "connectionError": "Connection Error",
@@ -127,7 +124,7 @@
       "noPeers": "No peers connected. Run discovery to find peers."
     },
     "errors": {
-        "downloadOnlyTauri": "Chiral Node download is only available in the desktop app. Please download and run the Tauri desktop version."
+      "downloadOnlyTauri": "Chiral Node download is only available in the desktop app. Please download and run the Tauri desktop version."
     },
     "maxConnections": "Max Connections",
     "port": "Port",
@@ -196,20 +193,57 @@
       "autostart": "Download automatically started.",
       "searchFailed": "Search failed: {error}",
       "downloadFailed": "Download failed for {name}."
+    },
+    "search": {
+      "status": {
+        "started": "Searching the network...",
+        "searching": "Searching...",
+        "foundNotification": "Found {name}",
+        "notFoundNotification": "File not found on the network.",
+        "unknownError": "Unknown error",
+        "errorNotification": "Search failed",
+        "completedIn": "Completed in {seconds}s",
+        "notFoundDetail": "We could not locate that hash on the network.",
+        "errorHeadline": "Search failed",
+        "placeholder": "Run a search to view metadata.",
+        "addedToQueue": "Added \"{name}\" to download queue"
+      },
+      "notifications": {
+        "copied": "Copied {value} to clipboard"
+      },
+      "history": {
+        "title": "Search history",
+        "clear": "Clear history",
+        "empty": "No recent searches yet.",
+        "retry": "Retry search",
+        "foundSeeders": "{count, plural, one {1 seeder discovered} other {{count} seeders discovered}}",
+        "notFound": "No seeders found",
+        "pending": "Awaiting result"
+      },
+      "queue": {
+        "status": {
+          "completed": "File download already completed",
+          "downloading": "File is currently downloading ({progress}% complete)",
+          "paused": "File download is paused at {progress}%",
+          "queued": "File is already in download queue",
+          "failed": "File download previously failed. Try again?",
+          "seeding": "You are already sharing this file",
+          "other": "File is already in your downloads ({status})"
+        }
+      },
+      "button": "Search"
     }
   },
   "regions.usEast": "US East",
   "regions.usWest": "US West",
   "regions.euWest": "Europe West",
   "regions.apac": "Asia Pacific",
-
   "language.title": "Language",
   "language.select": "Select Language",
   "language.english": "English",
   "language.spanish": "Español",
   "language.chinese": "中文",
   "language.korean": "한국어",
-
   "nav": {
     "menu": "Menu",
     "download": "Download",
@@ -227,19 +261,16 @@
     "collapseSidebar": "Collapse sidebar",
     "closeMobileMenu": "Close mobile menu"
   },
-
   "privacy.title": "Privacy & Security",
   "privacy.enableProxy": "Enable proxy routing for anonymity",
   "privacy.enableEncryption": "Enable end-to-end encryption",
   "privacy.anonymousMode": "Anonymous mode (hide all identifying information)",
   "privacy.shareAnalytics": "Share anonymous usage analytics",
-
   "notifications.title": "Notifications",
   "notifications.enable": "Enable desktop notifications",
   "notifications.notifyComplete": "Notify when downloads complete",
   "notifications.notifyError": "Notify on errors",
   "notifications.soundAlerts": "Play sound alerts",
-
   "advanced.title": "Advanced",
   "advanced.chunkSize": "Chunk Size (KB)",
   "advanced.cacheSize": "Cache Size (MB)",
@@ -256,29 +287,23 @@
   "advanced.exportSuccess": "Settings exported to your browser's download folder.",
   "advanced.importSuccess": "Settings imported successfully.",
   "advanced.importError": "Invalid JSON file. Please select a valid export.",
-
   "actions.resetDefaults": "Reset to Defaults",
   "actions.cancel": "Cancel",
   "actions.save": "Save Settings",
   "actions.confirm": "Confirm Reset",
-
   "confirm.title": "Are you sure?",
   "confirm.resetBody": "All settings will be reset to their default values. This action will be saved immediately.",
-
   "validation.min": "{label} must be ≥ {min}.",
   "validation.between": "{label} must be between {min} and {max}.",
-
   "button": {
     "clearCache": "Clear Cache",
     "clearing": "Clearing...",
     "cleared": "✓ Cleared!"
   },
-
   "account": {
     "title": "Account",
     "subtitle": "Manage your wallet and account settings"
   },
-
   "wallet": {
     "title": "Chiral Network Wallet",
     "balance": "Balance",
@@ -302,7 +327,6 @@
       "load_from_wallet": "Load from Wallet"
     }
   },
-
   "transfer": {
     "title": "Send Chiral Coins",
     "recipient": {
@@ -331,7 +355,6 @@
       "none": "Pending Transactions"
     }
   },
-
   "transactions": {
     "title": "Transaction History",
     "manual": "Manual transaction",
@@ -344,7 +367,6 @@
       "to": "To"
     }
   },
-
   "keystore": {
     "title": "Save to Local Keystore",
     "desc": "Save your private key securely on this computer, encrypted with a password.",
@@ -363,7 +385,6 @@
       "addressMismatch": "Decryption error: address does not match."
     }
   },
-
   "blacklist": {
     "title": "Blacklist Management",
     "subtitle": "Block malicious or unwanted addresses",
@@ -413,23 +434,18 @@
       "parseError": "Invalid file format - please select a valid JSON file"
     }
   },
-
   "security": {
     "2fa": {
       "title": "2-Factor Authentication (2FA)",
       "subtitle_clear": "Add an extra layer of security to your account.",
-      
       "status": {
         "enabled": "2FA is Enabled",
         "enabled_desc": "Sensitive actions now require a verification code.",
         "disabled_desc": "Enable 2FA for better account security."
       },
-      
       "how_it_works": "When enabled, you'll need a code from an authenticator app (like Google Authenticator or Authy) for sensitive actions.",
-
       "enable": "Enable 2FA",
       "disable": "Disable",
-
       "setup": {
         "title": "Set Up 2FA",
         "step1_scan": "1. Scan the QR code with your authenticator app.",
@@ -439,7 +455,6 @@
         "verifyLabel": "Verification Code",
         "verifyAndEnable": "Verify & Enable"
       },
-
       "prompt": {
         "title": "2FA Required",
         "enter_code": "Enter the 6-digit code from your authenticator app to continue.",
@@ -447,7 +462,6 @@
       }
     }
   },
-
   "filters": {
     "type": "Type",
     "typeAll": "All",
@@ -460,7 +474,6 @@
     "sortOldest": "Oldest → Newest",
     "reset": "Reset"
   },
-
   "actions": {
     "createAccount": "Create New Account",
     "creating": "Creating...",
@@ -484,7 +497,6 @@
     "verifying": "Verifying...",
     "confirm": "Confirm"
   },
-
   "placeholders": {
     "importPrivateKey": "Enter private key to import",
     "password": "Enter a strong password",
@@ -492,7 +504,6 @@
     "searchBlacklist": "Search blacklist...",
     "reason": "Enter reason..."
   },
-  
   "password": {
     "weak": "Weak password",
     "medium": "Medium strength",
@@ -500,27 +511,23 @@
     "requirements": {
       "length": "At least 8 characters",
       "uppercase": "One uppercase letter",
-      "lowercase": "One lowercase letter", 
+      "lowercase": "One lowercase letter",
       "number": "One number",
       "special": "One special character"
     }
   },
-
   "tooltips": {
     "showQr": "Show QR Code",
     "clearSearch": "Clear search"
   },
-
   "aria": {
     "copyAddress": "Copy address",
     "copyPrivateKey": "Copy private key",
     "showQr": "Show QR code"
   },
-
   "warnings": {
     "neverSharePrivateKey": "Never share your private key with anyone"
   },
-
   "errors": {
     "address": {
       "mustStartWith0x": "Address must start with 0x.",
@@ -536,7 +543,6 @@
     "exportFailed": "Export failed. Please try again.",
     "createAccount": "Failed to create account: {error}"
   },
-
   "messages": {
     "copied": "Copied!",
     "failed": "Failed!"
@@ -589,7 +595,8 @@
     "from": "From",
     "to": "To",
     "suspiciousActivity": "Suspicious Activity",
-    "noSuspiciousActivity": "No suspicious activity detected."
+    "noSuspiciousActivity": "No suspicious activity detected.",
+    "latencyNoNodes": "No connected proxy nodes. Latency data will appear here once you connect."
   },
   "proxy": {
     "title": "Proxy Network",
