@@ -776,6 +776,27 @@ function clearSearch() {
     }
   }
   
+  function retryDownload(fileId: string) {
+    const fileToRetry = filteredDownloads.find(f => f.id === fileId);
+    if (!fileToRetry || (fileToRetry.status !== 'failed' && fileToRetry.status !== 'canceled')) {
+      return;
+    }
+
+    // Remove the old failed/canceled entry from the main files list
+    files.update(f => f.filter(file => file.id !== fileId));
+
+    // Create a new file object and add it to the download queue
+    const newFile = {
+      ...fileToRetry,
+      id: `download-${Date.now()}`, // Generate a new unique ID
+      status: 'queued' as const,
+      progress: 0, // Reset progress
+      downloadPath: undefined, // Clear previous download path
+    };
+    downloadQueue.update(q => [...q, newFile]);
+    showNotification(`Retrying download for "${newFile.name}"`, 'info');
+  }
+
   function moveInQueue(fileId: string, direction: 'up' | 'down') {
     downloadQueue.update(queue => {
       const index = queue.findIndex(f => f.id === fileId)
@@ -1215,6 +1236,17 @@ function clearSearch() {
                     <FolderOpen class="h-3 w-3 mr-1" />
                     Show in Folder
                   </Button>
+                {:else if file.status === 'failed' || file.status === 'canceled'}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    on:click={() => retryDownload(file.id)}
+                    class="h-7 px-3 text-sm"
+                  >
+                    <Play class="h-3 w-3 mr-1" />
+                    {$t('download.actions.retry', { default: 'Retry' })}
+                  </Button>
+                  <!-- You could also add a "Clear" button here to remove it from the list -->
                 {/if}
               </div>
             </div>
