@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "check": "tsc --noEmit",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.json",
     "tauri": "tauri"
   },
   "dependencies": {

@@ -3,7 +3,8 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
   import { TrendingUp, Upload, DollarSign, HardDrive, Award, BarChart3, TrendingUp as LineChart } from 'lucide-svelte'
-  import { files, wallet, networkStats, proxyNodes } from '$lib/stores'
+  import { files, wallet, networkStats } from '$lib/stores';
+  import { proxyNodes } from '$lib/proxy';
   import { onMount } from 'svelte'
   import { t } from 'svelte-i18n'
   import { suspiciousActivity } from '$lib/stores'; // only import
@@ -397,7 +398,7 @@
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">{$t('analytics.totalEarnings')}</p>
-          <p class="text-2xl font-bold">{$wallet.totalEarned.toFixed(2)} Chiral</p>
+          <p class="text-2xl font-bold">{($wallet.totalEarned ?? 0).toFixed(2)} Chiral</p>
           <p class="text-xs text-green-600 flex items-center gap-1 mt-1">
             <TrendingUp class="h-3 w-3" />
             {$t('analytics.earningsThisWeek')}
@@ -441,11 +442,11 @@
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">{$t('analytics.reputation')}</p>
-          <p class="text-2xl font-bold">{$wallet.reputation || 4.5}/5.0</p>
+          <p class="text-2xl font-bold">{(($wallet.reputation ?? 4.5)).toFixed(1)}/5.0</p>
           <!-- Stars (replaces your existing block) -->
           <div
                   class="flex gap-0.5 mt-1"
-                  aria-label={"Reputation " + (($wallet.reputation ?? 4.5).toFixed(1)) + " out of 5"}
+                  aria-label={"Reputation " + (($wallet.reputation ?? 4.5)).toFixed(1) + " out of 5"}
           >
             {#each Array(5) as _, i}
     <span class="relative inline-block leading-none align-middle" style="width: 1em">

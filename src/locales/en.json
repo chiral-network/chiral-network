@@ -41,8 +41,30 @@
     "nodeAddress": "Node Address",
     "copied": "Copied!",
     "copy": "Copy",
-    "stopNode": "Stop Chiral Node",
-    "dht": {
+  "stopNode": "Stop Chiral Node",
+  "geth": {
+    "title": "Node Lifecycle",
+    "subtitle": "Monitor installation, runtime, and logs for the bundled Geth instance.",
+    "refresh": "Refresh status",
+    "desktopOnly": "Available in the desktop app only.",
+    "installed": "Binary",
+    "installedYes": "Installed",
+    "installedNo": "Missing",
+    "binaryMissing": "Binary path unavailable",
+    "running": "Runtime",
+    "runningYes": "Running",
+    "runningNo": "Stopped",
+    "versionUnknown": "Version unavailable",
+    "dataDir": "Data directory",
+    "dataDirMissing": "Directory does not exist",
+    "logHeading": "Recent logs",
+    "logEmpty": "No log entries yet.",
+    "logUnavailable": "Log file not found.",
+    "logTruncated": "Showing the last {count} lines.",
+    "errorGeneric": "Could not load Geth status.",
+    "lastUpdated": "Updated {time}"
+  },
+  "dht": {
       "title": "DHT Network",
       "notConnected": "DHT is not connected",
       "connectionError": "Connection Error",
@@ -195,6 +217,7 @@
     "network": "Network",
     "mining": "Mining",
     "proxy": "Proxy",
+    "proxySelfTest": "Proxy Self-Test",
     "analytics": "Analytics",
     "account": "Account",
     "settings": "Settings",
@@ -272,7 +295,12 @@
       "intro": "Get started with Chiral Network by creating or importing an account:",
       "or": "Or"
     },
-    "privateKey": "Private Key"
+    "privateKey": "Private Key",
+    "hd": {
+      "create_via_phrase": "Create via Recovery Phrase",
+      "import_phrase": "Import Recovery Phrase",
+      "load_from_wallet": "Load from Wallet"
+    }
   },
 
   "transfer": {
@@ -299,7 +327,7 @@
     "pending": {
       "title": "Pending Transactions",
       "noDetails": "No pending transaction details available.",
-      "count": "{count} Pending Transaction{count !== 1 ? 's' : ''}",
+      "count": "{count, plural, one {# Pending Transaction} other {# Pending Transactions}}",
       "none": "Pending Transactions"
     }
   },
@@ -329,7 +357,10 @@
       "empty": "No accounts found in keystore.",
       "success": "Account loaded successfully",
       "successSimulated": "Account loaded (demo mode)",
-      "error": "Failed to load account: {error}"
+      "error": "Failed to load account: {error}",
+      "savePassword": "Save password on this computer (expires in 30 days)",
+      "savePasswordWarning": "Warning: Saving your password locally is convenient but less secure. Use with caution.",
+      "addressMismatch": "Decryption error: address does not match."
     }
   },
 
@@ -383,6 +414,40 @@
     }
   },
 
+  "security": {
+    "2fa": {
+      "title": "2-Factor Authentication (2FA)",
+      "subtitle_clear": "Add an extra layer of security to your account.",
+      
+      "status": {
+        "enabled": "2FA is Enabled",
+        "enabled_desc": "Sensitive actions now require a verification code.",
+        "disabled_desc": "Enable 2FA for better account security."
+      },
+      
+      "how_it_works": "When enabled, you'll need a code from an authenticator app (like Google Authenticator or Authy) for sensitive actions.",
+
+      "enable": "Enable 2FA",
+      "disable": "Disable",
+
+      "setup": {
+        "title": "Set Up 2FA",
+        "step1_scan": "1. Scan the QR code with your authenticator app.",
+        "scanAlt": "Can't scan?",
+        "step2_manual": "Or, enter this key manually:",
+        "step3_verify": "2. Enter the 6-digit code from your app to verify.",
+        "verifyLabel": "Verification Code",
+        "verifyAndEnable": "Verify & Enable"
+      },
+
+      "prompt": {
+        "title": "2FA Required",
+        "enter_code": "Enter the 6-digit code from your authenticator app to continue.",
+        "label": "Authentication Code"
+      }
+    }
+  },
+
   "filters": {
     "type": "Type",
     "typeAll": "All",
@@ -415,7 +480,9 @@
     "remove": "Remove",
     "edit": "Edit",
     "resetDefaults": "Reset to Defaults",
-    "lockWallet": "Lock Wallet"
+    "lockWallet": "Lock Wallet",
+    "verifying": "Verifying...",
+    "confirm": "Confirm"
   },
 
   "placeholders": {
