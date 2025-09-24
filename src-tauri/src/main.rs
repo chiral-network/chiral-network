@@ -540,7 +540,7 @@ async fn get_dht_health(state: State<'_, AppState>) -> Result<Option<DhtMetricsS
 #[tauri::command]
 async fn get_nat_status(state: State<'_, AppState>) -> Result<Option<String>, String> {
     let dht = {
-        let dht_guard = state.dht.lock().map_err(|e| e.to_string())?;
+        let dht_guard = state.dht.lock().await;
         dht_guard.as_ref().cloned()
     };
 

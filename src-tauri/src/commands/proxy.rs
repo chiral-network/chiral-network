@@ -1,6 +1,6 @@
 use crate::dht::DhtService; // Assuming DhtService is accessible here
 use crate::AppState;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 use tauri::Emitter;
 use tracing::info;
 

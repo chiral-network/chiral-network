@@ -18,7 +18,6 @@ use libp2p::{
         Mode, Record, GetRecordOk, PutRecordOk, QueryResult
     },
     mdns::{tokio::Behaviour as Mdns, Event as MdnsEvent},
-    ping::{self, Behaviour as Ping, Event as PingEvent},
     request_response as rr,
     swarm::{NetworkBehaviour, SwarmEvent},
     Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
@@ -43,7 +42,6 @@ struct DhtBehaviour {
     ping: ping::Behaviour,
     autonat: autonat::Behaviour,
     dcutr: dcutr::Behaviour,
-    ping: ping::Behaviour,
     proxy_rr: rr::Behaviour<ProxyCodec>,
 }
 
@@ -281,13 +279,11 @@ async fn run_dht_node(
             SwarmEvent::Behaviour(DhtBehaviourEvent::Identify(identify_event)) => {
                         handle_identify_event(identify_event, &mut swarm, &event_tx).await;
                     }
-            SwarmEvent::Behaviour(DhtBehaviourEvent::Ping(_)) => {}
             SwarmEvent::Behaviour(DhtBehaviourEvent::Autonat(ev)) => {
                 if let Ok(mut m) = metrics.try_lock() {
                     m.nat_status = Some(format!("{:?}", ev));
                 }
             }
-            SwarmEvent::Behaviour(DhtBehaviourEvent::Dcutr(_)) => {}
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Mdns(mdns_event)) => {
                         handle_mdns_event(mdns_event, &mut swarm, &event_tx).await;
                     }
@@ -551,13 +547,7 @@ async fn handle_mdns_event(
     }
 }
 
-async fn handle_ping_event(event: PingEvent) {
-    match event {
-        ping::Event { result, .. } => {
-            debug!("Ping result: {:?}", result);
-        }
-    }
-}
+// (removed unused handle_ping_event)
 
 impl DhtService {
     pub async fn echo(&self, peer_id: String, payload: Vec<u8>) -> Result<Vec<u8>, String> {
@@ -649,7 +639,6 @@ impl DhtService {
             ping: ping_behaviour,
             autonat: autonat_behaviour,
             dcutr: dcutr_behaviour,
-            ping: Ping::new(ping::Config::new()),
             proxy_rr,
         };
 
