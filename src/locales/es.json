@@ -1,9 +1,7 @@
 {
   "settings.title": "Configuración",
   "settings.subtitle": "Configura tus preferencias de la Red Chiral",
-
   "badges.unsaved": "Cambios no guardados",
-
   "storage.title": "Almacenamiento",
   "storage.location": "Ubicación de almacenamiento",
   "storage.locationPick": "Elegir ubicación de almacenamiento",
@@ -13,7 +11,6 @@
   "storage.maxSize": "Tamaño máximo de almacenamiento (GB)",
   "storage.cleanupThreshold": "Umbral de limpieza automática (%)",
   "storage.enableCleanup": "Habilitar limpieza automática cuando el almacenamiento esté lleno",
-
   "network": {
     "title": "Resumen de red",
     "subtitle": "Supervisa el estado de la red y descubre pares",
@@ -149,19 +146,16 @@
     "enableNat": "Habilitar mapeo de puertos NAT",
     "enableDht": "Habilitar DHT"
   },
-
   "regions.usEast": "EE. UU. Este",
   "regions.usWest": "EE. UU. Oeste",
   "regions.euWest": "Europa Occidental",
   "regions.apac": "Asia-Pacífico",
-
   "language.title": "Idioma",
   "language.select": "Seleccionar idioma",
   "language.english": "Inglés",
   "language.spanish": "Español",
   "language.chinese": "中文",
   "language.korean": "한국어",
-
   "nav": {
     "menu": "Menú",
     "download": "Descargar",
@@ -178,19 +172,16 @@
     "collapseSidebar": "Colapsar barra lateral",
     "closeMobileMenu": "Cerrar menú móvil"
   },
-
   "privacy.title": "Privacidad y seguridad",
   "privacy.enableProxy": "Habilitar enrutamiento por proxy para anonimato",
   "privacy.enableEncryption": "Habilitar cifrado de extremo a extremo",
   "privacy.anonymousMode": "Modo anónimo (ocultar toda información identificativa)",
   "privacy.shareAnalytics": "Compartir analíticas de uso anónimas",
-
   "notifications.title": "Notificaciones",
   "notifications.enable": "Habilitar notificaciones de escritorio",
   "notifications.notifyComplete": "Notificar cuando finalicen las descargas",
   "notifications.notifyError": "Notificar errores",
   "notifications.soundAlerts": "Reproducir alertas sonoras",
-
   "advanced.title": "Avanzado",
   "advanced.chunkSize": "Tamaño de fragmento (KB)",
   "advanced.cacheSize": "Tamaño de caché (MB)",
@@ -204,29 +195,23 @@
   "advanced.exportSettings": "Exportar configuración",
   "advanced.importSettings": "Importar configuración",
   "advanced.invalidJsonAlert": "Archivo JSON no válido. Selecciona una exportación válida.",
-
   "actions.resetDefaults": "Restablecer valores predeterminados",
   "actions.cancel": "Cancelar",
   "actions.save": "Guardar configuración",
   "actions.confirm": "Confirmar restablecimiento",
-
   "confirm.title": "¿Estás seguro?",
   "confirm.resetBody": "Todos los ajustes se restablecerán a sus valores predeterminados. Esta acción se guardará inmediatamente.",
-
   "validation.min": "{label} debe ser ≥ {min}.",
   "validation.between": "{label} debe estar entre {min} y {max}.",
-
   "button": {
     "clearCache": "Borrar caché",
     "clearing": "Borrando...",
     "cleared": "✓ ¡Borrado!"
   },
-
   "account": {
     "title": "Cuenta",
     "subtitle": "Gestiona tu monedero y la configuración de tu cuenta"
   },
-
   "wallet": {
     "title": "Billetera de la Red Chiral",
     "balance": "Saldo",
@@ -250,7 +235,6 @@
       "load_from_wallet": "Cargar desde Billetera"
     }
   },
-
   "transfer": {
     "title": "Enviar monedas Chiral",
     "recipient": {
@@ -279,7 +263,6 @@
       "none": "Transacciones pendientes"
     }
   },
-
   "transactions": {
     "title": "Historial de transacciones",
     "manual": "Transacción manual",
@@ -292,7 +275,6 @@
       "to": "Para"
     }
   },
-
   "keystore": {
     "title": "Guardar en almacén local",
     "desc": "Guarda tu clave privada de forma segura en este equipo, cifrada con una contraseña.",
@@ -308,7 +290,6 @@
       "error": "Error al cargar la cuenta: {error}"
     }
   },
-
   "blacklist": {
     "title": "Gestión de lista negra",
     "subtitle": "Bloquea direcciones maliciosas o no deseadas",
@@ -358,7 +339,6 @@
       "parseError": "Formato de archivo inválido: selecciona un archivo JSON válido"
     }
   },
-
   "filters": {
     "type": "Tipo",
     "typeAll": "Todas",
@@ -371,7 +351,6 @@
     "sortOldest": "Más antiguas → Más recientes",
     "reset": "Restablecer"
   },
-
   "actions": {
     "createAccount": "Crear nueva cuenta",
     "creating": "Creando...",
@@ -393,7 +372,6 @@
     "resetDefaults": "Restablecer valores predeterminados",
     "lockWallet": "Bloquear billetera"
   },
-
   "placeholders": {
     "importPrivateKey": "Introduce la clave privada para importar",
     "password": "Introduce una contraseña segura",
@@ -401,7 +379,6 @@
     "searchBlacklist": "Buscar en la lista negra...",
     "reason": "Introduce la razón..."
   },
-
   "password": {
     "weak": "Contraseña débil",
     "medium": "Seguridad media",
@@ -414,22 +391,18 @@
       "special": "Un carácter especial"
     }
   },
-
   "tooltips": {
     "showQr": "Mostrar código QR",
     "clearSearch": "Borrar búsqueda"
   },
-
   "aria": {
     "copyAddress": "Copiar dirección",
     "copyPrivateKey": "Copiar clave privada",
     "showQr": "Mostrar código QR"
   },
-
   "warnings": {
     "neverSharePrivateKey": "Nunca compartas tu clave privada con nadie"
   },
-
   "errors": {
     "address": {
       "mustStartWith0x": "La dirección debe comenzar con 0x.",
@@ -445,7 +418,6 @@
     "exportFailed": "La exportación falló. Inténtalo de nuevo.",
     "createAccount": "No se pudo crear la cuenta: {error}"
   },
-
   "messages": {
     "copied": "¡Copiado!",
     "failed": "¡Fallido!"
@@ -705,6 +677,45 @@
       "searchFailed": "Búsqueda fallida: {error}",
       "downloadFailed": "Descarga fallida: {name}",
       "downloadCompleted": "Descarga completada: {name}"
+    },
+    "search": {
+      "status": {
+        "started": "Buscando en la red...",
+        "searching": "Buscando...",
+        "foundNotification": "Se encontró {name}",
+        "notFoundNotification": "Archivo no encontrado en la red.",
+        "unknownError": "Error desconocido",
+        "errorNotification": "Búsqueda fallida",
+        "completedIn": "Completado en {seconds}s",
+        "notFoundDetail": "No pudimos localizar ese hash en la red.",
+        "errorHeadline": "La búsqueda falló",
+        "placeholder": "Ejecuta una búsqueda para ver los metadatos.",
+        "addedToQueue": "Añadido \"{name}\" a la cola de descargas"
+      },
+      "notifications": {
+        "copied": "Copiado {value} al portapapeles"
+      },
+      "history": {
+        "title": "Historial de búsquedas",
+        "clear": "Limpiar historial",
+        "empty": "Aún no hay búsquedas recientes.",
+        "retry": "Reintentar búsqueda",
+        "foundSeeders": "{count, plural, one {1 semilla encontrada} other {{count} semillas encontradas}}",
+        "notFound": "No se encontraron semillas",
+        "pending": "Esperando resultado"
+      },
+      "queue": {
+        "status": {
+          "completed": "Descarga ya completada",
+          "downloading": "Descargando actualmente ({progress}% completado)",
+          "paused": "Descarga en pausa al {progress}%",
+          "queued": "Archivo ya en la cola de descargas",
+          "failed": "La descarga falló anteriormente. ¿Intentar de nuevo?",
+          "seeding": "Ya estás compartiendo este archivo",
+          "other": "El archivo ya está en tus descargas ({status})"
+        }
+      },
+      "button": "Buscar"
     }
   }
 }

@@ -468,20 +468,6 @@ async fn publish_file_metadata(
 }
 
 #[tauri::command]
-async fn search_file_metadata(state: State<'_, AppState>, file_hash: String) -> Result<(), String> {
-    let dht = {
-        let dht_guard = state.dht.lock().await;
-        dht_guard.as_ref().cloned()
-    };
-
-    if let Some(dht) = dht {
-        dht.get_file(file_hash).await
-    } else {
-        Err("DHT node is not running".to_string())
-    }
-}
-
-#[tauri::command]
 async fn connect_to_peer(state: State<'_, AppState>, peer_address: String) -> Result<(), String> {
     let dht = {
         let dht_guard = state.dht.lock().await;
@@ -1075,6 +1061,25 @@ async fn get_file_transfer_events(state: State<'_, AppState>) -> Result<Vec<Stri
         Ok(mapped)
     } else {
         Ok(vec![])
+    }
+}
+
+#[tauri::command]
+async fn search_file_metadata(
+    state: State<'_, AppState>,
+    file_hash: String,
+    timeout_ms: Option<u64>,
+) -> Result<Option<FileMetadata>, String> {
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    if let Some(dht) = dht {
+        let timeout = timeout_ms.unwrap_or(10_000);
+        dht.search_metadata(file_hash, timeout).await
+    } else {
+        Err("DHT node is not running".to_string())
     }
 }
 
