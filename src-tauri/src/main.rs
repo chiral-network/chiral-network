@@ -49,6 +49,7 @@ struct AppState {
     geth: Mutex<GethProcess>,
     downloader: Arc<GethDownloader>,
     miner_address: Mutex<Option<String>>,
+    rpc_url: Mutex<String>,
     dht: Mutex<Option<Arc<DhtService>>>,
     file_transfer: Mutex<Option<Arc<FileTransferService>>>,
     proxies: Arc<Mutex<Vec<ProxyNode>>>,
@@ -68,6 +69,11 @@ async fn import_chiral_account(private_key: String) -> Result<EthAccount, String
 async fn start_geth_node(state: State<'_, AppState>, data_dir: String) -> Result<(), String> {
     let mut geth = state.geth.lock().await;
     let miner_address = state.miner_address.lock().await;
+    // TODO: The port and address should be configurable from the frontend.
+    // For now, we'll update the rpc_url in the state when starting.
+    let rpc_url = "http://127.0.0.1:8545".to_string();
+    *state.rpc_url.lock().await = rpc_url;
+
     geth.start(&data_dir, miner_address.as_deref())
 }
 
@@ -158,6 +164,60 @@ async fn set_miner_address(state: State<'_, AppState>, address: String) -> Resul
     Ok(())
 }
 
+/// Checks if the Geth RPC endpoint is ready to accept connections.
+async fn is_geth_rpc_ready(state: &State<'_, AppState>) -> bool {
+    let rpc_url = state.rpc_url.lock().await.clone();
+    if let Ok(response) = reqwest::Client::new()
+        .post(&rpc_url)
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0", "method": "net_version", "params": [], "id": 1
+        }))
+        .send()
+        .await
+    {
+        if response.status().is_success() {
+            if let Ok(json) = response.json::<serde_json::Value>().await {
+                return json.get("result").is_some();
+            }
+        }
+    }
+    false
+}
+
+/// Stops, restarts, and waits for the Geth node to be ready.
+/// This is used when `miner_setEtherbase` is not available and a restart is required.
+async fn restart_geth_and_wait(state: &State<'_, AppState>, data_dir: &str) -> Result<(), String> {
+    info!("Restarting Geth with new configuration...");
+
+    // Stop Geth
+    state.geth.lock().await.stop()?;
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await; // Brief pause for shutdown
+
+    // Restart with the stored miner address
+    {
+        let mut geth = state.geth.lock().await;
+        let miner_address = state.miner_address.lock().await;
+        info!("Restarting Geth with miner address: {:?}", miner_address);
+        geth.start(data_dir, miner_address.as_deref())?;
+    }
+
+    // Wait for Geth to become responsive
+    let max_attempts = 30;
+    for attempt in 1..=max_attempts {
+        if is_geth_rpc_ready(state).await {
+            info!("Geth is ready for RPC calls after restart.");
+            return Ok(());
+        }
+        info!(
+            "Waiting for Geth to start... (attempt {}/{})",
+            attempt, max_attempts
+        );
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    }
+
+    Err("Geth failed to start up within 30 seconds after restart.".to_string())
+}
+
 #[tauri::command]
 async fn start_miner(
     state: State<'_, AppState>,
@@ -176,66 +236,11 @@ async fn start_miner(
         Ok(_) => Ok(()),
         Err(e) if e.contains("-32601") || e.to_lowercase().contains("does not exist") => {
             // miner_setEtherbase method doesn't exist, need to restart with etherbase
-            println!("miner_setEtherbase not supported, restarting geth with miner address...");
-
-            // Need to restart geth with the miner address
-            // First stop geth
-            {
-                let mut geth = state.geth.lock().await;
-                geth.stop()?;
-            }
-
-            // Wait a moment for it to shut down
-            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-            // Restart with miner address
-            {
-                let mut geth = state.geth.lock().await;
-                let miner_address = state.miner_address.lock().await;
-                println!("Restarting geth with miner address: {:?}", miner_address);
-                geth.start(&data_dir, miner_address.as_deref())?;
-            }
-
-            // Wait for geth to start up and be ready to accept RPC connections
-            let mut attempts = 0;
-            let max_attempts = 30; // 30 seconds max wait
-            loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                attempts += 1;
-
-                // Check if geth is responding to RPC calls
-                if let Ok(response) = reqwest::Client::new()
-                    .post("http://127.0.0.1:8545")
-                    .json(&serde_json::json!({
-                        "jsonrpc": "2.0",
-                        "method": "net_version",
-                        "params": [],
-                        "id": 1
-                    }))
-                    .send()
-                    .await
-                {
-                    if response.status().is_success() {
-                        if let Ok(json) = response.json::<serde_json::Value>().await {
-                            if json.get("result").is_some() {
-                                println!("Geth is ready for RPC calls");
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                if attempts >= max_attempts {
-                    return Err("Geth failed to start up within 30 seconds".to_string());
-                }
-
-                println!(
-                    "Waiting for geth to start up... (attempt {}/{})",
-                    attempts, max_attempts
-                );
-            }
+            warn!("miner_setEtherbase not supported, restarting geth with miner address...");
+            restart_geth_and_wait(&state, &data_dir).await?;
 
             // Try mining again without setting etherbase (it's set via command line now)
+            let rpc_url = state.rpc_url.lock().await.clone();
             let client = reqwest::Client::new();
             let start_mining_direct = serde_json::json!({
                 "jsonrpc": "2.0",
@@ -245,7 +250,7 @@ async fn start_miner(
             });
 
             let response = client
-                .post("http://127.0.0.1:8545")
+                .post(&rpc_url)
                 .json(&start_mining_direct)
                 .send()
                 .await
@@ -1336,6 +1341,7 @@ fn main() {
             geth: Mutex::new(GethProcess::new()),
             downloader: Arc::new(GethDownloader::new()),
             miner_address: Mutex::new(None),
+            rpc_url: Mutex::new("http://127.0.0.1:8545".to_string()),
             dht: Mutex::new(None),
             file_transfer: Mutex::new(None),
             proxies: Arc::new(Mutex::new(Vec::new())),
