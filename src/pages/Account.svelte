@@ -1659,6 +1659,7 @@
               class="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8 p-0"
               on:click={scanQrCode}
               aria-label={$t('transfer.recipient.scanQr')}
+              title={$t('transfer.recipient.scanQr')}
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect><line x1="14" x2="14" y1="14" y2="21"></line><line x1="21" x2="21" y1="14" y2="21"></line><line x1="21" x2="14" y1="21" y2="21"></line></svg>
             </Button>
