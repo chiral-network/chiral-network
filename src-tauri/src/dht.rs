@@ -618,6 +618,7 @@ async fn handle_mdns_event(
         MdnsEvent::Discovered(list) => {
             for (peer_id, multiaddr) in list {
                 debug!("mDNS discovered peer {} at {}", peer_id, multiaddr);
+                if not_loopback(&multiaddr){
                 swarm
                     .behaviour_mut()
                     .kademlia
@@ -625,6 +626,7 @@ async fn handle_mdns_event(
                 let _ = event_tx
                     .send(DhtEvent::PeerDiscovered(peer_id.to_string()))
                     .await;
+                }
             }
         }
         MdnsEvent::Expired(list) => {
@@ -982,12 +984,12 @@ fn is_global_v4(ip: std::net::Ipv4Addr) -> bool {
     // Check if it's a global address by excluding all local/private ranges
     !(
         // RFC1918 private ranges
-        (octets[0] == 10) ||
+        // (octets[0] == 10) ||
         // (octets[0] == 172 && (16..=31).contains(&octets[1])) ||
         // (octets[0] == 192 && octets[1] == 168) ||
         
         // Loopback (127.0.0.0/8)
-        // (octets[0] == 127) ||
+        (octets[0] == 127) ||
         
         // // Link-local (169.254.0.0/16)
         // (octets[0] == 169 && octets[1] == 254) ||
