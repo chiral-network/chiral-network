@@ -245,47 +245,30 @@
         { type: 'Failed Downloads', description: 'Several failed download attempts detected', date: now.toLocaleString(undefined, dateOptions), severity: 'low' },
       ]);
 
-    // Generate mock latency history (last 30 points)
-    const lhist: { date: string; latency: number }[] = []
-    for (let i = 29; i >= 0; i--) {
-      const d = new Date()
-      d.setDate(d.getDate() - i)
-      // Base on current avg and add slight jitter
-      const base = $proxyNodes.length
-              ? ($proxyNodes.reduce((s, n) => s + (n.latency || 0), 0) / $proxyNodes.length)
-              : 80
-      const jitter = (Math.random() - 0.5) * 20;
-      lhist.push({ date: d.toLocaleDateString(), latency: Math.max(5, base + jitter) })
-    }
-    latencyHistory = lhist
+    // Initialize latency stats and history
     computeLatencyStats()
+    latencyHistory = Array(30).fill({
+      date: new Date().toLocaleTimeString(undefined, { timeStyle: 'long' }),
+      latency: avgLatency
+    });
 
 
-    // Update bandwidth usage periodically
-    /*const interval = setInterval(() => {
-      bandwidthUsed = {
-        upload: bandwidthUsed.upload + Math.random() * 100,
-        download: bandwidthUsed.download + Math.random() * 150
-      }
-    }, 3000)*/
-    
     // Update bandwidth & latency periodically
     const interval = setInterval(() => {
+      // Mock bandwidth usage update
       bandwidthUsed = {
         upload: bandwidthUsed.upload + Math.random() * 100,
         download: bandwidthUsed.download + Math.random() * 150
       }
 
-      // Simulate latency jitter and keep short history (30 points)
-      const base = $proxyNodes.length
-              ? ($proxyNodes.reduce((s, n) => s + (n.latency || 0), 0) / $proxyNodes.length)
-              : 80
-      const jitter = (Math.random() - 0.5) * 15
+      // First, re-calculate the current latency statistics
+      computeLatencyStats();
+
+      // Then, add the new *real* average latency to the history
       latencyHistory = [
         ...latencyHistory.slice(1),
-        { date: new Date().toLocaleTimeString(undefined, { timeStyle: 'long' }), latency: Math.max(5, base + jitter) }
+        { date: new Date().toLocaleTimeString(undefined, { timeStyle: 'long' }), latency: avgLatency }
       ]
-      computeLatencyStats()
     }, 3000)
 
 
@@ -600,40 +583,48 @@
           </div>
 
           <!-- Bars -->
-          {#each latencyHistory as p, i}
-            <div
-                    role="button"
-                    tabindex="0"
-                    class="flex-1 bg-gradient-to-t from-blue-400/40 to-blue-500/80 hover:from-blue-500/60 hover:to-blue-600/90 transition-all rounded-t-md shadow-sm relative"
-                    style="height: {(Math.min(p.latency, 300) / 300) * 100}%"
-                    aria-label="{p.date}: {p.latency.toFixed(0)} ms"
-                    on:mouseenter={() => { hoveredLatency = p; hoveredLatencyIndex = i; }}
-                    on:mouseleave={() => { hoveredLatency = null; hoveredLatencyIndex = null; }}
-            >
-              {#if hoveredLatencyIndex === i && hoveredLatency}
-                <div
-                        class="absolute left-1/2 -translate-x-1/2 -top-8 z-10 px-2 py-1 rounded bg-primary text-white text-xs shadow-lg pointer-events-none"
-                        style="white-space:nowrap;"
-                >
-                  {hoveredLatency.date}: {hoveredLatency.latency.toFixed(0)} ms
-                  <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0
-                border-l-6 border-l-transparent border-r-6 border-r-transparent
-                border-t-6 border-t-primary"></span>
-                </div>
-              {/if}
+          {#if $proxyNodes.length > 0}
+            {#each latencyHistory as p, i}
+              <div
+                      role="button"
+                      tabindex="0"
+                      class="flex-1 bg-gradient-to-t from-blue-400/40 to-blue-500/80 hover:from-blue-500/60 hover:to-blue-600/90 transition-all rounded-t-md shadow-sm relative"
+                      style="height: {(Math.min(p.latency, 300) / 300) * 100}%"
+                      aria-label="{p.date}: {p.latency.toFixed(0)} ms"
+                      on:mouseenter={() => { hoveredLatency = p; hoveredLatencyIndex = i; }}
+                      on:mouseleave={() => { hoveredLatency = null; hoveredLatencyIndex = null; }}
+              >
+                {#if hoveredLatencyIndex === i && hoveredLatency}
+                  <div
+                          class="absolute left-1/2 -translate-x-1/2 -top-8 z-10 px-2 py-1 rounded bg-primary text-white text-xs shadow-lg pointer-events-none"
+                          style="white-space:nowrap;"
+                  >
+                    {hoveredLatency.date}: {hoveredLatency.latency.toFixed(0)} ms
+                    <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0
+                  border-l-6 border-l-transparent border-r-6 border-r-transparent
+                  border-t-6 border-t-primary"></span>
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          {:else}
+            <div class="absolute inset-0 flex items-center justify-center">
+              <p class="text-sm text-muted-foreground text-center px-4">{$t('analytics.latencyNoNodes')}</p>
             </div>
-          {/each}
+          {/if}
         </div>
       </div>
 
-      <div class="flex justify-between mt-2 text-xs text-muted-foreground">
-        <span>{latencyHistory[0]?.date.split(' ')[0]}</span>
-        <span>{latencyHistory[latencyHistory.length - 1]?.date}</span>
-      </div>
-      <div class="flex gap-4 mt-2 text-xs text-muted-foreground">
-        <span>Min: {Math.min(...latencyHistory.map(p => p.latency)).toFixed(0)} ms</span>
-        <span>Max: {Math.max(...latencyHistory.map(p => p.latency)).toFixed(0)} ms</span>
-      </div>
+      {#if $proxyNodes.length > 0}
+        <div class="flex justify-between mt-2 text-xs text-muted-foreground">
+          <span>{latencyHistory[0]?.date.split(' ')[0]}</span>
+          <span>{latencyHistory[latencyHistory.length - 1]?.date}</span>
+        </div>
+        <div class="flex gap-4 mt-2 text-xs text-muted-foreground">
+          <span>Min: {Math.min(...latencyHistory.map(p => p.latency)).toFixed(0)} ms</span>
+          <span>Max: {Math.max(...latencyHistory.map(p => p.latency)).toFixed(0)} ms</span>
+        </div>
+      {/if}
     </Card>
   </div>
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
