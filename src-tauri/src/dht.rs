@@ -701,11 +701,12 @@ async fn handle_identify_event(
             // Add identified peer to Kademlia routing table
             if info.protocol_version != EXPECTED_PROTOCOL_VERSION {
                 warn!(
-                    "Peer {} has a mismatched protocol version: '{}'. Expected: '{}'. Banning peer.",
+                    "Peer {} has a mismatched protocol version: '{}'. Expected: '{}'. Removing peer.",
                     peer_id,
                     info.protocol_version,
                     EXPECTED_PROTOCOL_VERSION
                 );
+                swarm.behaviour_mut().kademlia.remove_peer(&peer_id);
             } else {
                 for addr in info.listen_addrs {
                     if not_loopback(&addr) {
