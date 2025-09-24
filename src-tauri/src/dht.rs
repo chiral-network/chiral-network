@@ -373,7 +373,7 @@ async fn run_dht_node(
                         let _ = event_tx.send(DhtEvent::Error(format!("Connection failed: {}", error))).await;
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::ProxyRr(ev)) => {
-                        use libp2p::request_response::{Event as RREvent, Message, InboundFailure, OutboundFailure};
+                        use libp2p::request_response::{Event as RREvent, Message};
 
                         match ev {
                             RREvent::Message { peer: _, message } => match message {
