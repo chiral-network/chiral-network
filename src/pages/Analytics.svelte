@@ -254,7 +254,7 @@
       const base = $proxyNodes.length
               ? ($proxyNodes.reduce((s, n) => s + (n.latency || 0), 0) / $proxyNodes.length)
               : 80
-      const jitter = (Math.random() - 0.5) * 20
+      const jitter = (Math.random() - 0.5) * 20;
       lhist.push({ date: d.toLocaleDateString(), latency: Math.max(5, base + jitter) })
     }
     latencyHistory = lhist
@@ -283,7 +283,7 @@
       const jitter = (Math.random() - 0.5) * 15
       latencyHistory = [
         ...latencyHistory.slice(1),
-        { date: new Date().toLocaleTimeString(), latency: Math.max(5, base + jitter) }
+        { date: new Date().toLocaleTimeString(undefined, { timeStyle: 'long' }), latency: Math.max(5, base + jitter) }
       ]
       computeLatencyStats()
     }, 3000)
@@ -627,7 +627,7 @@
       </div>
 
       <div class="flex justify-between mt-2 text-xs text-muted-foreground">
-        <span>{latencyHistory[0]?.date}</span>
+        <span>{latencyHistory[0]?.date.split(' ')[0]}</span>
         <span>{latencyHistory[latencyHistory.length - 1]?.date}</span>
       </div>
       <div class="flex gap-4 mt-2 text-xs text-muted-foreground">
