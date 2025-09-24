@@ -1,9 +1,7 @@
 {
   "settings.title": "설정",
   "settings.subtitle": "Chiral Network 환경을 구성하세요.",
-
   "badges.unsaved": "저장되지 않은 변경사항",
-
   "storage.title": "스토리지",
   "storage.location": "저장 위치",
   "storage.locationPick": "저장 위치 선택",
@@ -13,7 +11,6 @@
   "storage.maxSize": "최대 저장 용량 (GB)",
   "storage.cleanupThreshold": "자동 정리 임계값 (%)",
   "storage.enableCleanup": "저장 공간 부족 시 자동 정리 활성화",
-
   "network": {
     "title": "네트워크 개요",
     "subtitle": "네트워크 상태를 모니터링하고 피어를 찾아보세요",
@@ -149,19 +146,16 @@
     "enableNat": "NAT 포트 매핑 활성화",
     "enableDht": "DHT 활성화"
   },
-
   "regions.usEast": "미국 동부",
   "regions.usWest": "미국 서부",
   "regions.euWest": "유럽 서부",
   "regions.apac": "아시아 태평양",
-
   "language.title": "언어",
   "language.select": "언어 선택",
   "language.english": "English",
   "language.spanish": "Español",
   "language.chinese": "中文",
   "language.korean": "한국어",
-
   "nav": {
     "expandSidebar": "사이드바 확장",
     "collapseSidebar": "사이드바 축소",
@@ -178,19 +172,16 @@
     "connected": "연결됨",
     "disconnected": "연결 끊김"
   },
-
   "privacy.title": "프라이버시 & 보안",
   "privacy.enableProxy": "익명성을 위한 프록시 라우팅 사용",
   "privacy.enableEncryption": "종단간 암호화 사용",
   "privacy.anonymousMode": "익명 모드(식별 정보 숨김)",
   "privacy.shareAnalytics": "익명 사용 분석 공유",
-
   "notifications.title": "알림",
   "notifications.enable": "데스크톱 알림 사용",
   "notifications.notifyComplete": "다운로드 완료 시 알림",
   "notifications.notifyError": "오류 발생 시 알림",
   "notifications.soundAlerts": "사운드 알림",
-
   "advanced.title": "고급",
   "advanced.chunkSize": "청크 크기 (KB)",
   "advanced.cacheSize": "캐시 크기 (MB)",
@@ -204,29 +195,23 @@
   "advanced.exportSettings": "설정 내보내기",
   "advanced.importSettings": "설정 가져오기",
   "advanced.invalidJsonAlert": "잘못된 JSON 파일입니다. 올바른 내보내기 파일을 선택하세요.",
-
   "actions.resetDefaults": "기본값으로 재설정",
   "actions.cancel": "취소",
   "actions.save": "설정 저장",
   "actions.confirm": "재설정 확인",
-
   "confirm.title": "확실합니까?",
   "confirm.resetBody": "모든 설정이 기본값으로 초기화됩니다. 이 작업은 즉시 저장됩니다.",
-
   "validation.min": "{label} 값은 {min} 이상이어야 합니다.",
   "validation.between": "{label} 값은 {min} ~ {max} 범위여야 합니다.",
-
   "button": {
     "clearCache": "캐시 비우기",
     "clearing": "삭제 중...",
     "cleared": "✓ 삭제 완료!"
   },
-
   "account": {
     "title": "계정",
     "subtitle": "지갑과 계정 설정을 관리하세요"
   },
-
   "wallet": {
     "title": "카이럴 네트워크 지갑",
     "balance": "잔액",
@@ -250,7 +235,6 @@
       "load_from_wallet": "지갑에서 불러오기"
     }
   },
-
   "transfer": {
     "title": "카이럴 코인 보내기",
     "recipient": {
@@ -279,7 +263,6 @@
       "none": "보류 중 트랜잭션"
     }
   },
-
   "transactions": {
     "title": "트랜잭션 내역",
     "manual": "수동 트랜잭션",
@@ -292,14 +275,12 @@
       "to": "받는 사람"
     }
   },
-
   "fees": {
     "low": "낮음",
     "market": "보통",
     "fast": "빠름",
     "estimated": "예상 수수료"
   },
-
   "keystore": {
     "title": "로컬 키스토어에 저장",
     "desc": "이 컴퓨터에 비밀번호로 암호화하여 안전하게 저장합니다.",
@@ -318,7 +299,6 @@
       "addressMismatch": "복호화 오류: 주소가 일치하지 않습니다."
     }
   },
-
   "blacklist": {
     "title": "블랙리스트 관리",
     "subtitle": "악성/원치 않는 주소를 차단합니다",
@@ -368,7 +348,6 @@
       "parseError": "잘못된 파일 형식 — 올바른 JSON 파일을 선택하세요"
     }
   },
-
   "filters": {
     "type": "유형",
     "typeAll": "전체",
@@ -381,15 +360,10 @@
     "sortOldest": "오래된 → 최신",
     "reset": "초기화"
   },
-
   "actionsGroup": {},
-
   "actionsGroupNote": "Do not remove this key; placeholder to avoid merging issues.",
-
   "actionsObjectNote": "Real actions are under \"actions\" and below \"actions\" object. Above top-level action keys are also kept for backward compatibility.",
-
   "actionsObject": {},
-
   "actions": {
     "createAccount": "새 계정 만들기",
     "creating": "생성 중...",
@@ -411,7 +385,6 @@
     "resetDefaults": "기본값으로 재설정",
     "lockWallet": "지갑 잠금"
   },
-
   "placeholders": {
     "importPrivateKey": "가져올 개인 키를 입력",
     "password": "강력한 비밀번호 입력",
@@ -419,7 +392,6 @@
     "searchBlacklist": "블랙리스트 검색…",
     "reason": "사유 입력…"
   },
-
   "password": {
     "weak": "약한 비밀번호",
     "medium": "중간 강도",
@@ -432,22 +404,18 @@
       "special": "특수문자 1개 포함"
     }
   },
-
   "tooltips": {
     "showQr": "QR 코드 보기",
     "clearSearch": "검색 지우기"
   },
-
   "aria": {
     "copyAddress": "주소 복사",
     "copyPrivateKey": "개인 키 복사",
     "showQr": "QR 코드 보기"
   },
-
   "warnings": {
     "neverSharePrivateKey": "개인 키는 누구와도 공유하지 마세요"
   },
-
   "errors": {
     "address": {
       "mustStartWith0x": "주소는 0x로 시작해야 합니다.",
@@ -462,7 +430,6 @@
     "exportFailed": "내보내기에 실패했습니다. 다시 시도하세요.",
     "createAccount": "계정 생성 실패: {error}"
   },
-
   "messages": {
     "copied": "복사됨!",
     "failed": "실패!"
@@ -722,6 +689,45 @@
       "searchFailed": "검색 실패: {error}",
       "downloadFailed": "다운로드 실패: {name}",
       "downloadCompleted": "다운로드 완료: {name}"
+    },
+    "search": {
+      "status": {
+        "started": "네트워크에서 검색 중...",
+        "searching": "검색 중...",
+        "foundNotification": "{name}을(를) 찾았습니다",
+        "notFoundNotification": "네트워크에서 파일을 찾을 수 없습니다.",
+        "unknownError": "알 수 없는 오류",
+        "errorNotification": "검색 실패",
+        "completedIn": "{seconds}초 만에 완료됨",
+        "notFoundDetail": "해당 해시를 네트워크에서 찾을 수 없습니다.",
+        "errorHeadline": "검색에 실패했습니다",
+        "placeholder": "검색을 실행하여 메타데이터를 확인하세요.",
+        "addedToQueue": "\"{name}\"을(를) 다운로드 대기열에 추가했습니다"
+      },
+      "notifications": {
+        "copied": "{value} 복사 완료"
+      },
+      "history": {
+        "title": "검색 기록",
+        "clear": "기록 지우기",
+        "empty": "최근 검색 기록이 없습니다.",
+        "retry": "검색 다시 시도",
+        "foundSeeders": "{count, plural, one {시더 1명 발견} other {시더 {count}명 발견}}",
+        "notFound": "시더를 찾을 수 없음",
+        "pending": "결과 대기 중"
+      },
+      "queue": {
+        "status": {
+          "completed": "이미 다운로드가 완료되었습니다",
+          "downloading": "현재 다운로드 중입니다 ({progress}% 완료)",
+          "paused": "다운로드가 {progress}%에서 일시 중지되었습니다",
+          "queued": "이미 다운로드 대기열에 있습니다",
+          "failed": "이전에 다운로드에 실패했습니다. 다시 시도해 보세요.",
+          "seeding": "이미 이 파일을 공유 중입니다",
+          "other": "이미 다운로드 목록에 있습니다 ({status})"
+        }
+      },
+      "button": "검색"
     }
   }
 }
