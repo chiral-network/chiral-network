@@ -2,7 +2,9 @@
 use crate::dht::{DhtService, FileMetadata};
 use crate::ethereum::GethProcess;
 use clap::Parser;
+use std::{sync::Arc, time::Instant};
 use tokio::signal;
+
 use tracing::{error, info};
 
 #[derive(Parser, Debug)]
@@ -128,7 +130,29 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
     }
 
     info!("Bootstrap node is running. Press Ctrl+C to stop.");
+    let dht_arc = Arc::new(dht_service);
 
+    // Spawn the event pump
+    let dht_clone_for_pump = dht_arc.clone();
+
+    tokio::spawn(async move {
+        use std::time::Duration;
+        loop {
+            // If the DHT service has been shut down, the weak reference will be None
+            let events = dht_clone_for_pump.drain_events(100).await;
+            if events.is_empty() {
+                // Avoid busy-waiting
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                // Check if the DHT is still alive before continuing
+                if Arc::strong_count(&dht_clone_for_pump) <= 1 {
+                    // 1 is the pump itself
+                    info!("DHT service appears to be shut down. Exiting event pump.");
+                    break;
+                }
+                continue;
+            }
+        }
+    });
     // Keep the service running
     signal::ctrl_c().await?;
 
