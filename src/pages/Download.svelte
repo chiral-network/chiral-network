@@ -18,6 +18,7 @@
   let maxConcurrentDownloads: string | number = 3
   let lastValidMaxConcurrent = 3 // Store the last valid value
   let autoStartQueue = true
+  let autoClearCompleted = false // New setting for auto-clearing
   let filterStatus = 'all' // 'all', 'active', 'paused', 'queued', 'completed', 'failed'
   let activeSimulations = new Set<string>() // Track files with active progress simulations
 
@@ -490,7 +491,13 @@
               clearInterval(progressInterval);
               activeSimulations.delete(fileId);
               showNotification(`Download completed: ${fileToDownload.name} saved to ${outputPath}`, 'success');
-
+              
+              // New: Auto-clear if enabled
+              if (autoClearCompleted) {
+                setTimeout(() => {
+                  clearDownload(fileId);
+                }, 5000); // 5-second delay before removing
+              }
               return { ...file, progress: 100, status: 'completed', downloadPath: outputPath };
             }
 
@@ -541,6 +548,41 @@
     }
   }
   
+  function clearDownload(fileId: string) {
+    // Remove from both files and downloadQueue for good measure
+    files.update(f => f.filter(file => file.id !== fileId));
+    downloadQueue.update(q => q.filter(file => file.id !== fileId));
+  }
+
+  function clearAllFinished() {
+    files.update(f => f.filter(file => 
+      file.status !== 'completed' && 
+      file.status !== 'failed' && 
+      file.status !== 'canceled'
+    ));
+  }
+
+  function retryDownload(fileId: string) {
+    const fileToRetry = filteredDownloads.find(f => f.id === fileId);
+    if (!fileToRetry || (fileToRetry.status !== 'failed' && fileToRetry.status !== 'canceled')) {
+      return;
+    }
+
+    // Remove the old failed/canceled entry from the main files list
+    files.update(f => f.filter(file => file.id !== fileId));
+
+    // Create a new file object and add it to the download queue
+    const newFile = {
+      ...fileToRetry,
+      id: `download-${Date.now()}`, // Generate a new unique ID
+      status: 'queued' as const,
+      progress: 0, // Reset progress
+      downloadPath: undefined, // Clear previous download path
+    };
+    downloadQueue.update(q => [...q, newFile]);
+    showNotification(`Retrying download for "${newFile.name}"`, 'info');
+  }
+
   function moveInQueue(fileId: string, direction: 'up' | 'down') {
     downloadQueue.update(queue => {
       const index = queue.findIndex(f => f.id === fileId)
@@ -604,6 +646,16 @@
       <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <!-- Filter Buttons -->
         <div class="flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            on:click={clearAllFinished}
+            class="text-xs text-destructive border-destructive hover:bg-destructive/10 hover:text-destructive"
+            disabled={completedCount === 0 && failedCount === 0 && allFilteredDownloads.filter(f => f.status === 'canceled').length === 0}
+          >
+            <X class="h-3 w-3 mr-1" />
+            Clear Finished
+          </Button>
           <Button
             size="sm"
             variant={filterStatus === 'all' ? 'default' : 'outline'}
@@ -691,6 +743,22 @@
               <span
                 class="inline-block h-3 w-3 rounded-full bg-white transition-transform shadow-sm"
                 style="transform: translateX({autoStartQueue ? '18px' : '2px'})"
+              ></span>
+            </button>
+          </div>
+          <div class="flex items-center gap-2">
+            <Label class="font-medium">Auto-clear:</Label>
+            <button
+              type="button"
+              aria-label="Toggle auto-clear completed downloads"
+              on:click={() => autoClearCompleted = !autoClearCompleted}
+              class="relative inline-flex h-4 w-8 items-center rounded-full transition-colors focus:outline-none"
+              class:bg-green-500={autoClearCompleted}
+              class:bg-muted-foreground={!autoClearCompleted}
+            >
+              <span
+                class="inline-block h-3 w-3 rounded-full bg-white transition-transform shadow-sm"
+                style="transform: translateX({autoClearCompleted ? '18px' : '2px'})"
               ></span>
             </button>
           </div>
@@ -857,6 +925,35 @@
                   >
                     <FolderOpen class="h-3 w-3 mr-1" />
                     Show in Folder
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    on:click={() => clearDownload(file.id)}
+                    class="h-7 px-3 text-sm text-muted-foreground hover:text-destructive"
+                    title={$t('download.actions.remove', { default: 'Remove' })}
+                  >
+                    <X class="h-3 w-3" />
+                  </Button>
+                {:else if file.status === 'failed' || file.status === 'canceled'}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    on:click={() => retryDownload(file.id)}
+                    class="h-7 px-3 text-sm"
+                  >
+                    <Play class="h-3 w-3 mr-1" />
+                    {$t('download.actions.retry', { default: 'Retry' })}
+                  </Button>
+                  <!-- You could also add a "Clear" button here to remove it from the list -->
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    on:click={() => clearDownload(file.id)}
+                    class="h-7 px-3 text-sm text-muted-foreground hover:text-destructive"
+                    title={$t('download.actions.remove', { default: 'Remove' })}
+                  >
+                    <X class="h-3 w-3" />
                   </Button>
                 {/if}
               </div>
