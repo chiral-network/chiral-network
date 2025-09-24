@@ -233,10 +233,16 @@
 
   // Generate mock latency history once on mount
   onMount(() => {   
+    const now = new Date();
+    // Options to include the timezone name
+    const dateOptions: Intl.DateTimeFormatOptions = {
+      dateStyle: 'medium',
+      timeStyle: 'long',
+    };
     suspiciousActivity.set([
-        { type: 'Unusual Upload', description: 'File > 1GB uploaded unusually fast', date: new Date().toLocaleString(), severity: 'high' },
-        { type: 'Multiple Logins', description: 'User logged in from different countries in 5 mins', date: new Date().toLocaleString(), severity: 'medium' },
-        { type: 'Failed Downloads', description: 'Several failed download attempts detected', date: new Date().toLocaleString(), severity: 'low' },
+        { type: 'Unusual Upload', description: 'File > 1GB uploaded unusually fast', date: now.toLocaleString(undefined, dateOptions), severity: 'high' },
+        { type: 'Multiple Logins', description: 'User logged in from different countries in 5 mins', date: now.toLocaleString(undefined, dateOptions), severity: 'medium' },
+        { type: 'Failed Downloads', description: 'Several failed download attempts detected', date: now.toLocaleString(undefined, dateOptions), severity: 'low' },
       ]);
 
     // Generate mock latency history (last 30 points)
@@ -931,7 +937,13 @@
   {#if $suspiciousActivity.length > 0}
     <div class="space-y-2">
       {#each $suspiciousActivity as alert}
-        <div class="flex items-center justify-between p-2 rounded hover:bg-red-50 transition">
+        <div
+          class="flex items-center justify-between p-2 rounded transition"
+          class:hover:bg-red-50={alert.severity === 'high'}
+          class:hover:bg-amber-50={alert.severity === 'medium'}
+          class:hover:bg-green-50={alert.severity === 'low'}
+          class:cursor-pointer={true}
+        >
           <div>
             <p class="text-sm font-medium">{alert.type}</p>
             <p class="text-xs text-muted-foreground">{alert.description}</p>
@@ -940,8 +952,8 @@
           <span
             class="px-2 py-0.5 rounded text-xs font-semibold"
             class:red-500={alert.severity === 'high'}
-            class:yellow-500={alert.severity === 'medium'}
-            class:green-500={alert.severity === 'low'}
+            class:text-amber-600={alert.severity === 'medium'}
+            class:text-green-600={alert.severity === 'low'}
             style="background-color: {alert.severity === 'high' ? '#fee2e2' : alert.severity === 'medium' ? '#fef3c7' : '#dcfce7'}"
           >
             {alert.severity.toUpperCase()}
