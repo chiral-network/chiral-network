@@ -1,18 +1,16 @@
-use crate::dht::DhtService; // Assuming DhtService is accessible here
+use crate::dht::DhtService;
 use crate::AppState;
-use std::sync::Arc;
-use tauri::{AppHandle, Manager, State};
 use tauri::Emitter;
-use tokio::sync::Mutex;
+use tauri::State;
 use tracing::info;
 
 #[derive(Clone, serde::Serialize)]
 pub struct ProxyNode {
-  pub id: String,
-  pub address: String,
-  pub status: String,
-  pub latency: u32,
-  pub error: Option<String>,
+    pub id: String,
+    pub address: String,
+    pub status: String,
+    pub latency: u32,
+    pub error: Option<String>,
 }
 
 fn normalize_to_multiaddr(input: &str) -> Result<String, String> {
@@ -32,9 +30,9 @@ fn normalize_to_multiaddr(input: &str) -> Result<String, String> {
         // host:port or 127.0.0.1:4001
         let (host, port) = input.split_once(':').ok_or("invalid host:port")?;
         if host.chars().all(|c| c.is_ascii_digit() || c == '.') {
-             Ok(format!("/ip4/{host}/tcp/{port}"))
+            Ok(format!("/ip4/{host}/tcp/{port}"))
         } else {
-             Ok(format!("/dns4/{host}/tcp/{port}"))
+            Ok(format!("/dns4/{host}/tcp/{port}"))
         }
     } else {
         Err(format!("unsupported address format: {}", input))
@@ -101,18 +99,20 @@ pub(crate) async fn proxy_disconnect(
 }
 
 #[tauri::command]
-pub async fn list_proxies(state: State<'_, AppState>) -> Result<Vec<ProxyNode>, String> {
+pub(crate) async fn list_proxies(state: State<'_, AppState>) -> Result<Vec<ProxyNode>, String> {
     let proxies = state.proxies.lock().await;
     Ok(proxies.clone())
 }
 
 #[tauri::command]
-pub async fn proxy_echo(
+pub(crate) async fn proxy_echo(
     state: State<'_, AppState>,
     peer_id: String,
     payload: Vec<u8>,
 ) -> Result<Vec<u8>, String> {
     let dht_guard = state.dht.lock().await;
-    let dht: &DhtService = dht_guard.as_ref().ok_or_else(|| "DHT not running".to_string())?;
+    let dht: &DhtService = dht_guard
+        .as_ref()
+        .ok_or_else(|| "DHT not running".to_string())?;
     dht.echo(peer_id, payload).await
 }
