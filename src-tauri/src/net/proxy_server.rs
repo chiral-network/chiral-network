@@ -15,20 +15,16 @@ pub async fn run_proxy_server(
     let local_peer_id = PeerId::from(local_key.public());
     info!("Local peer id: {:?}", local_peer_id);
 
-    // SwarmBuilder: TCP + RelayClient + with_behaviour(두 인자) + build()
-    let mut swarm: Swarm<RelayClientBehaviour> = SwarmBuilder::with_existing_identity(local_key)
-        .with_tokio()
-        .with_tcp(
-            tcp::Config::default(),
-            noise::Config::new,
-            yamux::Config::default,
-        )? // 함수 포인터 서명에 맞게 ok
-        .with_relay_client(noise::Config::new, yamux::Config::default)? // 마찬가지
-        .with_behaviour(|_keypair, relay_client| {
-            // 별도 Config 없이, 만들어진 relay_client 그대로 사용
-            Ok(relay_client)
-        })?
-        .build(); // 여기서 바로 Swarm 완성 (Swarm::new + Default::default() 불필요)
+    // SwarmBuilder: TCP + RelayClient + with_behaviour + build()
+    let mut swarm: Swarm<RelayClientBehaviour> =
+        SwarmBuilder::with_existing_identity(local_key)
+            .with_tokio()
+            .with_tcp(tcp::Config::default(), noise::Config::new, yamux::Config::default)?
+            .with_relay_client(noise::Config::new, yamux::Config::default)?                 
+            .with_behaviour(|_keypair, relay_client| {
+                Ok(relay_client)
+            })?
+            .build(); 
 
     let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", port).parse()?;
     swarm.listen_on(listen_addr)?;
