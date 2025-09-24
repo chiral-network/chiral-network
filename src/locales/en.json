@@ -595,7 +595,8 @@
     "from": "From",
     "to": "To",
     "suspiciousActivity": "Suspicious Activity",
-    "noSuspiciousActivity": "No suspicious activity detected."
+    "noSuspiciousActivity": "No suspicious activity detected.",
+    "latencyNoNodes": "No connected proxy nodes. Latency data will appear here once you connect."
   },
   "proxy": {
     "title": "Proxy Network",
