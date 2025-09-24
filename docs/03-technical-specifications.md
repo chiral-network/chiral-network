@@ -28,7 +28,6 @@
 | **WebSocket**     | 8547  | WS         | Real-time updates          |
 | **File Transfer** | 8080  | HTTP/HTTPS | File chunk transfers       |
 | **DHT**           | 4001  | UDP        | DHT routing                |
-| **Market API**    | 3000  | HTTPS      | Market server API          |
 
 ### Node Requirements
 
@@ -193,15 +192,6 @@ Message Structure:
 | `/api/v1/files/{hash}`      | DELETE | Delete file           |
 | `/api/v1/files/list`        | GET    | List user's files     |
 
-#### Market Operations
-
-| Endpoint                      | Method | Description          |
-| ----------------------------- | ------ | -------------------- |
-| `/api/v1/market/search`       | GET    | Search for files     |
-| `/api/v1/market/price/{hash}` | GET    | Get file prices      |
-| `/api/v1/market/supply`       | POST   | List file for sale   |
-| `/api/v1/market/purchase`     | POST   | Purchase file access |
-
 #### Node Operations
 
 | Endpoint              | Method  | Description          |
@@ -273,8 +263,7 @@ Master Key (from mnemonic)
 | **Transfer**        | Send coins           | 21,000 gas    |
 | **Storage Request** | Request file storage | 100,000 gas   |
 | **Storage Proof**   | Prove file storage   | 50,000 gas    |
-| **Market Listing**  | List file on market  | 80,000 gas    |
-| **Purchase**        | Purchase file access | 60,000 gas    |
+| **File Access**     | Access stored file   | 30,000 gas    |
 
 ### Transaction Structure
 
@@ -311,7 +300,7 @@ Transaction {
 | **Files per Node**       | 100,000    | 1,000,000  |
 | **Peers per Node**       | 100        | 1,000      |
 | **Concurrent Transfers** | 50         | 200        |
-| **Market Listings**      | 10,000     | 100,000    |
+| **DHT Entries**          | 10,000     | 100,000    |
 
 ## Protocol Versions
 
@@ -321,7 +310,7 @@ Transaction {
 | ------- | ------------ | ------ | ------------------ |
 | 0.1.0   | 2024-01-01   | Alpha  | Initial release    |
 | 0.2.0   | 2024-03-01   | Beta   | DHT implementation |
-| 0.3.0   | 2024-06-01   | Beta   | Market protocol    |
+| 0.3.0   | 2024-06-01   | Beta   | Storage protocol   |
 | 1.0.0   | 2024-12-01   | Stable | Production ready   |
 
 ### Protocol Negotiation
@@ -330,7 +319,7 @@ Transaction {
 Handshake {
   version: "1.0.0",
   network_id: 9001,
-  capabilities: ["storage", "market", "relay"],
+  capabilities: ["storage", "dht", "relay"],
   timestamp: 1234567890,
   nonce: "random_bytes"
 }
@@ -372,7 +361,7 @@ Example: 0x742d35Cc6634C0532925a3b8D0C9e0c8b346b983
 | 1005 | PERMISSION_DENIED  | Access not authorized         |
 | 1006 | STORAGE_FULL       | Node storage capacity reached |
 | 1007 | INVALID_CHUNK      | Chunk verification failed     |
-| 1008 | MARKET_OFFLINE     | Market service unavailable    |
+| 1008 | DHT_TIMEOUT        | DHT lookup timeout            |
 | 1009 | PEER_UNREACHABLE   | Cannot connect to peer        |
 
 ## Quality of Service
