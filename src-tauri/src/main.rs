@@ -11,7 +11,9 @@ mod geth_downloader;
 mod headless;
 mod keystore;
 pub mod net;
-use crate::commands::proxy::{list_proxies, proxy_connect, proxy_disconnect, proxy_echo, ProxyNode};
+use crate::commands::proxy::{
+    list_proxies, proxy_connect, proxy_disconnect, proxy_echo, ProxyNode,
+};
 use dht::{DhtEvent, DhtMetricsSnapshot, DhtService, FileMetadata};
 use ethereum::{
     create_new_account, get_account_from_private_key, get_balance, get_block_number, get_hashrate,
@@ -384,13 +386,22 @@ async fn start_dht_node(
                         error,
                     } => {
                         let mut proxies = proxies_arc.lock().await;
-                        // upsert: find by id (peer id) or by address (initial connection url)
-                        if let Some(p) = proxies.iter_mut().find(|p| {
-                            p.id == id
-                                || p.address == id
-                                || (!address.is_empty() && p.address == address)
-                        }) {
-                            p.id = id.clone(); // always update to the real peer id
+
+                        // 1) Find existing proxy by id, then by address, then by address==id
+                        let mut idx = proxies.iter().position(|p| p.id == id);
+                        if idx.is_none() && !address.is_empty() {
+                            idx = proxies.iter().position(|p| p.address == address);
+                        }
+                        if idx.is_none() {
+                            idx = proxies.iter().position(|p| p.address == id);
+                        }
+
+                        if let Some(i) = idx {
+                            // 2) Safe merge: only overwrite with incoming values
+                            let p = &mut proxies[i];
+                            if p.id != id {
+                                p.id = id.clone();
+                            }
                             if !address.is_empty() {
                                 p.address = address.clone();
                             }
@@ -401,20 +412,46 @@ async fn start_dht_node(
                             p.error = error.clone();
                             let _ = app_handle.emit("proxy_status_update", p.clone());
                         } else {
-                            // let new_node = ProxyNode {
-                            //     id: id.clone(),
-                            //     address: if address.is_empty() { id.clone() } else { address.clone() },
-                            //     status,
-                            //     latency: latency_ms.unwrap_or(999) as u32,
-                            //     error,
-                            // };
-                            // proxies.push(new_node.clone());
-                            // let _ = app_handle.emit("proxy_status_update", new_node);
+                            // 3) If not found, add new (if address is empty, use id instead)
+                            let new_node = ProxyNode {
+                                id: id.clone(),
+                                address: if address.is_empty() {
+                                    id.clone()
+                                } else {
+                                    address.clone()
+                                },
+                                status,
+                                latency: latency_ms.unwrap_or(0) as u32,
+                                error,
+                            };
+                            proxies.push(new_node.clone());
+                            let _ = app_handle.emit("proxy_status_update", new_node);
                         }
                     }
                     DhtEvent::EchoReceived { from, utf8, bytes } => {
-                        let payload = serde_json::json!({ "from": from, "text": utf8, "bytes": bytes });
+                        // Sending inbox event to frontend
+                        let payload =
+                            serde_json::json!({ "from": from, "text": utf8, "bytes": bytes });
                         let _ = app_handle.emit("proxy_echo_rx", payload);
+
+                        // If recieved an echo, mark the node as online in the proxy list
+                        {
+                            let mut proxies = proxies_arc.lock().await;
+                            if let Some(p) = proxies.iter_mut().find(|p| p.id == from) {
+                                p.status = "online".to_string();
+                                let _ = app_handle.emit("proxy_status_update", p.clone());
+                            } else {
+                                let new_node = ProxyNode {
+                                    id: from.clone(),
+                                    address: String::new(),
+                                    status: "online".to_string(),
+                                    latency: 0,
+                                    error: None,
+                                };
+                                proxies.push(new_node.clone());
+                                let _ = app_handle.emit("proxy_status_update", new_node);
+                            }
+                        }
                     }
                     DhtEvent::PeerRtt { peer, rtt_ms } => {
                         let mut proxies = proxies_arc.lock().await;
@@ -479,6 +516,19 @@ async fn publish_file_metadata(
         };
 
         dht.publish_file(metadata).await
+    } else {
+        Err("DHT node is not running".to_string())
+    }
+}
+
+#[tauri::command]
+async fn stop_publishing_file(state: State<'_, AppState>, file_hash: String) -> Result<(), String> {
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+    if let Some(dht) = dht {
+        dht.stop_publishing_file(file_hash).await
     } else {
         Err("DHT node is not running".to_string())
     }
@@ -889,8 +939,7 @@ async fn start_file_transfer_service(state: State<'_, AppState>) -> Result<(), S
 async fn upload_file_to_network(
     state: State<'_, AppState>,
     file_path: String,
-    file_name: String,
-) -> Result<String, String> {
+) -> Result<FileMetadata, String> {
     let ft = {
         let ft_guard = state.file_transfer.lock().await;
         ft_guard.as_ref().cloned()
@@ -898,7 +947,11 @@ async fn upload_file_to_network(
 
     if let Some(ft) = ft {
         // Upload the file
-        ft.upload_file(file_path.clone(), file_name.clone()).await?;
+        let file_name = file_path.split('/').last().unwrap_or(&file_path);
+
+        ft.upload_file(file_path.clone(), file_name.to_string())
+            .await
+            .map_err(|e| format!("Failed to upload file: {}", e))?;
 
         // Get the file hash by reading the file and calculating it
         let file_data = tokio::fs::read(&file_path)
@@ -915,7 +968,7 @@ async fn upload_file_to_network(
         if let Some(dht) = dht {
             let metadata = FileMetadata {
                 file_hash: file_hash.clone(),
-                file_name: file_name.clone(),
+                file_name: file_name.to_string(),
                 file_size: file_data.len() as u64,
                 seeders: vec![],
                 created_at: std::time::SystemTime::now()
@@ -925,12 +978,14 @@ async fn upload_file_to_network(
                 mime_type: None,
             };
 
-            if let Err(e) = dht.publish_file(metadata).await {
+            if let Err(e) = dht.publish_file(metadata.clone()).await {
                 warn!("Failed to publish file metadata to DHT: {}", e);
             }
+
+            return Ok(metadata);
         }
 
-        Ok(file_hash)
+        Err("DHT Service not running".to_string())
     } else {
         Err("File transfer service is not running".to_string())
     }
@@ -1257,9 +1312,12 @@ async fn logout(state: State<'_, AppState>) -> Result<(), ()> {
 }
 
 async fn get_active_account(state: &State<'_, AppState>) -> Result<String, String> {
-    state.active_account.lock().await.clone().ok_or_else(|| {
-        "No account is currently active. Please log in.".to_string()
-    })
+    state
+        .active_account
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "No account is currently active. Please log in.".to_string())
 }
 
 // --- 2FA Commands ---
@@ -1326,11 +1384,15 @@ async fn verify_and_enable_totp(
     // Create a Secret enum from the base32 string, then get its raw bytes.
     let secret_bytes = Secret::Encoded(secret.clone());
     let totp = TOTP::new(
-        Algorithm::SHA1, 6, 1, 30,
+        Algorithm::SHA1,
+        6,
+        1,
+        30,
         secret_bytes.to_bytes().map_err(|e| e.to_string())?,
         Some("Chiral Network".to_string()),
         address.clone(),
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
 
     if !totp.check_current(&code).unwrap_or(false) {
         return Ok(false); // Code is invalid, don't enable.
@@ -1353,18 +1415,23 @@ async fn verify_totp_code(
     let keystore = Keystore::load()?;
 
     // 1. Retrieve the secret from the keystore.
-    let secret_b32 = keystore.get_2fa_secret(&address, &password)?
+    let secret_b32 = keystore
+        .get_2fa_secret(&address, &password)?
         .ok_or_else(|| "2FA is not enabled for this account.".to_string())?;
 
     // 2. Verify the provided code against the stored secret.
     // Create a Secret enum from the base32 string, then get its raw bytes.
     let secret_bytes = Secret::Encoded(secret_b32);
     let totp = TOTP::new(
-        Algorithm::SHA1, 6, 1, 30,
+        Algorithm::SHA1,
+        6,
+        1,
+        30,
         secret_bytes.to_bytes().map_err(|e| e.to_string())?,
         Some("Chiral Network".to_string()),
         address.clone(),
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
 
     Ok(totp.check_current(&code).unwrap_or(false))
 }
@@ -1388,7 +1455,7 @@ fn main() {
             .with(
                 EnvFilter::from_default_env()
                     .add_directive("chiral_network=info".parse().unwrap())
-                    .add_directive("libp2p=trace".parse().unwrap())
+                    .add_directive("libp2p=debug".parse().unwrap())
                     .add_directive("libp2p_kad=debug".parse().unwrap())
                     .add_directive("libp2p_swarm=debug".parse().unwrap()),
             )
@@ -1457,6 +1524,7 @@ fn main() {
             start_dht_node,
             stop_dht_node,
             publish_file_metadata,
+            stop_publishing_file,
             search_file_metadata,
             connect_to_peer,
             get_dht_events,
