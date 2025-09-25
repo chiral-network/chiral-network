@@ -25,9 +25,6 @@ use libp2p::{
     swarm::{NetworkBehaviour, SwarmEvent},
     Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
 };
-use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, oneshot, Mutex};
-use tracing::{debug, error, info, warn};
 const EXPECTED_PROTOCOL_VERSION: &str = "/chiral/1.0.0";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
