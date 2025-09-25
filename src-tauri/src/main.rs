@@ -537,21 +537,6 @@ async fn get_dht_health(state: State<'_, AppState>) -> Result<Option<DhtMetricsS
 }
 
 #[tauri::command]
-async fn get_nat_status(state: State<'_, AppState>) -> Result<Option<String>, String> {
-    let dht = {
-        let dht_guard = state.dht.lock().await;
-        dht_guard.as_ref().cloned()
-    };
-
-    if let Some(dht) = dht {
-        let snap = dht.metrics_snapshot().await;
-        Ok(snap.nat_status)
-    } else {
-        Ok(None)
-    }
-}
-
-#[tauri::command]
 async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, String> {
     let dht = {
         let dht_guard = state.dht.lock().await;
@@ -1469,7 +1454,6 @@ fn main() {
             get_dht_health,
             get_dht_peer_count,
             get_dht_peer_id,
-            get_nat_status,
             start_file_transfer_service,
             upload_file_to_network,
             upload_file_data_to_network,

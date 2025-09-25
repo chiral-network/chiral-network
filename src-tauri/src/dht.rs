@@ -6,11 +6,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use tokio::sync::{mpsc, oneshot, Mutex};
-use tracing::{debug, error, info, warn};
-use serde::{Deserialize, Serialize};
-use libp2p::ping;
-use libp2p::{autonat, dcutr};
 use libp2p::{
     identify::{self, Event as IdentifyEvent},
     identity,
@@ -19,6 +14,7 @@ use libp2p::{
         Event as KademliaEvent, GetRecordOk, Mode, PutRecordOk, QueryResult, Record,
     },
     mdns::{tokio::Behaviour as Mdns, Event as MdnsEvent},
+    ping::{self, Behaviour as Ping, Event as PingEvent},
     request_response as rr,
     swarm::{NetworkBehaviour, SwarmEvent},
     Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
@@ -45,8 +41,6 @@ struct DhtBehaviour {
     identify: identify::Behaviour,
     mdns: Mdns,
     ping: ping::Behaviour,
-    autonat: autonat::Behaviour,
-    dcutr: dcutr::Behaviour,
     proxy_rr: rr::Behaviour<ProxyCodec>,
 }
 
@@ -105,7 +99,6 @@ struct DhtMetrics {
     last_error: Option<String>,
     bootstrap_failures: u64,
     listen_addrs: Vec<String>,
-    nat_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -118,7 +111,6 @@ pub struct DhtMetricsSnapshot {
     pub last_error_at: Option<u64>,
     pub bootstrap_failures: u64,
     pub listen_addrs: Vec<String>,
-    pub nat_status: Option<String>,
 }
 
 // ------Proxy Protocol Implementation------
@@ -213,7 +205,6 @@ impl DhtMetricsSnapshot {
             last_error_at: metrics.last_error_at.and_then(to_secs),
             bootstrap_failures: metrics.bootstrap_failures,
             listen_addrs: metrics.listen_addrs,
-            nat_status: metrics.nat_status,
         }
     }
 }
@@ -358,14 +349,9 @@ async fn run_dht_node(
                         )
                         .await;
                     }
-            SwarmEvent::Behaviour(DhtBehaviourEvent::Identify(identify_event)) => {
+                    SwarmEvent::Behaviour(DhtBehaviourEvent::Identify(identify_event)) => {
                         handle_identify_event(identify_event, &mut swarm, &event_tx).await;
                     }
-            SwarmEvent::Behaviour(DhtBehaviourEvent::Autonat(ev)) => {
-                if let Ok(mut m) = metrics.try_lock() {
-                    m.nat_status = Some(format!("{:?}", ev));
-                }
-            }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Mdns(mdns_event)) => {
                         handle_mdns_event(mdns_event, &mut swarm, &event_tx).await;
                     }
@@ -649,7 +635,13 @@ async fn handle_mdns_event(
     }
 }
 
-// (removed unused handle_ping_event)
+async fn handle_ping_event(event: PingEvent) {
+    match event {
+        ping::Event { result, .. } => {
+            debug!("Ping result: {:?}", result);
+        }
+    }
+}
 
 impl DhtService {
     pub async fn echo(&self, peer_id: String, payload: Vec<u8>) -> Result<Vec<u8>, String> {
@@ -725,15 +717,6 @@ impl DhtService {
         // mDNS for local peer discovery
         let mdns = Mdns::new(Default::default(), local_peer_id)?;
 
-        // Build additional behaviours for NAT traversal
-        let ping_behaviour = ping::Behaviour::new(ping::Config::new().with_interval(Duration::from_secs(15)));
-        let autonat_behaviour = autonat::Behaviour::new(
-            local_peer_id,
-            autonat::Config::default(),
-        );
-        // DCUtR enables direct connection upgrades (benefits from relays when available)
-        let dcutr_behaviour = dcutr::Behaviour::new(local_peer_id);
-
         // Request-Response behaviour
         let rr_cfg = rr::Config::default();
         let protocols =
@@ -744,9 +727,7 @@ impl DhtService {
             kademlia,
             identify,
             mdns,
-            ping: ping_behaviour,
-            autonat: autonat_behaviour,
-            dcutr: dcutr_behaviour,
+            ping: Ping::new(ping::Config::new()),
             proxy_rr,
         };
 
@@ -764,9 +745,9 @@ impl DhtService {
             )
             .build();
 
-        // Listen on TCP and also enable relay and QUIC if needed in future
+        // Listen on the specified port
         let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", port).parse()?;
-        swarm.listen_on(listen_addr.clone())?;
+        swarm.listen_on(listen_addr)?;
         info!("DHT listening on port: {}", port);
 
         // Connect to bootstrap nodes
