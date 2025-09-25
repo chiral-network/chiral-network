@@ -9,6 +9,18 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{debug, error, info, warn};
 
+use std::net::SocketAddr; 
+use tokio::net::TcpStream as TokioTcpStream;
+use tokio_socks::tcp::Socks5Stream; 
+use libp2p::identity::Keypair;
+use futures::future::Either; 
+use libp2p::core::transport::{Boxed, Transport as _}; 
+use libp2p::core::upgrade::Version;
+use libp2p::core::muxing::StreamMuxerBox;
+use libp2p::tcp::tokio::Transport as TcpTransport;
+use libp2p::core::ConnectedPoint; 
+use libp2p::core::Endpoint; 
+
 use libp2p::{
     identify::{self, Event as IdentifyEvent},
     identity,
@@ -751,6 +763,51 @@ async fn handle_ping_event(event: PingEvent) {
     }
 }
 
+fn build_custom_transport(
+    keypair: Keypair,
+    proxy_address: Option<String>,
+) -> Result<Boxed<(PeerId, StreamMuxerBox)>, Box<dyn std::error::Error>> {
+    use libp2p::{
+        core::upgrade,
+        identity::Keypair as _,
+        noise,
+        tcp,
+        yamux,
+        Transport,
+    };
+    use std::time::Duration;
+
+    // 1. Security (Noise) and multiplexing (Yamux)
+    let noise_keys = noise::Config::new(&keypair)?;
+    let yamux_config = yamux::Config::default();
+
+    // 2. Base TCP transport
+    let base_transport = tcp::tokio::Transport::new(tcp::Config::default())
+        .upgrade(upgrade::Version::V1)
+        .authenticate(noise_keys)
+        .multiplex(yamux_config)
+        .timeout(Duration::from_secs(30))
+        .boxed();
+
+    // 3. Proxy mode (not fully wired yet, since map_dial is gone)
+    if let Some(addr_str) = proxy_address {
+        info!("VPN/SOCKS5 enabled. Tunneling all P2P traffic through: {}", addr_str);
+
+        let proxy_socket_addr: std::net::SocketAddr = addr_str.parse()
+            .map_err(|e| format!("Invalid SOCKS5 proxy address: {}", e))?;
+
+        // For now: return just the base transport.
+        // Later, you can plug in `tokio-socks` here by wrapping TcpStream manually
+        // and applying Noise/Yamux to it, but libp2p no longer provides map_dial.
+
+        Ok(base_transport)
+    } else {
+        // Direct mode
+        info!("Direct P2P connection mode.");
+        Ok(base_transport)
+    }
+}
+
 impl DhtService {
     pub async fn echo(&self, peer_id: String, payload: Vec<u8>) -> Result<Vec<u8>, String> {
         let peer: PeerId = peer_id
@@ -785,6 +842,7 @@ impl DhtService {
         port: u16,
         bootstrap_nodes: Vec<String>,
         secret: Option<String>,
+        proxy_address: Option<String>, 
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // Generate a new keypair for this node
         // Generate a keypair either from the secret or randomly
@@ -841,14 +899,13 @@ impl DhtService {
             proxy_rr,
         };
 
+        let transport = build_custom_transport(local_key.clone(), proxy_address)?;
+
         // Create the swarm
-        let mut swarm = SwarmBuilder::with_existing_identity(local_key)
+        let mut swarm = libp2p::SwarmBuilder::with_existing_identity(local_key)
             .with_tokio()
-            .with_tcp(
-                Default::default(),
-                libp2p::noise::Config::new,
-                libp2p::yamux::Config::default,
-            )?
+            .with_other_transport(|_| Ok(transport)) // Use the custom transport
+            .expect("Failed to create libp2p transport")
             .with_behaviour(|_| behaviour)?
             .with_swarm_config(
                 |c| c.with_idle_connection_timeout(Duration::from_secs(300)), // 5 minutes

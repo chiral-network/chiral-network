@@ -336,6 +336,7 @@ async fn start_dht_node(
     state: State<'_, AppState>,
     port: u16,
     bootstrap_nodes: Vec<String>,
+    proxy_address: Option<String>,
 ) -> Result<String, String> {
     {
         let dht_guard = state.dht.lock().await;
@@ -344,7 +345,7 @@ async fn start_dht_node(
         }
     }
 
-    let dht_service = DhtService::new(port, bootstrap_nodes, None)
+    let dht_service = DhtService::new(port, bootstrap_nodes, None, proxy_address)
         .await
         .map_err(|e| format!("Failed to start DHT: {}", e))?;
 
