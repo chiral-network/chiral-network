@@ -115,7 +115,7 @@
   onMount(() => {
     refreshAvailableStorage()
 
-    // totoro: think this is for reacting to drag and drops...
+    // totoro: think this is for reacting to drag and drops... 
     // const unlisten = appWindow.onFileDropEvent((event) => {
     //   switch (event.payload.type) {
     //     case 'hover':
@@ -148,13 +148,20 @@
         addFilesFromPaths([selectedPaths]);
       }
     } catch (e) {
-      console.error("Error opening file dialog:", e);
       showToast(tr('upload.fileDialogError'), 'error');
     }
   }
   
-  function removeFile(fileId: string) {
-    files.update(f => f.filter(file => file.id !== fileId))
+  async function removeFile(fileHash: string) {
+
+    try {
+        await invoke('stop_publishing_file',{fileHash});
+        console.log("stopped publishing file")
+        files.update(f => f.filter(file => file.hash !== fileHash))
+      } catch (error) {
+        console.error(error);
+        showToast(tr('upload.fileFailed', { values: { name: fileHash, error: String(error) } }), 'error');
+      }
   }
   
   async function addFilesFromPaths(paths: string[]) {
@@ -406,7 +413,7 @@
                   </div>
                   
                   <button
-                    on:click={() => removeFile(file.id)}
+                    on:click={() => removeFile(file.hash)}
                     class="group/btn p-2 hover:bg-destructive/10 rounded-lg transition-all duration-200 hover:scale-110"
                     title={$t('upload.stopSharing')}
                     aria-label="Stop sharing file"

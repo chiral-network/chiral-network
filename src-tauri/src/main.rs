@@ -11,7 +11,9 @@ mod geth_downloader;
 mod headless;
 mod keystore;
 pub mod net;
-use crate::commands::proxy::{list_proxies, proxy_connect, proxy_disconnect, proxy_echo, ProxyNode};
+use crate::commands::proxy::{
+    list_proxies, proxy_connect, proxy_disconnect, proxy_echo, ProxyNode,
+};
 use dht::{DhtEvent, DhtMetricsSnapshot, DhtService, FileMetadata};
 use ethereum::{
     create_new_account, get_account_from_private_key, get_balance, get_block_number, get_hashrate,
@@ -397,17 +399,27 @@ async fn start_dht_node(
                         if let Some(i) = idx {
                             // 2) Safe merge: only overwrite with incoming values
                             let p = &mut proxies[i];
-                            if p.id != id { p.id = id.clone(); }
-                            if !address.is_empty() { p.address = address.clone(); }
+                            if p.id != id {
+                                p.id = id.clone();
+                            }
+                            if !address.is_empty() {
+                                p.address = address.clone();
+                            }
                             p.status = status.clone();
-                            if let Some(ms) = latency_ms { p.latency = ms as u32; }
+                            if let Some(ms) = latency_ms {
+                                p.latency = ms as u32;
+                            }
                             p.error = error.clone();
                             let _ = app_handle.emit("proxy_status_update", p.clone());
                         } else {
                             // 3) If not found, add new (if address is empty, use id instead)
                             let new_node = ProxyNode {
                                 id: id.clone(),
-                                address: if address.is_empty() { id.clone() } else { address.clone() },
+                                address: if address.is_empty() {
+                                    id.clone()
+                                } else {
+                                    address.clone()
+                                },
                                 status,
                                 latency: latency_ms.unwrap_or(0) as u32,
                                 error,
@@ -418,7 +430,8 @@ async fn start_dht_node(
                     }
                     DhtEvent::EchoReceived { from, utf8, bytes } => {
                         // Sending inbox event to frontend
-                        let payload = serde_json::json!({ "from": from, "text": utf8, "bytes": bytes });
+                        let payload =
+                            serde_json::json!({ "from": from, "text": utf8, "bytes": bytes });
                         let _ = app_handle.emit("proxy_echo_rx", payload);
 
                         // If recieved an echo, mark the node as online in the proxy list
@@ -503,6 +516,19 @@ async fn publish_file_metadata(
         };
 
         dht.publish_file(metadata).await
+    } else {
+        Err("DHT node is not running".to_string())
+    }
+}
+
+#[tauri::command]
+async fn stop_publishing_file(state: State<'_, AppState>, file_hash: String) -> Result<(), String> {
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+    if let Some(dht) = dht {
+        dht.stop_publishing_file(file_hash).await
     } else {
         Err("DHT node is not running".to_string())
     }
@@ -1286,9 +1312,12 @@ async fn logout(state: State<'_, AppState>) -> Result<(), ()> {
 }
 
 async fn get_active_account(state: &State<'_, AppState>) -> Result<String, String> {
-    state.active_account.lock().await.clone().ok_or_else(|| {
-        "No account is currently active. Please log in.".to_string()
-    })
+    state
+        .active_account
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "No account is currently active. Please log in.".to_string())
 }
 
 // --- 2FA Commands ---
@@ -1355,11 +1384,15 @@ async fn verify_and_enable_totp(
     // Create a Secret enum from the base32 string, then get its raw bytes.
     let secret_bytes = Secret::Encoded(secret.clone());
     let totp = TOTP::new(
-        Algorithm::SHA1, 6, 1, 30,
+        Algorithm::SHA1,
+        6,
+        1,
+        30,
         secret_bytes.to_bytes().map_err(|e| e.to_string())?,
         Some("Chiral Network".to_string()),
         address.clone(),
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
 
     if !totp.check_current(&code).unwrap_or(false) {
         return Ok(false); // Code is invalid, don't enable.
@@ -1382,18 +1415,23 @@ async fn verify_totp_code(
     let keystore = Keystore::load()?;
 
     // 1. Retrieve the secret from the keystore.
-    let secret_b32 = keystore.get_2fa_secret(&address, &password)?
+    let secret_b32 = keystore
+        .get_2fa_secret(&address, &password)?
         .ok_or_else(|| "2FA is not enabled for this account.".to_string())?;
 
     // 2. Verify the provided code against the stored secret.
     // Create a Secret enum from the base32 string, then get its raw bytes.
     let secret_bytes = Secret::Encoded(secret_b32);
     let totp = TOTP::new(
-        Algorithm::SHA1, 6, 1, 30,
+        Algorithm::SHA1,
+        6,
+        1,
+        30,
         secret_bytes.to_bytes().map_err(|e| e.to_string())?,
         Some("Chiral Network".to_string()),
         address.clone(),
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
 
     Ok(totp.check_current(&code).unwrap_or(false))
 }
@@ -1486,6 +1524,7 @@ fn main() {
             start_dht_node,
             stop_dht_node,
             publish_file_metadata,
+            stop_publishing_file,
             search_file_metadata,
             connect_to_peer,
             get_dht_events,
