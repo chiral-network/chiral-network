@@ -8,8 +8,8 @@ use std::io::{Read, Error, Write};
 use std::path::{Path, PathBuf};
 use x25519_dalek::{EphemeralSecret, PublicKey};
 
-// Import the new crypto functions and the bundle struct
-use crate::crypto::{decrypt_aes_key, encrypt_aes_key, EncryptedAesKeyBundle};
+// Import the new encryption functions and the bundle struct
+use crate::encryption::{decrypt_aes_key, encrypt_aes_key, EncryptedAesKeyBundle};
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct ChunkInfo {
@@ -132,11 +132,30 @@ impl ChunkManager {
     fn save_chunk(&self, hash: &str, data_with_nonce: &[u8]) -> Result<(), Error> {
         fs::create_dir_all(&self.storage_path)?;
         fs::write(self.storage_path.join(hash), data_with_nonce)?;
+        // Prime the L1 cache
+        {
+            let mut cache = L1_CACHE.lock().unwrap();
+            cache.put(hash.to_string(), data_with_nonce.to_vec());
+        }
         Ok(())
     }
 
     pub fn read_chunk(&self, hash: &str) -> Result<Vec<u8>, Error> {
-        fs::read(self.storage_path.join(hash))
+        // Check L1 cache first
+        {
+            let mut cache = L1_CACHE.lock().unwrap();
+            if let Some(data) = cache.get(hash) {
+                return Ok(data);
+            }
+        }
+        // Fallback to disk
+        let data = fs::read(self.storage_path.join(hash))?;
+        // Populate L1 cache
+        {
+            let mut cache = L1_CACHE.lock().unwrap();
+            cache.put(hash.to_string(), data.clone());
+        }
+        Ok(data)
     }
 
     fn decrypt_chunk(&self, data_with_nonce: &[u8], key: &Key<Aes256Gcm>) -> Result<Vec<u8>, String> {
@@ -273,4 +292,58 @@ impl ChunkManager {
         let proof = rs_merkle::MerkleProof::<Sha256Hasher>::new(proof_indices.to_vec(), proof_hashes);
         Ok(proof.verify(merkle_root, &[chunk_info.index as usize], &[calculated_hash]))
     }
+}
+
+use std::collections::HashMap;
+use std::sync::{Mutex, Arc};
+use lazy_static::lazy_static;
+
+// Simple thread-safe LRU cache implementation
+const L1_CACHE_CAPACITY: usize = 128;
+
+struct LruCache {
+    map: HashMap<String, Vec<u8>>,
+    order: Vec<String>,
+    capacity: usize,
+}
+
+impl LruCache {
+    fn new(capacity: usize) -> Self {
+        LruCache {
+            map: HashMap::new(),
+            order: Vec::new(),
+            capacity,
+        }
+    }
+
+    fn get(&mut self, key: &str) -> Option<Vec<u8>> {
+        if let Some(value) = self.map.get(key) {
+            // Move key to the end (most recently used)
+            self.order.retain(|k| k != key);
+            self.order.push(key.to_string());
+            Some(value.clone())
+        } else {
+            None
+        }
+    }
+
+    fn put(&mut self, key: String, value: Vec<u8>) {
+        if self.map.contains_key(&key) {
+            self.order.retain(|k| k != &key);
+        }
+        self.order.push(key.clone());
+        self.map.insert(key.clone(), value);
+
+        // Evict least recently used if over capacity
+        if self.order.len() > self.capacity {
+            if let Some(lru) = self.order.first() {
+                self.map.remove(lru);
+            }
+            self.order.remove(0);
+        }
+    }
+}
+
+lazy_static! {
+    static ref L1_CACHE: Mutex<LruCache> = Mutex::new(LruCache::new(L1_CACHE_CAPACITY));
 }

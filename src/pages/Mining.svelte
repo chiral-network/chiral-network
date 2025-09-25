@@ -109,9 +109,6 @@
 
   $: displayedTemperature = temperatureUnit === 'F' ? toFahrenheit(temperature).toFixed(1) : temperature.toFixed(1);
 
-
-  
-  $: expectedBlockReward = 2;
   $: expectedTotalRewards = $miningState.blocksFound * 2;
   $: $miningState.totalRewards = expectedTotalRewards;
   

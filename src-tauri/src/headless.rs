@@ -106,6 +106,9 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
                 .unwrap()
                 .as_secs(),
             mime_type: Some("text/plain".to_string()),
+            is_encrypted: false,
+            encryption_method: None,
+            key_fingerprint: None,
         };
 
         dht_service.publish_file(example_metadata).await?;

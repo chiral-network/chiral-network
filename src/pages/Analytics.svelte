@@ -29,7 +29,7 @@
     // Use the live values from $proxyNodes
     const latencies = $proxyNodes
             .map(n => n.latency)
-            .filter(l => typeof l === 'number' && isFinite(l))
+            .filter((l): l is number => typeof l === 'number' && isFinite(l))
 
     if (latencies.length === 0) {
       avgLatency = 0
@@ -42,8 +42,8 @@
     const sum = latencies.reduce((s, v) => s + v, 0)
     avgLatency = sum / latencies.length
     const idx = Math.floor(0.95 * (latencies.length - 1))
-    p95Latency = latencies[idx]
-    bestLatency = latencies[0]
+    p95Latency = latencies[idx] || 0
+    bestLatency = latencies[0] || 0
   }
 
   type Earning = {

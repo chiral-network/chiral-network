@@ -4,6 +4,7 @@
 )]
 
 pub mod commands;
+mod encryption;
 mod dht;
 mod ethereum;
 mod file_transfer;
@@ -514,6 +515,9 @@ async fn publish_file_metadata(
                 .unwrap()
                 .as_secs(),
             mime_type,
+            is_encrypted: false,
+            encryption_method: None,
+            key_fingerprint: None,
         };
 
         dht.publish_file(metadata).await
@@ -977,6 +981,9 @@ async fn upload_file_to_network(
                     .unwrap()
                     .as_secs(),
                 mime_type: None,
+                is_encrypted: false,
+                encryption_method: None,
+                key_fingerprint: None,
             };
 
             if let Err(e) = dht.publish_file(metadata.clone()).await {
@@ -1064,6 +1071,9 @@ async fn upload_file_data_to_network(
                     .unwrap()
                     .as_secs(),
                 mime_type: None,
+                is_encrypted: false,
+                encryption_method: None,
+                key_fingerprint: None,
             };
 
             if let Err(e) = dht.publish_file(metadata).await {
@@ -1141,6 +1151,88 @@ async fn get_file_transfer_events(state: State<'_, AppState>) -> Result<Vec<Stri
     } else {
         Ok(vec![])
     }
+}
+
+#[tauri::command]
+async fn encrypt_file_with_password(
+    input_path: String,
+    output_path: String,
+    password: String,
+) -> Result<encryption::EncryptionInfo, String> {
+    use std::path::Path;
+    
+    let input = Path::new(&input_path);
+    let output = Path::new(&output_path);
+    
+    if !input.exists() {
+        return Err("Input file does not exist".to_string());
+    }
+    
+    let result = encryption::FileEncryption::encrypt_file_with_password(
+        input,
+        output,
+        &password,
+    ).await?;
+    
+    Ok(result.encryption_info)
+}
+
+#[tauri::command]
+async fn decrypt_file_with_password(
+    input_path: String,
+    output_path: String,
+    password: String,
+    encryption_info: encryption::EncryptionInfo,
+) -> Result<u64, String> {
+    use std::path::Path;
+    
+    let input = Path::new(&input_path);
+    let output = Path::new(&output_path);
+    
+    if !input.exists() {
+        return Err("Encrypted file does not exist".to_string());
+    }
+    
+    encryption::FileEncryption::decrypt_file_with_password(
+        input,
+        output,
+        &password,
+        &encryption_info,
+    ).await
+}
+
+#[tauri::command]
+async fn encrypt_file_for_upload(
+    input_path: String,
+    password: Option<String>,
+) -> Result<(String, encryption::EncryptionInfo), String> {
+    use std::path::Path;
+    
+    let input = Path::new(&input_path);
+    if !input.exists() {
+        return Err("Input file does not exist".to_string());
+    }
+    
+    // Create encrypted file in same directory with .enc extension
+    let encrypted_path = input.with_extension("enc");
+    
+    let result = if let Some(pwd) = password {
+        encryption::FileEncryption::encrypt_file_with_password(
+            input,
+            &encrypted_path,
+            &pwd,
+        ).await?
+    } else {
+        // Generate random key for no-password encryption
+        let key = encryption::FileEncryption::generate_random_key();
+        encryption::FileEncryption::encrypt_file(
+            input,
+            &encrypted_path,
+            &key,
+        ).await?
+    };
+    
+    Ok((encrypted_path.to_string_lossy().to_string(), result.encryption_info))
 }
 
 #[tauri::command]
@@ -1538,6 +1630,9 @@ fn main() {
             upload_file_data_to_network,
             download_file_from_network,
             get_file_transfer_events,
+            encrypt_file_with_password,
+            decrypt_file_with_password,
+            encrypt_file_for_upload,
             show_in_folder,
             get_available_storage,
             proxy_connect,

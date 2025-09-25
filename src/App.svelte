@@ -22,8 +22,6 @@
     import { fileService } from '$lib/services/fileService';
     // gets path name not entire url:
     // ex: http://locatlhost:1420/download -> /download
-
-    const DEV = import.meta.env.DEV;
     
     // get path name based on current url
     // if no path name, default to 'download'
