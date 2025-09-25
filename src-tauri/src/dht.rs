@@ -462,7 +462,16 @@ async fn run_dht_node(
                                 Message::Request { request, channel, .. } => {
                                     let EchoRequest(data) = request;
 
-                                    // 1) Showing received data to UI
+                                    // 1) Notify UI of peer status
+                                    let _ = event_tx.send(DhtEvent::ProxyStatus {
+                                        id: peer.to_string(),
+                                        address: String::new(),
+                                        status: "online".into(),
+                                        latency_ms: None,
+                                        error: None,
+                                    }).await;
+
+                                    // 2) Showing received data to UI
                                     let preview = std::str::from_utf8(&data).ok().map(|s| s.to_string());
                                     let _ = event_tx.send(DhtEvent::EchoReceived {
                                         from: peer.to_string(),
@@ -470,10 +479,12 @@ async fn run_dht_node(
                                         bytes: data.len(),
                                     }).await;
 
-                                    // 2) Echo response
+                                    // 3) Echo response
                                     swarm.behaviour_mut().proxy_rr
                                         .send_response(channel, EchoResponse(data))
                                         .unwrap_or_else(|e| error!("send_response failed: {e:?}"));
+
+
                                 }
                                 // Client response
                                 Message::Response { request_id, response } => {
