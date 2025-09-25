@@ -119,7 +119,7 @@ export class DhtService {
     }
 
     try {
-      await invoke("search_file_metadata", { fileHash });
+      await invoke("search_file_metadata", { fileHash, timeoutMs: 0 });
       console.log("Searching for file:", fileHash);
     } catch (error) {
       console.error("Failed to search file:", error);
@@ -190,6 +190,35 @@ export class DhtService {
     } catch (error) {
       console.error("Failed to get DHT health:", error);
       return null;
+    }
+  }
+
+  async searchFileMetadata(
+    fileHash: string,
+    timeoutMs = 10_000
+  ): Promise<FileMetadata | null> {
+    const trimmed = fileHash.trim();
+    if (!trimmed) {
+      throw new Error("File hash is required");
+    }
+
+    try {
+      const result = await invoke<FileMetadata | null>("search_file_metadata", {
+        fileHash: trimmed,
+        timeoutMs,
+      });
+
+      if (!result) {
+        return null;
+      }
+
+      return {
+        ...result,
+        seeders: Array.isArray(result.seeders) ? result.seeders : [],
+      };
+    } catch (error) {
+      console.error("Failed to search file metadata:", error);
+      throw error;
     }
   }
 }

@@ -70,7 +70,14 @@ export interface PeerInfo {
   location?: string;
 }
 
-export const suspiciousActivity = writable<{ type: string; description: string; date: string; severity: 'low' | 'medium' | 'high' }[]>([]);
+export const suspiciousActivity = writable<
+  {
+    type: string;
+    description: string;
+    date: string;
+    severity: "low" | "medium" | "high";
+  }[]
+>([]);
 
 export interface ChatMessage {
   id: string;
@@ -93,14 +100,14 @@ export interface NetworkStats {
 }
 
 export interface Transaction {
-    id: number;
-    type: 'sent' | 'received';
-    amount: number;
-    to?: string;
-    from?: string;
-    date: Date;
-    description: string;
-    status: 'pending' | 'completed';
+  id: number;
+  type: "sent" | "received";
+   amount: number;
+  to?: string;
+  from?: string;
+  date: Date;
+  description: string;
+  status: "pending" | "completed";
 }
 
 export interface BlacklistEntry {
@@ -143,7 +150,7 @@ const dummyFiles: FileItem[] = [
 const dummyWallet: WalletInfo = {
   address: "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1",
   balance: 1000.5,
-  pendingTransactions: 2,
+  pendingTransactions: 5,
 };
 
 // Additional dummy data
@@ -207,40 +214,40 @@ const dummyNetworkStats: NetworkStats = {
 const dummyTransactions: Transaction[] = [
   {
     id: 1,
-    type: 'received',
+    type: "received",
     amount: 50.5,
-    from: '0x8765...4321',
-    date: new Date('2024-03-15'),
-    description: 'File purchase',
-    status: 'completed'
+    from: "0x8765...4321",
+    date: new Date("2024-03-15"),
+    description: "Storage reward",
+    status: "completed",
   },
   {
     id: 2,
-    type: 'sent',
+    type: "sent",
     amount: 10.25,
-    to: '0x1234...5678',
-    date: new Date('2024-03-14'),
-    description: 'Proxy service',
-    status: 'completed'
+    to: "0x1234...5678",
+    date: new Date("2024-03-14"),
+    description: "Proxy service",
+    status: "completed",
   },
   {
     id: 3,
-    type: 'received',
+    type: "received",
     amount: 100,
-    from: '0xabcd...ef12',
-    date: new Date('2024-03-13'),
-    description: 'Upload reward',
-    status: 'completed'
+    from: "0xabcd...ef12",
+    date: new Date("2024-03-13"),
+    description: "Upload reward",
+    status: "completed",
   },
   {
     id: 4,
-    type: 'sent',
+    type: "sent",
     amount: 5.5,
-    to: '0x9876...5432',
-    date: new Date('2024-03-12'),
-    description: 'File download',
-    status: 'completed'
-  }
+    to: "0x9876...5432",
+    date: new Date("2024-03-12"),
+    description: "File download",
+    status: "completed",
+  },
 ];
 
 // Stores
@@ -303,13 +310,14 @@ export const miningState = writable<MiningState>({
   miningHistory: [],
 });
 
-
-export const totalEarned = derived(transactions, $txs =>
-  $txs.filter(tx => tx.type === 'received')
-      .reduce((sum, tx) => sum + tx.amount, 0)
+export const totalEarned = derived(transactions, ($txs) =>
+  $txs
+    .filter((tx) => tx.type === "received")
+    .reduce((sum, tx) => sum + tx.amount, 0)
 );
 
-export const totalSpent = derived(transactions, $txs =>
-  $txs.filter(tx => tx.type === 'sent')
-      .reduce((sum, tx) => sum + tx.amount, 0)
+export const totalSpent = derived(transactions, ($txs) =>
+  $txs
+    .filter((tx) => tx.type === "sent")
+    .reduce((sum, tx) => sum + tx.amount, 0)
 );

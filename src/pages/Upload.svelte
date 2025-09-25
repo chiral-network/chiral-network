@@ -9,6 +9,12 @@
   import { showToast } from '$lib/toast'
   import { getStorageStatus, isDuplicateHash } from '$lib/uploadHelpers.js'
   import { fileService } from '$lib/services/fileService'
+  import { open } from "@tauri-apps/plugin-dialog";
+  import { invoke } from "@tauri-apps/api/core";
+  import type { FileMetadata } from '$lib/dht';
+  // import { getCurrentWindow } from "@tauri-apps/api/window";
+
+
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
 
   // Enhanced file type detection with icons
@@ -48,9 +54,6 @@
   }
 
   let isDragging = false
-  let dragCounter = 0
-  let fileInput: HTMLInputElement
-
   const LOW_STORAGE_THRESHOLD = 5
   let availableStorage: number | null = null
   let storageStatus: 'unknown' | 'ok' | 'low' = 'unknown'
@@ -111,81 +114,86 @@
 
   onMount(() => {
     refreshAvailableStorage()
+
+    // totoro: think this is for reacting to drag and drops... 
+    // const unlisten = appWindow.onFileDropEvent((event) => {
+    //   switch (event.payload.type) {
+    //     case 'hover':
+    //       isDragging = true
+    //       break
+    //     case 'drop':
+    //       isDragging = false
+    //       addFilesFromPaths(event.payload.paths)
+    //       break
+    //     case 'cancel':
+    //       isDragging = false
+    //       break
+    //   }
+    // })
+
+    // return () => {
+    //   unlisten.then(f => f());
+    // }
   })
 
-  function handleFileSelect(event: Event) {
-    const input = event.target as HTMLInputElement
-    if (input.files) {
-      addFiles(Array.from(input.files))
-      input.value = '' // Reset input
-    }
-  }
+  async function openFileDialog() {
+    try {
+      const selectedPaths = await open({
+        multiple: true,
+      });
 
-  function handleDrop(event: DragEvent) {
-    event.preventDefault()
-    isDragging = false
-    dragCounter = 0
-    if (event.dataTransfer?.files && event.dataTransfer.files.length > 0) {
-      addFiles(Array.from(event.dataTransfer.files))
-    }
-  }
-
-  function handleDragOver(event: DragEvent) {
-    event.preventDefault();
-    // Allow drop
-  }
-
-  function handleDragEnter(event: DragEvent) {
-    event.preventDefault()
-    dragCounter++
-    if (dragCounter === 1) {
-      isDragging = true
-    }
-  }
-
-  function handleDragLeave(event: DragEvent) {
-    event.preventDefault()
-    dragCounter--
-    if (dragCounter === 0) {
-      isDragging = false
+      if (Array.isArray(selectedPaths)) {
+        addFilesFromPaths(selectedPaths);
+      } else if (selectedPaths) {
+        addFilesFromPaths([selectedPaths]);
+      }
+    } catch (e) {
+      showToast(tr('upload.fileDialogError'), 'error');
     }
   }
   
-  function removeFile(fileId: string) {
-    files.update(f => f.filter(file => file.id !== fileId))
+  async function removeFile(fileHash: string) {
+
+    try {
+        await invoke('stop_publishing_file',{fileHash});
+        console.log("stopped publishing file")
+        files.update(f => f.filter(file => file.hash !== fileHash))
+      } catch (error) {
+        console.error(error);
+        showToast(tr('upload.fileFailed', { values: { name: fileHash, error: String(error) } }), 'error');
+      }
   }
   
-  async function addFiles(filesToAdd: File[]) {
+  async function addFilesFromPaths(paths: string[]) {
     let duplicateCount = 0
     let addedCount = 0
 
-    for (let i = 0; i < filesToAdd.length; i++) {
-      const file = filesToAdd[i];
+    for (const filePath of paths) {
       try {
-        // Mock upload for demo purposes (backend not available)
-        const fileHash = `mock-hash-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const metadata = await invoke('upload_file_to_network',{filePath}) as FileMetadata;
 
-        if (isDuplicateHash(get(files), fileHash)) {
+        if (isDuplicateHash(get(files), metadata.fileHash)) {
           duplicateCount++
           continue;
         }
 
         const newFile = {
-          id: `file-${Date.now()}-${i}`,
-          name: file.name,
-          hash: fileHash,
-          size: file.size,
+          id: `file-${Date.now()}-${Math.random()}`,
+          name: metadata.fileName,
+          path: filePath, 
+          hash: metadata.fileHash,
+          size: metadata.fileSize,
           status: 'seeding' as const,
-          seeders: Math.floor(Math.random() * 10) + 1,
-          leechers: Math.floor(Math.random() * 5),
-          uploadDate: new Date()
+          seeders: 1,
+          leechers: 0,
+          uploadDate: new Date(metadata.createdAt)
         };
 
         files.update(f => [...f, newFile]);
         addedCount++;
       } catch (error) {
-        console.error(`Failed to upload file "${file.name}":`, error);
-        showToast(tr('upload.fileFailed', { values: { name: file.name, error: String(error) } }), 'error');
+        console.error(error);
+        showToast(tr('upload.fileFailed', { values: { name: filePath.split(/[\/]/).pop(), error: String(error) } }), 'error');
       }
     }
 
@@ -256,20 +264,9 @@
     <div
       class="space-y-4"
       role="region"
-      on:drop={handleDrop}
-      on:dragover={handleDragOver}
-      on:dragenter={handleDragEnter}
-      on:dragleave={handleDragLeave}
    >
     <div class="space-y-4">
       <!-- Drag & Drop Indicator -->
-      <input
-        bind:this={fileInput}
-        type="file"
-        multiple
-        on:change={handleFileSelect}
-        class="hidden"
-      />
       {#if $files.filter(f => f.status === 'seeding' || f.status === 'uploaded').length === 0}
         <div class="text-center py-12 border-2 border-dashed rounded-xl transition-all duration-300 relative overflow-hidden {isDragging ? 'border-primary bg-gradient-to-br from-primary/20 via-primary/10 to-primary/5 scale-105 shadow-2xl' : 'border-muted-foreground/25 bg-gradient-to-br from-muted/5 to-muted/10 hover:border-muted-foreground/40 hover:bg-muted/20'}">
           
@@ -307,7 +304,7 @@
               </div>
               
               <div class="flex justify-center gap-3">
-                <button class="group inline-flex items-center justify-center h-12 rounded-xl px-6 text-sm font-medium bg-gradient-to-r from-primary to-primary/90 text-primary-foreground hover:from-primary/90 hover:to-primary shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105" on:click={() => fileInput?.click()}>
+                <button class="group inline-flex items-center justify-center h-12 rounded-xl px-6 text-sm font-medium bg-gradient-to-r from-primary to-primary/90 text-primary-foreground hover:from-primary/90 hover:to-primary shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105" on:click={openFileDialog}>
                   <Plus class="h-5 w-5 mr-2 group-hover:rotate-90 transition-transform duration-300" />
                   {$t('upload.addFiles')}
                 </button>
@@ -331,7 +328,7 @@
             <p class="text-xs text-muted-foreground mt-1">{$t('upload.tip')}</p>
           </div>
           <div class="flex gap-2">
-            <button class="inline-flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90" on:click={() => { console.log('fileInput:', fileInput); fileInput?.click(); }}>
+            <button class="inline-flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90" on:click={openFileDialog}>
               <Plus class="h-4 w-4 mr-2" />
               {$t('upload.addMoreFiles')}
             </button>
@@ -416,7 +413,7 @@
                   </div>
                   
                   <button
-                    on:click={() => removeFile(file.id)}
+                    on:click={() => removeFile(file.hash)}
                     class="group/btn p-2 hover:bg-destructive/10 rounded-lg transition-all duration-200 hover:scale-110"
                     title={$t('upload.stopSharing')}
                     aria-label="Stop sharing file"

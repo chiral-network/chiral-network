@@ -82,86 +82,62 @@ Storage Node:
   port: 8080,
   capacity: 1099511627776, // 1TB in bytes
   used: 549755813888, // 512GB in bytes
-  pricePerGB: 0.001, // in native currency
+  rewardRate: 0.001, // algorithmic reward rate
   uptime: 0.99,
   reputation: 4.5
 }
 ```
 
-### 3. Market Mechanism
+### 3. Peer Discovery Mechanism
 
-#### Centralized Market Server (Phase 1)
+#### DHT-Based Discovery (Fully Decentralized)
 
-Initial implementation uses a centralized discovery server:
-
-```
-Market Database Schema:
-Files Table:
-- file_hash: VARCHAR(64) PRIMARY KEY
-- file_size: BIGINT
-- file_name: VARCHAR(255)
-- upload_date: TIMESTAMP
-
-Suppliers Table:
-- supplier_id: VARCHAR(64)
-- file_hash: VARCHAR(64)
-- ip_address: VARCHAR(45)
-- port: INTEGER
-- price_per_mb: DECIMAL(10,8)
-- bandwidth_limit: INTEGER
-- last_seen: TIMESTAMP
-- expires_at: TIMESTAMP
-```
-
-#### Market Operations
+The system uses a fully decentralized approach for peer discovery via Kademlia DHT:
 
 ```
-// Supplier Registration
-POST /market/supply
+File Metadata Structure:
 {
-  file_hash: "sha256_hash",
-  ip: "192.168.1.100",
-  port: 8080,
-  price: 0.001,
-  bandwidth: 100 // MB/s
+  file_hash: "sha256_hash",       // Content-based identifier
+  file_name: "document.pdf",
+  file_size: 1048576,             // bytes
+  seeders: [                      // Direct peer multiaddresses
+    "/ip4/192.168.1.100/tcp/8080/p2p/12D3KooW...",
+    "/ip4/10.0.0.5/tcp/4001/p2p/12D3KooW..."
+  ],
+  created_at: 1640995200,
+  mime_type: "application/pdf",
+  total_chunks: 16
 }
+```
+
+#### DHT Operations
+
+```
+// File Registration (No central server)
+dht.put_record(file_hash, metadata);
+
+// Peer announces availability
+dht.provider_record(file_hash, peer_multiaddr);
 
 // File Discovery
-GET /market/lookup/{file_hash}
-Response: [
-  {
-    supplier_id: "node_123",
-    ip: "192.168.1.100",
-    port: 8080,
-    price: 0.001,
-    reputation: 4.5
-  }
-]
+metadata = dht.get_record(file_hash);
+providers = dht.get_providers(file_hash);
+
+// Direct peer connection
+connect(providers[0]);  // Connect to seeders directly
 ```
 
-#### Decentralized Market (Phase 2)
+#### Decentralized Incentives
 
-Future implementation using smart contracts:
+Rewards distributed via blockchain without centralized markets:
 
-```solidity
-contract FileMarket {
-  struct Listing {
-    address supplier;
-    bytes32 fileHash;
-    uint256 price;
-    uint256 deposit;
-    uint256 expiry;
-  }
-
-  mapping(bytes32 => Listing[]) public listings;
-
-  function listFile(bytes32 _hash, uint256 _price) external payable {
-    // Implementation
-  }
-
-  function purchaseFile(bytes32 _hash, address _supplier) external payable {
-    // Implementation
-  }
+```rust
+// Proof-of-Storage validation
+struct StorageProof {
+    file_hash: Hash,
+    chunk_hashes: Vec<Hash>,
+    merkle_proof: MerkleProof,
+    timestamp: u64,
 }
 ```
 
@@ -172,7 +148,7 @@ contract FileMarket {
 ```
 Protocol Layers:
 ┌─────────────────────┐
-│   Application       │ ← File Transfer, Market Queries
+│   Application       │ ← File Transfer, DHT Queries
 ├─────────────────────┤
 │   libp2p            │ ← Peer Discovery, Routing
 ├─────────────────────┤
@@ -198,15 +174,15 @@ message FileResponse {
   string next_chunk_hash = 3;
 }
 
-message PriceQuery {
+message StorageRequest {
   string file_hash = 1;
   uint64 duration = 2; // storage duration in seconds
 }
 
-message PriceResponse {
-  uint64 total_price = 1;
-  uint64 price_per_mb = 2;
-  uint64 price_per_day = 3;
+message StorageResponse {
+  uint64 reward_amount = 1; // algorithmic reward
+  uint64 gas_cost = 2;
+  bool accepted = 3;
 }
 ```
 
@@ -234,18 +210,18 @@ Backend Services:
 File Upload:
 1. Select File → Generate Hash
 2. Create Chunks → Encrypt
-3. Query Market → Find Storage Nodes
-4. Negotiate Price → Create Transaction
+3. Query DHT → Find Storage Nodes
+4. Calculate Rewards → Create Transaction
 5. Upload Chunks → Verify Storage
 6. Register in DHT → Complete
 
 File Download:
 1. Input Hash → Query DHT
-2. Discover Suppliers → Compare Prices
-3. Select Supplier → Initiate Transfer
+2. Discover Storage Nodes → Select Available
+3. Connect to Nodes → Initiate Transfer
 4. Download Chunks → Verify Hashes
 5. Reassemble File → Decrypt
-6. Make Payment → Complete
+6. Distribute Rewards → Complete
 ```
 
 ### 6. Security Architecture
@@ -276,7 +252,7 @@ Permission Model:
 - File Owner: Full control (read, write, delete, share)
 - Storage Node: Read-only access to encrypted chunks
 - Network Peer: No direct file access
-- Market Server: Metadata only (no file content)
+- DHT Network: Metadata only (no file content)
 ```
 
 ### 7. Data Flow Architecture
@@ -288,8 +264,8 @@ sequenceDiagram
     Client->>+FileService: Upload File
     FileService->>FileService: Generate Hash
     FileService->>FileService: Chunk & Encrypt
-    FileService->>+Market: Query Storage Nodes
-    Market-->>-FileService: Return Node List
+    FileService->>+DHT: Query File Metadata
+    DHT-->>-FileService: Return Seeder List
     FileService->>+StorageNode: Upload Chunks
     StorageNode-->>-FileService: Confirm Storage
     FileService->>+DHT: Register File
@@ -306,8 +282,8 @@ sequenceDiagram
     Client->>+FileService: Request File (Hash)
     FileService->>+DHT: Lookup File
     DHT-->>-FileService: Return Locations
-    FileService->>+Market: Get Prices
-    Market-->>-FileService: Return Prices
+    FileService->>+DHT: Get Provider Info
+    DHT-->>-FileService: Return Peer Details
     FileService->>Client: Present Options
     Client->>FileService: Select Provider
     FileService->>+StorageNode: Request Chunks
@@ -323,7 +299,7 @@ sequenceDiagram
 #### Horizontal Scaling
 
 - **Storage**: Add more storage nodes
-- **Market**: Multiple market servers with load balancing
+- **DHT**: Distributed peer discovery with no central servers
 - **Blockchain**: Increase block size or use sidechains
 - **DHT**: Automatic scaling with node count
 
@@ -345,7 +321,7 @@ Load Balancing:
 - Geographic distribution
 - Latency-based routing
 - Bandwidth availability
-- Price optimization
+- Reward optimization
 ```
 
 ### 9. Fault Tolerance
@@ -365,7 +341,7 @@ File Redundancy:
 ```
 Node Failure:
 1. Detection: Heartbeat timeout (30 seconds)
-2. Mark Offline: Update DHT and market
+2. Mark Offline: Update DHT records
 3. Redirect: Route requests to replicas
 4. Repair: Re-replicate to maintain redundancy
 5. Cleanup: Remove after grace period
@@ -406,13 +382,13 @@ Techniques:
 
 1. Basic blockchain with wallet
 2. Simple file upload/download
-3. Centralized market server
+3. Fully decentralized DHT discovery
 4. Desktop GUI
 
 ### Phase 2: Decentralization
 
 1. Full DHT implementation
-2. P2P market discovery
+2. DHT-based peer discovery
 3. Enhanced encryption
 4. Reputation system
 
@@ -431,7 +407,7 @@ Techniques:
 **Alternative**: Build from scratch or use Bitcoin fork
 **Trade-off**: More complex but more flexible for application needs
 
-### Decision: Centralized Market Initially
+### Decision: Fully Decentralized DHT
 
 **Rationale**: Faster development, easier debugging
 **Alternative**: Fully decentralized from start

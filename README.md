@@ -2,7 +2,7 @@
 
 ## Overview
 
-Chiral Network is a BitTorrent-like decentralized file sharing application designed for legitimate personal and organizational use. Built with Svelte, TypeScript, and Tauri, it provides a modern desktop experience for peer-to-peer file sharing focused on privacy, security, and efficient data distribution. The platform operates on a continuous seeding model where files are instantly available to the network once added, similar to BitTorrent's architecture.
+Chiral Network is a decentralized peer-to-peer file storage and sharing system that combines blockchain technology with distributed hash table (DHT) based file storage. The system creates a separate Ethereum-compatible blockchain network with custom parameters for handling transactions while using a DHT-based approach similar to IPFS for completely decentralized file storage and retrieval without any centralized market servers.
 
 ## Design Philosophy
 
@@ -132,16 +132,18 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 
 ### Why These Design Choices?
 
-1. **Non-Commercial BitTorrent Model**
-   - No marketplace or monetary transactions
+1. **Decentralized BitTorrent Model**
+   - No centralized marketplace or intermediaries
    - Pure P2P file sharing for legitimate use
    - Continuous seeding model like BitTorrent
+   - Fully decentralized peer discovery via DHT
    - Suitable for personal, educational, and organizational use
 
 2. **Privacy-Focused Architecture**
-   - No transaction tracking or marketplace analytics
+   - No centralized servers to track users
    - Anonymous routing options through proxy nodes
    - Local-first data storage
+   - Decentralized peer discovery prevents tracking
 
 3. **Community Resource Sharing**
    - Contribute storage space to help others
@@ -308,7 +310,8 @@ npm run tauri build # Desktop production build
 - XSS protection in user content
 - CORS configuration for API calls
 - Secure random for IDs
-- No commercial features to prevent misuse
+- No centralized servers to compromise
+- Fully decentralized architecture prevents single points of failure
 
 ### Planned Security
 
@@ -330,9 +333,10 @@ We welcome contributions that align with our non-commercial, privacy-focused vis
 
 Please avoid:
 
-- Adding marketplace features
+- Adding centralized market servers
 - Commercial tracking systems
 - Features that could enable piracy
+- Centralized intermediaries that compromise decentralization
 
 ## License
 
@@ -353,6 +357,7 @@ MIT License - See LICENSE file for details
 - **Compact Design**: Removed large drop zones for cleaner interface
 - **Smart Filtering**: Contextual filters for better organization
 - **Drag Anywhere**: Entire cards accept drag-and-drop
+- **Fully Decentralized**: No market servers, pure P2P file discovery via DHT
 
 ## Acknowledgments
 
@@ -372,7 +377,7 @@ For issues, questions, or suggestions:
 
 ## Disclaimer
 
-Chiral Network is designed for legitimate file storage and sharing. Users are responsible for ensuring they have the rights to share any content they upload. The platform does not include marketplace features to prevent commercial misuse or piracy.
+Chiral Network is designed for legitimate file storage and sharing. Users are responsible for ensuring they have the rights to share any content they upload. The platform uses a fully decentralized architecture without centralized market servers to ensure true peer-to-peer operation and prevent commercial misuse or piracy.
 
 ---
 
