@@ -96,24 +96,7 @@
   $: expectedBlockReward = 2;
   $: expectedTotalRewards = $miningState.blocksFound * 2;
   $: $miningState.totalRewards = expectedTotalRewards;
-  function parseHashRate(rateStr: string): number {
-    const match = rateStr.match(/^~?\s*([\d.]+)\s*([KMGT])H\/s$/i);
-    
-    // Fallback: If the regex fails (e.g., if the string is just "0 H/s"), return 0.
-    if (!match) return 0;
-    
-    // Match indices: 1 is the value, 2 is the unit (K, M, G, T)
-    const value = parseFloat(match[1]);
-    const unit = match[2] ? match[2].toUpperCase() : ''; // Handle base H/s case if needed, though this regex forces a unit
-    
-    switch (unit) {
-      case 'K': return value * 1000;
-      case 'M': return value * 1000000;
-      case 'G': return value * 1000000000;
-      case 'T': return value * 1000000000000;
-      default: return value; // Assumes base H/s if no unit is captured (e.g., if regex simplified)
-    }
-  }
+  
 
   $: {
     const localHashRateNum = parseHashRate($miningState.hashRate);
