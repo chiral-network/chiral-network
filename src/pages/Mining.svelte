@@ -40,7 +40,7 @@
   // Network statistics
   let networkHashRate = '0 H/s'
   let networkDifficulty = '0'
-  let blockReward = 5 // Chiral per block
+  let blockReward = 2// Chiral per block
   let peerCount = 0
 
   // Statistics - preserve across page navigation
@@ -109,6 +109,13 @@
 
   $: displayedTemperature = temperatureUnit === 'F' ? toFahrenheit(temperature).toFixed(1) : temperature.toFixed(1);
 
+
+  
+  $: expectedBlockReward = 2;
+  $: expectedTotalRewards = $miningState.blocksFound * 2;
+  $: $miningState.totalRewards = expectedTotalRewards;
+  
+
   function parseHashRate(rateStr: string): number {
     const match = rateStr.match(/^~?\s*([\d.]+)\s*([KMGT])H\/s$/i);
     
@@ -128,6 +135,7 @@
     }
   }
 
+
   $: {
     const localHashRateNum = parseHashRate($miningState.hashRate);
     const networkDifficultyNum = parseDifficulty(networkDifficulty);
@@ -140,16 +148,7 @@
     }
   }
 
-  $: expectedBlockReward = 5; // Define the intended reward value
 
-  // Calculate the expected total rewards based on blocks found * 5.
-  $: expectedTotalRewards = $miningState.blocksFound * expectedBlockReward;
-
-  // Overrides the Geth-reported balance ($miningState.totalRewards) if the expected
-  // calculation (based on blocks found * 5) is higher.
-  $: if (expectedTotalRewards > ($miningState.totalRewards ?? 0)) {
-      $miningState.totalRewards = expectedTotalRewards;
-  }
 
   // Function to convert Celsius to Fahrenheit
   function toFahrenheit(celsius: number): number {
@@ -319,7 +318,7 @@
             // Use actual hash rate from logs
             $miningState.hashRate = formatHashRate(hashRateFromLogs)
             if (blocksFound > $miningState.blocksFound) {
-              $miningState.blocksFound = blocksFound; 
+              $miningState.blocksFound = blocksFound*5; 
               //Visualization Now Handled By Backend
             }
           } else if ($miningState.activeThreads > 0) {
@@ -368,62 +367,63 @@
     }
   }
   
+  
   async function updateNetworkStats() {
-    try {
-      if (isGethRunning) {
-        const promises: Promise<any>[] = [
-          invoke('get_network_stats') as Promise<[string, string]>,
-          invoke('get_current_block') as Promise<number>,
-          invoke('get_network_peer_count') as Promise<number>
-        ]
-        
-        // Also fetch account balance and blocks mined if we have an account and are mining
-        if ($etcAccount && $miningState.isMining) {
-          promises.push(invoke('get_account_balance', { 
-            address: $etcAccount.address 
-          }) as Promise<string>)
-          promises.push(invoke('get_blocks_mined', { 
-            address: $etcAccount.address 
-          }) as Promise<number>)
-        }
-        
-        const results = await Promise.all(promises)
-        
-        networkDifficulty = results[0][0]
-        networkHashRate = results[0][1]
-        currentBlock = results[1]
-        peerCount = results[2]
-        
-        // Update total rewards from actual balance
-        if (results[3] !== undefined) {
-          const balance = parseFloat(results[3]);
-          if (!isNaN(balance)) {
-            // Only update if backend balance is higher
-            if (balance > ($miningState.totalRewards ?? 0)) {
-              $miningState.totalRewards = balance;
+  try {
+    if (isGethRunning) {
+      const promises: Promise<any>[] = [
+        invoke('get_network_stats') as Promise<[string, string]>,
+        invoke('get_current_block') as Promise<number>,
+        invoke('get_network_peer_count') as Promise<number>
+      ]
+      
+      // Also fetch account balance and blocks mined if we have an account and are mining
+      if ($etcAccount && $miningState.isMining) {
+        promises.push(invoke('get_account_balance', { 
+          address: $etcAccount.address 
+        }) as Promise<string>)
+        promises.push(invoke('get_blocks_mined', { 
+          address: $etcAccount.address 
+        }) as Promise<number>)
+      }
+      
+      const results = await Promise.all(promises)
+      
+      networkDifficulty = results[0][0]
+      networkHashRate = results[0][1]
+      currentBlock = results[1]
+      peerCount = results[2]
+      
+      // Update total rewards from actual balance
+      if (results[3] !== undefined) {
+        const balance = parseFloat(results[3]);
+        if (!isNaN(balance)) {
+          // Only update if backend balance is higher
+          if (balance > ($miningState.totalRewards ?? 0)) {
+            $miningState.totalRewards = balance;
 
-              // Mark all "pending" mining reward txs as completed
-              transactions.update(list =>
-                list.map(tx =>
-                  tx.status === 'pending' ? { ...tx, status: 'completed' } : tx
-                )
-              );
-            }
+            // Mark all "pending" mining reward txs as completed
+            transactions.update(list =>
+              list.map(tx =>
+                tx.status === 'pending' ? { ...tx, status: 'completed' } : tx
+              )
+            );
           }
         }
-                
-        // Update blocks mined from blockchain query
-        if (results[4] !== undefined) {
-          const blocksMined = results[4] as number;
-          if (blocksMined > $miningState.blocksFound) {
-            $miningState.blocksFound = blocksMined;
-          }
+      }  
+              
+      // Update blocks mined from blockchain query
+      if (results[4] !== undefined) {
+        const blocksMined = results[4] as number;
+        if (blocksMined > $miningState.blocksFound) {
+          $miningState.blocksFound = blocksMined;
         }
       }
-    } catch (e) {
-      console.error('Failed to update network stats:', e)
     }
+  } catch (e) {
+    console.error('Failed to update network stats:', e)
   }
+}
 
   async function updateCpuTemperature() {
     // Only show loading state for the very first check
@@ -585,7 +585,7 @@ function pushRecentBlock(b: {
     const tx: Transaction = {
       id: Date.now(),
       type: 'received',
-      amount: reward,
+      amount: 2,
       from: 'Mining reward',
       date: new Date(),
       description: `Block Reward (…${last4})`,
@@ -614,7 +614,7 @@ function pushRecentBlock(b: {
           difficulty: b.difficulty ? parseInt(b.difficulty, 16) : undefined,
           timestamp: new Date((b.timestamp || 0) * 1000),
           number: b.number,
-          reward: typeof b.reward === 'number' ? b.reward : undefined
+          reward: 5
         });
       }
       // Hard de-duplication by hash as a safety net
@@ -878,7 +878,7 @@ function pushRecentBlock(b: {
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">{$t('mining.totalRewards')}</p>
-          <p class="text-2xl font-bold">{$miningState.totalRewards.toFixed(2)} Chiral</p>
+          <p class="text-2xl font-bold">{($miningState.totalRewards || 0).toFixed(2)} Chiral</p>
           <p class="text-xs text-green-600 flex items-center gap-1 mt-1">
             <TrendingUp class="h-3 w-3" />
             {$miningState.blocksFound} {$t('mining.blocksFound')}
@@ -1738,3 +1738,17 @@ function pushRecentBlock(b: {
       </div>
     </div>
   {/if} 
+<div class="balance-info" style="background: #f5f5f5; padding: 15px; margin: 10px 0; border-radius: 8px;">
+  <h3>Account Information</h3>
+  <div style="display: flex; gap: 30px;">
+    <div>
+      <strong>Current Balance:</strong> {($miningState.totalRewards || 0).toFixed(2)} Chiral
+    </div>
+    <div>
+      <strong>Blocks Found:</strong> {$miningState.blocksFound} blocks
+    </div>
+    <div>
+      <strong>Mining Status:</strong> {$miningState.isMining ? 'Active' : 'Stopped'}
+    </div>
+  </div>
+</div>
