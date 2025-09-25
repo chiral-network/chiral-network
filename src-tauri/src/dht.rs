@@ -1,5 +1,8 @@
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use futures_util::StreamExt;
+use serde::{Serialize, Deserialize};
+use tokio::sync::{mpsc, oneshot, Mutex};
+use tracing::{debug, error, info, warn};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -100,7 +103,7 @@ struct DhtMetrics {
     listen_addrs: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DhtMetricsSnapshot {
     pub peer_count: usize,
