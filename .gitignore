@@ -75,3 +75,7 @@ pnpm-lock.yaml
 
 # Local Python venv
 .venv-pdf/
+src-tauri/bin/
+src-tauri/geth-data/
+src-tauri/bin/
+src-tauri/geth-data/
