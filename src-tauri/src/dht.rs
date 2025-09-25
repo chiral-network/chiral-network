@@ -1,13 +1,13 @@
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use futures_util::StreamExt;
 
-use tokio::sync::{mpsc, oneshot, Mutex};
-use serde::{Serialize, Deserialize};
-use tracing::{info, error, debug, warn};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::{mpsc, oneshot, Mutex};
+use tracing::{debug, error, info, warn};
 
 use libp2p::{
     identify::{self, Event as IdentifyEvent},
@@ -56,6 +56,7 @@ pub enum DhtCommand {
         tx: oneshot::Sender<Result<Vec<u8>, String>>,
     },
     Shutdown(oneshot::Sender<()>),
+    StopPublish(String),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -73,7 +74,10 @@ pub enum DhtEvent {
         latency_ms: Option<u64>,
         error: Option<String>,
     },
-    PeerRtt { peer: String, rtt_ms: u64 },
+    PeerRtt {
+        peer: String,
+        rtt_ms: u64,
+    },
     EchoReceived {
         from: String,
         utf8: Option<String>,
@@ -247,7 +251,9 @@ async fn is_proxy_peer(
     proxy_capable: &Arc<Mutex<HashSet<PeerId>>>,
 ) -> bool {
     let t = proxy_targets.lock().await;
-    if t.contains(id) { return true; }
+    if t.contains(id) {
+        return true;
+    }
     drop(t);
     let c = proxy_capable.lock().await;
     c.contains(id)
@@ -315,6 +321,12 @@ async fn run_dht_node(
                                 let _ = event_tx.send(DhtEvent::Error(format!("Failed to serialize metadata: {}", e))).await;
                             }
                         }
+                    }
+                    Some(DhtCommand::StopPublish(file_hash)) => {
+                        let key = kad::RecordKey::new(&file_hash);
+                        // Remove the record
+                        // swarm.behaviour_mut().kademlia.stop_providing(&key);
+                        swarm.behaviour_mut().kademlia.remove_record(&key)
                     }
                     Some(DhtCommand::SearchFile(file_hash)) => {
                         let key = kad::RecordKey::new(&file_hash.as_bytes());
@@ -796,8 +808,8 @@ impl DhtService {
         let mut kad_cfg = KademliaConfig::new(StreamProtocol::new("/chiral/kad/1.0.0"));
         // Align with docs: shorter queries, higher replication
         kad_cfg.set_query_timeout(Duration::from_secs(10));
-        // Replication factor of 20 (as per spec table)
-        if let Some(nz) = std::num::NonZeroUsize::new(20) {
+        // Replication factor of 3 (as per spec table)
+        if let Some(nz) = std::num::NonZeroUsize::new(3) {
             kad_cfg.set_replication_factor(nz);
         }
         let mut kademlia = Kademlia::with_config(local_peer_id, store, kad_cfg);
@@ -942,6 +954,12 @@ impl DhtService {
     pub async fn publish_file(&self, metadata: FileMetadata) -> Result<(), String> {
         self.cmd_tx
             .send(DhtCommand::PublishFile(metadata))
+            .await
+            .map_err(|e| e.to_string())
+    }
+    pub async fn stop_publishing_file(&self, file_hash: String) -> Result<(), String> {
+        self.cmd_tx
+            .send(DhtCommand::StopPublish(file_hash))
             .await
             .map_err(|e| e.to_string())
     }
