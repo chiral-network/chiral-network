@@ -265,6 +265,7 @@ impl ChunkManager {
         let merkle_tree = MerkleTree::<Sha256Hasher>::from_leaves(&all_chunk_hashes);
         let proof = merkle_tree.proof(&[chunk_index_to_prove]);
 
+        
         let proof_indices = proof.proof_indices().to_vec();
         let proof_hashes_hex = proof.proof_hashes_hex();
 
