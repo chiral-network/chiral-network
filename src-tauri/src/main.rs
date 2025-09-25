@@ -11,7 +11,7 @@ mod geth_downloader;
 mod headless;
 mod keystore;
 pub mod net;
-use crate::commands::proxy::{list_proxies, proxy_connect, proxy_disconnect, ProxyNode};
+use crate::commands::proxy::{list_proxies, proxy_connect, proxy_disconnect, proxy_echo, ProxyNode};
 use dht::{DhtEvent, DhtMetricsSnapshot, DhtService, FileMetadata};
 use ethereum::{
     create_new_account, get_account_from_private_key, get_balance, get_block_number, get_hashrate,
