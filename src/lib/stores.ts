@@ -102,7 +102,7 @@ export interface NetworkStats {
 export interface Transaction {
   id: number;
   type: "sent" | "received";
-  amount: number;
+   amount: number;
   to?: string;
   from?: string;
   date: Date;
@@ -150,7 +150,7 @@ const dummyFiles: FileItem[] = [
 const dummyWallet: WalletInfo = {
   address: "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1",
   balance: 1000.5,
-  pendingTransactions: 2,
+  pendingTransactions: 5,
 };
 
 // Additional dummy data
