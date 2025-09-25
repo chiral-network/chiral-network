@@ -34,6 +34,12 @@ pub struct FileMetadata {
     pub seeders: Vec<String>,
     pub created_at: u64,
     pub mime_type: Option<String>,
+    /// Whether the file is encrypted
+    pub is_encrypted: bool,
+    /// The encryption method used (e.g., "AES-256-GCM")
+    pub encryption_method: Option<String>,
+    /// Fingerprint of the encryption key for identification
+    pub key_fingerprint: Option<String>,
 }
 
 #[derive(NetworkBehaviour)]

@@ -34,8 +34,10 @@
 
   
   $: sortedNodes = [...filteredNodes].sort((a, b) => {
-      const statusOrder = { 'online': 1, 'connecting': 2, 'offline': 3 };
-      return statusOrder[a.status] - statusOrder[b.status];
+      const statusOrder: Record<string, number> = { 'online': 1, 'connecting': 2, 'offline': 3, 'error': 4 };
+      const aOrder = statusOrder[a.status || 'offline'] || 5;
+      const bOrder = statusOrder[b.status || 'offline'] || 5;
+      return aOrder - bOrder;
   });
 
   
@@ -89,7 +91,7 @@
 
   
   $: activeNodes = $proxyNodes.filter(n => n.status === 'online').length
-  $: totalBandwidth = $proxyNodes.reduce((sum, n) => sum + (n.status === 'online' ? n.bandwidth : 0), 0)
+  $: totalBandwidth = $proxyNodes.reduce((sum, n) => sum + (n.status === 'online' ? (n.latency ? Math.round(100 - n.latency) : 50) : 0), 0)
   $: isAddressValid = validAddressRegex.test(newNodeAddress.trim())
 </script>
 
@@ -267,8 +269,8 @@
                 'bg-gray-500'
               }"></div>
               <div>
-                <p class="font-medium">{node.address}</p>
-                <p class="text-xs text-muted-foreground">{node.region}</p>
+                <p class="font-medium">{node.address || node.id}</p>
+                <p class="text-xs text-muted-foreground">{node.address ? 'Proxy Node' : 'DHT Peer'}</p>
               </div>
             </div>
               <Badge variant={node.status === 'online' ? 'default' :
@@ -289,11 +291,11 @@
           <div class="grid grid-cols-2 gap-4 mb-3">
             <div>
               <p class="text-xs text-muted-foreground">{$t('proxy.bandwidth')}</p>
-              <p class="text-sm font-medium">{node.bandwidth} Mbps</p>
+              <p class="text-sm font-medium">{node.latency ? Math.round(100 - node.latency) : 'N/A'} Mbps</p>
             </div>
             <div>
               <p class="text-xs text-muted-foreground">{$t('proxy.latency')}</p>
-              <p class="text-sm font-medium">{node.latency} ms</p>
+              <p class="text-sm font-medium">{node.latency || 'N/A'} ms</p>
             </div>
           </div>
           

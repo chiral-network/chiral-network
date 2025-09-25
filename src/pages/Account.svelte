@@ -1353,11 +1353,9 @@
 
   let sessionTimeout = 600; // seconds (10 minutes)
   let sessionTimer: number | null = null;
-  let lastActivity = Date.now();
   let autoLockMessage = '';
 
   function resetSessionTimer() {
-    lastActivity = Date.now();
     if (sessionTimer) clearTimeout(sessionTimer);
     sessionTimer = window.setTimeout(() => {
       autoLockWallet();
@@ -2333,6 +2331,7 @@
         on:click|stopPropagation
         role="dialog"
         aria-modal="true"
+        tabindex="-1"
         on:keydown={(e) => { if (e.key === 'Escape') show2faSetupModal = false; }}
       >
         <h3 class="text-xl font-semibold mb-2">{$t('security.2fa.setup.title')}</h3>
@@ -2345,7 +2344,7 @@
             <p class="text-xs text-muted-foreground">{$t('security.2fa.setup.step2_manual')}</p>
             <div class="flex items-center gap-2 bg-secondary p-2 rounded">
               <code class="text-sm font-mono break-all">{totpSetupInfo.secret}</code>
-              <Button size="icon" variant="ghost" on:click={() => { navigator.clipboard.writeText(totpSetupInfo.secret); showToast('Copied!', 'success'); }}>
+              <Button size="icon" variant="ghost" on:click={() => { navigator.clipboard.writeText(totpSetupInfo?.secret || ''); showToast('Copied!', 'success'); }}>
                 <Copy class="h-4 w-4" />
               </Button>
             </div>
@@ -2362,7 +2361,7 @@
             placeholder="123456"
             inputmode="numeric"
             autocomplete="one-time-code"
-            maxlength="6"
+            maxlength={6}
           />
           <Label for="totp-password-setup" class="mt-4">{$t('keystore.load.password')}</Label>
           <Input
@@ -2400,6 +2399,7 @@
         on:click|stopPropagation
         role="dialog"
         aria-modal="true"
+        tabindex="-1"
         on:keydown={(e) => { if (e.key === 'Escape') { show2faPromptModal = false; actionToConfirm = null; } }}
       >
         <h3 class="text-xl font-semibold mb-2">{$t('security.2fa.prompt.title')}</h3>
@@ -2414,7 +2414,7 @@
             placeholder="123456"
             inputmode="numeric"
             autocomplete="one-time-code"
-            maxlength="6"
+            maxlength={6}
             autofocus
           />
           <Label for="totp-password-action" class="mt-4">{$t('keystore.load.password')}</Label>
