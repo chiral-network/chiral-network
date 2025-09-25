@@ -633,11 +633,10 @@
       const demoAddress = generateDemoAddress()
       const demoPrivateKey = generateDemoPrivateKey()
 
-      const demoBlackList = [{node_id: 169245, name: "Jane"}]
       account = {
         address: demoAddress,
         private_key: demoPrivateKey,
-        blacklist: demoBlackList
+        blacklist: []
       }
       console.log('Running in web mode - using demo account')
     }
@@ -650,8 +649,8 @@
       pendingTransactions: 0
     }))
 
-    // 🔹 Reset transaction history for new account
     transactions.set([])
+    blacklist.set([])   
 
     showToast('Account Created Successfully!', 'success')
     
