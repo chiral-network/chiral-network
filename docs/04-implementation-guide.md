@@ -22,10 +22,6 @@ chiral-network/
 │   ├── dht/           # DHT implementation
 │   ├── chunks/        # Chunk management
 │   └── api/           # Storage API
-├── market/            # Market server
-│   ├── server/        # Market API server
-│   ├── database/      # Market database
-│   └── contracts/     # Smart contracts (optional)
 ├── chiral-app/        # Desktop application
 │   ├── src/           # Svelte frontend
 │   ├── src-tauri/     # Tauri backend
@@ -306,136 +302,7 @@ fn retrieve_chunk() -> impl Filter<Extract = impl Reply> + Clone {
 }
 ```
 
-## Phase 3: Market Server
-
-### Step 1: Database Schema
-
-Create `market/database/schema.sql`:
-
-```sql
-CREATE DATABASE chiral_market;
-USE chiral_market;
-
-CREATE TABLE files (
-    file_hash VARCHAR(64) PRIMARY KEY,
-    file_name VARCHAR(255),
-    file_size BIGINT,
-    mime_type VARCHAR(100),
-    upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    total_chunks INT,
-    INDEX idx_upload_date (upload_date)
-);
-
-CREATE TABLE suppliers (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    supplier_id VARCHAR(64) NOT NULL,
-    file_hash VARCHAR(64) NOT NULL,
-    ip_address VARCHAR(45) NOT NULL,
-    port INT NOT NULL,
-    price_per_mb DECIMAL(10, 8),
-    bandwidth_limit INT,
-    reputation DECIMAL(3, 2),
-    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP,
-    FOREIGN KEY (file_hash) REFERENCES files(file_hash),
-    INDEX idx_file_hash (file_hash),
-    INDEX idx_expires (expires_at)
-);
-
-CREATE TABLE transactions (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    tx_hash VARCHAR(64) UNIQUE,
-    buyer_address VARCHAR(64),
-    supplier_id VARCHAR(64),
-    file_hash VARCHAR(64),
-    amount DECIMAL(18, 8),
-    status ENUM('pending', 'confirmed', 'failed'),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    confirmed_at TIMESTAMP NULL,
-    INDEX idx_status (status)
-);
-```
-
-### Step 2: Market API Server
-
-Create `market/server/index.js`:
-
-```javascript
-const express = require("express");
-const mysql = require("mysql2/promise");
-const app = express();
-
-// Database connection pool
-const pool = mysql.createPool({
-  host: "localhost",
-  user: "chiral",
-  password: "password",
-  database: "chiral_market",
-  waitForConnections: true,
-  connectionLimit: 10,
-});
-
-// Register as supplier
-app.post("/api/v1/market/supply", async (req, res) => {
-  const { file_hash, ip, port, price, bandwidth } = req.body;
-
-  try {
-    // Check if file exists
-    const [files] = await pool.execute(
-      "SELECT file_hash FROM files WHERE file_hash = ?",
-      [file_hash]
-    );
-
-    if (files.length === 0) {
-      return res.status(404).json({ error: "File not found" });
-    }
-
-    // Insert or update supplier
-    await pool.execute(
-      `INSERT INTO suppliers 
-             (supplier_id, file_hash, ip_address, port, price_per_mb, bandwidth_limit, expires_at)
-             VALUES (?, ?, ?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 1 HOUR))
-             ON DUPLICATE KEY UPDATE
-             ip_address = VALUES(ip_address),
-             port = VALUES(port),
-             price_per_mb = VALUES(price_per_mb),
-             bandwidth_limit = VALUES(bandwidth_limit),
-             last_seen = NOW(),
-             expires_at = DATE_ADD(NOW(), INTERVAL 1 HOUR)`,
-      [req.user.id, file_hash, ip, port, price, bandwidth]
-    );
-
-    res.json({ success: true, expires_in: 3600 });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Query suppliers for file
-app.get("/api/v1/market/lookup/:hash", async (req, res) => {
-  const { hash } = req.params;
-
-  try {
-    const [suppliers] = await pool.execute(
-      `SELECT supplier_id, ip_address, port, price_per_mb, bandwidth_limit, reputation
-             FROM suppliers
-             WHERE file_hash = ? AND expires_at > NOW()
-             ORDER BY price_per_mb ASC, reputation DESC`,
-      [hash]
-    );
-
-    res.json(suppliers);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.listen(3000, () => {
-  console.log("Market server running on port 3000");
-});
-```
-
-## Phase 4: Desktop Application
+## Phase 3: Desktop Application
 
 ### Step 1: Frontend Setup
 
@@ -475,20 +342,17 @@ export class FileService {
   }
 
   async downloadFile(hash: string): Promise<Blob> {
-    // Query market for suppliers
-    const suppliers = await this.queryMarket(hash);
+    // Search DHT for file metadata and available peers
+    const metadata = await this.searchDHT(hash);
 
-    if (suppliers.length === 0) {
+    if (!metadata || metadata.seeders.length === 0) {
       throw new Error("File not found in network");
     }
 
-    // Select best supplier (lowest price)
-    const supplier = suppliers[0];
-
-    // Download chunks
+    // Download chunks directly from peers via DHT
     const chunks = await invoke<Uint8Array[]>("download_file", {
       hash,
-      supplier: supplier.id,
+      metadata,
     });
 
     // Combine chunks into blob
@@ -496,9 +360,9 @@ export class FileService {
     return blob;
   }
 
-  private async queryMarket(hash: string): Promise<Supplier[]> {
-    const response = await fetch(`${MARKET_URL}/api/v1/market/lookup/${hash}`);
-    return response.json();
+  private async searchDHT(hash: string): Promise<FileMetadata | null> {
+    // Search DHT for file metadata without centralized market
+    return await invoke<FileMetadata>("search_dht_metadata", { hash });
   }
 }
 ```
@@ -537,9 +401,6 @@ pub async fn upload_file(
     // Register in DHT
     register_in_dht(&file_hash, &chunks).await?;
 
-    // Register in market
-    register_in_market(&file_hash, &name, size).await?;
-
     Ok(file_hash)
 }
 
@@ -561,14 +422,14 @@ pub async fn download_file(
     // Verify and decrypt chunks
     let decrypted = decrypt_chunks(chunks)?;
 
-    // Make payment
-    make_payment(&supplier, metadata.total_price).await?;
+    // Distribute rewards
+    distribute_rewards(&storage_nodes, &file_hash).await?;
 
     Ok(decrypted)
 }
 ```
 
-## Phase 5: Integration Testing
+## Phase 4: Integration Testing
 
 ### Test Network Setup
 
@@ -578,9 +439,6 @@ chiral-node --chain chiral-spec.json --config chiral-config.toml
 
 # Start storage nodes
 cd storage && cargo run --bin storage-node -- --port 8080 --dht-port 4001
-
-# Start market server
-cd market && npm start
 
 # Start desktop app
 cd chiral-app && npm run tauri dev
@@ -619,10 +477,10 @@ describe("Chiral Network Integration", () => {
     expect(text).toBe(content);
   });
 
-  test("Market discovery", async () => {
-    const suppliers = await fileService.queryMarket("test_hash");
-    expect(suppliers.length).toBeGreaterThan(0);
-    expect(suppliers[0]).toHaveProperty("price");
+  test("DHT peer discovery", async () => {
+    const metadata = await fileService.searchDHT("test_hash");
+    expect(metadata).toBeTruthy();
+    expect(metadata.seeders.length).toBeGreaterThan(0);
   });
 });
 ```
@@ -637,9 +495,6 @@ cd blockchain && cargo build --release
 
 # Build storage node
 cd storage && cargo build --release
-
-# Build market server
-cd market && npm run build
 
 # Build desktop app
 cd chiral-app && npm run tauri build
@@ -672,28 +527,9 @@ services:
     environment:
       - DHT_BOOTSTRAP=/ip4/bootstrap.chiral.network/tcp/4001
 
-  market:
-    image: chiral/market:latest
-    ports:
-      - "3000:3000"
-    environment:
-      - DB_HOST=postgres
-      - DB_PASSWORD=${DB_PASSWORD}
-    depends_on:
-      - postgres
-
-  postgres:
-    image: postgres:15
-    environment:
-      - POSTGRES_DB=chiral_market
-      - POSTGRES_PASSWORD=${DB_PASSWORD}
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-
 volumes:
   blockchain-data:
   storage-data:
-  postgres-data:
 ```
 
 ## Monitoring

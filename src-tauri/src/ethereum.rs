@@ -1118,62 +1118,64 @@ pub async fn get_recent_mined_blocks(
             .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
             .unwrap_or(n);
 
-        // Compute miner reward by changes in balance from block to block (balance@n - balance@(n-1))
-        // This approximates the value of the block as this isn't publicly available.
-        let reward = {
-            // Balance at block n
-            let bal_n_v = client
-                .post("http://127.0.0.1:8545")
-                .json(&serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "method": "eth_getBalance",
-                    "params": [target, format!("0x{:x}", number)],
-                    "id": 1
-                }))
-                .send()
-                .await
-                .map_err(|e| format!("RPC send: {e}"))?
-                .json::<serde_json::Value>()
-                .await
-                .map_err(|e| format!("RPC parse: {e}"))?;
+        // let reward = {
+        //     // Balance at block n
+        //     let bal_n_v = client
+        //         .post("http://127.0.0.1:8545")
+        //         .json(&serde_json::json!({
+        //             "jsonrpc": "2.0",
+        //             "method": "eth_getBalance",
+        //             "params": [target, format!("0x{:x}", number)],
+        //             "id": 1
+        //         }))
+        //         .send()
+        //         .await
+        //         .map_err(|e| format!("RPC send: {e}"))?
+        //         .json::<serde_json::Value>()
+        //         .await
+        //         .map_err(|e| format!("RPC parse: {e}"))?;
 
-            let bal_prev_v = client
-                .post("http://127.0.0.1:8545")
-                .json(&serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "method": "eth_getBalance",
-                    "params": [target, format!("0x{:x}", number.saturating_sub(1))],
-                    "id": 1
-                }))
-                .send()
-                .await
-                .map_err(|e| format!("RPC send: {e}"))?
-                .json::<serde_json::Value>()
-                .await
-                .map_err(|e| format!("RPC parse: {e}"))?;
+        //     let bal_prev_v = client
+        //         .post("http://127.0.0.1:8545")
+        //         .json(&serde_json::json!({
+        //             "jsonrpc": "2.0",
+        //             "method": "eth_getBalance",
+        //             "params": [target, format!("0x{:x}", number.saturating_sub(1))],
+        //             "id": 1
+        //         }))
+        //         .send()
+        //         .await
+        //         .map_err(|e| format!("RPC send: {e}"))?
+        //         .json::<serde_json::Value>()
+        //         .await
+        //         .map_err(|e| format!("RPC parse: {e}"))?;
 
-            let parse_u128 = |hex_str: &str| -> Option<u128> {
-                let s = hex_str.trim_start_matches("0x");
-                u128::from_str_radix(s, 16).ok()
-            };
+        //     let parse_u128 = |hex_str: &str| -> Option<u128> {
+        //         let s = hex_str.trim_start_matches("0x");
+        //         u128::from_str_radix(s, 16).ok()
+        //     };
 
-            let bal_n = bal_n_v
-                .get("result")
-                .and_then(|v| v.as_str())
-                .and_then(parse_u128);
-            let bal_prev = bal_prev_v
-                .get("result")
-                .and_then(|v| v.as_str())
-                .and_then(parse_u128);
-            if let (Some(bn), Some(bp)) = (bal_n, bal_prev) {
-                let delta_wei = bn.saturating_sub(bp);
-                // Convert to ether-like units (divide by 1e18)
-                let reward = (delta_wei as f64) / 1_000_000_000_000_000_000f64;
-                Some(reward)
-            } else {
-                None
-            }
-        };
+        //     let bal_n = bal_n_v
+        //         .get("result")
+        //         .and_then(|v| v.as_str())
+        //         .and_then(parse_u128);
+        //     let bal_prev = bal_prev_v
+        //         .get("result")
+        //         .and_then(|v| v.as_str())
+        //         .and_then(parse_u128);
+        //     if let (Some(bn), Some(bp)) = (bal_n, bal_prev) {
+        //         let delta_wei = bn.saturating_sub(bp);
+        //         // Convert to ether-like units (divide by 1e18)
+        //         let reward = (delta_wei as f64) / 1_000_000_000_000_000_000f64;
+        //         Some(reward)
+        //     } else {
+        //         None
+        //     }
+        // };
+
+        // Since Geth's default reward (2.0) doesn't match the intended Chiral Network
+        // reward, we hardcode the intended value of 5.0 here.
+        let reward = Some(5.0); 
 
         out.push(MinedBlock {
             hash,

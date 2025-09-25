@@ -76,9 +76,11 @@ pub enum DhtEvent {
         latency_ms: Option<u64>,
         error: Option<String>,
     },
-    PeerRtt {
-        peer: String,
-        rtt_ms: u64,
+    PeerRtt { peer: String, rtt_ms: u64 },
+    EchoReceived {
+        from: String,
+        utf8: Option<String>,
+        bytes: usize,
     },
 }
 
@@ -448,17 +450,23 @@ async fn run_dht_node(
                         use libp2p::request_response::{Event as RREvent, Message};
 
                         match ev {
-                            RREvent::Message { peer: _, message } => match message {
+                            RREvent::Message { peer, message } => match message {
                                 // Echo server
                                 Message::Request { request, channel, .. } => {
                                     let EchoRequest(data) = request;
-                                    if let Err(err) = swarm
-                                        .behaviour_mut()
-                                        .proxy_rr
+
+                                    // 1) Showing received data to UI
+                                    let preview = std::str::from_utf8(&data).ok().map(|s| s.to_string());
+                                    let _ = event_tx.send(DhtEvent::EchoReceived {
+                                        from: peer.to_string(),
+                                        utf8: preview,
+                                        bytes: data.len(),
+                                    }).await;
+
+                                    // 2) Echo response
+                                    swarm.behaviour_mut().proxy_rr
                                         .send_response(channel, EchoResponse(data))
-                                    {
-                                        error!("send_response failed: {err:?}");
-                                    }
+                                        .unwrap_or_else(|e| error!("send_response failed: {e:?}"));
                                 }
                                 // Client response
                                 Message::Response { request_id, response } => {

@@ -11,8 +11,7 @@ mod geth_downloader;
 mod headless;
 mod keystore;
 pub mod net;
-
-use commands::proxy::{list_proxies, proxy_connect, proxy_disconnect, proxy_echo, ProxyNode};
+use crate::commands::proxy::{list_proxies, proxy_connect, proxy_disconnect, proxy_echo, ProxyNode};
 use dht::{DhtEvent, DhtMetricsSnapshot, DhtService, FileMetadata};
 use ethereum::{
     create_new_account, get_account_from_private_key, get_balance, get_block_number, get_hashrate,
@@ -49,6 +48,8 @@ struct AppState {
     geth: Mutex<GethProcess>,
     downloader: Arc<GethDownloader>,
     miner_address: Mutex<Option<String>>,
+
+    active_account: Mutex<Option<String>>, // To track the logged-in user's address
     rpc_url: Mutex<String>,
     dht: Mutex<Option<Arc<DhtService>>>,
     file_transfer: Mutex<Option<Arc<FileTransferService>>>,
@@ -98,11 +99,18 @@ async fn save_account_to_keystore(
 async fn load_account_from_keystore(
     address: String,
     password: String,
+    state: State<'_, AppState>,
 ) -> Result<EthAccount, String> {
     let keystore = Keystore::load()?;
 
     // Get decrypted private key from keystore
     let private_key = keystore.get_account(&address, &password)?;
+
+    // Set the active account in the app state
+    {
+        let mut active_account = state.active_account.lock().await;
+        *active_account = Some(address.clone());
+    }
 
     // Derive account details from private key
     get_account_from_private_key(&private_key)
@@ -404,6 +412,10 @@ async fn start_dht_node(
                             // let _ = app_handle.emit("proxy_status_update", new_node);
                         }
                     }
+                    DhtEvent::EchoReceived { from, utf8, bytes } => {
+                        let payload = serde_json::json!({ "from": from, "text": utf8, "bytes": bytes });
+                        let _ = app_handle.emit("proxy_echo_rx", payload);
+                    }
                     DhtEvent::PeerRtt { peer, rtt_ms } => {
                         let mut proxies = proxies_arc.lock().await;
                         if let Some(p) = proxies.iter_mut().find(|p| p.id == peer) {
@@ -571,6 +583,12 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                     )
                 }
                 DhtEvent::PeerRtt { peer, rtt_ms } => format!("peer_rtt:{peer}:{rtt_ms}"),
+                DhtEvent::EchoReceived { from, utf8, bytes } => format!(
+                    "echo_received:{}:{}:{}",
+                    from,
+                    utf8.unwrap_or_default(),
+                    bytes
+                ),
             })
             .collect();
         Ok(mapped)
@@ -1231,6 +1249,19 @@ async fn get_geth_status(
     })
 }
 
+#[tauri::command]
+async fn logout(state: State<'_, AppState>) -> Result<(), ()> {
+    let mut active_account = state.active_account.lock().await;
+    *active_account = None;
+    Ok(())
+}
+
+async fn get_active_account(state: &State<'_, AppState>) -> Result<String, String> {
+    state.active_account.lock().await.clone().ok_or_else(|| {
+        "No account is currently active. Please log in.".to_string()
+    })
+}
+
 // --- 2FA Commands ---
 
 #[derive(serde::Serialize)]
@@ -1244,7 +1275,7 @@ fn generate_totp_secret() -> Result<TotpSetup, String> {
     // Customize the issuer and account name.
     // The account name should ideally be the user's identifier (e.g., email or username).
     let issuer = "Chiral Network".to_string();
-    let account_name = "user@example.com".to_string(); // TODO: Replace with a real user identifier
+    let account_name = "Chiral User".to_string(); // Generic name, as it's not tied to a specific account yet
 
     // Generate a new secret using random bytes
     use rand::RngCore;
@@ -1276,26 +1307,75 @@ fn generate_totp_secret() -> Result<TotpSetup, String> {
 }
 
 #[tauri::command]
-fn is_2fa_enabled() -> bool {
-    // TODO: Implement logic to check if 2FA is enabled for the current user
-    false
+async fn is_2fa_enabled(state: State<'_, AppState>) -> Result<bool, String> {
+    let address = get_active_account(&state).await?;
+    let keystore = Keystore::load()?;
+    Ok(keystore.is_2fa_enabled(&address)?)
 }
 
 #[tauri::command]
-fn verify_and_enable_totp(_secret: String, _code: String) -> Result<bool, String> {
-    // TODO: Implement logic to verify the code and save the secret securely
-    Ok(true) // Placeholder
+async fn verify_and_enable_totp(
+    secret: String,
+    code: String,
+    password: String, // Password needed to encrypt the secret
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    let address = get_active_account(&state).await?;
+
+    // 1. Verify the code against the provided secret first.
+    // Create a Secret enum from the base32 string, then get its raw bytes.
+    let secret_bytes = Secret::Encoded(secret.clone());
+    let totp = TOTP::new(
+        Algorithm::SHA1, 6, 1, 30,
+        secret_bytes.to_bytes().map_err(|e| e.to_string())?,
+        Some("Chiral Network".to_string()),
+        address.clone(),
+    ).map_err(|e| e.to_string())?;
+
+    if !totp.check_current(&code).unwrap_or(false) {
+        return Ok(false); // Code is invalid, don't enable.
+    }
+
+    // 2. Code is valid, so save the secret to the keystore.
+    let mut keystore = Keystore::load()?;
+    keystore.set_2fa_secret(&address, &secret, &password)?;
+
+    Ok(true)
 }
 
 #[tauri::command]
-fn verify_totp_code(_code: String) -> Result<bool, String> {
-    // TODO: Implement logic to verify a code against the user's saved secret
-    Ok(true) // Placeholder
+async fn verify_totp_code(
+    code: String,
+    password: String, // Password needed to decrypt the secret
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    let address = get_active_account(&state).await?;
+    let keystore = Keystore::load()?;
+
+    // 1. Retrieve the secret from the keystore.
+    let secret_b32 = keystore.get_2fa_secret(&address, &password)?
+        .ok_or_else(|| "2FA is not enabled for this account.".to_string())?;
+
+    // 2. Verify the provided code against the stored secret.
+    // Create a Secret enum from the base32 string, then get its raw bytes.
+    let secret_bytes = Secret::Encoded(secret_b32);
+    let totp = TOTP::new(
+        Algorithm::SHA1, 6, 1, 30,
+        secret_bytes.to_bytes().map_err(|e| e.to_string())?,
+        Some("Chiral Network".to_string()),
+        address.clone(),
+    ).map_err(|e| e.to_string())?;
+
+    Ok(totp.check_current(&code).unwrap_or(false))
 }
 
 #[tauri::command]
-fn disable_2fa() -> Result<(), String> {
-    // TODO: Implement logic to disable 2FA for the user
+async fn disable_2fa(password: String, state: State<'_, AppState>) -> Result<(), String> {
+    // This action is protected by `with2FA` on the frontend, so we can assume
+    // the user has already been verified via `verify_totp_code`.
+    let address = get_active_account(&state).await?;
+    let mut keystore = Keystore::load()?;
+    keystore.remove_2fa_secret(&address, &password)?;
     Ok(())
 }
 fn main() {
@@ -1341,6 +1421,7 @@ fn main() {
             geth: Mutex::new(GethProcess::new()),
             downloader: Arc::new(GethDownloader::new()),
             miner_address: Mutex::new(None),
+            active_account: Mutex::new(None),
             rpc_url: Mutex::new("http://127.0.0.1:8545".to_string()),
             dht: Mutex::new(None),
             file_transfer: Mutex::new(None),
@@ -1392,11 +1473,13 @@ fn main() {
             get_available_storage,
             proxy_connect,
             proxy_disconnect,
+            proxy_echo,
             list_proxies,
             generate_totp_secret,
             is_2fa_enabled,
             verify_and_enable_totp,
             verify_totp_code,
+            logout,
             disable_2fa,
         ])
         .plugin(tauri_plugin_process::init())

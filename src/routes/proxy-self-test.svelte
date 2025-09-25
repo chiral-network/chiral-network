@@ -1,14 +1,15 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { invoke } from '@tauri-apps/api/core';
   import {
     proxyNodes,
+    echoInbox,              
     initProxyEvents,
     disposeProxyEvents,
     connectProxy,
     disconnectProxy,
     listProxies,
   } from '$lib/proxy';
-  import { invoke } from '@tauri-apps/api/core';
 
   // Connect form
   let url = 'ws://127.0.0.1:4001';
@@ -16,17 +17,22 @@
 
   // Echo form
   let selectedPeerId = '';
-  let peerId = '';            // final target (defaults from selection)
+  let peerId = '';            // final target (default to dropdown selection)
   let echoPayload = 'hello';
   let echoResult = '';
   let echoBusy = false;
 
-  // Keep peerId in sync with dropdown selection
+  // Synchronize selectedPeerId to peerId
   $: if (selectedPeerId) peerId = selectedPeerId;
 
   async function doEcho() {
+    if (!peerId) {
+      echoResult = 'Pick a target peer first';
+      return;
+    }
     try {
-      // String -> bytes
+      echoBusy = true;
+      // String -> bytes (number[])
       const payload = Array.from(new TextEncoder().encode(echoPayload));
       // Rust returns Vec<u8> -> number[]
       const out = await invoke<number[]>('proxy_echo', { peerId, payload });
@@ -34,6 +40,8 @@
       echoResult = new TextDecoder().decode(new Uint8Array(out));
     } catch (e) {
       echoResult = String(e);
+    } finally {
+      echoBusy = false;
     }
   }
 
@@ -71,13 +79,12 @@
     {/if}
     <ul class="space-y-1">
       {#each $proxyNodes as node}
-        <li class="flex items-center gap-2">
+        <li class="flex flex-wrap items-center gap-2">
           <strong>{node.address}</strong>
           <span>— {node.status} ({node.latency}ms)</span>
           {#if node.error}
             <span class="text-red-500">· {node.error}</span>
           {/if}
-          <!-- Quick set as Echo target if node.id is present -->
           {#if node.id}
             <button
               class="btn btn-xs ml-2"
@@ -96,7 +103,6 @@
   <section class="space-y-2">
     <h2 class="text-xl font-bold">Echo Test</h2>
 
-    <!-- Peer picker populated from proxies -->
     <div class="flex gap-2 items-center">
       <label class="text-sm" for="target-peer-select">Target Peer</label>
       <select id="target-peer-select" class="input" bind:value={selectedPeerId}>
@@ -111,7 +117,6 @@
       </select>
     </div>
 
-    <!-- Or paste PeerId manually -->
     <input class="input" placeholder="Or paste PeerId" bind:value={peerId} />
 
     <div class="flex gap-2">
@@ -126,6 +131,24 @@
         <span class="font-semibold">Result:</span> {echoResult}
       </div>
     {/if}
+  </section>
+
+  <!-- Echo Inbox (Checking for incoming messages) -->
+  <section class="space-y-2">
+    <h2 class="text-xl font-bold">Echo Inbox</h2>
+    {#if $echoInbox.length === 0}
+      <div class="text-sm text-gray-500">No incoming echo messages yet.</div>
+    {/if}
+    <ul class="space-y-1">
+      {#each $echoInbox as msg, i}
+        <li class="text-sm">
+          <span class="font-mono text-gray-600">[{i}]</span>
+          <span class="font-mono">{msg.from}</span> →
+          <span>{msg.text}</span>
+          <span class="text-gray-500 ml-2">({new Date(msg.ts).toLocaleTimeString()})</span>
+        </li>
+      {/each}
+    </ul>
   </section>
 </div>
 

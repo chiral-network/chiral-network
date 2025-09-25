@@ -125,12 +125,13 @@
   let isVerifyingAction = false;
   let twoFaErrorMessage = '';
 
+  let twoFaPassword = ''; // To hold password for 2FA operations
 
   let Html5QrcodeScanner: InstanceType<typeof Html5QrcodeScannerClass> | null = null;
   
   // Demo transactions - in real app these will be fetched from blockchain
   // const transactions = writable<Transaction[]>([
-  //   { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', to: undefined, date: new Date('2024-03-15'), description: 'File purchase', status: 'completed' },
+  //   { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', to: undefined, date: new Date('2024-03-15'), description: 'Storage reward', status: 'completed' },
   //   { id: 2, type: 'sent', amount: 10.25, to: '0x1234...5678', from: undefined, date: new Date('2024-03-14'), description: 'Proxy service', status: 'completed' },
   //   { id: 3, type: 'received', amount: 100, from: '0xabcd...ef12', to: undefined, date: new Date('2024-03-13'), description: 'Upload reward', status: 'completed' },
   //   { id: 4, type: 'sent', amount: 5.5, to: '0x9876...5432', from: undefined, date: new Date('2024-03-12'), description: 'File download', status: 'completed' },
@@ -632,11 +633,10 @@
       const demoAddress = generateDemoAddress()
       const demoPrivateKey = generateDemoPrivateKey()
 
-      const demoBlackList = [{node_id: 169245, name: "Jane"}]
       account = {
         address: demoAddress,
         private_key: demoPrivateKey,
-        blacklist: demoBlackList
+        blacklist: []
       }
       console.log('Running in web mode - using demo account')
     }
@@ -649,8 +649,8 @@
       pendingTransactions: 0
     }))
 
-    // 🔹 Reset transaction history for new account
     transactions.set([])
+    blacklist.set([])   
 
     showToast('Account Created Successfully!', 'success')
     
@@ -902,6 +902,7 @@
 
     try {
         if (isTauri) {
+            // The backend now requires the app state to track the active account
             // Send password to backend for decryption
             const decryptedAccount = await invoke('load_account_from_keystore', {
                 address: selectedKeystoreAccount,
@@ -1027,6 +1028,7 @@
       const success = await invoke('verify_and_enable_totp', {
         secret: totpSetupInfo.secret,
         code: totpVerificationCode,
+        password: twoFaPassword, // Pass the password
       });
 
       if (success) {
@@ -1034,6 +1036,7 @@
         show2faSetupModal = false;
         showToast('Two-Factor Authentication has been enabled!', 'success');
       } else {
+        // Don't clear password, but clear code
         twoFaErrorMessage = 'Invalid code. Please try again.';
         totpVerificationCode = '';
       }
@@ -1065,7 +1068,10 @@
     twoFaErrorMessage = '';
 
     try {
-      const success = await invoke('verify_totp_code', { code: totpActionCode });
+      const success = await invoke('verify_totp_code', {
+        code: totpActionCode,
+        password: twoFaPassword, // Pass the password
+      });
 
       if (success) {
         show2faPromptModal = false;
@@ -1088,9 +1094,9 @@
   // To disable 2FA (this action is also protected by 2FA)
   function disable2FA() {
     with2FA(async () => {
-      try {
-        await invoke('disable_2fa');
-          is2faEnabled = false;
+      try { // The password is provided in the with2FA prompt
+        await invoke('disable_2fa', { password: twoFaPassword });
+        is2faEnabled = false;
         showToast('Two-Factor Authentication has been disabled.', 'warning');
       } catch (error) {
         console.error('Failed to disable 2FA:', error);
@@ -1284,6 +1290,11 @@
     rawAmountInput = $wallet.balance.toFixed(2);
   }
 
+  async function handleLogout() {
+    if (isTauri) await invoke('logout');
+    logout();
+  }
+
   function logout() {
     // Clear the account details from memory, effectively logging out
     etcAccount.set(null);
@@ -1354,7 +1365,7 @@
   }
 
   function autoLockWallet() {
-    logout();
+    handleLogout();
     autoLockMessage = 'Wallet auto-locked due to inactivity.';
     showToast(autoLockMessage, 'warning');
     setTimeout(() => autoLockMessage = '', 5000);
@@ -1626,7 +1637,7 @@
                 <Button type="button" variant="outline" on:click={exportWallet}>
                   {$t('wallet.export')}
                 </Button>
-                <Button type="button" variant="destructive" on:click={logout}>
+                <Button type="button" variant="destructive" on:click={handleLogout}>
                   {$t('actions.lockWallet')}
                 </Button>
               </div>
@@ -2353,6 +2364,13 @@
             autocomplete="one-time-code"
             maxlength="6"
           />
+          <Label for="totp-password-setup" class="mt-4">{$t('keystore.load.password')}</Label>
+          <Input
+            id="totp-password-setup"
+            type="password"
+            bind:value={twoFaPassword}
+            placeholder={$t('placeholders.unlockPassword')}
+          />
           {#if twoFaErrorMessage}
             <p class="text-sm text-red-500">{twoFaErrorMessage}</p>
           {/if}
@@ -2360,7 +2378,7 @@
 
         <div class="mt-6 flex justify-end gap-2">
           <Button variant="outline" on:click={() => show2faSetupModal = false}>{$t('actions.cancel')}</Button>
-          <Button on:click={verifyAndEnable2FA} disabled={isVerifying2fa || totpVerificationCode.length < 6}>
+          <Button on:click={verifyAndEnable2FA} disabled={isVerifying2fa || totpVerificationCode.length < 6 || !twoFaPassword}>
             {isVerifying2fa ? $t('actions.verifying') : $t('security.2fa.setup.verifyAndEnable')}
           </Button>
         </div>
@@ -2399,6 +2417,13 @@
             maxlength="6"
             autofocus
           />
+          <Label for="totp-password-action" class="mt-4">{$t('keystore.load.password')}</Label>
+          <Input
+            id="totp-password-action"
+            type="password"
+            bind:value={twoFaPassword}
+            placeholder={$t('placeholders.unlockPassword')}
+          />
           {#if twoFaErrorMessage}
             <p class="text-sm text-red-500">{twoFaErrorMessage}</p>
           {/if}
@@ -2406,7 +2431,7 @@
 
         <div class="mt-6 flex justify-end gap-2">
           <Button variant="outline" on:click={() => { show2faPromptModal = false; actionToConfirm = null; }}>{$t('actions.cancel')}</Button>
-          <Button on:click={confirmActionWith2FA} disabled={isVerifyingAction || totpActionCode.length < 6}>
+          <Button on:click={confirmActionWith2FA} disabled={isVerifyingAction || totpActionCode.length < 6 || !twoFaPassword}>
             {isVerifyingAction ? $t('actions.verifying') : $t('actions.confirm')}
           </Button>
         </div>

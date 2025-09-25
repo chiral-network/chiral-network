@@ -20,8 +20,8 @@ tauri-plugin-os = "2.0"
 tauri-plugin-shell = "2.0"
 tauri-plugin-dialog = "2"
 tauri-plugin-store = "2"
-secp256k1 = { version = "0.24", features = ["rand", "serde"] }
-rand = "0.8"
+secp256k1 = { version = "0.24", features = ["serde", "rand-std"] }
+rand = { version = "0.8", features = ["std_rng"] }
 totp-rs = { version = "5.7.0", features = ["otpauth"] }
 hex = "0.4"
 sha3 = "0.10"

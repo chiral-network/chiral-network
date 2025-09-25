@@ -18,6 +18,11 @@ pub struct EncryptedKeystore {
     pub encrypted_private_key: String,
     pub salt: String,
     pub iv: String,
+    // The 2FA secret, encrypted with the same key as the private key, but with its own IV.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encrypted_two_fa_secret: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub two_fa_iv: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -85,6 +90,8 @@ impl Keystore {
             encrypted_private_key: encrypted,
             salt,
             iv,
+            encrypted_two_fa_secret: None,
+            two_fa_iv: None,
         });
 
         self.save()?;
@@ -104,6 +111,65 @@ impl Keystore {
             &account.iv,
             password,
         )
+    }
+
+    pub fn is_2fa_enabled(&self, address: &str) -> Result<bool, String> {
+        let account = self
+            .accounts
+            .iter()
+            .find(|a| a.address == address)
+            .ok_or_else(|| "Account not found".to_string())?;
+        Ok(account.encrypted_two_fa_secret.is_some())
+    }
+
+    pub fn get_2fa_secret(&self, address: &str, password: &str) -> Result<Option<String>, String> {
+        let account = self
+            .accounts
+            .iter()
+            .find(|a| a.address == address)
+            .ok_or_else(|| "Account not found".to_string())?;
+
+        match (&account.encrypted_two_fa_secret, &account.two_fa_iv) {
+            (Some(encrypted_secret), Some(iv)) => {
+                let decrypted_secret = decrypt_data(encrypted_secret, &account.salt, iv, password)?;
+                Ok(Some(decrypted_secret))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    pub fn set_2fa_secret(&mut self, address: &str, secret: &str, password: &str) -> Result<(), String> {
+        let account = self
+            .accounts
+            .iter_mut()
+            .find(|a| a.address == address)
+            .ok_or_else(|| "Account not found".to_string())?;
+
+        let (encrypted_secret, iv) = encrypt_data(secret, password, &account.salt)?;
+        account.encrypted_two_fa_secret = Some(encrypted_secret);
+        account.two_fa_iv = Some(iv);
+
+        self.save()
+    }
+
+    pub fn remove_2fa_secret(&mut self, address: &str, password: &str) -> Result<(), String> {
+        let account = self
+            .accounts
+            .iter_mut()
+            .find(|a| a.address == address)
+            .ok_or_else(|| "Account not found".to_string())?;
+
+        // To remove, we must first verify the password is correct.
+        // We can do this by trying to decrypt the existing secret.
+        if let (Some(encrypted_secret), Some(iv)) = (&account.encrypted_two_fa_secret, &account.two_fa_iv) {
+            decrypt_data(encrypted_secret, &account.salt, iv, password)
+                .map_err(|_| "Invalid password. Cannot disable 2FA.".to_string())?;
+        }
+
+        // Password is correct, so we can remove the secret.
+        account.encrypted_two_fa_secret = None;
+        account.two_fa_iv = None;
+        self.save()
     }
 
     pub fn remove_account(&mut self, address: &str) -> Result<(), String> {
@@ -147,6 +213,26 @@ fn encrypt_private_key(
     cipher.apply_keystream(&mut data);
 
     Ok((hex::encode(data), hex::encode(salt), hex::encode(iv)))
+}
+
+/// Generic function to encrypt any string data using the password and a salt.
+fn encrypt_data(data_to_encrypt: &str, password: &str, salt_hex: &str) -> Result<(String, String), String> {
+    let salt = hex::decode(salt_hex).map_err(|e| format!("Invalid salt: {}", e))?;
+    let key = derive_key(password, &salt);
+
+    let mut iv = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut iv);
+
+    let mut data = data_to_encrypt.as_bytes().to_vec();
+    let mut cipher = Aes256Ctr::new(&key.into(), &iv.into());
+    cipher.apply_keystream(&mut data);
+
+    Ok((hex::encode(data), hex::encode(iv)))
+}
+
+/// Generic function to decrypt data.
+fn decrypt_data(encrypted_hex: &str, salt_hex: &str, iv_hex: &str, password: &str) -> Result<String, String> {
+    decrypt_private_key(encrypted_hex, salt_hex, iv_hex, password)
 }
 
 fn decrypt_private_key(
