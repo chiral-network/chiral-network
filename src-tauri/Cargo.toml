@@ -54,8 +54,10 @@ fs2 = "0.4"
 glob = "0.3"
 
 [features]
-default = ["custom-protocol"]
-custom-protocol = ["tauri/custom-protocol"]
+default = [ "custom-protocol" ]
+custom-protocol = [ "tauri/custom-protocol" ]
+lru = []
+once_cell = []
 
 [profile.release]
 lto = true

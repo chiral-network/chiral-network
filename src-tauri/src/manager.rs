@@ -6,6 +6,10 @@ use rand::RngCore;
 use std::fs::{File, self};
 use std::io::{Read, Error, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::num::NonZeroUsize;
+use lru::LruCache;
+use once_cell::sync::Lazy;
 use x25519_dalek::{EphemeralSecret, PublicKey};
 
 // Import the new crypto functions and the bundle struct
@@ -44,6 +48,14 @@ impl Hasher for Sha256Hasher {
         hasher.finalize().into()
     }
 }
+
+/// In-memory L1 cache for frequently accessed chunks.
+/// We use a Mutex for thread-safe access and Lazy to ensure it's initialized only once.
+static CHUNK_CACHE: Lazy<Mutex<LruCache<String, Vec<u8>>>> = Lazy::new(|| {
+    // Cache up to 256 chunks (256 * 256KB = 64MB).
+    let capacity = NonZeroUsize::new(256).unwrap();
+    Mutex::new(LruCache::new(capacity))
+});
 
 pub struct ChunkManager {
     chunk_size: usize,
@@ -130,13 +142,35 @@ impl ChunkManager {
 
     // This function now saves the combined [nonce][ciphertext] blob
     fn save_chunk(&self, hash: &str, data_with_nonce: &[u8]) -> Result<(), Error> {
+        // 1. Save to disk (L2 Cache)
         fs::create_dir_all(&self.storage_path)?;
         fs::write(self.storage_path.join(hash), data_with_nonce)?;
+
+        // 2. Also put it in the in-memory cache (L1 Cache) for immediate access.
+        if let Ok(mut cache) = CHUNK_CACHE.lock() {
+            cache.put(hash.to_string(), data_with_nonce.to_vec());
+        }
+
         Ok(())
     }
 
     pub fn read_chunk(&self, hash: &str) -> Result<Vec<u8>, Error> {
-        fs::read(self.storage_path.join(hash))
+        // 1. Try to get the chunk from the in-memory L1 cache first.
+        if let Ok(mut cache) = CHUNK_CACHE.lock() {
+            if let Some(data) = cache.get(hash) {
+                return Ok(data.clone()); // Cache hit! Return immediately.
+            }
+        }
+
+        // 2. If not in memory (cache miss), read from disk (L2 cache).
+        let data_from_disk = fs::read(self.storage_path.join(hash))?;
+
+        // 3. Populate the L1 cache with the data we just read from disk.
+        if let Ok(mut cache) = CHUNK_CACHE.lock() {
+            cache.put(hash.to_string(), data_from_disk.clone());
+        }
+
+        Ok(data_from_disk)
     }
 
     fn decrypt_chunk(&self, data_with_nonce: &[u8], key: &Key<Aes256Gcm>) -> Result<Vec<u8>, String> {
