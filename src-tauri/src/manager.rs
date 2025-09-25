@@ -31,7 +31,7 @@ pub struct FileManifest {
     pub merkle_root: String,
     /// Information about each chunk needed for reassembly.
     pub chunks: Vec<ChunkInfo>,
-    /// The encrypted AES key bundle needed for decryption.
+    /// The encrypted  AES key bundle needed for decryption.
     pub encrypted_key_bundle: EncryptedAesKeyBundle,
 }
 
