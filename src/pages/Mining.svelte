@@ -90,66 +90,7 @@
     return logFilters[level]
   })
 
-  function parseDifficulty(difficultyStr: string): number {
-    const match = difficultyStr.match(/^([\d.]+)\s*([KGMTP]?)H?\/?s?$/i)
-    if (!match) return 0
-    
-    const value = parseFloat(match[1])
-    const unit = match[2].toUpperCase()
-    
-    switch (unit) {
-      case 'K': return value * 1000
-      case 'M': return value * 1000000
-      case 'G': return value * 1000000000
-      case 'T': return value * 1000000000000
-      case 'P': return value * 1000000000000000
-      default: return value
-    }
-  }
-
   $: displayedTemperature = temperatureUnit === 'F' ? toFahrenheit(temperature).toFixed(1) : temperature.toFixed(1);
-
-  function parseHashRate(rateStr: string): number {
-    const match = rateStr.match(/^~?\s*([\d.]+)\s*([KMGT])H\/s$/i);
-    
-    // Fallback: If the regex fails (e.g., if the string is just "0 H/s"), return 0.
-    if (!match) return 0;
-    
-    // Match indices: 1 is the value, 2 is the unit (K, M, G, T)
-    const value = parseFloat(match[1]);
-    const unit = match[2] ? match[2].toUpperCase() : ''; // Handle base H/s case if needed, though this regex forces a unit
-    
-    switch (unit) {
-      case 'K': return value * 1000;
-      case 'M': return value * 1000000;
-      case 'G': return value * 1000000000;
-      case 'T': return value * 1000000000000;
-      default: return value; // Assumes base H/s if no unit is captured (e.g., if regex simplified)
-    }
-  }
-
-  $: {
-    const localHashRateNum = parseHashRate($miningState.hashRate);
-    const networkDifficultyNum = parseDifficulty(networkDifficulty);
-    
-    if (localHashRateNum > 0 && networkDifficultyNum > 0) {
-        // ETB = Difficulty / Hashrate (in seconds)
-        estimatedTimeToBlock = networkDifficultyNum / localHashRateNum;
-    } else {
-        estimatedTimeToBlock = 0;
-    }
-  }
-
-  $: expectedBlockReward = 5; // Define the intended reward value
-
-  // Calculate the expected total rewards based on blocks found * 5.
-  $: expectedTotalRewards = $miningState.blocksFound * expectedBlockReward;
-
-  // Overrides the Geth-reported balance ($miningState.totalRewards) if the expected
-  // calculation (based on blocks found * 5) is higher.
-  $: if (expectedTotalRewards > ($miningState.totalRewards ?? 0)) {
-      $miningState.totalRewards = expectedTotalRewards;
-  }
 
   // Function to convert Celsius to Fahrenheit
   function toFahrenheit(celsius: number): number {
@@ -348,19 +289,18 @@
       // Convert hashRate string to number for chart
       let hashRateNum = 0
       // Clean up the rate string (remove ~ and text in parentheses)
-      // const cleanRate = $miningState.hashRate.replace(/[~()a-zA-Z \.]+/g, '').trim()
-
-      // if ($miningState.hashRate.includes('GH/s')) {
-      //   hashRateNum = parseFloat(cleanRate) * 1000000000
-      // } else if ($miningState.hashRate.includes('MH/s')) {
-      //   hashRateNum = parseFloat(cleanRate) * 1000000
-      // } else if ($miningState.hashRate.includes('KH/s')) {
-      //   hashRateNum = parseFloat(cleanRate) * 1000
-      // } else {
-      //   hashRateNum = parseFloat(cleanRate) || 0
-      // }
-        
-      hashRateNum = parseHashRate($miningState.hashRate)
+      const cleanRate = $miningState.hashRate.replace(/[~()a-zA-Z \.]+/g, '').trim()
+      
+      if ($miningState.hashRate.includes('GH/s')) {
+        hashRateNum = parseFloat(cleanRate) * 1000000000
+      } else if ($miningState.hashRate.includes('MH/s')) {
+        hashRateNum = parseFloat(cleanRate) * 1000000
+      } else if ($miningState.hashRate.includes('KH/s')) {
+        hashRateNum = parseFloat(cleanRate) * 1000
+      } else {
+        hashRateNum = parseFloat(cleanRate) || 0
+      }
+      
       // Update mining history for chart
       if ($miningState.isMining) {
         $miningState.miningHistory = [...($miningState.miningHistory || []).slice(-29), {
@@ -646,30 +586,21 @@ function pushRecentBlock(b: {
     const seconds = Math.floor((uptime % 60000) / 1000)
     return `${hours}h ${minutes}m ${seconds}s`
   }
-
-  function formatTimeFromSeconds(totalSeconds: number): string {
-      if (totalSeconds < 60) {
-          return `${totalSeconds.toFixed(0)}s`;
-      }
-
-      const seconds = Math.floor(totalSeconds);
-      const hours = Math.floor(seconds / 3600);
-      const minutes = Math.floor((seconds % 3600) / 60);
-      const remainingSeconds = seconds % 60;
-
-      let parts = [];
-      if (hours > 0) {
-          parts.push(`${hours}h`);
-      }
-      if (minutes > 0) {
-          parts.push(`${minutes}m`);
-      }
-      // Only show seconds if the total time is less than an hour, or if minutes is 0
-      if (hours === 0 && minutes < 5) { // Show seconds when time is short
-          parts.push(`${remainingSeconds}s`);
-      }
-
-      return parts.join(' ');
+  
+  function parseHashRate(rateStr: string): number {
+    const match = rateStr.match(/^([\d.]+)\s*([KMGT]?)H\/s$/i)
+    if (!match) return 0
+    
+    const value = parseFloat(match[1])
+    const unit = match[2].toUpperCase()
+    
+    switch (unit) {
+      case 'K': return value * 1000
+      case 'M': return value * 1000000
+      case 'G': return value * 1000000000
+      case 'T': return value * 1000000000000
+      default: return value
+    }
   }
 
   function formatHashRate(rate: number | string): string {
@@ -1260,8 +1191,7 @@ function pushRecentBlock(b: {
         <div class="flex justify-between items-center">
           <span class="text-sm text-muted-foreground">{$t('mining.estTimeToBlock')}</span>
           <Badge variant="outline">
-            {estimatedTimeToBlock > 0 ?
-              `~${formatTimeFromSeconds(estimatedTimeToBlock)}` : $t('mining.calculating')}
+            {estimatedTimeToBlock > 0 ? `~${Math.floor(estimatedTimeToBlock / 60)} min` : $t('mining.calculating')}
           </Badge>
         </div>
         <div class="flex justify-between items-center">
