@@ -9,7 +9,7 @@ The Chiral Network implements a multi-layered protocol stack combining blockchai
 ```
 ┌─────────────────────────────────────────┐
 │         Application Layer               │
-│   File Transfer | Market | Mining       │
+│   File Transfer | DHT | Mining          │
 ├─────────────────────────────────────────┤
 │         Session Layer                   │
 │   Authentication | Encryption | State   │
@@ -394,8 +394,8 @@ protocols:
     handler: dht_handler
   /chiral/transfer/1.0.0: # File transfer
     handler: transfer_handler
-  /chiral/market/1.0.0: # Market protocol
-    handler: market_handler
+  /chiral/dht/1.0.0: # DHT protocol
+    handler: dht_handler
   /chiral/eth/1.0.0: # Ethereum-compatible sync
     handler: eth_handler
 ```
@@ -569,7 +569,7 @@ Capabilities Bitmap:
 Bit 0: Storage Node
 Bit 1: Relay Node
 Bit 2: Mining Node
-Bit 3: Market Server
+Bit 3: DHT Node
 Bit 4: Bootstrap Node
 Bit 5: Archive Node
 Bit 6-31: Reserved
