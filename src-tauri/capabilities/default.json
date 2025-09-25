@@ -4,9 +4,7 @@
   "description": "Default permissions",
   "windows": ["main"],
   "permissions": [
-    "core:event:default",
-    "core:window:default",
-    "core:window:allow-hide",
+    "core:default",
     "shell:allow-open",
     "os:default",
     "dialog:default"
