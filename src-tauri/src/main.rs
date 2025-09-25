@@ -384,37 +384,61 @@ async fn start_dht_node(
                         error,
                     } => {
                         let mut proxies = proxies_arc.lock().await;
-                        // upsert: find by id (peer id) or by address (initial connection url)
-                        if let Some(p) = proxies.iter_mut().find(|p| {
-                            p.id == id
-                                || p.address == id
-                                || (!address.is_empty() && p.address == address)
-                        }) {
-                            p.id = id.clone(); // always update to the real peer id
-                            if !address.is_empty() {
-                                p.address = address.clone();
-                            }
+
+                        // 1) Find existing proxy by id, then by address, then by address==id
+                        let mut idx = proxies.iter().position(|p| p.id == id);
+                        if idx.is_none() && !address.is_empty() {
+                            idx = proxies.iter().position(|p| p.address == address);
+                        }
+                        if idx.is_none() {
+                            idx = proxies.iter().position(|p| p.address == id);
+                        }
+
+                        if let Some(i) = idx {
+                            // 2) Safe merge: only overwrite with incoming values
+                            let p = &mut proxies[i];
+                            if p.id != id { p.id = id.clone(); }
+                            if !address.is_empty() { p.address = address.clone(); }
                             p.status = status.clone();
-                            if let Some(ms) = latency_ms {
-                                p.latency = ms as u32;
-                            }
+                            if let Some(ms) = latency_ms { p.latency = ms as u32; }
                             p.error = error.clone();
                             let _ = app_handle.emit("proxy_status_update", p.clone());
                         } else {
-                            // let new_node = ProxyNode {
-                            //     id: id.clone(),
-                            //     address: if address.is_empty() { id.clone() } else { address.clone() },
-                            //     status,
-                            //     latency: latency_ms.unwrap_or(999) as u32,
-                            //     error,
-                            // };
-                            // proxies.push(new_node.clone());
-                            // let _ = app_handle.emit("proxy_status_update", new_node);
+                            // 3) If not found, add new (if address is empty, use id instead)
+                            let new_node = ProxyNode {
+                                id: id.clone(),
+                                address: if address.is_empty() { id.clone() } else { address.clone() },
+                                status,
+                                latency: latency_ms.unwrap_or(0) as u32,
+                                error,
+                            };
+                            proxies.push(new_node.clone());
+                            let _ = app_handle.emit("proxy_status_update", new_node);
                         }
                     }
                     DhtEvent::EchoReceived { from, utf8, bytes } => {
+                        // Sending inbox event to frontend
                         let payload = serde_json::json!({ "from": from, "text": utf8, "bytes": bytes });
                         let _ = app_handle.emit("proxy_echo_rx", payload);
+
+                        // If recieved an echo, mark the node as online in the proxy list
+                        {
+                            let mut proxies = proxies_arc.lock().await;
+                            if let Some(p) = proxies.iter_mut().find(|p| p.id == from) {
+                                p.status = "online".to_string();
+                                let _ = app_handle.emit("proxy_status_update", p.clone());
+                            } else {
+                                let new_node = ProxyNode {
+                                    id: from.clone(),
+                                    address: String::new(),
+                                    status: "online".to_string(),
+                                    latency: 0,
+                                    error: None,
+                                };
+                                proxies.push(new_node.clone());
+                                let _ = app_handle.emit("proxy_status_update", new_node);
+                            }
+                        }
                     }
                     DhtEvent::PeerRtt { peer, rtt_ms } => {
                         let mut proxies = proxies_arc.lock().await;
