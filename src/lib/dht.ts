@@ -23,6 +23,9 @@ export interface FileMetadata {
   seeders: string[];
   createdAt: number;
   mimeType?: string;
+  isEncrypted: boolean;
+  encryptionMethod?: string;
+  keyFingerprint?: string;
 }
 
 export interface DhtHealth {
@@ -194,7 +197,7 @@ export class DhtService {
 
   async searchFileMetadata(
     fileHash: string,
-    timeoutMs = 10_000,
+    timeoutMs = 10_000
   ): Promise<FileMetadata | null> {
     const trimmed = fileHash.trim();
     if (!trimmed) {

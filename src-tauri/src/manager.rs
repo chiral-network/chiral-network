@@ -8,8 +8,8 @@ use std::io::{Read, Error, Write};
 use std::path::{Path, PathBuf};
 use x25519_dalek::{EphemeralSecret, PublicKey};
 
-// Import the new crypto functions and the bundle struct
-use crate::crypto::{decrypt_aes_key, encrypt_aes_key, EncryptedAesKeyBundle};
+// Import the new encryption functions and the bundle struct
+use crate::encryption::{decrypt_aes_key, encrypt_aes_key, EncryptedAesKeyBundle};
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct ChunkInfo {

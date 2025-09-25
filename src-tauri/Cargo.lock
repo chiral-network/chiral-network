@@ -820,6 +820,7 @@ dependencies = [
  "aes-gcm",
  "async-std",
  "async-trait",
+ "base64 0.21.7",
  "clap",
  "ctr",
  "directories",
@@ -851,6 +852,7 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-shell",
  "tauri-plugin-store",
+ "tempfile",
  "tokio",
  "totp-rs",
  "tracing",
@@ -4451,6 +4453,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "password-hash"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "346f04948ba92c43e8469c1ee6736c7563d71012b17d40745260fe106aac2166"
+dependencies = [
+ "base64ct",
+ "rand_core 0.6.4",
+ "subtle",
+]
+
+[[package]]
 name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4470,7 +4483,7 @@ checksum = "83a0692ec44e4cf1ef28ca317f14f8f07da2d95ec3fa01f86e4467b725e60917"
 dependencies = [
  "digest",
  "hmac",
- "password-hash",
+ "password-hash 0.4.2",
  "sha2",
 ]
 
@@ -4482,6 +4495,8 @@ checksum = "f8ed6a7761f76e3b9f92dfb0a60a6a6477c61024b775147ff0973a02653abaf2"
 dependencies = [
  "digest",
  "hmac",
+ "password-hash 0.5.0",
+ "sha2",
 ]
 
 [[package]]
