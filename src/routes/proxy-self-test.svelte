@@ -1,3 +1,4 @@
+<!-- Consolidated to the enhanced UI with Echo test -->
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import {
