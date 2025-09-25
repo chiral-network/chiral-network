@@ -889,8 +889,7 @@ async fn start_file_transfer_service(state: State<'_, AppState>) -> Result<(), S
 async fn upload_file_to_network(
     state: State<'_, AppState>,
     file_path: String,
-    file_name: String,
-) -> Result<String, String> {
+) -> Result<FileMetadata, String> {
     let ft = {
         let ft_guard = state.file_transfer.lock().await;
         ft_guard.as_ref().cloned()
@@ -898,7 +897,11 @@ async fn upload_file_to_network(
 
     if let Some(ft) = ft {
         // Upload the file
-        ft.upload_file(file_path.clone(), file_name.clone()).await?;
+        let file_name = file_path.split('/').last().unwrap_or(&file_path);
+
+        ft.upload_file(file_path.clone(), file_name.to_string())
+            .await
+            .map_err(|e| format!("Failed to upload file: {}", e))?;
 
         // Get the file hash by reading the file and calculating it
         let file_data = tokio::fs::read(&file_path)
@@ -915,7 +918,7 @@ async fn upload_file_to_network(
         if let Some(dht) = dht {
             let metadata = FileMetadata {
                 file_hash: file_hash.clone(),
-                file_name: file_name.clone(),
+                file_name: file_name.to_string(),
                 file_size: file_data.len() as u64,
                 seeders: vec![],
                 created_at: std::time::SystemTime::now()
@@ -925,12 +928,14 @@ async fn upload_file_to_network(
                 mime_type: None,
             };
 
-            if let Err(e) = dht.publish_file(metadata).await {
+            if let Err(e) = dht.publish_file(metadata.clone()).await {
                 warn!("Failed to publish file metadata to DHT: {}", e);
             }
+
+            return Ok(metadata);
         }
 
-        Ok(file_hash)
+        Err("DHT Service not running".to_string())
     } else {
         Err("File transfer service is not running".to_string())
     }
@@ -1388,7 +1393,7 @@ fn main() {
             .with(
                 EnvFilter::from_default_env()
                     .add_directive("chiral_network=info".parse().unwrap())
-                    .add_directive("libp2p=trace".parse().unwrap())
+                    .add_directive("libp2p=debug".parse().unwrap())
                     .add_directive("libp2p_kad=debug".parse().unwrap())
                     .add_directive("libp2p_swarm=debug".parse().unwrap()),
             )
