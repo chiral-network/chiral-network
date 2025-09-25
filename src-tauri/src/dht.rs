@@ -283,6 +283,7 @@ async fn run_dht_node(
     // Periodic bootstrap interval
     let mut bootstrap_interval = tokio::time::interval(Duration::from_secs(30));
     let mut shutdown_ack: Option<oneshot::Sender<()>> = None;
+    let mut ping_failures: HashMap<PeerId, u8> = HashMap::new();
 
     'outer: loop {
         tokio::select! {
@@ -413,6 +414,8 @@ async fn run_dht_node(
                                             rtt_ms: rtt.as_millis() as u64,
                                         })
                                         .await;
+
+                                        ping_failures.remove(&peer);
                                 } else {
                                     debug!("skip rtt update for non-proxy/offline peer {}", peer);
                                 }
@@ -421,11 +424,27 @@ async fn run_dht_node(
                                 let _ = event_tx
                                     .send(DhtEvent::Error(format!("Ping timeout {}", peer)))
                                     .await;
+                                let count = ping_failures.entry(peer).or_insert(0);
+                                *count += 1;
+                                if *count >= 3 {
+                                    swarm.behaviour_mut().kademlia.remove_peer(&peer);
+                                    ping_failures.remove(&peer);
+                                    let _ = event_tx.send(DhtEvent::Error(format!(
+                                        "Peer {} removed after 3 failed pings", peer
+                                    ))).await;
+                                }
                             }
                             libp2p::ping::Event { peer, result: Err(e), .. } => {
                                 warn!("ping error with {}: {}", peer, e);
-                                // If needed, also send to UI
-                                // let _ = event_tx.send(DhtEvent::Error(format!("Ping error {}: {}", peer, e))).await;
+                                let count = ping_failures.entry(peer).or_insert(0);
+                                *count += 1;
+                                if *count >= 3 {
+                                    swarm.behaviour_mut().kademlia.remove_peer(&peer);
+                                    ping_failures.remove(&peer);
+                                    let _ = event_tx.send(DhtEvent::Error(format!(
+                                        "Peer {} removed after 3 failed pings", peer
+                                    ))).await;
+                                }
                             }
                         }
                     }
