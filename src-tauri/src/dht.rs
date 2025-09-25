@@ -280,6 +280,7 @@ async fn run_dht_node(
     pending_searches: Arc<Mutex<HashMap<String, Vec<PendingSearch>>>>,
     proxy_targets: Arc<Mutex<HashSet<PeerId>>>,
     proxy_capable: Arc<Mutex<HashSet<PeerId>>>,
+    is_bootstrap: bool,
 ) {
     // Periodic bootstrap interval
     let mut shutdown_ack: Option<oneshot::Sender<()>> = None;
@@ -386,7 +387,9 @@ async fn run_dht_node(
                         handle_identify_event(identify_event, &mut swarm, &event_tx).await;
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Mdns(mdns_event)) => {
-                        handle_mdns_event(mdns_event, &mut swarm, &event_tx).await;
+                        if !is_bootstrap{
+                            handle_mdns_event(mdns_event, &mut swarm, &event_tx).await;
+                        }
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Ping(ev)) => {
                         match ev {
@@ -796,6 +799,7 @@ impl DhtService {
         port: u16,
         bootstrap_nodes: Vec<String>,
         secret: Option<String>,
+        is_bootstrap: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // Generate a new keypair for this node
         // Generate a keypair either from the secret or randomly
@@ -818,14 +822,23 @@ impl DhtService {
         // Create a Kademlia behaviour with tuned configuration
         let store = MemoryStore::new(local_peer_id);
         let mut kad_cfg = KademliaConfig::new(StreamProtocol::new("/chiral/kad/1.0.0"));
-        // Align with docs: shorter queries, higher replication
-        kad_cfg.set_query_timeout(Duration::from_secs(40));
         let bootstrap_interval = Duration::from_secs(30);
+        if is_bootstrap {
+            // These settings result in node to not provide files, only acts as a router
+            kad_cfg.set_record_ttl(Some(Duration::from_secs(0)));
+            kad_cfg.set_provider_record_ttl(Some(Duration::from_secs(0)));
 
-        kad_cfg.set_periodic_bootstrap_interval(Some(bootstrap_interval));
+            // ensures bootstrap node only keeps active peers in its routing table
+            kad_cfg.set_periodic_bootstrap_interval(None);
+        } else {
+            kad_cfg.set_periodic_bootstrap_interval(Some(bootstrap_interval));
+        }
 
-        // Replication factor of 20 (as per spec table)
-        if let Some(nz) = std::num::NonZeroUsize::new(20) {
+        // Align with docs: shorter queries, higher replication
+        kad_cfg.set_query_timeout(Duration::from_secs(30));
+
+        // Replication factor of 3 (as per spec table)
+        if let Some(nz) = std::num::NonZeroUsize::new(3) {
             kad_cfg.set_replication_factor(nz);
         }
         let mut kademlia = Kademlia::with_config(local_peer_id, store, kad_cfg);
@@ -946,6 +959,7 @@ impl DhtService {
             pending_searches.clone(),
             proxy_targets.clone(),
             proxy_capable.clone(),
+            is_bootstrap,
         ));
 
         Ok(DhtService {
@@ -1129,7 +1143,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn shutdown_command_stops_dht_service() {
-        let service = match DhtService::new(0, Vec::new(), None).await {
+        let service = match DhtService::new(0, Vec::new(), None, false).await {
             Ok(service) => service,
             Err(err) => {
                 let message = err.to_string();
