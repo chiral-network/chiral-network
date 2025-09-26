@@ -345,7 +345,7 @@ async fn start_dht_node(
         }
     }
 
-    let dht_service = DhtService::new(port, bootstrap_nodes, None)
+    let dht_service = DhtService::new(port, bootstrap_nodes, None, false)
         .await
         .map_err(|e| format!("Failed to start DHT: {}", e))?;
 
@@ -1159,20 +1159,20 @@ async fn encrypt_file_with_password(
     password: String,
 ) -> Result<encryption::EncryptionInfo, String> {
     use std::path::Path;
-    
+
     let input = Path::new(&input_path);
     let output = Path::new(&output_path);
-    
+
     if !input.exists() {
         return Err("Input file does not exist".to_string());
     }
-    
+
     let result = encryption::FileEncryption::encrypt_file_with_password(
         input,
         output,
         &password,
     ).await?;
-    
+
     Ok(result.encryption_info)
 }
 
@@ -1184,14 +1184,14 @@ async fn decrypt_file_with_password(
     encryption_info: encryption::EncryptionInfo,
 ) -> Result<u64, String> {
     use std::path::Path;
-    
+
     let input = Path::new(&input_path);
     let output = Path::new(&output_path);
-    
+
     if !input.exists() {
         return Err("Encrypted file does not exist".to_string());
     }
-    
+
     encryption::FileEncryption::decrypt_file_with_password(
         input,
         output,
@@ -1206,15 +1206,15 @@ async fn encrypt_file_for_upload(
     password: Option<String>,
 ) -> Result<(String, encryption::EncryptionInfo), String> {
     use std::path::Path;
-    
+
     let input = Path::new(&input_path);
     if !input.exists() {
         return Err("Input file does not exist".to_string());
     }
-    
+
     // Create encrypted file in same directory with .enc extension
     let encrypted_path = input.with_extension("enc");
-    
+
     let result = if let Some(pwd) = password {
         encryption::FileEncryption::encrypt_file_with_password(
             input,
@@ -1230,7 +1230,7 @@ async fn encrypt_file_for_upload(
             &key,
         ).await?
     };
-    
+
     Ok((encrypted_path.to_string_lossy().to_string(), result.encryption_info))
 }
 
