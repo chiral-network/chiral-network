@@ -1,8 +1,10 @@
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use futures_util::StreamExt;
 
+use libp2p::multiaddr::Protocol;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -24,8 +26,7 @@ use libp2p::{
     swarm::{NetworkBehaviour, SwarmEvent},
     Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
 };
-
-
+const EXPECTED_PROTOCOL_VERSION: &str = "/chiral/1.0.0";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileMetadata {
@@ -282,21 +283,14 @@ async fn run_dht_node(
     proxy_targets: Arc<Mutex<HashSet<PeerId>>>,
     proxy_capable: Arc<Mutex<HashSet<PeerId>>>,
     peer_selection: Arc<Mutex<PeerSelectionService>>,
+    is_bootstrap: bool,
 ) {
     // Periodic bootstrap interval
-    let mut bootstrap_interval = tokio::time::interval(Duration::from_secs(30));
     let mut shutdown_ack: Option<oneshot::Sender<()>> = None;
 
     'outer: loop {
         tokio::select! {
-            _ = bootstrap_interval.tick() => {
-                // Periodically bootstrap to maintain connections
-                let _ = swarm.behaviour_mut().kademlia.bootstrap();
-                if let Ok(mut m) = metrics.try_lock() {
-                    m.last_bootstrap = Some(SystemTime::now());
-                }
-                debug!("Performing periodic Kademlia bootstrap");
-            }
+
 
             cmd = cmd_rx.recv() => {
                 match cmd {
@@ -396,7 +390,9 @@ async fn run_dht_node(
                         handle_identify_event(identify_event, &mut swarm, &event_tx).await;
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Mdns(mdns_event)) => {
-                        handle_mdns_event(mdns_event, &mut swarm, &event_tx).await;
+                        if !is_bootstrap{
+                            handle_mdns_event(mdns_event, &mut swarm, &event_tx).await;
+                        }
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Ping(ev)) => {
                         match ev {
@@ -553,6 +549,7 @@ async fn run_dht_node(
                             } else if error.to_string().contains("Transport") {
                                 warn!("   ℹ Hint: Transport protocol negotiation failed.");
                             }
+                            swarm.behaviour_mut().kademlia.remove_peer(&peer_id);
                         } else {
                             error!("❌ Outgoing connection error to unknown peer: {}", error);
                         }
@@ -728,8 +725,20 @@ async fn handle_identify_event(
         IdentifyEvent::Received { peer_id, info, .. } => {
             info!("Identified peer {}: {:?}", peer_id, info.protocol_version);
             // Add identified peer to Kademlia routing table
-            for addr in info.listen_addrs {
-                swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
+            if info.protocol_version != EXPECTED_PROTOCOL_VERSION {
+                warn!(
+                    "Peer {} has a mismatched protocol version: '{}'. Expected: '{}'. Removing peer.",
+                    peer_id,
+                    info.protocol_version,
+                    EXPECTED_PROTOCOL_VERSION
+                );
+                swarm.behaviour_mut().kademlia.remove_peer(&peer_id);
+            } else {
+                for addr in info.listen_addrs {
+                    if not_loopback(&addr) {
+                        swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
+                    }
+                }
             }
         }
         IdentifyEvent::Sent { peer_id, .. } => {
@@ -748,10 +757,12 @@ async fn handle_mdns_event(
         MdnsEvent::Discovered(list) => {
             for (peer_id, multiaddr) in list {
                 debug!("mDNS discovered peer {} at {}", peer_id, multiaddr);
-                swarm
-                    .behaviour_mut()
-                    .kademlia
-                    .add_address(&peer_id, multiaddr);
+                if not_loopback(&multiaddr) {
+                    swarm
+                        .behaviour_mut()
+                        .kademlia
+                        .add_address(&peer_id, multiaddr);
+                }
                 let _ = event_tx
                     .send(DhtEvent::PeerDiscovered(peer_id.to_string()))
                     .await;
@@ -812,6 +823,7 @@ impl DhtService {
         port: u16,
         bootstrap_nodes: Vec<String>,
         secret: Option<String>,
+        is_bootstrap: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // Generate a new keypair for this node
         // Generate a keypair either from the secret or randomly
@@ -834,8 +846,21 @@ impl DhtService {
         // Create a Kademlia behaviour with tuned configuration
         let store = MemoryStore::new(local_peer_id);
         let mut kad_cfg = KademliaConfig::new(StreamProtocol::new("/chiral/kad/1.0.0"));
+        let bootstrap_interval = Duration::from_secs(30);
+        if is_bootstrap {
+            // These settings result in node to not provide files, only acts as a router
+            kad_cfg.set_record_ttl(Some(Duration::from_secs(0)));
+            kad_cfg.set_provider_record_ttl(Some(Duration::from_secs(0)));
+
+            // ensures bootstrap node only keeps active peers in its routing table
+            kad_cfg.set_periodic_bootstrap_interval(None);
+        } else {
+            kad_cfg.set_periodic_bootstrap_interval(Some(bootstrap_interval));
+        }
+
         // Align with docs: shorter queries, higher replication
-        kad_cfg.set_query_timeout(Duration::from_secs(10));
+        kad_cfg.set_query_timeout(Duration::from_secs(30));
+
         // Replication factor of 3 (as per spec table)
         if let Some(nz) = std::num::NonZeroUsize::new(3) {
             kad_cfg.set_replication_factor(nz);
@@ -847,7 +872,7 @@ impl DhtService {
 
         // Create identify behaviour
         let identify = identify::Behaviour::new(identify::Config::new(
-            "/chiral/1.0.0".to_string(),
+            EXPECTED_PROTOCOL_VERSION.to_string(),
             local_key.public(),
         ));
 
@@ -960,6 +985,7 @@ impl DhtService {
             proxy_targets.clone(),
             proxy_capable.clone(),
             peer_selection.clone(),
+            is_bootstrap,
         ));
 
         Ok(DhtService {
@@ -1188,13 +1214,32 @@ impl DhtService {
     }
 }
 
+fn not_loopback(ip: &Multiaddr) -> bool {
+    if let Some(ip) = multiaddr_to_ip(ip) {
+        ip.is_loopback()
+    } else {
+        false
+    }
+}
+
+fn multiaddr_to_ip(addr: &Multiaddr) -> Option<IpAddr> {
+    for comp in addr.iter() {
+        match comp {
+            Protocol::Ip4(ipv4) => return Some(IpAddr::V4(ipv4)),
+            Protocol::Ip6(ipv6) => return Some(IpAddr::V6(ipv6)),
+            _ => {}
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn shutdown_command_stops_dht_service() {
-        let service = match DhtService::new(0, Vec::new(), None).await {
+        let service = match DhtService::new(0, Vec::new(), None, false).await {
             Ok(service) => service,
             Err(err) => {
                 let message = err.to_string();
