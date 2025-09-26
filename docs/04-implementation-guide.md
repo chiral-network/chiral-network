@@ -431,6 +431,21 @@ pub async fn download_file(
 
 ## Phase 4: Integration Testing
 
+### NAT reachability instrumentation
+
+- AutoNAT v2 client and server behaviours are mounted alongside Kademlia. The
+  probe interval defaults to 30 s and can be adjusted with
+  `--autonat-probe-interval`; disable probing entirely via `--disable-autonat`.
+- Additional AutoNAT servers can be supplied with repeated
+  `--autonat-server` flags. `--show-reachability` streams a periodic summary in
+  headless mode (state, confidence, observed addresses, last error) so ops can
+  validate reachability without the GUI.
+- The Network → DHT page now surfaces a “Reachability” card that mirrors Kubo’s
+  vocabulary (Direct/Relayed/Unknown), confidence badge, observed external
+  addresses with copy affordances, and the last few probe summaries. Toasts are
+  emitted when reachability changes (restored, degraded, reset) to give desktop
+  operators immediate feedback.
+
 ### Local download resilience & tracing
 
 The desktop runtime now performs up to three local download attempts with an
@@ -446,7 +461,6 @@ frontend event and exposes a `get_download_metrics` command returning aggregate
 success/failure counters and the last 20 attempts. Headless mode gains a
 `--show-downloads` flag that prints the same snapshot at startup so operators can
 confirm retry behaviour without the GUI.
-
 ### Test Network Setup
 
 ```bash
