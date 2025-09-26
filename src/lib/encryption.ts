@@ -13,18 +13,18 @@ export interface EncryptionResult {
 }
 
 /**
- * Frontend crypto service for file encryption
+ * Frontend encryption service for file encryption
  */
-export class CryptoService {
-  private static instance: CryptoService | null = null;
+export class EncryptionService {
+  private static instance: EncryptionService | null = null;
 
   private constructor() {}
 
-  static getInstance(): CryptoService {
-    if (!CryptoService.instance) {
-      CryptoService.instance = new CryptoService();
+  static getInstance(): EncryptionService {
+    if (!EncryptionService.instance) {
+      EncryptionService.instance = new EncryptionService();
     }
-    return CryptoService.instance;
+    return EncryptionService.instance;
   }
 
   /**
@@ -139,4 +139,4 @@ export class CryptoService {
 }
 
 // Export singleton instance
-export const cryptoService = CryptoService.getInstance();
+export const encryptionService = EncryptionService.getInstance();

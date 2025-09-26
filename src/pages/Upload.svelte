@@ -7,7 +7,7 @@
   import { get } from 'svelte/store'
   import { onMount, tick } from 'svelte';
   import { showToast } from '$lib/toast'
-  import { getStorageStatus, isDuplicateHash } from '$lib/uploadHelpers.js'
+  import { getStorageStatus, isDuplicateHash } from '$lib/uploadHelpers'
   import { fileService } from '$lib/services/fileService'
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
