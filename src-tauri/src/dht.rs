@@ -9,17 +9,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{debug, error, info, warn};
 
-use std::net::SocketAddr; 
-use tokio::net::TcpStream as TokioTcpStream;
-use tokio_socks::tcp::Socks5Stream; 
-use libp2p::identity::Keypair;
-use futures::future::Either; 
-use libp2p::core::transport::{Boxed, Transport as _}; 
-use libp2p::core::upgrade::Version;
-use libp2p::core::muxing::StreamMuxerBox;
-use libp2p::tcp::tokio::Transport as TcpTransport;
-use libp2p::core::ConnectedPoint; 
-use libp2p::core::Endpoint; 
+use std::time::Duration;
+use tokio_socks::tcp::Socks5Stream;
+use tokio::net::TcpStream;
+use futures::io::{AsyncRead, AsyncWrite};
 
 use libp2p::{
     identify::{self, Event as IdentifyEvent},
@@ -33,6 +26,11 @@ use libp2p::{
     request_response as rr,
     swarm::{NetworkBehaviour, SwarmEvent},
     Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
+    core::{upgrade, muxing::StreamMuxerBox, transport::Boxed, Transport},
+    noise,
+    tcp,
+    yamux,
+    identity::Keypair,
 };
 
 
@@ -46,12 +44,6 @@ pub struct FileMetadata {
     pub seeders: Vec<String>,
     pub created_at: u64,
     pub mime_type: Option<String>,
-    /// Whether the file is encrypted
-    pub is_encrypted: bool,
-    /// The encryption method used (e.g., "AES-256-GCM")
-    pub encryption_method: Option<String>,
-    /// Fingerprint of the encryption key for identification
-    pub key_fingerprint: Option<String>,
 }
 
 #[derive(NetworkBehaviour)]
@@ -769,49 +761,51 @@ async fn handle_ping_event(event: PingEvent) {
     }
 }
 
-fn build_custom_transport(
+/// Build a libp2p transport, optionally tunneling through a SOCKS5 proxy (e.g., Tor).
+pub fn build_custom_transport(
     keypair: Keypair,
     proxy_address: Option<String>,
-) -> Result<Boxed<(PeerId, StreamMuxerBox)>, Box<dyn std::error::Error>> {
-    use libp2p::{
-        core::upgrade,
-        identity::Keypair as _,
-        noise,
-        tcp,
-        yamux,
-        Transport,
-    };
-    use std::time::Duration;
-
+) -> Result<Boxed<(PeerId, StreamMuxerBox)>, Box<dyn Error>> {
     // 1. Security (Noise) and multiplexing (Yamux)
     let noise_keys = noise::Config::new(&keypair)?;
     let yamux_config = yamux::Config::default();
 
-    // 2. Base TCP transport
-    let base_transport = tcp::tokio::Transport::new(tcp::Config::default())
-        .upgrade(upgrade::Version::V1)
-        .authenticate(noise_keys)
-        .multiplex(yamux_config)
-        .timeout(Duration::from_secs(30))
-        .boxed();
+    // 2. Direct TCP transport
+    let base_tcp = tcp::tokio::Transport::new(tcp::Config::default());
 
-    // 3. Proxy mode (not fully wired yet, since map_dial is gone)
-    if let Some(addr_str) = proxy_address {
-        info!("VPN/SOCKS5 enabled. Tunneling all P2P traffic through: {}", addr_str);
+    // 3. Wrap in SOCKS5 if requested
+    let transport: Boxed<(PeerId, StreamMuxerBox)> = if let Some(proxy) = proxy_address {
+        info!("SOCKS5 enabled. Routing all P2P traffic via {}", proxy);
 
-        let proxy_socket_addr: std::net::SocketAddr = addr_str.parse()
-            .map_err(|e| format!("Invalid SOCKS5 proxy address: {}", e))?;
+        // Wrap TCP in a custom SOCKS5 dialer
+        let proxy_transport = base_tcp.and_then(move |_, addr| {
+            let proxy_clone = proxy.clone();
+            async move {
+                let target = addr.to_string();
+                let stream = Socks5Stream::connect(proxy_clone, target)
+                    .await
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                Ok(tokio::net::TcpStream::from_std(stream.into_inner())?)
+            }
+        });
 
-        // For now: return just the base transport.
-        // Later, you can plug in `tokio-socks` here by wrapping TcpStream manually
-        // and applying Noise/Yamux to it, but libp2p no longer provides map_dial.
-
-        Ok(base_transport)
+        proxy_transport
+            .upgrade(upgrade::Version::V1)
+            .authenticate(noise_keys)
+            .multiplex(yamux_config)
+            .timeout(Duration::from_secs(30))
+            .boxed()
     } else {
-        // Direct mode
         info!("Direct P2P connection mode.");
-        Ok(base_transport)
-    }
+        base_tcp
+            .upgrade(upgrade::Version::V1)
+            .authenticate(noise_keys)
+            .multiplex(yamux_config)
+            .timeout(Duration::from_secs(30))
+            .boxed()
+    };
+
+    Ok(transport)
 }
 
 impl DhtService {

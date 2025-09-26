@@ -166,9 +166,14 @@
         await new Promise(resolve => setTimeout(resolve, 500))
         // DHT not running, start it
         try {
+          // --- TEMPORARY INJECTION FOR SOCKS5 TEST ---
+          // Tor Proxy Address: 127.0.0.1:9050
+          const TOR_PROXY_ADDRESS = "127.0.0.1:9050";
+          
           const peerId = await dhtService.start({
             port: dhtPort,
-            bootstrapNodes: DEFAULT_BOOTSTRAP_NODES
+            bootstrapNodes: DEFAULT_BOOTSTRAP_NODES,
+            proxyAddress: TOR_PROXY_ADDRESS, 
           })
           dhtPeerId = peerId
           // Also ensure the service knows its own peer ID

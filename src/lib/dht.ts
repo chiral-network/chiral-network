@@ -14,6 +14,7 @@ export interface DhtConfig {
   port: number;
   bootstrapNodes: string[];
   showMultiaddr?: boolean;
+  proxyAddress?: string; // The SOCKS5 address for routing (e.g., "127.0.0.1:9050")
 }
 
 export interface FileMetadata {
