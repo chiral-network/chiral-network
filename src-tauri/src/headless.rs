@@ -1,8 +1,9 @@
 // Headless mode for running as a bootstrap node on servers
 use crate::dht::{DhtService, FileMetadata};
 use crate::ethereum::GethProcess;
+use crate::file_transfer::FileTransferService;
 use clap::Parser;
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 use tokio::signal;
 
 use tracing::{error, info};
@@ -50,6 +51,10 @@ pub struct CliArgs {
     // Runs in bootstrap mode
     #[arg(long)]
     pub is_bootstrap: bool,
+
+    /// Print local download metrics snapshot at startup
+    #[arg(long)]
+    pub show_downloads: bool,
 }
 
 pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error>> {
@@ -68,6 +73,15 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         info!("Using default bootstrap nodes: {:?}", bootstrap_nodes);
     }
 
+    // Optionally start local file-transfer service for metrics insight
+    let file_transfer_service = if args.show_downloads {
+        Some(Arc::new(FileTransferService::new().await.map_err(|e| {
+            format!("Failed to start file transfer service: {}", e)
+        })?))
+    } else {
+        None
+    };
+
     // Start DHT node
     let dht_service = DhtService::new(
         args.dht_port,
@@ -83,6 +97,20 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
 
     info!("✅ DHT node started");
     info!("📍 Local Peer ID: {}", peer_id);
+
+    if let Some(ft) = &file_transfer_service {
+        let snapshot = ft.download_metrics_snapshot().await;
+        info!(
+            "📊 Download metrics: success={}, failures={}, retries={}",
+            snapshot.total_success, snapshot.total_failures, snapshot.total_retries
+        );
+        if let Some(latest) = snapshot.recent_attempts.first() {
+            info!(
+                "   Last attempt: hash={} status={:?} attempt {}/{}",
+                latest.file_hash, latest.status, latest.attempt, latest.max_attempts
+            );
+        }
+    }
 
     if args.show_multiaddr {
         // Get local IP addresses

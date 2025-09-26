@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, info_span, warn};
@@ -49,11 +49,78 @@ pub enum FileTransferEvent {
     Error {
         message: String,
     },
+    DownloadAttempt(DownloadAttemptSnapshot),
 }
 
 const MAX_DOWNLOAD_ATTEMPTS: u32 = 3;
 const BASE_BACKOFF_MS: u64 = 250;
 const MAX_BACKOFF_MS: u64 = 1_500;
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AttemptStatus {
+    Retrying,
+    Success,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadAttemptSnapshot {
+    pub file_hash: String,
+    pub attempt: u32,
+    pub max_attempts: u32,
+    pub status: AttemptStatus,
+    pub duration_ms: u64,
+    pub timestamp: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadMetricsSnapshot {
+    pub total_success: u64,
+    pub total_failures: u64,
+    pub total_retries: u64,
+    pub recent_attempts: Vec<DownloadAttemptSnapshot>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct DownloadMetrics {
+    total_success: u64,
+    total_failures: u64,
+    total_retries: u64,
+    recent_attempts: VecDeque<DownloadAttemptSnapshot>,
+}
+
+impl DownloadMetrics {
+    fn record_attempt(&mut self, snapshot: DownloadAttemptSnapshot) {
+        match snapshot.status {
+            AttemptStatus::Retrying => {
+                self.total_retries = self.total_retries.saturating_add(1);
+            }
+            AttemptStatus::Success => {
+                self.total_success = self.total_success.saturating_add(1);
+            }
+            AttemptStatus::Failed => {
+                self.total_failures = self.total_failures.saturating_add(1);
+            }
+        }
+
+        self.recent_attempts.push_front(snapshot);
+        while self.recent_attempts.len() > 20 {
+            self.recent_attempts.pop_back();
+        }
+    }
+
+    fn snapshot(&self) -> DownloadMetricsSnapshot {
+        DownloadMetricsSnapshot {
+            total_success: self.total_success,
+            total_failures: self.total_failures,
+            total_retries: self.total_retries,
+            recent_attempts: self.recent_attempts.iter().cloned().collect(),
+        }
+    }
+}
 
 #[cfg(test)]
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -68,6 +135,7 @@ pub struct FileTransferService {
     cmd_tx: mpsc::Sender<FileTransferCommand>,
     event_rx: Arc<Mutex<mpsc::Receiver<FileTransferEvent>>>,
     stored_files: Arc<Mutex<HashMap<String, (String, Vec<u8>)>>>, // hash -> (name, data)
+    download_metrics: Arc<Mutex<DownloadMetrics>>,
 }
 
 impl FileTransferService {
@@ -86,6 +154,8 @@ impl FileTransferService {
         file_hash: &str,
         output_path: &str,
         stored_files: &Arc<Mutex<HashMap<String, (String, Vec<u8>)>>>,
+        event_tx: mpsc::Sender<FileTransferEvent>,
+        download_metrics: Arc<Mutex<DownloadMetrics>>,
     ) -> Result<(), String> {
         let mut attempt = 0u32;
         let mut last_error: Option<String> = None;
@@ -118,6 +188,18 @@ impl FileTransferService {
                 Ok(()) => {
                     let duration_ms = start.elapsed().as_millis() as u64;
                     span.in_scope(|| info!(duration_ms = duration_ms, "download_succeeded"));
+                    let snapshot = DownloadAttemptSnapshot {
+                        file_hash: file_hash.to_string(),
+                        attempt,
+                        max_attempts: MAX_DOWNLOAD_ATTEMPTS,
+                        status: AttemptStatus::Success,
+                        duration_ms,
+                        timestamp: SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs(),
+                    };
+                    Self::emit_attempt(event_tx.clone(), download_metrics.clone(), snapshot).await;
                     #[cfg(test)]
                     {
                         LAST_DOWNLOAD_ATTEMPTS.store(attempt, Ordering::SeqCst);
@@ -128,6 +210,26 @@ impl FileTransferService {
                     let duration_ms = start.elapsed().as_millis() as u64;
                     span.in_scope(|| warn!(duration_ms = duration_ms, %err, "download_failed"));
                     last_error = Some(err.clone());
+
+                    let status = if attempt >= MAX_DOWNLOAD_ATTEMPTS {
+                        AttemptStatus::Failed
+                    } else {
+                        AttemptStatus::Retrying
+                    };
+
+                    let snapshot = DownloadAttemptSnapshot {
+                        file_hash: file_hash.to_string(),
+                        attempt,
+                        max_attempts: MAX_DOWNLOAD_ATTEMPTS,
+                        status,
+                        duration_ms,
+                        timestamp: SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs(),
+                    };
+                    Self::emit_attempt(event_tx.clone(), download_metrics.clone(), snapshot).await;
+
                     if attempt >= MAX_DOWNLOAD_ATTEMPTS {
                         #[cfg(test)]
                         {
@@ -157,6 +259,24 @@ impl FileTransferService {
             .map_err(|e| format!("Failed to write file: {}", e))
     }
 
+    async fn emit_attempt(
+        event_tx: mpsc::Sender<FileTransferEvent>,
+        download_metrics: Arc<Mutex<DownloadMetrics>>,
+        snapshot: DownloadAttemptSnapshot,
+    ) {
+        {
+            let mut metrics = download_metrics.lock().await;
+            metrics.record_attempt(snapshot.clone());
+        }
+
+        if let Err(err) = event_tx
+            .send(FileTransferEvent::DownloadAttempt(snapshot))
+            .await
+        {
+            warn!("failed to forward download attempt event: {}", err);
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn reset_retry_counters() {
         LAST_DOWNLOAD_ATTEMPTS.store(0, Ordering::SeqCst);
@@ -177,18 +297,21 @@ impl FileTransferService {
         let (cmd_tx, cmd_rx) = mpsc::channel(100);
         let (event_tx, event_rx) = mpsc::channel(100);
         let stored_files = Arc::new(Mutex::new(HashMap::new()));
+        let download_metrics = Arc::new(Mutex::new(DownloadMetrics::default()));
 
         // Spawn the file transfer service task
         tokio::spawn(Self::run_file_transfer_service(
             cmd_rx,
             event_tx,
             stored_files.clone(),
+            download_metrics.clone(),
         ));
 
         Ok(FileTransferService {
             cmd_tx,
             event_rx: Arc::new(Mutex::new(event_rx)),
             stored_files,
+            download_metrics,
         })
     }
 
@@ -196,6 +319,7 @@ impl FileTransferService {
         mut cmd_rx: mpsc::Receiver<FileTransferCommand>,
         event_tx: mpsc::Sender<FileTransferEvent>,
         stored_files: Arc<Mutex<HashMap<String, (String, Vec<u8>)>>>,
+        download_metrics: Arc<Mutex<DownloadMetrics>>,
     ) {
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
@@ -226,7 +350,14 @@ impl FileTransferService {
                     file_hash,
                     output_path,
                 } => {
-                    match Self::download_with_retries(&file_hash, &output_path, &stored_files).await
+                    match Self::download_with_retries(
+                        &file_hash,
+                        &output_path,
+                        &stored_files,
+                        event_tx.clone(),
+                        download_metrics.clone(),
+                    )
+                    .await
                     {
                         Ok(()) => {
                             let _ = event_tx
@@ -358,6 +489,11 @@ impl FileTransferService {
         let mut stored_files = self.stored_files.lock().await;
         stored_files.insert(file_hash, (file_name, file_data));
     }
+
+    pub async fn download_metrics_snapshot(&self) -> DownloadMetricsSnapshot {
+        let metrics = self.download_metrics.lock().await;
+        metrics.snapshot()
+    }
 }
 
 #[cfg(test)]
@@ -365,7 +501,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use tempfile::tempdir;
-    use tokio::sync::Mutex;
+    use tokio::sync::{mpsc, Mutex};
 
     #[tokio::test]
     async fn download_retries_then_succeeds() {
@@ -385,15 +521,38 @@ mod tests {
         let output_path = temp_dir.path().join("downloaded.txt");
         let output_str = output_path.to_string_lossy().to_string();
 
-        let result =
-            FileTransferService::download_with_retries("test-hash", &output_str, &stored_files)
-                .await;
+        let (event_tx, mut event_rx) = mpsc::channel(16);
+        let metrics = Arc::new(Mutex::new(DownloadMetrics::default()));
+
+        let result = FileTransferService::download_with_retries(
+            "test-hash",
+            &output_str,
+            &stored_files,
+            event_tx.clone(),
+            metrics.clone(),
+        )
+        .await;
 
         assert!(result.is_ok(), "expected download to succeed: {result:?}");
 
         let written = tokio::fs::read(&output_path).await.expect("file read");
         assert_eq!(written, b"hello world");
         assert_eq!(FileTransferService::last_attempts(), 3);
+
+        // Ensure we received attempt events
+        let mut statuses = Vec::new();
+        while let Ok(event) = event_rx.try_recv() {
+            if let FileTransferEvent::DownloadAttempt(snapshot) = event {
+                statuses.push(snapshot.status);
+            }
+        }
+        assert!(statuses.contains(&AttemptStatus::Retrying));
+        assert!(statuses.contains(&AttemptStatus::Success));
+
+        let snapshot = metrics.lock().await.snapshot();
+        assert_eq!(snapshot.total_success, 1);
+        assert_eq!(snapshot.total_failures, 0);
+        assert_eq!(snapshot.total_retries, 2);
     }
 
     #[tokio::test]
@@ -407,11 +566,37 @@ mod tests {
         let output_path = temp_dir.path().join("missing.txt");
         let output_str = output_path.to_string_lossy().to_string();
 
-        let result =
-            FileTransferService::download_with_retries("missing-hash", &output_str, &stored_files)
-                .await;
+        let (event_tx, mut event_rx) = mpsc::channel(16);
+        let metrics = Arc::new(Mutex::new(DownloadMetrics::default()));
+
+        let result = FileTransferService::download_with_retries(
+            "missing-hash",
+            &output_str,
+            &stored_files,
+            event_tx.clone(),
+            metrics.clone(),
+        )
+        .await;
 
         assert!(result.is_err(), "expected download to fail");
         assert_eq!(FileTransferService::last_attempts(), MAX_DOWNLOAD_ATTEMPTS);
+
+        let mut failure_seen = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if let FileTransferEvent::DownloadAttempt(snapshot) = event {
+                if matches!(snapshot.status, AttemptStatus::Failed) {
+                    failure_seen = true;
+                }
+            }
+        }
+        assert!(failure_seen, "expected a failed attempt event");
+
+        let snapshot = metrics.lock().await.snapshot();
+        assert_eq!(snapshot.total_success, 0);
+        assert_eq!(snapshot.total_failures, 1);
+        assert_eq!(
+            snapshot.total_retries,
+            MAX_DOWNLOAD_ATTEMPTS.saturating_sub(1) as u64
+        );
     }
 }

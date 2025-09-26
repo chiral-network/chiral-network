@@ -9,10 +9,20 @@
   import { files, downloadQueue } from '$lib/stores'
   import DownloadSearchSection from '$lib/components/download/DownloadSearchSection.svelte'
   import type { FileMetadata } from '$lib/dht'
+  import { onDestroy, onMount } from 'svelte'
   import { t } from 'svelte-i18n'
   import { get } from 'svelte/store'
   import { toHumanReadableSize } from '$lib/utils'
+  import { initDownloadTelemetry, disposeDownloadTelemetry } from '$lib/downloadTelemetry'
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
+
+  onMount(() => {
+    initDownloadTelemetry()
+  })
+
+  onDestroy(() => {
+    disposeDownloadTelemetry()
+  })
   
   let searchFilter = ''  // For searching existing downloads
   let maxConcurrentDownloads: string | number = 3
@@ -1001,4 +1011,3 @@
     {/if}
   </Card>
 </div>
-
