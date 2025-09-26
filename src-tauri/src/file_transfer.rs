@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::{mpsc, Mutex};
-use tracing::{debug, error, info};
+use tokio::time::{sleep, Duration};
+use tracing::{debug, error, info, info_span, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileRequest {
@@ -49,6 +51,19 @@ pub enum FileTransferEvent {
     },
 }
 
+const MAX_DOWNLOAD_ATTEMPTS: u32 = 3;
+const BASE_BACKOFF_MS: u64 = 250;
+const MAX_BACKOFF_MS: u64 = 1_500;
+
+#[cfg(test)]
+use std::sync::atomic::{AtomicU32, Ordering};
+
+#[cfg(test)]
+static LAST_DOWNLOAD_ATTEMPTS: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(test)]
+static FAIL_WRITE_BEFORE_SUCCESS: AtomicU32 = AtomicU32::new(0);
+
 pub struct FileTransferService {
     cmd_tx: mpsc::Sender<FileTransferCommand>,
     event_rx: Arc<Mutex<mpsc::Receiver<FileTransferEvent>>>,
@@ -56,6 +71,108 @@ pub struct FileTransferService {
 }
 
 impl FileTransferService {
+    fn backoff_delay(attempt: u32) -> Duration {
+        if attempt <= 1 {
+            return Duration::from_millis(0);
+        }
+
+        let shift = (attempt - 1).min(4);
+        let multiplier = 1u64 << shift;
+        let delay = BASE_BACKOFF_MS.saturating_mul(multiplier);
+        Duration::from_millis(delay.min(MAX_BACKOFF_MS))
+    }
+
+    async fn download_with_retries(
+        file_hash: &str,
+        output_path: &str,
+        stored_files: &Arc<Mutex<HashMap<String, (String, Vec<u8>)>>>,
+    ) -> Result<(), String> {
+        let mut attempt = 0u32;
+        let mut last_error: Option<String> = None;
+
+        while attempt < MAX_DOWNLOAD_ATTEMPTS {
+            attempt += 1;
+            let span = info_span!(
+                "download_attempt",
+                module = "file_transfer",
+                hash = %file_hash,
+                attempt,
+                max_attempts = MAX_DOWNLOAD_ATTEMPTS
+            );
+            let start = Instant::now();
+
+            if attempt > 1 {
+                let delay = Self::backoff_delay(attempt);
+                span.in_scope(|| debug!(?delay, "waiting before retry"));
+                if delay > Duration::from_millis(0) {
+                    sleep(delay).await;
+                }
+            }
+
+            let result = {
+                let _guard = span.enter();
+                Self::handle_download_file(file_hash, output_path, stored_files).await
+            };
+
+            match result {
+                Ok(()) => {
+                    let duration_ms = start.elapsed().as_millis() as u64;
+                    span.in_scope(|| info!(duration_ms = duration_ms, "download_succeeded"));
+                    #[cfg(test)]
+                    {
+                        LAST_DOWNLOAD_ATTEMPTS.store(attempt, Ordering::SeqCst);
+                    }
+                    return Ok(());
+                }
+                Err(err) => {
+                    let duration_ms = start.elapsed().as_millis() as u64;
+                    span.in_scope(|| warn!(duration_ms = duration_ms, %err, "download_failed"));
+                    last_error = Some(err.clone());
+                    if attempt >= MAX_DOWNLOAD_ATTEMPTS {
+                        #[cfg(test)]
+                        {
+                            LAST_DOWNLOAD_ATTEMPTS.store(attempt, Ordering::SeqCst);
+                        }
+                        return Err(err);
+                    }
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| "Download failed".to_string()))
+    }
+
+    async fn write_output(output_path: &str, data: &[u8]) -> Result<(), String> {
+        #[cfg(test)]
+        {
+            let remaining = FAIL_WRITE_BEFORE_SUCCESS.load(Ordering::SeqCst);
+            if remaining > 0 {
+                FAIL_WRITE_BEFORE_SUCCESS.fetch_sub(1, Ordering::SeqCst);
+                return Err("simulated write failure".to_string());
+            }
+        }
+
+        tokio::fs::write(output_path, data)
+            .await
+            .map_err(|e| format!("Failed to write file: {}", e))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reset_retry_counters() {
+        LAST_DOWNLOAD_ATTEMPTS.store(0, Ordering::SeqCst);
+        FAIL_WRITE_BEFORE_SUCCESS.store(0, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_fail_write_attempts(count: u32) {
+        FAIL_WRITE_BEFORE_SUCCESS.store(count, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn last_attempts() -> u32 {
+        LAST_DOWNLOAD_ATTEMPTS.load(Ordering::SeqCst)
+    }
+
     pub async fn new() -> Result<Self, String> {
         let (cmd_tx, cmd_rx) = mpsc::channel(100);
         let (event_tx, event_rx) = mpsc::channel(100);
@@ -109,7 +226,7 @@ impl FileTransferService {
                     file_hash,
                     output_path,
                 } => {
-                    match Self::handle_download_file(&file_hash, &output_path, &stored_files).await
+                    match Self::download_with_retries(&file_hash, &output_path, &stored_files).await
                     {
                         Ok(()) => {
                             let _ = event_tx
@@ -178,9 +295,7 @@ impl FileTransferService {
         };
 
         // Write the file to the output path
-        tokio::fs::write(output_path, file_data)
-            .await
-            .map_err(|e| format!("Failed to write file: {}", e))?;
+        Self::write_output(output_path, &file_data).await?;
 
         info!("File downloaded: {} -> {}", file_name, output_path);
         Ok(())
@@ -242,5 +357,61 @@ impl FileTransferService {
     pub async fn store_file_data(&self, file_hash: String, file_name: String, file_data: Vec<u8>) {
         let mut stored_files = self.stored_files.lock().await;
         stored_files.insert(file_hash, (file_name, file_data));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+    use tokio::sync::Mutex;
+
+    #[tokio::test]
+    async fn download_retries_then_succeeds() {
+        FileTransferService::reset_retry_counters();
+        FileTransferService::set_fail_write_attempts(2);
+
+        let stored_files = Arc::new(Mutex::new(HashMap::new()));
+        {
+            let mut guard = stored_files.lock().await;
+            guard.insert(
+                "test-hash".to_string(),
+                ("example.txt".to_string(), b"hello world".to_vec()),
+            );
+        }
+
+        let temp_dir = tempdir().expect("temp dir");
+        let output_path = temp_dir.path().join("downloaded.txt");
+        let output_str = output_path.to_string_lossy().to_string();
+
+        let result =
+            FileTransferService::download_with_retries("test-hash", &output_str, &stored_files)
+                .await;
+
+        assert!(result.is_ok(), "expected download to succeed: {result:?}");
+
+        let written = tokio::fs::read(&output_path).await.expect("file read");
+        assert_eq!(written, b"hello world");
+        assert_eq!(FileTransferService::last_attempts(), 3);
+    }
+
+    #[tokio::test]
+    async fn download_fails_after_max_attempts_for_missing_file() {
+        FileTransferService::reset_retry_counters();
+        FileTransferService::set_fail_write_attempts(0);
+
+        let stored_files = Arc::new(Mutex::new(HashMap::new()));
+
+        let temp_dir = tempdir().expect("temp dir");
+        let output_path = temp_dir.path().join("missing.txt");
+        let output_str = output_path.to_string_lossy().to_string();
+
+        let result =
+            FileTransferService::download_with_retries("missing-hash", &output_str, &stored_files)
+                .await;
+
+        assert!(result.is_err(), "expected download to fail");
+        assert_eq!(FileTransferService::last_attempts(), MAX_DOWNLOAD_ATTEMPTS);
     }
 }
