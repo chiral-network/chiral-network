@@ -391,7 +391,13 @@
     const nextFile = $downloadQueue[0]
     if (!nextFile) return
     downloadQueue.update(q => q.filter(f => f.id !== nextFile.id))
-    const downloadingFile = { ...nextFile, status: 'downloading' as const, progress: 0 }
+    const downloadingFile = { 
+      ...nextFile, 
+      status: 'downloading' as const, 
+      progress: 0,
+      speed: '0 B/s', // Ensure speed property exists
+      eta: 'N/A'      // Ensure eta property exists
+    }
     files.update(f => [...f, downloadingFile])
     simulateDownloadProgress(downloadingFile.id)
   }
@@ -400,7 +406,13 @@
     files.update(f => f.map(file => {
       if (file.id === fileId) {
         const newStatus = file.status === 'downloading' ? 'paused' as const : 'downloading' as const
-        return { ...file, status: newStatus }
+        // Ensure speed and eta are always present
+        return { 
+          ...file, 
+          status: newStatus,
+          speed: file.speed ?? '0 B/s',
+          eta: file.eta ?? 'N/A'
+        }
       }
       return file
     }))
@@ -421,7 +433,13 @@
     downloadQueue.update(queue => {
       const file = queue.find(f => f.id === fileId)
       if (file) {
-        files.update(f => [...f, { ...file, status: 'downloading', progress: 0 }])
+        files.update(f => [...f, { 
+          ...file, 
+          status: 'downloading', 
+          progress: 0,
+          speed: '0 B/s', // Ensure speed property exists
+          eta: 'N/A'      // Ensure eta property exists
+        }])
         simulateDownloadProgress(fileId)
       }
       return queue.filter(f => f.id !== fileId)
@@ -477,13 +495,29 @@
       files.update(f => f.map(file => 
         file.id === fileId ? { ...file, progress: 10 } : file
       ));
+      let lastProgress = 10;
+      let lastTimestamp = Date.now();
       
       // Simulate progress while downloading - complete when progress reaches 100%
       const progressInterval = setInterval(() => {
         files.update(f => f.map(file => {
           if (file.id === fileId && file.status === 'downloading') {
             const currentProgress = file.progress || 10;
-            const newProgress = Math.min(100, currentProgress + Math.random() * 8 + 2); // 2-10% increment
+            const newProgress = Math.min(100, currentProgress + Math.random() * 5 + 1); // 1-6% increment
+
+            // Calculate speed and ETA
+            const now = Date.now();
+            const timeDiff = (now - lastTimestamp) / 1000; // in seconds
+            const progressDiff = newProgress - lastProgress;
+            const bytesDownloaded = (progressDiff / 100) * file.size;
+            const speed = bytesDownloaded / timeDiff; // bytes per second
+            const speedStr = `${toHumanReadableSize(speed)}/s`;
+
+            const remainingBytes = file.size * (100 - newProgress) / 100;
+            const etaSeconds = speed > 0 ? Math.round(remainingBytes / speed) : Infinity;
+            const etaStr = etaSeconds === Infinity ? '∞' : `${Math.floor(etaSeconds / 60)}m ${etaSeconds % 60}s`;
+            lastProgress = newProgress;
+            lastTimestamp = now;
 
             // Check if download just completed
             if (newProgress >= 100) {
@@ -498,10 +532,10 @@
                   clearDownload(fileId);
                 }, 5000); // 5-second delay before removing
               }
-              return { ...file, progress: 100, status: 'completed', downloadPath: outputPath };
+              return { ...file, progress: 100, status: 'completed', downloadPath: outputPath, speed: '0 B/s', eta: 'Done' };
             }
 
-            return { ...file, progress: newProgress };
+            return { ...file, progress: newProgress, speed: speedStr, eta: etaStr };
           }
           return file;
         }));
@@ -512,7 +546,7 @@
           clearInterval(progressInterval);
           activeSimulations.delete(fileId);
         }
-      }, 500);
+      }, 1000); // Update every second for more stable speed/ETA
       
     } catch (error) {
       // Download failed
@@ -568,16 +602,16 @@
       return;
     }
 
-    // Remove the old failed/canceled entry from the main files list
     files.update(f => f.filter(file => file.id !== fileId));
 
-    // Create a new file object and add it to the download queue
     const newFile = {
       ...fileToRetry,
-      id: `download-${Date.now()}`, // Generate a new unique ID
+      id: `download-${Date.now()}`,
       status: 'queued' as const,
-      progress: 0, // Reset progress
-      downloadPath: undefined, // Clear previous download path
+      progress: 0,
+      downloadPath: undefined,
+      speed: '0 B/s', // Ensure speed property exists
+      eta: 'N/A'      // Ensure eta property exists
     };
     downloadQueue.update(q => [...q, newFile]);
     showNotification(`Retrying download for "${newFile.name}"`, 'info');
@@ -866,7 +900,10 @@
             {#if file.status === 'downloading' || file.status === 'paused'}
               <div class="pb-2 ml-7">
                 <div class="flex items-center justify-between text-sm mb-1">
-                  <span class="text-foreground">{$t('download.file.progress')}</span>
+                  <div class="flex items-center gap-4 text-muted-foreground">
+                    <span>Speed: {file.speed || '0 B/s'}</span>
+                    <span>ETA: {file.eta || 'N/A'}</span>
+                  </div>
                   <span class="text-foreground">{(file.progress || 0).toFixed(2)}%</span>
                 </div>
                 <Progress
@@ -964,3 +1001,4 @@
     {/if}
   </Card>
 </div>
+
