@@ -109,8 +109,7 @@
 
   $: displayedTemperature = temperatureUnit === 'F' ? toFahrenheit(temperature).toFixed(1) : temperature.toFixed(1);
 
-  $: expectedTotalRewards = $miningState.blocksFound * 2;
-  $: $miningState.totalRewards = expectedTotalRewards;
+
   
 
   function parseHashRate(rateStr: string): number {
@@ -314,10 +313,15 @@
           if (hashRateFromLogs > 0) {
             // Use actual hash rate from logs
             $miningState.hashRate = formatHashRate(hashRateFromLogs)
-            if (blocksFound > $miningState.blocksFound) {
-              $miningState.blocksFound = blocksFound*5; 
-              //Visualization Now Handled By Backend
-            }
+            
+            console.log('From mining stats - blocks:', blocksFound);
+            console.log('Current blocksFound before:', $miningState.blocksFound);
+            
+            $miningState.blocksFound = blocksFound;
+            
+            console.log('blocksFound after:', $miningState.blocksFound);
+          
+            
           } else if ($miningState.activeThreads > 0) {
             // Fall back to simulation if no log data yet
             const elapsed = (Date.now() - sessionStartTime) / 1000 // seconds
@@ -410,11 +414,16 @@
       }  
               
       // Update blocks mined from blockchain query
+      
       if (results[4] !== undefined) {
         const blocksMined = results[4] as number;
-        if (blocksMined > $miningState.blocksFound) {
-          $miningState.blocksFound = blocksMined;
-        }
+        
+        console.log('Backend returned blocks:', blocksMined);
+        console.log('Current blocksFound before update:', $miningState.blocksFound);
+        
+        $miningState.blocksFound = blocksMined;
+        
+        console.log('blocksFound after update:', $miningState.blocksFound);
       }
     }
   } catch (e) {
