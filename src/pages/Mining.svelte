@@ -611,7 +611,7 @@ function pushRecentBlock(b: {
           difficulty: b.difficulty ? parseInt(b.difficulty, 16) : undefined,
           timestamp: new Date((b.timestamp || 0) * 1000),
           number: b.number,
-          reward: 5
+          reward: 2
         });
       }
       // Hard de-duplication by hash as a safety net
