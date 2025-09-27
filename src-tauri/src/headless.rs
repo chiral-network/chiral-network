@@ -1,9 +1,9 @@
 // Headless mode for running as a bootstrap node on servers
-use crate::dht::{DhtService, FileMetadata};
+use crate::dht::{DhtMetricsSnapshot, DhtService, FileMetadata};
 use crate::ethereum::GethProcess;
 use crate::file_transfer::FileTransferService;
 use clap::Parser;
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 use tokio::signal;
 
 use tracing::{error, info};
@@ -52,6 +52,22 @@ pub struct CliArgs {
     #[arg(long)]
     pub is_bootstrap: bool,
 
+    /// Disable AutoNAT reachability probes
+    #[arg(long)]
+    pub disable_autonat: bool,
+
+    /// Interval in seconds between AutoNAT probes
+    #[arg(long, default_value = "30")]
+    pub autonat_probe_interval: u64,
+
+    /// Additional AutoNAT servers to dial (multiaddr form)
+    #[arg(long)]
+    pub autonat_server: Vec<String>,
+
+    /// Print reachability snapshot at startup (and periodically)
+    #[arg(long)]
+    pub show_reachability: bool,
+
     // SOCKS5 Proxy address (e.g., 127.0.0.1:9050 for Tor or a private VPN SOCKS endpoint)
     #[arg(long)]
     pub socks5_proxy: Option<String>,
@@ -77,6 +93,25 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         info!("Using default bootstrap nodes: {:?}", bootstrap_nodes);
     }
 
+    let enable_autonat = !args.disable_autonat;
+    let probe_interval = if enable_autonat {
+        Some(Duration::from_secs(args.autonat_probe_interval))
+    } else {
+        None
+    };
+
+    if enable_autonat {
+        info!(
+            "AutoNAT probes enabled (interval: {}s)",
+            args.autonat_probe_interval
+        );
+        if !args.autonat_server.is_empty() {
+            info!("AutoNAT servers: {:?}", args.autonat_server);
+        }
+    } else {
+        info!("AutoNAT probes disabled via CLI");
+    }
+
     // Optionally start local file-transfer service for metrics insight
     let file_transfer_service = if args.show_downloads {
         Some(Arc::new(FileTransferService::new().await.map_err(|e| {
@@ -85,13 +120,15 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
     } else {
         None
     };
-
     // Start DHT node
     let dht_service = DhtService::new(
         args.dht_port,
         bootstrap_nodes.clone(),
         args.secret,
         args.is_bootstrap,
+        enable_autonat,
+        probe_interval,
+        args.autonat_server.clone(),
         args.socks5_proxy,
     )
     .await?;
@@ -175,11 +212,33 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
     info!("Bootstrap node is running. Press Ctrl+C to stop.");
     let dht_arc = Arc::new(dht_service);
 
+    if args.show_reachability {
+        let snapshot = dht_arc.metrics_snapshot().await;
+        log_reachability_snapshot(&snapshot);
+
+        let dht_for_logs = dht_arc.clone();
+        tokio::spawn(async move {
+            loop {
+                if Arc::strong_count(&dht_for_logs) <= 1 {
+                    break;
+                }
+
+                tokio::time::sleep(Duration::from_secs(60)).await;
+
+                let snapshot = dht_for_logs.metrics_snapshot().await;
+                log_reachability_snapshot(&snapshot);
+
+                if !snapshot.autonat_enabled {
+                    break;
+                }
+            }
+        });
+    }
+
     // Spawn the event pump
-    let dht_clone_for_pump = dht_arc.clone();
+    let dht_clone_for_pump = Arc::clone(&dht_arc);
 
     tokio::spawn(async move {
-        use std::time::Duration;
         loop {
             // If the DHT service has been shut down, the weak reference will be None
             let events = dht_clone_for_pump.drain_events(100).await;
@@ -201,6 +260,23 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
 
     info!("Shutting down...");
     Ok(())
+}
+
+fn log_reachability_snapshot(snapshot: &DhtMetricsSnapshot) {
+    info!(
+        "📡 Reachability: {:?} (confidence {:?})",
+        snapshot.reachability, snapshot.reachability_confidence
+    );
+    if let Some(ts) = snapshot.last_probe_at {
+        info!("   Last probe epoch: {}", ts);
+    }
+    if let Some(err) = snapshot.last_reachability_error.as_ref() {
+        info!("   Last error: {}", err);
+    }
+    if !snapshot.observed_addrs.is_empty() {
+        info!("   Observed addresses: {:?}", snapshot.observed_addrs);
+    }
+    info!("   AutoNAT enabled: {}", snapshot.autonat_enabled);
 }
 
 fn get_local_ip() -> Option<String> {
