@@ -57,6 +57,7 @@ struct AppState {
     dht: Mutex<Option<Arc<DhtService>>>,
     file_transfer: Mutex<Option<Arc<FileTransferService>>>,
     proxies: Arc<Mutex<Vec<ProxyNode>>>,
+    socks5_proxy_cli: Mutex<Option<String>>,
 }
 
 #[tauri::command]
@@ -346,7 +347,12 @@ async fn start_dht_node(
         }
     }
 
-    let dht_service = DhtService::new(port, bootstrap_nodes, None, false)
+    // Get the proxy from the command line, if it was provided at launch
+    let cli_proxy = state.socks5_proxy_cli.lock().await.clone();
+    // Prioritize the command-line argument. Fall back to the one from the UI.
+    let final_proxy_address = cli_proxy.or(proxy_address.clone());
+
+    let dht_service = DhtService::new(port, bootstrap_nodes, None, false, final_proxy_address,)
         .await
         .map_err(|e| format!("Failed to start DHT: {}", e))?;
 
@@ -1586,6 +1592,7 @@ fn main() {
             dht: Mutex::new(None),
             file_transfer: Mutex::new(None),
             proxies: Arc::new(Mutex::new(Vec::new())),
+            socks5_proxy_cli: Mutex::new(args.socks5_proxy), 
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
