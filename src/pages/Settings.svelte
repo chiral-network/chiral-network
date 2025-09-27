@@ -26,10 +26,11 @@
   import { showToast } from "$lib/toast";
   import { invoke } from "@tauri-apps/api/core";
   import Expandable from "$lib/components/ui/Expandable.svelte";
+  import { settings, type AppSettings } from "$lib/stores";
 
   let showResetConfirmModal = false;
   // Settings state
-  let defaultSettings = {
+  let defaultSettings: AppSettings = {
     // Storage settings
     storagePath: "~/ChiralNetwork/Storage",
     maxStorageSize: 100, // GB
@@ -47,6 +48,7 @@
 
     // Privacy settings
     enableProxy: true,
+    proxyAddress: "127.0.0.1:9050", // Default Tor SOCKS address
     enableEncryption: true,
     anonymousMode: false,
     shareAnalytics: true,
@@ -65,8 +67,8 @@
     logLevel: "info",
     autoUpdate: true,
   };
-  let settings = { ...defaultSettings };
-  let savedSettings = { ...defaultSettings };
+  let localSettings: AppSettings = get(settings); 
+  let savedSettings: AppSettings = get(settings);
   let hasChanges = false;
   let fileInputEl: HTMLInputElement | null = null;
   let selectedLanguage: string | undefined = undefined;
@@ -93,24 +95,29 @@
   ];
 
   // Check for changes
-  $: hasChanges = JSON.stringify(settings) !== JSON.stringify(savedSettings);
+  $: hasChanges = JSON.stringify(localSettings) !== JSON.stringify(savedSettings);
 
   function saveSettings() {
     if (!isValid || maxStorageError) {
       return;
     }
 
+    // Save local changes to the Svelte store
+    settings.set(localSettings);
+
     // Save to local storage
-    localStorage.setItem("chiralSettings", JSON.stringify(settings));
-    savedSettings = { ...settings };
-    userLocation.set(settings.userLocation);
+    localStorage.setItem("chiralSettings", JSON.stringify(localSettings));
+    
+    savedSettings = JSON.parse(JSON.stringify(localSettings));
+    userLocation.set(localSettings.userLocation);
     importExportFeedback = null;
     showToast("Settings Updated!");
   }
 
   function handleConfirmReset() {
-    settings = { ...defaultSettings };
-    saveSettings();
+    localSettings = { ...defaultSettings }; // Reset local changes
+    settings.set(defaultSettings); // Reset the store
+    saveSettings(); // Save the reset state
     showResetConfirmModal = false;
   }
 
@@ -127,14 +134,14 @@
       const result = await open({
         directory: true,
         multiple: false,
-        defaultPath: settings.storagePath.startsWith("~/")
-          ? settings.storagePath.replace("~", home)
-          : settings.storagePath,
+        defaultPath: localSettings.storagePath.startsWith("~/")
+          ? localSettings.storagePath.replace("~", home)
+          : localSettings.storagePath,
         title: tr("storage.selectLocationTitle"),
       });
 
       if (typeof result === "string") {
-        settings.storagePath = result.replace(home, "~");
+        localSettings.storagePath = result.replace(home, "~");
       }
     } catch {
       // Fallback for browser environment
@@ -142,7 +149,7 @@
         // Use File System Access API (Chrome/Edge)
         try {
           const directoryHandle = await (window as any).showDirectoryPicker();
-          settings.storagePath = directoryHandle.name;
+          localSettings.storagePath = directoryHandle.name;
         } catch (err: any) {
           if (err.name !== "AbortError") {
             console.error("Directory picker error:", err);
@@ -152,10 +159,10 @@
         // Fallback: let user type path manually
         const newPath = prompt(
           `${tr("storage.enterPathPrompt")} ( ${tr("storage.browserNoPicker")} )`,
-          settings.storagePath
+          localSettings.storagePath
         );
         if (newPath) {
-          settings.storagePath = newPath;
+          localSettings.storagePath = newPath;
         }
       }
     }
@@ -176,7 +183,7 @@
   }
 
   function exportSettings() {
-    const blob = new Blob([JSON.stringify(settings, null, 2)], {
+    const blob = new Blob([JSON.stringify(localSettings, null, 2)], {
       type: "application/json",
     });
     const url = URL.createObjectURL(blob);
@@ -201,7 +208,7 @@
     reader.onload = (e) => {
       try {
         const imported = JSON.parse(e.target?.result as string);
-        settings = { ...settings, ...imported };
+        localSettings = { ...localSettings, ...imported };
         saveSettings(); // This saves, updates savedSettings, and clears any old feedback.
         // Now we set the new feedback for the import action.
         importExportFeedback = {
@@ -231,8 +238,12 @@
     const stored = localStorage.getItem("chiralSettings");
     if (stored) {
       try {
-        settings = JSON.parse(stored);
-        savedSettings = { ...settings };
+        const loadedSettings: AppSettings = JSON.parse(stored);
+        // Set the store, which ensures it is available globally
+        settings.set({ ...defaultSettings, ...loadedSettings }); 
+        // Update local state from the store after loading
+        localSettings = get(settings); 
+        savedSettings = get(settings); 
       } catch (e) {
         console.error("Failed to load settings:", e);
       }
@@ -277,21 +288,19 @@
     return `${label} must be between ${min} and ${max}.`;
   }
 
-  function validate(settings: any) {
+  function validate(localSettings: any) {
     const next: Record<string, string | null> = {};
     for (const [key, cfg] of Object.entries(limits)) {
-      const val = Number((settings as any)[key]);
-      if (val < cfg.min || val > cfg.max) {
-        next[key] = rangeMessage(cfg.label, cfg.min, cfg.max);
-        continue;
-      }
-      next[key] = null;
+        const val = Number((localSettings as any)[key]);
+        if (val < cfg.min || val > cfg.max) {
+            next[key] = rangeMessage(cfg.label, cfg.min, cfg.max);
+        }
     }
     errors = next;
-  }
+}
 
   // Revalidate whenever settings change
-  $: validate(settings);
+  $: validate(localSettings);
 
   // Valid when no error messages remain
   let isValid = true;
@@ -305,7 +314,7 @@
   });
 
   $: {
-    if (freeSpaceGB !== null && settings.maxStorageSize > freeSpaceGB) {
+    if (freeSpaceGB !== null && localSettings.maxStorageSize > freeSpaceGB) {
       maxStorageError = `Insufficient disk space. Only ${freeSpaceGB} GB available.`;
     } else {
       maxStorageError = null;
@@ -409,7 +418,7 @@ function sectionMatches(section: string, query: string) {
           <div class="flex gap-2 mt-2">
             <Input
               id="storage-path"
-              bind:value={settings.storagePath}
+              bind:value={localSettings.storagePath}
               placeholder="~/ChiralNetwork/Storage"
               class="flex-1"
             />
@@ -436,7 +445,7 @@ function sectionMatches(section: string, query: string) {
                 <Input
                   id="max-storage"
                   type="number"
-                  bind:value={settings.maxStorageSize}
+                  bind:value={localSettings.maxStorageSize}
                   min="10"
                   max={freeSpaceGB ?? 10000}
                   class={`mt-2 ${maxStorageError ? 'border-red-500 focus:border-red-500 ring-red-500' : ''}`}
@@ -454,10 +463,10 @@ function sectionMatches(section: string, query: string) {
             <Input
               id="cleanup-threshold"
               type="number"
-              bind:value={settings.cleanupThreshold}
+              bind:value={localSettings.cleanupThreshold}
               min="50"
               max="100"
-              disabled={!settings.autoCleanup}
+              disabled={!localSettings.autoCleanup}
               class="mt-2"
             />
             {#if errors.cleanupThreshold}
@@ -470,7 +479,7 @@ function sectionMatches(section: string, query: string) {
           <input
             type="checkbox"
             id="auto-cleanup"
-            bind:checked={settings.autoCleanup}
+            bind:checked={localSettings.autoCleanup}
           />
           <Label for="auto-cleanup" class="cursor-pointer">
             {$t("storage.enableCleanup")}
@@ -494,7 +503,7 @@ function sectionMatches(section: string, query: string) {
             <Input
               id="max-connections"
               type="number"
-              bind:value={settings.maxConnections}
+              bind:value={localSettings.maxConnections}
               min="10"
               max="200"
               class="mt-2"
@@ -509,7 +518,7 @@ function sectionMatches(section: string, query: string) {
             <Input
               id="port"
               type="number"
-              bind:value={settings.port}
+              bind:value={localSettings.port}
               min="1024"
               max="65535"
               class="mt-2"
@@ -526,7 +535,7 @@ function sectionMatches(section: string, query: string) {
             <Input
               id="upload-bandwidth"
               type="number"
-              bind:value={settings.uploadBandwidth}
+              bind:value={localSettings.uploadBandwidth}
               min="0"
               class="mt-2"
             />
@@ -540,7 +549,7 @@ function sectionMatches(section: string, query: string) {
             <Input
               id="download-bandwidth"
               type="number"
-              bind:value={settings.downloadBandwidth}
+              bind:value={localSettings.downloadBandwidth}
               min="0"
               class="mt-2"
             />
@@ -556,7 +565,7 @@ function sectionMatches(section: string, query: string) {
           <DropDown
             id="user-location"
             options={locations}
-            bind:value={settings.userLocation}
+            bind:value={localSettings.userLocation}
           />
           <p class="text-xs text-muted-foreground mt-1">
             {$t("network.locationHint")}
@@ -568,7 +577,7 @@ function sectionMatches(section: string, query: string) {
             <input
               type="checkbox"
               id="enable-upnp"
-              bind:checked={settings.enableUPnP}
+              bind:checked={localSettings.enableUPnP}
             />
             <Label for="enable-upnp" class="cursor-pointer">
               {$t("network.enableUpnp")}
@@ -579,7 +588,7 @@ function sectionMatches(section: string, query: string) {
             <input
               type="checkbox"
               id="enable-nat"
-              bind:checked={settings.enableNAT}
+              bind:checked={localSettings.enableNAT}
             />
             <Label for="enable-nat" class="cursor-pointer">
               {$t("network.enableNat")}
@@ -590,7 +599,7 @@ function sectionMatches(section: string, query: string) {
             <input
               type="checkbox"
               id="enable-dht"
-              bind:checked={settings.enableDHT}
+              bind:checked={localSettings.enableDHT}
             />
             <Label for="enable-dht" class="cursor-pointer">
               {$t("network.enableDht")}
@@ -634,18 +643,31 @@ function sectionMatches(section: string, query: string) {
           <input
             type="checkbox"
             id="enable-proxy"
-            bind:checked={settings.enableProxy}
+            bind:checked={localSettings.enableProxy}
           />
           <Label for="enable-proxy" class="cursor-pointer">
             {$t("privacy.enableProxy")}
           </Label>
         </div>
 
+        {#if localSettings.enableProxy}
+          <div>
+            <Label for="proxy-address">{$t("privacy.proxyAddress")}</Label>
+            <Input
+              id="proxy-address"
+              bind:value={localSettings.proxyAddress}
+              placeholder="127.0.0.1:9050 (SOCKS5)"
+              class="mt-1"
+            />
+            <p class="text-xs text-muted-foreground mt-1">{$t("privacy.proxyHint")}</p>
+          </div>
+        {/if}
+
         <div class="flex items-center gap-2">
           <input
             type="checkbox"
             id="enable-encryption"
-            bind:checked={settings.enableEncryption}
+            bind:checked={localSettings.enableEncryption}
           />
           <Label for="enable-encryption" class="cursor-pointer">
             {$t("privacy.enableEncryption")}
@@ -656,7 +678,7 @@ function sectionMatches(section: string, query: string) {
           <input
             type="checkbox"
             id="anonymous-mode"
-            bind:checked={settings.anonymousMode}
+            bind:checked={localSettings.anonymousMode}
           />
           <Label for="anonymous-mode" class="cursor-pointer">
             {$t("privacy.anonymousMode")}
@@ -667,7 +689,7 @@ function sectionMatches(section: string, query: string) {
           <input
             type="checkbox"
             id="share-analytics"
-            bind:checked={settings.shareAnalytics}
+            bind:checked={localSettings.shareAnalytics}
           />
           <Label for="share-analytics" class="cursor-pointer">
             {$t("privacy.shareAnalytics")}
@@ -689,20 +711,20 @@ function sectionMatches(section: string, query: string) {
           <input
             type="checkbox"
             id="enable-notifications"
-            bind:checked={settings.enableNotifications}
+            bind:checked={localSettings.enableNotifications}
           />
           <Label for="enable-notifications" class="cursor-pointer">
             {$t("notifications.enable")}
           </Label>
         </div>
 
-        {#if settings.enableNotifications}
+        {#if localSettings.enableNotifications}
           <div class="ml-6 space-y-2">
             <div class="flex items-center gap-2">
               <input
                 type="checkbox"
                 id="notify-complete"
-                bind:checked={settings.notifyOnComplete}
+                bind:checked={localSettings.notifyOnComplete}
               />
               <Label for="notify-complete" class="cursor-pointer">
                 {$t("notifications.notifyComplete")}
@@ -713,7 +735,7 @@ function sectionMatches(section: string, query: string) {
               <input
                 type="checkbox"
                 id="notify-error"
-                bind:checked={settings.notifyOnError}
+                bind:checked={localSettings.notifyOnError}
               />
               <Label for="notify-error" class="cursor-pointer">
                 {$t("notifications.notifyError")}
@@ -724,7 +746,7 @@ function sectionMatches(section: string, query: string) {
               <input
                 type="checkbox"
                 id="sound-alerts"
-                bind:checked={settings.soundAlerts}
+                bind:checked={localSettings.soundAlerts}
               />
               <Label for="sound-alerts" class="cursor-pointer">
                 {$t("notifications.soundAlerts")}
@@ -750,7 +772,7 @@ function sectionMatches(section: string, query: string) {
             <Input
               id="chunk-size"
               type="number"
-              bind:value={settings.chunkSize}
+              bind:value={localSettings.chunkSize}
               min="64"
               max="1024"
               class="mt-2"
@@ -765,7 +787,7 @@ function sectionMatches(section: string, query: string) {
             <Input
               id="cache-size"
               type="number"
-              bind:value={settings.cacheSize}
+              bind:value={localSettings.cacheSize}
               min="256"
               max="8192"
               class="mt-2"
@@ -786,7 +808,7 @@ function sectionMatches(section: string, query: string) {
               { value: "info", label: $t("advanced.logInfo") },
               { value: "debug", label: $t("advanced.logDebug") },
             ]}
-            bind:value={settings.logLevel}
+            bind:value={localSettings.logLevel}
           />
         </div>
 
@@ -794,7 +816,7 @@ function sectionMatches(section: string, query: string) {
           <input
             type="checkbox"
             id="auto-update"
-            bind:checked={settings.autoUpdate}
+            bind:checked={localSettings.autoUpdate}
           />
           <Label for="auto-update" class="cursor-pointer">
             {$t("advanced.autoUpdate")}
@@ -865,7 +887,7 @@ function sectionMatches(section: string, query: string) {
         variant="outline"
         size="xs"
         disabled={!hasChanges}
-        on:click={() => (settings = { ...savedSettings })}
+        on:click={() => (localSettings = { ...savedSettings })}
         class={`transition-colors duration-200 ${!hasChanges ? "cursor-not-allowed opacity-50" : ""}`}
       >
         {$t("actions.cancel")}

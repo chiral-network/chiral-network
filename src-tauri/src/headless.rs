@@ -52,6 +52,10 @@ pub struct CliArgs {
     #[arg(long)]
     pub is_bootstrap: bool,
 
+    // SOCKS5 Proxy address (e.g., 127.0.0.1:9050 for Tor or a private VPN SOCKS endpoint)
+    #[arg(long)]
+    pub socks5_proxy: Option<String>,
+
     /// Print local download metrics snapshot at startup
     #[arg(long)]
     pub show_downloads: bool,
@@ -88,6 +92,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         bootstrap_nodes.clone(),
         args.secret,
         args.is_bootstrap,
+        args.socks5_proxy,
     )
     .await?;
     let peer_id = dht_service.get_peer_id().await;

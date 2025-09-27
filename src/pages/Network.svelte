@@ -20,6 +20,7 @@
   import { t } from 'svelte-i18n';
   import { showToast } from '$lib/toast';
   import DropDown from '$lib/components/ui/dropDown.svelte'
+  import { settings} from '$lib/stores'; 
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -63,6 +64,9 @@
   let chainId = 98765
   let gethStatusCardRef: { refresh?: () => Promise<void> } | null = null
   
+  // Local settings state
+  // let localSettings = get(settings); // Initialize local settings
+
   // DHT variables
   let dhtStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
   let dhtPeerId: string | null = null
@@ -167,9 +171,15 @@
         await new Promise(resolve => setTimeout(resolve, 500))
         // DHT not running, start it
         try {
+          
+          const proxyAddress = $settings.enableProxy 
+            ? $settings.proxyAddress 
+            : undefined; // Get proxy address from local settings
+
           const peerId = await dhtService.start({
             port: dhtPort,
-            bootstrapNodes: DEFAULT_BOOTSTRAP_NODES
+            bootstrapNodes: DEFAULT_BOOTSTRAP_NODES,
+            proxyAddress: proxyAddress, 
           })
           dhtPeerId = peerId
           // Also ensure the service knows its own peer ID
