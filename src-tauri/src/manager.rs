@@ -1,21 +1,78 @@
 use sha2::{Sha256, Digest};
 use rs_merkle::{MerkleTree, Hasher};
 use aes_gcm::{Aes256Gcm, Key, Nonce, KeyInit};
-use aes_gcm::aead::{Aead, OsRng};
+use aes_gcm::aead::{Aead, AeadCore, OsRng};
 use rand::RngCore;
 use std::fs::{File, self};
 use std::io::{Read, Error, Write};
 use std::path::{Path, PathBuf};
+use reed_solomon_erasure::galois_8::ReedSolomon;
 use x25519_dalek::{EphemeralSecret, PublicKey};
+use rs_merkle::MerkleProof;
+use std::sync::Mutex;
 
 // Import the new encryption functions and the bundle struct
-use crate::encryption::{decrypt_aes_key, encrypt_aes_key, EncryptedAesKeyBundle};
+use crate::crypto::{decrypt_aes_key, encrypt_aes_key, EncryptedAesKeyBundle};
+
+use std::collections::HashMap;
+use lazy_static::lazy_static;
+
+// Simple thread-safe LRU cache implementation
+const L1_CACHE_CAPACITY: usize = 128;
+
+struct LruCache {
+    map: HashMap<String, Vec<u8>>,
+    order: Vec<String>,
+    capacity: usize,
+}
+
+impl LruCache {
+    fn new(capacity: usize) -> Self {
+        LruCache {
+            map: HashMap::new(),
+            order: Vec::new(),
+            capacity,
+        }
+    }
+
+    fn get(&mut self, key: &str) -> Option<Vec<u8>> {
+        if let Some(value) = self.map.get(key) {
+            // Move key to the end (most recently used)
+            self.order.retain(|k| k != key);
+            self.order.push(key.to_string());
+            Some(value.clone())
+        } else {
+            None
+        }
+    }
+
+    fn put(&mut self, key: String, value: Vec<u8>) {
+        if self.map.contains_key(&key) {
+            self.order.retain(|k| k != &key);
+        }
+        self.order.push(key.clone());
+        self.map.insert(key.clone(), value);
+
+        // Evict least recently used if over capacity
+        if self.order.len() > self.capacity {
+            if let Some(lru) = self.order.first() {
+                self.map.remove(lru);
+            }
+            self.order.remove(0);
+        }
+    }
+}
+
+lazy_static! {
+    static ref L1_CACHE: Mutex<LruCache> = Mutex::new(LruCache::new(L1_CACHE_CAPACITY));
+}
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct ChunkInfo {
     pub index: u32,
     pub hash: String,
     pub size: usize,
+    pub shards: Vec<String>, // Hashes of the Reed-Solomon shards
     pub encrypted_size: usize,
 }
 
@@ -64,6 +121,10 @@ impl ChunkManager {
         file_path: &Path,
         recipient_public_key: &PublicKey,
     ) -> Result<FileManifest, String> {
+        const DATA_SHARDS: usize = 10;
+        const PARITY_SHARDS: usize = 4;
+        let r = ReedSolomon::new(DATA_SHARDS, PARITY_SHARDS).unwrap();
+
         let mut key_bytes = [0u8; 32];
         OsRng.fill_bytes(&mut key_bytes);
         let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
@@ -82,18 +143,42 @@ impl ChunkManager {
             let chunk_hash_bytes = Sha256Hasher::hash(chunk_data);
             chunk_hashes.push(chunk_hash_bytes);
             let chunk_hash_hex = hex::encode(chunk_hash_bytes);
-            
-            // The nonce is now prepended to the ciphertext by `encrypt_chunk`
-            let encrypted_data_with_nonce = self.encrypt_chunk(chunk_data, &key)?;
+
+            // Pad the chunk data to be a multiple of DATA_SHARDS
+            let mut padded_chunk_data = chunk_data.to_vec();
+            let remainder = padded_chunk_data.len() % DATA_SHARDS;
+            if remainder != 0 {
+                padded_chunk_data.resize(padded_chunk_data.len() + DATA_SHARDS - remainder, 0);
+            }
+
+            // Create shards
+            let mut shards: Vec<Vec<u8>> = padded_chunk_data
+                .chunks(padded_chunk_data.len() / DATA_SHARDS)
+                .map(|c| c.to_vec())
+                .collect();
+
+            // Encode the shards
+            r.encode(&mut shards).unwrap();
+
+            let mut shard_hashes = Vec::new();
+            let mut total_encrypted_size = 0;
+
+            for shard in shards {
+                let encrypted_shard_with_nonce = self.encrypt_chunk(&shard, &key)?;
+                let shard_hash = self.hash_chunk(&encrypted_shard_with_nonce);
+                self.save_chunk(&shard_hash, &encrypted_shard_with_nonce).map_err(|e| e.to_string())?;
+                shard_hashes.push(shard_hash);
+                total_encrypted_size += encrypted_shard_with_nonce.len();
+            }
 
             chunks_info.push(ChunkInfo {
                 index,
                 hash: chunk_hash_hex.clone(),
                 size: bytes_read,
-                encrypted_size: encrypted_data_with_nonce.len(),
+                shards: shard_hashes,
+                encrypted_size: total_encrypted_size,
             });
 
-            self.save_chunk(&chunk_hash_hex, &encrypted_data_with_nonce).map_err(|e| e.to_string())?;
             index += 1;
         }
 
@@ -145,7 +230,7 @@ impl ChunkManager {
         {
             let mut cache = L1_CACHE.lock().unwrap();
             if let Some(data) = cache.get(hash) {
-                return Ok(data);
+                return Ok(data.clone());
             }
         }
         // Fallback to disk
@@ -179,6 +264,10 @@ impl ChunkManager {
         encrypted_key_bundle: &EncryptedAesKeyBundle,
         recipient_secret_key: &EphemeralSecret,
     ) -> Result<(), String> {
+        const DATA_SHARDS: usize = 10;
+        const PARITY_SHARDS: usize = 4;
+        let r = ReedSolomon::new(DATA_SHARDS, PARITY_SHARDS).unwrap();
+
         let key_bytes = decrypt_aes_key(encrypted_key_bundle, recipient_secret_key)?;
         let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
 
@@ -186,11 +275,33 @@ impl ChunkManager {
 
         // Assuming chunks are ordered by index. If not, they should be sorted first.
         for chunk_info in chunks {
-            let encrypted_data_with_nonce =
-                self.read_chunk(&chunk_info.hash)
-                    .map_err(|e| format!("Failed to read chunk {}: {}", chunk_info.index, e))?;
+            let mut shards: Vec<Option<Vec<u8>>> = Vec::with_capacity(DATA_SHARDS + PARITY_SHARDS);
+            for shard_hash in &chunk_info.shards {
+                if let Ok(encrypted_shard_with_nonce) = self.read_chunk(shard_hash) {
+                    if let Ok(decrypted_shard) = self.decrypt_chunk(&encrypted_shard_with_nonce, &key) {
+                        shards.push(Some(decrypted_shard));
+                    } else {
+                        shards.push(None);
+                    }
+                } else {
+                    shards.push(None);
+                }
+            }
 
-            let decrypted_data = self.decrypt_chunk(&encrypted_data_with_nonce, &key)?;
+            // Reconstruct the original data
+            r.reconstruct(&mut shards).map_err(|e| e.to_string())?;
+
+            let mut decrypted_data = Vec::new();
+            for shard in shards.iter().take(DATA_SHARDS) {
+                if let Some(shard_data) = shard {
+                    decrypted_data.extend_from_slice(shard_data);
+                } else {
+                    return Err(format!("Failed to reconstruct chunk {}", chunk_info.index));
+                }
+            }
+
+            // Trim padding
+            decrypted_data.truncate(chunk_info.size);
 
             // Verify that the decrypted data matches the original hash
             let calculated_hash = self.hash_chunk(&decrypted_data);
@@ -250,7 +361,7 @@ impl ChunkManager {
         let merkle_tree = MerkleTree::<Sha256Hasher>::from_leaves(&all_chunk_hashes);
         let proof = merkle_tree.proof(&[chunk_index_to_prove]);
 
-        let proof_indices = proof.proof_indices().to_vec();
+        let proof_indices = vec![chunk_index_to_prove];
         let proof_hashes_hex = proof.proof_hashes_hex();
 
         Ok((proof_indices, proof_hashes_hex))
@@ -294,56 +405,43 @@ impl ChunkManager {
     }
 }
 
-use std::collections::HashMap;
-use std::sync::{Mutex, Arc};
-use lazy_static::lazy_static;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+    use x25519_dalek::StaticSecret;
 
-// Simple thread-safe LRU cache implementation
-const L1_CACHE_CAPACITY: usize = 128;
+    #[test]
+    fn test_chunk_encrypt_reassemble_decrypt() {
+        // 1. Setup
+        let dir = tempdir().unwrap();
+        let storage_path = dir.path().to_path_buf();
+        let manager = ChunkManager::new(storage_path.clone());
 
-struct LruCache {
-    map: HashMap<String, Vec<u8>>,
-    order: Vec<String>,
-    capacity: usize,
-}
+        let original_file_path = dir.path().join("original.txt");
+        let reassembled_file_path = dir.path().join("reassembled.txt");
+        let file_content = "This is a test file for erasure coding.".repeat(1000);
+        fs::write(&original_file_path, &file_content).unwrap();
 
-impl LruCache {
-    fn new(capacity: usize) -> Self {
-        LruCache {
-            map: HashMap::new(),
-            order: Vec::new(),
-            capacity,
-        }
+        let recipient_secret = StaticSecret::new(OsRng);
+        let recipient_public = PublicKey::from(&recipient_secret);
+
+        // 2. Chunk, encrypt, and apply erasure coding
+        let manifest = manager.chunk_and_encrypt_file(&original_file_path, &recipient_public).unwrap();
+
+        // 3. Reassemble, reconstruct from shards, and decrypt
+        manager.reassemble_and_decrypt_file(
+            &manifest.chunks,
+            &reassembled_file_path,
+            &manifest.encrypted_key_bundle,
+            &recipient_secret.to_ephemeral(),
+        ).unwrap();
+
+        // 4. Verify
+        let reassembled_content = fs::read_to_string(&reassembled_file_path).unwrap();
+        assert_eq!(file_content, reassembled_content);
+
+        // 5. Cleanup is handled by tempdir dropping
     }
-
-    fn get(&mut self, key: &str) -> Option<Vec<u8>> {
-        if let Some(value) = self.map.get(key) {
-            // Move key to the end (most recently used)
-            self.order.retain(|k| k != key);
-            self.order.push(key.to_string());
-            Some(value.clone())
-        } else {
-            None
-        }
-    }
-
-    fn put(&mut self, key: String, value: Vec<u8>) {
-        if self.map.contains_key(&key) {
-            self.order.retain(|k| k != &key);
-        }
-        self.order.push(key.clone());
-        self.map.insert(key.clone(), value);
-
-        // Evict least recently used if over capacity
-        if self.order.len() > self.capacity {
-            if let Some(lru) = self.order.first() {
-                self.map.remove(lru);
-            }
-            self.order.remove(0);
-        }
-    }
-}
-
-lazy_static! {
-    static ref L1_CACHE: Mutex<LruCache> = Mutex::new(LruCache::new(L1_CACHE_CAPACITY));
 }
