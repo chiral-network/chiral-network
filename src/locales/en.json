@@ -232,6 +232,11 @@
         }
       },
       "button": "Search"
+    },
+    "telemetry": {
+      "retrying": "Retrying download for {hash} (attempt {attempt} of {max})",
+      "recovered": "Recovered download for {hash} after {retries} retries ({duration} ms)",
+      "failed": "Download failed for {hash} after {attempts} attempts"
     }
   },
   "regions.usEast": "US East",

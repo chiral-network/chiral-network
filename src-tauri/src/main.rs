@@ -4,8 +4,8 @@
 )]
 
 pub mod commands;
-mod encryption;
 mod dht;
+mod encryption;
 mod ethereum;
 mod file_transfer;
 mod geth_downloader;
@@ -22,7 +22,7 @@ use ethereum::{
     get_network_difficulty, get_network_hashrate, get_peer_count, get_recent_mined_blocks,
     start_mining, stop_mining, EthAccount, GethProcess, MinedBlock,
 };
-use file_transfer::{FileTransferEvent, FileTransferService};
+use file_transfer::{DownloadMetricsSnapshot, FileTransferEvent, FileTransferService};
 use fs2::available_space;
 use geth_downloader::GethDownloader;
 use keystore::Keystore;
@@ -43,7 +43,11 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State,
 };
-use tokio::sync::Mutex;
+use tokio::{
+    sync::Mutex,
+    task::JoinHandle,
+    time::{sleep, Duration},
+};
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{info, warn};
 
@@ -57,6 +61,7 @@ struct AppState {
     dht: Mutex<Option<Arc<DhtService>>>,
     file_transfer: Mutex<Option<Arc<FileTransferService>>>,
     proxies: Arc<Mutex<Vec<ProxyNode>>>,
+    file_transfer_pump: Mutex<Option<JoinHandle<()>>>,
 }
 
 #[tauri::command]
@@ -919,7 +924,10 @@ fn detect_locale() -> String {
 }
 
 #[tauri::command]
-async fn start_file_transfer_service(state: State<'_, AppState>) -> Result<(), String> {
+async fn start_file_transfer_service(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     {
         let ft_guard = state.file_transfer.lock().await;
         if ft_guard.is_some() {
@@ -931,9 +939,22 @@ async fn start_file_transfer_service(state: State<'_, AppState>) -> Result<(), S
         .await
         .map_err(|e| format!("Failed to start file transfer service: {}", e))?;
 
+    let ft_arc = Arc::new(file_transfer_service);
     {
         let mut ft_guard = state.file_transfer.lock().await;
-        *ft_guard = Some(Arc::new(file_transfer_service));
+        *ft_guard = Some(ft_arc.clone());
+    }
+
+    {
+        let mut pump_guard = state.file_transfer_pump.lock().await;
+        if pump_guard.is_none() {
+            let app_handle = app.clone();
+            let ft_clone = ft_arc.clone();
+            let handle = tokio::spawn(async move {
+                pump_file_transfer_events(app_handle, ft_clone).await;
+            });
+            *pump_guard = Some(handle);
+        }
     }
 
     Ok(())
@@ -1144,11 +1165,61 @@ async fn get_file_transfer_events(state: State<'_, AppState>) -> Result<Vec<Stri
                 FileTransferEvent::Error { message } => {
                     format!("error:{}", message)
                 }
+                FileTransferEvent::DownloadAttempt(snapshot) => {
+                    match serde_json::to_string(&snapshot) {
+                        Ok(json) => format!("download_attempt:{}", json),
+                        Err(_) => "download_attempt:{}".to_string(),
+                    }
+                }
             })
             .collect();
         Ok(mapped)
     } else {
         Ok(vec![])
+    }
+}
+
+#[tauri::command]
+async fn get_download_metrics(
+    state: State<'_, AppState>,
+) -> Result<DownloadMetricsSnapshot, String> {
+    let ft = {
+        let ft_guard = state.file_transfer.lock().await;
+        ft_guard.as_ref().cloned()
+    };
+
+    if let Some(ft) = ft {
+        Ok(ft.download_metrics_snapshot().await)
+    } else {
+        Ok(DownloadMetricsSnapshot::default())
+    }
+}
+
+async fn pump_file_transfer_events(app: tauri::AppHandle, ft: Arc<FileTransferService>) {
+    loop {
+        let events = ft.drain_events(64).await;
+        if events.is_empty() {
+            if Arc::strong_count(&ft) <= 1 {
+                break;
+            }
+            sleep(Duration::from_millis(250)).await;
+            continue;
+        }
+
+        for event in events {
+            match event {
+                FileTransferEvent::DownloadAttempt(snapshot) => {
+                    if let Err(err) = app.emit("download_attempt", &snapshot) {
+                        warn!("Failed to emit download_attempt event: {}", err);
+                    }
+                }
+                other => {
+                    if let Err(err) = app.emit("file_transfer_event", format!("{:?}", other)) {
+                        warn!("Failed to emit file_transfer_event: {}", err);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1167,11 +1238,8 @@ async fn encrypt_file_with_password(
         return Err("Input file does not exist".to_string());
     }
 
-    let result = encryption::FileEncryption::encrypt_file_with_password(
-        input,
-        output,
-        &password,
-    ).await?;
+    let result =
+        encryption::FileEncryption::encrypt_file_with_password(input, output, &password).await?;
 
     Ok(result.encryption_info)
 }
@@ -1197,7 +1265,8 @@ async fn decrypt_file_with_password(
         output,
         &password,
         &encryption_info,
-    ).await
+    )
+    .await
 }
 
 #[tauri::command]
@@ -1216,22 +1285,17 @@ async fn encrypt_file_for_upload(
     let encrypted_path = input.with_extension("enc");
 
     let result = if let Some(pwd) = password {
-        encryption::FileEncryption::encrypt_file_with_password(
-            input,
-            &encrypted_path,
-            &pwd,
-        ).await?
+        encryption::FileEncryption::encrypt_file_with_password(input, &encrypted_path, &pwd).await?
     } else {
         // Generate random key for no-password encryption
         let key = encryption::FileEncryption::generate_random_key();
-        encryption::FileEncryption::encrypt_file(
-            input,
-            &encrypted_path,
-            &key,
-        ).await?
+        encryption::FileEncryption::encrypt_file(input, &encrypted_path, &key).await?
     };
 
-    Ok((encrypted_path.to_string_lossy().to_string(), result.encryption_info))
+    Ok((
+        encrypted_path.to_string_lossy().to_string(),
+        result.encryption_info,
+    ))
 }
 
 #[tauri::command]
@@ -1585,6 +1649,7 @@ fn main() {
             dht: Mutex::new(None),
             file_transfer: Mutex::new(None),
             proxies: Arc::new(Mutex::new(Vec::new())),
+            file_transfer_pump: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
@@ -1629,6 +1694,7 @@ fn main() {
             upload_file_data_to_network,
             download_file_from_network,
             get_file_transfer_events,
+            get_download_metrics,
             encrypt_file_with_password,
             decrypt_file_with_password,
             encrypt_file_for_upload,
