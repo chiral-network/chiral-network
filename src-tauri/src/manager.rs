@@ -7,12 +7,11 @@ use std::fs::{File, self};
 use std::io::{Read, Error, Write};
 use std::path::{Path, PathBuf};
 use reed_solomon_erasure::galois_8::ReedSolomon;
-use x25519_dalek::{EphemeralSecret, PublicKey};
-use rs_merkle::MerkleProof;
+use x25519_dalek::PublicKey;
 use std::sync::Mutex;
 
 // Import the new encryption functions and the bundle struct
-use crate::crypto::{decrypt_aes_key, encrypt_aes_key, EncryptedAesKeyBundle};
+use crate::crypto::{decrypt_aes_key, encrypt_aes_key, EncryptedAesKeyBundle, DiffieHellman};
 
 use std::collections::HashMap;
 use lazy_static::lazy_static;
@@ -257,12 +256,12 @@ impl ChunkManager {
             .map_err(|e| format!("Chunk decryption failed: {}", e))
     }
 
-    pub fn reassemble_and_decrypt_file(
+    pub fn reassemble_and_decrypt_file<S: DiffieHellman>(
         &self,
         chunks: &[ChunkInfo],
         output_path: &Path,
         encrypted_key_bundle: &EncryptedAesKeyBundle,
-        recipient_secret_key: &EphemeralSecret,
+        recipient_secret_key: S,
     ) -> Result<(), String> {
         const DATA_SHARDS: usize = 10;
         const PARITY_SHARDS: usize = 4;
@@ -347,7 +346,7 @@ impl ChunkManager {
         &self,
         all_chunk_hashes_hex: &[String],
         chunk_index_to_prove: usize,
-    ) -> Result<(Vec<usize>, Vec<String>), String> {
+    ) -> Result<(Vec<usize>, Vec<String>, usize), String> {
         let all_chunk_hashes: Vec<[u8; 32]> = all_chunk_hashes_hex
             .iter()
             .map(|h| {
@@ -364,7 +363,7 @@ impl ChunkManager {
         let proof_indices = vec![chunk_index_to_prove];
         let proof_hashes_hex = proof.proof_hashes_hex();
 
-        Ok((proof_indices, proof_hashes_hex))
+        Ok((proof_indices, proof_hashes_hex, all_chunk_hashes.len()))
     }
 
     /// Verifies a downloaded chunk against the file's Merkle root using a proof.
@@ -376,6 +375,7 @@ impl ChunkManager {
         chunk_data: &[u8],
         proof_indices: &[usize],
         proof_hashes_hex: &[String],
+        total_leaves_count: usize,
     ) -> Result<bool, String> {
         // 1. Verify the chunk's own hash.
         let calculated_hash = Sha256Hasher::hash(chunk_data);
@@ -400,8 +400,8 @@ impl ChunkManager {
             .collect::<Result<Vec<_>, String>>()?;
 
         // 3. Construct a Merkle proof object and verify it against the root.
-        let proof = rs_merkle::MerkleProof::<Sha256Hasher>::new(proof_indices.to_vec(), proof_hashes);
-        Ok(proof.verify(merkle_root, &[chunk_info.index as usize], &[calculated_hash]))
+        let proof = rs_merkle::MerkleProof::<Sha256Hasher>::new(proof_hashes);
+        Ok(proof.verify(merkle_root, proof_indices, &[calculated_hash], total_leaves_count))
     }
 }
 
@@ -435,7 +435,7 @@ mod tests {
             &manifest.chunks,
             &reassembled_file_path,
             &manifest.encrypted_key_bundle,
-            &recipient_secret.to_ephemeral(),
+            &recipient_secret,
         ).unwrap();
 
         // 4. Verify

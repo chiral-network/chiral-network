@@ -2,7 +2,7 @@ use aes_gcm::{aead::{Aead, AeadCore, OsRng}, Aes256Gcm, KeyInit, Nonce};
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use x25519_dalek::{EphemeralSecret, PublicKey};
+use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret, StaticSecret};
 
 /// A bundle containing the encrypted AES key and the necessary data for decryption.
 /// This struct is designed to be serialized (e.g., to JSON) and stored as file metadata.
@@ -14,6 +14,22 @@ pub struct EncryptedAesKeyBundle {
     pub encrypted_key: String,
     /// The nonce used for AES-GCM encryption (12 bytes), hex-encoded.
     pub nonce: String,
+}
+
+pub trait DiffieHellman {
+    fn diffie_hellman(self, their_public: &PublicKey) -> SharedSecret;
+}
+
+impl DiffieHellman for &StaticSecret {
+    fn diffie_hellman(self, their_public: &PublicKey) -> SharedSecret {
+        self.diffie_hellman(their_public)
+    }
+}
+
+impl DiffieHellman for EphemeralSecret {
+    fn diffie_hellman(self, their_public: &PublicKey) -> SharedSecret {
+        self.diffie_hellman(their_public)
+    }
 }
 
 /// Encrypts a 32-byte AES key using the recipient's public key (ECIES pattern).
@@ -64,9 +80,9 @@ pub fn encrypt_aes_key(
 ///
 /// # Returns
 /// The decrypted 32-byte AES key.
-pub fn decrypt_aes_key(
+pub fn decrypt_aes_key<S: DiffieHellman>(
     encrypted_bundle: &EncryptedAesKeyBundle,
-    recipient_secret_key: &EphemeralSecret,
+    recipient_secret_key: S,
 ) -> Result<[u8; 32], String> {
     // 1. Decode hex-encoded data from the bundle.
     let ephemeral_public_key_bytes: [u8; 32] = hex::decode(&encrypted_bundle.ephemeral_public_key)
