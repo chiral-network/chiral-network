@@ -321,3 +321,64 @@ export const totalSpent = derived(transactions, ($txs) =>
     .filter((tx) => tx.type === "sent")
     .reduce((sum, tx) => sum + tx.amount, 0)
 );
+
+// Interface for Application Settings
+export interface AppSettings {
+  storagePath: string;
+  maxStorageSize: number; // GB
+  autoCleanup: boolean;
+  cleanupThreshold: number; // %
+  maxConnections: number;
+  uploadBandwidth: number; // 0 = unlimited
+  downloadBandwidth: number; // 0 = unlimited
+  port: number;
+  enableUPnP: boolean;
+  enableNAT: boolean;
+  userLocation: string;
+  enableProxy: boolean; // For SOCKS5 feature
+  proxyAddress: string; // For SOCKS5 feature
+  enableEncryption: boolean;
+  anonymousMode: boolean;
+  shareAnalytics: boolean;
+  enableNotifications: boolean;
+  notifyOnComplete: boolean;
+  notifyOnError: boolean;
+  soundAlerts: boolean;
+  enableDHT: boolean;
+  enableIPFS: boolean;
+  chunkSize: number; // KB
+  cacheSize: number; // MB
+  logLevel: string;
+  autoUpdate: boolean;
+}
+
+// Export the settings store
+// We initialize with a safe default structure. Settings.svelte will load/persist the actual state.
+export const settings = writable<AppSettings>({
+  storagePath: "~/ChiralNetwork/Storage",
+  maxStorageSize: 100,
+  autoCleanup: true,
+  cleanupThreshold: 90,
+  maxConnections: 50,
+  uploadBandwidth: 0,
+  downloadBandwidth: 0,
+  port: 30303,
+  enableUPnP: true,
+  enableNAT: true,
+  userLocation: "US-East",
+  enableProxy: true, // Defaulting to enabled for SOCKS5 feature
+  proxyAddress: "127.0.0.1:9050", // Default Tor SOCKS address
+  enableEncryption: true,
+  anonymousMode: false,
+  shareAnalytics: true,
+  enableNotifications: true,
+  notifyOnComplete: true,
+  notifyOnError: true,
+  soundAlerts: false,
+  enableDHT: true,
+  enableIPFS: false,
+  chunkSize: 256,
+  cacheSize: 1024,
+  logLevel: "info",
+  autoUpdate: true,
+});

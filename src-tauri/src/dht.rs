@@ -1,10 +1,19 @@
-use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use futures_util::StreamExt;
+use async_trait::async_trait;
+
+use futures::io::{AsyncRead as FAsyncRead, AsyncWrite as FAsyncWrite};
+use futures::AsyncReadExt as _;
+use futures::AsyncWriteExt as _;
+use futures::future::Either;
+
+// Use tokio::io traits as base for the custom AsyncIo trait
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt}; 
+use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use libp2p::multiaddr::Protocol;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr}; 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -12,6 +21,18 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{debug, error, info, warn};
 
 use crate::peer_selection::{PeerMetrics, PeerSelectionService, SelectionStrategy};
+
+use std::error::Error;
+use std::io::{self};
+use tokio_socks::tcp::Socks5Stream;
+
+use std::task::{Context, Poll};
+use std::pin::Pin;
+use futures::future::{BoxFuture, FutureExt}; 
+
+// MODIFIED: Trait alias uses tokio::io traits
+pub trait AsyncIo: FAsyncRead + FAsyncWrite + Unpin + Send {}
+impl<T: FAsyncRead + FAsyncWrite + Unpin + Send> AsyncIo for T {}
 
 use libp2p::{
     identify::{self, Event as IdentifyEvent},
@@ -25,8 +46,20 @@ use libp2p::{
     request_response as rr,
     swarm::{NetworkBehaviour, SwarmEvent},
     Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
+    core::{
+        upgrade, muxing::StreamMuxerBox, 
+        // FIXED E0432: ListenerEvent is removed, only import what is available.
+        transport::{Boxed, Transport, TransportError, ListenerId, DialOpts, TransportEvent},
+    },
+    noise,
+    tcp,
+    yamux,
+    identity::Keypair,
 };
+use libp2p::core::upgrade::Version;
+
 const EXPECTED_PROTOCOL_VERSION: &str = "/chiral/1.0.0";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileMetadata {
@@ -37,11 +70,8 @@ pub struct FileMetadata {
     pub seeders: Vec<String>,
     pub created_at: u64,
     pub mime_type: Option<String>,
-    /// Whether the file is encrypted
     pub is_encrypted: bool,
-    /// The encryption method used (e.g., "AES-256-GCM")
     pub encryption_method: Option<String>,
-    /// Fingerprint of the encryption key for identification
     pub key_fingerprint: Option<String>,
 }
 
@@ -139,7 +169,7 @@ struct EchoRequest(pub Vec<u8>);
 struct EchoResponse(pub Vec<u8>);
 
 // 4byte LE length prefix
-async fn read_framed<T: AsyncRead + Unpin + Send>(io: &mut T) -> std::io::Result<Vec<u8>> {
+async fn read_framed<T: FAsyncRead + Unpin + Send>(io: &mut T) -> std::io::Result<Vec<u8>> {
     let mut len_buf = [0u8; 4];
     io.read_exact(&mut len_buf).await?;
     let len = u32::from_le_bytes(len_buf) as usize;
@@ -147,7 +177,7 @@ async fn read_framed<T: AsyncRead + Unpin + Send>(io: &mut T) -> std::io::Result
     io.read_exact(&mut data).await?;
     Ok(data)
 }
-async fn write_framed<T: AsyncWrite + Unpin + Send>(
+async fn write_framed<T: FAsyncWrite + Unpin + Send>(
     io: &mut T,
     data: Vec<u8>,
 ) -> std::io::Result<()> {
@@ -168,7 +198,8 @@ impl rr::Codec for ProxyCodec {
         io: &mut T,
     ) -> std::io::Result<Self::Request>
     where
-        T: AsyncRead + Unpin + Send,
+        // CORRECTED: FAsyncRead is now correctly defined via the new imports
+        T: FAsyncRead + Unpin + Send,
     {
         Ok(EchoRequest(read_framed(io).await?))
     }
@@ -178,7 +209,8 @@ impl rr::Codec for ProxyCodec {
         io: &mut T,
     ) -> std::io::Result<Self::Response>
     where
-        T: AsyncRead + Unpin + Send,
+        // CORRECTED: FAsyncRead is now correctly defined via the new imports
+        T: FAsyncRead + Unpin + Send,
     {
         Ok(EchoResponse(read_framed(io).await?))
     }
@@ -189,7 +221,8 @@ impl rr::Codec for ProxyCodec {
         EchoRequest(data): EchoRequest,
     ) -> std::io::Result<()>
     where
-        T: AsyncWrite + Unpin + Send,
+        // CORRECTED: FAsyncWrite is now correctly defined via the new imports
+        T: FAsyncWrite + Unpin + Send,
     {
         write_framed(io, data).await
     }
@@ -200,12 +233,93 @@ impl rr::Codec for ProxyCodec {
         EchoResponse(data): EchoResponse,
     ) -> std::io::Result<()>
     where
-        T: AsyncWrite + Unpin + Send,
+        // CORRECTED: FAsyncWrite is now correctly defined via the new imports
+        T: FAsyncWrite + Unpin + Send,
     {
         write_framed(io, data).await
     }
 }
+
 // ------End Proxy Protocol Implementation------
+#[derive(Clone)]
+struct Socks5Transport {
+    proxy: SocketAddr,
+}
+
+#[async_trait]
+impl Transport for Socks5Transport {
+    type Output = Box<dyn AsyncIo>;
+    type Error = io::Error;
+    type ListenerUpgrade = futures::future::Pending<Result<Self::Output, Self::Error>>;
+    // FIXED E0412: Use imported BoxFuture
+    type Dial = BoxFuture<'static, Result<Self::Output, Self::Error>>;
+
+    // FIXED E0050, E0046: Corrected implementation
+    fn listen_on(
+        &mut self,
+        _id: ListenerId, 
+        _addr: libp2p::Multiaddr,
+    ) -> Result<(), TransportError<Self::Error>> {
+        Err(TransportError::Other(io::Error::new(
+            io::ErrorKind::Other,
+            "SOCKS5 transport does not support listening",
+        )))
+    }
+    
+    fn remove_listener(&mut self, _id: ListenerId) -> bool {
+        false
+    }
+    
+    fn poll(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<TransportEvent<Self::ListenerUpgrade, Self::Error>> {
+        Poll::Pending
+    }
+
+    fn dial(
+        &mut self,
+        addr: libp2p::Multiaddr,
+        _opts: DialOpts,
+    ) -> Result<Self::Dial, TransportError<Self::Error>> {
+        let proxy = self.proxy;
+        
+        // Convert Multiaddr to string for SOCKS5 connection
+        let target = match addr_to_socket_addr(&addr) {
+            Some(socket_addr) => socket_addr.to_string(),
+            None => return Err(TransportError::Other(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Invalid address for SOCKS5",
+            ))),
+        };
+        
+        Ok(async move {
+            let stream = Socks5Stream::connect(proxy, target).await
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            
+            // CORRECT: Convert tokio stream to futures stream via .compat().
+            let compat = stream.compat(); 
+            // The compat stream correctly implements FAsyncRead/FAsyncWrite required by AsyncIo.
+            Ok(Box::new(compat) as Box<dyn AsyncIo>) 
+        }.boxed())
+    }
+}
+
+// Helper function to convert Multiaddr to SocketAddr
+fn addr_to_socket_addr(addr: &libp2p::Multiaddr) -> Option<SocketAddr> {
+    use libp2p::multiaddr::Protocol;
+    
+    let mut iter = addr.iter();
+    match (iter.next(), iter.next()) {
+        (Some(Protocol::Ip4(ip)), Some(Protocol::Tcp(port))) => {
+            Some(SocketAddr::new(ip.into(), port))
+        }
+        (Some(Protocol::Ip6(ip)), Some(Protocol::Tcp(port))) => {
+            Some(SocketAddr::new(ip.into(), port))
+        }
+        _ => None,
+    }
+}
 
 impl DhtMetricsSnapshot {
     fn from(metrics: DhtMetrics, peer_count: usize) -> Self {
@@ -807,6 +921,55 @@ async fn handle_ping_event(event: PingEvent) {
     }
 }
 
+impl Socks5Transport {
+    pub fn new(proxy: SocketAddr) -> Self {
+        Self { proxy }
+    }
+}
+
+/// Build a libp2p transport, optionally tunneling through a SOCKS5 proxy.
+pub fn build_custom_transport(
+    keypair: identity::Keypair,
+    proxy_address: Option<String>,
+) -> Result<libp2p::core::transport::Boxed<(PeerId, StreamMuxerBox)>, Box<dyn Error>> {
+    let noise_keys = noise::Config::new(&keypair)?;
+    let yamux_config = libp2p::yamux::Config::default();
+
+    // CORRECTED: The full transport stack is now built inside each branch
+    // to ensure the final types are identical.
+    if let Some(proxy) = proxy_address {
+        info!(
+            "SOCKS5 enabled. Routing all P2P dialing traffic via {}",
+            proxy
+        );
+        let proxy_addr = proxy.parse::<SocketAddr>().map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("Invalid proxy address: {}", e),
+            )
+        })?;
+        let socks5_transport = Socks5Transport::new(proxy_addr);
+
+        Ok(socks5_transport
+            .upgrade(Version::V1)
+            .authenticate(noise_keys)
+            .multiplex(yamux_config)
+            .timeout(Duration::from_secs(30))
+            .boxed())
+    } else {
+        info!("Direct P2P connection mode.");
+        let direct_tcp = tcp::tokio::Transport::new(tcp::Config::default())
+            .map(|s, _| Box::new(s.0.compat()) as Box<dyn AsyncIo>);
+
+        Ok(direct_tcp
+            .upgrade(Version::V1)
+            .authenticate(noise_keys)
+            .multiplex(yamux_config)
+            .timeout(Duration::from_secs(30))
+            .boxed())
+    }
+}
+
 impl DhtService {
     pub async fn echo(&self, peer_id: String, payload: Vec<u8>) -> Result<Vec<u8>, String> {
         let peer: PeerId = peer_id
@@ -843,7 +1006,8 @@ impl DhtService {
         bootstrap_nodes: Vec<String>,
         secret: Option<String>,
         is_bootstrap: bool,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+        proxy_address: Option<String>, 
+    ) -> Result<Self, Box<dyn Error>> {
         // Generate a new keypair for this node
         // Generate a keypair either from the secret or randomly
         let local_key = match secret {
@@ -912,14 +1076,14 @@ impl DhtService {
             proxy_rr,
         };
 
+        // Use the new SOCKS5-aware transport builder
+        let transport = build_custom_transport(local_key.clone(), proxy_address)?;
+
         // Create the swarm
-        let mut swarm = SwarmBuilder::with_existing_identity(local_key)
+        let mut swarm = libp2p::SwarmBuilder::with_existing_identity(local_key)
             .with_tokio()
-            .with_tcp(
-                Default::default(),
-                libp2p::noise::Config::new,
-                libp2p::yamux::Config::default,
-            )?
+            .with_other_transport(|_| Ok(transport)) 
+            .expect("Failed to create libp2p transport")
             .with_behaviour(|_| behaviour)?
             .with_swarm_config(
                 |c| c.with_idle_connection_timeout(Duration::from_secs(300)), // 5 minutes
