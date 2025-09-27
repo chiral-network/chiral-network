@@ -1038,24 +1038,39 @@ async fn download_file_from_network(
         ft_guard.as_ref().cloned()
     };
 
-    if let Some(ft) = ft {
-        // First try to download from local storage
-        match ft
-            .download_file(file_hash.clone(), output_path.clone())
-            .await
-        {
-            Ok(()) => {
-                info!("File downloaded successfully from local storage");
-                return Ok(());
+    if let Some(_ft) = ft {
+        info!("Starting P2P download for: {}", file_hash);
+
+        // Search DHT for file metadata
+        let dht = {
+            let dht_guard = state.dht.lock().await;
+            dht_guard.as_ref().cloned()
+        };
+
+        if let Some(dht_service) = dht {
+            // Search for file metadata in DHT with 5 second timeout
+            match dht_service.search_metadata(file_hash.clone(), 5000).await {
+                Ok(Some(metadata)) => {
+                    info!("Found file metadata in DHT: {} (size: {} bytes)",
+                          metadata.file_name, metadata.file_size);
+
+                    // TODO: Implement peer discovery and chunk requesting
+                    // For now, return an error indicating P2P transfer not implemented
+                    return Err(format!(
+                        "File found in DHT but P2P transfer not yet implemented. File: {} ({})",
+                        metadata.file_name, metadata.file_hash
+                    ));
+                }
+                Ok(None) => {
+                    return Err("DHT search timed out - file metadata not found".to_string());
+                }
+                Err(e) => {
+                    warn!("DHT search failed: {}", e);
+                    return Err(format!("DHT search failed: {}", e));
+                }
             }
-            Err(_) => {
-                // File not found locally, would need to implement P2P download here
-                // For now, return an error
-                return Err(
-                    "File not found in local storage. P2P download not yet implemented."
-                        .to_string(),
-                );
-            }
+        } else {
+            return Err("DHT service not available".to_string());
         }
     } else {
         Err("File transfer service is not running".to_string())
