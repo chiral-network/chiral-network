@@ -12,6 +12,7 @@ mod geth_downloader;
 mod headless;
 mod keystore;
 pub mod net;
+mod peer_selection;
 use crate::commands::proxy::{
     list_proxies, proxy_connect, proxy_disconnect, proxy_echo, ProxyNode,
 };
@@ -1601,6 +1602,121 @@ async fn disable_2fa(password: String, state: State<'_, AppState>) -> Result<(),
     keystore.remove_2fa_secret(&address, &password)?;
     Ok(())
 }
+
+// Peer Selection Commands
+
+#[tauri::command]
+async fn get_recommended_peers_for_file(
+    state: State<'_, AppState>,
+    file_hash: String,
+    file_size: u64,
+    require_encryption: bool,
+) -> Result<Vec<String>, String> {
+    let dht_guard = state.dht.lock().await;
+    if let Some(ref dht) = *dht_guard {
+        Ok(dht.get_recommended_peers_for_download(&file_hash, file_size, require_encryption).await)
+    } else {
+        Err("DHT service not available".to_string())
+    }
+}
+
+#[tauri::command]
+async fn record_transfer_success(
+    state: State<'_, AppState>,
+    peer_id: String,
+    bytes: u64,
+    duration_ms: u64,
+) -> Result<(), String> {
+    let dht_guard = state.dht.lock().await;
+    if let Some(ref dht) = *dht_guard {
+        dht.record_transfer_success(&peer_id, bytes, duration_ms).await;
+        Ok(())
+    } else {
+        Err("DHT service not available".to_string())
+    }
+}
+
+#[tauri::command]
+async fn record_transfer_failure(
+    state: State<'_, AppState>,
+    peer_id: String,
+    error: String,
+) -> Result<(), String> {
+    let dht_guard = state.dht.lock().await;
+    if let Some(ref dht) = *dht_guard {
+        dht.record_transfer_failure(&peer_id, &error).await;
+        Ok(())
+    } else {
+        Err("DHT service not available".to_string())
+    }
+}
+
+#[tauri::command]
+async fn get_peer_metrics(state: State<'_, AppState>) -> Result<Vec<crate::peer_selection::PeerMetrics>, String> {
+    let dht_guard = state.dht.lock().await;
+    if let Some(ref dht) = *dht_guard {
+        Ok(dht.get_peer_metrics().await)
+    } else {
+        Err("DHT service not available".to_string())
+    }
+}
+
+#[tauri::command]
+async fn select_peers_with_strategy(
+    state: State<'_, AppState>,
+    available_peers: Vec<String>,
+    count: usize,
+    strategy: String,
+    require_encryption: bool,
+) -> Result<Vec<String>, String> {
+    use crate::peer_selection::SelectionStrategy;
+    
+    let selection_strategy = match strategy.as_str() {
+        "fastest" => SelectionStrategy::FastestFirst,
+        "reliable" => SelectionStrategy::MostReliable,
+        "bandwidth" => SelectionStrategy::HighestBandwidth,
+        "balanced" => SelectionStrategy::Balanced,
+        "encryption" => SelectionStrategy::EncryptionPreferred,
+        "load_balanced" => SelectionStrategy::LoadBalanced,
+        _ => SelectionStrategy::Balanced,
+    };
+
+    let dht_guard = state.dht.lock().await;
+    if let Some(ref dht) = *dht_guard {
+        Ok(dht.select_peers_with_strategy(&available_peers, count, selection_strategy, require_encryption).await)
+    } else {
+        Err("DHT service not available".to_string())
+    }
+}
+
+#[tauri::command]
+async fn set_peer_encryption_support(
+    state: State<'_, AppState>,
+    peer_id: String,
+    supported: bool,
+) -> Result<(), String> {
+    let dht_guard = state.dht.lock().await;
+    if let Some(ref dht) = *dht_guard {
+        dht.set_peer_encryption_support(&peer_id, supported).await;
+        Ok(())
+    } else {
+        Err("DHT service not available".to_string())
+    }
+}
+
+#[tauri::command]
+async fn cleanup_inactive_peers(
+    state: State<'_, AppState>,
+    max_age_seconds: u64,
+) -> Result<(), String> {
+    let dht_guard = state.dht.lock().await;
+    if let Some(ref dht) = *dht_guard {
+        dht.cleanup_inactive_peers(max_age_seconds).await;
+        Ok(())
+    } else {
+        Err("DHT service not available".to_string())
+    }
+}
 fn main() {
     // Initialize logging for debug builds
     #[cfg(debug_assertions)]
@@ -1710,6 +1826,13 @@ fn main() {
             verify_totp_code,
             logout,
             disable_2fa,
+            get_recommended_peers_for_file,
+            record_transfer_success,
+            record_transfer_failure,
+            get_peer_metrics,
+            select_peers_with_strategy,
+            set_peer_encryption_support,
+            cleanup_inactive_peers,
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
