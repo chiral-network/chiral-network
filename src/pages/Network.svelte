@@ -5,6 +5,7 @@
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
   import GethStatusCard from '$lib/components/GethStatusCard.svelte'
+  import PeerMetrics from '$lib/components/PeerMetrics.svelte'
   import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Play, Square, Download, AlertCircle, Wifi } from 'lucide-svelte'
   import { peers, networkStats, networkStatus, userLocation, etcAccount } from '$lib/stores'
   import { get } from 'svelte/store'
@@ -13,7 +14,7 @@
   import { listen } from '@tauri-apps/api/event'
   import { dhtService, DEFAULT_BOOTSTRAP_NODES } from '$lib/dht'
   import { getStatus as fetchGethStatus, type GethStatus } from '$lib/services/gethService'
-  import { resetConnectionAttempts } from '$lib/dhtHelpers.js'
+  import { resetConnectionAttempts } from '$lib/dhtHelpers'
   import type { DhtHealth } from '$lib/dht'
   import { Clipboard } from "lucide-svelte"
   import { t } from 'svelte-i18n';
@@ -1032,6 +1033,11 @@
       {/if}
     </div>
   </Card>
+
+  <!-- Smart Peer Selection Metrics -->
+  {#if dhtStatus === 'connected'}
+    <PeerMetrics />
+  {/if}
   
   <!-- Network Statistics Cards -->
   <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

@@ -431,6 +431,22 @@ pub async fn download_file(
 
 ## Phase 4: Integration Testing
 
+### Local download resilience & tracing
+
+The desktop runtime now performs up to three local download attempts with an
+exponential backoff (250 ms → 500 ms → 1 s). Each attempt emits a
+`download_attempt` tracing span carrying `hash`, `attempt`, `max_attempts`, and
+`duration_ms` fields. When debugging failed transfers, filter logs on
+`download_succeeded`/`download_failed` events to see whether the file was missing
+or a transient write error occurred. The final error returned to the UI remains
+the last failure string so existing user messaging stays unchanged.
+
+In addition to spans, the Tauri shell now broadcasts a `download_attempt`
+frontend event and exposes a `get_download_metrics` command returning aggregate
+success/failure counters and the last 20 attempts. Headless mode gains a
+`--show-downloads` flag that prints the same snapshot at startup so operators can
+confirm retry behaviour without the GUI.
+
 ### Test Network Setup
 
 ```bash

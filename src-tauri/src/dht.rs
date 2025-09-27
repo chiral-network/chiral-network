@@ -20,6 +20,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{debug, error, info, warn};
 
+use crate::peer_selection::{PeerMetrics, PeerSelectionService, SelectionStrategy};
+
 use std::error::Error;
 use std::io::{self};
 use tokio_socks::tcp::Socks5Stream;
@@ -394,10 +396,12 @@ async fn run_dht_node(
     pending_searches: Arc<Mutex<HashMap<String, Vec<PendingSearch>>>>,
     proxy_targets: Arc<Mutex<HashSet<PeerId>>>,
     proxy_capable: Arc<Mutex<HashSet<PeerId>>>,
+    peer_selection: Arc<Mutex<PeerSelectionService>>,
     is_bootstrap: bool,
 ) {
     // Periodic bootstrap interval
     let mut shutdown_ack: Option<oneshot::Sender<()>> = None;
+    let mut ping_failures: HashMap<PeerId, u8> = HashMap::new();
 
     'outer: loop {
         tokio::select! {
@@ -509,6 +513,13 @@ async fn run_dht_node(
                         match ev {
                             libp2p::ping::Event { peer, result: Ok(rtt), .. } => {
                                 let is_connected = connected_peers.lock().await.contains(&peer);
+                                let rtt_ms = rtt.as_millis() as u64;
+
+                                // Update peer selection metrics with latency
+                                {
+                                    let mut selection = peer_selection.lock().await;
+                                    selection.update_peer_latency(&peer.to_string(), rtt_ms);
+                                }
 
                                 let show_as_proxy = {
                                     let t = proxy_targets.lock().await;
@@ -520,9 +531,11 @@ async fn run_dht_node(
                                     let _ = event_tx
                                         .send(DhtEvent::PeerRtt {
                                             peer: peer.to_string(),
-                                            rtt_ms: rtt.as_millis() as u64,
+                                            rtt_ms,
                                         })
                                         .await;
+
+                                        ping_failures.remove(&peer);
                                 } else {
                                     debug!("skip rtt update for non-proxy/offline peer {}", peer);
                                 }
@@ -531,17 +544,46 @@ async fn run_dht_node(
                                 let _ = event_tx
                                     .send(DhtEvent::Error(format!("Ping timeout {}", peer)))
                                     .await;
+                                let count = ping_failures.entry(peer).or_insert(0);
+                                *count += 1;
+                                if *count >= 3 {
+                                    swarm.behaviour_mut().kademlia.remove_peer(&peer);
+                                    ping_failures.remove(&peer);
+                                    let _ = event_tx.send(DhtEvent::Error(format!(
+                                        "Peer {} removed after 3 failed pings", peer
+                                    ))).await;
+                                }
                             }
                             libp2p::ping::Event { peer, result: Err(e), .. } => {
                                 warn!("ping error with {}: {}", peer, e);
-                                // If needed, also send to UI
-                                // let _ = event_tx.send(DhtEvent::Error(format!("Ping error {}: {}", peer, e))).await;
+                                let count = ping_failures.entry(peer).or_insert(0);
+                                *count += 1;
+                                if *count >= 3 {
+                                    swarm.behaviour_mut().kademlia.remove_peer(&peer);
+                                    ping_failures.remove(&peer);
+                                    let _ = event_tx.send(DhtEvent::Error(format!(
+                                        "Peer {} removed after 3 failed pings", peer
+                                    ))).await;
+                                }
                             }
                         }
                     }
                     SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                         info!("✅ CONNECTION ESTABLISHED with peer: {}", peer_id);
                         info!("   Endpoint: {:?}", endpoint);
+
+                        // Initialize peer metrics for smart selection
+                        {
+                            let mut selection = peer_selection.lock().await;
+                            let peer_metrics = PeerMetrics::new(
+                                peer_id.to_string(),
+                                endpoint.get_remote_address().to_string(),
+                            );
+                            selection.update_peer_metrics(peer_metrics);
+                        }
+
+                        // Add peer to Kademlia routing table
+                        swarm.behaviour_mut().kademlia.add_address(&peer_id, endpoint.get_remote_address().clone());
 
                         if is_proxy_peer(&peer_id, &proxy_targets, &proxy_capable).await {
                             let remote_addr_str = endpoint.get_remote_address().to_string();
@@ -955,6 +997,7 @@ pub struct DhtService {
     search_counter: Arc<AtomicU64>,
     proxy_targets: Arc<Mutex<HashSet<PeerId>>>,
     proxy_capable: Arc<Mutex<HashSet<PeerId>>>,
+    peer_selection: Arc<Mutex<PeerSelectionService>>,
 }
 
 impl DhtService {
@@ -1110,6 +1153,7 @@ impl DhtService {
         let search_counter = Arc::new(AtomicU64::new(1));
         let proxy_targets = Arc::new(Mutex::new(HashSet::new()));
         let proxy_capable = Arc::new(Mutex::new(HashSet::new()));
+        let peer_selection = Arc::new(Mutex::new(PeerSelectionService::new()));
 
         // Spawn the DHT node task
         tokio::spawn(run_dht_node(
@@ -1123,6 +1167,7 @@ impl DhtService {
             pending_searches.clone(),
             proxy_targets.clone(),
             proxy_capable.clone(),
+            peer_selection.clone(),
             is_bootstrap,
         ));
 
@@ -1137,6 +1182,7 @@ impl DhtService {
             search_counter,
             proxy_targets,
             proxy_capable,
+            peer_selection,
         })
     }
 
@@ -1279,6 +1325,75 @@ impl DhtService {
             }
         }
         events
+    }
+
+    /// Get recommended peers for file download using smart selection
+    pub async fn get_recommended_peers_for_download(
+        &self,
+        file_hash: &str,
+        file_size: u64,
+        require_encryption: bool,
+    ) -> Vec<String> {
+        // First get peers that have the file
+        let available_peers = self.get_seeders_for_file(file_hash).await;
+        
+        if available_peers.is_empty() {
+            return Vec::new();
+        }
+
+        // Use smart peer selection
+        let mut peer_selection = self.peer_selection.lock().await;
+        peer_selection.recommend_peers_for_file(&available_peers, file_size, require_encryption)
+    }
+
+    /// Record successful transfer for peer metrics
+    pub async fn record_transfer_success(&self, peer_id: &str, bytes: u64, duration_ms: u64) {
+        let mut peer_selection = self.peer_selection.lock().await;
+        peer_selection.record_transfer_success(peer_id, bytes, duration_ms);
+    }
+
+    /// Record failed transfer for peer metrics
+    pub async fn record_transfer_failure(&self, peer_id: &str, error: &str) {
+        let mut peer_selection = self.peer_selection.lock().await;
+        peer_selection.record_transfer_failure(peer_id, error);
+    }
+
+    /// Update peer encryption support
+    pub async fn set_peer_encryption_support(&self, peer_id: &str, supported: bool) {
+        let mut peer_selection = self.peer_selection.lock().await;
+        peer_selection.set_peer_encryption_support(peer_id, supported);
+    }
+
+    /// Get all peer metrics for monitoring
+    pub async fn get_peer_metrics(&self) -> Vec<PeerMetrics> {
+        let peer_selection = self.peer_selection.lock().await;
+        peer_selection.get_all_metrics()
+    }
+
+    /// Select best peers using a specific strategy
+    pub async fn select_peers_with_strategy(
+        &self,
+        available_peers: &[String],
+        count: usize,
+        strategy: SelectionStrategy,
+        require_encryption: bool,
+    ) -> Vec<String> {
+        let mut peer_selection = self.peer_selection.lock().await;
+        peer_selection.select_peers(available_peers, count, strategy, require_encryption)
+    }
+
+    /// Clean up inactive peer metrics
+    pub async fn cleanup_inactive_peers(&self, max_age_seconds: u64) {
+        let mut peer_selection = self.peer_selection.lock().await;
+        peer_selection.cleanup_inactive_peers(max_age_seconds);
+    }
+
+    /// Get seeders for a specific file (helper method)
+    async fn get_seeders_for_file(&self, _file_hash: &str) -> Vec<String> {
+        // This would typically search the DHT for peers that have the file
+        // For now, return connected peers as potential seeders
+        let connected = self.connected_peers.lock().await;
+        connected.iter().map(|p| p.to_string()).collect()
     }
 }
 
