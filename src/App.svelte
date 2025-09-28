@@ -1,6 +1,6 @@
 <script lang="ts">
     import './styles/globals.css'
-    import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X } from 'lucide-svelte'
+    import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star } from 'lucide-svelte'
     import UploadPage from './pages/Upload.svelte'
     import DownloadPage from './pages/Download.svelte'
     import ProxyPage from './pages/Proxy.svelte'
@@ -9,6 +9,7 @@
     import AnalyticsPage from './pages/Analytics.svelte'
     import SettingsPage from './pages/Settings.svelte'
     import MiningPage from './pages/Mining.svelte'
+    import ReputationPage from './pages/Reputation.svelte'
     import NotFound from './pages/NotFound.svelte'
     import ProxySelfTest from './routes/proxy-self-test.svelte'
     import { networkStatus } from './lib/stores'
@@ -106,6 +107,7 @@
         { id: 'mining', label: $t('nav.mining'), icon: Cpu },
         { id: 'proxy', label: $t('nav.proxy'), icon: Shield },
         { id: 'analytics', label: $t('nav.analytics'), icon: BarChart3 },
+        { id: 'reputation', label: 'Reputation', icon: Star },
         { id: 'account', label: $t('nav.account'), icon: Wallet },
         { id: 'settings', label: $t('nav.settings'), icon: Settings },
 
@@ -142,6 +144,10 @@
       {
         path: "analytics",
         component: AnalyticsPage
+      },
+      {
+        path: "reputation",
+        component: ReputationPage
       },
       {
         path: "account",
