@@ -17,7 +17,7 @@
   import { t, locale } from 'svelte-i18n'
   import { showToast } from '$lib/toast'
   import { get } from 'svelte/store'
-  import { totalEarned, totalSpent } from '$lib/stores';
+  import { totalEarned, totalSpent, miningState } from '$lib/stores';
 
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
   
@@ -501,7 +501,7 @@
     showToast('Transaction submitted', 'info')
 
     // Simulate transaction
-    wallet.update(w => ({
+    wallet.update((w: typeof $wallet) => ({
       ...w,
       balance: w.balance - sendAmount,
       pendingTransactions: w.pendingTransactions + 1,
@@ -1286,9 +1286,55 @@
     rawAmountInput = $wallet.balance.toFixed(2);
   }
 
+  // async function handleLogout() {
+  //   if (isTauri) await invoke('logout');
+  //   logout();
+  // }
+
+  // Update your handleLogout function
   async function handleLogout() {
-    if (isTauri) await invoke('logout');
-    logout();
+    try {
+      // Stop mining if it's currently running
+      if ($miningState.isMining) {
+        await invoke('stop_miner');
+      }
+      
+      // Clear the account store
+      etcAccount.set(null);
+      
+      // Clear wallet data
+      wallet.update((w: any) => ({
+        ...w,
+        address: "",
+        balance: 1000.5, // Reset to default
+        totalEarned: 0,
+        totalSpent: 0,
+        pendingTransactions: 0
+      }));
+      
+      // Clear mining state completely
+      miningState.update((state: any) => ({
+        ...state,
+        isMining: false,
+        hashRate: "0 H/s",
+        totalRewards: 0,
+        blocksFound: 0,
+        activeThreads: 0,
+        recentBlocks: [],
+        sessionStartTime: undefined
+      }));
+      
+      // Clear any stored session data
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem('lastAccount');
+        localStorage.removeItem('miningSession');
+      }
+      
+      privateKeyVisible = false;
+      
+    } catch (error) {
+      console.error('Error during logout:', error);
+    }
   }
 
   function logout() {
