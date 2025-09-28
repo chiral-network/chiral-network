@@ -28,7 +28,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 ### 1. File Sharing & Seeding
 
 - **Instant Sharing**: Files immediately start seeding when added (BitTorrent-style)
-- **Drag & Drop Interface**: Simple, compact file addition
+- ✅ **Drag & Drop Interface**: Simple, compact file addition with real-time feedback
 - **Content Hashing**: Automatic generation of unique file identifiers
 - **Continuous Seeding**: Files remain available as long as they're in your list
 - **Peer Statistics**: Real-time display of seeders and leechers
