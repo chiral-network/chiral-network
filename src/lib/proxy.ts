@@ -1,11 +1,11 @@
-import { writable } from 'svelte/store';
-import { invoke } from '@tauri-apps/api/core';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { writable } from "svelte/store";
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export interface ProxyNode {
   id: string;
   address?: string;
-  status?: 'online' | 'offline' | 'connecting' | 'error';
+  status?: "online" | "offline" | "connecting" | "error";
   latency?: number;
   error?: string;
 }
@@ -13,9 +13,9 @@ export interface ProxyNode {
 type ProxyUpdate = Partial<ProxyNode> & { id: string };
 
 export const proxyNodes = writable<ProxyNode[]>([]);
-export const echoInbox = writable<{ from: string; text?: string; bytes: number; ts: number }[]>(
-  []
-);
+export const echoInbox = writable<
+  { from: string; text?: string; bytes: number; ts: number }[]
+>([]);
 
 let unlisten: UnlistenFn | null = null;
 let unlistenEcho: (() => void) | undefined;
@@ -25,18 +25,22 @@ function mergeNode(prev: ProxyNode | undefined, upd: ProxyUpdate): ProxyNode {
   return {
     ...base,
     // update only if there's a new value
-    address: upd.address ?? base.address,
+    // address: upd.address ?? base.address,
+    address:
+      upd.address !== undefined && upd.address !== ""
+        ? upd.address
+        : base.address,
     status: upd.status ?? base.status,
     latency: upd.latency ?? base.latency,
-    error: upd.error ?? base.error
+    error: upd.error ?? base.error,
   };
 }
 
 function sortNodes(xs: ProxyNode[]) {
   const order = { online: 0, connecting: 1, offline: 2, error: 3 } as const;
   return xs.slice().sort((a, b) => {
-    const sa = a.status ?? 'offline';
-    const sb = b.status ?? 'offline';
+    const sa = a.status ?? "offline";
+    const sb = b.status ?? "offline";
     const oa = (order as any)[sa] ?? 9;
     const ob = (order as any)[sb] ?? 9;
     if (oa !== ob) return oa - ob;
@@ -47,13 +51,13 @@ function sortNodes(xs: ProxyNode[]) {
 }
 
 export async function initProxyEvents() {
-  if (typeof window === 'undefined') return;
+  if (typeof window === "undefined") return;
   if (unlisten) return;
 
   // State update (ProxyStatus) - merge by PeerId
-  unlisten = await listen('proxy_status_update', (event) => {
+  unlisten = await listen("proxy_status_update", (event) => {
     const updated = event.payload as ProxyUpdate;
-    console.log('[proxy_status_update]', updated);
+    console.log("[proxy_status_update]", updated);
 
     proxyNodes.update((nodes) => {
       const i = nodes.findIndex((n) => n.id === updated.id);
@@ -65,16 +69,21 @@ export async function initProxyEvents() {
       }
       // Duplicates should not happen, but just in case
       const seen = new Set<string>();
-      const dedup = next.filter((n) => (seen.has(n.id) ? false : (seen.add(n.id), true)));
+      const dedup = next.filter((n) =>
+        seen.has(n.id) ? false : (seen.add(n.id), true)
+      );
       return sortNodes(dedup);
     });
   });
 
   // Echo inbox
-  const un = await listen('proxy_echo_rx', (e) => {
+  const un = await listen("proxy_echo_rx", (e) => {
     const m = e.payload as { from: string; text?: string; bytes?: number };
     echoInbox.update((xs) =>
-      [{ from: m.from, text: m.text, bytes: m.bytes ?? 0, ts: Date.now() }, ...xs].slice(0, 100)
+      [
+        { from: m.from, text: m.text, bytes: m.bytes ?? 0, ts: Date.now() },
+        ...xs,
+      ].slice(0, 100)
     );
   });
   unlistenEcho = un;
@@ -91,26 +100,26 @@ export function disposeProxyEvents() {
 export async function connectProxy(url: string, token: string) {
   try {
     console.log(`Connecting to proxy: ${url}`);
-    await invoke('proxy_connect', { url, token });
+    await invoke("proxy_connect", { url, token });
     // if needed: optimistic placeholder if PeerId is unknown
   } catch (e) {
-    console.error('proxy_connect failed:', e);
+    console.error("proxy_connect failed:", e);
   }
 }
 
 export async function disconnectProxy(url: string) {
   try {
     console.log(`Disconnecting from proxy: ${url}`);
-    await invoke('proxy_disconnect', { url });
+    await invoke("proxy_disconnect", { url });
   } catch (e) {
-    console.error('proxy_disconnect failed:', e);
+    console.error("proxy_disconnect failed:", e);
   }
 }
 
 export async function listProxies() {
   try {
-    console.log('Refreshing proxy list');
-    const incoming = (await invoke<ProxyNode[]>('list_proxies')) ?? [];
+    console.log("Refreshing proxy list");
+    const incoming = (await invoke<ProxyNode[]>("list_proxies")) ?? [];
     // merge with existing nodes to preserve status/latency if possible
     proxyNodes.update((nodes) => {
       const map = new Map<string, ProxyNode>();
@@ -119,7 +128,7 @@ export async function listProxies() {
       return sortNodes([...map.values()]);
     });
   } catch (e) {
-    console.error('list_proxies failed:', e);
+    console.error("list_proxies failed:", e);
     proxyNodes.set([]);
   }
 }
