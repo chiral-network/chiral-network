@@ -6,7 +6,7 @@
   import type { FileItem } from '$lib/stores'
   import { t } from 'svelte-i18n';
   import { get } from 'svelte/store'
-  import { onMount, tick } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { showToast } from '$lib/toast'
   import { getStorageStatus } from '$lib/uploadHelpers'
   import { fileService } from '$lib/services/fileService'
@@ -17,6 +17,7 @@
 
 
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
+  const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
   // Enhanced file type detection with icons
   function getFileIcon(fileName: string) {
@@ -55,6 +56,9 @@
   }
 
   let isDragging = false
+  let tauriDropUnlisten: (() => void) | null = null
+  let dragCounter = 0
+  let tauriDropHandled = false
   const LOW_STORAGE_THRESHOLD = 5
   let availableStorage: number | null = null
   let storageStatus: 'unknown' | 'ok' | 'low' = 'unknown'
@@ -113,28 +117,52 @@
     }
   }
 
+  async function setupTauriFileDropListener() {
+    try {
+      const { appWindow } = await import('@tauri-apps/api/window')
+      tauriDropUnlisten = await appWindow.onFileDropEvent((event) => {
+        const payload = event.payload
+        switch (payload.type) {
+          case 'hover':
+            dragCounter = 1
+            isDragging = true
+            break
+          case 'drop':
+            dragCounter = 0
+            isDragging = false
+            tauriDropHandled = true
+            if (Array.isArray(payload.paths) && payload.paths.length > 0) {
+              void addFilesFromPaths(payload.paths)
+            }
+            setTimeout(() => {
+              tauriDropHandled = false
+            }, 0)
+            break
+          case 'cancel':
+          case 'leave':
+            dragCounter = 0
+            isDragging = false
+            break
+          default:
+            break
+        }
+      })
+    } catch (error) {
+      console.error('Failed to bind Tauri file drop listener:', error)
+    }
+  }
+
   onMount(() => {
     refreshAvailableStorage()
 
-    // totoro: think this is for reacting to drag and drops... 
-    // const unlisten = appWindow.onFileDropEvent((event) => {
-    //   switch (event.payload.type) {
-    //     case 'hover':
-    //       isDragging = true
-    //       break
-    //     case 'drop':
-    //       isDragging = false
-    //       addFilesFromPaths(event.payload.paths)
-    //       break
-    //     case 'cancel':
-    //       isDragging = false
-    //       break
-    //   }
-    // })
+    if (isTauri) {
+      void setupTauriFileDropListener()
+    }
+  })
 
-    // return () => {
-    //   unlisten.then(f => f());
-    // }
+  onDestroy(() => {
+    tauriDropUnlisten?.()
+    tauriDropUnlisten = null
   })
 
   async function openFileDialog() {
