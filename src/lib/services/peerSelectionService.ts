@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { toHumanReadableSize } from "$lib/utils";
 
 /**
  * Peer metrics interface matching the Rust struct
@@ -241,10 +242,14 @@ export class PeerSelectionService {
    * Format bytes to human readable format
    */
   static formatBytes(bytes: number): string {
-    const sizes = ["Bytes", "KB", "MB", "GB", "TB"];
-    if (bytes === 0) return "0 Bytes";
-    const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    return Math.round((bytes / Math.pow(1024, i)) * 100) / 100 + " " + sizes[i];
+    if (!Number.isFinite(bytes) || bytes <= 0) {
+      return "0 Bytes";
+    }
+
+    const formatted = toHumanReadableSize(bytes, 2);
+    return formatted.endsWith(" B")
+      ? formatted.replace(" B", " Bytes")
+      : formatted;
   }
 
   /**
