@@ -3,11 +3,12 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import { File as FileIcon, X, Plus, FolderOpen, FileText, Image, Music, Video, Archive, Code, FileSpreadsheet, Upload, Download, RefreshCw } from 'lucide-svelte'
   import { files } from '$lib/stores'
+  import type { FileItem } from '$lib/stores'
   import { t } from 'svelte-i18n';
   import { get } from 'svelte/store'
   import { onMount, tick } from 'svelte';
   import { showToast } from '$lib/toast'
-  import { getStorageStatus, isDuplicateHash } from '$lib/uploadHelpers'
+  import { getStorageStatus } from '$lib/uploadHelpers'
   import { fileService } from '$lib/services/fileService'
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
@@ -152,7 +153,7 @@
     }
   }
   
-  async function removeFile(fileHash: string) {
+async function removeFile(fileHash: string) {
 
     try {
         await invoke('stop_publishing_file',{fileHash});
@@ -164,36 +165,67 @@
       }
   }
   
+  function buildFileItem(metadata: FileMetadata, sourcePath?: string): FileItem {
+    const createdAtSeconds = typeof metadata.createdAt === 'number'
+      ? metadata.createdAt
+      : Math.floor(Date.now() / 1000)
+
+    const seederCount = Array.isArray(metadata.seeders)
+      ? Math.max(1, metadata.seeders.length)
+      : 1
+
+    return {
+      id: `file-${metadata.fileHash}`,
+      name: metadata.fileName,
+      hash: metadata.fileHash,
+      size: typeof metadata.fileSize === 'number' ? metadata.fileSize : 0,
+      status: 'seeding',
+      seeders: seederCount,
+      leechers: 0,
+      uploadDate: new Date(createdAtSeconds * 1000),
+      encrypted: metadata.isEncrypted,
+      downloadPath: sourcePath
+    }
+  }
+
+  function upsertFileItem(item: FileItem): boolean {
+    let added = false
+    files.update((current) => {
+      const index = current.findIndex((entry) => entry.hash === item.hash)
+      if (index >= 0) {
+        const next = current.slice()
+        next[index] = { ...next[index], ...item }
+        return next
+      }
+
+      added = true
+      return [...current, item]
+    })
+    return added
+  }
+
+  function persistFileMetadata(metadata: FileMetadata, sourcePath?: string): boolean {
+    const item = buildFileItem(metadata, sourcePath)
+    return upsertFileItem(item)
+  }
+
   async function addFilesFromPaths(paths: string[]) {
     let duplicateCount = 0
     let addedCount = 0
 
     for (const filePath of paths) {
       try {
-        const metadata = await invoke('upload_file_to_network',{filePath}) as FileMetadata;
+        const metadata = await invoke('upload_file_to_network', { filePath }) as FileMetadata
+        const added = persistFileMetadata(metadata, filePath)
 
-        if (isDuplicateHash(get(files), metadata.fileHash)) {
+        if (added) {
+          addedCount++
+        } else {
           duplicateCount++
-          continue;
         }
-
-        const newFile = {
-          id: `file-${Date.now()}-${Math.random()}`,
-          name: metadata.fileName,
-          path: filePath, 
-          hash: metadata.fileHash,
-          size: metadata.fileSize,
-          status: 'seeding' as const,
-          seeders: 1,
-          leechers: 0,
-          uploadDate: new Date(metadata.createdAt)
-        };
-
-        files.update(f => [...f, newFile]);
-        addedCount++;
       } catch (error) {
-        console.error(error);
-        showToast(tr('upload.fileFailed', { values: { name: filePath.split(/[\/]/).pop(), error: String(error) } }), 'error');
+        console.error(error)
+        showToast(tr('upload.fileFailed', { values: { name: filePath.split(/[\\/]/).pop(), error: String(error) } }), 'error')
       }
     }
 
