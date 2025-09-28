@@ -1778,6 +1778,7 @@ async fn cleanup_inactive_peers(
         Err("DHT service not available".to_string())
     }
 }
+#[cfg(not(test))]
 fn main() {
     // Initialize logging for debug builds
     #[cfg(debug_assertions)]
