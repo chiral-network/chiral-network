@@ -1054,11 +1054,36 @@ async fn download_file_from_network(
                     info!("Found file metadata in DHT: {} (size: {} bytes)",
                           metadata.file_name, metadata.file_size);
 
-                    // TODO: Implement peer discovery and chunk requesting
-                    // For now, return an error indicating P2P transfer not implemented
+                    // Implement peer discovery for file chunks
+                    info!("Discovering peers for file: {} with {} known seeders",
+                          metadata.file_name, metadata.seeders.len());
+
+                    if metadata.seeders.is_empty() {
+                        return Err(format!(
+                            "No seeders available for file: {} ({})",
+                            metadata.file_name, metadata.file_hash
+                        ));
+                    }
+
+                    // Discover and verify available peers for this file
+                    let available_peers = dht_service.discover_peers_for_file(&metadata).await
+                        .map_err(|e| format!("Peer discovery failed: {}", e))?;
+
+                    if available_peers.is_empty() {
+                        info!("File found but no seeders currently available");
+                        // TODO: Return metadata to frontend with 0 seeders instead of error
+                        return Err(format!(
+                            "File found but no seeders available: {} ({} bytes) - 0 seeders online",
+                            metadata.file_name, metadata.file_size
+                        ));
+                    }
+
+                    info!("Found {} available peers for file download", available_peers.len());
+
+                    // TODO: Implement chunk requesting protocol
                     return Err(format!(
-                        "File found in DHT but P2P transfer not yet implemented. File: {} ({})",
-                        metadata.file_name, metadata.file_hash
+                        "File found with {} seeders, but chunk requesting not yet implemented. File: {} ({} bytes)",
+                        available_peers.len(), metadata.file_name, metadata.file_size
                     ));
                 }
                 Ok(None) => {
