@@ -708,15 +708,21 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
 
 #[tauri::command]
 fn get_cpu_temperature() -> Option<f32> {
-    static mut LAST_UPDATE: Option<Instant> = None;
-    unsafe {
-        if let Some(last) = LAST_UPDATE {
-            if last.elapsed() < MINIMUM_CPU_UPDATE_INTERVAL {
-                return None;
-            }
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST_UPDATE: AtomicU64 = AtomicU64::new(0);
+
+    let now = Instant::now();
+    let now_secs = now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let last_update = LAST_UPDATE.load(Ordering::Relaxed);
+
+    if last_update > 0 {
+        let last_instant = std::time::UNIX_EPOCH + Duration::from_secs(last_update);
+        if now.duration_since(last_instant).unwrap_or_default() < MINIMUM_CPU_UPDATE_INTERVAL {
+            return None;
         }
-        LAST_UPDATE = Some(Instant::now());
     }
+
+    LAST_UPDATE.store(now_secs, Ordering::Relaxed);
 
     // Try sysinfo first (works on some platforms including M1 macs and some Windows)
     let mut sys = System::new_all();

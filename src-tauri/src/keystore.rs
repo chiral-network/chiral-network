@@ -192,7 +192,8 @@ impl Keystore {
 
 fn derive_key(password: &str, salt: &[u8]) -> [u8; 32] {
     let mut key = [0u8; 32];
-    pbkdf2::<Hmac<Sha3_256>>(password.as_bytes(), salt, 4096, &mut key)
+    // Increased iterations from 4096 to 100000 for better security
+    pbkdf2::<Hmac<Sha3_256>>(password.as_bytes(), salt, 100_000, &mut key)
         .expect("PBKDF2 should not fail");
     key
 }

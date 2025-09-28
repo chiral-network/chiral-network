@@ -21,27 +21,8 @@
 
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
   
-  // Basic obfuscation for locally stored passwords. NOT for cryptographic security.
-  const OBFUSCATION_KEY = 'chiral-network-p@ssw0rd-key'; // A simple key
-
-  function obfuscate(text: string): string {
-    const textBytes = new TextEncoder().encode(text);
-    const keyBytes = new TextEncoder().encode(OBFUSCATION_KEY);
-    const resultBytes = textBytes.map((byte, i) => byte ^ keyBytes[i % keyBytes.length]);
-    return btoa(String.fromCharCode(...resultBytes)); // Base64 encode to handle binary data
-  }
-
-  function deobfuscate(base64Text: string): string {
-    try {
-      const resultBytes = [...atob(base64Text)].map(char => char.charCodeAt(0));
-      const keyBytes = new TextEncoder().encode(OBFUSCATION_KEY);
-      const textBytes = resultBytes.map((byte, i) => byte ^ keyBytes[i % keyBytes.length]);
-      return new TextDecoder().decode(new Uint8Array(textBytes));
-    } catch (e) {
-      console.error("Deobfuscation failed", e);
-      return ''; // Return empty string on failure
-    }
-  }
+  // SECURITY NOTE: Removed weak XOR obfuscation. Sensitive data should not be stored in frontend.
+  // Use proper secure storage mechanisms in the backend instead.
 
   // HD wallet imports
   import MnemonicWizard from '$lib/components/wallet/MnemonicWizard.svelte'
