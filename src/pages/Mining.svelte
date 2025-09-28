@@ -201,10 +201,12 @@
 
   const navigation = getContext('navigation') as { setCurrentPage: (page: string) => void };
   
-  // Computed values for actual threads based on intensity
+  // Computed values for threads based on intensity
   const maxThreads = cpuThreads
-  $: actualThreads = Math.ceil(($miningState.minerIntensity / 100) * maxThreads)
-  // Don't directly modify store in reactive statement to avoid infinite loops
+  // Intensity slider directly controls selectedThreads
+  $: if (!$miningState.isMining) {
+    selectedThreads = Math.ceil(($miningState.minerIntensity / 100) * maxThreads)
+  }
 
 
   // Threads warning
@@ -494,7 +496,7 @@
       sessionStartTime = Date.now()
       // Store session start time in the store for persistence
       $miningState.sessionStartTime = sessionStartTime
-      $miningState.activeThreads = actualThreads  // Use computed actualThreads
+      $miningState.activeThreads = selectedThreads  // Use selectedThreads
       totalHashes = 0 // Reset total hashes
       lastHashUpdate = Date.now()
       startUptimeTimer() 
