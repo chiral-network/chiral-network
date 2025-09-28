@@ -131,6 +131,7 @@ pub enum DhtCommand {
     PublishFile(FileMetadata),
     SearchFile(String),
     ConnectPeer(String),
+    DisconnectPeer(PeerId),
     GetPeerCount(oneshot::Sender<usize>),
     Echo {
         peer: PeerId,
@@ -670,6 +671,74 @@ async fn run_dht_node(
                             let _ = event_tx.send(DhtEvent::Error(format!("Invalid address: {}", addr))).await;
                         }
                     }
+                    // Some(DhtCommand::DisconnectPeer(peer_id)) => {
+                    //     info!("Requesting disconnect from peer: {}", peer_id);
+                    //     let was_proxy = is_proxy_peer(&peer_id, &proxy_targets, &proxy_capable).await;
+                    //     let peer_id_str = peer_id.to_string();
+
+                    //     match swarm.disconnect_peer_id(peer_id.clone()) {
+                    //         Ok(()) => {
+                    //             if was_proxy {
+                    //                 proxy_targets.lock().await.remove(&peer_id);
+                    //                 proxy_capable.lock().await.remove(&peer_id);
+
+                    //                 let _ = event_tx
+                    //                     .send(DhtEvent::ProxyStatus {
+                    //                         id: peer_id_str,
+                    //                         address: String::new(),
+                    //                         status: "offline".to_string(),
+                    //                         latency_ms: None,
+                    //                         error: None,
+                    //                     })
+                    //                     .await;
+                    //             }
+                    //         }
+                    //         Err(e) => {
+                    //             error!("Failed to disconnect from {}: {}", peer_id, e);
+                    //             let _ = event_tx
+                    //                 .send(DhtEvent::Error(format!(
+                    //                     "Failed to disconnect from {}: {}",
+                    //                     peer_id, e
+                    //                 )))
+                    //                 .await;
+                    //         }
+                    //     }
+                    // }
+                    Some(DhtCommand::DisconnectPeer(peer_id)) => {
+                        info!("Requesting disconnect from peer: {}", peer_id);
+                        let was_proxy = is_proxy_peer(&peer_id, &proxy_targets, &proxy_capable).await;
+                        let peer_id_str = peer_id.to_string();
+
+                        match swarm.disconnect_peer_id(peer_id.clone()) {
+                            Ok(()) => {
+                                if was_proxy {
+                                    proxy_targets.lock().await.remove(&peer_id);
+                                    proxy_capable.lock().await.remove(&peer_id);
+
+                                    let _ = event_tx
+                                        .send(DhtEvent::ProxyStatus {
+                                            id: peer_id_str,
+                                            address: String::new(),
+                                            status: "offline".to_string(),
+                                            latency_ms: None,
+                                            error: None,
+                                        })
+                                        .await;
+                                }
+                            }
+                            Err(e) => {
+                                // Use Debug formatting (`{:?}`) because the error type is `()`, not `Display`.
+                                error!("Failed to disconnect from {}: {:?}", peer_id, e);
+                                let _ = event_tx
+                                    .send(DhtEvent::Error(format!(
+                                        "Failed to disconnect from {}: {:?}",
+                                        peer_id, e
+                                    )))
+                                    .await;
+                            }
+                        }
+                    }
+
                     Some(DhtCommand::GetPeerCount(tx)) => {
                         let count = connected_peers.lock().await.len();
                         let _ = tx.send(count);
@@ -1681,6 +1750,13 @@ impl DhtService {
     pub async fn connect_peer(&self, addr: String) -> Result<(), String> {
         self.cmd_tx
             .send(DhtCommand::ConnectPeer(addr))
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    pub async fn disconnect_peer(&self, peer_id: PeerId) -> Result<(), String> {
+        self.cmd_tx
+            .send(DhtCommand::DisconnectPeer(peer_id))
             .await
             .map_err(|e| e.to_string())
     }
