@@ -1,5 +1,16 @@
 import { writable, type Writable } from "svelte/store";
 
+function createClientId(): string {
+  const randomUUID = globalThis?.crypto?.randomUUID;
+  if (typeof randomUUID === "function") {
+    return randomUUID();
+  }
+
+  const timePart = Date.now().toString(36);
+  const randomPart = Math.random().toString(36).slice(2, 10);
+  return `client-${timePart}-${randomPart}`;
+}
+
 export class SignalingService {
   private ws: WebSocket | null = null;
   private clientId: string;
@@ -11,7 +22,7 @@ export class SignalingService {
   private onMessageHandler: ((msg: any) => void) | null = null;
 
   constructor(private url: string = "ws://localhost:3000") {
-    this.clientId = crypto.randomUUID();
+    this.clientId = createClientId();
   }
 
   async connect(): Promise<void> {
