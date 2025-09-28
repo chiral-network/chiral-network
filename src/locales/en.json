@@ -75,6 +75,16 @@
       "peers": "Connected Peers",
       "peerId": "Peer ID",
       "bootstrapNode": "Bootstrap Node",
+      "listenAddresses": "Listen Addresses",
+      "noListenAddresses": "No listen addresses available. DHT may be running in client-only mode.",
+      "health": {
+        "lastBootstrap": "Last Bootstrap",
+        "lastPeer": "Last Peer Event",
+        "lastError": "Last Error",
+        "failures": "Bootstrap Failures",
+        "never": "Never",
+        "none": "None"
+      },
       "recentEvents": "Recent Events",
       "disconnect": "Disconnect from DHT",
       "reachability": {
