@@ -1172,10 +1172,10 @@ pub async fn get_recent_mined_blocks(
         //         None
         //     }
         // };
-        
+
         // Since Geth's default reward (2.0) doesn't match the intended Chiral Network
         // reward, we hardcode the intended value of 5.0 here.
-        let reward = Some(5.0); 
+        let reward = Some(5.0);
 
         out.push(MinedBlock {
             hash,
