@@ -45,7 +45,7 @@ futures-util = "0.3"
 systemstat = "0.2.5"
 sysinfo = "0.31"
 sys-locale = "0.3"
-libp2p = { version = "0.54", features = ["kad", "mdns", "noise", "tcp", "yamux", "identify", "gossipsub", "macros", "tokio", "rsa", "request-response", "relay", "ping"] }
+libp2p = { version = "0.54", features = ["kad", "mdns", "noise", "tcp", "yamux", "identify", "gossipsub", "macros", "tokio", "rsa", "request-response", "relay", "ping", "dns"] }
 async-std = { version = "1.12", features = ["attributes"] }
 async-trait = "0.1"
 tracing = "0.1"
@@ -55,6 +55,7 @@ fs2 = "0.4"
 glob = "0.3"
 tokio-util = { version = "0.7", features = ["compat"] }
 tokio-socks = "0.5"
+trust-dns-resolver = { version = "0.23", features = ["tokio-runtime", "system-config"] }
 
 [dev-dependencies]
 tempfile = "3.8"

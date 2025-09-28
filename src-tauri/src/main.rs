@@ -4,6 +4,7 @@
 )]
 
 pub mod commands;
+mod bootstrap;
 mod dht;
 mod encryption;
 mod ethereum;
@@ -338,6 +339,14 @@ async fn get_recent_mined_blocks_pub(
 ) -> Result<Vec<MinedBlock>, String> {
     get_recent_mined_blocks(&address, lookback, limit).await
 }
+
+#[tauri::command]
+async fn resolve_bootstrap_nodes(
+    domains: Option<Vec<String>>,
+) -> Result<Vec<String>, String> {
+    bootstrap::resolve_bootstrap_nodes(domains).await
+}
+
 #[tauri::command]
 async fn start_dht_node(
     app: tauri::AppHandle,
@@ -346,6 +355,7 @@ async fn start_dht_node(
     bootstrap_nodes: Vec<String>,
     proxy_address: Option<String>,
 ) -> Result<String, String> {
+    let mut bootstrap_nodes = bootstrap_nodes;
     {
         let dht_guard = state.dht.lock().await;
         if dht_guard.is_some() {
@@ -357,6 +367,21 @@ async fn start_dht_node(
     let cli_proxy = state.socks5_proxy_cli.lock().await.clone();
     // Prioritize the command-line argument. Fall back to the one from the UI.
     let final_proxy_address = cli_proxy.or(proxy_address.clone());
+
+    if bootstrap_nodes.is_empty() {
+        match bootstrap::resolve_bootstrap_nodes(None).await {
+            Ok(resolved) => {
+                info!(
+                    "Using {} bootstrap nodes discovered via DNS",
+                    resolved.len()
+                );
+                bootstrap_nodes = resolved;
+            }
+            Err(err) => {
+                warn!("Failed to discover bootstrap nodes via DNS: {}", err);
+            }
+        }
+    }
 
     let dht_service = DhtService::new(port, bootstrap_nodes, None, false, final_proxy_address,)
         .await
@@ -1802,6 +1827,7 @@ fn main() {
             get_blocks_mined,
             get_recent_mined_blocks_pub,
             get_cpu_temperature,
+            resolve_bootstrap_nodes,
             start_dht_node,
             stop_dht_node,
             publish_file_metadata,

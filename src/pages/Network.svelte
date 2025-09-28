@@ -12,7 +12,12 @@
   import { onMount, onDestroy } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
-  import { dhtService, DEFAULT_BOOTSTRAP_NODES } from '$lib/dht'
+  import {
+    dhtService,
+    resolveBootstrapNodes,
+    getBootstrapDiscoveryError,
+    DEFAULT_BOOTSTRAP_DOMAINS,
+  } from '$lib/dht'
   import { getStatus as fetchGethStatus, type GethStatus } from '$lib/services/gethService'
   import { resetConnectionAttempts } from '$lib/dhtHelpers'
   import type { DhtHealth } from '$lib/dht'
@@ -71,7 +76,9 @@
   let dhtStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
   let dhtPeerId: string | null = null
   let dhtPort = 4001
-  let dhtBootstrapNode = DEFAULT_BOOTSTRAP_NODES[0] || 'No bootstrap nodes configured'
+  let bootstrapNodes: string[] = []
+  let bootstrapResolutionError: string | null = null
+  let dhtBootstrapNode = 'Resolving bootstrap nodes…'
   let dhtEvents: string[] = []
   let dhtPeerCount = 0
   let dhtHealth: DhtHealth | null = null
@@ -107,7 +114,28 @@
   function formatHealthMessage(value: string | null): string {
     return value ?? tr('network.dht.health.none')
   }
-  
+
+  async function refreshBootstrapNodes(forceRefresh = false) {
+    if (!isTauri) {
+      bootstrapNodes = []
+      bootstrapResolutionError = null
+      dhtBootstrapNode = 'Bootstrap discovery unavailable in web preview'
+      return
+    }
+
+    const nodes = await resolveBootstrapNodes(undefined, { forceRefresh })
+    bootstrapNodes = nodes
+    bootstrapResolutionError = getBootstrapDiscoveryError(undefined)
+
+    if (nodes.length > 0) {
+      dhtBootstrapNode = nodes[0]
+      console.log('Discovered bootstrap nodes:', nodes)
+    } else {
+      const domainList = DEFAULT_BOOTSTRAP_DOMAINS.join(', ')
+      dhtBootstrapNode = `No bootstrap nodes discovered for ${domainList}`
+    }
+  }
+
   async function startDht() {
     if (!isTauri) {
       // Mock DHT connection for web
@@ -121,7 +149,11 @@
     
     try {
       dhtError = null
-      
+
+      if (bootstrapNodes.length === 0 || connectionAttempts > 0) {
+        await refreshBootstrapNodes(connectionAttempts > 0)
+      }
+
       // First check if DHT is already running in backend BEFORE setting any status
       let backendPeerId = null
       try {
@@ -178,7 +210,9 @@
 
           const peerId = await dhtService.start({
             port: dhtPort,
-            bootstrapNodes: DEFAULT_BOOTSTRAP_NODES,
+            bootstrapNodes,
+            bootstrapDomains: DEFAULT_BOOTSTRAP_DOMAINS,
+            forceBootstrapRefresh: connectionAttempts > 1,
             proxyAddress: proxyAddress, 
           })
           dhtPeerId = peerId
@@ -214,20 +248,20 @@
       
       // Try to connect to bootstrap nodes
       let connectionSuccessful = false
-      if (DEFAULT_BOOTSTRAP_NODES.length > 0) {
-        console.log('Attempting to connect to bootstrap nodes:', DEFAULT_BOOTSTRAP_NODES)
-        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to ${DEFAULT_BOOTSTRAP_NODES.length} bootstrap node(s)...`]
-        
+      if (bootstrapNodes.length > 0) {
+        console.log('Attempting to connect to bootstrap nodes:', bootstrapNodes)
+        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to ${bootstrapNodes.length} bootstrap node(s)...`]
+
         // Add another small delay to show the connection attempt
         await new Promise(resolve => setTimeout(resolve, 1000))
-        
+
         try {
           // Try connecting to the first available bootstrap node
-          await dhtService.connectPeer(DEFAULT_BOOTSTRAP_NODES[0])
+          await dhtService.connectPeer(bootstrapNodes[0])
           console.log('Connection initiated to bootstrap nodes')
           connectionSuccessful = true
           dhtEvents = [...dhtEvents, `✓ Connection initiated to bootstrap nodes (waiting for handshake...)`]
-          
+
           // Poll for actual connection after a delay
           setTimeout(async () => {
             const dhtPeerCountResult = await invoke('get_dht_peer_count') as number
@@ -263,7 +297,7 @@
             errorMessage = 'Unknown connection error - running in standalone mode'
             connectionSuccessful = true
           }
-          
+
           if (!connectionSuccessful) {
             dhtError = errorMessage
             dhtEvents = [...dhtEvents, `✗ Connection failed: ${errorMessage}`]
@@ -271,6 +305,13 @@
             dhtEvents = [...dhtEvents, `⚠ ${errorMessage}`]
           }
         }
+      } else {
+        connectionSuccessful = true
+        const domainList = DEFAULT_BOOTSTRAP_DOMAINS.join(', ')
+        const message = bootstrapResolutionError
+          ? `DNS discovery error: ${bootstrapResolutionError}`
+          : `DNS discovery returned no bootstrap nodes for ${domainList}`
+        dhtEvents = [...dhtEvents, `⚠ ${message}`]
       }
       
       // Set status based on connection result

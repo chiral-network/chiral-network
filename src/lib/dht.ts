@@ -1,19 +1,98 @@
 // DHT configuration and utilities
 import { invoke } from "@tauri-apps/api/core";
 
-// Default bootstrap nodes for network connectivity
-export const DEFAULT_BOOTSTRAP_NODES = [
-  "/ip4/145.40.118.135/tcp/4001/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
-  "/ip4/139.178.91.71/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
-  "/ip4/147.75.87.27/tcp/4001/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
-  "/ip4/139.178.65.157/tcp/4001/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
-  "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
-  "/ip4/54.198.145.146/tcp/4001/p2p/12D3KooWNHdYWRTe98KMF1cDXXqGXvNjd1SAchDaeP5o4MsoJLu2",
-];
+const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+export const DEFAULT_BOOTSTRAP_DOMAINS = ["bootstrap.chiral.network"];
+
+type ResolveOptions = {
+  forceRefresh?: boolean;
+};
+
+const bootstrapCache = new Map<string, string[]>();
+const bootstrapErrors = new Map<string, string>();
+
+function normalizeDomains(domains?: string[] | null): string[] {
+  const source = domains && domains.length > 0 ? domains : DEFAULT_BOOTSTRAP_DOMAINS;
+  return source
+    .map((domain) => domain.trim())
+    .filter((domain) => domain.length > 0);
+}
+
+function createCacheKey(domains: string[]): string {
+  return [...domains]
+    .map((domain) => domain.toLowerCase())
+    .sort()
+    .join(",");
+}
+
+export function getBootstrapDiscoveryError(domains?: string[]): string | null {
+  if (!domains) {
+    return bootstrapErrors.size > 0 ? Array.from(bootstrapErrors.values())[0] : null;
+  }
+  const normalized = normalizeDomains(domains);
+  if (normalized.length === 0) {
+    return null;
+  }
+  const key = createCacheKey(normalized);
+  return bootstrapErrors.get(key) ?? null;
+}
+
+export function clearBootstrapCache(domains?: string[]): void {
+  if (!domains) {
+    bootstrapCache.clear();
+    bootstrapErrors.clear();
+    return;
+  }
+  const normalized = normalizeDomains(domains);
+  if (normalized.length === 0) {
+    return;
+  }
+  const key = createCacheKey(normalized);
+  bootstrapCache.delete(key);
+  bootstrapErrors.delete(key);
+}
+
+export async function resolveBootstrapNodes(
+  domains?: string[],
+  options?: ResolveOptions,
+): Promise<string[]> {
+  const normalized = normalizeDomains(domains);
+  if (normalized.length === 0) {
+    return [];
+  }
+
+  const key = createCacheKey(normalized);
+  if (!options?.forceRefresh && bootstrapCache.has(key)) {
+    const cached = bootstrapCache.get(key);
+    return cached ? [...cached] : [];
+  }
+
+  if (!isTauri) {
+    const cached = bootstrapCache.get(key);
+    return cached ? [...cached] : [];
+  }
+
+  try {
+    const nodes = await invoke<string[]>("resolve_bootstrap_nodes", { domains: normalized });
+    const sanitized = nodes.filter((addr) => addr.length > 0);
+    bootstrapCache.set(key, sanitized);
+    bootstrapErrors.delete(key);
+    return [...sanitized];
+  } catch (error) {
+    console.error("Failed to resolve bootstrap nodes from DNS:", error);
+    const message = error instanceof Error ? error.message : String(error);
+    bootstrapErrors.set(key, message);
+    const fallback = bootstrapCache.get(key);
+    return fallback ? [...fallback] : [];
+  }
+}
 
 export interface DhtConfig {
   port: number;
-  bootstrapNodes: string[];
+  bootstrapNodes?: string[];
+  bootstrapDomains?: string[];
+  forceBootstrapRefresh?: boolean;
   showMultiaddr?: boolean;
   proxyAddress?: string; // The SOCKS5 address for routing (e.g., "127.0.0.1:9050")
 }
@@ -44,6 +123,8 @@ export class DhtService {
   private static instance: DhtService | null = null;
   private peerId: string | null = null;
   private port: number = 4001;
+  private bootstrapNodes: string[] = [];
+  private bootstrapDomains: string[] = [...DEFAULT_BOOTSTRAP_DOMAINS];
 
   private constructor() {}
 
@@ -59,21 +140,39 @@ export class DhtService {
   }
 
   async start(config?: Partial<DhtConfig>): Promise<string> {
-    const port = config?.port || 4001;
-    let bootstrapNodes = config?.bootstrapNodes || [];
+    const port = config?.port ?? 4001;
+    const configuredNodes = config?.bootstrapNodes?.filter((addr) => addr.length > 0) ?? [];
+    const discoveryDomains = config?.bootstrapDomains;
+    const forceRefresh = config?.forceBootstrapRefresh ?? false;
 
-    // Use default bootstrap nodes if none provided
+    let bootstrapNodes = configuredNodes;
+
     if (bootstrapNodes.length === 0) {
-      bootstrapNodes = DEFAULT_BOOTSTRAP_NODES;
-      console.log("Using default bootstrap nodes for network connectivity");
+      bootstrapNodes = await resolveBootstrapNodes(discoveryDomains, { forceRefresh });
+      if (bootstrapNodes.length === 0) {
+        console.warn(
+          "No bootstrap nodes discovered via DNS; starting without predefined peers",
+        );
+      } else {
+        console.log(`Discovered ${bootstrapNodes.length} bootstrap node(s) via DNS`);
+      }
     } else {
-      console.log(`Using ${bootstrapNodes.length} custom bootstrap nodes`);
+      console.log(
+        `Using ${bootstrapNodes.length} bootstrap node(s) provided by configuration`,
+      );
     }
+
+    this.bootstrapNodes = [...bootstrapNodes];
+    this.bootstrapDomains =
+      discoveryDomains && discoveryDomains.length > 0
+        ? [...discoveryDomains]
+        : [...DEFAULT_BOOTSTRAP_DOMAINS];
 
     try {
       const peerId = await invoke<string>("start_dht_node", {
         port,
         bootstrapNodes,
+        proxyAddress: config?.proxyAddress,
       });
       this.peerId = peerId;
       this.port = port;
@@ -170,6 +269,14 @@ export class DhtService {
 
   getPort(): number {
     return this.port;
+  }
+
+  getBootstrapNodes(): string[] {
+    return [...this.bootstrapNodes];
+  }
+
+  getBootstrapDomains(): string[] {
+    return [...this.bootstrapDomains];
   }
 
   getMultiaddr(): string | null {

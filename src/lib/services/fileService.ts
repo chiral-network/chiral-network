@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { downloadDir, join } from '@tauri-apps/api/path';
+import { resolveBootstrapNodes } from '$lib/dht';
 
 /**
  * A service class to interact with the file transfer and DHT commands
@@ -15,10 +16,8 @@ export class FileService {
     await invoke('start_file_transfer_service');
     // Also start the DHT node, as it's closely related to file sharing.
     // The port and bootstrap nodes could be made configurable in the future.
-    // Using a default bootstrap node from your headless.rs for now.
-    const defaultBootstrap =
-      '/ip4/54.198.145.146/tcp/4001/p2p/12D3KooWNHdYWRTe98KMF1cDXXqGXvNjd1SAchDaeP5o4MsoJLu2';
-    await invoke('start_dht_node', { port: 4001, bootstrapNodes: [defaultBootstrap] });
+    const bootstrapNodes = await resolveBootstrapNodes();
+    await invoke('start_dht_node', { port: 4001, bootstrapNodes });
   }
 
   /**
