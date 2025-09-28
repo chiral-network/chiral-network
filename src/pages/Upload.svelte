@@ -181,21 +181,20 @@
     }
   }
   
-async function removeFile(fileHash: string) {
-
+  async function removeFile(fileHash: string) {
     try {
-        await invoke('stop_publishing_file',{fileHash});
-        console.log("stopped publishing file")
-        files.update(f => f.filter(file => file.hash !== fileHash))
-      } catch (error) {
-        console.error(error);
-        showToast(tr('upload.fileFailed', { values: { name: fileHash, error: String(error) } }), 'error');
-      }
+      await invoke('stop_publishing_file', { fileHash })
+      console.log('stopped publishing file')
+      files.update((f) => f.filter((file) => file.hash !== fileHash))
+    } catch (error) {
+      console.error(error)
+      showToast(tr('upload.fileFailed', { values: { name: fileHash, error: String(error) } }), 'error')
+    }
   }
   
   function buildFileItem(metadata: FileMetadata, sourcePath?: string): FileItem {
-    const createdAtSeconds = typeof metadata.createdAt === 'number'
-      ? metadata.createdAt
+    const createdAtSeconds = Number.isFinite(metadata.createdAt)
+      ? (metadata.createdAt as number)
       : Math.floor(Date.now() / 1000)
 
     const seederCount = Array.isArray(metadata.seeders)
@@ -212,7 +211,7 @@ async function removeFile(fileHash: string) {
       leechers: 0,
       uploadDate: new Date(createdAtSeconds * 1000),
       encrypted: metadata.isEncrypted,
-      downloadPath: sourcePath
+      downloadPath: sourcePath,
     }
   }
 
@@ -237,23 +236,121 @@ async function removeFile(fileHash: string) {
     return upsertFileItem(item)
   }
 
+  function hasFilePayload(event: DragEvent): boolean {
+    const { dataTransfer } = event
+    if (!dataTransfer) return false
+    if (dataTransfer.files && dataTransfer.files.length > 0) return true
+    return Array.from(dataTransfer.types ?? []).includes('Files')
+  }
+
+  function handleDragEnter(event: DragEvent) {
+    if (!hasFilePayload(event)) return
+    event.preventDefault()
+    dragCounter += 1
+    isDragging = true
+  }
+
+  function handleDragLeave(event: DragEvent) {
+    if (!hasFilePayload(event)) return
+    event.preventDefault()
+    dragCounter = Math.max(0, dragCounter - 1)
+    if (dragCounter === 0) {
+      isDragging = false
+    }
+  }
+
+  function handleDragOver(event: DragEvent) {
+    if (!hasFilePayload(event)) return
+    event.preventDefault()
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'copy'
+    }
+  }
+
+  function handleDrop(event: DragEvent) {
+    if (!hasFilePayload(event)) return
+    event.preventDefault()
+    dragCounter = 0
+    isDragging = false
+
+    if (isTauri && tauriDropHandled) {
+      return
+    }
+
+    const { dataTransfer } = event
+    if (!dataTransfer || !dataTransfer.files || dataTransfer.files.length === 0) {
+      return
+    }
+
+    void addBrowserFiles(dataTransfer.files)
+  }
+
   async function addFilesFromPaths(paths: string[]) {
+    const uniquePaths = Array.from(new Set(paths.filter(Boolean)))
+    if (uniquePaths.length === 0) return
+
     let duplicateCount = 0
     let addedCount = 0
 
-    for (const filePath of paths) {
+    for (const filePath of uniquePaths) {
       try {
         const metadata = await invoke('upload_file_to_network', { filePath }) as FileMetadata
         const added = persistFileMetadata(metadata, filePath)
 
         if (added) {
-          addedCount++
+          addedCount += 1
         } else {
-          duplicateCount++
+          duplicateCount += 1
         }
       } catch (error) {
         console.error(error)
-        showToast(tr('upload.fileFailed', { values: { name: filePath.split(/[\\/]/).pop(), error: String(error) } }), 'error')
+        const name = filePath.split(/[\\/]/).pop()
+        showToast(tr('upload.fileFailed', { values: { name, error: String(error) } }), 'error')
+      }
+    }
+
+    if (duplicateCount > 0) {
+      showToast(tr('upload.duplicateSkipped', { values: { count: duplicateCount } }), 'warning')
+    }
+
+    if (addedCount > 0) {
+      showToast(tr('upload.filesAdded', { values: { count: addedCount } }), 'success')
+      refreshAvailableStorage()
+    }
+  }
+
+  async function addBrowserFiles(fileList: FileList | File[]) {
+    const filesArray = Array.from(fileList instanceof FileList ? fileList : fileList)
+    if (filesArray.length === 0) return
+
+    let addedCount = 0
+    let duplicateCount = 0
+
+    for (const file of filesArray) {
+      try {
+        const hash = await fileService.uploadFile(file)
+        const metadata: FileMetadata = {
+          fileHash: hash,
+          fileName: file.name || 'Untitled file',
+          fileSize: file.size,
+          seeders: [],
+          createdAt: Math.floor(Date.now() / 1000),
+          mimeType: file.type || undefined,
+          isEncrypted: false,
+          encryptionMethod: undefined,
+          keyFingerprint: undefined,
+        }
+
+        const added = persistFileMetadata(metadata)
+        if (added) {
+          addedCount += 1
+        } else {
+          duplicateCount += 1
+        }
+      } catch (error) {
+        console.error(error)
+        const name = file.name || 'file'
+        showToast(tr('upload.fileFailed', { values: { name, error: String(error) } }), 'error')
       }
     }
 
@@ -320,7 +417,13 @@ async function removeFile(fileHash: string) {
     </div>
   </Card>
   
-  <Card class="relative p-6 transition-all duration-200 border-dashed {isDragging ? 'border-primary bg-primary/5 scale-[1.01]' : 'border-muted-foreground/25 hover:border-muted-foreground/50'}">
+  <Card
+    class="relative p-6 transition-all duration-200 border-dashed {isDragging ? 'border-primary bg-primary/5 scale-[1.01]' : 'border-muted-foreground/25 hover:border-muted-foreground/50'}"
+    on:dragenter={handleDragEnter}
+    on:dragleave={handleDragLeave}
+    on:dragover={handleDragOver}
+    on:drop={handleDrop}
+  >
     <div
       class="space-y-4"
       role="region"
