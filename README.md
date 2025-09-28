@@ -28,7 +28,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 ### 1. File Sharing & Seeding
 
 - ✅ **Instant Sharing**: Files immediately processed and metadata published to DHT
-- ❌ **Drag & Drop Interface**: Simple, compact file addition with real-time feedback (currently not functioning)
+- ✅ **Drag & Drop Interface**: Simple, compact file addition with real-time feedback
 - ✅ **Content Hashing**: SHA-256 hash generation for unique file identifiers
 - ✅ **DHT Metadata Distribution**: File information shared via distributed hash table
 - ❌ **Network Integration**: Files registered with P2P network for discovery (currently local-only storage)
