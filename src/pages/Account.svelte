@@ -148,9 +148,6 @@
   let isBlacklistAddressValid = false;
 
 
-  // Copy feedback message
-  let copyMessage = '';
-  let privateKeyCopyMessage = '';
    
   // Export feedback message
   let exportMessage = '';
@@ -386,12 +383,11 @@
       const privateKeyToCopy = $etcAccount ? $etcAccount.private_key : '';
       if (privateKeyToCopy) {
         navigator.clipboard.writeText(privateKeyToCopy);
-        privateKeyCopyMessage = tr('messages.copied');
+        showToast('Private key copied to clipboard!', 'success');
       }
       else {
-        privateKeyCopyMessage = tr('messages.failed');
+        showToast('No private key available', 'error');
       }
-      setTimeout(() => privateKeyCopyMessage = '', 1500);
     });
   }
     
@@ -1552,14 +1548,9 @@
               <p class="text-sm text-muted-foreground">{$t('wallet.address')}</p>
               <div class="flex items-center gap-2 mt-1">
                 <p class="font-mono text-sm">{$etcAccount.address.slice(0, 10)}...{$etcAccount.address.slice(-8)}</p>
-                <div class="relative">
-                  <Button size="sm" variant="outline" on:click={copyAddress} aria-label={$t('aria.copyAddress')}>
-                    <Copy class="h-3 w-3" />
-                  </Button>
-                  {#if copyMessage}
-                    <span class="absolute top-full left-1/2 transform -translate-x-1/2 text-xs text-green-600 mt-1 whitespace-nowrap">{copyMessage}</span>
-                  {/if}
-                </div>
+                <Button size="sm" variant="outline" on:click={copyAddress} aria-label={$t('aria.copyAddress')}>
+                  <Copy class="h-3 w-3" />
+                </Button>
                 <Button size="sm" variant="outline" on:click={generateAndShowQrCode} title={$t('tooltips.showQr')} aria-label={$t('aria.showQr')}>
                   <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5h3v3H5zM5 16h3v3H5zM16 5h3v3h-3zM16 16h3v3h-3zM10.5 5h3M10.5 19h3M5 10.5v3M19 10.5v3M10.5 10.5h3v3h-3z"/></svg>
                 </Button>
@@ -1598,30 +1589,26 @@
             
             <div class="mt-4">
               <p class="text-sm text-muted-foreground">{$t('wallet.privateKey')}</p>
-                <div class="flex gap-2 mt-1">
+                <div class="flex items-center gap-2 mt-1">
                   <Input
                     type="text"
                     value={privateKeyVisible ? $etcAccount.private_key : '•'.repeat($etcAccount.private_key.length)}
                     readonly
-                    class="flex-1 font-mono text-xs min-w-0"
+                    class="flex-1 font-mono text-xs min-w-0 h-9"
                   />
-                <div class="relative">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    on:click={copyPrivateKey}
-                    aria-label={$t('aria.copyPrivateKey')}
-                  >
-                    <Copy class="h-3 w-3" />
-                  </Button>
-                  {#if privateKeyCopyMessage}
-                    <span class="absolute top-full left-1/2 transform -translate-x-1/2 text-xs text-green-600 mt-1 whitespace-nowrap">{privateKeyCopyMessage}</span>
-                  {/if}
-                </div>
                 <Button
                   size="sm"
                   variant="outline"
-                  class="w-16"
+                  on:click={copyPrivateKey}
+                  aria-label={$t('aria.copyPrivateKey')}
+                  class="h-9 px-3"
+                >
+                  <Copy class="h-3 w-3" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  class="w-16 h-9 px-3"
                   on:click={togglePrivateKeyVisibility}
                 >
                   {privateKeyVisible ? $t('actions.hide') : $t('actions.show')}

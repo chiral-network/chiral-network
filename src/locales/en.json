@@ -75,8 +75,50 @@
       "peers": "Connected Peers",
       "peerId": "Peer ID",
       "bootstrapNode": "Bootstrap Node",
+      "listenAddresses": "Listen Addresses",
+      "noListenAddresses": "No listen addresses available. DHT may be running in client-only mode.",
+      "health": {
+        "lastBootstrap": "Last Bootstrap",
+        "lastPeer": "Last Peer Event",
+        "lastError": "Last Error",
+        "failures": "Bootstrap Failures",
+        "never": "Never",
+        "none": "None"
+      },
       "recentEvents": "Recent Events",
-      "disconnect": "Disconnect from DHT"
+      "disconnect": "Disconnect from DHT",
+      "reachability": {
+        "title": "Reachability",
+        "state": {
+          "public": "Direct (Public)",
+          "private": "Relayed / Private",
+          "unknown": "Unknown"
+        },
+        "confidence": {
+          "low": "Low confidence",
+          "medium": "Moderate confidence",
+          "high": "High confidence"
+        },
+        "lastProbe": "Last probe",
+        "lastChange": "Last change",
+        "lastError": "Last probe error",
+        "observedAddrs": "Observed external addresses",
+        "observedEmpty": "No external addresses learned yet.",
+        "history": "Recent probe history",
+        "historyEmpty": "No reachability probes recorded yet.",
+        "summary": "Summary",
+        "timestamp": "Timestamp",
+        "stateLabel": "State",
+        "autonatDisabled": "AutoNAT probes disabled",
+        "copySuccess": "Observed address copied",
+        "copyError": "Unable to copy address",
+        "genericSummary": "No additional details.",
+        "toast": {
+          "public": "Reachability restored. {summary}",
+          "private": "Reachability degraded. {summary}",
+          "unknown": "Reachability status updated. {summary}"
+        }
+      }
     },
     "networkStatus": "Network Status",
     "dhtPeers": "DHT Peers",

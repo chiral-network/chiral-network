@@ -11,11 +11,24 @@ export const DEFAULT_BOOTSTRAP_NODES = [
   "/ip4/54.198.145.146/tcp/4001/p2p/12D3KooWNHdYWRTe98KMF1cDXXqGXvNjd1SAchDaeP5o4MsoJLu2",
 ];
 
+export type NatReachabilityState = 'unknown' | 'public' | 'private';
+export type NatConfidence = 'low' | 'medium' | 'high';
+
+export interface NatHistoryItem {
+  state: NatReachabilityState;
+  confidence: NatConfidence;
+  timestamp: number;
+  summary?: string | null;
+}
+
 export interface DhtConfig {
   port: number;
   bootstrapNodes: string[];
   showMultiaddr?: boolean;
-  proxyAddress?: string; // The SOCKS5 address for routing (e.g., "127.0.0.1:9050")
+  enableAutonat?: boolean;
+  autonatProbeIntervalSeconds?: number;
+  autonatServers?: string[];
+  proxyAddress?: string;
 }
 
 export interface FileMetadata {
@@ -38,6 +51,14 @@ export interface DhtHealth {
   lastErrorAt: number | null;
   bootstrapFailures: number;
   listenAddrs: string[];
+  reachability: NatReachabilityState;
+  reachabilityConfidence: NatConfidence;
+  lastReachabilityChange: number | null;
+  lastProbeAt: number | null;
+  lastReachabilityError: string | null;
+  observedAddrs: string[];
+  reachabilityHistory: NatHistoryItem[];
+  autonatEnabled: boolean;
 }
 
 export class DhtService {
@@ -71,10 +92,24 @@ export class DhtService {
     }
 
     try {
-      const peerId = await invoke<string>("start_dht_node", {
+      const payload: Record<string, unknown> = {
         port,
         bootstrapNodes,
-      });
+      };
+      if (typeof config?.enableAutonat === 'boolean') {
+        payload.enableAutonat = config.enableAutonat;
+      }
+      if (typeof config?.autonatProbeIntervalSeconds === 'number') {
+        payload.autonatProbeIntervalSecs = config.autonatProbeIntervalSeconds;
+      }
+      if (config?.autonatServers && config.autonatServers.length > 0) {
+        payload.autonatServers = config.autonatServers;
+      }
+      if (typeof config?.proxyAddress === 'string' && config.proxyAddress.trim().length > 0) {
+        payload.proxyAddress = config.proxyAddress;
+      }
+
+      const peerId = await invoke<string>("start_dht_node", payload);
       this.peerId = peerId;
       this.port = port;
       console.log("DHT started with peer ID:", this.peerId);
