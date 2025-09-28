@@ -1769,5 +1769,8 @@ function pushRecentBlock(b: {
     <div>
       <strong>Mining Status:</strong> {$miningState.isMining ? 'Active' : 'Stopped'}
     </div>
+    <div>
+      <strong>Account:</strong> {$etcAccount ? `${$etcAccount.address.slice(0, 10)}...${$etcAccount.address.slice(-8)}` : 'No Account'}
+    </div>
   </div>
 </div>

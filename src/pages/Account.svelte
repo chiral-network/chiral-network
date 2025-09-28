@@ -173,6 +173,25 @@
   $: if ($etcAccount && isGethRunning) {
     fetchBalance()
   }
+  // Add this reactive statement after your other reactive statements (around line 170)
+  $: if ($etcAccount) {
+    // Clear dummy transactions when a real account is logged in
+    // Only keep transactions that are actually related to this account
+    const accountTransactions = $transactions.filter(tx => 
+      // Keep transactions that are from mining rewards or manual transactions
+      tx.description?.includes('Mining reward') || 
+      tx.description?.includes('Block reward') ||
+      tx.description === tr('transactions.manual') ||
+      // Or transactions that involve this account's address
+      tx.to?.toLowerCase() === $etcAccount.address.toLowerCase() ||
+      tx.from?.toLowerCase() === $etcAccount.address.toLowerCase()
+    );
+    
+    // If we have fewer relevant transactions than total, update the store
+    if (accountTransactions.length !== $transactions.length) {
+      transactions.set(accountTransactions);
+    }
+  }
 
   // Derived filtered transactions
   $: filteredTransactions = $transactions
@@ -1285,11 +1304,6 @@
   function setMaxAmount() {
     rawAmountInput = $wallet.balance.toFixed(2);
   }
-
-  // async function handleLogout() {
-  //   if (isTauri) await invoke('logout');
-  //   logout();
-  // }
 
   // Update your handleLogout function
   async function handleLogout() {
