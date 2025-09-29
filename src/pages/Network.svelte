@@ -20,6 +20,8 @@
   import { t } from 'svelte-i18n';
   import { showToast } from '$lib/toast';
   import DropDown from '$lib/components/ui/dropDown.svelte'
+  import { SignalingService } from '$lib/services/signalingService';
+  import { createWebRTCSession } from '$lib/services/webrtcService';
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -84,6 +86,13 @@
   let natStatusUnlisten: (() => void) | null = null
   let lastNatState: NatReachabilityState | null = null
   let lastNatConfidence: NatConfidence | null = null
+  
+  // WebRTC and Signaling variables
+  let signaling: SignalingService;
+  let webrtcSession: ReturnType<typeof createWebRTCSession> | null = null;
+  let discoveredPeers: string[] = [];
+  let signalingConnected = false;
+  let selectedPeerId = '';
   
   // UI variables
   const nodeAddress = "enode://277ac35977fc0a230e3ca4ccbf6df6da486fd2af9c129925b1193b25da6f013a301788fceed458f03c6c0d289dfcbf7a7ca5c0aef34b680fcbbc8c2ef79c0f71@127.0.0.1:30303"
@@ -510,104 +519,97 @@
     }
   }
 
-  function runDiscovery() {
+  async function runDiscovery() {
     if (dhtStatus !== 'connected') {
       showToast($t('network.errors.dhtNotConnected'), 'error');
       return;
     }
-    discoveryRunning = true
     
-    // Simulate discovering new peers
-    setTimeout(() => {
-      const newPeer = {
-        id: `peer-${Date.now()}`,
-        address: `${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`,
-        nickname: `Node${Math.floor(Math.random() * 1000)}`,
-        status: 'online' as const,
-        reputation: 3 + Math.random() * 2,
-        sharedFiles: Math.floor(Math.random() * 500),
-        totalSize: Math.floor(Math.random() * 10737418240),
-        joinDate: new Date(),
-        lastSeen: new Date(),
-        location: ['US-East', 'EU-West', 'Asia-Pacific', 'US-West'][Math.floor(Math.random() * 4)]
-      }
-      
-      peers.update(p => [...p, newPeer])
-      networkStats.update(s => ({
-        ...s,
-        totalPeers: s.totalPeers + 1,
-        onlinePeers: s.onlinePeers + 1
-      }))
-      
-      discoveryRunning = false
-    }, 2000)
+    if (!signalingConnected) {
+      await signaling.connect();
+      signalingConnected = true;
+    }
+    
+    // discoveredPeers will update automatically
+    showToast('Discovery started. Found peers: ' + discoveredPeers.length, 'info');
   }
   
   function connectToPeer() {
-  if (!newPeerAddress.trim()) return
-  
-  const trimmedAddress = newPeerAddress.trim()
-  
-  // Parse IP and port first to check for duplicates properly
-  const [ip, portStr] = trimmedAddress.split(':')
-  const port = portStr ? parseInt(portStr) : 8080
-  const fullAddress = portStr ? trimmedAddress : `${ip}:${port}`
-  
-  // Check if peer with this exact IP:port combination already exists
-  const existingPeer = $peers.find(peer => peer.address === fullAddress)
-  if (existingPeer) {
-    showToast($t('Peer Already Connected'), 'error')
-    return
+    if (!newPeerAddress.trim()) {
+      showToast('Please enter a peer ID', 'error');
+      return;
+    }
+    
+    if (!signalingConnected) {
+      showToast('Signaling server not connected', 'error');
+      return;
+    }
+    
+    const peerId = newPeerAddress.trim();
+    
+    // Check if peer exists in discovered peers
+    if (!discoveredPeers.includes(peerId)) {
+      showToast(`Peer ${peerId} not found in discovered peers`, 'warning');
+      // Still attempt connection in case peer was discovered recently
+    }
+    
+    try {
+      webrtcSession = createWebRTCSession({
+        peerId,
+        signaling,
+        isInitiator: true,
+        onMessage: (data) => {
+          showToast('Received from peer: ' + data, 'info');
+          console.log('Received from peer:', data);
+        },
+        onConnectionStateChange: (state) => {
+          showToast('WebRTC state: ' + state, 'info');
+          console.log('WebRTC connection state:', state);
+          
+          if (state === 'connected') {
+            showToast('Successfully connected to peer!', 'success');
+          } else if (state === 'failed' || state === 'disconnected') {
+            showToast('Connection to peer failed or disconnected', 'error');
+          }
+        },
+        onDataChannelOpen: () => {
+          showToast('Data channel open - you can now send messages!', 'success');
+        },
+        onDataChannelClose: () => {
+          showToast('Data channel closed', 'warning');
+        },
+        onError: (e) => {
+          showToast('WebRTC error: ' + e, 'error');
+          console.error('WebRTC error:', e);
+        }
+      });
+      
+      webrtcSession.createOffer();
+      showToast('Connecting to peer: ' + peerId, 'info');
+      
+      // Clear input on successful connection attempt
+      newPeerAddress = '';
+      
+    } catch (error) {
+      console.error('Failed to create WebRTC session:', error);
+      showToast('Failed to create connection: ' + error, 'error');
+    }
   }
   
-  // Basic IP format validation (supports IP:port format)
-  const ipPortRegex = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$/
-  if (!ipPortRegex.test(trimmedAddress)) {
-    showToast($t('Invalid IP Format'), 'error')
-    return
+  function sendTestMessage() {
+    if (!webrtcSession || !webrtcSession.channel || webrtcSession.channel.readyState !== 'open') {
+      showToast('No active WebRTC connection', 'error');
+      return;
+    }
+    
+    const testMessage = `Hello from ${signaling.getClientId()} at ${new Date().toLocaleTimeString()}`;
+    try {
+      webrtcSession.send(testMessage);
+      showToast('Test message sent: ' + testMessage, 'success');
+    } catch (error) {
+      showToast('Failed to send message: ' + error, 'error');
+    }
   }
-  
-  // Validate IP ranges (0-255 for each octet)
-  const ipParts = ip.split('.').map(Number)
-  if (ipParts.some(part => part < 0 || part > 255)) {
-    showToast($t('Invalid IP Range'), 'error')
-    return
-  }
-  
-  // Validate port range
-  if (port < 1 || port > 65535) {
-    showToast($t('Invalid Port Number'), 'error')
-    return
-  }
-  
-  // Create new peer
-  const newPeer = {
-    id: `peer-${Date.now()}`,
-    address: fullAddress, // Use the normalized IP:port format
-    nickname: `DirectPeer${Math.floor(Math.random() * 100)}`,
-    status: 'online' as const,
-    reputation: 0,
-    sharedFiles: 0,
-    totalSize: 0,
-    joinDate: new Date(),
-    lastSeen: new Date(),
-    location: 'Unknown'
-  }
-  
-  // Add to peers list
-  peers.update(p => [...p, newPeer])
-  
-  // Update network stats
-  networkStats.update(s => ({
-    ...s,
-    totalPeers: s.totalPeers + 1,
-    onlinePeers: s.onlinePeers + 1
-  }))
-  
-  // Clear input and show success
-  newPeerAddress = ''
-  showToast($t('Peer Connected Successfully'), 'success')
-}
   
   function refreshStats() {
     networkStats.update(s => ({
@@ -776,9 +778,25 @@
     }
   }
 
-  onMount(() => {
+  onMount(async () => {
     const interval = setInterval(refreshStats, 5000)
     let unlistenProgress: (() => void) | null = null
+    
+    // Initialize signaling service
+    try {
+      signaling = new SignalingService('ws://localhost:9000');
+      await signaling.connect();
+      signalingConnected = true;
+      signaling.peers.subscribe(peers => {
+        discoveredPeers = peers;
+        console.log('Updated discovered peers:', peers);
+      });
+      showToast('Connected to signaling server', 'success');
+    } catch (error) {
+      console.error('Failed to connect to signaling server:', error);
+      showToast('Failed to connect to signaling server. Make sure it\'s running.', 'error');
+      signalingConnected = false;
+    }
     
     // Initialize async operations
     const initAsync = async () => {
@@ -811,6 +829,10 @@
       if (natStatusUnlisten) {
         natStatusUnlisten()
         natStatusUnlisten = null
+      }
+      // Disconnect signaling service
+      if (signaling) {
+        signaling.disconnect()
       }
     }
   })
@@ -1325,6 +1347,13 @@
           <Button on:click={connectToPeer} disabled={!newPeerAddress}>
             <UserPlus class="h-4 w-4 mr-2" />
             {$t('network.peerDiscovery.connect')}
+          </Button>
+          <Button 
+            on:click={sendTestMessage} 
+            disabled={!webrtcSession || !webrtcSession.channel || webrtcSession.channel.readyState !== 'open'}
+            variant="outline"
+          >
+            Send Test
           </Button>
         </div>
       </div>
