@@ -1080,24 +1080,64 @@ async fn download_file_from_network(
         ft_guard.as_ref().cloned()
     };
 
-    if let Some(ft) = ft {
-        // First try to download from local storage
-        match ft
-            .download_file(file_hash.clone(), output_path.clone())
-            .await
-        {
-            Ok(()) => {
-                info!("File downloaded successfully from local storage");
-                return Ok(());
+    if let Some(_ft) = ft {
+        info!("Starting P2P download for: {}", file_hash);
+
+        // Search DHT for file metadata
+        let dht = {
+            let dht_guard = state.dht.lock().await;
+            dht_guard.as_ref().cloned()
+        };
+
+        if let Some(dht_service) = dht {
+            // Search for file metadata in DHT with 5 second timeout
+            match dht_service.search_metadata(file_hash.clone(), 5000).await {
+                Ok(Some(metadata)) => {
+                    info!("Found file metadata in DHT: {} (size: {} bytes)",
+                          metadata.file_name, metadata.file_size);
+
+                    // Implement peer discovery for file chunks
+                    info!("Discovering peers for file: {} with {} known seeders",
+                          metadata.file_name, metadata.seeders.len());
+
+                    if metadata.seeders.is_empty() {
+                        return Err(format!(
+                            "No seeders available for file: {} ({})",
+                            metadata.file_name, metadata.file_hash
+                        ));
+                    }
+
+                    // Discover and verify available peers for this file
+                    let available_peers = dht_service.discover_peers_for_file(&metadata).await
+                        .map_err(|e| format!("Peer discovery failed: {}", e))?;
+
+                    if available_peers.is_empty() {
+                        info!("File found but no seeders currently available");
+                        // TODO: Return metadata to frontend with 0 seeders instead of error
+                        return Err(format!(
+                            "File found but no seeders available: {} ({} bytes) - 0 seeders online",
+                            metadata.file_name, metadata.file_size
+                        ));
+                    }
+
+                    info!("Found {} available peers for file download", available_peers.len());
+
+                    // TODO: Implement chunk requesting protocol
+                    return Err(format!(
+                        "File found with {} seeders, but chunk requesting not yet implemented. File: {} ({} bytes)",
+                        available_peers.len(), metadata.file_name, metadata.file_size
+                    ));
+                }
+                Ok(None) => {
+                    return Err("DHT search timed out - file metadata not found".to_string());
+                }
+                Err(e) => {
+                    warn!("DHT search failed: {}", e);
+                    return Err(format!("DHT search failed: {}", e));
+                }
             }
-            Err(_) => {
-                // File not found locally, would need to implement P2P download here
-                // For now, return an error
-                return Err(
-                    "File not found in local storage. P2P download not yet implemented."
-                        .to_string(),
-                );
-            }
+        } else {
+            return Err("DHT service not available".to_string());
         }
     } else {
         Err("File transfer service is not running".to_string())

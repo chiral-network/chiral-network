@@ -1874,6 +1874,39 @@ impl DhtService {
         let connected = self.connected_peers.lock().await;
         connected.iter().map(|p| p.to_string()).collect()
     }
+
+    /// Discover and verify available peers for a specific file
+    pub async fn discover_peers_for_file(&self, metadata: &FileMetadata) -> Result<Vec<String>, String> {
+        info!("Starting peer discovery for file: {} with {} seeders",
+              metadata.file_hash, metadata.seeders.len());
+
+        let mut available_peers = Vec::new();
+        let connected_peers = self.connected_peers.lock().await;
+
+        // Check which seeders from metadata are currently connected
+        for seeder_id in &metadata.seeders {
+            if let Ok(peer_id) = seeder_id.parse::<libp2p::PeerId>() {
+                if connected_peers.contains(&peer_id) {
+                    info!("Seeder {} is currently connected", seeder_id);
+                    available_peers.push(seeder_id.clone());
+                } else {
+                    info!("Seeder {} is not currently connected", seeder_id);
+                    // TODO: Try to connect to this peer
+                }
+            } else {
+                warn!("Invalid peer ID in seeders list: {}", seeder_id);
+            }
+        }
+
+        // If no seeders are connected, the file is not available for download
+        if available_peers.is_empty() {
+            info!("No seeders are currently connected - file not available for download");
+            // TODO: In the future, we could try to connect to offline seeders
+        }
+
+        info!("Peer discovery completed: found {} available peers", available_peers.len());
+        Ok(available_peers)
+    }
 }
 
 fn not_loopback(ip: &Multiaddr) -> bool {
