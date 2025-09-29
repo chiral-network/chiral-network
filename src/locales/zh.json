@@ -634,6 +634,7 @@
     "downloads": "下载",
     "searchPlaceholder": "搜索下载...",
     "clearSearch": "清除搜索",
+    "clearFinished": "清除已完成",
     "filters": {
       "all": "全部",
       "active": "活跃",
@@ -672,7 +673,8 @@
       "resume": "继续",
       "remove": "移除",
       "cancel": "取消",
-      "openFile": "打开文件"
+      "openFile": "打开文件",
+      "showInFolder": "在文件夹中显示"
     },
     "notifications": {
       "enterHash": "请输入文件哈希",

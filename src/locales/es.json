@@ -626,6 +626,7 @@
     "downloads": "Descargas",
     "searchPlaceholder": "Buscar descargas...",
     "clearSearch": "Borrar búsqueda",
+    "clearFinished": "Limpiar finalizados",
     "filters": {
       "all": "Todas",
       "active": "Activas",
@@ -664,7 +665,8 @@
       "resume": "Reanudar",
       "remove": "Eliminar",
       "cancel": "Cancelar",
-      "openFile": "Abrir archivo"
+      "showInFolder": "Mostrar en carpeta",
+      "retry": "Reintentar"
     },
     "notifications": {
       "enterHash": "Por favor introduce un hash de archivo",

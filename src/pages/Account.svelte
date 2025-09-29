@@ -17,7 +17,7 @@
   import { t, locale } from 'svelte-i18n'
   import { showToast } from '$lib/toast'
   import { get } from 'svelte/store'
-  import { totalEarned, totalSpent } from '$lib/stores';
+  import { totalEarned, totalSpent, miningState } from '$lib/stores';
 
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
   
@@ -148,9 +148,6 @@
   let isBlacklistAddressValid = false;
 
 
-  // Copy feedback message
-  let copyMessage = '';
-  let privateKeyCopyMessage = '';
    
   // Export feedback message
   let exportMessage = '';
@@ -386,12 +383,11 @@
       const privateKeyToCopy = $etcAccount ? $etcAccount.private_key : '';
       if (privateKeyToCopy) {
         navigator.clipboard.writeText(privateKeyToCopy);
-        privateKeyCopyMessage = tr('messages.copied');
+        showToast('Private key copied to clipboard!', 'success');
       }
       else {
-        privateKeyCopyMessage = tr('messages.failed');
+        showToast('No private key available', 'error');
       }
-      setTimeout(() => privateKeyCopyMessage = '', 1500);
     });
   }
     
@@ -505,7 +501,7 @@
     showToast('Transaction submitted', 'info')
 
     // Simulate transaction
-    wallet.update(w => ({
+    wallet.update((w: typeof $wallet) => ({
       ...w,
       balance: w.balance - sendAmount,
       pendingTransactions: w.pendingTransactions + 1,
@@ -1290,9 +1286,55 @@
     rawAmountInput = $wallet.balance.toFixed(2);
   }
 
+  // async function handleLogout() {
+  //   if (isTauri) await invoke('logout');
+  //   logout();
+  // }
+
+  // Update your handleLogout function
   async function handleLogout() {
-    if (isTauri) await invoke('logout');
-    logout();
+    try {
+      // Stop mining if it's currently running
+      if ($miningState.isMining) {
+        await invoke('stop_miner');
+      }
+      
+      // Clear the account store
+      etcAccount.set(null);
+      
+      // Clear wallet data
+      wallet.update((w: any) => ({
+        ...w,
+        address: "",
+        balance: 1000.5, // Reset to default
+        totalEarned: 0,
+        totalSpent: 0,
+        pendingTransactions: 0
+      }));
+      
+      // Clear mining state completely
+      miningState.update((state: any) => ({
+        ...state,
+        isMining: false,
+        hashRate: "0 H/s",
+        totalRewards: 0,
+        blocksFound: 0,
+        activeThreads: 0,
+        recentBlocks: [],
+        sessionStartTime: undefined
+      }));
+      
+      // Clear any stored session data
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem('lastAccount');
+        localStorage.removeItem('miningSession');
+      }
+      
+      privateKeyVisible = false;
+      
+    } catch (error) {
+      console.error('Error during logout:', error);
+    }
   }
 
   function logout() {
@@ -1552,14 +1594,9 @@
               <p class="text-sm text-muted-foreground">{$t('wallet.address')}</p>
               <div class="flex items-center gap-2 mt-1">
                 <p class="font-mono text-sm">{$etcAccount.address.slice(0, 10)}...{$etcAccount.address.slice(-8)}</p>
-                <div class="relative">
-                  <Button size="sm" variant="outline" on:click={copyAddress} aria-label={$t('aria.copyAddress')}>
-                    <Copy class="h-3 w-3" />
-                  </Button>
-                  {#if copyMessage}
-                    <span class="absolute top-full left-1/2 transform -translate-x-1/2 text-xs text-green-600 mt-1 whitespace-nowrap">{copyMessage}</span>
-                  {/if}
-                </div>
+                <Button size="sm" variant="outline" on:click={copyAddress} aria-label={$t('aria.copyAddress')}>
+                  <Copy class="h-3 w-3" />
+                </Button>
                 <Button size="sm" variant="outline" on:click={generateAndShowQrCode} title={$t('tooltips.showQr')} aria-label={$t('aria.showQr')}>
                   <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5h3v3H5zM5 16h3v3H5zM16 5h3v3h-3zM16 16h3v3h-3zM10.5 5h3M10.5 19h3M5 10.5v3M19 10.5v3M10.5 10.5h3v3h-3z"/></svg>
                 </Button>
@@ -1598,30 +1635,26 @@
             
             <div class="mt-4">
               <p class="text-sm text-muted-foreground">{$t('wallet.privateKey')}</p>
-                <div class="flex gap-2 mt-1">
+                <div class="flex items-center gap-2 mt-1">
                   <Input
                     type="text"
                     value={privateKeyVisible ? $etcAccount.private_key : '•'.repeat($etcAccount.private_key.length)}
                     readonly
-                    class="flex-1 font-mono text-xs min-w-0"
+                    class="flex-1 font-mono text-xs min-w-0 h-9"
                   />
-                <div class="relative">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    on:click={copyPrivateKey}
-                    aria-label={$t('aria.copyPrivateKey')}
-                  >
-                    <Copy class="h-3 w-3" />
-                  </Button>
-                  {#if privateKeyCopyMessage}
-                    <span class="absolute top-full left-1/2 transform -translate-x-1/2 text-xs text-green-600 mt-1 whitespace-nowrap">{privateKeyCopyMessage}</span>
-                  {/if}
-                </div>
                 <Button
                   size="sm"
                   variant="outline"
-                  class="w-16"
+                  on:click={copyPrivateKey}
+                  aria-label={$t('aria.copyPrivateKey')}
+                  class="h-9 px-3"
+                >
+                  <Copy class="h-3 w-3" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  class="w-16 h-9 px-3"
                   on:click={togglePrivateKeyVisibility}
                 >
                   {privateKeyVisible ? $t('actions.hide') : $t('actions.show')}
@@ -1672,6 +1705,7 @@
               class="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8 p-0"
               on:click={scanQrCode}
               aria-label={$t('transfer.recipient.scanQr')}
+              title={$t('transfer.recipient.scanQr')}
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect><line x1="14" x2="14" y1="14" y2="21"></line><line x1="21" x2="21" y1="14" y2="21"></line><line x1="21" x2="14" y1="21" y2="21"></line></svg>
             </Button>

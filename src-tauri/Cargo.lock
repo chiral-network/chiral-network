@@ -832,10 +832,13 @@ dependencies = [
  "hex",
  "hkdf",
  "hmac",
+ "lazy_static",
  "libp2p",
  "pbkdf2 0.12.2",
  "rand 0.8.5",
+ "reed-solomon-erasure",
  "reqwest 0.11.27",
+ "rs_merkle",
  "secp256k1",
  "serde",
  "serde_json",
@@ -5204,6 +5207,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "reed-solomon-erasure"
+version = "4.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a415a013dd7c5d4221382329a5a3482566da675737494935cbbbcdec04662f9d"
+dependencies = [
+ "smallvec",
+]
+
+[[package]]
 name = "ref-cast"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5385,6 +5397,15 @@ dependencies = [
  "libc",
  "untrusted 0.9.0",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rs_merkle"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb09b49230ba22e8c676e7b75dfe2887dea8121f18b530ae0ba519ce442d2b21"
+dependencies = [
+ "sha2",
 ]
 
 [[package]]
