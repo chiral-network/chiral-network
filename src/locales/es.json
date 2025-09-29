@@ -163,6 +163,7 @@
     "network": "Red",
     "mining": "Minería",
     "proxy": "Proxy",
+    "proxySelfTest": "Prueba de proxy",
     "analytics": "Analíticas",
     "account": "Cuenta",
     "settings": "Configuración",
@@ -370,7 +371,10 @@
     "remove": "Eliminar",
     "edit": "Editar",
     "resetDefaults": "Restablecer valores predeterminados",
-    "lockWallet": "Bloquear billetera"
+    "confirm": "Confirmar"
+  },
+  "units": {
+    "ms": "ms"
   },
   "placeholders": {
     "importPrivateKey": "Introduce la clave privada para importar",
@@ -484,7 +488,12 @@
   "proxy": {
     "title": "Red proxy",
     "subtitle": "Administra tus nodos proxy y la configuración de red",
-    "status": "Estado del proxy",
+    "status": {
+      "online": "En línea",
+      "offline": "Desconectado",
+      "connecting": "Conectando",
+      "error": "Error"
+    },
     "active": "Activo",
     "inactive": "Inactivo",
     "activeNodes": "Nodos activos",

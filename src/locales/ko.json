@@ -165,6 +165,7 @@
     "network": "네트워크",
     "mining": "채굴",
     "proxy": "프록시",
+    "proxySelfTest": "프록시 자가 테스트",
     "analytics": "분석",
     "account": "계정",
     "settings": "설정",
@@ -385,6 +386,10 @@
     "resetDefaults": "기본값으로 재설정",
     "lockWallet": "지갑 잠금"
   },
+  "confirm": "확인",
+  "units": {
+    "ms": "밀리초"
+  },
   "placeholders": {
     "importPrivateKey": "가져올 개인 키를 입력",
     "password": "강력한 비밀번호 입력",
@@ -496,7 +501,12 @@
   "proxy": {
     "title": "프록시 네트워크",
     "subtitle": "프록시 노드 및 네트워크 설정 관리",
-    "status": "프록시 상태",
+    "status": {
+      "online": "온라인",
+      "offline": "오프라인",
+      "connecting": "연결 중",
+      "error": "오류"
+    },
     "active": "활성",
     "inactive": "비활성",
     "activeNodes": "활성 노드",

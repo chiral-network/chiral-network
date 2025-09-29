@@ -10,6 +10,7 @@
     disconnectProxy,
     listProxies,
   } from '$lib/proxy';
+  import { _, locale } from 'svelte-i18n';
 
   // Connect form
   let url = 'ws://127.0.0.1:4001';
@@ -27,7 +28,7 @@
 
   async function doEcho() {
     if (!peerId) {
-      echoResult = 'Pick a target peer first';
+      echoResult = $_('proxySelfTest.echoTest.pickTarget');
       return;
     }
     try {
@@ -56,32 +57,33 @@
 </script>
 
 <div class="p-4 space-y-6">
-  <h1 class="text-2xl font-bold">Proxy Self-Test</h1>
+  <h1 class="text-2xl font-bold">{$_('proxySelfTest.title')}</h1>
+  <h2 class="text-lg text-gray-500">{$_('proxySelfTest.subtitle')}</h2>
 
   <!-- Connect / Disconnect -->
   <section class="space-y-3">
     <div class="flex gap-4">
-      <input type="text" bind:value={url} placeholder="Proxy URL" class="input" />
-      <input type="text" bind:value={token} placeholder="Auth Token" class="input" />
+      <input type="text" bind:value={url} placeholder={$_('proxySelfTest.connect.proxyUrl')} class="input" />
+      <input type="text" bind:value={token} placeholder={$_('proxySelfTest.connect.authToken')} class="input" />
     </div>
     <div class="flex gap-4">
-      <button on:click={() => connectProxy(url, token)} class="btn btn-primary">Connect</button>
-      <button on:click={() => disconnectProxy(url)} class="btn">Disconnect</button>
-      <button on:click={listProxies} class="btn">Refresh List</button>
+      <button on:click={() => connectProxy(url, token)} class="btn btn-primary">{$_('proxySelfTest.connect.connect')}</button>
+      <button on:click={() => disconnectProxy(url)} class="btn">{$_('proxySelfTest.connect.disconnect')}</button>
+      <button on:click={listProxies} class="btn">{$_('proxySelfTest.connect.refresh')}</button>
     </div>
   </section>
 
   <!-- Connected Proxies -->
   <section class="space-y-2">
-    <h2 class="text-xl font-bold">Connected Proxies</h2>
+    <h2 class="text-xl font-bold">{$_('proxySelfTest.connectedProxies.title')}</h2>
     {#if $proxyNodes.length === 0}
-      <div class="text-sm text-gray-500">No proxies yet. Connect above.</div>
+      <div class="text-sm text-gray-500">{$_('proxySelfTest.connectedProxies.empty')}</div>
     {/if}
     <ul class="space-y-1">
       {#each $proxyNodes as node}
         <li class="flex flex-wrap items-center gap-2">
           <strong>{node.address}</strong>
-          <span>— {node.status} ({node.latency}ms)</span>
+          <span>— {$_('proxy.status.' + node.status)} ({node.latency}{$_('units.ms')})</span>
           {#if node.error}
             <span class="text-red-500">· {node.error}</span>
           {/if}
@@ -89,9 +91,9 @@
             <button
               class="btn btn-xs ml-2"
               on:click={() => { selectedPeerId = node.id; }}
-              title="Use this peer for Echo"
+              title={$_('proxySelfTest.echoTest.useForEchoTitle')}
             >
-              Use for Echo
+              {$_('proxySelfTest.echoTest.useForEcho')}
             </button>
           {/if}
         </li>
@@ -101,43 +103,43 @@
 
   <!-- Echo Test -->
   <section class="space-y-2">
-    <h2 class="text-xl font-bold">Echo Test</h2>
+    <h2 class="text-xl font-bold">{$_('proxySelfTest.echoTest.title')}</h2>
 
     <div class="flex gap-2 items-center">
-      <label class="text-sm" for="target-peer-select">Target Peer</label>
+      <label class="text-sm" for="target-peer-select">{$_('proxySelfTest.echoTest.targetPeer')}</label>
       <select id="target-peer-select" class="input" bind:value={selectedPeerId}>
-        <option value="">— Select from connected proxies —</option>
+        <option value="">{$_('proxySelfTest.echoTest.selectPeer')}</option>
         {#each $proxyNodes as node}
           {#if node.id}
             <option value={node.id}>
-              {node.id} ({node.latency}ms)
+              {node.id} ({node.latency}{$_('units.ms')})
             </option>
           {/if}
         {/each}
       </select>
     </div>
 
-    <input class="input" placeholder="Or paste PeerId" bind:value={peerId} />
+    <input class="input" placeholder={$_('proxySelfTest.echoTest.pastePeerId')} bind:value={peerId} />
 
     <div class="flex gap-2">
-      <input class="input flex-1" placeholder="Payload" bind:value={echoPayload} />
+      <input class="input flex-1" placeholder={$_('proxySelfTest.echoTest.payload')} bind:value={echoPayload} />
       <button class="btn btn-primary" on:click={doEcho} disabled={echoBusy}>
-        {echoBusy ? 'Sending…' : 'Echo'}
+        {echoBusy ? $_('proxySelfTest.echoTest.sending') : $_('proxySelfTest.echoTest.echo')}
       </button>
     </div>
 
     {#if echoResult}
       <div class="mt-1 text-sm">
-        <span class="font-semibold">Result:</span> {echoResult}
+        <span class="font-semibold">{$_('proxySelfTest.echoTest.result')}</span> {echoResult}
       </div>
     {/if}
   </section>
 
   <!-- Echo Inbox (Checking for incoming messages) -->
   <section class="space-y-2">
-    <h2 class="text-xl font-bold">Echo Inbox</h2>
+    <h2 class="text-xl font-bold">{$_('proxySelfTest.echoInbox.title')}</h2>
     {#if $echoInbox.length === 0}
-      <div class="text-sm text-gray-500">No incoming echo messages yet.</div>
+      <div class="text-sm text-gray-500">{$_('proxySelfTest.echoInbox.empty')}</div>
     {/if}
     <ul class="space-y-1">
       {#each $echoInbox as msg, i}
@@ -145,7 +147,7 @@
           <span class="font-mono text-gray-600">[{i}]</span>
           <span class="font-mono">{msg.from}</span> →
           <span>{msg.text}</span>
-          <span class="text-gray-500 ml-2">({new Date(msg.ts).toLocaleTimeString()})</span>
+          <span class="text-gray-500 ml-2">({new Date(msg.ts).toLocaleTimeString($locale)})</span>
         </li>
       {/each}
     </ul>

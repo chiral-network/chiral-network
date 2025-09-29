@@ -98,20 +98,22 @@
     };
 
     let menuItems: MenuItem[] = [];
-    $: if (!loading) {
-      menuItems = [
-        { id: 'download', label: $t('nav.download'), icon: Download },
-        { id: 'upload', label: $t('nav.upload'), icon: Upload },
-        { id: 'network', label: $t('nav.network'), icon: Globe },
-        { id: 'mining', label: $t('nav.mining'), icon: Cpu },
-        { id: 'proxy', label: $t('nav.proxy'), icon: Shield },
-        { id: 'analytics', label: $t('nav.analytics'), icon: BarChart3 },
-        { id: 'account', label: $t('nav.account'), icon: Wallet },
-        { id: 'settings', label: $t('nav.settings'), icon: Settings },
+    $: {
+      if (!loading) {
+        menuItems = [
+          { id: 'download', label: $t('nav.download'), icon: Download },
+          { id: 'upload', label: $t('nav.upload'), icon: Upload },
+          { id: 'network', label: $t('nav.network'), icon: Globe },
+          { id: 'mining', label: $t('nav.mining'), icon: Cpu },
+          { id: 'proxy', label: $t('nav.proxy'), icon: Shield },
+          { id: 'analytics', label: $t('nav.analytics'), icon: BarChart3 },
+          { id: 'account', label: $t('nav.account'), icon: Wallet },
+          { id: 'settings', label: $t('nav.settings'), icon: Settings },
 
-        ...(import.meta.env.DEV ? [{ id: 'proxy-self-test', label: 'Proxy Self-Test', icon: Shield }] : [])
+          ...(import.meta.env.DEV ? [{ id: 'proxy-self-test', label: $t('nav.proxySelfTest'), icon: Shield }] : [])
 
-      ]
+        ]
+      }
     }
 
     // routes to be used:

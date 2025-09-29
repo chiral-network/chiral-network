@@ -163,6 +163,7 @@
     "network": "网络",
     "mining": "挖矿",
     "proxy": "代理",
+    "proxySelfTest": "代理自测",
     "analytics": "分析",
     "account": "账户",
     "settings": "设置",
@@ -379,7 +380,10 @@
     "remove": "删除",
     "edit": "编辑",
     "resetDefaults": "重置为默认值",
-    "lockWallet": "锁定钱包"
+    "confirm": "确认"
+  },
+  "units": {
+    "ms": "毫秒"
   },
   "placeholders": {
     "importPrivateKey": "输入私钥以导入",
@@ -492,7 +496,12 @@
   "proxy": {
     "title": "代理网络",
     "subtitle": "管理你的代理节点和网络设置",
-    "status": "代理状态",
+    "status": {
+      "online": "在线",
+      "offline": "离线",
+      "connecting": "连接中",
+      "error": "错误"
+    },
     "active": "活跃",
     "inactive": "非活跃",
     "activeNodes": "活跃节点",

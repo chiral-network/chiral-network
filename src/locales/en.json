@@ -308,6 +308,39 @@
     "collapseSidebar": "Collapse sidebar",
     "closeMobileMenu": "Close mobile menu"
   },
+  "proxySelfTest": {
+    "title": "Proxy Self-Test",
+    "subtitle": "Verify proxy connections and test peer-to-peer echo messages.",
+    "connect": {
+      "title": "Connect / Disconnect",
+      "proxyUrl": "Proxy URL",
+      "authToken": "Auth Token",
+      "connect": "Connect",
+      "disconnect": "Disconnect",
+      "refresh": "Refresh List"
+    },
+    "connectedProxies": {
+      "title": "Connected Proxies",
+      "empty": "No proxies yet. Connect above."
+    },
+    "echoTest": {
+      "title": "Echo Test",
+      "targetPeer": "Target Peer",
+      "selectPeer": "— Select from connected proxies —",
+      "pastePeerId": "Or paste PeerId",
+      "payload": "Payload",
+      "sending": "Sending…",
+      "echo": "Echo",
+      "result": "Result:",
+      "pickTarget": "Pick a target peer first",
+      "useForEcho": "Use for Echo",
+      "useForEchoTitle": "Use this peer for Echo"
+    },
+    "echoInbox": {
+      "title": "Echo Inbox",
+      "empty": "No incoming echo messages yet."
+    }
+  },
   "privacy.title": "Privacy & Security",
   "privacy.enableProxy": "Enable proxy routing for anonymity",
   "privacy.enableEncryption": "Enable end-to-end encryption",
@@ -544,6 +577,9 @@
     "verifying": "Verifying...",
     "confirm": "Confirm"
   },
+  "units": {
+    "ms": "ms"
+  },
   "placeholders": {
     "importPrivateKey": "Enter private key to import",
     "password": "Enter a strong password",
@@ -648,7 +684,12 @@
   "proxy": {
     "title": "Proxy Network",
     "subtitle": "Manage your proxy nodes and network settings",
-    "status": "Proxy Status",
+    "status": {
+      "online": "Online",
+      "offline": "Offline",
+      "connecting": "Connecting",
+      "error": "Error"
+    },
     "active": "Active",
     "inactive": "Inactive",
     "activeNodes": "Active Nodes",
