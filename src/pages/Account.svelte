@@ -624,8 +624,6 @@
         balance: 0, // Start with 0
         address: $etcAccount.address 
       }));
-      // Also clear any lingering dummy transactions
-      transactions.set([]);
 
       if (isTauri && isGethRunning) {
         // Desktop app with local geth node - get real blockchain balance
@@ -637,6 +635,14 @@
           ...w, 
           balance: realBalance,
         }));
+        if (!isNaN(realBalance)) {
+        if (realBalance > ($miningState.totalRewards ?? 0)) {
+            miningState.update(state => ({
+              ...state,
+              totalRewards: realBalance
+            }));
+          }
+        }
 
         // Now, fetch real transactions like mining rewards
         // (This assumes you have a function to fetch recent blocks/transactions)
