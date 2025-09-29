@@ -5,7 +5,13 @@ use futures::{AsyncReadExt as _, AsyncWriteExt as _};
 use futures_util::StreamExt;
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
+use blockstore::{
+    block::{Block, CidError},
+    Blockstore, InMemoryBlockstore,
+};
+use cid::Cid;
 use libp2p::multiaddr::Protocol;
+use multihash_codetable::{Code, MultihashDigest};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, SocketAddr};
@@ -51,6 +57,8 @@ use libp2p::{
 };
 use rand::rngs::OsRng;
 const EXPECTED_PROTOCOL_VERSION: &str = "/chiral/1.0.0";
+const MAX_MULTIHASH_LENGHT: usize = 64;
+const RAW_CODEC: u64 = 0x55;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -123,6 +131,7 @@ struct DhtBehaviour {
     kademlia: Kademlia<MemoryStore>,
     identify: identify::Behaviour,
     mdns: Mdns,
+    bitswap: beetswap::Behaviour<MAX_MULTIHASH_LENGHT, InMemoryBlockstore<MAX_MULTIHASH_LENGHT>>,
     ping: ping::Behaviour,
     proxy_rr: rr::Behaviour<ProxyCodec>,
     autonat_client: toggle::Toggle<v2::client::Behaviour>,
@@ -674,39 +683,6 @@ async fn run_dht_node(
                             let _ = event_tx.send(DhtEvent::Error(format!("Invalid address: {}", addr))).await;
                         }
                     }
-                    // Some(DhtCommand::DisconnectPeer(peer_id)) => {
-                    //     info!("Requesting disconnect from peer: {}", peer_id);
-                    //     let was_proxy = is_proxy_peer(&peer_id, &proxy_targets, &proxy_capable).await;
-                    //     let peer_id_str = peer_id.to_string();
-
-                    //     match swarm.disconnect_peer_id(peer_id.clone()) {
-                    //         Ok(()) => {
-                    //             if was_proxy {
-                    //                 proxy_targets.lock().await.remove(&peer_id);
-                    //                 proxy_capable.lock().await.remove(&peer_id);
-
-                    //                 let _ = event_tx
-                    //                     .send(DhtEvent::ProxyStatus {
-                    //                         id: peer_id_str,
-                    //                         address: String::new(),
-                    //                         status: "offline".to_string(),
-                    //                         latency_ms: None,
-                    //                         error: None,
-                    //                     })
-                    //                     .await;
-                    //             }
-                    //         }
-                    //         Err(e) => {
-                    //             error!("Failed to disconnect from {}: {}", peer_id, e);
-                    //             let _ = event_tx
-                    //                 .send(DhtEvent::Error(format!(
-                    //                     "Failed to disconnect from {}: {}",
-                    //                     peer_id, e
-                    //                 )))
-                    //                 .await;
-                    //         }
-                    //     }
-                    // }
                     Some(DhtCommand::DisconnectPeer(peer_id)) => {
                         info!("Requesting disconnect from peer: {}", peer_id);
                         let was_proxy = is_proxy_peer(&peer_id, &proxy_targets, &proxy_capable).await;
@@ -773,6 +749,17 @@ async fn run_dht_node(
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Mdns(mdns_event)) => {
                         if !is_bootstrap{
                             handle_mdns_event(mdns_event, &mut swarm, &event_tx).await;
+                        }
+                    }
+                    SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) => match bitswap {
+                        // !TODO: implement this
+                        beetswap::Event::GetQueryResponse { query_id, data } => {
+                            // let cid = queries.get(&query_id).expect("unknown cid received");
+                            // info!("received response for {cid:?}: {data:?}");
+                        }
+                        beetswap::Event::GetQueryError { query_id, error } => {
+                            // let cid = queries.get(&query_id).expect("unknown cid received");
+                            // info!("received error for {cid:?}: {error}");
                         }
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Ping(ev)) => {
@@ -1507,10 +1494,13 @@ impl DhtService {
             None
         };
 
+        let blockstore = Arc::new(InMemoryBlockstore::new());
+        let bitswap = beetswap::Behaviour::new(blockstore);
         let behaviour = DhtBehaviour {
             kademlia,
             identify,
             mdns,
+            bitswap,
             ping: Ping::new(ping::Config::new()),
             proxy_rr,
             autonat_client: toggle::Toggle::from(autonat_client_behaviour),
@@ -1669,7 +1659,10 @@ impl DhtService {
     }
 
     pub async fn publish_file(&self, metadata: FileMetadata) -> Result<(), String> {
-        self.file_metadata_cache.lock().await.insert(metadata.file_hash.clone(), metadata.clone());
+        self.file_metadata_cache
+            .lock()
+            .await
+            .insert(metadata.file_hash.clone(), metadata.clone());
         self.cmd_tx
             .send(DhtCommand::PublishFile(metadata))
             .await
@@ -1681,8 +1674,11 @@ impl DhtService {
             .await
             .map_err(|e| e.to_string())
     }
-     pub async fn cache_remote_file(&self, metadata: &FileMetadata) {
-        self.file_metadata_cache.lock().await.insert(metadata.file_hash.clone(), metadata.clone());
+    pub async fn cache_remote_file(&self, metadata: &FileMetadata) {
+        self.file_metadata_cache
+            .lock()
+            .await
+            .insert(metadata.file_hash.clone(), metadata.clone());
     }
     /// List all known FileMetadata (from cache, i.e., locally published or discovered)
     pub async fn get_all_file_metadata(&self) -> Result<Vec<FileMetadata>, String> {
@@ -1691,9 +1687,13 @@ impl DhtService {
     }
 
     /// Get all versions for a file name, sorted by version (desc)
-    pub async fn get_versions_by_file_name(&self, file_name: String) -> Result<Vec<FileMetadata>, String> {
+    pub async fn get_versions_by_file_name(
+        &self,
+        file_name: String,
+    ) -> Result<Vec<FileMetadata>, String> {
         let all = self.get_all_file_metadata().await?;
-        let mut versions: Vec<FileMetadata> = all.into_iter()
+        let mut versions: Vec<FileMetadata> = all
+            .into_iter()
             .filter(|m| m.file_name == file_name)
             .collect();
         versions.sort_by(|a, b| b.version.unwrap_or(1).cmp(&a.version.unwrap_or(1)));
@@ -1701,7 +1701,10 @@ impl DhtService {
     }
 
     /// Get the latest version for a file name
-    pub async fn get_latest_version_by_file_name(&self, file_name: String) -> Result<Option<FileMetadata>, String> {
+    pub async fn get_latest_version_by_file_name(
+        &self,
+        file_name: String,
+    ) -> Result<Option<FileMetadata>, String> {
         let versions = self.get_versions_by_file_name(file_name).await?;
         Ok(versions.into_iter().max_by_key(|m| m.version.unwrap_or(1)))
     }
@@ -1718,7 +1721,9 @@ impl DhtService {
         encryption_method: Option<String>,
         key_fingerprint: Option<String>,
     ) -> Result<FileMetadata, String> {
-        let latest = self.get_latest_version_by_file_name(file_name.clone()).await?;
+        let latest = self
+            .get_latest_version_by_file_name(file_name.clone())
+            .await?;
         let (version, parent_hash) = match latest {
             Some(ref prev) => (
                 prev.version.map(|v| v + 1).unwrap_or(2),
@@ -1940,9 +1945,15 @@ impl DhtService {
     }
 
     /// Discover and verify available peers for a specific file
-    pub async fn discover_peers_for_file(&self, metadata: &FileMetadata) -> Result<Vec<String>, String> {
-        info!("Starting peer discovery for file: {} with {} seeders",
-              metadata.file_hash, metadata.seeders.len());
+    pub async fn discover_peers_for_file(
+        &self,
+        metadata: &FileMetadata,
+    ) -> Result<Vec<String>, String> {
+        info!(
+            "Starting peer discovery for file: {} with {} seeders",
+            metadata.file_hash,
+            metadata.seeders.len()
+        );
 
         let mut available_peers = Vec::new();
         let connected_peers = self.connected_peers.lock().await;
@@ -1968,7 +1979,10 @@ impl DhtService {
             // TODO: In the future, we could try to connect to offline seeders
         }
 
-        info!("Peer discovery completed: found {} available peers", available_peers.len());
+        info!(
+            "Peer discovery completed: found {} available peers",
+            available_peers.len()
+        );
         Ok(available_peers)
     }
 }
@@ -1990,6 +2004,19 @@ fn multiaddr_to_ip(addr: &Multiaddr) -> Option<IpAddr> {
         }
     }
     None
+}
+
+struct StringBlock(pub String);
+
+impl Block<64> for StringBlock {
+    fn cid(&self) -> Result<Cid, CidError> {
+        let hash = Code::Sha2_256.digest(self.0.as_ref());
+        Ok(Cid::new_v1(RAW_CODEC, hash))
+    }
+
+    fn data(&self) -> &[u8] {
+        self.0.as_ref()
+    }
 }
 
 #[cfg(test)]
