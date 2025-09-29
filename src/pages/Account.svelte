@@ -618,10 +618,31 @@
     if (!$etcAccount) return
     
     try {
+      // FIRST: Reset wallet to a clean state for the new account
+      wallet.update(w => ({ 
+        ...w, 
+        balance: 0, // Start with 0
+        address: $etcAccount.address 
+      }));
+      // Also clear any lingering dummy transactions
+      transactions.set([]);
+
       if (isTauri && isGethRunning) {
         // Desktop app with local geth node - get real blockchain balance
-        const balance = await invoke('get_account_balance', { address: $etcAccount.address }) as string
-        wallet.update(w => ({ ...w, balance: parseFloat(balance) }))
+        const balanceStr = await invoke('get_account_balance', { address: $etcAccount.address }) as string
+        const realBalance = parseFloat(balanceStr);
+
+        // Update wallet with the real balance
+        wallet.update(w => ({ 
+          ...w, 
+          balance: realBalance,
+        }));
+
+        // Now, fetch real transactions like mining rewards
+        // (This assumes you have a function to fetch recent blocks/transactions)
+        // For example:
+        // await appendNewBlocksFromBackend(); 
+
       } else if (isTauri && !isGethRunning) {
         // Desktop app but geth not running - use stored balance
         console.log('Geth not running - using stored balance')
@@ -1899,7 +1920,7 @@
         <option value="received">{$t('filters.typeReceived')}</option>
       </select>
       <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4-4 4 4m0 6l-4 4-4-4"></path></svg>
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4-4 4 4-4m0 6l-4 4-4-4"></path></svg>
       </div>
     </div>
   </div>
@@ -2448,7 +2469,7 @@
         role="dialog"
         aria-modal="true"
         tabindex="-1"
-        on:keydown={(e) => { if (e.key === 'Escape') { show2faPromptModal = false; actionToConfirm = null; } }}
+        on:keydown={(e) => { if (e.key === 'Escape' ) { show2faPromptModal = false; actionToConfirm = null; } }}
       >
         <h3 class="text-xl font-semibold mb-2">{$t('security.2fa.prompt.title')}</h3>
         <p class="text-sm text-muted-foreground mb-4">{$t('security.2fa.prompt.enter_code')}</p>

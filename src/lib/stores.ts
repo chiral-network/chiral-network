@@ -310,10 +310,9 @@ export const miningState = writable<MiningState>({
   miningHistory: [],
 });
 
-export const totalEarned = derived(transactions, ($txs) =>
-  $txs
-    .filter((tx) => tx.type === "received")
-    .reduce((sum, tx) => sum + tx.amount, 0)
+export const totalEarned = derived(
+  miningState,
+  ($miningState) => $miningState.totalRewards
 );
 
 export const totalSpent = derived(transactions, ($txs) =>
