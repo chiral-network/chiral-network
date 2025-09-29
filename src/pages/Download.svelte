@@ -722,7 +722,7 @@ let searchName = '';
             disabled={completedCount === 0 && failedCount === 0 && allFilteredDownloads.filter(f => f.status === 'canceled').length === 0}
           >
             <X class="h-3 w-3 mr-1" />
-            Clear Finished
+            {$t('download.clearFinished')}
           </Button>
           <Button
             size="sm"
@@ -995,7 +995,7 @@ let searchName = '';
                     class="h-7 px-3 text-sm"
                   >
                     <FolderOpen class="h-3 w-3 mr-1" />
-                    Show in Folder
+                    {$t('download.actions.showInFolder')}
                   </Button>
                   <Button
                     size="sm"
