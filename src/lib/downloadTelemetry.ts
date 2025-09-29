@@ -16,7 +16,11 @@ type DownloadAttemptPayload = {
 
 let unlisten: UnlistenFn | null = null;
 
-const tr = (key: string, params?: Record<string, unknown>) => get(t)(key, params);
+type TranslateFn = (key: string, params?: Record<string, unknown>) => string;
+
+const getTranslator = (): TranslateFn => get(t) as TranslateFn;
+
+const tr = (key: string, params?: Record<string, unknown>) => getTranslator()(key, params);
 
 function summarizeHash(hash: string): string {
   if (!hash) return 'unknown';
