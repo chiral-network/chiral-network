@@ -1960,6 +1960,8 @@ fn main() {
             select_peers_with_strategy,
             set_peer_encryption_support,
             cleanup_inactive_peers,
+            upload_versioned_file,
+            get_file_versions_by_name,
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
