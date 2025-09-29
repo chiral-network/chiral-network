@@ -383,7 +383,14 @@ async fn start_dht_node(
         }
     }
 
-    let dht_service = DhtService::new(port, bootstrap_nodes, None, false, final_proxy_address,)
+    let dht_service = DhtService::new(port,
+        bootstrap_nodes,
+        None,
+        false,
+        auto_enabled,
+        probe_interval,
+        autonat_server_list,
+        final_proxy_address,)
         .await
         .map_err(|e| format!("Failed to start DHT: {}", e))?;
 
