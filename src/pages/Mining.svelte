@@ -5,7 +5,6 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import DropDown from "$lib/components/ui/dropDown.svelte";
   import type { MiningHistoryPoint } from '$lib/stores';
   import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw } from 'lucide-svelte'
   import { onDestroy, onMount, getContext } from 'svelte'
@@ -199,10 +198,91 @@
 
   let validationError: string | null = null;
 
-  // Pool mining state
-  let poolUrl: string = '';
-  let isPoolMining: boolean = false;
+  // Decentralized Pool Mining State
+  interface MiningPool {
+    id: string;
+    name: string;
+    url: string;
+    description: string;
+    fee_percentage: number;
+    miners_count: number;
+    total_hashrate: string;
+    last_block_time: number;
+    blocks_found_24h: number;
+    region: string;
+    status: 'Active' | 'Maintenance' | 'Full' | 'Offline';
+    min_payout: number;
+    payment_method: string;
+    created_by?: string;
+    worker?: string;
+    password?: string;
+  }
+
+  interface PoolStats {
+    connected_miners: number;
+    pool_hashrate: string;
+    your_hashrate: string;
+    your_share_percentage: number;
+    shares_submitted: number;
+    shares_accepted: number;
+    estimated_payout_24h: number;
+    last_share_time: number;
+  }
+
+  interface JoinedPoolInfo {
+    pool: MiningPool;
+    stats: PoolStats;
+    joined_at: number;
+  }
+
+  // Pool state
+  let availablePools: MiningPool[] = [];
+  let currentPool: JoinedPoolInfo | null = null;
   let poolError: string = '';
+  let isDiscovering: boolean = false;
+  let showCreatePool: boolean = false;
+  let showPoolList: boolean = false;
+  let editingPool: MiningPool | null = null;
+  let showPoolManager: boolean = false;
+  let poolConnected: boolean = false;
+  let poolStats = {
+    connectedMiners: 0,
+    poolHashrate: '0 H/s',
+    yourHashrate: '0 H/s',
+    yourSharePercentage: 0,
+    sharesSubmitted: 0,
+    sharesAccepted: 0,
+    estimatedPayout24h: 0,
+    lastShareTime: 0
+  };
+  
+  // Pool creation form
+  let newPool = {
+    name: '',
+    description: '',
+    fee_percentage: 1.0,
+    min_payout: 1.0,
+    payment_method: 'PPLNS',
+    region: 'Global',
+    url: '',
+    worker: '',
+    password: ''
+  };
+
+  // Computed values
+  $: poolConnected = currentPool !== null;
+  $: if (currentPool) {
+    poolStats = {
+      connectedMiners: currentPool.stats.connected_miners,
+      poolHashrate: currentPool.stats.pool_hashrate,
+      yourHashrate: currentPool.stats.your_hashrate,
+      yourSharePercentage: currentPool.stats.your_share_percentage,
+      sharesSubmitted: currentPool.stats.shares_submitted,
+      sharesAccepted: currentPool.stats.shares_accepted,
+      estimatedPayout24h: currentPool.stats.estimated_payout_24h,
+      lastShareTime: currentPool.stats.last_share_time
+    };
+  }
 
   const navigation = getContext('navigation') as { setCurrentPage: (page: string) => void };
   
@@ -270,6 +350,17 @@
     }
     if (isTauri) {
       await updateCpuTemperature()
+    }
+    
+    // Initialize pool state
+    try {
+      const poolInfo = await invoke('get_current_pool_info') as JoinedPoolInfo | null;
+      if (poolInfo) {
+        currentPool = poolInfo;
+        startPoolStatsUpdates();
+      }
+    } catch (e) {
+      console.error('Failed to get current pool info:', e);
     }
     
     // Start polling for mining stats
@@ -540,49 +631,259 @@
     }
   }
 
-  async function joinPool() {
+  // Decentralized Pool Functions
+  async function discoverPools() {
     if (!$etcAccount) {
       poolError = 'Please create or import an account first.';
       return;
     }
-    if (!poolUrl) {
-      poolError = 'Please enter a valid pool URL (e.g., stratum+tcp://pool.example.com:3333)';
+    
+    isDiscovering = true;
+    poolError = '';
+    
+    try {
+      const pools = await invoke('discover_mining_pools') as MiningPool[];
+      availablePools = pools;
+      showPoolList = true;
+      await invoke('update_pool_discovery'); // Update pool stats
+    } catch (e) {
+      poolError = String(e);
+    } finally {
+      isDiscovering = false;
+    }
+  }
+
+  async function joinPool(pool: MiningPool) {
+    if (!$etcAccount) {
+      poolError = 'Please create or import an account first.';
       return;
     }
+    
+    if (pool.status === 'Offline') {
+      poolError = 'Cannot join offline pool.';
+      return;
+    }
+    
     poolError = '';
+    
     try {
-      await invoke('join_mining_pool', { url: poolUrl, address: $etcAccount.address });
-      isPoolMining = true; // Visually indicate pool mining is active
+      const joinedInfo = await invoke('join_mining_pool', { 
+        pool_id: pool.id, 
+        address: $etcAccount.address 
+      }) as JoinedPoolInfo;
+      
+      currentPool = joinedInfo;
+      showPoolList = false;
+      
+      // Start periodic stats updates
+      startPoolStatsUpdates();
     } catch (e) {
       poolError = String(e);
     }
   }
 
   async function leavePool() {
+    if (!currentPool) return;
+    
     try {
       await invoke('leave_mining_pool');
-      isPoolMining = false;
+      currentPool = null;
+      stopPoolStatsUpdates();
     } catch (e) {
       poolError = String(e);
     }
   }
 
-  async function createPool() {
+  async function createNewPool() {
     if (!$etcAccount) {
       poolError = 'Please create or import an account first.';
       return;
     }
+    
+    if (!newPool.name.trim()) {
+      poolError = 'Pool name is required.';
+      return;
+    }
+    
     poolError = '';
+    
     try {
-      await invoke('create_mining_pool', { address: $etcAccount.address });
-      // Maybe automatically join the created pool? For now, just a message.
-      poolUrl = 'stratum+tcp://127.0.0.1:3333'; // Example URL for local pool
-      poolError = 'Pool created locally. Enter the URL to join.';
+      const createdPool = await invoke('create_mining_pool', {
+        address: $etcAccount.address,
+        name: newPool.name,
+        description: newPool.description,
+        fee_percentage: newPool.fee_percentage,
+        min_payout: newPool.min_payout,
+        payment_method: newPool.payment_method,
+        region: newPool.region,
+      }) as MiningPool;
+      
+      // Reset form
+      newPool = {
+        name: '',
+        description: '',
+        fee_percentage: 1.0,
+        min_payout: 1.0,
+        payment_method: 'PPLNS',
+        region: 'Global',
+        url: '',
+        worker: '',
+        password: ''
+      };
+      
+      showCreatePool = false;
+      
+      // Automatically join the created pool
+      await joinPool(createdPool);
     } catch (e) {
       poolError = String(e);
     }
   }
 
+  // Pool stats updates
+  let poolStatsInterval: number | null = null;
+  
+  function startPoolStatsUpdates() {
+    if (poolStatsInterval) return;
+    
+    poolStatsInterval = setInterval(async () => {
+      if (!currentPool) {
+        stopPoolStatsUpdates();
+        return;
+      }
+      
+      try {
+        const stats = await invoke('get_pool_stats') as PoolStats;
+        if (stats && currentPool) {
+          currentPool.stats = stats;
+          currentPool = { ...currentPool }; // Trigger reactivity
+        }
+      } catch (e) {
+        console.error('Failed to update pool stats:', e);
+      }
+    }, 5000) as unknown as number; // Update every 5 seconds
+  }
+  
+  function stopPoolStatsUpdates() {
+    if (poolStatsInterval) {
+      clearInterval(poolStatsInterval);
+      poolStatsInterval = null;
+    }
+  }
+
+  function getPoolStatusColor(status: string): string {
+    switch (status) {
+      case 'Active': return 'text-green-500';
+      case 'Maintenance': return 'text-yellow-500';
+      case 'Full': return 'text-orange-500';
+      case 'Offline': return 'text-red-500';
+      default: return 'text-gray-500';
+    }
+  }
+
+  function formatTimestamp(timestamp: number): string {
+    const now = Date.now() / 1000;
+    const diff = now - timestamp;
+    
+    if (diff < 60) return `${Math.floor(diff)}s ago`;
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return `${Math.floor(diff / 86400)}d ago`;
+  }
+
+  // Pool management functions
+  function editPool(pool: MiningPool) {
+    editingPool = { ...pool };
+    showPoolManager = true;
+  }
+
+  function cancelPoolEdit() {
+    editingPool = null;
+    showPoolManager = false;
+  }
+
+  function deletePool(poolId: string) {
+    // Remove pool from available pools
+    availablePools = availablePools.filter(p => p.id !== poolId);
+    
+    // If this was the current pool, leave it
+    if (currentPool && currentPool.pool.id === poolId) {
+      leavePool();
+    }
+  }
+
+  // Save changes to an existing pool (edit functionality)
+  function savePool() {
+    if (!editingPool) return;
+    
+    // Store the editing pool in a local variable to satisfy TypeScript
+    const poolToEdit = editingPool;
+    
+    // Find and update the pool in availablePools
+    availablePools = availablePools.map(pool =>
+      pool.id === poolToEdit.id
+        ? {
+            ...pool,
+            ...poolToEdit,
+            id: poolToEdit.id ?? pool.id, // Ensure id is always a string
+            name: poolToEdit.name ?? pool.name,
+            url: poolToEdit.url ?? pool.url,
+            description: poolToEdit.description ?? pool.description,
+            fee_percentage: poolToEdit.fee_percentage ?? pool.fee_percentage,
+            miners_count: poolToEdit.miners_count ?? pool.miners_count,
+            total_hashrate: poolToEdit.total_hashrate ?? pool.total_hashrate,
+            last_block_time: poolToEdit.last_block_time ?? pool.last_block_time,
+            blocks_found_24h: poolToEdit.blocks_found_24h ?? pool.blocks_found_24h,
+            region: poolToEdit.region ?? pool.region,
+            status: poolToEdit.status ?? pool.status,
+            min_payout: poolToEdit.min_payout ?? pool.min_payout,
+            payment_method: poolToEdit.payment_method ?? pool.payment_method,
+            created_by: poolToEdit.created_by ?? pool.created_by,
+            worker: poolToEdit.worker ?? pool.worker ?? '',
+            password: poolToEdit.password ?? pool.password ?? ''
+          }
+        : pool
+    );
+    editingPool = null;
+    showPoolManager = false;
+  }
+
+  // Add a new pool (for modal form)
+  function addPool() {
+    // Basic validation
+    if (!newPool.name.trim()) return;
+    // Generate a unique id for the new pool
+    const id = `pool-${Date.now()}`;
+    availablePools = [
+      ...availablePools,
+      {
+        ...newPool,
+        id,
+        status: 'Active',
+        miners_count: 1,
+        total_hashrate: '0 H/s',
+        last_block_time: 0,
+        blocks_found_24h: 0,
+        created_by: $etcAccount ? $etcAccount.address : '',
+      }
+    ];
+    // Reset form and close modal
+    newPool = {
+      name: '',
+      description: '',
+      fee_percentage: 1.0,
+      min_payout: 1.0,
+      payment_method: 'PPLNS',
+      region: 'Global',
+      url: '',
+      worker: '',
+      password: ''
+    };
+    showPoolManager = false;
+  }
+
+  // Define pools variable as an alias for availablePools for compatibility
+  $: pools = availablePools;
   // Simulation removed; recent blocks come from backend
 
   // Keep a set of hashes we've already shown to avoid duplicates
@@ -758,132 +1059,7 @@
       }
     }
   }
-  // Pool structure with full configuration
-  interface Pool {
-    id: string
-    name: string
-    url: string
-    worker: string
-    password: string
-  }
-
-  let pools: Pool[] = []
-  let poolOptions: { value: string; label: string }[] = []
-
-  // Initialize with default pools
-  $: {
-    pools = [
-      { id: 'solo', name: 'Solo Mining', url: '', worker: '', password: '' },
-      { id: 'pool1', name: 'Pool 1', url: 'stratum://pool1.example.com:3333', worker: 'worker1', password: 'x' },
-      { id: 'pool2', name: 'Pool 2', url: 'stratum://pool2.example.com:3333', worker: 'worker2', password: 'x' },
-      { id: 'pool3', name: 'Community Pool', url: 'stratum://community.example.com:3333', worker: 'worker3', password: 'x' }
-    ]
-    
-    // Create dropdown options
-    poolOptions = pools.map(pool => ({
-      value: pool.id,
-      label: pool.name
-    }))
-  }
-
-  // Current pool management state
-  let poolConnected = false
-  let poolWorker = 'worker1'
-  let poolPassword = 'x'
-  
-  // Pool management UI state
-  let showPoolManager = false
-  let editingPool: Pool | null = null
-  let newPool: Pool = { id: '', name: '', url: '', worker: '', password: '' }
-  let poolStats = {
-    connectedMiners: 0,
-    totalShares: 0,
-    currentDifficulty: 1000000,
-    poolHashrate: 0
-  }
-  let poolStatsInterval: ReturnType<typeof setInterval> | null = null
-
-  // Mock pool stats simulation
-  function startPoolStatsSimulation() {
-    if (poolStatsInterval) {
-      clearInterval(poolStatsInterval)
-    }
-    
-    poolStatsInterval = setInterval(() => {
-      if (poolConnected) {
-        // Simulate realistic pool stats
-        poolStats.connectedMiners = Math.max(1, poolStats.connectedMiners + Math.floor(Math.random() * 3) - 1)
-        poolStats.totalShares += Math.floor(Math.random() * 5)
-        poolStats.poolHashrate = poolStats.connectedMiners * (85000 + Math.random() * 15000) // 85-100 KH/s per miner
-        poolStats.currentDifficulty = 1000000 + Math.floor(Math.random() * 100000)
-      }
-    }, 3000) // Update every 3 seconds
-  }
-
-  function stopPoolStatsSimulation() {
-    if (poolStatsInterval) {
-      clearInterval(poolStatsInterval)
-      poolStatsInterval = null
-    }
-  }
-
-  // Pool management functions
-  function getCurrentPool(): Pool | null {
-    return pools.find(pool => pool.id === $miningState.selectedPool) || null
-  }
-
-  function updateCurrentPoolConfig() {
-    const currentPool = getCurrentPool()
-    if (currentPool) {
-      poolUrl = currentPool.url
-      poolWorker = currentPool.worker
-      poolPassword = currentPool.password
-    }
-  }
-
-  function addPool() {
-    if (newPool.name && newPool.url) {
-      const poolId = `pool_${Date.now()}`
-      pools = [...pools, { ...newPool, id: poolId }]
-      newPool = { id: '', name: '', url: '', worker: '', password: '' }
-      showPoolManager = false
-    }
-  }
-
-  function editPool(pool: Pool) {
-    editingPool = { ...pool }
-    showPoolManager = true
-  }
-
-  function savePool() {
-    if (editingPool && editingPool.name && editingPool.url) {
-      pools = pools.map(pool => 
-        pool.id === editingPool!.id ? editingPool! : pool
-      )
-      editingPool = null
-      showPoolManager = false
-    }
-  }
-
-  function deletePool(poolId: string) {
-    if (poolId !== 'solo') { // Don't delete solo mining
-      pools = pools.filter(pool => pool.id !== poolId)
-      if ($miningState.selectedPool === poolId) {
-        $miningState.selectedPool = 'solo'
-      }
-    }
-  }
-
-  function cancelPoolEdit() {
-    editingPool = null
-    newPool = { id: '', name: '', url: '', worker: '', password: '' }
-    showPoolManager = false
-  }
-
-  // Update pool config when selection changes
-  $: if ($miningState.selectedPool) {
-    updateCurrentPoolConfig()
-  }
+  // Remove old pool management code - replaced with decentralized system
   
   onDestroy(async () => {
     // Don't stop mining when leaving the page - preserve state
@@ -1027,142 +1203,98 @@
     </div>
     
     <div class="space-y-4">
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div class="relative">
-          <Label for="pool-select">{$t('mining.pool')}</Label>
-          <div class="flex gap-2 items-end">
-            <div class="flex-1">
-              <DropDown
-                id="pool-select"
-                options={poolOptions}
-                bind:value={$miningState.selectedPool}
-                disabled={$miningState.isMining}
-              />
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={$miningState.isMining}
-              on:click={() => showPoolManager = true}
-            >
-              Manage Pools
-            </Button>
-          </div>
-        </div>
-        
-        <!-- Pool Management Mockup -->
-        {#if $miningState.selectedPool !== 'solo'}
-          <div class="col-span-full space-y-4 p-4 bg-muted/50 rounded-lg">
-            <h3 class="font-semibold text-lg">Pool Management</h3>
-            
-            <!-- Pool Configuration -->
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <Label for="pool-url">Pool URL</Label>
-                <Input
-                  id="pool-url"
-                  bind:value={poolUrl}
-                  placeholder="stratum://localhost:3333"
-                  disabled={$miningState.isMining}
-                  class="mt-2"
-                />
-              </div>
-              <div>
-                <Label for="pool-worker">Worker Name</Label>
-                <Input
-                  id="pool-worker"
-                  bind:value={poolWorker}
-                  placeholder="worker1"
-                  disabled={$miningState.isMining}
-                  class="mt-2"
-                />
-              </div>
-              <div>
-                <Label for="pool-password">Password</Label>
-                <Input
-                  id="pool-password"
-                  bind:value={poolPassword}
-                  placeholder="x"
-                  disabled={$miningState.isMining}
-                  class="mt-2"
-                />
-              </div>
-            </div>
-            
-            <!-- Connection Status -->
-            <div class="flex items-center gap-2">
-              <div class="w-2 h-2 rounded-full {poolConnected ? 'bg-green-500' : 'bg-red-500'}"></div>
-              <span class="text-sm font-medium">
-                {poolConnected ? 'Connected to Pool' : 'Not Connected'}
-              </span>
-            </div>
-            
-            <!-- Pool Actions -->
+      <!-- Decentralized Pool Mining Section -->
+      <div class="col-span-full">
+        <div class="bg-muted/30 rounded-lg p-4 space-y-4">
+          <div class="flex items-center justify-between">
+            <h3 class="text-lg font-semibold">Decentralized Mining Pools</h3>
             <div class="flex gap-2">
-              {#if !poolConnected}
-                <Button 
-                  disabled={$miningState.isMining}
-                  size="sm"
-                  on:click={() => {
-                    poolConnected = true
-                    startPoolStatsSimulation()
-                  }}
-                >
-                  Connect to Pool
-                </Button>
-              {:else}
-                <Button 
-                  disabled={$miningState.isMining}
-                  variant="outline"
-                  size="sm"
-                  on:click={() => {
-                    poolConnected = false
-                    stopPoolStatsSimulation()
-                  }}
-                >
-                  Disconnect
-                </Button>
-              {/if}
-              
-              <Button 
-                disabled={$miningState.isMining}
-                variant="secondary"
-                size="sm"
-              >
-                Start Pool Server
+              <Button variant="outline" size="sm" on:click={discoverPools} disabled={isDiscovering || $miningState.isMining}>
+                {#if isDiscovering}
+                  <RefreshCw class="h-4 w-4 mr-2 animate-spin" />
+                  Discovering...
+                {:else}
+                  <RefreshCw class="h-4 w-4 mr-2" />
+                  Discover Pools
+                {/if}
               </Button>
-              <Button 
-                disabled={$miningState.isMining}
-                variant="destructive"
-                size="sm"
-              >
-                Stop Pool Server
+              <Button variant="secondary" size="sm" on:click={() => showCreatePool = true} disabled={$miningState.isMining}>
+                <Coins class="h-4 w-4 mr-2" />
+                Create Pool
               </Button>
             </div>
-            
-            <!-- Pool Statistics (when connected) -->
-            {#if poolConnected}
+          </div>
+
+          {#if currentPool}
+            <!-- Currently Connected Pool -->
+            <div class="bg-green-500/10 border border-green-500/20 rounded-lg p-4">
+              <div class="flex items-center justify-between mb-3">
+                <div class="flex items-center gap-2">
+                  <div class="w-3 h-3 bg-green-500 rounded-full"></div>
+                  <h4 class="font-semibold text-green-700">Connected to: {currentPool.pool.name}</h4>
+                </div>
+                <Button variant="destructive" size="sm" on:click={leavePool} disabled={$miningState.isMining}>
+                  Leave Pool
+                </Button>
+              </div>
+              
               <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                 <div>
-                  <p class="text-muted-foreground">Connected Miners</p>
-                  <p class="font-semibold">{poolStats.connectedMiners}</p>
+                  <p class="text-muted-foreground">Your Hashrate</p>
+                  <p class="font-semibold">{currentPool.stats.your_hashrate}</p>
                 </div>
                 <div>
                   <p class="text-muted-foreground">Pool Hashrate</p>
-                  <p class="font-semibold">{poolStats.poolHashrate.toFixed(2)} H/s</p>
+                  <p class="font-semibold">{currentPool.stats.pool_hashrate}</p>
                 </div>
                 <div>
-                  <p class="text-muted-foreground">Total Shares</p>
-                  <p class="font-semibold">{poolStats.totalShares}</p>
+                  <p class="text-muted-foreground">Your Share</p>
+                  <p class="font-semibold">{currentPool.stats.your_share_percentage.toFixed(2)}%</p>
                 </div>
                 <div>
-                  <p class="text-muted-foreground">Difficulty</p>
-                  <p class="font-semibold">{poolStats.currentDifficulty.toLocaleString()}</p>
+                  <p class="text-muted-foreground">Est. 24h Payout</p>
+                  <p class="font-semibold">{currentPool.stats.estimated_payout_24h.toFixed(3)} Chiral</p>
+                </div>
+                <div>
+                  <p class="text-muted-foreground">Shares (A/S)</p>
+                  <p class="font-semibold">{currentPool.stats.shares_accepted}/{currentPool.stats.shares_submitted}</p>
+                </div>
+                <div>
+                  <p class="text-muted-foreground">Connected Miners</p>
+                  <p class="font-semibold">{currentPool.stats.connected_miners}</p>
+                </div>
+                <div>
+                  <p class="text-muted-foreground">Pool Fee</p>
+                  <p class="font-semibold">{currentPool.pool.fee_percentage}%</p>
+                </div>
+                <div>
+                  <p class="text-muted-foreground">Last Share</p>
+                  <p class="font-semibold">{formatTimestamp(currentPool.stats.last_share_time)}</p>
                 </div>
               </div>
-            {/if}
-          </div>
-        {/if}
+            </div>
+          {:else}
+            <!-- Solo Mining Status -->
+            <div class="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4">
+              <div class="flex items-center gap-2">
+                <div class="w-3 h-3 bg-blue-500 rounded-full"></div>
+                <h4 class="font-semibold text-blue-700">Solo Mining</h4>
+              </div>
+              <p class="text-sm text-muted-foreground mt-2">
+                You're mining solo. Discover and join a pool to share rewards and reduce variance.
+              </p>
+            </div>
+          {/if}
+
+          {#if poolError}
+            <div class="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
+              <p class="text-sm text-red-600">{poolError}</p>
+            </div>
+          {/if}
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         
         <div>
           <Label for="thread-count">{$t('mining.cpuThreads', { values: { cpuThreads } })}</Label>
@@ -1669,9 +1801,6 @@
                 <div class="font-medium">{pool.name}</div>
                 <div class="text-sm text-muted-foreground">
                   {pool.url || 'Solo Mining'}
-                  {#if pool.worker}
-                    • {pool.worker}
-                  {/if}
                 </div>
               </div>
               <div class="flex gap-2">
@@ -1741,7 +1870,7 @@
               <Label for="pool-worker">Worker Name</Label>
               <Input
                 id="pool-worker"
-                value={editingPool ? editingPool.worker : newPool.worker}
+                value={editingPool ? (editingPool.worker ?? '') : newPool.worker}
                 on:input={(e: Event) => {
                   const target = e.target as HTMLInputElement
                   if (editingPool) {
@@ -1758,7 +1887,7 @@
               <Label for="pool-password">Password</Label>
               <Input
                 id="pool-password"
-                value={editingPool ? editingPool.password : newPool.password}
+                value={editingPool ? (editingPool.password ?? '') : newPool.password}
                 on:input={(e: Event) => {
                   const target = e.target as HTMLInputElement
                   if (editingPool) {
@@ -1792,47 +1921,191 @@
     </div>
   {/if}
 
-  <!-- Pool mining UI -->
-  {#if $miningState.selectedPool !== 'solo'}
-    <Card>
-      <div class="p-4">
-        <h3 class="text-lg font-semibold mb-2">Pool mining</h3>
-        <div class="space-y-4">
-          <div>
-            <Label for="pool-url">Pool URL</Label>
-            <Input
-              id="pool-url"
-              type="text"
-              placeholder="stratum+tcp://pool.example.com:3333"
-              bind:value={poolUrl}
-              disabled={isPoolMining}
-            />
-            {#if poolError}
-              <p class="text-red-500 text-sm mt-1">{poolError}</p>
-            {/if}
-          </div>
+  <!-- Old pool UI removed - using new decentralized system -->
 
-          {#if isPoolMining}
-            <Button on:click={leavePool} class="w-full" variant="destructive">
-              <X class="mr-2 h-4 w-4" />
-              Leave Pool
-            </Button>
-          {:else}
-            <div class="grid grid-cols-2 gap-2">
-              <Button on:click={joinPool} class="w-full" disabled={!poolUrl}>
-                <Play class="mr-2 h-4 w-4" />
-                Join Pool
-              </Button>
-              <Button on:click={createPool} class="w-full" variant="secondary">
-                <Cpu class="mr-2 h-4 w-4" />
-                Create Pool
-              </Button>
-            </div>
-          {/if}
-          <p class="text-xs text-muted-foreground text-center pt-2">
-            Join a public pool or create your own to share rewards.
+
+<!-- Pool Discovery Modal -->
+{#if showPoolList}
+  <div class="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <Card class="w-full max-w-4xl max-h-[80vh] flex flex-col">
+      <div class="p-4 border-b flex items-center justify-between">
+        <h2 class="text-lg font-semibold">Available Mining Pools</h2>
+        <Button size="sm" variant="ghost" on:click={() => showPoolList = false}>
+          <X class="h-4 w-4" />
+        </Button>
+      </div>
+      
+      <div class="flex-1 overflow-y-auto p-4">
+        {#if availablePools.length === 0}
+          <div class="text-center py-8">
+            <p class="text-muted-foreground">No pools discovered yet. Try discovering pools first.</p>
+          </div>
+        {:else}
+          <div class="space-y-3">
+            {#each availablePools as pool}
+              <div class="border rounded-lg p-4 hover:bg-muted/50">
+                <div class="flex items-start justify-between">
+                  <div class="flex-1">
+                    <div class="flex items-center gap-2 mb-2">
+                      <h3 class="font-semibold">{pool.name}</h3>
+                      <Badge variant="outline" class={getPoolStatusColor(pool.status)}>
+                        {pool.status}
+                      </Badge>
+                      <Badge variant="secondary">{pool.region}</Badge>
+                    </div>
+                    
+                    <p class="text-sm text-muted-foreground mb-3">{pool.description}</p>
+                    
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                      <div>
+                        <p class="text-muted-foreground">Miners</p>
+                        <p class="font-medium">{pool.miners_count}</p>
+                      </div>
+                      <div>
+                        <p class="text-muted-foreground">Hashrate</p>
+                        <p class="font-medium">{pool.total_hashrate}</p>
+                      </div>
+                      <div>
+                        <p class="text-muted-foreground">Fee</p>
+                        <p class="font-medium">{pool.fee_percentage}%</p>
+                      </div>
+                      <div>
+                        <p class="text-muted-foreground">Last Block</p>
+                        <p class="font-medium">{pool.last_block_time > 0 ? formatTimestamp(pool.last_block_time) : 'Never'}</p>
+                      </div>
+                      <div>
+                        <p class="text-muted-foreground">24h Blocks</p>
+                        <p class="font-medium">{pool.blocks_found_24h}</p>
+                      </div>
+                      <div>
+                        <p class="text-muted-foreground">Min Payout</p>
+                        <p class="font-medium">{pool.min_payout} Chiral</p>
+                      </div>
+                      <div>
+                        <p class="text-muted-foreground">Payment</p>
+                        <p class="font-medium">{pool.payment_method}</p>
+                      </div>
+                      <div>
+                        <p class="text-muted-foreground">URL</p>
+                        <p class="font-mono text-xs">{pool.url}</p>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div class="ml-4">
+                    <Button 
+                      size="sm" 
+                      on:click={() => joinPool(pool)}
+                      disabled={pool.status !== 'Active' || $miningState.isMining}
+                    >
+                      Join Pool
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    </Card>
+  </div>
+{/if}
+
+<!-- Create Pool Modal -->
+{#if showCreatePool}
+  <div class="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <Card class="w-full max-w-2xl">
+      <div class="p-4 border-b flex items-center justify-between">
+        <h2 class="text-lg font-semibold">Create New Mining Pool</h2>
+        <Button size="sm" variant="ghost" on:click={() => showCreatePool = false}>
+          <X class="h-4 w-4" />
+        </Button>
+      </div>
+      
+      <div class="p-4 space-y-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <Label for="pool-name">Pool Name *</Label>
+            <Input
+              id="pool-name"
+              bind:value={newPool.name}
+              placeholder="My Mining Pool"
+              class="mt-2"
+            />
+          </div>
+          <div>
+            <Label for="pool-region">Region</Label>
+            <select bind:value={newPool.region} class="w-full mt-2 px-3 py-2 border rounded-md bg-background">
+              <option value="Global">Global</option>
+              <option value="Americas">Americas</option>
+              <option value="Europe">Europe</option>
+              <option value="Asia">Asia</option>
+              <option value="Oceania">Oceania</option>
+            </select>
+          </div>
+        </div>
+        
+        <div>
+          <Label for="pool-description">Description</Label>
+          <Input
+            id="pool-description"
+            bind:value={newPool.description}
+            placeholder="A brief description of your pool..."
+            class="mt-2"
+          />
+        </div>
+        
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <Label for="pool-fee">Fee Percentage</Label>
+            <Input
+              id="pool-fee"
+              type="number"
+              bind:value={newPool.fee_percentage}
+              min="0"
+              max="10"
+              step="0.1"
+              class="mt-2"
+            />
+          </div>
+          <div>
+            <Label for="pool-payout">Min Payout (Chiral)</Label>
+            <Input
+              id="pool-payout"
+              type="number"
+              bind:value={newPool.min_payout}
+              min="0.1"
+              step="0.1"
+              class="mt-2"
+            />
+          </div>
+          <div>
+            <Label for="pool-payment">Payment Method</Label>
+            <select bind:value={newPool.payment_method} class="w-full mt-2 px-3 py-2 border rounded-md bg-background">
+              <option value="PPLNS">PPLNS</option>
+              <option value="PPS">PPS</option>
+              <option value="PPS+">PPS+</option>
+              <option value="PROP">PROP</option>
+            </select>
+          </div>
+        </div>
+        
+        <div class="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3">
+          <p class="text-sm text-blue-600">
+            <strong>Note:</strong> Creating a pool will automatically set you as the coordinator. 
+            Your pool will be announced on the decentralized network for others to discover and join.
           </p>
+        </div>
+        
+        <div class="flex justify-end gap-2 pt-4">
+          <Button variant="outline" on:click={() => showCreatePool = false}>
+            Cancel
+          </Button>
+          <Button on:click={createNewPool} disabled={!newPool.name.trim()}>
+            Create Pool
+          </Button>
         </div>
       </div>
     </Card>
-  {/if}
+  </div>
+{/if}
