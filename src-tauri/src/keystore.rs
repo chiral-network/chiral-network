@@ -138,7 +138,12 @@ impl Keystore {
         }
     }
 
-    pub fn set_2fa_secret(&mut self, address: &str, secret: &str, password: &str) -> Result<(), String> {
+    pub fn set_2fa_secret(
+        &mut self,
+        address: &str,
+        secret: &str,
+        password: &str,
+    ) -> Result<(), String> {
         let account = self
             .accounts
             .iter_mut()
@@ -161,7 +166,9 @@ impl Keystore {
 
         // To remove, we must first verify the password is correct.
         // We can do this by trying to decrypt the existing secret.
-        if let (Some(encrypted_secret), Some(iv)) = (&account.encrypted_two_fa_secret, &account.two_fa_iv) {
+        if let (Some(encrypted_secret), Some(iv)) =
+            (&account.encrypted_two_fa_secret, &account.two_fa_iv)
+        {
             decrypt_data(encrypted_secret, &account.salt, iv, password)
                 .map_err(|_| "Invalid password. Cannot disable 2FA.".to_string())?;
         }
@@ -216,7 +223,11 @@ fn encrypt_private_key(
 }
 
 /// Generic function to encrypt any string data using the password and a salt.
-fn encrypt_data(data_to_encrypt: &str, password: &str, salt_hex: &str) -> Result<(String, String), String> {
+fn encrypt_data(
+    data_to_encrypt: &str,
+    password: &str,
+    salt_hex: &str,
+) -> Result<(String, String), String> {
     let salt = hex::decode(salt_hex).map_err(|e| format!("Invalid salt: {}", e))?;
     let key = derive_key(password, &salt);
 
@@ -231,7 +242,12 @@ fn encrypt_data(data_to_encrypt: &str, password: &str, salt_hex: &str) -> Result
 }
 
 /// Generic function to decrypt data.
-fn decrypt_data(encrypted_hex: &str, salt_hex: &str, iv_hex: &str, password: &str) -> Result<String, String> {
+fn decrypt_data(
+    encrypted_hex: &str,
+    salt_hex: &str,
+    iv_hex: &str,
+    password: &str,
+) -> Result<String, String> {
     decrypt_private_key(encrypted_hex, salt_hex, iv_hex, password)
 }
 

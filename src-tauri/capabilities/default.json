@@ -5,8 +5,11 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:webview:default",
+    "core:webview:allow-create-webview-window",
     "shell:allow-open",
     "os:default",
-    "dialog:default"
+    "dialog:default",
+    "dialog:allow-open"
   ]
 }

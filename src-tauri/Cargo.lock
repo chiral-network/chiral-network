@@ -832,10 +832,13 @@ dependencies = [
  "hex",
  "hkdf",
  "hmac",
+ "lazy_static",
  "libp2p",
  "pbkdf2 0.12.2",
  "rand 0.8.5",
+ "reed-solomon-erasure",
  "reqwest 0.11.27",
+ "rs_merkle",
  "secp256k1",
  "serde",
  "serde_json",
@@ -3053,6 +3056,7 @@ dependencies = [
  "futures-timer",
  "getrandom 0.2.16",
  "libp2p-allow-block-list",
+ "libp2p-autonat",
  "libp2p-connection-limits",
  "libp2p-core",
  "libp2p-dns",
@@ -3087,6 +3091,33 @@ dependencies = [
  "libp2p-identity",
  "libp2p-swarm",
  "void",
+]
+
+[[package]]
+name = "libp2p-autonat"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a083675f189803d0682a2726131628e808144911dad076858bfbe30b13065499"
+dependencies = [
+ "async-trait",
+ "asynchronous-codec",
+ "bytes",
+ "either",
+ "futures",
+ "futures-bounded",
+ "futures-timer",
+ "libp2p-core",
+ "libp2p-identity",
+ "libp2p-request-response",
+ "libp2p-swarm",
+ "quick-protobuf",
+ "quick-protobuf-codec",
+ "rand 0.8.5",
+ "rand_core 0.6.4",
+ "thiserror 1.0.69",
+ "tracing",
+ "void",
+ "web-time",
 ]
 
 [[package]]
@@ -5187,6 +5218,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "reed-solomon-erasure"
+version = "4.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a415a013dd7c5d4221382329a5a3482566da675737494935cbbbcdec04662f9d"
+dependencies = [
+ "smallvec",
+]
+
+[[package]]
 name = "ref-cast"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5368,6 +5408,15 @@ dependencies = [
  "libc",
  "untrusted 0.9.0",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rs_merkle"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb09b49230ba22e8c676e7b75dfe2887dea8121f18b530ae0ba519ce442d2b21"
+dependencies = [
+ "sha2",
 ]
 
 [[package]]
