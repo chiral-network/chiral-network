@@ -68,6 +68,9 @@ pub struct FileMetadata {
     pub encryption_method: Option<String>,
     /// Fingerprint of the encryption key for identification
     pub key_fingerprint: Option<String>,
+    // --- VERSIONING FIELDS ---
+    pub version: Option<u32>,
+    pub parent_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -131,6 +134,7 @@ pub enum DhtCommand {
     PublishFile(FileMetadata),
     SearchFile(String),
     ConnectPeer(String),
+    DisconnectPeer(PeerId),
     GetPeerCount(oneshot::Sender<usize>),
     Echo {
         peer: PeerId,
@@ -670,6 +674,74 @@ async fn run_dht_node(
                             let _ = event_tx.send(DhtEvent::Error(format!("Invalid address: {}", addr))).await;
                         }
                     }
+                    // Some(DhtCommand::DisconnectPeer(peer_id)) => {
+                    //     info!("Requesting disconnect from peer: {}", peer_id);
+                    //     let was_proxy = is_proxy_peer(&peer_id, &proxy_targets, &proxy_capable).await;
+                    //     let peer_id_str = peer_id.to_string();
+
+                    //     match swarm.disconnect_peer_id(peer_id.clone()) {
+                    //         Ok(()) => {
+                    //             if was_proxy {
+                    //                 proxy_targets.lock().await.remove(&peer_id);
+                    //                 proxy_capable.lock().await.remove(&peer_id);
+
+                    //                 let _ = event_tx
+                    //                     .send(DhtEvent::ProxyStatus {
+                    //                         id: peer_id_str,
+                    //                         address: String::new(),
+                    //                         status: "offline".to_string(),
+                    //                         latency_ms: None,
+                    //                         error: None,
+                    //                     })
+                    //                     .await;
+                    //             }
+                    //         }
+                    //         Err(e) => {
+                    //             error!("Failed to disconnect from {}: {}", peer_id, e);
+                    //             let _ = event_tx
+                    //                 .send(DhtEvent::Error(format!(
+                    //                     "Failed to disconnect from {}: {}",
+                    //                     peer_id, e
+                    //                 )))
+                    //                 .await;
+                    //         }
+                    //     }
+                    // }
+                    Some(DhtCommand::DisconnectPeer(peer_id)) => {
+                        info!("Requesting disconnect from peer: {}", peer_id);
+                        let was_proxy = is_proxy_peer(&peer_id, &proxy_targets, &proxy_capable).await;
+                        let peer_id_str = peer_id.to_string();
+
+                        match swarm.disconnect_peer_id(peer_id.clone()) {
+                            Ok(()) => {
+                                if was_proxy {
+                                    proxy_targets.lock().await.remove(&peer_id);
+                                    proxy_capable.lock().await.remove(&peer_id);
+
+                                    let _ = event_tx
+                                        .send(DhtEvent::ProxyStatus {
+                                            id: peer_id_str,
+                                            address: String::new(),
+                                            status: "offline".to_string(),
+                                            latency_ms: None,
+                                            error: None,
+                                        })
+                                        .await;
+                                }
+                            }
+                            Err(e) => {
+                                // Use Debug formatting (`{:?}`) because the error type is `()`, not `Display`.
+                                error!("Failed to disconnect from {}: {:?}", peer_id, e);
+                                let _ = event_tx
+                                    .send(DhtEvent::Error(format!(
+                                        "Failed to disconnect from {}: {:?}",
+                                        peer_id, e
+                                    )))
+                                    .await;
+                            }
+                        }
+                    }
+
                     Some(DhtCommand::GetPeerCount(tx)) => {
                         let count = connected_peers.lock().await.len();
                         let _ = tx.send(count);
@@ -1341,6 +1413,7 @@ pub struct DhtService {
     proxy_targets: Arc<Mutex<HashSet<PeerId>>>,
     proxy_capable: Arc<Mutex<HashSet<PeerId>>>,
     peer_selection: Arc<Mutex<PeerSelectionService>>,
+    file_metadata_cache: Arc<Mutex<HashMap<String, FileMetadata>>>,
 }
 
 impl DhtService {
@@ -1586,6 +1659,7 @@ impl DhtService {
             proxy_targets,
             proxy_capable,
             peer_selection,
+            file_metadata_cache: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -1595,6 +1669,7 @@ impl DhtService {
     }
 
     pub async fn publish_file(&self, metadata: FileMetadata) -> Result<(), String> {
+        self.file_metadata_cache.lock().await.insert(metadata.file_hash.clone(), metadata.clone());
         self.cmd_tx
             .send(DhtCommand::PublishFile(metadata))
             .await
@@ -1606,7 +1681,65 @@ impl DhtService {
             .await
             .map_err(|e| e.to_string())
     }
+     pub async fn cache_remote_file(&self, metadata: &FileMetadata) {
+        self.file_metadata_cache.lock().await.insert(metadata.file_hash.clone(), metadata.clone());
+    }
+    /// List all known FileMetadata (from cache, i.e., locally published or discovered)
+    pub async fn get_all_file_metadata(&self) -> Result<Vec<FileMetadata>, String> {
+        let cache = self.file_metadata_cache.lock().await;
+        Ok(cache.values().cloned().collect())
+    }
 
+    /// Get all versions for a file name, sorted by version (desc)
+    pub async fn get_versions_by_file_name(&self, file_name: String) -> Result<Vec<FileMetadata>, String> {
+        let all = self.get_all_file_metadata().await?;
+        let mut versions: Vec<FileMetadata> = all.into_iter()
+            .filter(|m| m.file_name == file_name)
+            .collect();
+        versions.sort_by(|a, b| b.version.unwrap_or(1).cmp(&a.version.unwrap_or(1)));
+        Ok(versions)
+    }
+
+    /// Get the latest version for a file name
+    pub async fn get_latest_version_by_file_name(&self, file_name: String) -> Result<Option<FileMetadata>, String> {
+        let versions = self.get_versions_by_file_name(file_name).await?;
+        Ok(versions.into_iter().max_by_key(|m| m.version.unwrap_or(1)))
+    }
+
+    /// Prepare a new FileMetadata for upload (auto-increment version, set parent_hash)
+    pub async fn prepare_versioned_metadata(
+        &self,
+        file_hash: String,
+        file_name: String,
+        file_size: u64,
+        created_at: u64,
+        mime_type: Option<String>,
+        is_encrypted: bool,
+        encryption_method: Option<String>,
+        key_fingerprint: Option<String>,
+    ) -> Result<FileMetadata, String> {
+        let latest = self.get_latest_version_by_file_name(file_name.clone()).await?;
+        let (version, parent_hash) = match latest {
+            Some(ref prev) => (
+                prev.version.map(|v| v + 1).unwrap_or(2),
+                Some(prev.file_hash.clone()),
+            ),
+            None => (1, None),
+        };
+        Ok(FileMetadata {
+            file_hash,
+            file_name,
+            file_size,
+            seeders: vec![],
+            created_at,
+            mime_type,
+            is_encrypted,
+            encryption_method,
+            key_fingerprint,
+            version: Some(version),
+            parent_hash,
+        })
+    }
     pub async fn search_file(&self, file_hash: String) -> Result<(), String> {
         self.cmd_tx
             .send(DhtCommand::SearchFile(file_hash))
@@ -1681,6 +1814,13 @@ impl DhtService {
     pub async fn connect_peer(&self, addr: String) -> Result<(), String> {
         self.cmd_tx
             .send(DhtCommand::ConnectPeer(addr))
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    pub async fn disconnect_peer(&self, peer_id: PeerId) -> Result<(), String> {
+        self.cmd_tx
+            .send(DhtCommand::DisconnectPeer(peer_id))
             .await
             .map_err(|e| e.to_string())
     }
@@ -1797,6 +1937,39 @@ impl DhtService {
         // For now, return connected peers as potential seeders
         let connected = self.connected_peers.lock().await;
         connected.iter().map(|p| p.to_string()).collect()
+    }
+
+    /// Discover and verify available peers for a specific file
+    pub async fn discover_peers_for_file(&self, metadata: &FileMetadata) -> Result<Vec<String>, String> {
+        info!("Starting peer discovery for file: {} with {} seeders",
+              metadata.file_hash, metadata.seeders.len());
+
+        let mut available_peers = Vec::new();
+        let connected_peers = self.connected_peers.lock().await;
+
+        // Check which seeders from metadata are currently connected
+        for seeder_id in &metadata.seeders {
+            if let Ok(peer_id) = seeder_id.parse::<libp2p::PeerId>() {
+                if connected_peers.contains(&peer_id) {
+                    info!("Seeder {} is currently connected", seeder_id);
+                    available_peers.push(seeder_id.clone());
+                } else {
+                    info!("Seeder {} is not currently connected", seeder_id);
+                    // TODO: Try to connect to this peer
+                }
+            } else {
+                warn!("Invalid peer ID in seeders list: {}", seeder_id);
+            }
+        }
+
+        // If no seeders are connected, the file is not available for download
+        if available_peers.is_empty() {
+            info!("No seeders are currently connected - file not available for download");
+            // TODO: In the future, we could try to connect to offline seeders
+        }
+
+        info!("Peer discovery completed: found {} available peers", available_peers.len());
+        Ok(available_peers)
     }
 }
 

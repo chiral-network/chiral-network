@@ -225,13 +225,13 @@
                 {tr('download.search.status.completedIn', { values: { seconds: (lastSearchDuration / 1000).toFixed(1) } })}
               </p>
             {:else if latestStatus === 'not_found'}
-              <div class="rounded-md border border-amber-300/70 bg-amber-100/50 dark:bg-amber-900/20 p-5 text-sm text-amber-700 dark:text-amber-300">
-                {tr('download.search.status.notFoundDetail')}
+              <div class="text-center py-8">
+                <p class="text-sm text-muted-foreground">{tr('download.search.status.notFoundDetail')}</p>
               </div>
             {:else if latestStatus === 'error'}
-              <div class="rounded-md border border-destructive/40 bg-destructive/10 p-5 text-sm text-destructive">
-                <p class="font-medium mb-1">{tr('download.search.status.errorHeadline')}</p>
-                <p>{searchError}</p>
+              <div class="text-center py-8">
+                <p class="text-sm font-medium text-muted-foreground mb-1">{tr('download.search.status.errorHeadline')}</p>
+                <p class="text-sm text-muted-foreground">{searchError}</p>
               </div>
             {:else}
               <div class="rounded-md border border-dashed border-muted p-5 text-sm text-muted-foreground text-center">
