@@ -5,7 +5,7 @@
   import { files } from '$lib/stores'
   import { t } from 'svelte-i18n';
   import { get } from 'svelte/store'
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { showToast } from '$lib/toast'
   import { getStorageStatus, isDuplicateHash } from '$lib/uploadHelpers'
   import { fileService } from '$lib/services/fileService'
@@ -13,6 +13,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { dhtService } from '$lib/dht';
   import type { FileMetadata } from '$lib/dht';
+  import Button from '$lib/components/ui/button.svelte';
 
 
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
@@ -23,13 +24,13 @@
   // Enhanced file type detection with icons
   function getFileIcon(fileName: string) {
     const ext = fileName.split('.').pop()?.toLowerCase() || ''
-    
+
     // Images
     if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext)) return Image
     // Videos
     if (['mp4', 'avi', 'mkv', 'mov', 'wmv', 'webm', 'flv', 'm4v'].includes(ext)) return Video
     // Audio
-    if (['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a', 'wma'].includes(ext)) return Music  
+    if (['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a', 'wma'].includes(ext)) return Music
     // Archives
     if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz'].includes(ext)) return Archive
     // Code files
@@ -38,13 +39,13 @@
     if (['txt', 'md', 'pdf', 'doc', 'docx', 'rtf'].includes(ext)) return FileText
     // Spreadsheets
     if (['xls', 'xlsx', 'csv', 'ods'].includes(ext)) return FileSpreadsheet
-    
+
     return FileIcon
   }
 
   function getFileColor(fileName: string) {
     const ext = fileName.split('.').pop()?.toLowerCase() || ''
-    
+
     if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext)) return 'text-blue-500'
     if (['mp4', 'avi', 'mkv', 'mov', 'wmv', 'webm', 'flv', 'm4v'].includes(ext)) return 'text-purple-500'
     if (['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a', 'wma'].includes(ext)) return 'text-green-500'
@@ -52,7 +53,7 @@
     if (['js', 'ts', 'html', 'css', 'py', 'java', 'cpp', 'c', 'php', 'rb', 'go', 'rs'].includes(ext)) return 'text-red-500'
     if (['txt', 'md', 'pdf', 'doc', 'docx', 'rtf'].includes(ext)) return 'text-gray-600'
     if (['xls', 'xlsx', 'csv', 'ods'].includes(ext)) return 'text-emerald-500'
-    
+
     return 'text-muted-foreground'
   }
 
@@ -63,6 +64,10 @@
   let isRefreshingStorage = false
   let storageError: string | null = null
   let lastChecked: Date | null = null
+
+  // Hash copied popup state
+  let copiedHash: string | null = null;
+  let showCopied = false;
 
   $: storageLabel = isRefreshingStorage
     ? tr('upload.storage.checking')
@@ -82,7 +87,7 @@
       ? tr('upload.storage.okBadge')
       : tr('upload.storage.unknownBadge')
 
-  $: lastCheckedLabel = lastChecked?.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  $: lastCheckedLabel = lastChecked
     ? tr('upload.storage.lastChecked', {
         values: {
           time: lastChecked.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -185,27 +190,27 @@
                   uploadDate: new Date()
                 };
 
-            files.update((currentFiles) => [...currentFiles, newFile]);
-            addedCount++;
+                files.update((currentFiles) => [...currentFiles, newFile]);
+                addedCount++;
 
-            // Publish file metadata to DHT network for discovery
-            try {
-              await dhtService.publishFile({
-                fileHash: hash,
-                fileName: file.name,
-                fileSize: file.size,
-                seeders: [],
-                createdAt: Date.now(),
-                isEncrypted: false
-              });
-              console.log('Dropped file published to DHT:', hash);
-            } catch (publishError) {
-              console.warn('Failed to publish dropped file to DHT:', publishError);
-            }
-          } catch (error) {
-            console.error('Error uploading dropped file:', file.name, error);
-            showToast(tr('upload.fileFailed', { values: { name: file.name, error: String(error) } }), 'error');
-          }
+                // Publish file metadata to DHT network for discovery
+                try {
+                  await dhtService.publishFile({
+                    fileHash: hash,
+                    fileName: file.name,
+                    fileSize: file.size,
+                    seeders: [],
+                    createdAt: Date.now(),
+                    isEncrypted: false
+                  });
+                  console.log('Dropped file published to DHT:', hash);
+                } catch (publishError) {
+                  console.warn('Failed to publish dropped file to DHT:', publishError);
+                }
+              } catch (error) {
+                console.error('Error uploading dropped file:', file.name, error);
+                showToast(tr('upload.fileFailed', { values: { name: file.name, error: String(error) } }), 'error');
+              }
             }
 
             if (duplicateCount > 0) {
@@ -261,7 +266,7 @@
       showToast(tr('upload.fileDialogError'), 'error');
     }
   }
-  
+
   async function removeFile(fileHash: string) {
     // Check if we're in Tauri environment
     if (!isTauri) {
@@ -284,7 +289,7 @@
         showToast(tr('upload.fileFailed', { values: { name: fileHash, error: String(error) } }), 'error');
       }
   }
-  
+
   async function addFilesFromPaths(paths: string[]) {
     let duplicateCount = 0
     let addedCount = 0
@@ -337,20 +342,27 @@
       refreshAvailableStorage()
     }
   }
-  
+
   function formatFileSize(bytes: number): string {
     if (bytes < 1024) return bytes + ' B'
     if (bytes < 1048576) return (bytes / 1024).toFixed(2) + ' KB'
     return (bytes / 1048576).toFixed(2) + ' MB'
   }
 
-  async function handleCopy(hash: string) {
-    await navigator.clipboard.writeText(hash);
-    showToast('Hash copied to clipboard!', 'success');
+  function toHumanReadableSize(bytes: number): string {
+    return formatFileSize(bytes);
   }
 
+  async function handleCopy(hash: string) {
+    await navigator.clipboard.writeText(hash);
+    copiedHash = hash;
+    showCopied = true;
+    await tick();
+    setTimeout(() => {
+      showCopied = false;
+    }, 1200);
+  }
 
-  
   let selectedFile: File | null = null;
   let existingVersions: any[] = [];
   let uploadMsg = '';
@@ -452,13 +464,13 @@
       <!-- Drag & Drop Indicator -->
       {#if $files.filter(f => f.status === 'seeding' || f.status === 'uploaded').length === 0}
         <div class="text-center py-12 border-2 border-dashed rounded-xl transition-all duration-300 relative overflow-hidden {isDragging ? 'border-primary bg-gradient-to-br from-primary/20 via-primary/10 to-primary/5 scale-105 shadow-2xl' : 'border-muted-foreground/25 bg-gradient-to-br from-muted/5 to-muted/10 hover:border-muted-foreground/40 hover:bg-muted/20'}">
-          
+
           <!-- Animated background when dragging -->
           {#if isDragging}
             <div class="absolute inset-0 bg-gradient-to-r from-transparent via-primary/10 to-transparent animate-pulse"></div>
             <div class="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(59,130,246,0.1)_0%,transparent_70%)] animate-ping"></div>
           {/if}
-          
+
           <div class="relative z-10">
             <!-- Dynamic icon based on drag state -->
             <div class="relative mb-6">
@@ -471,7 +483,7 @@
                 <FolderOpen class="h-16 w-16 mx-auto text-muted-foreground/70 hover:text-primary transition-colors duration-300" />
               {/if}
             </div>
-            
+
             <!-- Dynamic text -->
             <h3 class="text-2xl font-bold mb-3 transition-all duration-300 {isDragging ? 'text-primary scale-110' : 'text-foreground'}">{isDragging ? '✨ Drop files here!' : $t('upload.dropFiles')}</h3>
             <p class="text-muted-foreground mb-8 text-lg transition-colors duration-300">
@@ -480,7 +492,7 @@
                 : (isTauri ? $t('upload.dropFilesHint') : 'Drag and drop requires desktop app')
               }
             </p>
-            
+
             {#if !isDragging}
               <!-- File type icons preview -->
               <div class="flex justify-center gap-4 mb-8 opacity-60">
@@ -490,7 +502,7 @@
                 <Archive class="h-8 w-8 text-orange-500 animate-pulse" style="animation-delay: 600ms;" />
                 <Code class="h-8 w-8 text-red-500 animate-pulse" style="animation-delay: 800ms;" />
               </div>
-              
+
               <div class="flex justify-center gap-3">
                 {#if isTauri}
                   <button class="group inline-flex items-center justify-center h-12 rounded-xl px-6 text-sm font-medium bg-gradient-to-r from-primary to-primary/90 text-primary-foreground hover:from-primary/90 hover:to-primary shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105" on:click={openFileDialog}>
@@ -504,7 +516,7 @@
                   </div>
                 {/if}
               </div>
-              
+
               <!-- Supported formats hint -->
               <p class="text-xs text-muted-foreground/75 mt-4">
                 {#if isTauri}
@@ -540,7 +552,7 @@
           </div>
         </div>
       {/if}
-      
+
       <!-- File List -->
       {#if $files.filter(f => f.status === 'seeding' || f.status === 'uploaded').length > 0}
         <div class="space-y-3 relative">
@@ -548,7 +560,7 @@
             <div class="group relative bg-gradient-to-r from-card to-card/80 border border-border/50 rounded-xl p-4 hover:shadow-lg hover:border-border transition-all duration-300 hover:scale-[1.01] overflow-hidden">
               <!-- Background gradient effect -->
               <div class="absolute inset-0 bg-gradient-to-r from-primary/5 via-transparent to-secondary/5 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-              
+
               <div class="relative flex items-center justify-between gap-4">
                 <div class="flex items-center gap-4 min-w-0 flex-1">
                   <!-- Enhanced file icon with background -->
@@ -558,7 +570,7 @@
                       <svelte:component this={getFileIcon(file.name)} class="h-6 w-6 {getFileColor(file.name)}" />
                     </div>
                   </div>
-                  
+
                   <div class="flex-1 min-w-0 space-y-2">
                     <div class="flex items-center gap-2">
                       <p class="text-sm font-semibold truncate text-foreground">{file.name}</p>
@@ -567,7 +579,7 @@
                         <span class="text-xs text-green-600 font-medium">Active</span>
                       </div>
                     </div>
-                    
+
                     <div class="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                       <div class="flex items-center gap-1">
                         <span class="opacity-60">Hash:</span>
@@ -592,13 +604,13 @@
                     </div>
                   </div>
                 </div>
-                
+
                 <div class="flex items-center gap-2">
                   <Badge variant="secondary" class="bg-green-500/10 text-green-600 border-green-500/20 font-medium">
                     <div class="w-1.5 h-1.5 bg-green-500 rounded-full mr-1.5 animate-pulse"></div>
                     {$t('upload.seeding')}
                   </Badge>
-                  
+
                   <button
                     on:click={() => handleCopy(file.hash)}
                     class="group/btn p-2 hover:bg-primary/10 rounded-lg transition-all duration-200 hover:scale-110"
@@ -609,7 +621,7 @@
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                     </svg>
                   </button>
-                  
+
                   {#if isTauri}
                     <button
                       on:click={() => removeFile(file.hash)}
