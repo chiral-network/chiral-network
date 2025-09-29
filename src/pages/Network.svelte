@@ -6,6 +6,7 @@
   import Label from '$lib/components/ui/label.svelte'
   import GethStatusCard from '$lib/components/GethStatusCard.svelte'
   import PeerMetrics from '$lib/components/PeerMetrics.svelte'
+  import GeoDistributionCard from '$lib/components/GeoDistributionCard.svelte'
   import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Play, Square, Download, AlertCircle, Wifi } from 'lucide-svelte'
   import { peers, networkStats, networkStatus, userLocation, etcAccount } from '$lib/stores'
   import { get } from 'svelte/store'
@@ -1315,6 +1316,10 @@
         </div>
       </div>
     </Card>
+  </div>
+  
+  <div class="mt-6">
+    <GeoDistributionCard />
   </div>
   
   <!-- Peer Discovery -->

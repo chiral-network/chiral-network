@@ -144,7 +144,17 @@
     "locationHint": "帮助连接附近节点以获得更好性能。",
     "enableUpnp": "启用UPnP",
     "enableNat": "启用NAT端口映射",
-    "enableDht": "启用DHT"
+    "enableDht": "启用DHT",
+    "geoDistribution": {
+      "title": "地理分布",
+      "subtitle": "正在映射 {peers} 个已观测的节点",
+      "topRegion": "节点最多的区域：{region}",
+      "noData": "等待位置数据",
+      "tooltip": "{region}：{count} 个节点",
+      "peersShort": "{count} 个节点",
+      "emptyState": "连接到 DHT 后即可开始绘制节点地图。",
+      "unknownNotice": "仍有 {count} 个节点未提供位置信息。"
+    }
   },
   "regions.usEast": "美国东部",
   "regions.usWest": "美国西部",
