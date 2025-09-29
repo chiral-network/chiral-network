@@ -8,6 +8,20 @@ const seenHashes = new Set<string>();
 // This is the helper function that creates the transaction object
 function pushRecentBlock(b: { hash: string; reward?: number; timestamp?: Date }) {
   const reward = typeof b.reward === 'number' ? b.reward : 0;
+
+  const newBlock = {
+    id: `block-${b.hash}-${b.timestamp?.getTime() ?? Date.now()}`,
+    hash: b.hash,
+    reward: reward,
+    timestamp: b.timestamp ?? new Date(),
+    difficulty: 0,
+    nonce: 0, 
+  };
+  miningState.update(state => ({
+    ...state,
+    recentBlocks: [newBlock, ...(state.recentBlocks ?? [])].slice(0, 50)
+  }));
+
   if (reward > 0) {
     const last4 = b.hash.slice(-4);
     const tx: Transaction = {
