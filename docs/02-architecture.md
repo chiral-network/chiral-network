@@ -68,8 +68,9 @@ File Processing Pipeline:
 1. File Input → SHA-256 Hash Generation
 2. File Chunking → 256KB chunks
 3. Chunk Encryption → AES-256
-4. Chunk Distribution → Multiple storage nodes
-5. DHT Registration → Hash-to-location mapping
+4. Erasure Coding → 10 data, 4 parity shards
+5. Chunk Distribution → Multiple storage nodes
+6. DHT Registration → Hash-to-location mapping
 ```
 
 #### Storage Node Structure
@@ -210,18 +211,20 @@ Backend Services:
 File Upload:
 1. Select File → Generate Hash
 2. Create Chunks → Encrypt
-3. Query DHT → Find Storage Nodes
-4. Calculate Rewards → Create Transaction
-5. Upload Chunks → Verify Storage
-6. Register in DHT → Complete
+3. Erasure Code Chunks → 10 data, 4 parity shards
+4. Query DHT → Find Storage Nodes
+5. Calculate Rewards → Create Transaction
+6. Upload Shards → Verify Storage
+7. Register in DHT → Complete
 
 File Download:
 1. Input Hash → Query DHT
 2. Discover Storage Nodes → Select Available
 3. Connect to Nodes → Initiate Transfer
-4. Download Chunks → Verify Hashes
-5. Reassemble File → Decrypt
-6. Distribute Rewards → Complete
+4. Download Shards → Verify Hashes
+5. Reassemble Chunks from Shards → Decrypt
+6. Reassemble File from Chunks
+7. Distribute Rewards → Complete
 ```
 
 ### 6. Security Architecture
@@ -250,7 +253,7 @@ Transaction Security:
 ```
 Permission Model:
 - File Owner: Full control (read, write, delete, share)
-- Storage Node: Read-only access to encrypted chunks
+- Storage Node: Read-only access to encrypted shards
 - Network Peer: No direct file access
 - DHT Network: Metadata only (no file content)
 ```

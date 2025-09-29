@@ -73,6 +73,18 @@
 | **Compression**        | Optional (zstd)  |
 | **Max File Size**      | 10 GB (per file) |
 | **Replication Factor** | 3 (configurable) |
+| **Erasure Coding**     | 10 data, 4 parity shards |
+
+### Erasure Coding
+
+To enhance data durability without the high storage overhead of full replication, the Chiral Network employs Reed-Solomon erasure coding. Each 256 KB file chunk is encoded into a set of shards, which are then distributed across the network.
+
+- **Data Shards**: Each chunk is divided into 10 data shards.
+- **Parity Shards**: An additional 4 parity shards are generated for each chunk.
+- **Total Shards**: This results in a total of 14 shards per chunk.
+- **Reconstruction**: The original chunk can be fully reconstructed from any 10 of these 14 shards. This means the network can tolerate the loss of up to 4 shards per chunk without any data loss.
+
+This (10, 4) erasure coding scheme provides a high degree of fault tolerance while being more space-efficient than simple replication. Each of these 14 shards is then treated as an individual piece of data to be stored on the network, subject to the standard replication factor for availability.
 
 ### Chunk Structure
 
