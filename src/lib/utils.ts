@@ -63,6 +63,14 @@ export const flyAndScale = (
 
 const SIZE_UNITS = ["B", "KB", "MB", "GB", "TB", "PB"] as const;
 
+const SECOND = 1000;
+const MINUTE = 60 * SECOND;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+const WEEK = 7 * DAY;
+const MONTH = 30 * DAY;
+const YEAR = 365 * DAY;
+
 export function toHumanReadableSize(bytes: number, fractionDigits = 1): string {
   if (!Number.isFinite(bytes) || bytes <= 0) {
     return "0 B";
@@ -85,28 +93,51 @@ const RELATIVE_FORMATTER = new Intl.RelativeTimeFormat(undefined, {
 });
 
 export function formatRelativeTime(date: Date): string {
+  const timestamp = date instanceof Date ? date.getTime() : Number.NaN;
+
+  if (!Number.isFinite(timestamp)) {
+    return RELATIVE_FORMATTER.format(0, "second");
+  }
+
   const now = Date.now();
-  const diffMs = date.getTime() - now;
+  const diffMs = timestamp - now;
 
-  const minute = 60 * 1000;
-  const hour = 60 * minute;
-  const day = 24 * hour;
+  if (!Number.isFinite(diffMs)) {
+    return RELATIVE_FORMATTER.format(0, "second");
+  }
 
-  if (Math.abs(diffMs) < minute) {
-    const value = Math.round(diffMs / 1000);
+  const absDiff = Math.abs(diffMs);
+
+  if (absDiff < MINUTE) {
+    const value = Math.round(diffMs / SECOND);
     return RELATIVE_FORMATTER.format(value, "second");
   }
 
-  if (Math.abs(diffMs) < hour) {
-    const value = Math.round(diffMs / minute);
+  if (absDiff < HOUR) {
+    const value = Math.round(diffMs / MINUTE);
     return RELATIVE_FORMATTER.format(value, "minute");
   }
 
-  if (Math.abs(diffMs) < day) {
-    const value = Math.round(diffMs / hour);
+  if (absDiff < DAY) {
+    const value = Math.round(diffMs / HOUR);
     return RELATIVE_FORMATTER.format(value, "hour");
   }
 
-  const value = Math.round(diffMs / day);
-  return RELATIVE_FORMATTER.format(value, "day");
+  if (absDiff < WEEK) {
+    const value = Math.round(diffMs / DAY);
+    return RELATIVE_FORMATTER.format(value, "day");
+  }
+
+  if (absDiff < MONTH) {
+    const value = Math.round(diffMs / WEEK);
+    return RELATIVE_FORMATTER.format(value, "week");
+  }
+
+  if (absDiff < YEAR) {
+    const value = Math.round(diffMs / MONTH);
+    return RELATIVE_FORMATTER.format(value, "month");
+  }
+
+  const value = Math.round(diffMs / YEAR);
+  return RELATIVE_FORMATTER.format(value, "year");
 }

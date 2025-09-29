@@ -5,7 +5,9 @@
 
 pub mod commands;
 mod bootstrap;
+mod crypto;
 mod dht;
+mod manager;
 mod encryption;
 mod ethereum;
 mod file_transfer;
@@ -36,7 +38,7 @@ use std::process::Command;
 use std::{
     io::{BufRead, BufReader},
     sync::Arc,
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use sysinfo::{Components, System, MINIMUM_CPU_UPDATE_INTERVAL};
 use systemstat::{Platform, System as SystemStat};
@@ -45,11 +47,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State,
 };
-use tokio::{
-    sync::Mutex,
-    task::JoinHandle,
-    time::{sleep, Duration},
-};
+use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{info, warn};
 
@@ -353,6 +351,9 @@ async fn start_dht_node(
     state: State<'_, AppState>,
     port: u16,
     bootstrap_nodes: Vec<String>,
+    enable_autonat: Option<bool>,
+    autonat_probe_interval_secs: Option<u64>,
+    autonat_servers: Option<Vec<String>>,
     proxy_address: Option<String>,
 ) -> Result<String, String> {
     let mut bootstrap_nodes = bootstrap_nodes;
@@ -363,10 +364,15 @@ async fn start_dht_node(
         }
     }
 
+    let auto_enabled = enable_autonat.unwrap_or(true);
+    let probe_interval = autonat_probe_interval_secs.map(Duration::from_secs);
+    let autonat_server_list = autonat_servers.unwrap_or_default();
+
     // Get the proxy from the command line, if it was provided at launch
     let cli_proxy = state.socks5_proxy_cli.lock().await.clone();
     // Prioritize the command-line argument. Fall back to the one from the UI.
     let final_proxy_address = cli_proxy.or(proxy_address.clone());
+
 
     if bootstrap_nodes.is_empty() {
         match bootstrap::resolve_bootstrap_nodes(None).await {
@@ -386,6 +392,19 @@ async fn start_dht_node(
     let dht_service = DhtService::new(port, bootstrap_nodes, None, false, final_proxy_address,)
         .await
         .map_err(|e| format!("Failed to start DHT: {}", e))?;
+  
+    let dht_service = DhtService::new(
+        port,
+        bootstrap_nodes,
+        None,
+        false,
+        auto_enabled,
+        probe_interval,
+        autonat_server_list,
+        final_proxy_address,
+    )
+    .await
+    .map_err(|e| format!("Failed to start DHT: {}", e))?;
 
     let peer_id = dht_service.get_peer_id().await;
 
@@ -466,6 +485,20 @@ async fn start_dht_node(
                             proxies.push(new_node.clone());
                             let _ = app_handle.emit("proxy_status_update", new_node);
                         }
+                    }
+                    DhtEvent::NatStatus {
+                        state,
+                        confidence,
+                        last_error,
+                        summary,
+                    } => {
+                        let payload = serde_json::json!({
+                            "state": state,
+                            "confidence": confidence,
+                            "lastError": last_error,
+                            "summary": summary,
+                        });
+                        let _ = app_handle.emit("nat_status_update", payload);
                     }
                     DhtEvent::EchoReceived { from, utf8, bytes } => {
                         // Sending inbox event to frontend
@@ -674,6 +707,20 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                         }
                     )
                 }
+                DhtEvent::NatStatus {
+                    state,
+                    confidence,
+                    last_error,
+                    summary,
+                } => match serde_json::to_string(&serde_json::json!({
+                    "state": state,
+                    "confidence": confidence,
+                    "lastError": last_error,
+                    "summary": summary,
+                })) {
+                    Ok(json) => format!("nat_status:{json}"),
+                    Err(_) => "nat_status:{}".to_string(),
+                },
                 DhtEvent::PeerRtt { peer, rtt_ms } => format!("peer_rtt:{peer}:{rtt_ms}"),
                 DhtEvent::EchoReceived { from, utf8, bytes } => format!(
                     "echo_received:{}:{}:{}",
@@ -1646,7 +1693,9 @@ async fn get_recommended_peers_for_file(
 ) -> Result<Vec<String>, String> {
     let dht_guard = state.dht.lock().await;
     if let Some(ref dht) = *dht_guard {
-        Ok(dht.get_recommended_peers_for_download(&file_hash, file_size, require_encryption).await)
+        Ok(dht
+            .get_recommended_peers_for_download(&file_hash, file_size, require_encryption)
+            .await)
     } else {
         Err("DHT service not available".to_string())
     }
@@ -1661,7 +1710,8 @@ async fn record_transfer_success(
 ) -> Result<(), String> {
     let dht_guard = state.dht.lock().await;
     if let Some(ref dht) = *dht_guard {
-        dht.record_transfer_success(&peer_id, bytes, duration_ms).await;
+        dht.record_transfer_success(&peer_id, bytes, duration_ms)
+            .await;
         Ok(())
     } else {
         Err("DHT service not available".to_string())
@@ -1684,7 +1734,9 @@ async fn record_transfer_failure(
 }
 
 #[tauri::command]
-async fn get_peer_metrics(state: State<'_, AppState>) -> Result<Vec<crate::peer_selection::PeerMetrics>, String> {
+async fn get_peer_metrics(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::peer_selection::PeerMetrics>, String> {
     let dht_guard = state.dht.lock().await;
     if let Some(ref dht) = *dht_guard {
         Ok(dht.get_peer_metrics().await)
@@ -1702,7 +1754,7 @@ async fn select_peers_with_strategy(
     require_encryption: bool,
 ) -> Result<Vec<String>, String> {
     use crate::peer_selection::SelectionStrategy;
-    
+
     let selection_strategy = match strategy.as_str() {
         "fastest" => SelectionStrategy::FastestFirst,
         "reliable" => SelectionStrategy::MostReliable,
@@ -1715,7 +1767,14 @@ async fn select_peers_with_strategy(
 
     let dht_guard = state.dht.lock().await;
     if let Some(ref dht) = *dht_guard {
-        Ok(dht.select_peers_with_strategy(&available_peers, count, selection_strategy, require_encryption).await)
+        Ok(dht
+            .select_peers_with_strategy(
+                &available_peers,
+                count,
+                selection_strategy,
+                require_encryption,
+            )
+            .await)
     } else {
         Err("DHT service not available".to_string())
     }
@@ -1749,6 +1808,7 @@ async fn cleanup_inactive_peers(
         Err("DHT service not available".to_string())
     }
 }
+#[cfg(not(test))]
 fn main() {
     // Initialize logging for debug builds
     #[cfg(debug_assertions)]
@@ -1798,7 +1858,7 @@ fn main() {
             file_transfer: Mutex::new(None),
             proxies: Arc::new(Mutex::new(Vec::new())),
             file_transfer_pump: Mutex::new(None),
-            socks5_proxy_cli: Mutex::new(args.socks5_proxy), 
+            socks5_proxy_cli: Mutex::new(args.socks5_proxy),
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
