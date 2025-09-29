@@ -638,6 +638,7 @@
     "downloads": "다운로드",
     "searchPlaceholder": "다운로드 검색...",
     "clearSearch": "검색 지우기",
+    "clearFinished": "완료된 항목 지우기",
     "filters": {
       "all": "전체",
       "active": "활성",
@@ -676,7 +677,8 @@
       "resume": "재개",
       "remove": "제거",
       "cancel": "취소",
-      "openFile": "파일 열기"
+      "openFile": "파일 열기",
+      "showInFolder": "폴더에 표시"
     },
     "notifications": {
       "enterHash": "파일 해시를 입력하세요",

@@ -1338,6 +1338,11 @@
     rawAmountInput = $wallet.balance.toFixed(2);
   }
 
+  // async function handleLogout() {
+  //   if (isTauri) await invoke('logout');
+  //   logout();
+  // }
+  
   // Update your handleLogout function
   async function handleLogout() {
     try {

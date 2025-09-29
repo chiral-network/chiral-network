@@ -15,6 +15,7 @@
   import { toHumanReadableSize } from '$lib/utils'
   import { initDownloadTelemetry, disposeDownloadTelemetry } from '$lib/downloadTelemetry'
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
+  import { invoke } from "@tauri-apps/api/core";
 
   onMount(() => {
     initDownloadTelemetry()
@@ -644,6 +645,29 @@
   
   const formatFileSize = toHumanReadableSize
 
+let searchName = '';
+  let foundVersions: any[] = [];
+  let searchMsg = '';
+  let errorMsg = '';
+
+  async function searchVersions() {
+    foundVersions = [];
+    searchMsg = '';
+    errorMsg = '';
+    if (!searchName) return;
+    try {
+      foundVersions = await invoke('get_file_versions_by_name', { fileName: searchName })
+      if (!foundVersions.length) searchMsg = 'No versions found';
+    } catch (err) {
+      errorMsg = 'Could not query versions: ' + String(err);
+    }
+  }
+
+  async function downloadVersion(v) {
+    // Replace this with your actual download logic (e.g., call backend to download by v.file_hash)
+    alert(`Would download version v${v.version}: hash ${v.file_hash}`);
+    // await invoke('download_file_by_hash', { file_hash: v.file_hash });
+  }
 
 </script>
 
@@ -698,7 +722,7 @@
             disabled={completedCount === 0 && failedCount === 0 && allFilteredDownloads.filter(f => f.status === 'canceled').length === 0}
           >
             <X class="h-3 w-3 mr-1" />
-            Clear Finished
+            {$t('download.clearFinished')}
           </Button>
           <Button
             size="sm"
@@ -971,7 +995,7 @@
                     class="h-7 px-3 text-sm"
                   >
                     <FolderOpen class="h-3 w-3 mr-1" />
-                    Show in Folder
+                    {$t('download.actions.showInFolder')}
                   </Button>
                   <Button
                     size="sm"
@@ -1011,3 +1035,49 @@
     {/if}
   </Card>
 </div>
+
+<Card class="max-w-2xl mx-auto p-6 mt-8">
+  <h2 class="text-xl font-semibold text-primary mb-4">Search File Versions</h2>
+  <div class="flex gap-2 mb-4">
+    <Input
+      placeholder="File name"
+      bind:value={searchName}
+      class="flex-1"
+    />
+    <Button on:click={searchVersions} class="min-w-[100px]">Search</Button>
+  </div>
+  {#if searchMsg}
+    <div class="mb-2 px-4 py-2 bg-yellow-100 text-yellow-800 rounded">{searchMsg}</div>
+  {/if}
+  {#if errorMsg}
+    <div class="mb-2 px-4 py-2 bg-red-100 text-red-700 rounded">{errorMsg}</div>
+  {/if}
+  {#if foundVersions.length}
+    <div class="overflow-x-auto">
+      <table class="min-w-full table-auto border-collapse text-sm">
+        <thead>
+          <tr class="bg-muted">
+            <th class="px-4 py-2 text-left font-medium text-muted-foreground">Version</th>
+            <th class="px-4 py-2 text-left font-medium text-muted-foreground">Hash</th>
+            <th class="px-4 py-2 text-left font-medium text-muted-foreground">Date</th>
+            <th class="px-4 py-2"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each foundVersions as v}
+            <tr class="border-b hover:bg-muted/50">
+              <td class="px-4 py-2">
+                <Badge class="bg-blue-100 text-blue-800 px-2 py-0.5 rounded">v{v.version}</Badge>
+              </td>
+              <td class="px-4 py-2 font-mono">{v.file_hash.slice(0, 8)}...</td>
+              <td class="px-4 py-2 text-gray-600">{new Date(v.created_at*1000).toLocaleString()}</td>
+              <td class="px-4 py-2">
+                <Button size="sm" on:click={() => downloadVersion(v)}>Download</Button>
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
+  {/if}
+</Card>
