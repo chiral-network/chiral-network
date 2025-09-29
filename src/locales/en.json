@@ -176,7 +176,17 @@
     "locationHint": "Helps find closer peers for better performance.",
     "enableUpnp": "Enable UPnP",
     "enableNat": "Enable NAT Port Mapping",
-    "enableDht": "Enable DHT"
+    "enableDht": "Enable DHT",
+    "geoDistribution": {
+      "title": "Geographic Distribution",
+      "subtitle": "Mapping {peers} observed peers",
+      "topRegion": "Top region: {region}",
+      "noData": "Awaiting location data",
+      "tooltip": "{region}: {count} peers",
+      "peersShort": "{count} peers",
+      "emptyState": "Connect to the DHT to start mapping peers.",
+      "unknownNotice": "{count} peers have no advertised location yet."
+    }
   },
   "download": {
     "title": "Download Files",
