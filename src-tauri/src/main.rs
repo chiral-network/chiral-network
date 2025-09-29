@@ -4,16 +4,26 @@
 )]
 
 pub mod commands;
+mod crypto;
 mod dht;
+mod manager;
+mod encryption;
 mod ethereum;
-pub mod net;
 mod file_transfer;
 mod geth_downloader;
 mod headless;
 mod keystore;
+<<<<<<< HEAD
 mod pool;
 
 use commands::proxy::{proxy_connect, proxy_disconnect, list_proxies, ProxyNode};
+=======
+pub mod net;
+mod peer_selection;
+use crate::commands::proxy::{
+    list_proxies, proxy_connect, proxy_disconnect, proxy_echo, ProxyNode,
+};
+>>>>>>> f98ba99df0c55a14e1869866bd0326ef452749a9
 use dht::{DhtEvent, DhtMetricsSnapshot, DhtService, FileMetadata};
 use ethereum::{
     create_new_account, get_account_from_private_key, get_balance, get_block_number, get_hashrate,
@@ -21,14 +31,19 @@ use ethereum::{
     get_network_difficulty, get_network_hashrate, get_peer_count, get_recent_mined_blocks,
     start_mining, stop_mining, EthAccount, GethProcess, MinedBlock,
 };
-use file_transfer::{FileTransferEvent, FileTransferService};
+use file_transfer::{DownloadMetricsSnapshot, FileTransferEvent, FileTransferService};
 use fs2::available_space;
 use geth_downloader::GethDownloader;
 use keystore::Keystore;
-use std::path::Path;
+use serde::Serialize;
+use std::collections::VecDeque;
+use std::fs::File;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::{
-    sync::{Arc},
-    time::Instant,
+    io::{BufRead, BufReader},
+    sync::Arc,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use sysinfo::{Components, System, MINIMUM_CPU_UPDATE_INTERVAL};
 use systemstat::{Platform, System as SystemStat};
@@ -37,16 +52,22 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State,
 };
-use tokio::sync::Mutex;
+use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
+use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{info, warn};
 
 struct AppState {
     geth: Mutex<GethProcess>,
     downloader: Arc<GethDownloader>,
     miner_address: Mutex<Option<String>>,
+
+    active_account: Mutex<Option<String>>, // To track the logged-in user's address
+    rpc_url: Mutex<String>,
     dht: Mutex<Option<Arc<DhtService>>>,
     file_transfer: Mutex<Option<Arc<FileTransferService>>>,
     proxies: Arc<Mutex<Vec<ProxyNode>>>,
+    file_transfer_pump: Mutex<Option<JoinHandle<()>>>,
+    socks5_proxy_cli: Mutex<Option<String>>,
 }
 
 #[tauri::command]
@@ -63,6 +84,11 @@ async fn import_chiral_account(private_key: String) -> Result<EthAccount, String
 async fn start_geth_node(state: State<'_, AppState>, data_dir: String) -> Result<(), String> {
     let mut geth = state.geth.lock().await;
     let miner_address = state.miner_address.lock().await;
+    // TODO: The port and address should be configurable from the frontend.
+    // For now, we'll update the rpc_url in the state when starting.
+    let rpc_url = "http://127.0.0.1:8545".to_string();
+    *state.rpc_url.lock().await = rpc_url;
+
     geth.start(&data_dir, miner_address.as_deref())
 }
 
@@ -87,11 +113,18 @@ async fn save_account_to_keystore(
 async fn load_account_from_keystore(
     address: String,
     password: String,
+    state: State<'_, AppState>,
 ) -> Result<EthAccount, String> {
     let keystore = Keystore::load()?;
 
     // Get decrypted private key from keystore
     let private_key = keystore.get_account(&address, &password)?;
+
+    // Set the active account in the app state
+    {
+        let mut active_account = state.active_account.lock().await;
+        *active_account = Some(address.clone());
+    }
 
     // Derive account details from private key
     get_account_from_private_key(&private_key)
@@ -169,6 +202,60 @@ async fn set_miner_address(state: State<'_, AppState>, address: String) -> Resul
     Ok(())
 }
 
+/// Checks if the Geth RPC endpoint is ready to accept connections.
+async fn is_geth_rpc_ready(state: &State<'_, AppState>) -> bool {
+    let rpc_url = state.rpc_url.lock().await.clone();
+    if let Ok(response) = reqwest::Client::new()
+        .post(&rpc_url)
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0", "method": "net_version", "params": [], "id": 1
+        }))
+        .send()
+        .await
+    {
+        if response.status().is_success() {
+            if let Ok(json) = response.json::<serde_json::Value>().await {
+                return json.get("result").is_some();
+            }
+        }
+    }
+    false
+}
+
+/// Stops, restarts, and waits for the Geth node to be ready.
+/// This is used when `miner_setEtherbase` is not available and a restart is required.
+async fn restart_geth_and_wait(state: &State<'_, AppState>, data_dir: &str) -> Result<(), String> {
+    info!("Restarting Geth with new configuration...");
+
+    // Stop Geth
+    state.geth.lock().await.stop()?;
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await; // Brief pause for shutdown
+
+    // Restart with the stored miner address
+    {
+        let mut geth = state.geth.lock().await;
+        let miner_address = state.miner_address.lock().await;
+        info!("Restarting Geth with miner address: {:?}", miner_address);
+        geth.start(data_dir, miner_address.as_deref())?;
+    }
+
+    // Wait for Geth to become responsive
+    let max_attempts = 30;
+    for attempt in 1..=max_attempts {
+        if is_geth_rpc_ready(state).await {
+            info!("Geth is ready for RPC calls after restart.");
+            return Ok(());
+        }
+        info!(
+            "Waiting for Geth to start... (attempt {}/{})",
+            attempt, max_attempts
+        );
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    }
+
+    Err("Geth failed to start up within 30 seconds after restart.".to_string())
+}
+
 #[tauri::command]
 async fn start_miner(
     state: State<'_, AppState>,
@@ -187,66 +274,11 @@ async fn start_miner(
         Ok(_) => Ok(()),
         Err(e) if e.contains("-32601") || e.to_lowercase().contains("does not exist") => {
             // miner_setEtherbase method doesn't exist, need to restart with etherbase
-            println!("miner_setEtherbase not supported, restarting geth with miner address...");
-
-            // Need to restart geth with the miner address
-            // First stop geth
-            {
-                let mut geth = state.geth.lock().await;
-                geth.stop()?;
-            }
-
-            // Wait a moment for it to shut down
-            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-            // Restart with miner address
-            {
-                let mut geth = state.geth.lock().await;
-                let miner_address = state.miner_address.lock().await;
-                println!("Restarting geth with miner address: {:?}", miner_address);
-                geth.start(&data_dir, miner_address.as_deref())?;
-            }
-
-            // Wait for geth to start up and be ready to accept RPC connections
-            let mut attempts = 0;
-            let max_attempts = 30; // 30 seconds max wait
-            loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                attempts += 1;
-
-                // Check if geth is responding to RPC calls
-                if let Ok(response) = reqwest::Client::new()
-                    .post("http://127.0.0.1:8545")
-                    .json(&serde_json::json!({
-                        "jsonrpc": "2.0",
-                        "method": "net_version",
-                        "params": [],
-                        "id": 1
-                    }))
-                    .send()
-                    .await
-                {
-                    if response.status().is_success() {
-                        if let Ok(json) = response.json::<serde_json::Value>().await {
-                            if json.get("result").is_some() {
-                                println!("Geth is ready for RPC calls");
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                if attempts >= max_attempts {
-                    return Err("Geth failed to start up within 30 seconds".to_string());
-                }
-
-                println!(
-                    "Waiting for geth to start up... (attempt {}/{})",
-                    attempts, max_attempts
-                );
-            }
+            warn!("miner_setEtherbase not supported, restarting geth with miner address...");
+            restart_geth_and_wait(&state, &data_dir).await?;
 
             // Try mining again without setting etherbase (it's set via command line now)
+            let rpc_url = state.rpc_url.lock().await.clone();
             let client = reqwest::Client::new();
             let start_mining_direct = serde_json::json!({
                 "jsonrpc": "2.0",
@@ -256,7 +288,7 @@ async fn start_miner(
             });
 
             let response = client
-                .post("http://127.0.0.1:8545")
+                .post(&rpc_url)
                 .json(&start_mining_direct)
                 .send()
                 .await
@@ -332,6 +364,10 @@ async fn start_dht_node(
     state: State<'_, AppState>,
     port: u16,
     bootstrap_nodes: Vec<String>,
+    enable_autonat: Option<bool>,
+    autonat_probe_interval_secs: Option<u64>,
+    autonat_servers: Option<Vec<String>>,
+    proxy_address: Option<String>,
 ) -> Result<String, String> {
     {
         let dht_guard = state.dht.lock().await;
@@ -340,9 +376,27 @@ async fn start_dht_node(
         }
     }
 
-    let dht_service = DhtService::new(port, bootstrap_nodes, None)
-        .await
-        .map_err(|e| format!("Failed to start DHT: {}", e))?;
+    let auto_enabled = enable_autonat.unwrap_or(true);
+    let probe_interval = autonat_probe_interval_secs.map(Duration::from_secs);
+    let autonat_server_list = autonat_servers.unwrap_or_default();
+
+    // Get the proxy from the command line, if it was provided at launch
+    let cli_proxy = state.socks5_proxy_cli.lock().await.clone();
+    // Prioritize the command-line argument. Fall back to the one from the UI.
+    let final_proxy_address = cli_proxy.or(proxy_address.clone());
+
+    let dht_service = DhtService::new(
+        port,
+        bootstrap_nodes,
+        None,
+        false,
+        auto_enabled,
+        probe_interval,
+        autonat_server_list,
+        final_proxy_address,
+    )
+    .await
+    .map_err(|e| format!("Failed to start DHT: {}", e))?;
 
     let peer_id = dht_service.get_peer_id().await;
 
@@ -364,7 +418,8 @@ async fn start_dht_node(
                 // Avoid busy-waiting
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 // Check if the DHT is still alive before continuing
-                if Arc::strong_count(&dht_clone_for_pump) <= 1 { // 1 is the pump itself
+                if Arc::strong_count(&dht_clone_for_pump) <= 1 {
+                    // 1 is the pump itself
                     info!("DHT service appears to be shut down. Exiting event pump.");
                     break;
                 }
@@ -373,26 +428,93 @@ async fn start_dht_node(
 
             for ev in events {
                 match ev {
-                    DhtEvent::ProxyStatus { id, address, status, latency_ms, error } => {
+                    DhtEvent::ProxyStatus {
+                        id,
+                        address,
+                        status,
+                        latency_ms,
+                        error,
+                    } => {
                         let mut proxies = proxies_arc.lock().await;
-                        // upsert: find by id (peer id) or by address (initial connection url)
-                        if let Some(p) = proxies.iter_mut().find(|p| p.id == id || p.address == id || (!address.is_empty() && p.address == address)) {
-                            p.id = id.clone(); // always update to the real peer id
-                            if !address.is_empty() { p.address = address.clone(); }
+
+                        // 1) Find existing proxy by id, then by address, then by address==id
+                        let mut idx = proxies.iter().position(|p| p.id == id);
+                        if idx.is_none() && !address.is_empty() {
+                            idx = proxies.iter().position(|p| p.address == address);
+                        }
+                        if idx.is_none() {
+                            idx = proxies.iter().position(|p| p.address == id);
+                        }
+
+                        if let Some(i) = idx {
+                            // 2) Safe merge: only overwrite with incoming values
+                            let p = &mut proxies[i];
+                            if p.id != id {
+                                p.id = id.clone();
+                            }
+                            if !address.is_empty() {
+                                p.address = address.clone();
+                            }
                             p.status = status.clone();
-                            if let Some(ms) = latency_ms { p.latency = ms as u32; }
+                            if let Some(ms) = latency_ms {
+                                p.latency = ms as u32;
+                            }
                             p.error = error.clone();
                             let _ = app_handle.emit("proxy_status_update", p.clone());
                         } else {
-                            // let new_node = ProxyNode {
-                            //     id: id.clone(),
-                            //     address: if address.is_empty() { id.clone() } else { address.clone() },
-                            //     status,
-                            //     latency: latency_ms.unwrap_or(999) as u32,
-                            //     error,
-                            // };
-                            // proxies.push(new_node.clone());
-                            // let _ = app_handle.emit("proxy_status_update", new_node);
+                            // 3) If not found, add new (if address is empty, use id instead)
+                            let new_node = ProxyNode {
+                                id: id.clone(),
+                                address: if address.is_empty() {
+                                    id.clone()
+                                } else {
+                                    address.clone()
+                                },
+                                status,
+                                latency: latency_ms.unwrap_or(0) as u32,
+                                error,
+                            };
+                            proxies.push(new_node.clone());
+                            let _ = app_handle.emit("proxy_status_update", new_node);
+                        }
+                    }
+                    DhtEvent::NatStatus {
+                        state,
+                        confidence,
+                        last_error,
+                        summary,
+                    } => {
+                        let payload = serde_json::json!({
+                            "state": state,
+                            "confidence": confidence,
+                            "lastError": last_error,
+                            "summary": summary,
+                        });
+                        let _ = app_handle.emit("nat_status_update", payload);
+                    }
+                    DhtEvent::EchoReceived { from, utf8, bytes } => {
+                        // Sending inbox event to frontend
+                        let payload =
+                            serde_json::json!({ "from": from, "text": utf8, "bytes": bytes });
+                        let _ = app_handle.emit("proxy_echo_rx", payload);
+
+                        // If recieved an echo, mark the node as online in the proxy list
+                        {
+                            let mut proxies = proxies_arc.lock().await;
+                            if let Some(p) = proxies.iter_mut().find(|p| p.id == from) {
+                                p.status = "online".to_string();
+                                let _ = app_handle.emit("proxy_status_update", p.clone());
+                            } else {
+                                let new_node = ProxyNode {
+                                    id: from.clone(),
+                                    address: String::new(),
+                                    status: "online".to_string(),
+                                    latency: 0,
+                                    error: None,
+                                };
+                                proxies.push(new_node.clone());
+                                let _ = app_handle.emit("proxy_status_update", new_node);
+                            }
                         }
                     }
                     DhtEvent::PeerRtt { peer, rtt_ms } => {
@@ -455,6 +577,9 @@ async fn publish_file_metadata(
                 .unwrap()
                 .as_secs(),
             mime_type,
+            is_encrypted: false,
+            encryption_method: None,
+            key_fingerprint: None,
         };
 
         dht.publish_file(metadata).await
@@ -464,14 +589,13 @@ async fn publish_file_metadata(
 }
 
 #[tauri::command]
-async fn search_file_metadata(state: State<'_, AppState>, file_hash: String) -> Result<(), String> {
+async fn stop_publishing_file(state: State<'_, AppState>, file_hash: String) -> Result<(), String> {
     let dht = {
         let dht_guard = state.dht.lock().await;
         dht_guard.as_ref().cloned()
     };
-
     if let Some(dht) = dht {
-        dht.get_file(file_hash).await
+        dht.stop_publishing_file(file_hash).await
     } else {
         Err("DHT node is not running".to_string())
     }
@@ -555,13 +679,47 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                 ),
                 DhtEvent::FileNotFound(hash) => format!("file_not_found:{}", hash),
                 DhtEvent::Error(err) => format!("error:{}", err),
-                DhtEvent::ProxyStatus { id, address, status, latency_ms, error } => {
-                    let lat = latency_ms.map(|ms| format!("{ms}")).unwrap_or_else(|| "-".into());
+                DhtEvent::ProxyStatus {
+                    id,
+                    address,
+                    status,
+                    latency_ms,
+                    error,
+                } => {
+                    let lat = latency_ms
+                        .map(|ms| format!("{ms}"))
+                        .unwrap_or_else(|| "-".into());
                     let err = error.unwrap_or_default();
-                    format!("proxy_status:{id}:{address}:{status}:{lat}{}", 
-                            if err.is_empty() { "".into() } else { format!(":{err}") })
+                    format!(
+                        "proxy_status:{id}:{address}:{status}:{lat}{}",
+                        if err.is_empty() {
+                            "".into()
+                        } else {
+                            format!(":{err}")
+                        }
+                    )
                 }
+                DhtEvent::NatStatus {
+                    state,
+                    confidence,
+                    last_error,
+                    summary,
+                } => match serde_json::to_string(&serde_json::json!({
+                    "state": state,
+                    "confidence": confidence,
+                    "lastError": last_error,
+                    "summary": summary,
+                })) {
+                    Ok(json) => format!("nat_status:{json}"),
+                    Err(_) => "nat_status:{}".to_string(),
+                },
                 DhtEvent::PeerRtt { peer, rtt_ms } => format!("peer_rtt:{peer}:{rtt_ms}"),
+                DhtEvent::EchoReceived { from, utf8, bytes } => format!(
+                    "echo_received:{}:{}:{}",
+                    from,
+                    utf8.unwrap_or_default(),
+                    bytes
+                ),
             })
             .collect();
         Ok(mapped)
@@ -581,7 +739,7 @@ fn get_cpu_temperature() -> Option<f32> {
         }
         LAST_UPDATE = Some(Instant::now());
     }
-    
+
     // Try sysinfo first (works on some platforms including M1 macs and some Windows)
     let mut sys = System::new_all();
     sys.refresh_cpu_all();
@@ -593,7 +751,11 @@ fn get_cpu_temperature() -> Option<f32> {
         .iter()
         .filter(|c| {
             let label = c.label().to_lowercase();
-            label.contains("cpu") || label.contains("package") || label.contains("tdie") || label.contains("core") || label.contains("thermal")
+            label.contains("cpu")
+                || label.contains("package")
+                || label.contains("tdie")
+                || label.contains("core")
+                || label.contains("thermal")
         })
         .map(|c| {
             core_count += 1;
@@ -603,7 +765,7 @@ fn get_cpu_temperature() -> Option<f32> {
     if core_count > 0 {
         return Some(sum / core_count as f32);
     }
-    
+
     // Windows-specific temperature detection methods
     #[cfg(target_os = "windows")]
     {
@@ -611,7 +773,7 @@ fn get_cpu_temperature() -> Option<f32> {
             return Some(temp);
         }
     }
-    
+
     // Linux-specific temperature detection methods
     #[cfg(target_os = "linux")]
     {
@@ -619,7 +781,7 @@ fn get_cpu_temperature() -> Option<f32> {
             return Some(temp);
         }
     }
-    
+
     // Fallback for other platforms
     let stat_sys = SystemStat::new();
     if let Ok(temp) = stat_sys.cpu_temp() {
@@ -632,7 +794,7 @@ fn get_cpu_temperature() -> Option<f32> {
 #[cfg(target_os = "windows")]
 fn get_windows_temperature() -> Option<f32> {
     use std::process::Command;
-    
+
     // Method 1: Try the fastest method first - HighPrecisionTemperature from WMI
     if let Ok(output) = Command::new("powershell")
         .args([
@@ -650,7 +812,7 @@ fn get_windows_temperature() -> Option<f32> {
             }
         }
     }
-    
+
     // Method 2: Fallback to regular Temperature field
     if let Ok(output) = Command::new("powershell")
         .args([
@@ -668,26 +830,26 @@ fn get_windows_temperature() -> Option<f32> {
             }
         }
     }
-    
+
     None
 }
 
 #[cfg(target_os = "linux")]
 fn get_linux_temperature() -> Option<f32> {
     use std::fs;
-    
+
     // Method 1: Try sensors command first (most reliable and matches user expectations)
     if let Ok(output) = std::process::Command::new("sensors")
-        .arg("-u")  // Raw output
+        .arg("-u") // Raw output
         .output()
     {
         if let Ok(output_str) = String::from_utf8(output.stdout) {
             let lines: Vec<&str> = output_str.lines().collect();
             let mut i = 0;
-            
+
             while i < lines.len() {
                 let line = lines[i].trim();
-                
+
                 // Look for CPU package temperature section
                 if line.contains("Package id 0:") {
                     // Look for temp1_input in the following lines
@@ -726,7 +888,7 @@ fn get_linux_temperature() -> Option<f32> {
             }
         }
     }
-    
+
     // Method 2: Try thermal zones (fallback)
     // Look for CPU thermal zones in /sys/class/thermal/
     // Prioritize x86_pkg_temp as it's usually the most accurate for CPU package temperature
@@ -747,13 +909,16 @@ fn get_linux_temperature() -> Option<f32> {
             }
         }
     }
-    
+
     // Fallback to other CPU thermal zones
     for i in 0..20 {
         let type_path = format!("/sys/class/thermal/thermal_zone{}/type", i);
         if let Ok(zone_type) = fs::read_to_string(&type_path) {
             let zone_type = zone_type.trim().to_lowercase();
-            if zone_type.contains("cpu") || zone_type.contains("coretemp") || zone_type.contains("k10temp") {
+            if zone_type.contains("cpu")
+                || zone_type.contains("coretemp")
+                || zone_type.contains("k10temp")
+            {
                 let thermal_path = format!("/sys/class/thermal/thermal_zone{}/temp", i);
                 if let Ok(temp_str) = fs::read_to_string(&thermal_path) {
                     if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
@@ -766,19 +931,21 @@ fn get_linux_temperature() -> Option<f32> {
             }
         }
     }
-    
+
     // Method 3: Try hwmon (hardware monitoring) interfaces
     // Look for CPU temperature sensors in /sys/class/hwmon/
     for i in 0..10 {
         let hwmon_dir = format!("/sys/class/hwmon/hwmon{}", i);
-        
+
         // Check if this hwmon device is for CPU temperature
         let name_path = format!("{}/name", hwmon_dir);
         if let Ok(name) = fs::read_to_string(&name_path) {
             let name = name.trim().to_lowercase();
-            if name.contains("coretemp") || name.contains("k10temp") || 
-               name.contains("cpu") || name.contains("acpi") {
-                
+            if name.contains("coretemp")
+                || name.contains("k10temp")
+                || name.contains("cpu")
+                || name.contains("acpi")
+            {
                 // Try different temperature input files
                 for temp_input in 1..=8 {
                     let temp_path = format!("{}/temp{}_input", hwmon_dir, temp_input);
@@ -794,15 +961,15 @@ fn get_linux_temperature() -> Option<f32> {
             }
         }
     }
-    
+
     // Method 4: Try reading from specific CPU temperature files
     let cpu_temp_paths = [
         "/sys/devices/platform/coretemp.0/hwmon/hwmon*/temp1_input",
-        "/sys/devices/platform/coretemp.0/temp1_input", 
+        "/sys/devices/platform/coretemp.0/temp1_input",
         "/sys/bus/platform/devices/coretemp.0/hwmon/hwmon*/temp*_input",
         "/sys/devices/pci0000:00/0000:00:18.3/hwmon/hwmon*/temp1_input", // AMD
     ];
-    
+
     for pattern in &cpu_temp_paths {
         if let Ok(paths) = glob::glob(pattern) {
             for path_result in paths {
@@ -819,7 +986,7 @@ fn get_linux_temperature() -> Option<f32> {
             }
         }
     }
-    
+
     None
 }
 
@@ -829,7 +996,10 @@ fn detect_locale() -> String {
 }
 
 #[tauri::command]
-async fn start_file_transfer_service(state: State<'_, AppState>) -> Result<(), String> {
+async fn start_file_transfer_service(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     {
         let ft_guard = state.file_transfer.lock().await;
         if ft_guard.is_some() {
@@ -841,9 +1011,22 @@ async fn start_file_transfer_service(state: State<'_, AppState>) -> Result<(), S
         .await
         .map_err(|e| format!("Failed to start file transfer service: {}", e))?;
 
+    let ft_arc = Arc::new(file_transfer_service);
     {
         let mut ft_guard = state.file_transfer.lock().await;
-        *ft_guard = Some(Arc::new(file_transfer_service));
+        *ft_guard = Some(ft_arc.clone());
+    }
+
+    {
+        let mut pump_guard = state.file_transfer_pump.lock().await;
+        if pump_guard.is_none() {
+            let app_handle = app.clone();
+            let ft_clone = ft_arc.clone();
+            let handle = tokio::spawn(async move {
+                pump_file_transfer_events(app_handle, ft_clone).await;
+            });
+            *pump_guard = Some(handle);
+        }
     }
 
     Ok(())
@@ -853,8 +1036,7 @@ async fn start_file_transfer_service(state: State<'_, AppState>) -> Result<(), S
 async fn upload_file_to_network(
     state: State<'_, AppState>,
     file_path: String,
-    file_name: String,
-) -> Result<String, String> {
+) -> Result<FileMetadata, String> {
     let ft = {
         let ft_guard = state.file_transfer.lock().await;
         ft_guard.as_ref().cloned()
@@ -862,7 +1044,11 @@ async fn upload_file_to_network(
 
     if let Some(ft) = ft {
         // Upload the file
-        ft.upload_file(file_path.clone(), file_name.clone()).await?;
+        let file_name = file_path.split('/').last().unwrap_or(&file_path);
+
+        ft.upload_file(file_path.clone(), file_name.to_string())
+            .await
+            .map_err(|e| format!("Failed to upload file: {}", e))?;
 
         // Get the file hash by reading the file and calculating it
         let file_data = tokio::fs::read(&file_path)
@@ -879,7 +1065,7 @@ async fn upload_file_to_network(
         if let Some(dht) = dht {
             let metadata = FileMetadata {
                 file_hash: file_hash.clone(),
-                file_name: file_name.clone(),
+                file_name: file_name.to_string(),
                 file_size: file_data.len() as u64,
                 seeders: vec![],
                 created_at: std::time::SystemTime::now()
@@ -887,14 +1073,19 @@ async fn upload_file_to_network(
                     .unwrap()
                     .as_secs(),
                 mime_type: None,
+                is_encrypted: false,
+                encryption_method: None,
+                key_fingerprint: None,
             };
 
-            if let Err(e) = dht.publish_file(metadata).await {
+            if let Err(e) = dht.publish_file(metadata.clone()).await {
                 warn!("Failed to publish file metadata to DHT: {}", e);
             }
+
+            return Ok(metadata);
         }
 
-        Ok(file_hash)
+        Err("DHT Service not running".to_string())
     } else {
         Err("File transfer service is not running".to_string())
     }
@@ -972,6 +1163,9 @@ async fn upload_file_data_to_network(
                     .unwrap()
                     .as_secs(),
                 mime_type: None,
+                is_encrypted: false,
+                encryption_method: None,
+                key_fingerprint: None,
             };
 
             if let Err(e) = dht.publish_file(metadata).await {
@@ -1043,6 +1237,12 @@ async fn get_file_transfer_events(state: State<'_, AppState>) -> Result<Vec<Stri
                 FileTransferEvent::Error { message } => {
                     format!("error:{}", message)
                 }
+                FileTransferEvent::DownloadAttempt(snapshot) => {
+                    match serde_json::to_string(&snapshot) {
+                        Ok(json) => format!("download_attempt:{}", json),
+                        Err(_) => "download_attempt:{}".to_string(),
+                    }
+                }
             })
             .collect();
         Ok(mapped)
@@ -1052,11 +1252,555 @@ async fn get_file_transfer_events(state: State<'_, AppState>) -> Result<Vec<Stri
 }
 
 #[tauri::command]
+async fn get_download_metrics(
+    state: State<'_, AppState>,
+) -> Result<DownloadMetricsSnapshot, String> {
+    let ft = {
+        let ft_guard = state.file_transfer.lock().await;
+        ft_guard.as_ref().cloned()
+    };
+
+    if let Some(ft) = ft {
+        Ok(ft.download_metrics_snapshot().await)
+    } else {
+        Ok(DownloadMetricsSnapshot::default())
+    }
+}
+
+async fn pump_file_transfer_events(app: tauri::AppHandle, ft: Arc<FileTransferService>) {
+    loop {
+        let events = ft.drain_events(64).await;
+        if events.is_empty() {
+            if Arc::strong_count(&ft) <= 1 {
+                break;
+            }
+            sleep(Duration::from_millis(250)).await;
+            continue;
+        }
+
+        for event in events {
+            match event {
+                FileTransferEvent::DownloadAttempt(snapshot) => {
+                    if let Err(err) = app.emit("download_attempt", &snapshot) {
+                        warn!("Failed to emit download_attempt event: {}", err);
+                    }
+                }
+                other => {
+                    if let Err(err) = app.emit("file_transfer_event", format!("{:?}", other)) {
+                        warn!("Failed to emit file_transfer_event: {}", err);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[tauri::command]
+async fn encrypt_file_with_password(
+    input_path: String,
+    output_path: String,
+    password: String,
+) -> Result<encryption::EncryptionInfo, String> {
+    use std::path::Path;
+
+    let input = Path::new(&input_path);
+    let output = Path::new(&output_path);
+
+    if !input.exists() {
+        return Err("Input file does not exist".to_string());
+    }
+
+    let result =
+        encryption::FileEncryption::encrypt_file_with_password(input, output, &password).await?;
+
+    Ok(result.encryption_info)
+}
+
+#[tauri::command]
+async fn decrypt_file_with_password(
+    input_path: String,
+    output_path: String,
+    password: String,
+    encryption_info: encryption::EncryptionInfo,
+) -> Result<u64, String> {
+    use std::path::Path;
+
+    let input = Path::new(&input_path);
+    let output = Path::new(&output_path);
+
+    if !input.exists() {
+        return Err("Encrypted file does not exist".to_string());
+    }
+
+    encryption::FileEncryption::decrypt_file_with_password(
+        input,
+        output,
+        &password,
+        &encryption_info,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn encrypt_file_for_upload(
+    input_path: String,
+    password: Option<String>,
+) -> Result<(String, encryption::EncryptionInfo), String> {
+    use std::path::Path;
+
+    let input = Path::new(&input_path);
+    if !input.exists() {
+        return Err("Input file does not exist".to_string());
+    }
+
+    // Create encrypted file in same directory with .enc extension
+    let encrypted_path = input.with_extension("enc");
+
+    let result = if let Some(pwd) = password {
+        encryption::FileEncryption::encrypt_file_with_password(input, &encrypted_path, &pwd).await?
+    } else {
+        // Generate random key for no-password encryption
+        let key = encryption::FileEncryption::generate_random_key();
+        encryption::FileEncryption::encrypt_file(input, &encrypted_path, &key).await?
+    };
+
+    Ok((
+        encrypted_path.to_string_lossy().to_string(),
+        result.encryption_info,
+    ))
+}
+
+#[tauri::command]
+async fn search_file_metadata(
+    state: State<'_, AppState>,
+    file_hash: String,
+    timeout_ms: Option<u64>,
+) -> Result<Option<FileMetadata>, String> {
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    if let Some(dht) = dht {
+        let timeout = timeout_ms.unwrap_or(10_000);
+        dht.search_metadata(file_hash, timeout).await
+    } else {
+        Err("DHT node is not running".to_string())
+    }
+}
+
+#[tauri::command]
 fn get_available_storage() -> f64 {
     let storage = available_space(Path::new("/")).unwrap_or(0);
     (storage as f64 / 1024.0 / 1024.0 / 1024.0).floor()
 }
 
+const DEFAULT_GETH_DATA_DIR: &str = "./bin/geth-data";
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GethStatusPayload {
+    installed: bool,
+    running: bool,
+    binary_path: Option<String>,
+    data_dir: String,
+    data_dir_exists: bool,
+    log_path: Option<String>,
+    log_available: bool,
+    log_lines: usize,
+    version: Option<String>,
+    last_logs: Vec<String>,
+    last_updated: u64,
+}
+
+fn resolve_geth_data_dir(data_dir: &str) -> Result<PathBuf, String> {
+    let dir = PathBuf::from(data_dir);
+    if dir.is_absolute() {
+        return Ok(dir);
+    }
+
+    let exe_dir = std::env::current_exe()
+        .map_err(|e| format!("Failed to get executable path: {}", e))?
+        .parent()
+        .ok_or_else(|| "Failed to determine executable directory".to_string())?
+        .to_path_buf();
+
+    Ok(exe_dir.join(dir))
+}
+
+fn read_last_lines(path: &Path, max_lines: usize) -> Result<Vec<String>, String> {
+    let file = File::open(path).map_err(|e| format!("Failed to open log file: {}", e))?;
+    let reader = BufReader::new(file);
+    let mut buffer = VecDeque::with_capacity(max_lines);
+
+    for line in reader.lines() {
+        let line = line.map_err(|e| format!("Failed to read log file: {}", e))?;
+        if buffer.len() == max_lines {
+            buffer.pop_front();
+        }
+        buffer.push_back(line);
+    }
+
+    Ok(buffer.into_iter().collect())
+}
+
+#[tauri::command]
+async fn get_geth_status(
+    state: State<'_, AppState>,
+    data_dir: Option<String>,
+    log_lines: Option<usize>,
+) -> Result<GethStatusPayload, String> {
+    let requested_lines = log_lines.unwrap_or(40).clamp(1, 200);
+    let data_dir_value = data_dir.unwrap_or_else(|| DEFAULT_GETH_DATA_DIR.to_string());
+
+    let running = {
+        let geth = state.geth.lock().await;
+        geth.is_running()
+    };
+
+    let downloader = state.downloader.clone();
+    let geth_path = downloader.geth_path();
+    let installed = geth_path.exists();
+    let binary_path = installed.then(|| geth_path.to_string_lossy().into_owned());
+
+    let data_path = resolve_geth_data_dir(&data_dir_value)?;
+    let data_dir_exists = data_path.exists();
+    let log_path = data_path.join("geth.log");
+    let log_available = log_path.exists();
+
+    let last_logs = if log_available {
+        match read_last_lines(&log_path, requested_lines) {
+            Ok(lines) => lines,
+            Err(err) => {
+                warn!("Failed to read geth logs: {}", err);
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
+    let version = if installed {
+        match Command::new(&geth_path).arg("version").output() {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if stdout.is_empty() {
+                    None
+                } else {
+                    Some(stdout)
+                }
+            }
+            Ok(output) => {
+                warn!(
+                    "geth version command exited with status {:?}",
+                    output.status.code()
+                );
+                None
+            }
+            Err(err) => {
+                warn!("Failed to execute geth version: {}", err);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let last_updated = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let log_path_string = if log_available {
+        Some(log_path.to_string_lossy().into_owned())
+    } else {
+        None
+    };
+
+    Ok(GethStatusPayload {
+        installed,
+        running,
+        binary_path,
+        data_dir: data_dir_value,
+        data_dir_exists,
+        log_path: log_path_string,
+        log_available,
+        log_lines: requested_lines,
+        version,
+        last_logs,
+        last_updated,
+    })
+}
+
+#[tauri::command]
+async fn logout(state: State<'_, AppState>) -> Result<(), ()> {
+    let mut active_account = state.active_account.lock().await;
+    *active_account = None;
+    Ok(())
+}
+
+async fn get_active_account(state: &State<'_, AppState>) -> Result<String, String> {
+    state
+        .active_account
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "No account is currently active. Please log in.".to_string())
+}
+
+// --- 2FA Commands ---
+
+#[derive(serde::Serialize)]
+struct TotpSetup {
+    secret: String,
+    otpauth_url: String,
+}
+
+#[tauri::command]
+fn generate_totp_secret() -> Result<TotpSetup, String> {
+    // Customize the issuer and account name.
+    // The account name should ideally be the user's identifier (e.g., email or username).
+    let issuer = "Chiral Network".to_string();
+    let account_name = "Chiral User".to_string(); // Generic name, as it's not tied to a specific account yet
+
+    // Generate a new secret using random bytes
+    use rand::RngCore;
+    let mut rng = rand::thread_rng();
+    let mut secret_bytes = [0u8; 20]; // 160-bit secret (recommended for SHA1)
+    rng.fill_bytes(&mut secret_bytes);
+    let secret = Secret::Raw(secret_bytes.to_vec());
+
+    // Create a TOTP object.
+    let totp = TOTP::new(
+        Algorithm::SHA1,
+        6,  // 6 digits
+        1,  // 1 second tolerance
+        30, // 30 second step
+        secret.to_bytes().map_err(|e| e.to_string())?,
+        Some(issuer),
+        account_name,
+    )
+    .map_err(|e| e.to_string())?;
+
+    let otpauth_url = totp.get_url();
+    // For totp-rs v5+, use to_encoded() to get the base32 string
+    let secret_string = secret.to_encoded().to_string();
+
+    Ok(TotpSetup {
+        secret: secret_string,
+        otpauth_url,
+    })
+}
+
+#[tauri::command]
+async fn is_2fa_enabled(state: State<'_, AppState>) -> Result<bool, String> {
+    let address = get_active_account(&state).await?;
+    let keystore = Keystore::load()?;
+    Ok(keystore.is_2fa_enabled(&address)?)
+}
+
+#[tauri::command]
+async fn verify_and_enable_totp(
+    secret: String,
+    code: String,
+    password: String, // Password needed to encrypt the secret
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    let address = get_active_account(&state).await?;
+
+    // 1. Verify the code against the provided secret first.
+    // Create a Secret enum from the base32 string, then get its raw bytes.
+    let secret_bytes = Secret::Encoded(secret.clone());
+    let totp = TOTP::new(
+        Algorithm::SHA1,
+        6,
+        1,
+        30,
+        secret_bytes.to_bytes().map_err(|e| e.to_string())?,
+        Some("Chiral Network".to_string()),
+        address.clone(),
+    )
+    .map_err(|e| e.to_string())?;
+
+    if !totp.check_current(&code).unwrap_or(false) {
+        return Ok(false); // Code is invalid, don't enable.
+    }
+
+    // 2. Code is valid, so save the secret to the keystore.
+    let mut keystore = Keystore::load()?;
+    keystore.set_2fa_secret(&address, &secret, &password)?;
+
+    Ok(true)
+}
+
+#[tauri::command]
+async fn verify_totp_code(
+    code: String,
+    password: String, // Password needed to decrypt the secret
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    let address = get_active_account(&state).await?;
+    let keystore = Keystore::load()?;
+
+    // 1. Retrieve the secret from the keystore.
+    let secret_b32 = keystore
+        .get_2fa_secret(&address, &password)?
+        .ok_or_else(|| "2FA is not enabled for this account.".to_string())?;
+
+    // 2. Verify the provided code against the stored secret.
+    // Create a Secret enum from the base32 string, then get its raw bytes.
+    let secret_bytes = Secret::Encoded(secret_b32);
+    let totp = TOTP::new(
+        Algorithm::SHA1,
+        6,
+        1,
+        30,
+        secret_bytes.to_bytes().map_err(|e| e.to_string())?,
+        Some("Chiral Network".to_string()),
+        address.clone(),
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(totp.check_current(&code).unwrap_or(false))
+}
+
+#[tauri::command]
+async fn disable_2fa(password: String, state: State<'_, AppState>) -> Result<(), String> {
+    // This action is protected by `with2FA` on the frontend, so we can assume
+    // the user has already been verified via `verify_totp_code`.
+    let address = get_active_account(&state).await?;
+    let mut keystore = Keystore::load()?;
+    keystore.remove_2fa_secret(&address, &password)?;
+    Ok(())
+}
+
+// Peer Selection Commands
+
+#[tauri::command]
+async fn get_recommended_peers_for_file(
+    state: State<'_, AppState>,
+    file_hash: String,
+    file_size: u64,
+    require_encryption: bool,
+) -> Result<Vec<String>, String> {
+    let dht_guard = state.dht.lock().await;
+    if let Some(ref dht) = *dht_guard {
+        Ok(dht
+            .get_recommended_peers_for_download(&file_hash, file_size, require_encryption)
+            .await)
+    } else {
+        Err("DHT service not available".to_string())
+    }
+}
+
+#[tauri::command]
+async fn record_transfer_success(
+    state: State<'_, AppState>,
+    peer_id: String,
+    bytes: u64,
+    duration_ms: u64,
+) -> Result<(), String> {
+    let dht_guard = state.dht.lock().await;
+    if let Some(ref dht) = *dht_guard {
+        dht.record_transfer_success(&peer_id, bytes, duration_ms)
+            .await;
+        Ok(())
+    } else {
+        Err("DHT service not available".to_string())
+    }
+}
+
+#[tauri::command]
+async fn record_transfer_failure(
+    state: State<'_, AppState>,
+    peer_id: String,
+    error: String,
+) -> Result<(), String> {
+    let dht_guard = state.dht.lock().await;
+    if let Some(ref dht) = *dht_guard {
+        dht.record_transfer_failure(&peer_id, &error).await;
+        Ok(())
+    } else {
+        Err("DHT service not available".to_string())
+    }
+}
+
+#[tauri::command]
+async fn get_peer_metrics(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::peer_selection::PeerMetrics>, String> {
+    let dht_guard = state.dht.lock().await;
+    if let Some(ref dht) = *dht_guard {
+        Ok(dht.get_peer_metrics().await)
+    } else {
+        Err("DHT service not available".to_string())
+    }
+}
+
+#[tauri::command]
+async fn select_peers_with_strategy(
+    state: State<'_, AppState>,
+    available_peers: Vec<String>,
+    count: usize,
+    strategy: String,
+    require_encryption: bool,
+) -> Result<Vec<String>, String> {
+    use crate::peer_selection::SelectionStrategy;
+
+    let selection_strategy = match strategy.as_str() {
+        "fastest" => SelectionStrategy::FastestFirst,
+        "reliable" => SelectionStrategy::MostReliable,
+        "bandwidth" => SelectionStrategy::HighestBandwidth,
+        "balanced" => SelectionStrategy::Balanced,
+        "encryption" => SelectionStrategy::EncryptionPreferred,
+        "load_balanced" => SelectionStrategy::LoadBalanced,
+        _ => SelectionStrategy::Balanced,
+    };
+
+    let dht_guard = state.dht.lock().await;
+    if let Some(ref dht) = *dht_guard {
+        Ok(dht
+            .select_peers_with_strategy(
+                &available_peers,
+                count,
+                selection_strategy,
+                require_encryption,
+            )
+            .await)
+    } else {
+        Err("DHT service not available".to_string())
+    }
+}
+
+#[tauri::command]
+async fn set_peer_encryption_support(
+    state: State<'_, AppState>,
+    peer_id: String,
+    supported: bool,
+) -> Result<(), String> {
+    let dht_guard = state.dht.lock().await;
+    if let Some(ref dht) = *dht_guard {
+        dht.set_peer_encryption_support(&peer_id, supported).await;
+        Ok(())
+    } else {
+        Err("DHT service not available".to_string())
+    }
+}
+
+#[tauri::command]
+async fn cleanup_inactive_peers(
+    state: State<'_, AppState>,
+    max_age_seconds: u64,
+) -> Result<(), String> {
+    let dht_guard = state.dht.lock().await;
+    if let Some(ref dht) = *dht_guard {
+        dht.cleanup_inactive_peers(max_age_seconds).await;
+        Ok(())
+    } else {
+        Err("DHT service not available".to_string())
+    }
+}
+#[cfg(not(test))]
 fn main() {
     // Initialize logging for debug builds
     #[cfg(debug_assertions)]
@@ -1067,7 +1811,7 @@ fn main() {
             .with(
                 EnvFilter::from_default_env()
                     .add_directive("chiral_network=info".parse().unwrap())
-                    .add_directive("libp2p=trace".parse().unwrap())
+                    .add_directive("libp2p=debug".parse().unwrap())
                     .add_directive("libp2p_kad=debug".parse().unwrap())
                     .add_directive("libp2p_swarm=debug".parse().unwrap()),
             )
@@ -1100,9 +1844,13 @@ fn main() {
             geth: Mutex::new(GethProcess::new()),
             downloader: Arc::new(GethDownloader::new()),
             miner_address: Mutex::new(None),
+            active_account: Mutex::new(None),
+            rpc_url: Mutex::new("http://127.0.0.1:8545".to_string()),
             dht: Mutex::new(None),
             file_transfer: Mutex::new(None),
             proxies: Arc::new(Mutex::new(Vec::new())),
+            file_transfer_pump: Mutex::new(None),
+            socks5_proxy_cli: Mutex::new(args.socks5_proxy),
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
@@ -1119,6 +1867,7 @@ fn main() {
             get_cpu_temperature,
             is_geth_running,
             check_geth_binary,
+            get_geth_status,
             download_geth_binary,
             set_miner_address,
             start_miner,
@@ -1135,6 +1884,7 @@ fn main() {
             start_dht_node,
             stop_dht_node,
             publish_file_metadata,
+            stop_publishing_file,
             search_file_metadata,
             connect_to_peer,
             get_dht_events,
@@ -1147,11 +1897,29 @@ fn main() {
             upload_file_data_to_network,
             download_file_from_network,
             get_file_transfer_events,
+            get_download_metrics,
+            encrypt_file_with_password,
+            decrypt_file_with_password,
+            encrypt_file_for_upload,
             show_in_folder,
             get_available_storage,
             proxy_connect,
             proxy_disconnect,
-            list_proxies
+            proxy_echo,
+            list_proxies,
+            generate_totp_secret,
+            is_2fa_enabled,
+            verify_and_enable_totp,
+            verify_totp_code,
+            logout,
+            disable_2fa,
+            get_recommended_peers_for_file,
+            record_transfer_success,
+            record_transfer_failure,
+            get_peer_metrics,
+            select_peers_with_strategy,
+            set_peer_encryption_support,
+            cleanup_inactive_peers,
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())

@@ -8,12 +8,27 @@ export const DEFAULT_BOOTSTRAP_NODES = [
   "/ip4/147.75.87.27/tcp/4001/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
   "/ip4/139.178.65.157/tcp/4001/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
   "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
+  "/ip4/54.198.145.146/tcp/4001/p2p/12D3KooWNHdYWRTe98KMF1cDXXqGXvNjd1SAchDaeP5o4MsoJLu2",
 ];
+
+export type NatReachabilityState = 'unknown' | 'public' | 'private';
+export type NatConfidence = 'low' | 'medium' | 'high';
+
+export interface NatHistoryItem {
+  state: NatReachabilityState;
+  confidence: NatConfidence;
+  timestamp: number;
+  summary?: string | null;
+}
 
 export interface DhtConfig {
   port: number;
   bootstrapNodes: string[];
   showMultiaddr?: boolean;
+  enableAutonat?: boolean;
+  autonatProbeIntervalSeconds?: number;
+  autonatServers?: string[];
+  proxyAddress?: string;
 }
 
 export interface FileMetadata {
@@ -23,6 +38,9 @@ export interface FileMetadata {
   seeders: string[];
   createdAt: number;
   mimeType?: string;
+  isEncrypted: boolean;
+  encryptionMethod?: string;
+  keyFingerprint?: string;
 }
 
 export interface DhtHealth {
@@ -33,6 +51,14 @@ export interface DhtHealth {
   lastErrorAt: number | null;
   bootstrapFailures: number;
   listenAddrs: string[];
+  reachability: NatReachabilityState;
+  reachabilityConfidence: NatConfidence;
+  lastReachabilityChange: number | null;
+  lastProbeAt: number | null;
+  lastReachabilityError: string | null;
+  observedAddrs: string[];
+  reachabilityHistory: NatHistoryItem[];
+  autonatEnabled: boolean;
 }
 
 export class DhtService {
@@ -66,10 +92,24 @@ export class DhtService {
     }
 
     try {
-      const peerId = await invoke<string>("start_dht_node", {
+      const payload: Record<string, unknown> = {
         port,
         bootstrapNodes,
-      });
+      };
+      if (typeof config?.enableAutonat === 'boolean') {
+        payload.enableAutonat = config.enableAutonat;
+      }
+      if (typeof config?.autonatProbeIntervalSeconds === 'number') {
+        payload.autonatProbeIntervalSecs = config.autonatProbeIntervalSeconds;
+      }
+      if (config?.autonatServers && config.autonatServers.length > 0) {
+        payload.autonatServers = config.autonatServers;
+      }
+      if (typeof config?.proxyAddress === 'string' && config.proxyAddress.trim().length > 0) {
+        payload.proxyAddress = config.proxyAddress;
+      }
+
+      const peerId = await invoke<string>("start_dht_node", payload);
       this.peerId = peerId;
       this.port = port;
       console.log("DHT started with peer ID:", this.peerId);
@@ -118,7 +158,7 @@ export class DhtService {
     }
 
     try {
-      await invoke("search_file_metadata", { fileHash });
+      await invoke("search_file_metadata", { fileHash, timeoutMs: 0 });
       console.log("Searching for file:", fileHash);
     } catch (error) {
       console.error("Failed to search file:", error);
@@ -189,6 +229,35 @@ export class DhtService {
     } catch (error) {
       console.error("Failed to get DHT health:", error);
       return null;
+    }
+  }
+
+  async searchFileMetadata(
+    fileHash: string,
+    timeoutMs = 10_000
+  ): Promise<FileMetadata | null> {
+    const trimmed = fileHash.trim();
+    if (!trimmed) {
+      throw new Error("File hash is required");
+    }
+
+    try {
+      const result = await invoke<FileMetadata | null>("search_file_metadata", {
+        fileHash: trimmed,
+        timeoutMs,
+      });
+
+      if (!result) {
+        return null;
+      }
+
+      return {
+        ...result,
+        seeders: Array.isArray(result.seeders) ? result.seeders : [],
+      };
+    } catch (error) {
+      console.error("Failed to search file metadata:", error);
+      throw error;
     }
   }
 }

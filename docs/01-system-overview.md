@@ -20,14 +20,7 @@ Chiral Network is a decentralized peer-to-peer file storage and sharing system t
 - **DHT Integration**: Direct mapping of file hashes to network locations
 - **Redundancy**: Multiple copies across different nodes for reliability
 
-### 3. Market Layer
-
-- **Price Discovery**: Centralized server for initial implementation
-- **Supplier Registry**: Nodes advertise storage availability and pricing
-- **Query System**: Clients can discover file locations and prices
-- **Expiration**: Listings expire after one hour to ensure freshness
-
-### 4. Network Layer
+### 3. Network Layer
 
 - **P2P Communication**: libp2p protocol stack for node communication
 - **HTTP Interface**: Simple file retrieval using standard HTTP
@@ -36,7 +29,7 @@ Chiral Network is a decentralized peer-to-peer file storage and sharing system t
 
 ## System Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────┐
 │                     Client Applications                   │
 │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐   │
@@ -46,9 +39,9 @@ Chiral Network is a decentralized peer-to-peer file storage and sharing system t
                               │
 ┌─────────────────────────────────────────────────────────┐
 │                     Service Layer                        │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐ │
-│  │ File Service │  │Market Service│  │Wallet Service│ │
-│  └──────────────┘  └──────────────┘  └──────────────┘ │
+│  ┌──────────────┐                      ┌──────────────┐ │
+│  │ File Service │                      │Wallet Service│ │
+│  └──────────────┘                      └──────────────┘ │
 └─────────────────────────────────────────────────────────┘
                               │
 ┌─────────────────────────────────────────────────────────┐
@@ -86,13 +79,7 @@ Chiral Network is a decentralized peer-to-peer file storage and sharing system t
 - Local caching to reduce network load
 - Efficient routing through DHT
 
-### 4. Economic Incentives
-
-- Storage providers earn cryptocurrency
-- Market-based pricing for storage and bandwidth
-- Mining rewards for network security
-
-### 5. User Privacy
+### 4. User Privacy
 
 - Anonymous transactions through cryptocurrency
 - Optional proxy routing for enhanced privacy
@@ -128,28 +115,21 @@ Chiral Network is a decentralized peer-to-peer file storage and sharing system t
 - Improve network connectivity
 - Optional proxy services
 
-### 5. Market Nodes
-
-- Maintain price listings
-- Match buyers with sellers
-- Track node reputation
-- Provide discovery services
-
-## Economic Model
+## Node Rewards and Incentives
 
 ### Currency Flow
 
 1. **Block Rewards**: New coins created through Ethash mining
-2. **Storage Fees**: Clients pay for file storage
-3. **Bandwidth Fees**: Payment for data transfer
-4. **Gas Fees**: Transaction fees based on computational complexity
+2. **Gas Fees**: Transaction fees based on computational complexity
+3. **Storage Contributions**: Nodes earn rewards for providing reliable storage
+4. **Network Participation**: Rewards for maintaining network connectivity
 
-### Pricing Mechanisms
+### Decentralized Incentives
 
-- **Dynamic Pricing**: Based on supply and demand
-- **Reputation Weighting**: Higher reputation allows premium pricing
-- **Bulk Discounts**: Lower rates for large storage commitments
-- **Time-based Pricing**: Different rates for short vs long-term storage
+- **Proof of Storage**: Nodes demonstrate they are storing files through periodic challenges
+- **Reputation System**: Reliable nodes build reputation for consistent uptime and availability
+- **Community Rewards**: Distributed rewards for contributing to network health
+- **Fair Distribution**: Algorithmic reward distribution without centralized market makers
 
 ## Comparison with Existing Systems
 
@@ -179,7 +159,7 @@ Chiral Network is a decentralized peer-to-peer file storage and sharing system t
 
 - Basic blockchain implementation
 - Simple file storage and retrieval
-- Initial market mechanism
+- Decentralized peer discovery via DHT
 - Desktop GUI application
 
 ### Phase 2: Enhancement
@@ -215,8 +195,8 @@ Chiral Network is a decentralized peer-to-peer file storage and sharing system t
 ### Economic Metrics
 
 - Stable currency value
-- Competitive storage pricing
-- Active market participation
+- Fair reward distribution
+- Active network participation
 - Sustainable mining rewards
 
 ### User Metrics
@@ -244,10 +224,10 @@ Chiral Network is a decentralized peer-to-peer file storage and sharing system t
 
 **Solution**: Optional KYC, content policies, legal framework
 
-### Challenge: Market Manipulation
+### Challenge: Fair Resource Allocation
 
-**Solution**: Reputation systems, rate limiting, monitoring
+**Solution**: Algorithmic distribution, reputation systems, proof-of-storage validation
 
 ## Conclusion
 
-Chiral Network represents a comprehensive approach to decentralized file storage, combining the best aspects of blockchain technology, peer-to-peer networking, and market economics. By focusing on usability, security, and economic sustainability, the system aims to provide a viable alternative to centralized cloud storage while maintaining the benefits of decentralization.
+Chiral Network represents a comprehensive approach to decentralized file storage, combining the best aspects of blockchain technology, peer-to-peer networking, and community-driven incentives. By focusing on usability, security, and fair resource distribution, the system aims to provide a viable alternative to centralized cloud storage while maintaining the benefits of true decentralization without centralized market intermediaries.

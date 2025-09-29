@@ -4,6 +4,8 @@
   import Button from '$lib/components/ui/button.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
+  import GethStatusCard from '$lib/components/GethStatusCard.svelte'
+  import PeerMetrics from '$lib/components/PeerMetrics.svelte'
   import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Play, Square, Download, AlertCircle, Wifi } from 'lucide-svelte'
   import { peers, networkStats, networkStatus, userLocation, etcAccount } from '$lib/stores'
   import { get } from 'svelte/store'
@@ -11,8 +13,9 @@
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
   import { dhtService, DEFAULT_BOOTSTRAP_NODES } from '$lib/dht'
-  import { resetConnectionAttempts } from '$lib/dhtHelpers.js'
-  import type { DhtHealth } from '$lib/dht'
+  import { getStatus as fetchGethStatus, type GethStatus } from '$lib/services/gethService'
+  import { resetConnectionAttempts } from '$lib/dhtHelpers'
+  import type { DhtHealth, NatConfidence, NatReachabilityState } from '$lib/dht'
   import { Clipboard } from "lucide-svelte"
   import { t } from 'svelte-i18n';
   import { showToast } from '$lib/toast';
@@ -21,6 +24,13 @@
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
+
+  type NatStatusPayload = {
+    state: NatReachabilityState
+    confidence: NatConfidence
+    lastError?: string | null
+    summary?: string | null
+  }
   
   let discoveryRunning = false
   let newPeerAddress = ''
@@ -58,6 +68,7 @@
   let peerCount = 0
   let peerCountInterval: ReturnType<typeof setInterval> | undefined
   let chainId = 98765
+  let gethStatusCardRef: { refresh?: () => Promise<void> } | null = null
   
   // DHT variables
   let dhtStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
@@ -70,6 +81,9 @@
   let dhtError: string | null = null
   let connectionAttempts = 0
   let dhtPollInterval: number | undefined
+  let natStatusUnlisten: (() => void) | null = null
+  let lastNatState: NatReachabilityState | null = null
+  let lastNatConfidence: NatConfidence | null = null
   
   // UI variables
   const nodeAddress = "enode://277ac35977fc0a230e3ca4ccbf6df6da486fd2af9c129925b1193b25da6f013a301788fceed458f03c6c0d289dfcbf7a7ca5c0aef34b680fcbbc8c2ef79c0f71@127.0.0.1:30303"
@@ -98,6 +112,112 @@
 
   function formatHealthMessage(value: string | null): string {
     return value ?? tr('network.dht.health.none')
+  }
+
+  function formatReachabilityState(state?: NatReachabilityState | null): string {
+    switch (state) {
+      case 'public':
+        return tr('network.dht.reachability.state.public')
+      case 'private':
+        return tr('network.dht.reachability.state.private')
+      default:
+        return tr('network.dht.reachability.state.unknown')
+    }
+  }
+
+  function formatNatConfidence(confidence?: NatConfidence | null): string {
+    switch (confidence) {
+      case 'high':
+        return tr('network.dht.reachability.confidence.high')
+      case 'medium':
+        return tr('network.dht.reachability.confidence.medium')
+      default:
+        return tr('network.dht.reachability.confidence.low')
+    }
+  }
+
+  function reachabilityBadgeClass(state?: NatReachabilityState | null): string {
+    switch (state) {
+      case 'public':
+        return 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
+      case 'private':
+        return 'bg-amber-500/10 text-amber-600 dark:text-amber-300'
+      default:
+        return 'bg-muted text-muted-foreground'
+    }
+  }
+
+  function formatNatTimestamp(epoch?: number | null): string {
+    if (!epoch) return tr('network.dht.health.never')
+    return new Date(epoch * 1000).toLocaleString()
+  }
+
+  async function copyObservedAddr(addr: string) {
+    try {
+      await navigator.clipboard.writeText(addr)
+      showToast(tr('network.dht.reachability.copySuccess'), 'success')
+    } catch (error) {
+      console.error('Failed to copy observed address', error)
+      showToast(tr('network.dht.reachability.copyError'), 'error')
+    }
+  }
+
+  function showNatToast(payload: NatStatusPayload) {
+    if (lastNatState === null) {
+      lastNatState = payload.state
+      lastNatConfidence = payload.confidence
+      return
+    }
+
+    if (payload.state === lastNatState && payload.confidence === lastNatConfidence) {
+      lastNatState = payload.state
+      lastNatConfidence = payload.confidence
+      return
+    }
+
+    lastNatState = payload.state
+    lastNatConfidence = payload.confidence
+
+    const rawSummary = payload.summary ?? payload.lastError ?? ''
+    const summaryText = rawSummary.trim().length > 0
+      ? rawSummary
+      : tr('network.dht.reachability.genericSummary')
+
+    let toastKey = 'network.dht.reachability.toast.unknown'
+    let tone: 'success' | 'warning' | 'info' = 'info'
+
+    if (payload.state === 'public') {
+      toastKey = 'network.dht.reachability.toast.public'
+      tone = 'success'
+    } else if (payload.state === 'private') {
+      toastKey = 'network.dht.reachability.toast.private'
+      tone = 'warning'
+    }
+
+    showToast(tr(toastKey, { values: { summary: summaryText } }), tone)
+  }
+
+  async function registerNatListener() {
+    if (!isTauri || natStatusUnlisten) return
+    try {
+      natStatusUnlisten = await listen('nat_status_update', async (event) => {
+        const payload = event.payload as NatStatusPayload
+        if (!payload) return
+        showNatToast(payload)
+        try {
+          const snapshot = await dhtService.getHealth()
+          if (snapshot) {
+            dhtHealth = snapshot
+            lastNatState = snapshot.reachability
+            lastNatConfidence = snapshot.reachabilityConfidence
+          }
+        } catch (error) {
+          console.error('Failed to refresh NAT status', error)
+        }
+      })
+    } catch (error) {
+      console.error('Failed to subscribe to NAT status updates', error)
+    }
   }
   
   async function startDht() {
@@ -268,6 +388,8 @@
       if (snapshot) {
         dhtHealth = snapshot
         dhtPeerCount = snapshot.peerCount
+        lastNatState = snapshot.reachability
+        lastNatConfidence = snapshot.reachabilityConfidence
       }
       startDhtPolling()
     } catch (error: any) {
@@ -292,6 +414,8 @@
         if (health) {
           dhtHealth = health
           dhtPeerCount = health.peerCount
+          lastNatState = health.reachability
+          lastNatConfidence = health.reachabilityConfidence
         } else {
           dhtPeerCount = await dhtService.getPeerCount()
         }
@@ -333,9 +457,13 @@
           dhtHealth = health
           peerCount = health.peerCount
           dhtPeerCount = peerCount
+          lastNatState = health.reachability
+          lastNatConfidence = health.reachabilityConfidence
         } else {
           peerCount = await dhtService.getPeerCount()
           dhtPeerCount = peerCount
+          lastNatState = null
+          lastNatConfidence = null
         }
 
         // Update connection status based on peer count
@@ -360,6 +488,8 @@
       connectionAttempts = 0
       dhtHealth = null
       copiedListenAddr = null
+      lastNatState = null
+      lastNatConfidence = null
       return
     }
     
@@ -372,6 +502,8 @@
       dhtEvents = [...dhtEvents, `✓ DHT stopped`]
       dhtHealth = null
       copiedListenAddr = null
+      lastNatState = null
+      lastNatConfidence = null
     } catch (error) {
       console.error('Failed to stop DHT:', error)
       dhtEvents = [...dhtEvents, `✗ Failed to stop DHT: ${error}`]
@@ -485,6 +617,27 @@
       onlinePeers: Math.floor(s.totalPeers * (0.6 + Math.random() * 0.3))
     }))
   }
+
+  function applyGethStatus(status: GethStatus) {
+    const wasRunning = isGethRunning
+    isGethInstalled = status.installed
+    isGethRunning = status.running
+    isStartingNode = false
+
+    if (status.running && !wasRunning) {
+      startPolling()
+    } else if (!status.running && wasRunning) {
+      if (peerCountInterval) {
+        clearInterval(peerCountInterval)
+        peerCountInterval = undefined
+      }
+      peerCount = 0
+    }
+  }
+
+  function handleGethStatusChange(event: CustomEvent<GethStatus>) {
+    applyGethStatus(event.detail)
+  }
   
   async function checkGethStatus() {
     if (!isTauri) {
@@ -494,17 +647,13 @@
       isStartingNode = false
       return
     }
-    
+
     try {
-      // First check if geth is installed
-      isGethInstalled = await invoke('check_geth_binary') as boolean
-      
-      if (isGethInstalled) {
-        isGethRunning = await invoke('is_geth_running') as boolean
-        if (isGethRunning) {
-          isStartingNode = false
-          startPolling()
-        }
+      if (gethStatusCardRef?.refresh) {
+        await gethStatusCardRef.refresh()
+      } else {
+        const status = await fetchGethStatus(dataDir, 1)
+        applyGethStatus(status)
       }
     } catch (error) {
       console.error('Failed to check geth status:', error)
@@ -532,9 +681,15 @@
       isDownloading = false
       // Auto-start after download
       await startGethNode()
+      if (gethStatusCardRef?.refresh) {
+        await gethStatusCardRef.refresh()
+      }
     } catch (e) {
       downloadError = String(e)
       isDownloading = false
+      if (gethStatusCardRef?.refresh) {
+        await gethStatusCardRef.refresh()
+      }
     }
   }
 
@@ -561,6 +716,9 @@
       await invoke('start_geth_node', { dataDir })
       isGethRunning = true
       startPolling()
+      if (gethStatusCardRef?.refresh) {
+        await gethStatusCardRef.refresh()
+      }
     } catch (error) {
       console.error('Failed to start geth node:', error)
       alert('Failed to start Chiral node: ' + error)
@@ -583,6 +741,9 @@
       if (peerCountInterval) {
         clearInterval(peerCountInterval)
         peerCountInterval = undefined
+      }
+      if (gethStatusCardRef?.refresh) {
+        await gethStatusCardRef.refresh()
       }
     } catch (error) {
       console.error('Failed to stop geth node:', error)
@@ -630,6 +791,7 @@
       
       // Listen for download progress updates (only in Tauri)
       if (isTauri) {
+        await registerNatListener()
         unlistenProgress = await listen('geth-download-progress', (event) => {
           downloadProgress = event.payload as typeof downloadProgress
         })
@@ -646,6 +808,10 @@
       if (unlistenProgress) {
         unlistenProgress()
       }
+      if (natStatusUnlisten) {
+        natStatusUnlisten()
+        natStatusUnlisten = null
+      }
     }
   })
 
@@ -655,6 +821,10 @@
     }
     if (dhtPollInterval) {
       clearInterval(dhtPollInterval)
+    }
+    if (natStatusUnlisten) {
+      natStatusUnlisten()
+      natStatusUnlisten = null
     }
     // Note: We do NOT stop the DHT service here
     // The DHT should persist across page navigations
@@ -789,6 +959,14 @@
       {/if}
     </div>
   </Card>
+
+  <GethStatusCard
+    bind:this={gethStatusCardRef}
+    dataDir={dataDir}
+    logLines={60}
+    refreshIntervalMs={10000}
+    on:status={handleGethStatusChange}
+  />
   
   <!-- DHT Network Status Card -->
   <Card class="p-6">
@@ -939,6 +1117,83 @@
             </div>
           {/if}
 
+          <div class="pt-4 space-y-4">
+            <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.reachability.title')}</p>
+                <div class="mt-2 flex items-center gap-2">
+                  <Badge class={reachabilityBadgeClass(dhtHealth?.reachability)}>
+                    {formatReachabilityState(dhtHealth?.reachability)}
+                  </Badge>
+                  <span class="text-sm text-muted-foreground">
+                    {formatNatConfidence(dhtHealth?.reachabilityConfidence)}
+                  </span>
+                </div>
+              </div>
+              <div class="text-sm text-muted-foreground space-y-1 text-right">
+                <p>{$t('network.dht.reachability.lastProbe')}: {formatNatTimestamp(dhtHealth?.lastProbeAt ?? null)}</p>
+                <p>{$t('network.dht.reachability.lastChange')}: {formatNatTimestamp(dhtHealth?.lastReachabilityChange ?? null)}</p>
+                {#if dhtHealth && !dhtHealth.autonatEnabled}
+                  <p class="text-xs text-yellow-600">{$t('network.dht.reachability.autonatDisabled')}</p>
+                {/if}
+              </div>
+            </div>
+
+            <div class="grid gap-4 md:grid-cols-2">
+              <div>
+                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.reachability.observedAddrs')}</p>
+                {#if dhtHealth?.observedAddrs && dhtHealth.observedAddrs.length > 0}
+                  <div class="mt-2 flex flex-wrap gap-2">
+                    {#each dhtHealth.observedAddrs as addr}
+                      <button
+                        class="inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1 text-xs font-mono hover:bg-muted/80"
+                        on:click={() => copyObservedAddr(addr)}
+                        type="button"
+                      >
+                        {addr}
+                        <Clipboard class="h-3 w-3" />
+                      </button>
+                    {/each}
+                  </div>
+                {:else}
+                  <p class="mt-2 text-sm text-muted-foreground">{$t('network.dht.reachability.observedEmpty')}</p>
+                {/if}
+              </div>
+              <div>
+                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.reachability.lastError')}</p>
+                <p class="mt-2 text-sm text-muted-foreground">{dhtHealth?.lastReachabilityError ?? tr('network.dht.health.none')}</p>
+              </div>
+            </div>
+
+            <div>
+              <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.reachability.history')}</p>
+              {#if dhtHealth?.reachabilityHistory && dhtHealth.reachabilityHistory.length > 0}
+                <div class="mt-2 overflow-hidden rounded-md border border-muted/40">
+                  <table class="min-w-full text-sm">
+                    <thead class="bg-muted/50 text-left text-xs uppercase text-muted-foreground">
+                      <tr>
+                        <th class="px-3 py-2">{$t('network.dht.reachability.timestamp')}</th>
+                        <th class="px-3 py-2">{$t('network.dht.reachability.stateLabel')}</th>
+                        <th class="px-3 py-2">{$t('network.dht.reachability.summary')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each dhtHealth.reachabilityHistory as item}
+                        <tr class="border-t border-muted/30">
+                          <td class="px-3 py-2">{formatNatTimestamp(item.timestamp)}</td>
+                          <td class="px-3 py-2">{formatReachabilityState(item.state)}</td>
+                          <td class="px-3 py-2 text-muted-foreground">{item.summary ?? '—'}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              {:else}
+                <p class="mt-2 text-sm text-muted-foreground">{$t('network.dht.reachability.historyEmpty')}</p>
+              {/if}
+            </div>
+          </div>
+
           {#if dhtHealth}
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-3">
               <div class="bg-muted/40 rounded-lg p-3">
@@ -982,6 +1237,11 @@
       {/if}
     </div>
   </Card>
+
+  <!-- Smart Peer Selection Metrics -->
+  {#if dhtStatus === 'connected'}
+    <PeerMetrics />
+  {/if}
   
   <!-- Network Statistics Cards -->
   <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

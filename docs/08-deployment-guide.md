@@ -35,8 +35,6 @@ This guide provides comprehensive instructions for deploying the Chiral Network 
 - Node.js 18.x or higher
 - Rust 1.70 or higher
 - Docker 24.x (optional)
-- PostgreSQL 14+ (for market server)
-- Redis 7.x (for caching)
 
 # Build Tools
 - Git
@@ -100,42 +98,12 @@ services:
       - NODE_TYPE=storage
     restart: unless-stopped
 
-  market:
-    image: chiralnetwork/market:latest
-    container_name: chiral-market
-    ports:
-      - "3000:3000" # API
-    environment:
-      - DATABASE_URL=postgresql://user:pass@postgres:5432/chiral
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      - postgres
-      - redis
-    restart: unless-stopped
 
-  postgres:
-    image: postgres:14-alpine
-    container_name: chiral-postgres
-    environment:
-      - POSTGRES_DB=chiral
-      - POSTGRES_USER=user
-      - POSTGRES_PASSWORD=pass
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    restart: unless-stopped
-
-  redis:
-    image: redis:7-alpine
-    container_name: chiral-redis
-    volumes:
-      - redis-data:/data
     restart: unless-stopped
 
 volumes:
   blockchain-data:
   storage-data:
-  postgres-data:
-  redis-data:
 ```
 
 #### Start Services
@@ -266,32 +234,27 @@ bucket_size = 20
 replication = 20
 ```
 
-### 3. Market Server Configuration
+### 3. DHT Configuration (Decentralized)
 
-#### market.env
-
-```bash
-# Database
-DATABASE_URL=postgresql://chiral:password@localhost:5432/chiral_market
-DATABASE_POOL_SIZE=20
-
-# Redis
-REDIS_URL=redis://localhost:6379
-REDIS_PREFIX=chiral:
+No centralized servers required - peer discovery handled via DHT
 
 # API
+
 API_PORT=3000
 API_RATE_LIMIT=1000
-API_CORS_ORIGIN=*
+API_CORS_ORIGIN=\*
 
 # Security
+
 JWT_SECRET=your-secret-key-here
 ENCRYPTION_KEY=your-encryption-key-here
 
 # Monitoring
+
 METRICS_ENABLED=true
 METRICS_PORT=9090
-```
+
+````
 
 ## Network Setup
 
@@ -309,7 +272,7 @@ chiral-node tools genesis \
   --gas-limit 0x7A1200 \
   --alloc accounts.json \
   --output genesis.json
-```
+````
 
 #### accounts.json
 
@@ -366,8 +329,7 @@ sudo ufw allow 8547/tcp comment 'Chiral WebSocket'
 sudo ufw allow 8080/tcp comment 'File Transfer'
 sudo ufw allow 4001/udp comment 'DHT'
 
-# Market
-sudo ufw allow 3000/tcp comment 'Market API'
+# DHT P2P (no central server needed)
 
 # Enable firewall
 sudo ufw enable
@@ -605,7 +567,7 @@ DATE=$(date +%Y%m%d_%H%M%S)
 tar -czf $BACKUP_DIR/blockchain_$DATE.tar.gz /var/lib/chiral/blockchain
 
 # Backup storage metadata
-pg_dump chiral_market > $BACKUP_DIR/database_$DATE.sql
+# No database backup needed - fully decentralized
 
 # Backup configuration
 tar -czf $BACKUP_DIR/config_$DATE.tar.gz /etc/chiral
@@ -627,7 +589,7 @@ systemctl stop chiral-node
 tar -xzf blockchain_backup.tar.gz -C /
 
 # Restore database
-psql chiral_market < database_backup.sql
+# No database restore needed - fully decentralized
 
 # Start services
 systemctl start chiral-node
@@ -648,14 +610,14 @@ kubectl wait --for=condition=ready pod/chiral-node-0
 kubectl rollout status statefulset/chiral-node
 ```
 
-#### Database Migrations
+#### DHT Network Initialization
 
 ```bash
-# Run migrations
-chiral-migrate up --database-url $DATABASE_URL
+# Initialize DHT routing table
+chiral-cli dht bootstrap
 
-# Rollback if needed
-chiral-migrate down --steps 1
+# Check DHT connectivity
+chiral-cli dht status
 ```
 
 ### 3. Performance Tuning
@@ -705,7 +667,7 @@ compression = true
 # Check peer connections
 chiral-cli peers list
 
-# Reset peer database
+# Reset peer connections
 rm -rf /var/lib/chiral/blockchain/network/
 systemctl restart chiral-node
 
@@ -815,7 +777,7 @@ server {
 
 ### 1. Backup Strategy
 
-- **Daily:** Configuration files, database dumps
+- **Daily:** Configuration files, DHT state
 - **Weekly:** Full blockchain snapshot
 - **Monthly:** Complete system backup
 - **Offsite:** Cloud storage replication

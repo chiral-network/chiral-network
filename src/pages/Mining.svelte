@@ -40,7 +40,7 @@
   // Network statistics
   let networkHashRate = '0 H/s'
   let networkDifficulty = '0'
-  let blockReward = 5 // Chiral per block
+  let blockReward = 2// Chiral per block
   let peerCount = 0
 
   // Statistics - preserve across page navigation
@@ -54,6 +54,7 @@
   let hasRealTemperature = false
   let temperatureLoading = true // Add loading state for temperature checks
   let hasCompletedFirstCheck = false // Track if we've completed the first temperature check
+  let temperatureUnit: 'C' | 'F' = 'C'
 
   // Uptime tick (forces template to re-render every second while mining)
   let uptimeNow: number = Date.now()
@@ -88,6 +89,67 @@
     const level = detectLogLevel(log)
     return logFilters[level]
   })
+
+  function parseDifficulty(difficultyStr: string): number {
+    const match = difficultyStr.match(/^([\d.]+)\s*([KGMTP]?)H?\/?s?$/i)
+    if (!match) return 0
+    
+    const value = parseFloat(match[1])
+    const unit = match[2].toUpperCase()
+    
+    switch (unit) {
+      case 'K': return value * 1000
+      case 'M': return value * 1000000
+      case 'G': return value * 1000000000
+      case 'T': return value * 1000000000000
+      case 'P': return value * 1000000000000000
+      default: return value
+    }
+  }
+
+  $: displayedTemperature = temperatureUnit === 'F' ? toFahrenheit(temperature).toFixed(1) : temperature.toFixed(1);
+
+
+  
+
+  function parseHashRate(rateStr: string): number {
+    const match = rateStr.match(/^~?\s*([\d.]+)\s*([KMGT])H\/s$/i);
+    
+    // Fallback: If the regex fails (e.g., if the string is just "0 H/s"), return 0.
+    if (!match) return 0;
+    
+    // Match indices: 1 is the value, 2 is the unit (K, M, G, T)
+    const value = parseFloat(match[1]);
+    const unit = match[2] ? match[2].toUpperCase() : ''; // Handle base H/s case if needed, though this regex forces a unit
+    
+    switch (unit) {
+      case 'K': return value * 1000;
+      case 'M': return value * 1000000;
+      case 'G': return value * 1000000000;
+      case 'T': return value * 1000000000000;
+      default: return value; // Assumes base H/s if no unit is captured (e.g., if regex simplified)
+    }
+  }
+
+
+  $: {
+    const localHashRateNum = parseHashRate($miningState.hashRate);
+    const networkDifficultyNum = parseDifficulty(networkDifficulty);
+    
+    if (localHashRateNum > 0 && networkDifficultyNum > 0) {
+        // ETB = Difficulty / Hashrate (in seconds)
+        estimatedTimeToBlock = networkDifficultyNum / localHashRateNum;
+    } else {
+        estimatedTimeToBlock = 0;
+    }
+  }
+
+
+
+  // Function to convert Celsius to Fahrenheit
+  function toFahrenheit(celsius: number): number {
+    return (celsius * 9/5) + 32;
+  }
 
   // Determine log level from a log line and return a semantic level
   function detectLogLevel(line: string): 'error' | 'warn' | 'info' | 'other' {
@@ -144,10 +206,12 @@
 
   const navigation = getContext('navigation') as { setCurrentPage: (page: string) => void };
   
-  // Computed values for actual threads based on intensity
+  // Computed values for threads based on intensity
   const maxThreads = cpuThreads
-  $: actualThreads = Math.ceil(($miningState.minerIntensity / 100) * maxThreads)
-  // Don't directly modify store in reactive statement to avoid infinite loops
+  // Intensity slider directly controls selectedThreads
+  $: if (!$miningState.isMining) {
+    selectedThreads = Math.ceil(($miningState.minerIntensity / 100) * maxThreads)
+  }
 
 
   // Threads warning
@@ -256,10 +320,15 @@
           if (hashRateFromLogs > 0) {
             // Use actual hash rate from logs
             $miningState.hashRate = formatHashRate(hashRateFromLogs)
-            if (blocksFound > $miningState.blocksFound) {
-              $miningState.blocksFound = blocksFound; 
-              //Visualization Now Handled By Backend
-            }
+            
+            console.log('From mining stats - blocks:', blocksFound);
+            console.log('Current blocksFound before:', $miningState.blocksFound);
+            
+            $miningState.blocksFound = blocksFound;
+            
+            console.log('blocksFound after:', $miningState.blocksFound);
+          
+            
           } else if ($miningState.activeThreads > 0) {
             // Fall back to simulation if no log data yet
             const elapsed = (Date.now() - sessionStartTime) / 1000 // seconds
@@ -286,17 +355,7 @@
       // Convert hashRate string to number for chart
       let hashRateNum = 0
       // Clean up the rate string (remove ~ and text in parentheses)
-      const cleanRate = $miningState.hashRate.replace(/[~()a-zA-Z \.]+/g, '').trim()
-      
-      if ($miningState.hashRate.includes('GH/s')) {
-        hashRateNum = parseFloat(cleanRate) * 1000000000
-      } else if ($miningState.hashRate.includes('MH/s')) {
-        hashRateNum = parseFloat(cleanRate) * 1000000
-      } else if ($miningState.hashRate.includes('KH/s')) {
-        hashRateNum = parseFloat(cleanRate) * 1000
-      } else {
-        hashRateNum = parseFloat(cleanRate) || 0
-      }
+      hashRateNum = parseHashRate($miningState.hashRate)
       
       // Update mining history for chart
       if ($miningState.isMining) {
@@ -316,62 +375,68 @@
     }
   }
   
+  
   async function updateNetworkStats() {
-    try {
-      if (isGethRunning) {
-        const promises: Promise<any>[] = [
-          invoke('get_network_stats') as Promise<[string, string]>,
-          invoke('get_current_block') as Promise<number>,
-          invoke('get_network_peer_count') as Promise<number>
-        ]
-        
-        // Also fetch account balance and blocks mined if we have an account and are mining
-        if ($etcAccount && $miningState.isMining) {
-          promises.push(invoke('get_account_balance', { 
-            address: $etcAccount.address 
-          }) as Promise<string>)
-          promises.push(invoke('get_blocks_mined', { 
-            address: $etcAccount.address 
-          }) as Promise<number>)
-        }
-        
-        const results = await Promise.all(promises)
-        
-        networkDifficulty = results[0][0]
-        networkHashRate = results[0][1]
-        currentBlock = results[1]
-        peerCount = results[2]
-        
-        // Update total rewards from actual balance
-        if (results[3] !== undefined) {
-          const balance = parseFloat(results[3]);
-          if (!isNaN(balance)) {
-            // Only update if backend balance is higher
-            if (balance > ($miningState.totalRewards ?? 0)) {
-              $miningState.totalRewards = balance;
-
-              // Mark all "pending" mining reward txs as completed
-              transactions.update(list =>
-                list.map(tx =>
-                  tx.status === 'pending' ? { ...tx, status: 'completed' } : tx
-                )
-              );
-            }
-          }
-        }
-                
-        // Update blocks mined from blockchain query
-        if (results[4] !== undefined) {
-          const blocksMined = results[4] as number;
-          if (blocksMined > $miningState.blocksFound) {
-            $miningState.blocksFound = blocksMined;
-          }
-        }
+  try {
+    if (isGethRunning) {
+      const promises: Promise<any>[] = [
+        invoke('get_network_stats') as Promise<[string, string]>,
+        invoke('get_current_block') as Promise<number>,
+        invoke('get_network_peer_count') as Promise<number>
+      ]
+      
+      // Also fetch account balance and blocks mined if we have an account and are mining
+      if ($etcAccount && $miningState.isMining) {
+        promises.push(invoke('get_account_balance', { 
+          address: $etcAccount.address 
+        }) as Promise<string>)
+        promises.push(invoke('get_blocks_mined', { 
+          address: $etcAccount.address 
+        }) as Promise<number>)
       }
-    } catch (e) {
-      console.error('Failed to update network stats:', e)
+      
+      const results = await Promise.all(promises)
+      
+      networkDifficulty = results[0][0]
+      networkHashRate = results[0][1]
+      currentBlock = results[1]
+      peerCount = results[2]
+      
+      // Update total rewards from actual balance
+      if (results[3] !== undefined) {
+        const balance = parseFloat(results[3]);
+        if (!isNaN(balance)) {
+          // Only update if backend balance is higher
+          if (balance > ($miningState.totalRewards ?? 0)) {
+            $miningState.totalRewards = balance;
+
+            // Mark all "pending" mining reward txs as completed
+            transactions.update(list =>
+              list.map(tx =>
+                tx.status === 'pending' ? { ...tx, status: 'completed' } : tx
+              )
+            );
+          }
+        }
+      }  
+              
+      // Update blocks mined from blockchain query
+      
+      if (results[4] !== undefined) {
+        const blocksMined = results[4] as number;
+        
+        console.log('Backend returned blocks:', blocksMined);
+        console.log('Current blocksFound before update:', $miningState.blocksFound);
+        
+        $miningState.blocksFound = blocksMined;
+        
+        console.log('blocksFound after update:', $miningState.blocksFound);
+      }
     }
+  } catch (e) {
+    console.error('Failed to update network stats:', e)
   }
+}
 
   async function updateCpuTemperature() {
     // Only show loading state for the very first check
@@ -436,7 +501,7 @@
       sessionStartTime = Date.now()
       // Store session start time in the store for persistence
       $miningState.sessionStartTime = sessionStartTime
-      $miningState.activeThreads = actualThreads  // Use computed actualThreads
+      $miningState.activeThreads = selectedThreads  // Use selectedThreads
       totalHashes = 0 // Reset total hashes
       lastHashUpdate = Date.now()
       startUptimeTimer() 
@@ -461,8 +526,6 @@
       $miningState.isMining = false
       $miningState.hashRate = '0 H/s'
       $miningState.activeThreads = 0 
-
-      // ❌ Remove session payout, since pushRecentBlock already logs rewards
 
       // Clear session start time
       $miningState.sessionStartTime = undefined
@@ -554,7 +617,8 @@ function pushRecentBlock(b: {
   number?: number;
   reward?: number;
 }) {
-  const reward = typeof b.reward === "number" ? b.reward : blockReward;
+
+  const reward = typeof b.reward === "number" ? b.reward : 0;
 
   const item = {
     id: `block-${b.hash}-${b.timestamp?.getTime() ?? Date.now()}`,
@@ -572,20 +636,19 @@ function pushRecentBlock(b: {
   // Reset pagination so newest block is visible
   currentPage = 1;
 
-  // 💰 Immediately credit wallet balance (optimistic update)
-  $miningState.totalRewards = ($miningState.totalRewards ?? 0) + reward;
-
-  // 💳 Add a transaction entry for this block
-  const tx: Transaction = {
-    id: Date.now(),
-    type: 'received',
-    amount: reward,
-    from: 'Mining reward',
-    date: new Date(),
-    description: `Block reward (#${item.number})`,
-    status: 'pending' // mark as pending until backend confirms
-  };
-  transactions.update(list => [tx, ...list]);
+  if (reward > 0) {
+    const last4 = b.hash.slice(-4); // grab last 4 chars of hash
+    const tx: Transaction = {
+      id: Date.now(),
+      type: 'received',
+      amount: 2,
+      from: 'Mining reward',
+      date: new Date(),
+      description: `Block Reward (…${last4})`,
+      status: 'pending' // will flip to 'completed' when backend confirms
+    };
+    transactions.update(list => [tx, ...list]);
+  }
 }
 
   async function appendNewBlocksFromBackend() {
@@ -607,7 +670,7 @@ function pushRecentBlock(b: {
           difficulty: b.difficulty ? parseInt(b.difficulty, 16) : undefined,
           timestamp: new Date((b.timestamp || 0) * 1000),
           number: b.number,
-          reward: typeof b.reward === 'number' ? b.reward : undefined
+          reward: 2
         });
       }
       // Hard de-duplication by hash as a safety net
@@ -628,21 +691,30 @@ function pushRecentBlock(b: {
     const seconds = Math.floor((uptime % 60000) / 1000)
     return `${hours}h ${minutes}m ${seconds}s`
   }
-  
-  function parseHashRate(rateStr: string): number {
-    const match = rateStr.match(/^([\d.]+)\s*([KMGT]?)H\/s$/i)
-    if (!match) return 0
-    
-    const value = parseFloat(match[1])
-    const unit = match[2].toUpperCase()
-    
-    switch (unit) {
-      case 'K': return value * 1000
-      case 'M': return value * 1000000
-      case 'G': return value * 1000000000
-      case 'T': return value * 1000000000000
-      default: return value
-    }
+
+  function formatTimeFromSeconds(totalSeconds: number): string {
+      if (totalSeconds < 60) {
+          return `${totalSeconds.toFixed(0)}s`;
+      }
+
+      const seconds = Math.floor(totalSeconds);
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      const remainingSeconds = seconds % 60;
+
+      let parts = [];
+      if (hours > 0) {
+          parts.push(`${hours}h`);
+      }
+      if (minutes > 0) {
+          parts.push(`${minutes}m`);
+      }
+      // Only show seconds if the total time is less than an hour, or if minutes is 0
+      if (hours === 0 && minutes < 5) { // Show seconds when time is short
+          parts.push(`${remainingSeconds}s`);
+      }
+
+      return parts.join(' ');
   }
 
   function formatHashRate(rate: number | string): string {
@@ -861,7 +933,7 @@ function pushRecentBlock(b: {
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">{$t('mining.totalRewards')}</p>
-          <p class="text-2xl font-bold">{$miningState.totalRewards.toFixed(2)} Chiral</p>
+          <p class="text-2xl font-bold">{($miningState.totalRewards || 0).toFixed(2)} Chiral</p>
           <p class="text-xs text-green-600 flex items-center gap-1 mt-1">
             <TrendingUp class="h-3 w-3" />
             {$miningState.blocksFound} {$t('mining.blocksFound')}
@@ -895,7 +967,7 @@ function pushRecentBlock(b: {
           {#if temperatureLoading}
             <p class="text-2xl font-bold text-blue-500">--°C</p>
           {:else if hasRealTemperature}
-            <p class="text-2xl font-bold {temperature > 80 ? 'text-red-500' : temperature > 70 ? 'text-orange-500' : temperature > 60 ? 'text-yellow-500' : 'text-green-500'}">{temperature.toFixed(1)}°C</p>
+            <p class="text-2xl font-bold {temperature > 80 ? 'text-red-500' : temperature > 70 ? 'text-orange-500' : temperature > 60 ? 'text-yellow-500' : 'text-green-500'}">{displayedTemperature}°{temperatureUnit}</p>
           {:else}
             <p class="text-2xl font-bold text-gray-500">N/A</p>
           {/if}
@@ -917,8 +989,13 @@ function pushRecentBlock(b: {
             {/if}
           </div>
         </div>
-        <div class="p-2 {temperatureLoading ? 'bg-blue-500/20' : hasRealTemperature ? (temperature > 80 ? 'bg-red-500/20' : temperature > 70 ? 'bg-orange-500/20' : temperature > 60 ? 'bg-yellow-500/20' : 'bg-green-500/20') : 'bg-gray-500/20'} rounded-lg">
-          <Thermometer class="h-5 w-5 {temperatureLoading ? 'text-blue-500 animate-pulse' : hasRealTemperature ? (temperature > 80 ? 'text-red-500' : temperature > 70 ? 'text-orange-500' : temperature > 60 ? 'text-yellow-500' : 'text-green-500') : 'text-gray-500'}" />
+        <div class="flex flex-col gap-2">
+            <Button size="icon" variant="outline" on:click={() => temperatureUnit = temperatureUnit === 'C' ? 'F' : 'C'}>
+                {temperatureUnit === 'C' ? '°F' : '°C'}
+            </Button>
+            <div class="p-2 {temperatureLoading ? 'bg-blue-500/20' : hasRealTemperature ? (temperature > 80 ? 'bg-red-500/20' : temperature > 70 ? 'bg-orange-500/20' : temperature > 60 ? 'bg-yellow-500/20' : 'bg-green-500/20') : 'bg-gray-500/20'} rounded-lg">
+                <Thermometer class="h-5 w-5 {temperatureLoading ? 'text-blue-500 animate-pulse' : hasRealTemperature ? (temperature > 80 ? 'text-red-500' : temperature > 70 ? 'text-orange-500' : temperature > 60 ? 'text-yellow-500' : 'text-green-500') : 'text-gray-500'}" />
+            </div>
         </div>
       </div>
     </Card>
@@ -1227,7 +1304,8 @@ function pushRecentBlock(b: {
         <div class="flex justify-between items-center">
           <span class="text-sm text-muted-foreground">{$t('mining.estTimeToBlock')}</span>
           <Badge variant="outline">
-            {estimatedTimeToBlock > 0 ? `~${Math.floor(estimatedTimeToBlock / 60)} min` : $t('mining.calculating')}
+            {estimatedTimeToBlock > 0 ?
+              `~${formatTimeFromSeconds(estimatedTimeToBlock)}` : $t('mining.calculating')}
           </Badge>
         </div>
         <div class="flex justify-between items-center">
@@ -1714,6 +1792,7 @@ function pushRecentBlock(b: {
         </div>
       </div>
     </div>
+<<<<<<< HEAD
   {/if}
 
   <!-- Pool mining UI -->
@@ -1760,3 +1839,20 @@ function pushRecentBlock(b: {
       </div>
     </Card>
   {/if}
+=======
+  {/if} 
+<div class="balance-info" style="background: #f5f5f5; padding: 15px; margin: 10px 0; border-radius: 8px;">
+  <h3>Account Information</h3>
+  <div style="display: flex; gap: 30px;">
+    <div>
+      <strong>Current Balance:</strong> {($miningState.totalRewards || 0).toFixed(2)} Chiral
+    </div>
+    <div>
+      <strong>Blocks Found:</strong> {$miningState.blocksFound} blocks
+    </div>
+    <div>
+      <strong>Mining Status:</strong> {$miningState.isMining ? 'Active' : 'Stopped'}
+    </div>
+  </div>
+</div>
+>>>>>>> f98ba99df0c55a14e1869866bd0326ef452749a9

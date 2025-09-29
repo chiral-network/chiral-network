@@ -291,12 +291,12 @@ Sign transaction with group:
 
 #### Internal Threats
 
-| Threat         | Impact              | Mitigation               |
-| -------------- | ------------------- | ------------------------ |
-| Malicious Node | Data corruption     | Redundancy, verification |
-| Free Riding    | Resource drain      | Incentive system         |
-| Collusion      | Market manipulation | Economic penalties       |
-| Data Mining    | Privacy breach      | Encryption, anonymity    |
+| Threat         | Impact             | Mitigation               |
+| -------------- | ------------------ | ------------------------ |
+| Malicious Node | Data corruption    | Redundancy, verification |
+| Free Riding    | Resource drain     | Incentive system         |
+| Collusion      | Network disruption | Reputation penalties     |
+| Data Mining    | Privacy breach     | Encryption, anonymity    |
 
 ### Attack Scenarios
 
@@ -444,11 +444,11 @@ app.use((req, res, next) => {
   res.setHeader("X-XSS-Protection", "1; mode=block");
   res.setHeader(
     "Content-Security-Policy",
-    "default-src 'self'; script-src 'self' 'unsafe-inline'",
+    "default-src 'self'; script-src 'self' 'unsafe-inline'"
   );
   res.setHeader(
     "Strict-Transport-Security",
-    "max-age=31536000; includeSubDomains",
+    "max-age=31536000; includeSubDomains"
   );
   next();
 });
