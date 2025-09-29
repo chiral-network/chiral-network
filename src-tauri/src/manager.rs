@@ -739,3 +739,4 @@ mod tests {
         assert!(!is_tampered_valid, "Merkle proof verification should fail for tampered data.");
     }
 }
+}
