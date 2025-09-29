@@ -14,6 +14,7 @@
   import { getVersion } from "@tauri-apps/api/app";
   import { t } from 'svelte-i18n';
   import { goto } from '@mateothegreat/svelte5-router';
+  import { walletService } from '$lib/wallet'; 
 
   // Interfaces - MiningHistoryPoint is now defined in stores.ts
   
@@ -272,15 +273,15 @@
     
     // Start polling for mining stats
     statsInterval = setInterval(async () => {
-      if ($miningState.isMining) {
-        await updateMiningStats() 
-        await appendNewBlocksFromBackend()
-      }
-      await updateNetworkStats()
-      if (isTauri) {
-        await updateCpuTemperature()
-      }
-    }, 1000) as unknown as number
+    if ($miningState.isMining) {
+       await updateMiningStats();
+       await walletService.refreshTransactions();
+    }
+    await updateNetworkStats();
+    if (isTauri) {
+      await updateCpuTemperature();
+    }
+  }, 1000) as unknown as number;
   })
   
   async function checkGethStatus() {
@@ -572,80 +573,80 @@
 
   $: displayedBlocks = ($miningState.recentBlocks || []).slice((currentPage - 1) * pageSize, currentPage * pageSize)
 
-function pushRecentBlock(b: {
-  hash: string;
-  nonce?: number;
-  difficulty?: number;
-  timestamp?: Date;
-  number?: number;
-  reward?: number;
-}) {
+// function pushRecentBlock(b: {
+//   hash: string;
+//   nonce?: number;
+//   difficulty?: number;
+//   timestamp?: Date;
+//   number?: number;
+//   reward?: number;
+// }) {
 
-  const reward = typeof b.reward === "number" ? b.reward : 0;
+//   const reward = typeof b.reward === "number" ? b.reward : 0;
 
-  const item = {
-    id: `block-${b.hash}-${b.timestamp?.getTime() ?? Date.now()}`,
-    hash: b.hash,
-    reward,
-    timestamp: b.timestamp ?? new Date(),
-    difficulty: b.difficulty ?? currentDifficulty,
-    nonce: b.nonce ?? 0,
-    number: b.number ?? 0,
-  };
+//   const item = {
+//     id: `block-${b.hash}-${b.timestamp?.getTime() ?? Date.now()}`,
+//     hash: b.hash,
+//     reward,
+//     timestamp: b.timestamp ?? new Date(),
+//     difficulty: b.difficulty ?? currentDifficulty,
+//     nonce: b.nonce ?? 0,
+//     number: b.number ?? 0,
+//   };
 
-  // Add block to recentBlocks
-  $miningState.recentBlocks = [item, ...($miningState.recentBlocks ?? [])].slice(0, 50);
+//   // Add block to recentBlocks
+//   $miningState.recentBlocks = [item, ...($miningState.recentBlocks ?? [])].slice(0, 50);
 
-  // Reset pagination so newest block is visible
-  currentPage = 1;
+//   // Reset pagination so newest block is visible
+//   currentPage = 1;
 
-  if (reward > 0) {
-    const last4 = b.hash.slice(-4); // grab last 4 chars of hash
-    const tx: Transaction = {
-      id: Date.now(),
-      type: 'received',
-      amount: 2,
-      from: 'Mining reward',
-      date: new Date(),
-      description: `Block Reward (…${last4})`,
-      status: 'pending' // will flip to 'completed' when backend confirms
-    };
-    transactions.update(list => [tx, ...list]);
-  }
-}
+//   if (reward > 0) {
+//     const last4 = b.hash.slice(-4); // grab last 4 chars of hash
+//     const tx: Transaction = {
+//       id: Date.now(),
+//       type: 'received',
+//       amount: 2,
+//       from: 'Mining reward',
+//       date: new Date(),
+//       description: `Block Reward (…${last4})`,
+//       status: 'pending' // will flip to 'completed' when backend confirms
+//     };
+//     transactions.update(list => [tx, ...list]);
+//   }
+// }
 
-  async function appendNewBlocksFromBackend() {
-    try {
-      if (!($etcAccount && $miningState.isMining)) return;
-      const lookback = 2000;
-      const limit = 50;
-      const blocks = await invoke('get_recent_mined_blocks_pub', {
-        address: $etcAccount.address,
-        lookback,
-        limit
-      }) as Array<{ hash: string, nonce?: string, difficulty?: string, timestamp: number, number: number, reward?: number }>;
-      for (const b of blocks) {
-        if (seenHashes.has(b.hash)) continue;
-        seenHashes.add(b.hash);
-        pushRecentBlock({
-          hash: b.hash,
-          nonce: b.nonce ? parseInt(b.nonce, 16) : undefined,
-          difficulty: b.difficulty ? parseInt(b.difficulty, 16) : undefined,
-          timestamp: new Date((b.timestamp || 0) * 1000),
-          number: b.number,
-          reward: 2
-        });
-      }
-      // Hard de-duplication by hash as a safety net
-      const uniq = new Map<string, any>();
-      for (const it of ($miningState.recentBlocks ?? [])) {
-        if (!uniq.has(it.hash)) uniq.set(it.hash, it);
-      }
-  $miningState.recentBlocks = Array.from(uniq.values()).slice(0, 50);
-    } catch (e) {
-      console.error('Failed to append recent blocks:', e);
-    } 
-  } 
+  // async function appendNewBlocksFromBackend() {
+  //   try {
+  //     if (!($etcAccount && $miningState.isMining)) return;
+  //     const lookback = 2000;
+  //     const limit = 50;
+  //     const blocks = await invoke('get_recent_mined_blocks_pub', {
+  //       address: $etcAccount.address,
+  //       lookback,
+  //       limit
+  //     }) as Array<{ hash: string, nonce?: string, difficulty?: string, timestamp: number, number: number, reward?: number }>;
+  //     for (const b of blocks) {
+  //       if (seenHashes.has(b.hash)) continue;
+  //       seenHashes.add(b.hash);
+  //       pushRecentBlock({
+  //         hash: b.hash,
+  //         nonce: b.nonce ? parseInt(b.nonce, 16) : undefined,
+  //         difficulty: b.difficulty ? parseInt(b.difficulty, 16) : undefined,
+  //         timestamp: new Date((b.timestamp || 0) * 1000),
+  //         number: b.number,
+  //         reward: 2
+  //       });
+  //     }
+  //     // Hard de-duplication by hash as a safety net
+  //     const uniq = new Map<string, any>();
+  //     for (const it of ($miningState.recentBlocks ?? [])) {
+  //       if (!uniq.has(it.hash)) uniq.set(it.hash, it);
+  //     }
+  // $miningState.recentBlocks = Array.from(uniq.values()).slice(0, 50);
+  //   } catch (e) {
+  //     console.error('Failed to append recent blocks:', e);
+  //   } 
+  // } 
   
   function formatUptime(now: number = Date.now()) {
     const uptime = now - sessionStartTime

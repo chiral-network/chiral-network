@@ -18,6 +18,7 @@
   import { showToast } from '$lib/toast'
   import { get } from 'svelte/store'
   import { totalEarned, totalSpent, miningState } from '$lib/stores';
+  import { walletService } from '$lib/wallet'; 
 
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
   
@@ -175,23 +176,17 @@
   }
   // Add this reactive statement after your other reactive statements (around line 170)
   $: if ($etcAccount) {
-    // Clear dummy transactions when a real account is logged in
-    // Only keep transactions that are actually related to this account
     const accountTransactions = $transactions.filter(tx => 
-      // Keep transactions that are from mining rewards or manual transactions
-      tx.description?.includes('Mining reward') || 
-      tx.description?.includes('Block reward') ||
+      tx.from === 'Mining reward' || 
+      tx.description?.toLowerCase().includes('block reward') ||
       tx.description === tr('transactions.manual') ||
-      // Or transactions that involve this account's address
       tx.to?.toLowerCase() === $etcAccount.address.toLowerCase() ||
       tx.from?.toLowerCase() === $etcAccount.address.toLowerCase()
     );
-    
-    // If we have fewer relevant transactions than total, update the store
     if (accountTransactions.length !== $transactions.length) {
       transactions.set(accountTransactions);
     }
-  }
+}
 
   // Derived filtered transactions
   $: filteredTransactions = $transactions
@@ -614,52 +609,63 @@
     }
   }
 
+  // async function fetchBalance() {
+  //   if (!$etcAccount) return
+    
+  //   try {
+  //     // FIRST: Reset wallet to a clean state for the new account
+  //     wallet.update(w => ({ 
+  //       ...w, 
+  //       balance: 0, // Start with 0
+  //       address: $etcAccount.address 
+  //     }));
+
+  //     if (isTauri && isGethRunning) {
+  //       // Desktop app with local geth node - get real blockchain balance
+  //       const balanceStr = await invoke('get_account_balance', { address: $etcAccount.address }) as string
+  //       const realBalance = parseFloat(balanceStr);
+
+  //       // Update wallet with the real balance
+  //       wallet.update(w => ({ 
+  //         ...w, 
+  //         balance: realBalance,
+  //       }));
+  //       if (!isNaN(realBalance)) {
+  //       if (realBalance > ($miningState.totalRewards ?? 0)) {
+  //           miningState.update(state => ({
+  //             ...state,
+  //             totalRewards: realBalance
+  //           }));
+  //         }
+  //       }
+
+  //       // Now, fetch real transactions like mining rewards
+  //       // (This assumes you have a function to fetch recent blocks/transactions)
+  //       // For example:
+  //       // await appendNewBlocksFromBackend(); 
+
+  //     } else if (isTauri && !isGethRunning) {
+  //       // Desktop app but geth not running - use stored balance
+  //       console.log('Geth not running - using stored balance')
+  //     } else {
+  //       // Web environment - For now, simulate balance updates for demo purposes
+  //       const simulatedBalance = $wallet.balance + Math.random() * 10 // Small random changes
+  //       wallet.update(w => ({ ...w, balance: Math.max(0, simulatedBalance) }))
+  //     }
+  //   } catch (error) {
+  //     console.error('Failed to fetch balance:', error)
+  //     // Fallback to stored balance on error
+  //   }
+  // }
   async function fetchBalance() {
-    if (!$etcAccount) return
+    if (!$etcAccount) return;
     
     try {
-      // FIRST: Reset wallet to a clean state for the new account
-      wallet.update(w => ({ 
-        ...w, 
-        balance: 0, // Start with 0
-        address: $etcAccount.address 
-      }));
-
-      if (isTauri && isGethRunning) {
-        // Desktop app with local geth node - get real blockchain balance
-        const balanceStr = await invoke('get_account_balance', { address: $etcAccount.address }) as string
-        const realBalance = parseFloat(balanceStr);
-
-        // Update wallet with the real balance
-        wallet.update(w => ({ 
-          ...w, 
-          balance: realBalance,
-        }));
-        if (!isNaN(realBalance)) {
-        if (realBalance > ($miningState.totalRewards ?? 0)) {
-            miningState.update(state => ({
-              ...state,
-              totalRewards: realBalance
-            }));
-          }
-        }
-
-        // Now, fetch real transactions like mining rewards
-        // (This assumes you have a function to fetch recent blocks/transactions)
-        // For example:
-        // await appendNewBlocksFromBackend(); 
-
-      } else if (isTauri && !isGethRunning) {
-        // Desktop app but geth not running - use stored balance
-        console.log('Geth not running - using stored balance')
-      } else {
-        // Web environment - For now, simulate balance updates for demo purposes
-        const simulatedBalance = $wallet.balance + Math.random() * 10 // Small random changes
-        wallet.update(w => ({ ...w, balance: Math.max(0, simulatedBalance) }))
-      }
+      // These service calls now handle everything
+      await walletService.refreshBalance();
+      await walletService.refreshTransactions(); 
     } catch (error) {
-      console.error('Failed to fetch balance:', error)
-      // Fallback to stored balance on error
+      console.error('Failed to fetch balance and transactions:', error);
     }
   }
 
