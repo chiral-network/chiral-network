@@ -27,6 +27,10 @@ export interface FileItem {
   timeRemaining?: number;
   visualOrder?: number; // For maintaining user's intended visual order
   downloadPath?: string; // Path where the file was downloaded
+  version?: number; // File version number for versioning system
+  isNewVersion?: boolean; // Whether this is a new version of an existing file
+  speed?: string; // Download/upload speed display
+  eta?: string; // Estimated time remaining display
 }
 
 export interface ProxyNode {
@@ -102,7 +106,7 @@ export interface NetworkStats {
 export interface Transaction {
   id: number;
   type: "sent" | "received";
-   amount: number;
+  amount: number;
   to?: string;
   from?: string;
   date: Date;
