@@ -68,6 +68,9 @@ pub struct FileMetadata {
     pub encryption_method: Option<String>,
     /// Fingerprint of the encryption key for identification
     pub key_fingerprint: Option<String>,
+    // --- VERSIONING FIELDS ---
+    pub version: Option<u32>,
+    pub parent_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1410,6 +1413,7 @@ pub struct DhtService {
     proxy_targets: Arc<Mutex<HashSet<PeerId>>>,
     proxy_capable: Arc<Mutex<HashSet<PeerId>>>,
     peer_selection: Arc<Mutex<PeerSelectionService>>,
+    file_metadata_cache: Arc<Mutex<HashMap<String, FileMetadata>>>,
 }
 
 impl DhtService {
@@ -1655,6 +1659,7 @@ impl DhtService {
             proxy_targets,
             proxy_capable,
             peer_selection,
+            file_metadata_cache: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -1664,6 +1669,7 @@ impl DhtService {
     }
 
     pub async fn publish_file(&self, metadata: FileMetadata) -> Result<(), String> {
+        self.file_metadata_cache.lock().await.insert(metadata.file_hash.clone(), metadata.clone());
         self.cmd_tx
             .send(DhtCommand::PublishFile(metadata))
             .await
@@ -1675,7 +1681,65 @@ impl DhtService {
             .await
             .map_err(|e| e.to_string())
     }
+     pub async fn cache_remote_file(&self, metadata: &FileMetadata) {
+        self.file_metadata_cache.lock().await.insert(metadata.file_hash.clone(), metadata.clone());
+    }
+    /// List all known FileMetadata (from cache, i.e., locally published or discovered)
+    pub async fn get_all_file_metadata(&self) -> Result<Vec<FileMetadata>, String> {
+        let cache = self.file_metadata_cache.lock().await;
+        Ok(cache.values().cloned().collect())
+    }
 
+    /// Get all versions for a file name, sorted by version (desc)
+    pub async fn get_versions_by_file_name(&self, file_name: String) -> Result<Vec<FileMetadata>, String> {
+        let all = self.get_all_file_metadata().await?;
+        let mut versions: Vec<FileMetadata> = all.into_iter()
+            .filter(|m| m.file_name == file_name)
+            .collect();
+        versions.sort_by(|a, b| b.version.unwrap_or(1).cmp(&a.version.unwrap_or(1)));
+        Ok(versions)
+    }
+
+    /// Get the latest version for a file name
+    pub async fn get_latest_version_by_file_name(&self, file_name: String) -> Result<Option<FileMetadata>, String> {
+        let versions = self.get_versions_by_file_name(file_name).await?;
+        Ok(versions.into_iter().max_by_key(|m| m.version.unwrap_or(1)))
+    }
+
+    /// Prepare a new FileMetadata for upload (auto-increment version, set parent_hash)
+    pub async fn prepare_versioned_metadata(
+        &self,
+        file_hash: String,
+        file_name: String,
+        file_size: u64,
+        created_at: u64,
+        mime_type: Option<String>,
+        is_encrypted: bool,
+        encryption_method: Option<String>,
+        key_fingerprint: Option<String>,
+    ) -> Result<FileMetadata, String> {
+        let latest = self.get_latest_version_by_file_name(file_name.clone()).await?;
+        let (version, parent_hash) = match latest {
+            Some(ref prev) => (
+                prev.version.map(|v| v + 1).unwrap_or(2),
+                Some(prev.file_hash.clone()),
+            ),
+            None => (1, None),
+        };
+        Ok(FileMetadata {
+            file_hash,
+            file_name,
+            file_size,
+            seeders: vec![],
+            created_at,
+            mime_type,
+            is_encrypted,
+            encryption_method,
+            key_fingerprint,
+            version: Some(version),
+            parent_hash,
+        })
+    }
     pub async fn search_file(&self, file_hash: String) -> Result<(), String> {
         self.cmd_tx
             .send(DhtCommand::SearchFile(file_hash))
