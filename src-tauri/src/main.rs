@@ -188,19 +188,47 @@ async fn list_keystore_accounts() -> Result<Vec<String>, String> {
     Ok(keystore.list_accounts())
 }
 
+#[tauri::command(rename = "discover_mining_pools")]
+async fn discover_mining_pools_command() -> Result<Vec<pool::MiningPool>, String> {
+    pool::discover_mining_pools().await
+}
+
 #[tauri::command(rename = "create_mining_pool")]
-async fn create_mining_pool_command(address: String) -> Result<(), String> {
-    pool::create_mining_pool(address).await
+async fn create_mining_pool_command(
+    address: String,
+    name: String,
+    description: String,
+    fee_percentage: f64,
+    min_payout: f64,
+    payment_method: String,
+    region: String,
+) -> Result<pool::MiningPool, String> {
+    pool::create_mining_pool(address, name, description, fee_percentage, min_payout, payment_method, region).await
 }
 
 #[tauri::command(rename = "join_mining_pool")]
-async fn join_mining_pool_command(url: String, address: String) -> Result<(), String> {
-    pool::join_mining_pool(url, address).await
+async fn join_mining_pool_command(pool_id: String, address: String) -> Result<pool::JoinedPoolInfo, String> {
+    pool::join_mining_pool(pool_id, address).await
 }
 
 #[tauri::command(rename = "leave_mining_pool")]
 async fn leave_mining_pool_command() -> Result<(), String> {
     pool::leave_mining_pool().await
+}
+
+#[tauri::command(rename = "get_current_pool_info")]
+async fn get_current_pool_info_command() -> Result<Option<pool::JoinedPoolInfo>, String> {
+    pool::get_current_pool_info().await
+}
+
+#[tauri::command(rename = "get_pool_stats")]
+async fn get_pool_stats_command() -> Result<Option<pool::PoolStats>, String> {
+    pool::get_pool_stats().await
+}
+
+#[tauri::command(rename = "update_pool_discovery")]
+async fn update_pool_discovery_command() -> Result<(), String> {
+    pool::update_pool_discovery().await
 }
 
 #[tauri::command]
@@ -2464,9 +2492,13 @@ fn main() {
             save_account_to_keystore,
             load_account_from_keystore,
             list_keystore_accounts,
+            discover_mining_pools_command,
             create_mining_pool_command,
             join_mining_pool_command,
             leave_mining_pool_command,
+            get_current_pool_info_command,
+            get_pool_stats_command,
+            update_pool_discovery_command,
             get_disk_space,
             send_chiral_transaction,
             queue_transaction,
