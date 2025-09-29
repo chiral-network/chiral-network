@@ -356,7 +356,6 @@ async fn start_dht_node(
     autonat_servers: Option<Vec<String>>,
     proxy_address: Option<String>,
 ) -> Result<String, String> {
-    let mut bootstrap_nodes = bootstrap_nodes;
     {
         let dht_guard = state.dht.lock().await;
         if dht_guard.is_some() {
