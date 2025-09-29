@@ -50,6 +50,8 @@ use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{info, warn};
 
+
+
 struct AppState {
     geth: Mutex<GethProcess>,
     downloader: Arc<GethDownloader>,
@@ -178,6 +180,62 @@ async fn set_miner_address(state: State<'_, AppState>, address: String) -> Resul
     let mut miner_address = state.miner_address.lock().await;
     *miner_address = Some(address);
     Ok(())
+}
+
+#[tauri::command]
+async fn get_file_versions_by_name(
+    state: State<'_, AppState>,
+    file_name: String
+) -> Result<Vec<FileMetadata>, String> {
+    let dht = { state.dht.lock().await.as_ref().cloned() };
+    if let Some(dht) = dht {
+        (*dht).get_versions_by_file_name(file_name).await
+    } else {
+        Err("DHT not running".into())
+    }
+}
+
+#[tauri::command]
+async fn upload_versioned_file(
+    state: State<'_, AppState>,
+    file_name: String,
+    file_path: String,
+    file_size: u64,
+    mime_type: Option<String>,
+    is_encrypted: bool,
+    encryption_method: Option<String>,
+    key_fingerprint: Option<String>,
+) -> Result<FileMetadata, String> {
+    let dht_opt = { state.dht.lock().await.as_ref().cloned() };
+    if let Some(dht) = dht_opt {
+        // --- FIX: Calculate file_hash using file_transfer helper
+        let file_data = tokio::fs::read(&file_path).await.map_err(|e| e.to_string())?;
+        let file_hash = FileTransferService::calculate_file_hash(&file_data);
+
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // Use the DHT versioning helper to fill in parent_hash/version
+        let metadata = dht
+            .prepare_versioned_metadata(
+                file_hash.clone(),
+                file_name,
+                file_size,
+                created_at,
+                mime_type,
+                is_encrypted,
+                encryption_method,
+                key_fingerprint,
+            )
+            .await?;
+
+        dht.publish_file(metadata.clone()).await?;
+        Ok(metadata)
+    } else {
+        Err("DHT not running".into())
+    }
 }
 
 /// Checks if the Geth RPC endpoint is ready to accept connections.
@@ -558,6 +616,8 @@ async fn publish_file_metadata(
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
+            parent_hash: None,
+            version: Some(1),
         };
 
         dht.publish_file(metadata).await
@@ -1054,6 +1114,8 @@ async fn upload_file_to_network(
                 is_encrypted: false,
                 encryption_method: None,
                 key_fingerprint: None,
+                parent_hash: None,
+                version: Some(1),
             };
 
             if let Err(e) = dht.publish_file(metadata.clone()).await {
@@ -1184,6 +1246,8 @@ async fn upload_file_data_to_network(
                 is_encrypted: false,
                 encryption_method: None,
                 key_fingerprint: None,
+                parent_hash: None,
+                version: Some(1),
             };
 
             if let Err(e) = dht.publish_file(metadata).await {
@@ -1936,6 +2000,8 @@ fn main() {
             select_peers_with_strategy,
             set_peer_encryption_support,
             cleanup_inactive_peers,
+            upload_versioned_file,
+            get_file_versions_by_name,
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
