@@ -276,17 +276,9 @@ impl ChunkManager {
         let mut output_file = File::create(output_path).map_err(|e| e.to_string())?;
 
         // Assuming chunks are ordered by index. If not, they should be sorted first.
-        for chunk_info in chunks {
-            let mut shards: Vec<Option<Vec<u8>>> = Vec::with_capacity(DATA_SHARDS + PARITY_SHARDS);
-            for shard_hash in &chunk_info.shards {
-                let encrypted_shard_with_nonce = match self.read_chunk(shard_hash) {
-                    Ok(data) => data,
-                    Err(_) => {
-                        // If a shard is missing, push None and let Reed-Solomon try to recover.
         let result: Result<(), String> = (|| {
-            // Assuming chunks are ordered by index. If not, they should be sorted first.
             for chunk_info in chunks {
-                // Gather all shards from storage. Missing shards will be `None`.
+                // Gather all available encrypted shards from storage. Missing shards will be `None`.
                 let available_encrypted_shards: Vec<Option<Vec<u8>>> = chunk_info
                     .shards
                     .iter()
@@ -295,8 +287,6 @@ impl ChunkManager {
 
                 // Count available shards and fail fast if reconstruction is impossible.
                 let available_shards = available_encrypted_shards.iter().filter(|s| s.is_some()).count();
-                
-                // Fix: We need at least DATA_SHARDS (10) out of total (14) shards to reconstruct
                 if available_shards < DATA_SHARDS {
                     return Err(format!(
                         "Not enough shards to reconstruct chunk {}: found {}, need at least {}",
@@ -308,42 +298,10 @@ impl ChunkManager {
                 let mut shards: Vec<Option<Vec<u8>>> = Vec::with_capacity(DATA_SHARDS + PARITY_SHARDS);
                 for encrypted_shard_option in available_encrypted_shards {
                     if let Some(encrypted_shard) = encrypted_shard_option {
-                        // If a shard is present but fails to decrypt, it's a critical error.
                         shards.push(Some(self.decrypt_chunk(&encrypted_shard, &key)?));
                     } else {
                         shards.push(None);
-                        continue;
                     }
-                };
-                // If a shard is present but fails to decrypt, it's a critical error.
-                let decrypted_shard = self.decrypt_chunk(&encrypted_shard_with_nonce, &key)?;
-                shards.push(Some(decrypted_shard));
-            }
-
-            // Count available shards for a better error message if reconstruction fails.
-            let available_shards = shards.iter().filter(|s| s.is_some()).count();
-            if available_shards < DATA_SHARDS {
-                return Err(format!(
-                    "Not enough shards to reconstruct chunk {}: found {}, need at least {}",
-                    chunk_info.index, available_shards, DATA_SHARDS
-                ));
-            }
-
-            // Reconstruct the original data
-            if let Err(e) = r.reconstruct(&mut shards) {
-                return Err(format!(
-                    "Failed to reconstruct chunk {} from {} available shards: {:?}",
-                    chunk_info.index, available_shards, e
-                ));
-            }
-
-            let mut decrypted_data = Vec::new();
-            for shard in shards.iter().take(DATA_SHARDS) {
-                if let Some(shard_data) = shard {
-                    decrypted_data.extend_from_slice(shard_data);
-                } else {
-                    // This should not happen if reconstruction succeeded.
-                    return Err(format!("Reconstruction of chunk {} failed unexpectedly: missing a data shard post-reconstruction.", chunk_info.index));
                 }
 
                 // Reconstruct all missing shards (data and parity).
@@ -359,20 +317,11 @@ impl ChunkManager {
                     if let Some(shard_data) = shard {
                         decrypted_data.extend_from_slice(shard_data);
                     } else {
-                        // This should not happen if reconstruction succeeded.
                         return Err(format!("Reconstruction of chunk {} failed unexpectedly: missing a data shard post-reconstruction.", chunk_info.index));
                     }
                 }
 
-            // Verify that the decrypted data matches the original hash
-            let calculated_hash_hex = hex::encode(Sha256Hasher::hash(&decrypted_data));
-            if calculated_hash_hex != chunk_info.hash {
-                return Err(format!(
-                    "Hash mismatch for chunk {}. Data may be corrupt. Expected: {}, Got: {}",
-                    chunk_info.index, chunk_info.hash, calculated_hash_hex
-                ));
-            }
-                // Trim padding
+                // Trim padding to original size
                 decrypted_data.truncate(chunk_info.size);
 
                 // Verify that the decrypted data matches the original hash
@@ -384,34 +333,11 @@ impl ChunkManager {
                     ));
                 }
 
-                // Also verify the size
-                if decrypted_data.len() != chunk_info.size {
-                    return Err(format!(
-                        "Size mismatch for chunk {}. Expected {}, got {}.",
-                        chunk_info.index, chunk_info.size, decrypted_data.len()
-                    ));
-                }
-
                 output_file.write_all(&decrypted_data).map_err(|e| e.to_string())?;
             }
             Ok(())
         })();
-        result
-    }
-
-    pub fn hash_file(&self, file_path: &Path) -> Result<String, Error> {
-        let mut file = File::open(file_path)?;
-        let mut hasher = Sha256::new();
-        let mut buffer = vec![0; 1024 * 1024]; // 1MB buffer on the heap
-
-        loop {
-            let bytes_read = file.read(&mut buffer)?;
-            if bytes_read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..bytes_read]);
-        }
-        Ok(format!("{:x}", hasher.finalize()))
+        result 
     }
 
     /// Generates a Merkle proof for a specific chunk.
