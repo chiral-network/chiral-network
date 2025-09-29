@@ -225,6 +225,17 @@
             : '';
   }
 
+  $: if (!$etcAccount) {
+    // Clear mining state when no account is present
+    if ($miningState.isMining) {
+      stopMining(); // Stop mining if running
+    }
+    // Reset mining display state
+    $miningState.totalRewards = 0;
+    $miningState.blocksFound = 0;
+    $miningState.recentBlocks = [];
+  }
+
   // Button disabled if either warning exists
   $: isInvalid = !!threadsWarning || !!intensityWarning;
 
@@ -1225,7 +1236,7 @@ function pushRecentBlock(b: {
           <div class="flex items-center gap-2">
             <AlertCircle class="h-4 w-4 text-blue-500 flex-shrink-0" />
             <p class="text-sm text-blue-600">
-              {$t('mining.errors.noAccountLink')} <button on:click={() => { navigation.setCurrentPage('account'); goto('/account'); }} class="underline font-medium">{$t('mining.accountPage')}</button>
+              Please create a Chiral Network account from the <a href="/account" class="underline font-medium">Account page</a> to start mining
             </p>
           </div>
         </div>
