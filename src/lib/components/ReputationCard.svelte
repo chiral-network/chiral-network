@@ -52,8 +52,8 @@
 </script>
 
 <Card class="p-4 hover:shadow-md transition-shadow">
-  <div class="flex items-start justify-between mb-3">
-    <div class="flex items-center space-x-2">
+  <div class="flex items-start justify-between mb-3 flex-wrap gap-2">
+    <div class="flex items-center space-x-2 min-w-0">
       <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-sm font-bold">
         {peer.peerId.slice(0, 2).toUpperCase()}
       </div>
@@ -64,7 +64,7 @@
         <p class="text-xs text-gray-500">{formatLastSeen(peer.lastSeen)}</p>
       </div>
     </div>
-    <Badge class={getTrustLevelColor(peer.trustLevel)}>
+    <Badge class={`${getTrustLevelColor(peer.trustLevel)} flex-shrink-0`}>
       {peer.trustLevel}
     </Badge>
   </div>
