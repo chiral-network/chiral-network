@@ -13,6 +13,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { dhtService } from '$lib/dht';
   import type { FileMetadata } from '$lib/dht';
+  import { listen } from '@tauri-apps/api/event';
 
 
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
@@ -198,7 +199,11 @@
                 createdAt: Date.now(),
                 isEncrypted: false
               });
-              console.log('Dropped file published to DHT:', hash);
+              // console.log('Dropped file published to DHT:', hash);
+              await listen('published_file', (event) => {
+                console.log('DHT published_file event:', event.payload);
+              });
+
             } catch (publishError) {
               console.warn('Failed to publish dropped file to DHT:', publishError);
             }

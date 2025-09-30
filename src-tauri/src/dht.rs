@@ -163,6 +163,7 @@ pub enum DhtEvent {
     FileDiscovered(FileMetadata),
     FileNotFound(String),
     Error(String),
+    PublishedFile(FileMetadata),
     ProxyStatus {
         id: String,
         address: String,
@@ -681,6 +682,7 @@ async fn run_dht_node(
                                 let _ = event_tx.send(DhtEvent::Error(format!("failed to start providing: {}", e))).await;
                             }
                         }
+                        let _ = event_tx.send(DhtEvent::PublishedFile(metadata)).await;
                     }
                     
                     Some(DhtCommand::StopPublish(file_hash)) => {
