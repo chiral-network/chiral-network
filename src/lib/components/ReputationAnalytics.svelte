@@ -32,17 +32,17 @@
   // Get event icon
   const getEventIcon = (type: string): string => {
     switch (type) {
-      case 'FileTransferSuccess': return '📁✅';
-      case 'FileTransferFailure': return '📁❌';
-      case 'PaymentSuccess': return '💰✅';
-      case 'PaymentFailure': return '💰❌';
-      case 'ConnectionEstablished': return '🔗✅';
-      case 'ConnectionLost': return '🔗❌';
-      case 'DhtQueryAnswered': return '🔍✅';
-      case 'StorageOffered': return '💾';
-      case 'MaliciousBehaviorReport': return '⚠️';
-      case 'FileShared': return '📤';
-      default: return '📋';
+      case 'FileTransferSuccess': return '📤';
+      case 'FileTransferFailure': return '⚠️';
+      case 'PaymentSuccess': return '🎉';
+      case 'PaymentFailure': return '💥';
+      case 'ConnectionEstablished': return '🔗';
+      case 'ConnectionLost': return '🔌';
+      case 'DhtQueryAnswered': return '💡';
+      case 'StorageOffered': return '📦';
+      case 'MaliciousBehaviorReport': return '🚩';
+      case 'FileShared': return '🤝';
+      default: return '⚙️';
     }
   };
 
