@@ -58,6 +58,7 @@ struct AppState {
     miner_address: Mutex<Option<String>>,
 
     active_account: Mutex<Option<String>>, // To track the logged-in user's address
+    active_account_private_key: Mutex<Option<String>>,
     rpc_url: Mutex<String>,
     dht: Mutex<Option<Arc<DhtService>>>,
     file_transfer: Mutex<Option<Arc<FileTransferService>>>,
@@ -67,13 +68,44 @@ struct AppState {
 }
 
 #[tauri::command]
-async fn create_chiral_account() -> Result<EthAccount, String> {
-    create_new_account()
+async fn create_chiral_account(state: State<'_, AppState>) -> Result<EthAccount, String> {
+    let account = create_new_account()?;
+    
+    // Set as active account
+    {
+        let mut active_account = state.active_account.lock().await;
+        *active_account = Some(account.address.clone());
+    }
+    
+    // Store private key in session
+    {
+        let mut active_key = state.active_account_private_key.lock().await;
+        *active_key = Some(account.private_key.clone());
+    }
+    
+    Ok(account)
 }
 
 #[tauri::command]
-async fn import_chiral_account(private_key: String) -> Result<EthAccount, String> {
-    get_account_from_private_key(&private_key)
+async fn import_chiral_account(
+    private_key: String,
+    state: State<'_, AppState>
+) -> Result<EthAccount, String> {
+    let account = get_account_from_private_key(&private_key)?;
+    
+    // Set as active account
+    {
+        let mut active_account = state.active_account.lock().await;
+        *active_account = Some(account.address.clone());
+    }
+    
+    // Store private key in session
+    {
+        let mut active_key = state.active_account_private_key.lock().await;
+        *active_key = Some(account.private_key.clone());
+    }
+    
+    Ok(account)
 }
 
 #[tauri::command]
@@ -120,6 +152,12 @@ async fn load_account_from_keystore(
     {
         let mut active_account = state.active_account.lock().await;
         *active_account = Some(address.clone());
+    }
+
+    // Store the private key securely in memory for the session
+    {
+        let mut active_key = state.active_account_private_key.lock().await;
+        *active_key = Some(private_key.clone());
     }
 
     // Derive account details from private key
@@ -1618,6 +1656,11 @@ async fn get_geth_status(
 async fn logout(state: State<'_, AppState>) -> Result<(), ()> {
     let mut active_account = state.active_account.lock().await;
     *active_account = None;
+
+    // Clear private key from memory
+    let mut active_key = state.active_account_private_key.lock().await;
+    *active_key = None;
+
     Ok(())
 }
 
@@ -1882,6 +1925,33 @@ async fn cleanup_inactive_peers(
         Err("DHT service not available".to_string())
     }
 }
+
+#[tauri::command]
+async fn send_chiral_transaction(
+    state: State<'_, AppState>,
+    to_address: String,
+    amount: f64,
+) -> Result<String, String> {
+    // Get the active account address
+    let account = get_active_account(&state).await?;
+    
+    // Get the private key from state
+    let private_key = {
+        let key_guard = state.active_account_private_key.lock().await;
+        key_guard.clone().ok_or("No private key available. Please log in again.")?
+    };
+    
+    let tx_hash = ethereum::send_transaction(
+        &account,
+        &to_address,
+        amount,
+        &private_key
+    ).await?;
+    
+    Ok(tx_hash)
+}
+
+
 #[cfg(not(test))]
 fn main() {
     // Initialize logging for debug builds
@@ -1927,6 +1997,7 @@ fn main() {
             downloader: Arc::new(GethDownloader::new()),
             miner_address: Mutex::new(None),
             active_account: Mutex::new(None),
+            active_account_private_key: Mutex::new(None),
             rpc_url: Mutex::new("http://127.0.0.1:8545".to_string()),
             dht: Mutex::new(None),
             file_transfer: Mutex::new(None),
@@ -1944,6 +2015,7 @@ fn main() {
             list_keystore_accounts,
             remove_account_from_keystore,
             get_account_balance,
+            send_chiral_transaction,
             get_network_peer_count,
             is_geth_running,
             check_geth_binary,
