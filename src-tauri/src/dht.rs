@@ -880,7 +880,7 @@ async fn run_dht_node(
                         .await;
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Identify(identify_event)) => {
-                        handle_identify_event(identify_event, &mut swarm, &event_tx).await;
+                        handle_identify_event(identify_event, &mut swarm, &event_tx, metrics.clone()).await;
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Mdns(mdns_event)) => {
                         if !is_bootstrap{
@@ -1318,15 +1318,22 @@ async fn handle_kademlia_event(
     }
 }
 
+fn record_identify_push_metrics(metrics: &Arc<Mutex<DhtMetrics>>, info: &identify::Info) {
+    if let Ok(mut metrics_guard) = metrics.try_lock() {
+        for addr in &info.listen_addrs {
+            metrics_guard.record_listen_addr(addr);
+        }
+    }
+}
 async fn handle_identify_event(
     event: IdentifyEvent,
     swarm: &mut Swarm<DhtBehaviour>,
-    _event_tx: &mpsc::Sender<DhtEvent>,
+    event_tx: &mpsc::Sender<DhtEvent>,
+    metrics: Arc<Mutex<DhtMetrics>>,
 ) {
     match event {
         IdentifyEvent::Received { peer_id, info, .. } => {
             info!("Identified peer {}: {:?}", peer_id, info.protocol_version);
-            // Add identified peer to Kademlia routing table
             if info.protocol_version != EXPECTED_PROTOCOL_VERSION {
                 warn!(
                     "Peer {} has a mismatched protocol version: '{}'. Expected: '{}'. Removing peer.",
@@ -1336,6 +1343,9 @@ async fn handle_identify_event(
                 );
                 swarm.behaviour_mut().kademlia.remove_peer(&peer_id);
             } else {
+                if let Ok(mut metrics_guard) = metrics.try_lock() {
+                    metrics_guard.record_observed_addr(&info.observed_addr);
+                }
                 for addr in info.listen_addrs {
                     if not_loopback(&addr) {
                         swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
@@ -1343,10 +1353,26 @@ async fn handle_identify_event(
                 }
             }
         }
+        IdentifyEvent::Pushed { peer_id, info, .. } => {
+            info!(
+                "Pushed identify update to {} (listen addrs: {})",
+                peer_id,
+                info.listen_addrs.len()
+            );
+            record_identify_push_metrics(&metrics, &info);
+        }
         IdentifyEvent::Sent { peer_id, .. } => {
             debug!("Sent identify info to {}", peer_id);
         }
-        _ => {}
+        IdentifyEvent::Error { peer_id, error, .. } => {
+            warn!("Identify protocol error with {}: {}", peer_id, error);
+            let _ = event_tx
+                .send(DhtEvent::Error(format!(
+                    "Identify error with {}: {}",
+                    peer_id, error
+                )))
+                .await;
+        }
     }
 }
 
@@ -1671,11 +1697,12 @@ impl DhtService {
         // Set Kademlia to server mode to accept incoming connections
         kademlia.set_mode(Some(Mode::Server));
 
-        // Create identify behaviour
-        let identify = identify::Behaviour::new(identify::Config::new(
-            EXPECTED_PROTOCOL_VERSION.to_string(),
-            local_key.public(),
-        ));
+        // Create identify behaviour with proactive push updates
+        let identify_config =
+            identify::Config::new(EXPECTED_PROTOCOL_VERSION.to_string(), local_key.public())
+                .with_agent_version(format!("chiral-network/{}", env!("CARGO_PKG_VERSION")))
+                .with_push_listen_addr_updates(true);
+        let identify = identify::Behaviour::new(identify_config);
 
         // mDNS for local peer discovery
         let mdns = Mdns::new(Default::default(), local_peer_id)?;
@@ -2580,5 +2607,38 @@ mod tests {
             .contains(&"/ip4/0.0.0.0/tcp/4001".to_string()));
         assert!(snapshot.observed_addrs.is_empty());
         assert!(snapshot.reachability_history.is_empty());
+    }
+
+    #[tokio::test]
+    async fn identify_push_records_listen_addrs() {
+        let metrics = Arc::new(Mutex::new(DhtMetrics::default()));
+        let listen_addr: Multiaddr = "/ip4/10.0.0.1/tcp/4001".parse().unwrap();
+        let secondary_addr: Multiaddr = "/ip4/192.168.0.1/tcp/4001".parse().unwrap();
+        let info = identify::Info {
+            public_key: identity::Keypair::generate_ed25519().public(),
+            protocol_version: EXPECTED_PROTOCOL_VERSION.to_string(),
+            agent_version: "test-agent/1.0.0".to_string(),
+            listen_addrs: vec![listen_addr.clone(), secondary_addr.clone()],
+            protocols: vec![StreamProtocol::new("/chiral/test/1.0.0")],
+            observed_addr: "/ip4/127.0.0.1/tcp/4001".parse().unwrap(),
+        };
+
+        record_identify_push_metrics(&metrics, &info);
+
+        {
+            let guard = metrics.lock().await;
+            assert_eq!(guard.listen_addrs.len(), 2);
+            assert!(guard
+                .listen_addrs
+                .contains(&listen_addr.to_string()));
+            assert!(guard
+                .listen_addrs
+                .contains(&secondary_addr.to_string()));
+        }
+
+        record_identify_push_metrics(&metrics, &info);
+
+        let guard = metrics.lock().await;
+        assert_eq!(guard.listen_addrs.len(), 2);
     }
 }
