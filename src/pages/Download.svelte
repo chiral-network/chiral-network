@@ -6,7 +6,7 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
   import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation } from 'lucide-svelte'
-  import { files, downloadQueue } from '$lib/stores'
+  import { files, downloadQueue, activeTransfers } from '$lib/stores'
   import DownloadSearchSection from '$lib/components/download/DownloadSearchSection.svelte'
   import type { FileMetadata } from '$lib/dht'
   import { onDestroy, onMount } from 'svelte'
@@ -14,8 +14,8 @@
   import { get } from 'svelte/store'
   import { toHumanReadableSize } from '$lib/utils'
   import { initDownloadTelemetry, disposeDownloadTelemetry } from '$lib/downloadTelemetry'
-  const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
-  import { invoke } from "@tauri-apps/api/core";
+  
+  const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params)
 
   onMount(() => {
     initDownloadTelemetry()
@@ -230,6 +230,9 @@
       size: metadata.fileSize,
       status: 'queued' as const,
       priority: 'normal' as const,
+      version: metadata.version, // Preserve version info if available
+      seeders: metadata.seeders.length, // Convert array length to number
+      seederAddresses: metadata.seeders, // Store the actual seeder addresses
     }
 
     downloadQueue.update((queue) => [...queue, newFile])
@@ -259,8 +262,8 @@
   }
 
   // Function to handle input and only allow positive numbers
-  function handleMaxConcurrentInput(event: any) {
-    const target = event.target as HTMLInputElement
+  function handleMaxConcurrentInput(event: Event) {
+    const target = (event.target as HTMLInputElement)
     let value = target.value
     
     // Remove any non-digit characters
@@ -429,16 +432,26 @@
     }))
   }
   
-  function cancelDownload(fileId: string) {
-  files.update(f => f.map(file => 
-    file.id === fileId 
-      ? { ...file, status: 'canceled' }
-      : file
-  ))
-  downloadQueue.update(q => q.filter(file => file.id !== fileId))
-  activeSimulations.delete(fileId)
-}
+  async function cancelDownload(fileId: string) {
+    files.update(f => f.map(file =>
+      file.id === fileId
+        ? { ...file, status: 'canceled' }
+        : file
+    ))
+    downloadQueue.update(q => q.filter(file => file.id !== fileId))
+    activeSimulations.delete(fileId)
 
+    // Clean up P2P transfer
+    const transfer = get(activeTransfers).get(fileId);
+    if (transfer && transfer.type === 'p2p') {
+      const { p2pFileTransferService } = await import('$lib/services/p2pFileTransfer');
+      p2pFileTransferService.cancelTransfer(transfer.transferId);
+      activeTransfers.update(transfers => {
+        transfers.delete(fileId);
+        return transfers;
+      });
+    }
+  }
   
   function startQueuedDownload(fileId: string) {
     downloadQueue.update(queue => {
@@ -472,92 +485,103 @@
       return;
     }
 
-    // Proceed directly to file dialog
-    try {
-      const [, { save }] = await Promise.all([
-        import('@tauri-apps/api/core'),
-        import('@tauri-apps/plugin-dialog')
-      ]);
-      
-      // Show file save dialog
-      const outputPath = await save({
-        defaultPath: fileToDownload.name,
-        filters: [{
-          name: 'All Files',
-          extensions: ['*']
-        }]
-      });
-      
-      if (!outputPath) {
-        // User cancelled the save dialog
-        activeSimulations.delete(fileId);
-        files.update(f => f.map(file => 
-          file.id === fileId 
-            ? { ...file, status: 'canceled' }
-            : file
-        ));
-        return;
-      }
+      // Proceed directly to file dialog
+      try {
+        const { save } = await import('@tauri-apps/plugin-dialog');
+        
+        // Show file save dialog
+        const outputPath = await save({
+          defaultPath: fileToDownload.name,
+          filters: [{
+            name: 'All Files',
+            extensions: ['*']
+          }]
+        });
+        
+        if (!outputPath) {
+          // User cancelled the save dialog
+          activeSimulations.delete(fileId);
+          files.update(f => f.map(file => 
+            file.id === fileId 
+              ? { ...file, status: 'canceled' }
+              : file
+          ));
+          return;
+        }
       
       // Show "automatically started" message now that download is proceeding
       showNotification(tr('download.notifications.autostart'), 'info');
       
-      // Start the actual download
-      files.update(f => f.map(file => 
-        file.id === fileId ? { ...file, progress: 10 } : file
-      ));
-      let lastProgress = 10;
-      let lastTimestamp = Date.now();
-      
-      // Simulate progress while downloading - complete when progress reaches 100%
-      const progressInterval = setInterval(() => {
-        files.update(f => f.map(file => {
-          if (file.id === fileId && file.status === 'downloading') {
-            const currentProgress = file.progress || 10;
-            const newProgress = Math.min(100, currentProgress + Math.random() * 5 + 1); // 1-6% increment
+      // Import P2P file transfer service
+      const { p2pFileTransferService } = await import('$lib/services/p2pFileTransfer');
 
-            // Calculate speed and ETA
-            const now = Date.now();
-            const timeDiff = (now - lastTimestamp) / 1000; // in seconds
-            const progressDiff = newProgress - lastProgress;
-            const bytesDownloaded = (progressDiff / 100) * file.size;
-            const speed = bytesDownloaded / timeDiff; // bytes per second
-            const speedStr = `${toHumanReadableSize(speed)}/s`;
+      // Start P2P download using the P2P file transfer service
+      try {
+        const seeders = fileToDownload.seederAddresses || [];
 
-            const remainingBytes = file.size * (100 - newProgress) / 100;
-            const etaSeconds = speed > 0 ? Math.round(remainingBytes / speed) : Infinity;
-            const etaStr = etaSeconds === Infinity ? '∞' : `${Math.floor(etaSeconds / 60)}m ${etaSeconds % 60}s`;
-            lastProgress = newProgress;
-            lastTimestamp = now;
-
-            // Check if download just completed
-            if (newProgress >= 100) {
-              // Complete the download
-              clearInterval(progressInterval);
-              activeSimulations.delete(fileId);
-              showNotification(`Download completed: ${fileToDownload.name} saved to ${outputPath}`, 'success');
-              
-              // New: Auto-clear if enabled
-              if (autoClearCompleted) {
-                setTimeout(() => {
-                  clearDownload(fileId);
-                }, 5000); // 5-second delay before removing
-              }
-              return { ...file, progress: 100, status: 'completed', downloadPath: outputPath, speed: '0 B/s', eta: 'Done' };
-            }
-
-            return { ...file, progress: newProgress, speed: speedStr, eta: etaStr };
-          }
-          return file;
-        }));
-
-        // Check if download was cancelled (cleanup if needed)
-        const currentFile = $files.find(f => f.id === fileId);
-        if (!currentFile || currentFile.status === 'canceled') {
-          clearInterval(progressInterval);
-          activeSimulations.delete(fileId);
+        if (seeders.length === 0) {
+          throw new Error('No seeders available for this file');
         }
-      }, 1000); // Update every second for more stable speed/ETA
+
+        // Create file metadata for P2P transfer
+        const fileMetadata = {
+          fileHash: fileToDownload.hash,
+          fileName: fileToDownload.name,
+          fileSize: fileToDownload.size,
+          seeders: seeders,
+          createdAt: Date.now(),
+          isEncrypted: false
+        };
+
+        // Initiate P2P download with file saving
+        const transferId = await p2pFileTransferService.initiateDownloadWithSave(
+          fileMetadata,
+          seeders,
+          outputPath,
+          (transfer) => {
+            // Update UI with transfer progress
+            files.update(f => f.map(file => {
+              if (file.id === fileId) {
+                return {
+                  ...file,
+                  progress: transfer.progress,
+                  status: transfer.status === 'completed' ? 'completed' :
+                         transfer.status === 'failed' ? 'failed' :
+                         transfer.status === 'transferring' ? 'downloading' : file.status,
+                  speed: `${Math.round(transfer.speed / 1024)} KB/s`,
+                  eta: transfer.eta ? `${Math.round(transfer.eta)}s` : 'N/A',
+                  downloadPath: transfer.outputPath // Store the download path
+                };
+              }
+              return file;
+            }));
+
+            // Show notification on completion or failure
+            if (transfer.status === 'completed') {
+              showNotification(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
+            } else if (transfer.status === 'failed') {
+              showNotification(tr('download.notifications.downloadFailed', { values: { name: fileToDownload.name } }), 'error');
+            }
+          }
+        );
+
+        // Store transfer ID for cleanup
+        activeTransfers.update(transfers => {
+          transfers.set(fileId, { fileId, transferId, type: 'p2p' });
+          return transfers;
+        });
+
+        activeSimulations.delete(fileId);
+
+      } catch (error) {
+        console.error('P2P download failed:', error);
+        activeSimulations.delete(fileId);
+        files.update(f => f.map(file =>
+          file.id === fileId
+            ? { ...file, status: 'failed' }
+            : file
+        ));
+      }
       
     } catch (error) {
       // Download failed
@@ -645,29 +669,7 @@
   
   const formatFileSize = toHumanReadableSize
 
-let searchName = '';
-  let foundVersions: any[] = [];
-  let searchMsg = '';
-  let errorMsg = '';
 
-  async function searchVersions() {
-    foundVersions = [];
-    searchMsg = '';
-    errorMsg = '';
-    if (!searchName) return;
-    try {
-      foundVersions = await invoke('get_file_versions_by_name', { fileName: searchName })
-      if (!foundVersions.length) searchMsg = 'No versions found';
-    } catch (err) {
-      errorMsg = 'Could not query versions: ' + String(err);
-    }
-  }
-
-  async function downloadVersion(v) {
-    // Replace this with your actual download logic (e.g., call backend to download by v.file_hash)
-    alert(`Would download version v${v.version}: hash ${v.file_hash}`);
-    // await invoke('download_file_by_hash', { file_hash: v.file_hash });
-  }
 
 </script>
 
@@ -888,6 +890,11 @@ let searchName = '';
                     <div class="flex-1 min-w-0">
                       <div class="flex items-center gap-3 mb-1">
                         <h3 class="font-semibold text-sm truncate">{file.name}</h3>
+                        {#if file.version}
+                          <Badge class="bg-blue-100 text-blue-800 text-xs px-2 py-0.5">
+                            v{file.version}
+                          </Badge>
+                        {/if}
                         <Badge class="text-xs font-semibold bg-muted-foreground/20 text-foreground border-0 px-2 py-0.5">
                           {formatFileSize(file.size)}
                         </Badge>
@@ -1036,48 +1043,3 @@ let searchName = '';
   </Card>
 </div>
 
-<Card class="max-w-2xl mx-auto p-6 mt-8">
-  <h2 class="text-xl font-semibold text-primary mb-4">Search File Versions</h2>
-  <div class="flex gap-2 mb-4">
-    <Input
-      placeholder="File name"
-      bind:value={searchName}
-      class="flex-1"
-    />
-    <Button on:click={searchVersions} class="min-w-[100px]">Search</Button>
-  </div>
-  {#if searchMsg}
-    <div class="mb-2 px-4 py-2 bg-yellow-100 text-yellow-800 rounded">{searchMsg}</div>
-  {/if}
-  {#if errorMsg}
-    <div class="mb-2 px-4 py-2 bg-red-100 text-red-700 rounded">{errorMsg}</div>
-  {/if}
-  {#if foundVersions.length}
-    <div class="overflow-x-auto">
-      <table class="min-w-full table-auto border-collapse text-sm">
-        <thead>
-          <tr class="bg-muted">
-            <th class="px-4 py-2 text-left font-medium text-muted-foreground">Version</th>
-            <th class="px-4 py-2 text-left font-medium text-muted-foreground">Hash</th>
-            <th class="px-4 py-2 text-left font-medium text-muted-foreground">Date</th>
-            <th class="px-4 py-2"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each foundVersions as v}
-            <tr class="border-b hover:bg-muted/50">
-              <td class="px-4 py-2">
-                <Badge class="bg-blue-100 text-blue-800 px-2 py-0.5 rounded">v{v.version}</Badge>
-              </td>
-              <td class="px-4 py-2 font-mono">{v.file_hash.slice(0, 8)}...</td>
-              <td class="px-4 py-2 text-gray-600">{new Date(v.created_at*1000).toLocaleString()}</td>
-              <td class="px-4 py-2">
-                <Button size="sm" on:click={() => downloadVersion(v)}>Download</Button>
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    </div>
-  {/if}
-</Card>

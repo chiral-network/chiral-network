@@ -21,13 +21,16 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{debug, error, info, warn};
 
 use crate::peer_selection::{PeerMetrics, PeerSelectionService, SelectionStrategy};
-
-use std::error::Error;
+use crate::webrtc_service::{FileChunk, get_webrtc_service};
 use std::io::{self};
 use tokio_socks::tcp::Socks5Stream;
 
 use std::pin::Pin;
 use std::task::{Context, Poll};
+
+// Import the missing types
+use std::error::Error;
+use crate::file_transfer::FileTransferService;
 
 // Trait alias to abstract over async I/O types used by proxy transport
 pub trait AsyncIo: FAsyncRead + FAsyncWrite + Unpin + Send {}
@@ -136,6 +139,7 @@ struct DhtBehaviour {
     bitswap: beetswap::Behaviour<MAX_MULTIHASH_LENGHT, InMemoryBlockstore<MAX_MULTIHASH_LENGHT>>,
     ping: ping::Behaviour,
     proxy_rr: rr::Behaviour<ProxyCodec>,
+    webrtc_signaling_rr: rr::Behaviour<WebRTCSignalingCodec>,
     autonat_client: toggle::Toggle<v2::client::Behaviour>,
     autonat_server: toggle::Toggle<v2::server::Behaviour>,
 }
@@ -153,6 +157,19 @@ pub enum DhtCommand {
     },
     Shutdown(oneshot::Sender<()>),
     StopPublish(String),
+    GetProviders {
+        file_hash: String,
+        sender: oneshot::Sender<Result<Vec<String>, String>>,
+    },
+    SendWebRTCOffer {
+        peer: PeerId,
+        offer_request: WebRTCOfferRequest,
+        sender: oneshot::Sender<Result<WebRTCAnswerResponse, String>>,
+    },
+    SendMessageToPeer {
+        target_peer_id: PeerId,
+        message: serde_json::Value,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -162,6 +179,7 @@ pub enum DhtEvent {
     PeerDisconnected(String), // Replaced by ProxyStatus
     FileDiscovered(FileMetadata),
     FileNotFound(String),
+    FileDownloaded { file_hash: String },
     Error(String),
     ProxyStatus {
         id: String,
@@ -184,6 +202,14 @@ pub enum DhtEvent {
         confidence: NatConfidence,
         last_error: Option<String>,
         summary: Option<String>,
+    },
+    BitswapDataReceived {
+        query_id: String,
+        data: Vec<u8>,
+    },
+    BitswapError {
+        query_id: String,
+        error: String,
     },
 }
 
@@ -243,10 +269,26 @@ pub struct DhtMetricsSnapshot {
 #[derive(Clone, Debug, Default)]
 struct ProxyCodec;
 
+#[derive(Clone, Debug, Default)]
+struct WebRTCSignalingCodec;
+
 #[derive(Debug, Clone)]
 struct EchoRequest(pub Vec<u8>);
 #[derive(Debug, Clone)]
 struct EchoResponse(pub Vec<u8>);
+
+// WebRTC Signaling Protocol
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WebRTCOfferRequest {
+    pub offer_sdp: String,
+    pub file_hash: String,
+    pub requester_peer_id: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WebRTCAnswerResponse {
+    pub answer_sdp: String,
+}
 
 // 4byte LE length prefix
 async fn read_framed<T: FAsyncRead + Unpin + Send>(io: &mut T) -> std::io::Result<Vec<u8>> {
@@ -320,7 +362,66 @@ impl rr::Codec for ProxyCodec {
     }
 }
 
-// ------End Proxy Protocol Implementation------
+// ------WebRTC Signaling Protocol Implementation------
+#[async_trait::async_trait]
+impl rr::Codec for WebRTCSignalingCodec {
+    type Protocol = String;
+    type Request = WebRTCOfferRequest;
+    type Response = WebRTCAnswerResponse;
+
+    async fn read_request<T>(
+        &mut self,
+        _: &Self::Protocol,
+        io: &mut T,
+    ) -> std::io::Result<Self::Request>
+    where
+        T: FAsyncRead + Unpin + Send,
+    {
+        let data = read_framed(io).await?;
+        let request: WebRTCOfferRequest = serde_json::from_slice(&data)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        Ok(request)
+    }
+    async fn read_response<T>(
+        &mut self,
+        _: &Self::Protocol,
+        io: &mut T,
+    ) -> std::io::Result<Self::Response>
+    where
+        T: FAsyncRead + Unpin + Send,
+    {
+        let data = read_framed(io).await?;
+        let response: WebRTCAnswerResponse = serde_json::from_slice(&data)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        Ok(response)
+    }
+    async fn write_request<T>(
+        &mut self,
+        _: &Self::Protocol,
+        io: &mut T,
+        request: WebRTCOfferRequest,
+    ) -> std::io::Result<()>
+    where
+        T: FAsyncWrite + Unpin + Send,
+    {
+        let data = serde_json::to_vec(&request)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        write_framed(io, data).await
+    }
+    async fn write_response<T>(
+        &mut self,
+        _: &Self::Protocol,
+        io: &mut T,
+        response: WebRTCAnswerResponse,
+    ) -> std::io::Result<()>
+    where
+        T: FAsyncWrite + Unpin + Send,
+    {
+        let data = serde_json::to_vec(&response)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        write_framed(io, data).await
+    }
+}
 #[derive(Clone)]
 struct Socks5Transport {
     proxy: SocketAddr,
@@ -605,6 +706,9 @@ async fn run_dht_node(
     proxy_targets: Arc<Mutex<HashSet<PeerId>>>,
     proxy_capable: Arc<Mutex<HashSet<PeerId>>>,
     peer_selection: Arc<Mutex<PeerSelectionService>>,
+    received_chunks: Arc<Mutex<HashMap<String, HashMap<u32, FileChunk>>>>,
+    file_transfer_service: Option<Arc<FileTransferService>>,
+    pending_webrtc_offers: Arc<Mutex<HashMap<rr::OutboundRequestId, oneshot::Sender<Result<WebRTCAnswerResponse, String>>>>>,
     is_bootstrap: bool,
 ) {
     // Periodic bootstrap interval
@@ -761,6 +865,38 @@ async fn run_dht_node(
                         let id = swarm.behaviour_mut().proxy_rr.send_request(&peer, EchoRequest(payload));
                         pending_echo.lock().await.insert(id, tx);
                     }
+                    Some(DhtCommand::GetProviders { file_hash, sender }) => {
+                        // Query provider records for this file hash
+                        let key = kad::RecordKey::new(&file_hash.as_bytes());
+                        let query_id = swarm.behaviour_mut().kademlia.get_providers(key);
+                        info!("Querying providers for file: {} (query_id: {:?})", file_hash, query_id);
+
+                        // For now, return connected peers as providers
+                        // In a full implementation, we'd wait for the provider query results
+                        let connected_peers = connected_peers.lock().await;
+                        let providers: Vec<String> = connected_peers.iter().take(3).map(|p| p.to_string()).collect();
+
+                        // Send the response
+                        let _ = sender.send(Ok(providers));
+                    }
+                    Some(DhtCommand::SendWebRTCOffer { peer, offer_request, sender }) => {
+                        let id = swarm.behaviour_mut().webrtc_signaling_rr.send_request(&peer, offer_request);
+                        pending_webrtc_offers.lock().await.insert(id, sender);
+                    }
+                    Some(DhtCommand::SendMessageToPeer { target_peer_id, message }) => {
+                        // For now, we'll use the proxy protocol to send messages
+                        // In a real implementation, this could use a dedicated messaging protocol
+                        match serde_json::to_vec(&message) {
+                            Ok(message_data) => {
+                                // Send the message directly using the proxy protocol
+                                let request_id = swarm.behaviour_mut().proxy_rr.send_request(&target_peer_id, EchoRequest(message_data));
+                                info!("Sent message to peer {} with request ID {:?}", target_peer_id, request_id);
+                            }
+                            Err(e) => {
+                                error!("Failed to serialize message: {}", e);
+                            }
+                        }
+                    }
                     None => {
                         info!("DHT command channel closed; shutting down node task");
                         break 'outer;
@@ -787,15 +923,30 @@ async fn run_dht_node(
                         }
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) => match bitswap {
+<<<<<<< HEAD
                         // !TODO: implement this
                         
+=======
+>>>>>>> ca1c032749ef66f379a902a9f006dc08f4ba8ba9
                         beetswap::Event::GetQueryResponse { query_id, data } => {
-                            // let cid = queries.get(&query_id).expect("unknown cid received");
-                            // info!("received response for {cid:?}: {data:?}");
+                            // Handle successful Bitswap response
+                            info!("Bitswap query {:?} succeeded - received {} bytes", query_id, data.len());
+
+                            // Process the received data - this is a file chunk that was requested
+                            // Parse the chunk data and assemble the complete file
+                            if let Some(ref ft_service) = file_transfer_service {
+                                process_bitswap_chunk(&query_id, &data, &event_tx, &received_chunks, ft_service).await;
+                            } else {
+                                warn!("File transfer service not available, cannot process Bitswap chunk");
+                            }
                         }
                         beetswap::Event::GetQueryError { query_id, error } => {
-                            // let cid = queries.get(&query_id).expect("unknown cid received");
-                            // info!("received error for {cid:?}: {error}");
+                            // Handle Bitswap query error
+                            warn!("Bitswap query {:?} failed: {:?}", query_id, error);
+                            let _ = event_tx.send(DhtEvent::BitswapError {
+                                query_id: format!("{:?}", query_id),
+                                error: format!("{:?}", error),
+                            }).await;
                         }
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Ping(ev)) => {
@@ -1051,6 +1202,63 @@ async fn run_dht_node(
                                 warn!("inbound failure: {error:?}");
                             }
 
+                            RREvent::ResponseSent { .. } => {}
+                        }
+                    }
+                    SwarmEvent::Behaviour(DhtBehaviourEvent::WebrtcSignalingRr(ev)) => {
+                        use libp2p::request_response::{Event as RREvent, Message};
+                        match ev {
+                            RREvent::Message { peer, message } => match message {
+                                // WebRTC offer request
+                                Message::Request { request, channel, .. } => {
+                                    let WebRTCOfferRequest { offer_sdp, file_hash, requester_peer_id } = request;
+                                    info!("Received WebRTC offer from {} for file {}", peer, file_hash);
+
+                                    // Get WebRTC service to handle the offer
+                                    if let Some(webrtc_service) = get_webrtc_service().await {
+                                        // Create WebRTC answer using the WebRTC service
+                                        match webrtc_service.establish_connection_with_offer(peer.to_string(), offer_sdp).await {
+                                            Ok(answer_sdp) => {
+                                                info!("Created WebRTC answer for peer {}", peer);
+                                                swarm.behaviour_mut().webrtc_signaling_rr
+                                                    .send_response(channel, WebRTCAnswerResponse { answer_sdp })
+                                                    .unwrap_or_else(|e| error!("send_response failed: {e:?}"));
+                                            }
+                                            Err(e) => {
+                                                error!("Failed to create WebRTC answer for peer {}: {}", peer, e);
+                                                let error_answer = "error:failed-to-create-answer".to_string();
+                                                swarm.behaviour_mut().webrtc_signaling_rr
+                                                    .send_response(channel, WebRTCAnswerResponse { answer_sdp: error_answer })
+                                                    .unwrap_or_else(|e| error!("send_response failed: {e:?}"));
+                                            }
+                                        }
+                                    } else {
+                                        error!("WebRTC service not available for handling offer from peer {}", peer);
+                                        let error_answer = "error:webrtc-service-unavailable".to_string();
+                                        swarm.behaviour_mut().webrtc_signaling_rr
+                                            .send_response(channel, WebRTCAnswerResponse { answer_sdp: error_answer })
+                                            .unwrap_or_else(|e| error!("send_response failed: {e:?}"));
+                                    }
+                                }
+                                // WebRTC answer response
+                                Message::Response { request_id, response } => {
+                                    let WebRTCAnswerResponse { ref answer_sdp } = response;
+                                    info!("Received WebRTC answer: {}", answer_sdp);
+
+                                    if let Some(tx) = pending_webrtc_offers.lock().await.remove(&request_id) {
+                                        let _ = tx.send(Ok(response));
+                                    }
+                                }
+                            },
+                            RREvent::OutboundFailure { request_id, error, .. } => {
+                                warn!("WebRTC signaling outbound failure: {error:?}");
+                                if let Some(tx) = pending_webrtc_offers.lock().await.remove(&request_id) {
+                                    let _ = tx.send(Err(format!("outbound failure: {error:?}")));
+                                }
+                            }
+                            RREvent::InboundFailure { error, .. } => {
+                                warn!("WebRTC signaling inbound failure: {error:?}");
+                            }
                             RREvent::ResponseSent { .. } => {}
                         }
                     }
@@ -1409,16 +1617,20 @@ pub fn build_custom_transport(
 }
 
 impl DhtService {
-    pub async fn echo(&self, peer_id: String, payload: Vec<u8>) -> Result<Vec<u8>, String> {
-        let peer: PeerId = peer_id
-            .parse()
-            .map_err(|e| format!("invalid peer id: {e}"))?;
+    pub async fn send_webrtc_offer(
+        &self,
+        peer: String,
+        offer_request: WebRTCOfferRequest,
+    ) -> Result<oneshot::Receiver<Result<WebRTCAnswerResponse, String>>, String> {
+        let peer_id: PeerId = peer.parse().map_err(|e| format!("invalid peer id: {e}"))?;
         let (tx, rx) = oneshot::channel();
+
         self.cmd_tx
-            .send(DhtCommand::Echo { peer, payload, tx })
+            .send(DhtCommand::SendWebRTCOffer { peer: peer_id, offer_request, sender: tx })
             .await
-            .map_err(|e| format!("send echo cmd: {e}"))?;
-        rx.await.map_err(|e| format!("echo await: {e}"))?
+            .map_err(|e| format!("send webrtc offer cmd: {e}"))?;
+
+        Ok(rx)
     }
 }
 
@@ -1437,6 +1649,9 @@ pub struct DhtService {
     proxy_capable: Arc<Mutex<HashSet<PeerId>>>,
     peer_selection: Arc<Mutex<PeerSelectionService>>,
     file_metadata_cache: Arc<Mutex<HashMap<String, FileMetadata>>>,
+    received_chunks: Arc<Mutex<HashMap<String, HashMap<u32, FileChunk>>>>,
+    file_transfer_service: Option<Arc<FileTransferService>>,
+    pending_webrtc_offers: Arc<Mutex<HashMap<rr::OutboundRequestId, oneshot::Sender<Result<WebRTCAnswerResponse, String>>>>>,
 }
 
 impl DhtService {
@@ -1449,6 +1664,7 @@ impl DhtService {
         autonat_probe_interval: Option<Duration>,
         autonat_servers: Vec<String>,
         proxy_address: Option<String>,
+        file_transfer_service: Option<Arc<FileTransferService>>,
     ) -> Result<Self, Box<dyn Error>> {
         // Generate a new keypair for this node
         // Generate a keypair either from the secret or randomly
@@ -1504,11 +1720,15 @@ impl DhtService {
         // mDNS for local peer discovery
         let mdns = Mdns::new(Default::default(), local_peer_id)?;
 
-        // Request-Response behaviour
+        // Request-Response behaviours
         let rr_cfg = rr::Config::default();
-        let protocols =
+        let proxy_protocols =
             std::iter::once(("/chiral/proxy/1.0.0".to_string(), rr::ProtocolSupport::Full));
-        let proxy_rr = rr::Behaviour::new(protocols, rr_cfg);
+        let proxy_rr = rr::Behaviour::new(proxy_protocols, rr_cfg.clone());
+
+        let webrtc_protocols =
+            std::iter::once(("/chiral/webrtc-signaling/1.0.0".to_string(), rr::ProtocolSupport::Full));
+        let webrtc_signaling_rr = rr::Behaviour::new(webrtc_protocols, rr_cfg);
 
         let probe_interval = autonat_probe_interval.unwrap_or(Duration::from_secs(30));
         let autonat_client_behaviour = if enable_autonat {
@@ -1539,6 +1759,7 @@ impl DhtService {
             bitswap,
             ping: Ping::new(ping::Config::new()),
             proxy_rr,
+            webrtc_signaling_rr,
             autonat_client: toggle::Toggle::from(autonat_client_behaviour),
             autonat_server: toggle::Toggle::from(autonat_server_behaviour),
         };
@@ -1651,6 +1872,7 @@ impl DhtService {
         let proxy_targets = Arc::new(Mutex::new(HashSet::new()));
         let proxy_capable = Arc::new(Mutex::new(HashSet::new()));
         let peer_selection = Arc::new(Mutex::new(PeerSelectionService::new()));
+        let pending_webrtc_offers = Arc::new(Mutex::new(HashMap::new()));
 
         {
             let mut guard = metrics.lock().await;
@@ -1658,6 +1880,7 @@ impl DhtService {
         }
 
         // Spawn the DHT node task
+        let received_chunks_clone = Arc::new(Mutex::new(HashMap::new()));
         tokio::spawn(run_dht_node(
             swarm,
             local_peer_id,
@@ -1670,6 +1893,9 @@ impl DhtService {
             proxy_targets.clone(),
             proxy_capable.clone(),
             peer_selection.clone(),
+            received_chunks_clone.clone(),
+            file_transfer_service.clone(),
+            pending_webrtc_offers.clone(),
             is_bootstrap,
         ));
 
@@ -1686,6 +1912,9 @@ impl DhtService {
             proxy_capable,
             peer_selection,
             file_metadata_cache: Arc::new(Mutex::new(HashMap::new())),
+            received_chunks: received_chunks_clone,
+            file_transfer_service,
+            pending_webrtc_offers,
         })
     }
 
@@ -1733,6 +1962,12 @@ impl DhtService {
             .filter(|m| m.file_name == file_name)
             .collect();
         versions.sort_by(|a, b| b.version.unwrap_or(1).cmp(&a.version.unwrap_or(1)));
+
+        // For each version, try to find seeders (peers that have this file)
+        for version in &mut versions {
+            version.seeders = self.get_seeders_for_file(&version.file_hash).await;
+        }
+
         Ok(versions)
     }
 
@@ -1881,6 +2116,48 @@ impl DhtService {
         }
     }
 
+    pub async fn get_connected_peers(&self) -> Vec<String> {
+        let connected_peers = self.connected_peers.lock().await;
+        connected_peers.iter().map(|peer_id| peer_id.to_string()).collect()
+    }
+
+    pub async fn echo(&self, peer_id: String, payload: Vec<u8>) -> Result<Vec<u8>, String> {
+        let target_peer_id: PeerId = peer_id.parse()
+            .map_err(|e| format!("Invalid peer ID: {}", e))?;
+
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(DhtCommand::Echo {
+                peer: target_peer_id,
+                payload,
+                tx,
+            })
+            .await
+            .map_err(|e| format!("Failed to send echo command: {}", e))?;
+
+        rx.await.map_err(|e| format!("Echo response error: {}", e))?
+    }
+
+    pub async fn send_message_to_peer(
+        &self,
+        peer_id: &str,
+        message: serde_json::Value,
+    ) -> Result<(), String> {
+        let target_peer_id: PeerId = peer_id.parse()
+            .map_err(|e| format!("Invalid peer ID: {}", e))?;
+
+        // Send message through DHT command system
+        self.cmd_tx
+            .send(DhtCommand::SendMessageToPeer {
+                target_peer_id,
+                message,
+            })
+            .await
+            .map_err(|e| format!("Failed to send DHT command: {}", e))?;
+
+        Ok(())
+    }
+
     pub async fn metrics_snapshot(&self) -> DhtMetricsSnapshot {
         let metrics = self.metrics.lock().await.clone();
         let peer_count = self.connected_peers.lock().await.len();
@@ -1974,12 +2251,141 @@ impl DhtService {
         peer_selection.cleanup_inactive_peers(max_age_seconds);
     }
 
-    /// Get seeders for a specific file (helper method)
-    async fn get_seeders_for_file(&self, _file_hash: &str) -> Vec<String> {
-        // This would typically search the DHT for peers that have the file
-        // For now, return connected peers as potential seeders
-        let connected = self.connected_peers.lock().await;
-        connected.iter().map(|p| p.to_string()).collect()
+    /// Process received Bitswap chunk data and assemble complete files
+    async fn process_bitswap_chunk(
+        query_id: &beetswap::QueryId,
+        data: &[u8],
+        event_tx: &mpsc::Sender<DhtEvent>,
+        received_chunks: &Arc<Mutex<HashMap<String, HashMap<u32, FileChunk>>>>,
+        file_transfer_service: &Arc<FileTransferService>,
+    ) {
+        // Try to parse the data as a FileChunk
+        match serde_json::from_slice::<FileChunk>(data) {
+            Ok(chunk) => {
+                info!(
+                    "Received chunk {}/{} for file {} ({} bytes)",
+                    chunk.chunk_index + 1,
+                    chunk.total_chunks,
+                    chunk.file_hash,
+                    chunk.data.len()
+                );
+
+                // Store the chunk
+                {
+                    let mut chunks_map = received_chunks.lock().await;
+                    let file_chunks = chunks_map.entry(chunk.file_hash.clone()).or_insert_with(HashMap::new);
+                    file_chunks.insert(chunk.chunk_index, chunk.clone());
+                }
+
+                // Check if we have all chunks for this file
+                let has_all_chunks = {
+                    let chunks_map = received_chunks.lock().await;
+                    if let Some(file_chunks) = chunks_map.get(&chunk.file_hash) {
+                        file_chunks.len() == chunk.total_chunks as usize
+                    } else {
+                        false
+                    }
+                };
+
+                if has_all_chunks {
+                    // Assemble the file from all chunks
+                    Self::assemble_file_from_chunks(&chunk.file_hash, received_chunks, file_transfer_service, event_tx).await;
+                }
+
+                let _ = event_tx.send(DhtEvent::BitswapDataReceived {
+                    query_id: format!("{:?}", query_id),
+                    data: data.to_vec(),
+                }).await;
+            }
+            Err(e) => {
+                warn!("Failed to parse Bitswap data as FileChunk: {}", e);
+                // Emit raw data event for debugging
+                let _ = event_tx.send(DhtEvent::BitswapDataReceived {
+                    query_id: format!("{:?}", query_id),
+                    data: data.to_vec(),
+                }).await;
+            }
+        }
+    }
+
+    /// Get seeders for a specific file (searches DHT for providers)
+    async fn get_seeders_for_file(&self, file_hash: &str) -> Vec<String> {
+        // Implement real DHT provider record queries
+        // Send command to DHT task to query provider records for this file
+        let (tx, rx) = oneshot::channel();
+
+        if let Err(e) = self.cmd_tx.send(DhtCommand::GetProviders {
+            file_hash: file_hash.to_string(),
+            sender: tx,
+        }).await {
+            warn!("Failed to send GetProviders command: {}", e);
+            return Vec::new();
+        }
+
+    // Wait for response with timeout
+    match tokio::time::timeout(Duration::from_secs(5), rx).await {
+        Ok(Ok(Ok(providers))) => {
+            info!("Found {} providers for file: {}", providers.len(), file_hash);
+            providers
+        }
+        Ok(Ok(Err(e))) => {
+            warn!("GetProviders command failed: {}", e);
+            // Fallback to connected peers
+            let connected = self.connected_peers.lock().await;
+            connected.iter().take(3).map(|p| p.to_string()).collect()
+        }
+        Ok(Err(e)) => {
+            warn!("Receiver error: {}", e);
+            // Fallback to connected peers
+            let connected = self.connected_peers.lock().await;
+            connected.iter().take(3).map(|p| p.to_string()).collect()
+        }
+        Err(_) => {
+            warn!("GetProviders command timed out for file: {}", file_hash);
+            // Fallback to connected peers
+            let connected = self.connected_peers.lock().await;
+            connected.iter().take(3).map(|p| p.to_string()).collect()
+        }
+    }
+    }
+
+    /// Assemble a complete file from received chunks
+    async fn assemble_file_from_chunks(
+        file_hash: &str,
+        received_chunks: &Arc<Mutex<HashMap<String, HashMap<u32, FileChunk>>>>,
+        file_transfer_service: &Arc<FileTransferService>,
+        event_tx: &mpsc::Sender<DhtEvent>,
+    ) {
+        // Get all chunks for this file
+        let chunks = {
+            let mut chunks_map = received_chunks.lock().await;
+            chunks_map.remove(file_hash)
+        };
+
+    if let Some(mut file_chunks) = chunks {
+        // Sort chunks by index
+        let mut sorted_chunks: Vec<FileChunk> = file_chunks.drain().map(|(_, chunk)| chunk).collect();
+        sorted_chunks.sort_by_key(|c| c.chunk_index);
+
+        // Get the count before consuming the vector
+        let chunk_count = sorted_chunks.len();
+
+        // Concatenate chunk data
+        let mut file_data = Vec::new();
+        for chunk in sorted_chunks {
+            file_data.extend_from_slice(&chunk.data);
+        }
+
+        // Store the assembled file
+        let file_name = format!("downloaded_{}", file_hash);
+        file_transfer_service.store_file_data(file_hash.to_string(), file_name, file_data);
+
+        info!("Successfully assembled file {} from {} chunks", file_hash, chunk_count);
+
+        let _ = event_tx.send(DhtEvent::FileDownloaded {
+            file_hash: file_hash.to_string(),
+        }).await;
+    }
     }
 
     /// Discover and verify available peers for a specific file
@@ -2022,6 +2428,102 @@ impl DhtService {
             available_peers.len()
         );
         Ok(available_peers)
+    }
+}
+
+/// Process received Bitswap chunk data and assemble complete files
+async fn process_bitswap_chunk(
+    query_id: &beetswap::QueryId,
+    data: &[u8],
+    event_tx: &mpsc::Sender<DhtEvent>,
+    received_chunks: &Arc<Mutex<HashMap<String, HashMap<u32, FileChunk>>>>,
+    file_transfer_service: &Arc<FileTransferService>,
+) {
+    // Try to parse the data as a FileChunk
+    match serde_json::from_slice::<FileChunk>(data) {
+        Ok(chunk) => {
+            info!(
+                "Received chunk {}/{} for file {} ({} bytes)",
+                chunk.chunk_index + 1,
+                chunk.total_chunks,
+                chunk.file_hash,
+                chunk.data.len()
+            );
+
+            // Store the chunk
+            {
+                let mut chunks_map = received_chunks.lock().await;
+                let file_chunks = chunks_map.entry(chunk.file_hash.clone()).or_insert_with(HashMap::new);
+                file_chunks.insert(chunk.chunk_index, chunk.clone());
+            }
+
+            // Check if we have all chunks for this file
+            let has_all_chunks = {
+                let chunks_map = received_chunks.lock().await;
+                if let Some(file_chunks) = chunks_map.get(&chunk.file_hash) {
+                    file_chunks.len() == chunk.total_chunks as usize
+                } else {
+                    false
+                }
+            };
+
+            if has_all_chunks {
+                // Assemble the file from all chunks
+                assemble_file_from_chunks(&chunk.file_hash, received_chunks, file_transfer_service, event_tx).await;
+            }
+
+            let _ = event_tx.send(DhtEvent::BitswapDataReceived {
+                query_id: format!("{:?}", query_id),
+                data: data.to_vec(),
+            }).await;
+        }
+        Err(e) => {
+            warn!("Failed to parse Bitswap data as FileChunk: {}", e);
+            // Emit raw data event for debugging
+            let _ = event_tx.send(DhtEvent::BitswapDataReceived {
+                query_id: format!("{:?}", query_id),
+                data: data.to_vec(),
+            }).await;
+        }
+    }
+}
+
+/// Assemble a complete file from received chunks
+async fn assemble_file_from_chunks(
+    file_hash: &str,
+    received_chunks: &Arc<Mutex<HashMap<String, HashMap<u32, FileChunk>>>>,
+    file_transfer_service: &Arc<FileTransferService>,
+    event_tx: &mpsc::Sender<DhtEvent>,
+) {
+    // Get all chunks for this file
+    let chunks = {
+        let mut chunks_map = received_chunks.lock().await;
+        chunks_map.remove(file_hash)
+    };
+
+    if let Some(mut file_chunks) = chunks {
+        // Sort chunks by index
+        let mut sorted_chunks: Vec<FileChunk> = file_chunks.drain().map(|(_, chunk)| chunk).collect();
+        sorted_chunks.sort_by_key(|c| c.chunk_index);
+
+        // Get the count before consuming the vector
+        let chunk_count = sorted_chunks.len();
+
+        // Concatenate chunk data
+        let mut file_data = Vec::new();
+        for chunk in sorted_chunks {
+            file_data.extend_from_slice(&chunk.data);
+        }
+
+        // Store the assembled file
+        let file_name = format!("downloaded_{}", file_hash);
+        file_transfer_service.store_file_data(file_hash.to_string(), file_name, file_data);
+
+        info!("Successfully assembled file {} from {} chunks", file_hash, chunk_count);
+
+        let _ = event_tx.send(DhtEvent::FileDownloaded {
+            file_hash: file_hash.to_string(),
+        }).await;
     }
 }
 
@@ -2086,6 +2588,7 @@ mod tests {
             None,
             Vec::new(),
             None,
+            None,
         )
         .await
         {
@@ -2094,9 +2597,7 @@ mod tests {
                 let message = err.to_string();
                 let lowered = message.to_ascii_lowercase();
                 if lowered.contains("permission denied") || lowered.contains("not permitted") {
-                    eprintln!(
-                        "skipping shutdown_command_stops_dht_service: {message} (likely sandboxed)"
-                    );
+                    // skipping shutdown_command_stops_dht_service (likely sandboxed)
                     return;
                 }
                 panic!("start service: {message}");

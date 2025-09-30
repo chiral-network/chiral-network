@@ -18,8 +18,9 @@
   import { showToast } from '$lib/toast'
   import { get } from 'svelte/store'
   import { totalEarned, totalSpent, miningState } from '$lib/stores';
+  import { walletService } from '$lib/wallet'; 
 
-  const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
+  const tr = (k: string, params?: Record<string, any>): string => (get(t) as (key: string, params?: any) => string)(k, params)
   
   // Basic obfuscation for locally stored passwords. NOT for cryptographic security.
   const OBFUSCATION_KEY = 'chiral-network-p@ssw0rd-key'; // A simple key
@@ -173,6 +174,19 @@
   $: if ($etcAccount && isGethRunning) {
     fetchBalance()
   }
+  // Add this reactive statement after your other reactive statements (around line 170)
+  $: if ($etcAccount) {
+    const accountTransactions = $transactions.filter(tx => 
+      tx.from === 'Mining reward' || 
+      tx.description?.toLowerCase().includes('block reward') ||
+      tx.description === tr('transactions.manual') ||
+      tx.to?.toLowerCase() === $etcAccount.address.toLowerCase() ||
+      tx.from?.toLowerCase() === $etcAccount.address.toLowerCase()
+    );
+    if (accountTransactions.length !== $transactions.length) {
+      transactions.set(accountTransactions);
+    }
+}
 
   // Derived filtered transactions
   $: filteredTransactions = $transactions
@@ -539,7 +553,7 @@
   
   function formatDate(date: Date): string {
     const loc = get(locale) || 'en-US'
-    return new Intl.DateTimeFormat(loc, { month: 'short', day: 'numeric', year: 'numeric' }).format(date)
+    return new Intl.DateTimeFormat(typeof loc === 'string' ? loc : 'en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(date)
   }
 
   function handleTransactionClick(tx: any) {
@@ -588,32 +602,69 @@
       } else {
         // Fallback for web environment - assume geth is not running
         isGethRunning = false
-        console.log('Running in web mode - geth not available')
       }
     } catch (error) {
       console.error('Failed to check geth status:', error)
     }
   }
 
+  // async function fetchBalance() {
+  //   if (!$etcAccount) return
+    
+  //   try {
+  //     // FIRST: Reset wallet to a clean state for the new account
+  //     wallet.update(w => ({ 
+  //       ...w, 
+  //       balance: 0, // Start with 0
+  //       address: $etcAccount.address 
+  //     }));
+
+  //     if (isTauri && isGethRunning) {
+  //       // Desktop app with local geth node - get real blockchain balance
+  //       const balanceStr = await invoke('get_account_balance', { address: $etcAccount.address }) as string
+  //       const realBalance = parseFloat(balanceStr);
+
+  //       // Update wallet with the real balance
+  //       wallet.update(w => ({ 
+  //         ...w, 
+  //         balance: realBalance,
+  //       }));
+  //       if (!isNaN(realBalance)) {
+  //       if (realBalance > ($miningState.totalRewards ?? 0)) {
+  //           miningState.update(state => ({
+  //             ...state,
+  //             totalRewards: realBalance
+  //           }));
+  //         }
+  //       }
+
+  //       // Now, fetch real transactions like mining rewards
+  //       // (This assumes you have a function to fetch recent blocks/transactions)
+  //       // For example:
+  //       // await appendNewBlocksFromBackend(); 
+
+  //     } else if (isTauri && !isGethRunning) {
+  //       // Desktop app but geth not running - use stored balance
+  //       console.log('Geth not running - using stored balance')
+  //     } else {
+  //       // Web environment - For now, simulate balance updates for demo purposes
+  //       const simulatedBalance = $wallet.balance + Math.random() * 10 // Small random changes
+  //       wallet.update(w => ({ ...w, balance: Math.max(0, simulatedBalance) }))
+  //     }
+  //   } catch (error) {
+  //     console.error('Failed to fetch balance:', error)
+  //     // Fallback to stored balance on error
+  //   }
+  // }
   async function fetchBalance() {
-    if (!$etcAccount) return
+    if (!$etcAccount) return;
     
     try {
-      if (isTauri && isGethRunning) {
-        // Desktop app with local geth node - get real blockchain balance
-        const balance = await invoke('get_account_balance', { address: $etcAccount.address }) as string
-        wallet.update(w => ({ ...w, balance: parseFloat(balance) }))
-      } else if (isTauri && !isGethRunning) {
-        // Desktop app but geth not running - use stored balance
-        console.log('Geth not running - using stored balance')
-      } else {
-        // Web environment - For now, simulate balance updates for demo purposes
-        const simulatedBalance = $wallet.balance + Math.random() * 10 // Small random changes
-        wallet.update(w => ({ ...w, balance: Math.max(0, simulatedBalance) }))
-      }
+      // These service calls now handle everything
+      await walletService.refreshBalance();
+      await walletService.refreshTransactions(); 
     } catch (error) {
-      console.error('Failed to fetch balance:', error)
-      // Fallback to stored balance on error
+      console.error('Failed to fetch balance and transactions:', error);
     }
   }
 
@@ -634,7 +685,6 @@
         private_key: demoPrivateKey,
         blacklist: []
       }
-      console.log('Running in web mode - using demo account')
     }
 
     etcAccount.set(account)
@@ -684,7 +734,6 @@
             keystoreSaveMessage = tr('keystore.success');
         } else {
             // Simulate for web
-            console.log('Simulating save to keystore with password:', keystorePassword);
             await new Promise(resolve => setTimeout(resolve, 1000));
             keystoreSaveMessage = tr('keystore.successSimulated');
         }
@@ -708,8 +757,6 @@
     // 3. This function runs when a QR code is successfully scanned
     function onScanSuccess(decodedText: string, decodedResult: any) {
       // Handle the scanned code
-      console.log(`Code matched = ${decodedText}`, decodedResult);
-      
       // Paste the address into the input field
       recipientAddress = decodedText;
       
@@ -757,7 +804,6 @@
           address: demoAddress,
           private_key: importPrivateKey
         }
-        console.log('Running in web mode - using provided private key')
       }
       
       etcAccount.set(account)
@@ -941,7 +987,6 @@
 
         } else {
             // Web demo mode simulation
-            console.log('Simulating keystore load in web mode');
             // Save or clear the password from local storage based on the checkbox
             saveOrClearPassword(selectedKeystoreAccount, loadKeystorePassword);
             await new Promise(resolve => setTimeout(resolve, 1000));
@@ -1290,7 +1335,7 @@
   //   if (isTauri) await invoke('logout');
   //   logout();
   // }
-
+  
   // Update your handleLogout function
   async function handleLogout() {
     try {
@@ -1364,7 +1409,6 @@
       window.sessionStorage?.clear();
     }
 
-    console.log('Session cleared, wallet locked.');
     showToast('Wallet locked and session data cleared', 'success');
     
     // Refresh the list of keystore accounts for the login view
@@ -1885,7 +1929,7 @@
         <option value="received">{$t('filters.typeReceived')}</option>
       </select>
       <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4-4 4 4m0 6l-4 4-4-4"></path></svg>
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4-4 4 4-4m0 6l-4 4-4-4"></path></svg>
       </div>
     </div>
   </div>
@@ -2434,7 +2478,7 @@
         role="dialog"
         aria-modal="true"
         tabindex="-1"
-        on:keydown={(e) => { if (e.key === 'Escape') { show2faPromptModal = false; actionToConfirm = null; } }}
+        on:keydown={(e) => { if (e.key === 'Escape' ) { show2faPromptModal = false; actionToConfirm = null; } }}
       >
         <h3 class="text-xl font-semibold mb-2">{$t('security.2fa.prompt.title')}</h3>
         <p class="text-sm text-muted-foreground mb-4">{$t('security.2fa.prompt.enter_code')}</p>

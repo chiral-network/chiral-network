@@ -4,13 +4,14 @@
 )]
 
 pub mod commands;
-mod crypto;
+
 mod dht;
 mod manager;
 mod encryption;
 mod ethereum;
 mod file_transfer;
 mod geth_downloader;
+mod webrtc_service;
 mod headless;
 mod keystore;
 pub mod net;
@@ -26,6 +27,7 @@ use ethereum::{
     start_mining, stop_mining, EthAccount, GethProcess, MinedBlock,
 };
 use file_transfer::{DownloadMetricsSnapshot, FileTransferEvent, FileTransferService};
+use webrtc_service::{WebRTCService, WebRTCFileRequest};
 use fs2::available_space;
 use geth_downloader::GethDownloader;
 use keystore::Keystore;
@@ -61,6 +63,7 @@ struct AppState {
     rpc_url: Mutex<String>,
     dht: Mutex<Option<Arc<DhtService>>>,
     file_transfer: Mutex<Option<Arc<FileTransferService>>>,
+    webrtc: Mutex<Option<Arc<WebRTCService>>>,
     proxies: Arc<Mutex<Vec<ProxyNode>>>,
     file_transfer_pump: Mutex<Option<JoinHandle<()>>>,
     socks5_proxy_cli: Mutex<Option<String>>,
@@ -192,6 +195,62 @@ async fn get_file_versions_by_name(
         (*dht).get_versions_by_file_name(file_name).await
     } else {
         Err("DHT not running".into())
+    }
+}
+
+#[tauri::command]
+async fn establish_webrtc_connection(
+    state: State<'_, AppState>,
+    peer_id: String,
+    offer: String,
+) -> Result<(), String> {
+    let webrtc = { state.webrtc.lock().await.as_ref().cloned() };
+    if let Some(webrtc) = webrtc {
+        webrtc.establish_connection_with_answer(peer_id, offer).await
+    } else {
+        Err("WebRTC service not running".into())
+    }
+}
+
+#[tauri::command]
+async fn send_webrtc_file_request(
+    state: State<'_, AppState>,
+    peer_id: String,
+    file_hash: String,
+    file_name: String,
+    file_size: u64,
+) -> Result<(), String> {
+    let webrtc = { state.webrtc.lock().await.as_ref().cloned() };
+    if let Some(webrtc) = webrtc {
+        let request = WebRTCFileRequest {
+            file_hash,
+            file_name,
+            file_size,
+            requester_peer_id: {
+                let dht = state.dht.lock().await;
+                if let Some(d) = dht.as_ref() {
+                    d.get_peer_id().await
+                } else {
+                    "unknown".to_string()
+                }
+            },
+        };
+        webrtc.send_file_request(peer_id, request).await
+    } else {
+        Err("WebRTC service not running".into())
+    }
+}
+
+#[tauri::command]
+async fn get_webrtc_connection_status(
+    state: State<'_, AppState>,
+    peer_id: String,
+) -> Result<bool, String> {
+    let webrtc = { state.webrtc.lock().await.as_ref().cloned() };
+    if let Some(webrtc) = webrtc {
+        Ok(webrtc.get_connection_status(&peer_id).await)
+    } else {
+        Ok(false)
     }
 }
 
@@ -422,6 +481,12 @@ async fn start_dht_node(
     // Prioritize the command-line argument. Fall back to the one from the UI.
     let final_proxy_address = cli_proxy.or(proxy_address.clone());
 
+    // Get the file transfer service for DHT integration
+    let file_transfer_service = {
+        let ft_guard = state.file_transfer.lock().await;
+        ft_guard.as_ref().cloned()
+    };
+
     let dht_service = DhtService::new(
         port,
         bootstrap_nodes,
@@ -431,6 +496,7 @@ async fn start_dht_node(
         probe_interval,
         autonat_server_list,
         final_proxy_address,
+        file_transfer_service,
     )
     .await
     .map_err(|e| format!("Failed to start DHT: {}", e))?;
@@ -684,6 +750,42 @@ async fn get_dht_peer_id(state: State<'_, AppState>) -> Result<Option<String>, S
 }
 
 #[tauri::command]
+async fn get_dht_connected_peers(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    if let Some(dht) = dht {
+        // Get connected peers from DHT
+        let connected_peers = dht.get_connected_peers().await;
+        Ok(connected_peers)
+    } else {
+        Ok(Vec::new()) // Return empty vector if DHT is not running
+    }
+}
+
+#[tauri::command]
+async fn send_dht_message(
+    state: State<'_, AppState>,
+    peer_id: String,
+    message: serde_json::Value
+) -> Result<(), String> {
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    if let Some(dht) = dht {
+        // Send message through DHT to target peer
+        dht.send_message_to_peer(&peer_id, message).await
+            .map_err(|e| format!("Failed to send DHT message: {}", e))
+    } else {
+        Err("DHT not available".to_string())
+    }
+}
+
+#[tauri::command]
 async fn get_dht_health(state: State<'_, AppState>) -> Result<Option<DhtMetricsSnapshot>, String> {
     let dht = {
         let dht_guard = state.dht.lock().await;
@@ -760,6 +862,15 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                     utf8.unwrap_or_default(),
                     bytes
                 ),
+                DhtEvent::BitswapDataReceived { query_id, data } => {
+                    format!("bitswap_data_received:{}:{}", query_id, data.len())
+                }
+                DhtEvent::BitswapError { query_id, error } => {
+                    format!("bitswap_error:{}:{}", query_id, error)
+                }
+                DhtEvent::FileDownloaded { file_hash } => {
+                    format!("file_downloaded:{}", file_hash)
+                }
             })
             .collect();
         Ok(mapped)
@@ -1057,6 +1168,17 @@ async fn start_file_transfer_service(
         *ft_guard = Some(ft_arc.clone());
     }
 
+    // Initialize WebRTC service with file transfer service
+    let webrtc_service = WebRTCService::new(ft_arc.clone())
+        .await
+        .map_err(|e| format!("Failed to start WebRTC service: {}", e))?;
+
+    let webrtc_arc = Arc::new(webrtc_service);
+    {
+        let mut webrtc_guard = state.webrtc.lock().await;
+        *webrtc_guard = Some(webrtc_arc.clone());
+    }
+
     {
         let mut pump_guard = state.file_transfer_pump.lock().await;
         if pump_guard.is_none() {
@@ -1139,7 +1261,7 @@ async fn download_file_from_network(
     state: State<'_, AppState>,
     file_hash: String,
     output_path: String,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let ft = {
         let ft_guard = state.file_transfer.lock().await;
         ft_guard.as_ref().cloned()
@@ -1185,13 +1307,120 @@ async fn download_file_from_network(
                         ));
                     }
 
-                    info!("Found {} available peers for file download", available_peers.len());
+                    // Implement chunk requesting protocol with real WebRTC
+                    // Create WebRTC offer for the first available peer
+                    let webrtc = {
+                        let webrtc_guard = state.webrtc.lock().await;
+                        webrtc_guard.as_ref().cloned()
+                    };
 
-                    // TODO: Implement chunk requesting protocol
-                    return Err(format!(
-                        "File found with {} seeders, but chunk requesting not yet implemented. File: {} ({} bytes)",
-                        available_peers.len(), metadata.file_name, metadata.file_size
-                    ));
+                    if let Some(webrtc_service) = webrtc {
+                        // Select the best peer for download
+                        let selected_peer = if available_peers.len() == 1 {
+                            available_peers[0].clone()
+                        } else {
+                            // Use peer selection strategy to pick the best peer
+                            let recommended = dht_service
+                                .select_peers_with_strategy(
+                                    &available_peers,
+                                    1,
+                                    crate::peer_selection::SelectionStrategy::FastestFirst,
+                                    false,
+                                )
+                                .await;
+                            recommended.into_iter().next().unwrap_or_else(|| available_peers[0].clone())
+                        };
+
+                        info!("Selected peer {} for WebRTC download", selected_peer);
+
+                        // Create WebRTC offer
+                        match webrtc_service.create_offer(selected_peer.clone()).await {
+                            Ok(offer) => {
+                                info!("Created WebRTC offer for peer {}", selected_peer);
+
+                                // Send WebRTC offer via DHT signaling
+                                let offer_request = dht::WebRTCOfferRequest {
+                                    offer_sdp: offer,
+                                    file_hash: metadata.file_hash.clone(),
+                                    requester_peer_id: dht_service.get_peer_id().await,
+                                };
+
+                                match dht_service.send_webrtc_offer(selected_peer.clone(), offer_request).await {
+                                    Ok(answer_receiver) => {
+                                        info!("Sent WebRTC offer to peer {}, waiting for answer", selected_peer);
+
+                                        // Wait for WebRTC answer with timeout
+                                        match tokio::time::timeout(Duration::from_secs(30), answer_receiver).await {
+                                            Ok(Ok(Ok(answer_response))) => {
+                                                info!("Received WebRTC answer from peer {}", selected_peer);
+
+                                                // Establish WebRTC connection with the answer
+                                                match webrtc_service.establish_connection_with_answer(
+                                                    selected_peer.clone(),
+                                                    answer_response.answer_sdp,
+                                                ).await {
+                                                    Ok(_) => {
+                                                        info!("WebRTC connection established with peer {}", selected_peer);
+
+                                                        // Send file request over WebRTC data channel
+                                                        let file_request = crate::webrtc_service::WebRTCFileRequest {
+                                                            file_hash: metadata.file_hash.clone(),
+                                                            file_name: metadata.file_name.clone(),
+                                                            file_size: metadata.file_size,
+                                                            requester_peer_id: dht_service.get_peer_id().await,
+                                                        };
+
+                                                        match webrtc_service.send_file_request(selected_peer.clone(), file_request).await {
+                                                            Ok(_) => {
+                                                                info!("Sent file request for {} to peer {}", metadata.file_name, selected_peer);
+
+                                                                // The peer will now start sending chunks automatically
+                                                                // We don't need to request individual chunks - the WebRTC service handles this
+                                                                Ok(format!(
+                                                                    "WebRTC download initiated: {} ({} bytes) from peer {}",
+                                                                    metadata.file_name, metadata.file_size, selected_peer
+                                                                ))
+                                                            }
+                                                            Err(e) => {
+                                                                warn!("Failed to send file request: {}", e);
+                                                                Err(format!("Failed to send file request: {}", e))
+                                                            }
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        warn!("Failed to establish WebRTC connection: {}", e);
+                                                        Err(format!("WebRTC connection failed: {}", e))
+                                                    }
+                                                }
+                                            }
+                                            Ok(Ok(Err(e))) => {
+                                                warn!("WebRTC signaling failed: {}", e);
+                                                Err(format!("WebRTC signaling failed: {}", e))
+                                            }
+                                            Ok(Err(_)) => {
+                                                warn!("WebRTC answer receiver was canceled");
+                                                Err("WebRTC answer receiver was canceled".to_string())
+                                            }
+                                            Err(_) => {
+                                                warn!("WebRTC answer timeout from peer {}", selected_peer);
+                                                Err(format!("WebRTC answer timeout from peer {}", selected_peer))
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to send WebRTC offer: {}", e);
+                                        Err(format!("Failed to send WebRTC offer: {}", e))
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Failed to create WebRTC offer: {}", e);
+                                Err(format!("WebRTC setup failed: {}", e))
+                            }
+                        }
+                    } else {
+                        Err("WebRTC service not available".to_string())
+                    }
                 }
                 Ok(None) => {
                     return Err("DHT search timed out - file metadata not found".to_string());
@@ -1287,13 +1516,18 @@ async fn show_in_folder(path: String) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
         std::process::Command::new("xdg-open")
-            .args([&std::path::Path::new(&path)
-                .parent()
-                .unwrap_or(std::path::Path::new("/"))])
+            .arg(&path)
             .spawn()
-            .map_err(|e| format!("Failed to open folder: {}", e))?;
+            .map_err(|e| format!("Failed to open file manager: {}", e))?;
     }
+    Ok(())
+}
 
+#[tauri::command]
+async fn write_file(path: String, contents: Vec<u8>) -> Result<(), String> {
+    tokio::fs::write(&path, contents)
+        .await
+        .map_err(|e| format!("Failed to write file: {}", e))?;
     Ok(())
 }
 
@@ -1935,6 +2169,7 @@ fn main() {
             rpc_url: Mutex::new("http://127.0.0.1:8545".to_string()),
             dht: Mutex::new(None),
             file_transfer: Mutex::new(None),
+            webrtc: Mutex::new(None),
             proxies: Arc::new(Mutex::new(Vec::new())),
             file_transfer_pump: Mutex::new(None),
             socks5_proxy_cli: Mutex::new(args.socks5_proxy),
@@ -1977,6 +2212,8 @@ fn main() {
             get_dht_health,
             get_dht_peer_count,
             get_dht_peer_id,
+            get_dht_connected_peers,
+            send_dht_message,
             start_file_transfer_service,
             upload_file_to_network,
             upload_file_data_to_network,
@@ -1987,6 +2224,7 @@ fn main() {
             decrypt_file_with_password,
             encrypt_file_for_upload,
             show_in_folder,
+            write_file,
             get_available_storage,
             proxy_connect,
             proxy_disconnect,
@@ -2007,6 +2245,9 @@ fn main() {
             cleanup_inactive_peers,
             upload_versioned_file,
             get_file_versions_by_name,
+            establish_webrtc_connection,
+            send_webrtc_file_request,
+            get_webrtc_connection_status,
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -2036,6 +2277,29 @@ fn main() {
                     .arg("-f")
                     .arg("geth.*--datadir.*geth-data")
                     .output();
+            }
+
+            #[cfg(windows)]
+            {
+                use std::process::Command;
+                // On Windows, use taskkill to terminate geth processes
+                let _ = Command::new("taskkill")
+                    .args(["/F", "/IM", "geth.exe"])
+                    .output();
+            }
+
+            // Also remove the lock file if it exists
+            let lock_file = std::path::Path::new(DEFAULT_GETH_DATA_DIR).join("LOCK");
+            if lock_file.exists() {
+                println!("Removing stale LOCK file: {:?}", lock_file);
+                let _ = std::fs::remove_file(&lock_file);
+            }
+
+            // Remove geth.ipc file if it exists (another common lock point)
+            let ipc_file = std::path::Path::new(DEFAULT_GETH_DATA_DIR).join("geth.ipc");
+            if ipc_file.exists() {
+                println!("Removing stale IPC file: {:?}", ipc_file);
+                let _ = std::fs::remove_file(&ipc_file);
             }
 
             println!("App setup complete");
