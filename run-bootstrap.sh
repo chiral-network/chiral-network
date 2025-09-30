@@ -56,7 +56,7 @@ if [ ! -f "target/release/chiral-network" ]; then
 fi
 
 # Prepare the command
-CMD="./target/release/chiral-network --headless --dht-port $DHT_PORT --log-level $LOG_LEVEL --show-multiaddr"
+CMD="./target/release/chiral-network --headless --is_bootstrap --dht-port $DHT_PORT --log-level $LOG_LEVEL --show-multiaddr"
 
 if [ "$ENABLE_GETH" = "true" ]; then
     CMD="$CMD --enable-geth"
