@@ -627,6 +627,10 @@ async fn start_dht_node(
                             let _ = app_handle.emit("proxy_status_update", p.clone());
                         }
                     }
+                    DhtEvent::PublishedFile(metadata) => {
+                        let payload = serde_json::json!(metadata);
+                        let _ = app_handle.emit("published_file", payload);
+                    }
                     _ => {}
                 }
             }
@@ -817,6 +821,10 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                 DhtEvent::PeerDisconnected(p) => format!("peer_disconnected:{}", p),
                 DhtEvent::FileDiscovered(meta) => format!(
                     "file_discovered:{}:{}:{}",
+                    meta.file_hash, meta.file_name, meta.file_size
+                ),
+                DhtEvent::PublishedFile(meta) => format!(
+                    "file_published:{}:{}:{}",
                     meta.file_hash, meta.file_name, meta.file_size
                 ),
                 DhtEvent::FileNotFound(hash) => format!("file_not_found:{}", hash),
@@ -1225,7 +1233,7 @@ async fn upload_file_to_network(
         };
 
         if let Some(dht) = dht {
-            let metadata = FileMetadata {
+            let mut metadata = FileMetadata {
                 file_hash: file_hash.clone(),
                 file_name: file_name.to_string(),
                 file_size: file_data.len() as u64,
@@ -1243,11 +1251,11 @@ async fn upload_file_to_network(
                 version: Some(1),
             };
 
-            if let Err(e) = dht.publish_file(metadata.clone()).await {
-                warn!("Failed to publish file metadata to DHT: {}", e);
+            match dht.publish_file(metadata.clone()).await {
+                Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
+                Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
             }
-
-            return Ok(metadata);
+            // return Ok(metadata);
         }
 
         Err("DHT Service not running".to_string())

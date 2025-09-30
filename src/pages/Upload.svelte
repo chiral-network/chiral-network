@@ -14,6 +14,7 @@
   import { dhtService } from '$lib/dht';
   import type { FileMetadata } from '$lib/dht';
   import Button from '$lib/components/ui/button.svelte';
+  import { listen } from '@tauri-apps/api/event';
 
 
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
@@ -193,24 +194,28 @@
                 files.update((currentFiles) => [...currentFiles, newFile]);
                 addedCount++;
 
-                // Publish file metadata to DHT network for discovery
-                try {
-                  await dhtService.publishFile({
-                    fileHash: hash,
-                    fileName: file.name,
-                    fileSize: file.size,
-                    seeders: [],
-                    createdAt: Date.now(),
-                    isEncrypted: false
-                  });
-                  console.log('Dropped file published to DHT:', hash);
-                } catch (publishError) {
-                  console.warn('Failed to publish dropped file to DHT:', publishError);
-                }
-              } catch (error) {
-                console.error('Error uploading dropped file:', file.name, error);
-                showToast(tr('upload.fileFailed', { values: { name: file.name, error: String(error) } }), 'error');
-              }
+            // Publish file metadata to DHT network for discovery
+            try {
+              await dhtService.publishFile({
+                fileHash: hash,
+                fileName: file.name,
+                fileSize: file.size,
+                seeders: [],
+                createdAt: Date.now(),
+                isEncrypted: false
+              });
+              // console.log('Dropped file published to DHT:', hash);
+              await listen('published_file', (event) => {
+                console.log('DHT published_file event:', event.payload);
+              });
+
+            } catch (publishError) {
+              console.warn('Failed to publish dropped file to DHT:', publishError);
+            }
+          } catch (error) {
+            console.error('Error uploading dropped file:', file.name, error);
+            showToast(tr('upload.fileFailed', { values: { name: file.name, error: String(error) } }), 'error');
+          }
             }
 
             if (duplicateCount > 0) {
@@ -296,7 +301,7 @@
 
     for (const filePath of paths) {
       try {
-        const metadata = await invoke('upload_file_to_network',{filePath}) as FileMetadata;
+        const metadata = await dhtService.publishFileToNetwork(filePath);
 
         if (isDuplicateHash(get(files), metadata.fileHash)) {
           duplicateCount++
@@ -391,11 +396,9 @@
     try {
       // Use .path if in Tauri; fallback to file.name (may need adjustment for your environment)
       const filePath = (selectedFile as any).path ?? selectedFile.name;
-      const metadata = await invoke('upload_file_to_network', {
-        filePath,
-      }) as FileMetadata;
+      const metadata = await dhtService.publishFileToNetwork(filePath);
 
-      uploadMsg = `Uploaded as v${metadata.version} (${metadata.fileHash.slice(0,8)}...)`;
+      // uploadMsg = `Uploaded as v${metadata.version} (${metadata.fileHash.slice(0,8)}...)`;
       selectedFile = null;
       existingVersions = [];
     } catch (err) {
