@@ -1344,14 +1344,19 @@
         await invoke('stop_miner');
       }
       
+      // Call backend logout to clear active account from app state
+      if (isTauri) {
+        await invoke('logout');
+      }
+      
       // Clear the account store
       etcAccount.set(null);
       
-      // Clear wallet data
+      // Clear wallet data - reset to 0 balance, not a default value
       wallet.update((w: any) => ({
         ...w,
         address: "",
-        balance: 1000.5, // Reset to default
+        balance: 0, // Reset to 0 for logout
         totalEarned: 0,
         totalSpent: 0,
         pendingTransactions: 0
@@ -1369,50 +1374,23 @@
         sessionStartTime: undefined
       }));
       
-      // Clear any stored session data
+      // Clear any stored session data from both localStorage and sessionStorage
       if (typeof localStorage !== 'undefined') {
         localStorage.removeItem('lastAccount');
         localStorage.removeItem('miningSession');
+        // Clear all sessionStorage data for security
+        sessionStorage.clear();
       }
       
       privateKeyVisible = false;
       
+      // Show success message
+      showToast('Wallet locked and session cleared', 'success');
+      
     } catch (error) {
       console.error('Error during logout:', error);
+      showToast('Error during logout: ' + String(error), 'error');
     }
-  }
-
-  function logout() {
-    // Clear the account details from memory, effectively logging out
-    etcAccount.set(null);
-
-    // Reset wallet state to defaults
-    wallet.update(w => ({
-      ...w,
-      address: '',
-      balance: 0,
-      totalEarned: 0,
-      totalSpent: 0,
-      pendingTransactions: 0,
-    }));
-
-    // Explicitly nullify sensitive component state variables to assist garbage collection.
-    privateKeyVisible = false;
-    keystorePassword = '';
-    loadKeystorePassword = '';
-    importPrivateKey = '';
-
-    // For enhanced security, clear any session-related data from browser storage.
-    // This helps ensure no sensitive information like private keys persists in localStorage.
-    // Note: This will clear ALL data for this domain (e.g., settings, blacklist).
-    if (typeof window !== 'undefined') {
-      window.sessionStorage?.clear();
-    }
-
-    showToast('Wallet locked and session data cleared', 'success');
-    
-    // Refresh the list of keystore accounts for the login view
-    loadKeystoreAccountsList();
   }
 
   async function generateAndShowQrCode(){

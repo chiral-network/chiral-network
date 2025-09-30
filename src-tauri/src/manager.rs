@@ -407,7 +407,7 @@ impl ChunkManager {
 
     /// Generates a Merkle proof for a specific chunk.
     /// This would be called by a seeder node when a peer requests a chunk.
-    pub fn _generate_merkle_proof(
+    pub fn generate_merkle_proof(
         &self,
         all_chunk_hashes_hex: &[String],
         chunk_index_to_prove: usize,
@@ -433,7 +433,7 @@ impl ChunkManager {
 
     /// Verifies a downloaded chunk against the file's Merkle root using a proof.
     /// This is called by a downloader node to ensure chunk integrity.
-    pub fn _verify_chunk(
+    pub fn verify_chunk(
         &self,
         merkle_root_hex: &str,
         chunk_info: &ChunkInfo,
