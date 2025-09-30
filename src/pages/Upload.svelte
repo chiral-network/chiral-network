@@ -5,16 +5,13 @@
   import { files } from '$lib/stores'
   import { t } from 'svelte-i18n';
   import { get } from 'svelte/store'
-  import { onMount, onDestroy, tick } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { showToast } from '$lib/toast'
   import { getStorageStatus, isDuplicateHash } from '$lib/uploadHelpers'
   import { fileService } from '$lib/services/fileService'
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
   import { dhtService } from '$lib/dht';
-  import type { FileMetadata } from '$lib/dht';
-  import Button from '$lib/components/ui/button.svelte';
-
 
   const tr = (k: string, params?: Record<string, any>): string => (get(t) as (key: string, params?: any) => string)(k, params)
 
@@ -64,10 +61,6 @@
   let isRefreshingStorage = false
   let storageError: string | null = null
   let lastChecked: Date | null = null
-
-  // Hash copied popup state
-  let copiedHash: string | null = null;
-  let showCopied = false;
 
   $: storageLabel = isRefreshingStorage
     ? tr('upload.storage.checking')
@@ -434,65 +427,26 @@
     return (bytes / 1048576).toFixed(2) + ' MB'
   }
 
-  function toHumanReadableSize(bytes: number): string {
-    return formatFileSize(bytes);
-  }
-
   async function handleCopy(hash: string) {
     await navigator.clipboard.writeText(hash);
-    copiedHash = hash;
-    showCopied = true;
-    await tick();
-    setTimeout(() => {
-      showCopied = false;
-    }, 1200);
+    showToast('File hash copied to clipboard!', 'success');
   }
 
-
-
-  let selectedFile: File | null = null;
-  let existingVersions: any[] = [];
-  let uploadMsg = '';
-  let errorMsg = '';
-
-  async function handleFileSelect(e: Event) {
-    errorMsg = '';
-    uploadMsg = '';
-    selectedFile = (e.target as HTMLInputElement).files?.[0] ?? null;
-    existingVersions = [];
-    if (selectedFile) {
-      try {
-        existingVersions = await invoke('get_file_versions_by_name', {
-          file_name: selectedFile.name
-        }) as any[];
-      } catch (err) {
-        errorMsg = 'Could not query versions: ' + String(err);
-      }
-    }
-  }
-
-  async function handleUpload() {
-    if (!selectedFile) return;
-    uploadMsg = '';
-    errorMsg = '';
+  async function showVersionHistory(fileName: string) {
     try {
-      // Use .path if in Tauri; fallback to file.name (may need adjustment for your environment)
-      const filePath = (selectedFile as any).path ?? selectedFile.name;
-      const metadata = await invoke('upload_versioned_file', {
-        file_name: selectedFile.name,
-        file_path: filePath,
-        file_size: selectedFile.size,
-        mime_type: selectedFile.type ?? null,
-        is_encrypted: false,
-        encryption_method: null,
-        key_fingerprint: null,
-      }) as any;
+      const versions = await invoke('get_file_versions_by_name', { fileName }) as any[];
+      if (versions.length === 0) {
+        showToast('No version history found for this file', 'info');
+        return;
+      }
 
-      uploadMsg = `Uploaded as v${metadata.version} (${metadata.file_hash.slice(0,8)}...)`;
-      selectedFile = null;
-      existingVersions = [];
-    } catch (err) {
-      errorMsg = 'Upload failed: ' + String(err);
+      const versionList = versions.map(v =>
+        `v${v.version}: ${v.file_hash.slice(0, 8)}... (${new Date(v.created_at * 1000).toLocaleDateString()})`
+      ).join('\n');
+
+      showToast(`Version history for ${fileName}:\n${versionList}`, 'info');
+    } catch (error) {
+      showToast('Failed to load version history', 'error');
     }
   }
 
@@ -757,58 +711,3 @@
     </div>
   </Card>
 </div>
-
-<Card class="max-w-xl mx-auto mt-10 p-8 shadow border border-muted bg-background rounded-xl">
-  <h2 class="text-xl font-semibold text-primary mb-6 flex items-center gap-2">
-    <Upload class="h-6 w-6 text-primary mr-2" /> Upload File <span class="ml-1 font-normal opacity-70">(with Versioning)</span>
-  </h2>
-  <div class="mb-6">
-    <label class="block mb-2 font-medium text-muted-foreground">Choose a file</label>
-    <input
-      type="file"
-      class="block w-full text-sm text-muted-foreground file:mr-4 file:py-2 file:px-4
-            file:rounded-full file:border-0
-            file:text-sm file:font-semibold
-            file:bg-blue-50 file:text-blue-700
-            hover:file:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-primary/50"
-      on:change={handleFileSelect}
-    />
-  </div>
-  {#if selectedFile}
-    <div class="mb-4 p-4 bg-muted border border-border rounded-lg">
-      <div class="mb-2 flex flex-col sm:flex-row sm:items-center gap-2">
-        <div class="flex items-center gap-2 flex-1">
-          <FileText class="h-5 w-5 text-blue-500" />
-          <span class="font-semibold text-foreground">{selectedFile.name}</span>
-          <span class="text-xs text-muted-foreground">({toHumanReadableSize(selectedFile.size)})</span>
-        </div>
-        <Button on:click={handleUpload} class="ml-auto" size="sm">Upload New Version</Button>
-      </div>
-      {#if existingVersions.length}
-        <div class="mt-3">
-          <span class="block text-sm font-medium text-muted-foreground mb-1">Previous versions:</span>
-          <ul class="ml-2 mt-1 list-disc text-sm text-muted-foreground space-y-1">
-            {#each existingVersions as v}
-              <li>
-                <Badge class="bg-blue-100 text-blue-700 mr-2">v{v.version}</Badge>
-                <span class="font-mono text-xs bg-muted px-2 py-0.5 rounded">{v.file_hash.slice(0,8)}...</span>
-                <span class="ml-2 text-gray-400">{new Date(v.created_at * 1000).toLocaleString()}</span>
-              </li>
-            {/each}
-          </ul>
-          <div class="mt-2 text-blue-800 font-semibold">
-            Latest: v{existingVersions[0].version}. This will be v{(existingVersions[0].version ?? 1)+1}.
-          </div>
-        </div>
-      {:else}
-        <div class="mt-3 text-muted-foreground">No previous version. This will be <span class="font-semibold">v1</span>.</div>
-      {/if}
-    </div>
-  {/if}
-  {#if uploadMsg}
-    <div class="mt-2 px-4 py-2 bg-green-100 text-green-800 border border-green-200 rounded">{uploadMsg}</div>
-  {/if}
-  {#if errorMsg}
-    <div class="mt-2 px-4 py-2 bg-red-100 text-red-700 border border-red-200 rounded">{errorMsg}</div>
-  {/if}
-</Card>
