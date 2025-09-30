@@ -141,7 +141,41 @@ impl ChunkManager {
             let chunk_data = &buffer[..bytes_read];
             let chunk_hash_bytes = Sha256Hasher::hash(chunk_data);
             chunk_hashes.push(chunk_hash_bytes);
-            let chunk_hash_hex = hex::encode(chunk_hash_bytes);
+            let chunk_hash_hex = hex::encode(chunk_hash_bytes); // This is the original hash
+
+            // Pad the chunk data to be a multiple of DATA_SHARDS for sharding
+            let mut padded_chunk_data = chunk_data.to_vec();
+            // If the chunk is smaller than the number of data shards, it can't be split.
+            // We need to pad it up to DATA_SHARDS size.
+            if padded_chunk_data.len() < DATA_SHARDS {
+                padded_chunk_data.resize(DATA_SHARDS, 0);
+            } else {
+                // Otherwise, pad it to be evenly divisible by DATA_SHARDS.
+                let remainder = padded_chunk_data.len() % DATA_SHARDS;
+                if remainder != 0 {
+                    let padding_needed = DATA_SHARDS - remainder;
+                    padded_chunk_data.resize(padded_chunk_data.len() + padding_needed, 0);
+                }
+            }
+
+            // Create data shards.
+            let shard_len = (padded_chunk_data.len() / DATA_SHARDS).max(1);
+            let mut shards: Vec<Vec<u8>> = padded_chunk_data
+                .chunks(shard_len)
+                .map(|c| c.to_vec())
+                .collect();
+
+            // Ensure we have exactly DATA_SHARDS, padding with empty vecs if necessary.
+            // This handles the case where the chunk was smaller than DATA_SHARDS.
+            shards.resize(DATA_SHARDS, vec![0; shard_len]);
+
+            // Add empty parity shards to be filled by the encoder.
+            for _ in 0..PARITY_SHARDS {
+                shards.push(vec![0; shard_len]);
+            }
+
+            // Encode the shards
+            r.encode(&mut shards).map_err(|e| e.to_string())?;
 
             // Create data shards from the original chunk data.
             let mut shards: Vec<Vec<u8>> = chunk_data
@@ -167,7 +201,7 @@ impl ChunkManager {
 
             for shard in shards {
                 let encrypted_shard_with_nonce = self.encrypt_chunk(&shard, &key)?;
-                let shard_hash = self.hash_chunk(&encrypted_shard_with_nonce);
+                let shard_hash = Self::hash_chunk(&encrypted_shard_with_nonce);
                 self.save_chunk(&shard_hash, &encrypted_shard_with_nonce).map_err(|e| e.to_string())?;
                 shard_hashes.push(shard_hash);
                 total_encrypted_size += encrypted_shard_with_nonce.len();
@@ -209,7 +243,7 @@ impl ChunkManager {
         Ok(result)
     }
 
-    fn hash_chunk(&self, data: &[u8]) -> String {
+    fn hash_chunk(data: &[u8]) -> String {
         let mut hasher = Sha256::new();
         hasher.update(data);
         format!("{:x}", hasher.finalize())
@@ -321,8 +355,23 @@ impl ChunkManager {
                     }
                 }
 
+
+            // Verify that the decrypted data matches the original hash
+            let calculated_hash = Self::hash_chunk(&decrypted_data);
+            let calculated_hash = hex::encode(Sha256Hasher::hash(&decrypted_data));
+            if calculated_hash != chunk_info.hash {
+                return Err(format!(
+                    "Hash mismatch for chunk {}. Data may be corrupt.",
+                    chunk_info.index
+                ));
+            }
+
+                // Trim padding
+
                 // Trim padding to original size
+
                 decrypted_data.truncate(chunk_info.size);
+
 
                 // Verify that the decrypted data matches the original hash
                 let calculated_hash_hex = hex::encode(Sha256Hasher::hash(&decrypted_data));
@@ -337,12 +386,28 @@ impl ChunkManager {
             }
             Ok(())
         })();
-        result 
+        result
+    }
+
+    pub fn _hash_file(&self, file_path: &Path) -> Result<String, Error> {
+        let mut file = File::open(file_path)?;
+        let mut hasher = Sha256::new();
+        let mut buffer = vec![0; 1024 * 1024]; // 1MB buffer on the heap
+
+        loop {
+            let bytes_read = file.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..bytes_read]);
+        }
+        Ok(format!("{:x}", hasher.finalize()))
+
     }
 
     /// Generates a Merkle proof for a specific chunk.
     /// This would be called by a seeder node when a peer requests a chunk.
-    pub fn generate_merkle_proof(
+    pub fn _generate_merkle_proof(
         &self,
         all_chunk_hashes_hex: &[String],
         chunk_index_to_prove: usize,
@@ -368,7 +433,7 @@ impl ChunkManager {
 
     /// Verifies a downloaded chunk against the file's Merkle root using a proof.
     /// This is called by a downloader node to ensure chunk integrity.
-    pub fn verify_chunk(
+    pub fn _verify_chunk(
         &self,
         merkle_root_hex: &str,
         chunk_info: &ChunkInfo,
@@ -447,6 +512,50 @@ mod tests {
     }
 
     #[test]
+    fn test_merkle_tree_proof_and_verification() {
+        // 1. Create some mock chunk data and their hashes (leaves)
+        let leaves_data = vec![
+            "chunk 0 data",
+            "chunk 1 data",
+            "chunk 2 data",
+            "chunk 3 data",
+            "chunk 4 data",
+        ];
+        let leaves: Vec<[u8; 32]> = leaves_data
+            .iter()
+            .map(|d| Sha256Hasher::hash(d.as_bytes()))
+            .collect();
+
+        // 2. Build the Merkle Tree
+        let merkle_tree = MerkleTree::<Sha256Hasher>::from_leaves(&leaves);
+        let merkle_root = merkle_tree.root().expect("Could not get Merkle root");
+
+        // 3. Generate a proof for a specific leaf (e.g., index 2)
+        let index_to_prove = 2;
+        let leaf_to_prove = leaves[index_to_prove];
+        let proof = merkle_tree.proof(&[index_to_prove]);
+        let _proof_hashes = proof.proof_hashes();
+
+        // 4. Verify the proof
+        let is_valid = proof.verify(
+            merkle_root,
+            &[index_to_prove],
+            &[leaf_to_prove],
+            leaves.len(),
+        );
+        assert!(is_valid, "Merkle proof verification should succeed for the correct leaf.");
+
+        // 5. Test an invalid case: try to verify the proof with a different leaf
+        let wrong_leaf_index = 3;
+        let wrong_leaf = leaves[wrong_leaf_index];
+        let is_invalid = proof.verify(
+            merkle_root,
+            &[index_to_prove], // Proof is for index 2
+            &[wrong_leaf],     // But we provide data from index 3
+            leaves.len(),
+        );
+        assert!(!is_invalid, "Merkle proof verification should fail for an incorrect leaf.");
+
     fn test_reconstruction_with_missing_shards() {
         // 1. Setup
         let dir = tempdir().unwrap();
@@ -622,4 +731,5 @@ mod tests {
         let is_tampered_valid = manager.verify_chunk(&manifest.merkle_root, chunk_info, &tampered_data, &proof_indices, &proof_hashes, total_leaves).unwrap();
         assert!(!is_tampered_valid, "Merkle proof verification should fail for tampered data.");
     }
+}
 }
