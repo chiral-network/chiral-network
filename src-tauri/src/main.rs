@@ -6,16 +6,16 @@
 pub mod commands;
 
 mod dht;
-mod manager;
 mod encryption;
 mod ethereum;
 mod file_transfer;
 mod geth_downloader;
-mod webrtc_service;
 mod headless;
 mod keystore;
+mod manager;
 pub mod net;
 mod peer_selection;
+mod webrtc_service;
 use crate::commands::proxy::{
     list_proxies, proxy_connect, proxy_disconnect, proxy_echo, ProxyNode,
 };
@@ -27,7 +27,6 @@ use ethereum::{
     start_mining, stop_mining, EthAccount, GethProcess, MinedBlock,
 };
 use file_transfer::{DownloadMetricsSnapshot, FileTransferEvent, FileTransferService};
-use webrtc_service::{WebRTCService, WebRTCFileRequest};
 use fs2::available_space;
 use geth_downloader::GethDownloader;
 use keystore::Keystore;
@@ -51,8 +50,7 @@ use tauri::{
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{info, warn};
-
-
+use webrtc_service::{WebRTCFileRequest, WebRTCService};
 
 struct AppState {
     geth: Mutex<GethProcess>,
@@ -188,7 +186,7 @@ async fn set_miner_address(state: State<'_, AppState>, address: String) -> Resul
 #[tauri::command]
 async fn get_file_versions_by_name(
     state: State<'_, AppState>,
-    file_name: String
+    file_name: String,
 ) -> Result<Vec<FileMetadata>, String> {
     let dht = { state.dht.lock().await.as_ref().cloned() };
     if let Some(dht) = dht {
@@ -206,7 +204,9 @@ async fn establish_webrtc_connection(
 ) -> Result<(), String> {
     let webrtc = { state.webrtc.lock().await.as_ref().cloned() };
     if let Some(webrtc) = webrtc {
-        webrtc.establish_connection_with_answer(peer_id, offer).await
+        webrtc
+            .establish_connection_with_answer(peer_id, offer)
+            .await
     } else {
         Err("WebRTC service not running".into())
     }
@@ -268,7 +268,9 @@ async fn upload_versioned_file(
     let dht_opt = { state.dht.lock().await.as_ref().cloned() };
     if let Some(dht) = dht_opt {
         // --- FIX: Calculate file_hash using file_transfer helper
-        let file_data = tokio::fs::read(&file_path).await.map_err(|e| e.to_string())?;
+        let file_data = tokio::fs::read(&file_path)
+            .await
+            .map_err(|e| e.to_string())?;
         let file_hash = FileTransferService::calculate_file_hash(&file_data);
 
         let created_at = std::time::SystemTime::now()
@@ -773,7 +775,7 @@ async fn get_dht_connected_peers(state: State<'_, AppState>) -> Result<Vec<Strin
 async fn send_dht_message(
     state: State<'_, AppState>,
     peer_id: String,
-    message: serde_json::Value
+    message: serde_json::Value,
 ) -> Result<(), String> {
     let dht = {
         let dht_guard = state.dht.lock().await;
@@ -782,7 +784,8 @@ async fn send_dht_message(
 
     if let Some(dht) = dht {
         // Send message through DHT to target peer
-        dht.send_message_to_peer(&peer_id, message).await
+        dht.send_message_to_peer(&peer_id, message)
+            .await
             .map_err(|e| format!("Failed to send DHT message: {}", e))
     } else {
         Err("DHT not available".to_string())
@@ -1206,7 +1209,7 @@ async fn start_file_transfer_service(
 async fn upload_file_to_network(
     state: State<'_, AppState>,
     file_path: String,
-) -> Result<FileMetadata, String> {
+) -> Result<(), String> {
     let ft = {
         let ft_guard = state.file_transfer.lock().await;
         ft_guard.as_ref().cloned()
@@ -1254,11 +1257,11 @@ async fn upload_file_to_network(
             match dht.publish_file(metadata.clone()).await {
                 Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
                 Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
-            }
-            // return Ok(metadata);
+            };
+            Ok(())
+        } else {
+            Err("DHT Service not running.".to_string())
         }
-
-        Err("DHT Service not running".to_string())
     } else {
         Err("File transfer service is not running".to_string())
     }
@@ -1288,12 +1291,17 @@ async fn download_file_from_network(
             // Search for file metadata in DHT with 5 second timeout
             match dht_service.search_metadata(file_hash.clone(), 5000).await {
                 Ok(Some(metadata)) => {
-                    info!("Found file metadata in DHT: {} (size: {} bytes)",
-                          metadata.file_name, metadata.file_size);
+                    info!(
+                        "Found file metadata in DHT: {} (size: {} bytes)",
+                        metadata.file_name, metadata.file_size
+                    );
 
                     // Implement peer discovery for file chunks
-                    info!("Discovering peers for file: {} with {} known seeders",
-                          metadata.file_name, metadata.seeders.len());
+                    info!(
+                        "Discovering peers for file: {} with {} known seeders",
+                        metadata.file_name,
+                        metadata.seeders.len()
+                    );
 
                     if metadata.seeders.is_empty() {
                         return Err(format!(
@@ -1303,7 +1311,9 @@ async fn download_file_from_network(
                     }
 
                     // Discover and verify available peers for this file
-                    let available_peers = dht_service.discover_peers_for_file(&metadata).await
+                    let available_peers = dht_service
+                        .discover_peers_for_file(&metadata)
+                        .await
                         .map_err(|e| format!("Peer discovery failed: {}", e))?;
 
                     if available_peers.is_empty() {
@@ -1336,7 +1346,10 @@ async fn download_file_from_network(
                                     false,
                                 )
                                 .await;
-                            recommended.into_iter().next().unwrap_or_else(|| available_peers[0].clone())
+                            recommended
+                                .into_iter()
+                                .next()
+                                .unwrap_or_else(|| available_peers[0].clone())
                         };
 
                         info!("Selected peer {} for WebRTC download", selected_peer);
@@ -1353,20 +1366,37 @@ async fn download_file_from_network(
                                     requester_peer_id: dht_service.get_peer_id().await,
                                 };
 
-                                match dht_service.send_webrtc_offer(selected_peer.clone(), offer_request).await {
+                                match dht_service
+                                    .send_webrtc_offer(selected_peer.clone(), offer_request)
+                                    .await
+                                {
                                     Ok(answer_receiver) => {
-                                        info!("Sent WebRTC offer to peer {}, waiting for answer", selected_peer);
+                                        info!(
+                                            "Sent WebRTC offer to peer {}, waiting for answer",
+                                            selected_peer
+                                        );
 
                                         // Wait for WebRTC answer with timeout
-                                        match tokio::time::timeout(Duration::from_secs(30), answer_receiver).await {
+                                        match tokio::time::timeout(
+                                            Duration::from_secs(30),
+                                            answer_receiver,
+                                        )
+                                        .await
+                                        {
                                             Ok(Ok(Ok(answer_response))) => {
-                                                info!("Received WebRTC answer from peer {}", selected_peer);
+                                                info!(
+                                                    "Received WebRTC answer from peer {}",
+                                                    selected_peer
+                                                );
 
                                                 // Establish WebRTC connection with the answer
-                                                match webrtc_service.establish_connection_with_answer(
-                                                    selected_peer.clone(),
-                                                    answer_response.answer_sdp,
-                                                ).await {
+                                                match webrtc_service
+                                                    .establish_connection_with_answer(
+                                                        selected_peer.clone(),
+                                                        answer_response.answer_sdp,
+                                                    )
+                                                    .await
+                                                {
                                                     Ok(_) => {
                                                         info!("WebRTC connection established with peer {}", selected_peer);
 
@@ -1378,7 +1408,13 @@ async fn download_file_from_network(
                                                             requester_peer_id: dht_service.get_peer_id().await,
                                                         };
 
-                                                        match webrtc_service.send_file_request(selected_peer.clone(), file_request).await {
+                                                        match webrtc_service
+                                                            .send_file_request(
+                                                                selected_peer.clone(),
+                                                                file_request,
+                                                            )
+                                                            .await
+                                                        {
                                                             Ok(_) => {
                                                                 info!("Sent file request for {} to peer {}", metadata.file_name, selected_peer);
 
@@ -1397,7 +1433,10 @@ async fn download_file_from_network(
                                                     }
                                                     Err(e) => {
                                                         warn!("Failed to establish WebRTC connection: {}", e);
-                                                        Err(format!("WebRTC connection failed: {}", e))
+                                                        Err(format!(
+                                                            "WebRTC connection failed: {}",
+                                                            e
+                                                        ))
                                                     }
                                                 }
                                             }
@@ -1407,11 +1446,18 @@ async fn download_file_from_network(
                                             }
                                             Ok(Err(_)) => {
                                                 warn!("WebRTC answer receiver was canceled");
-                                                Err("WebRTC answer receiver was canceled".to_string())
+                                                Err("WebRTC answer receiver was canceled"
+                                                    .to_string())
                                             }
                                             Err(_) => {
-                                                warn!("WebRTC answer timeout from peer {}", selected_peer);
-                                                Err(format!("WebRTC answer timeout from peer {}", selected_peer))
+                                                warn!(
+                                                    "WebRTC answer timeout from peer {}",
+                                                    selected_peer
+                                                );
+                                                Err(format!(
+                                                    "WebRTC answer timeout from peer {}",
+                                                    selected_peer
+                                                ))
                                             }
                                         }
                                     }
@@ -1463,7 +1509,7 @@ async fn upload_file_data_to_network(
 
         // Store the file data directly in memory
         let file_size = file_data.len() as u64;
-        let cloned_fd = file_data.clone(); 
+        let cloned_fd = file_data.clone();
         ft.store_file_data(file_hash.clone(), file_name.clone(), file_data)
             .await;
 

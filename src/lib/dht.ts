@@ -1,5 +1,6 @@
 // DHT configuration and utilities
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 // Default bootstrap nodes for network connectivity
 export const DEFAULT_BOOTSTRAP_NODES = [
@@ -41,7 +42,6 @@ export interface FileMetadata {
   isEncrypted: boolean;
   encryptionMethod?: string;
   keyFingerprint?: string;
-  version?: number;
 }
 
 export interface DhtHealth {
@@ -87,6 +87,9 @@ export class DhtService {
     // Use default bootstrap nodes if none provided
     if (bootstrapNodes.length === 0) {
       bootstrapNodes = DEFAULT_BOOTSTRAP_NODES;
+      console.log("Using default bootstrap nodes for network connectivity");
+    } else {
+      console.log(`Using ${bootstrapNodes.length} custom bootstrap nodes`);
     }
 
     try {
@@ -113,6 +116,8 @@ export class DhtService {
       const peerId = await invoke<string>("start_dht_node", payload);
       this.peerId = peerId;
       this.port = port;
+      console.log("DHT started with peer ID:", this.peerId);
+      console.log("Your multiaddr for others to connect:", this.getMultiaddr());
       return this.peerId;
     } catch (error) {
       console.error("Failed to start DHT:", error);
@@ -125,6 +130,7 @@ export class DhtService {
     try {
       await invoke("stop_dht_node");
       this.peerId = null;
+      console.log("DHT stopped");
     } catch (error) {
       console.error("Failed to stop DHT:", error);
       throw error;
@@ -143,6 +149,31 @@ export class DhtService {
         fileSize: metadata.fileSize,
         mimeType: metadata.mimeType,
       });
+      console.log("Published file metadata:", metadata.fileHash);
+    } catch (error) {
+      console.error("Failed to publish file:", error);
+      throw error;
+    }
+  }
+  async publishFileToNetwork(filePath: string): Promise<FileMetadata> {
+    try {
+      // Start listening for the published_file event
+      const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {
+        const unlistenPromise = listen<FileMetadata>(
+          "published_file",
+          (event) => {
+            resolve(event.payload);
+            // Unsubscribe once we got the event
+            unlistenPromise.then((unlistenFn) => unlistenFn());
+          }
+        );
+      });
+
+      // Trigger the backend upload
+      await invoke("upload_file_to_network", { filePath });
+
+      // Wait until the event arrives
+      return await metadataPromise;
     } catch (error) {
       console.error("Failed to publish file:", error);
       throw error;
@@ -156,6 +187,7 @@ export class DhtService {
 
     try {
       await invoke("search_file_metadata", { fileHash, timeoutMs: 0 });
+      console.log("Searching for file:", fileHash);
     } catch (error) {
       console.error("Failed to search file:", error);
       throw error;
@@ -174,6 +206,7 @@ export class DhtService {
 
     try {
       await invoke("connect_to_peer", { peerAddress });
+      console.log("Connecting to peer:", peerAddress);
     } catch (error) {
       console.error("Failed to connect to peer:", error);
       throw error;
