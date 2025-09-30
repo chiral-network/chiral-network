@@ -50,22 +50,36 @@ use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{info, warn};
 
-
+#[derive(Clone)]
+struct QueuedTransaction {
+    id: String,
+    to_address: String,
+    amount: f64,
+    timestamp: u64,
+}
 
 struct AppState {
     geth: Mutex<GethProcess>,
     downloader: Arc<GethDownloader>,
     miner_address: Mutex<Option<String>>,
 
-    active_account: Mutex<Option<String>>, // To track the logged-in user's address
-    active_account_private_key: Mutex<Option<String>>,
+    // Wrap in Arc so they can be cloned
+    active_account: Arc<Mutex<Option<String>>>,
+    active_account_private_key: Arc<Mutex<Option<String>>>,
+    
     rpc_url: Mutex<String>,
     dht: Mutex<Option<Arc<DhtService>>>,
     file_transfer: Mutex<Option<Arc<FileTransferService>>>,
     proxies: Arc<Mutex<Vec<ProxyNode>>>,
     file_transfer_pump: Mutex<Option<JoinHandle<()>>>,
     socks5_proxy_cli: Mutex<Option<String>>,
+    
+    // New fields for transaction queue
+    transaction_queue: Arc<Mutex<VecDeque<QueuedTransaction>>>,
+    transaction_processor: Mutex<Option<JoinHandle<()>>>,
+    processing_transaction: Arc<Mutex<bool>>,
 }
+
 
 #[tauri::command]
 async fn create_chiral_account(state: State<'_, AppState>) -> Result<EthAccount, String> {
@@ -1951,6 +1965,188 @@ async fn send_chiral_transaction(
     Ok(tx_hash)
 }
 
+#[tauri::command]
+async fn queue_transaction(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    to_address: String,
+    amount: f64,
+) -> Result<String, String> {
+    // Validate account is logged in
+    let _account = get_active_account(&state).await?;
+    
+    // Generate unique transaction ID
+    let tx_id = format!("tx_{}", SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis());
+    
+    // Create queued transaction
+    let queued_tx = QueuedTransaction {
+        id: tx_id.clone(),
+        to_address,
+        amount,
+        timestamp: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+    };
+    
+    // Add to queue
+    {
+        let mut queue = state.transaction_queue.lock().await;
+        queue.push_back(queued_tx);
+    }
+    
+    // Start processor if not running
+    {
+        let mut processor_guard = state.transaction_processor.lock().await;
+        if processor_guard.is_none() {
+            let app_handle = app.clone();
+            let queue_arc = state.transaction_queue.clone();
+            let processing_arc = state.processing_transaction.clone();
+            
+            // Clone the Arc references we need instead of borrowing state
+            let active_account_arc = state.active_account.clone();
+            let active_key_arc = state.active_account_private_key.clone();
+            
+            let handle = tokio::spawn(async move {
+                process_transaction_queue(
+                    app_handle, 
+                    queue_arc, 
+                    processing_arc,
+                    active_account_arc,
+                    active_key_arc
+                ).await;
+            });
+            
+            *processor_guard = Some(handle);
+        }
+    }
+    
+    Ok(tx_id)
+}
+
+async fn process_transaction_queue(
+    app: tauri::AppHandle,
+    queue: Arc<Mutex<VecDeque<QueuedTransaction>>>,
+    processing: Arc<Mutex<bool>>,
+    active_account: Arc<Mutex<Option<String>>>,
+    active_private_key: Arc<Mutex<Option<String>>>,
+) {
+    loop {
+        // Check if already processing
+        {
+            let is_processing = processing.lock().await;
+            if *is_processing {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                continue;
+            }
+        }
+        
+        // Get next transaction from queue
+        let next_tx = {
+            let mut queue_guard = queue.lock().await;
+            queue_guard.pop_front()
+        };
+        
+        if let Some(tx) = next_tx {
+            // Mark as processing
+            {
+                let mut is_processing = processing.lock().await;
+                *is_processing = true;
+            }
+            
+            // Emit queue status
+            let _ = app.emit("transaction_queue_processing", &tx.id);
+            
+            // Get account and private key from the Arc references
+            let account_opt = {
+                let account_guard = active_account.lock().await;
+                account_guard.clone()
+            };
+            
+            let private_key_opt = {
+                let key_guard = active_private_key.lock().await;
+                key_guard.clone()
+            };
+            
+            match (account_opt, private_key_opt) {
+                (Some(account), Some(private_key)) => {
+                    // Process transaction
+                    match ethereum::send_transaction(
+                        &account,
+                        &tx.to_address,
+                        tx.amount,
+                        &private_key,
+                    ).await {
+                        Ok(tx_hash) => {
+                            // Success - emit event
+                            let _ = app.emit("transaction_sent", serde_json::json!({
+                                "id": tx.id,
+                                "txHash": tx_hash,
+                                "to": tx.to_address,
+                                "amount": tx.amount,
+                            }));
+                            
+                            // Wait a bit before processing next (to ensure nonce increments)
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                        }
+                        Err(e) => {
+                            // Error - emit event
+                            warn!("Transaction failed: {}", e);
+                            let _ = app.emit("transaction_failed", serde_json::json!({
+                                "id": tx.id,
+                                "error": e,
+                                "to": tx.to_address,
+                                "amount": tx.amount,
+                            }));
+                        }
+                    }
+                }
+                _ => {
+                    // No account or private key - user logged out
+                    warn!("Cannot process transaction - user logged out");
+                    let _ = app.emit("transaction_failed", serde_json::json!({
+                        "id": tx.id,
+                        "error": "User logged out",
+                        "to": tx.to_address,
+                        "amount": tx.amount,
+                    }));
+                }
+            }
+            
+            // Mark as not processing
+            {
+                let mut is_processing = processing.lock().await;
+                *is_processing = false;
+            }
+        } else {
+            // Queue is empty, sleep
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    }
+}
+
+#[tauri::command]
+async fn get_transaction_queue_status(
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let queue = state.transaction_queue.lock().await;
+    let processing = state.processing_transaction.lock().await;
+    
+    Ok(serde_json::json!({
+        "queueLength": queue.len(),
+        "isProcessing": *processing,
+        "transactions": queue.iter().map(|tx| serde_json::json!({
+            "id": tx.id,
+            "to": tx.to_address,
+            "amount": tx.amount,
+            "timestamp": tx.timestamp,
+        })).collect::<Vec<_>>(),
+    }))
+}
+
 
 #[cfg(not(test))]
 fn main() {
@@ -1996,14 +2192,19 @@ fn main() {
             geth: Mutex::new(GethProcess::new()),
             downloader: Arc::new(GethDownloader::new()),
             miner_address: Mutex::new(None),
-            active_account: Mutex::new(None),
-            active_account_private_key: Mutex::new(None),
+            active_account: Arc::new(Mutex::new(None)),
+            active_account_private_key: Arc::new(Mutex::new(None)),
             rpc_url: Mutex::new("http://127.0.0.1:8545".to_string()),
             dht: Mutex::new(None),
             file_transfer: Mutex::new(None),
             proxies: Arc::new(Mutex::new(Vec::new())),
             file_transfer_pump: Mutex::new(None),
             socks5_proxy_cli: Mutex::new(args.socks5_proxy),
+
+            // Initialize transaction queue
+            transaction_queue: Arc::new(Mutex::new(VecDeque::new())),
+            transaction_processor: Mutex::new(None),
+            processing_transaction: Arc::new(Mutex::new(false)),
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
@@ -2016,6 +2217,8 @@ fn main() {
             remove_account_from_keystore,
             get_account_balance,
             send_chiral_transaction,
+            queue_transaction,
+            get_transaction_queue_status,
             get_network_peer_count,
             is_geth_running,
             check_geth_binary,
