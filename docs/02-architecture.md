@@ -68,8 +68,9 @@ File Processing Pipeline:
 1. File Input → SHA-256 Hash Generation
 2. File Chunking → 256KB chunks
 3. Chunk Encryption → AES-256
-4. Chunk Distribution → Multiple storage nodes
-5. DHT Registration → Hash-to-location mapping
+4. Erasure Coding → 10 data, 4 parity shards
+5. Chunk Distribution → Multiple storage nodes
+6. DHT Registration → Hash-to-location mapping
 ```
 
 #### Storage Node Structure
@@ -210,18 +211,20 @@ Backend Services:
 File Upload:
 1. Select File → Generate Hash
 2. Create Chunks → Encrypt
-3. Query DHT → Find Storage Nodes
-4. Calculate Rewards → Create Transaction
-5. Upload Chunks → Verify Storage
-6. Register in DHT → Complete
+3. Erasure Code Chunks → 10 data, 4 parity shards
+4. Query DHT → Find Storage Nodes
+5. Calculate Rewards → Create Transaction
+6. Upload Shards → Verify Storage
+7. Register in DHT → Complete
 
 File Download:
 1. Input Hash → Query DHT
 2. Discover Storage Nodes → Select Available
 3. Connect to Nodes → Initiate Transfer
-4. Download Chunks → Verify Hashes
-5. Reassemble File → Decrypt
-6. Distribute Rewards → Complete
+4. Download Shards → Verify Hashes
+5. Reassemble Chunks from Shards → Decrypt
+6. Reassemble File from Chunks
+7. Distribute Rewards → Complete
 ```
 
 ### 6. Security Architecture
@@ -250,7 +253,7 @@ Transaction Security:
 ```
 Permission Model:
 - File Owner: Full control (read, write, delete, share)
-- Storage Node: Read-only access to encrypted chunks
+- Storage Node: Read-only access to encrypted shards
 - Network Peer: No direct file access
 - DHT Network: Metadata only (no file content)
 ```
@@ -261,14 +264,20 @@ Permission Model:
 
 ```mermaid
 sequenceDiagram
+    participant Client
+    participant FileService
+    participant StorageNode
+    participant DHT
+    participant Blockchain
+
     Client->>+FileService: Upload File
-    FileService->>FileService: Generate Hash
-    FileService->>FileService: Chunk & Encrypt
-    FileService->>+DHT: Query File Metadata
-    DHT-->>-FileService: Return Seeder List
-    FileService->>+StorageNode: Upload Chunks
-    StorageNode-->>-FileService: Confirm Storage
-    FileService->>+DHT: Register File
+    FileService->>FileService: Generate Merkle Root from original chunk hashes
+    FileService->>FileService: Chunk file into 256KB pieces
+    FileService->>FileService: Apply 10+4 Reed-Solomon erasure coding to each chunk
+    FileService->>FileService: Encrypt each of the 14 shards
+    FileService->>+StorageNode: Upload encrypted shards
+    StorageNode-->>-FileService: Confirm shard storage
+    FileService->>+DHT: Register File Manifest (Merkle Root, Shard Hashes)
     DHT-->>-FileService: Confirm Registration
     FileService->>+Blockchain: Create Payment TX
     Blockchain-->>-FileService: TX Confirmed
@@ -279,16 +288,21 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    Client->>+FileService: Request File (Hash)
-    FileService->>+DHT: Lookup File
-    DHT-->>-FileService: Return Locations
-    FileService->>+DHT: Get Provider Info
-    DHT-->>-FileService: Return Peer Details
-    FileService->>Client: Present Options
-    Client->>FileService: Select Provider
-    FileService->>+StorageNode: Request Chunks
-    StorageNode-->>-FileService: Send Chunks
-    FileService->>FileService: Verify & Decrypt
+    participant Client
+    participant FileService
+    participant DHT
+    participant StorageNode
+    participant Blockchain
+
+    Client->>+FileService: Request File (Merkle Root)
+    FileService->>+DHT: Lookup File Manifest
+    DHT-->>-FileService: Return Manifest (includes shard hashes)
+    FileService->>+StorageNode: Request encrypted shards (needs 10 of 14)
+    StorageNode-->>-FileService: Send available encrypted shards
+    FileService->>FileService: Decrypt individual shards
+    FileService->>FileService: Reconstruct original chunk via erasure coding
+    FileService->>FileService: Verify chunk hash against original hash in manifest
+    FileService->>FileService: Assemble file from verified chunks
     FileService->>+Blockchain: Send Payment
     Blockchain-->>-FileService: Payment Confirmed
     FileService-->>-Client: File Ready
@@ -331,7 +345,7 @@ Load Balancing:
 ```
 File Redundancy:
 - Replication Factor: 3 (minimum)
-- Reed-Solomon Erasure Coding: 10+4
+- Reed-Solomon Erasure Coding: The 10+4 configuration provides built-in fault tolerance.
 - Geographic Distribution: Different regions
 - Automatic Repair: Self-healing on node failure
 ```
