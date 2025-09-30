@@ -11,7 +11,7 @@ use x25519_dalek::PublicKey;
 use std::sync::Mutex;
 
 // Import the new encryption functions and the bundle struct
-use crate::crypto::{decrypt_aes_key, encrypt_aes_key, EncryptedAesKeyBundle, DiffieHellman};
+use crate::encryption::{decrypt_aes_key, encrypt_aes_key, EncryptedAesKeyBundle, DiffieHellman};
 
 use std::collections::HashMap;
 use lazy_static::lazy_static;
@@ -510,13 +510,10 @@ mod tests {
         let manifest = manager.chunk_and_encrypt_file(&original_file_path, &recipient_public).unwrap();
         assert!(!manifest.chunks.is_empty(), "Test file should produce at least one chunk");
 
-        println!("Generated {} chunks", manifest.chunks.len());
-
         // 3. Simulate critical data loss by deleting too many shards
         // We have 10 data + 4 parity shards. We can lose up to 4. Let's delete 5.
         const SHARDS_TO_DELETE: usize = 5;
         if let Some(first_chunk_info) = manifest.chunks.first() {
-            println!("First chunk has {} shards", first_chunk_info.shards.len());
             
             let mut actually_deleted = 0;
             for i in 0..SHARDS_TO_DELETE {
@@ -525,18 +522,14 @@ mod tests {
                 if shard_path.exists() {
                     fs::remove_file(shard_path).unwrap();
                     actually_deleted += 1;
-                    //println!("Deleted shard {}: {}", i, shard_hash_to_delete);
                 } else {
-                    println!("Shard {} doesn't exist: {}", i, shard_hash_to_delete);
                 }
             }
-            println!("Actually deleted {} shards", actually_deleted);
             
             // Count remaining shards
             let remaining_shards = first_chunk_info.shards.iter()
                 .filter(|hash| storage_path.join(hash).exists())
                 .count();
-            println!("Remaining shards: {}", remaining_shards);
         }
 
         // CRITICAL FIX: Clear the L1 cache after deleting files
@@ -544,7 +537,6 @@ mod tests {
         {
             let mut cache = L1_CACHE.lock().unwrap();
             *cache = LruCache::new(L1_CACHE_CAPACITY);
-            println!("Cleared L1 cache");
         }
 
         // 4. Attempt to reassemble the file. This should fail.
@@ -562,7 +554,6 @@ mod tests {
             },
             Err(error_message) => {
                 // The error should indicate not enough shards were available.
-                println!("Got expected error: {}", error_message);
                 assert!(error_message.contains("Not enough shards to reconstruct chunk"));
             }
         }
