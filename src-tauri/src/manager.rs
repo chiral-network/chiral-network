@@ -435,7 +435,12 @@ impl ChunkManager {
         let proof = merkle_tree.proof(&[chunk_index_to_prove]);
 
         let proof_indices = vec![chunk_index_to_prove];
-        let proof_hashes_hex = proof.proof_hashes();
+        // Convert proof hashes to Vec<String> (hex)
+        let proof_hashes_hex: Vec<String> = proof
+            .proof_hashes()
+            .iter()
+            .map(|h| hex::encode(h))
+            .collect();
 
         Ok((proof_indices, proof_hashes_hex, all_chunk_hashes.len()))
     }
@@ -564,6 +569,8 @@ mod tests {
             leaves.len(),
         );
         assert!(!is_invalid, "Merkle proof verification should fail for an incorrect leaf.");
+
+    }
 
     fn test_reconstruction_with_missing_shards() {
         // 1. Setup
