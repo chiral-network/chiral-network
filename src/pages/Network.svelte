@@ -526,8 +526,22 @@
     }
     
     if (!signalingConnected) {
-      await signaling.connect();
-      signalingConnected = true;
+      try {
+        if (!signaling) {
+          signaling = new SignalingService();
+        }
+        await signaling.connect();
+        signalingConnected = true;
+        signaling.peers.subscribe(peers => {
+          discoveredPeers = peers;
+          console.log('Updated discovered peers:', peers);
+        });
+        showToast('Connected to signaling server', 'success');
+      } catch (error) {
+        console.error('Failed to connect to signaling server:', error);
+        showToast('Failed to connect to signaling server. Make sure DHT is running.', 'error');
+        return;
+      }
     }
     
     // discoveredPeers will update automatically
@@ -541,7 +555,7 @@
     }
     
     if (!signalingConnected) {
-      showToast('Signaling server not connected', 'error');
+      showToast('Signaling server not connected. Please start DHT first.', 'error');
       return;
     }
     
@@ -792,10 +806,9 @@
           discoveredPeers = peers;
           console.log('Updated discovered peers:', peers);
         });
-        showToast('Connected to signaling server', 'success');
+        console.log('Signaling service initialized successfully');
       } catch (error) {
-        console.error('Failed to connect to signaling server:', error);
-        showToast('Failed to connect to signaling server. Make sure it\'s running.', 'error');
+        console.log('Signaling service not available (DHT not running) - this is normal');
         signalingConnected = false;
       }
       
