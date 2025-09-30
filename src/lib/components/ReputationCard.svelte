@@ -22,13 +22,26 @@
     }
   };
 
-  // Score color based on value
-  const getScoreColor = (score: number): string => {
-    if (score >= 0.8) return 'text-green-600';
-    if (score >= 0.6) return 'text-blue-600';
-    if (score >= 0.4) return 'text-yellow-600';
-    if (score >= 0.2) return 'text-orange-600';
-    return 'text-red-600';
+  // Convert score to star rating (0-5)
+  const getStarRating = (score: number): number => {
+    return score * 5;
+  };
+
+  // Score color based on trust level
+  const getScoreColor = (level: TrustLevel): string => {
+    switch (level) {
+      case TrustLevel.Trusted:
+        return 'text-green-600';
+      case TrustLevel.High:
+        return 'text-blue-600';
+      case TrustLevel.Medium:
+        return 'text-yellow-600';
+      case TrustLevel.Low:
+        return 'text-orange-600';
+      case TrustLevel.Unknown:
+      default:
+        return 'text-gray-600';
+    }
   };
 
   // Format last seen time
@@ -45,26 +58,28 @@
     return 'Just now';
   };
 
-  // Calculate success rate
+  // Calculate success rate and star rating
   const successRate = peer.totalInteractions > 0 
     ? (peer.successfulInteractions / peer.totalInteractions) * 100 
     : 0;
+  
+  const starRating = getStarRating(peer.score);
 </script>
 
 <Card class="p-4 hover:shadow-md transition-shadow">
-  <div class="flex items-start justify-between mb-3 flex-wrap gap-2">
-    <div class="flex items-center space-x-2 min-w-0">
-      <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-sm font-bold">
+  <div class="flex flex-col items-start gap-2 mb-3">
+    <div class="flex items-center space-x-2 min-w-0 w-full">
+      <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
         {peer.peerId.slice(0, 2).toUpperCase()}
       </div>
-      <div class="min-w-0">
+      <div class="min-w-0 flex-1">
         <h3 class="font-semibold text-gray-900 text-sm truncate" title={peer.peerId}>
           {peer.peerId}
         </h3>
         <p class="text-xs text-gray-500">{formatLastSeen(peer.lastSeen)}</p>
       </div>
     </div>
-    <Badge class={`${getTrustLevelColor(peer.trustLevel)} flex-shrink-0`}>
+    <Badge class={`${getTrustLevelColor(peer.trustLevel)}`}>
       {peer.trustLevel}
     </Badge>
   </div>
@@ -74,8 +89,8 @@
     <div class="flex justify-between items-center">
       <div>
         <p class="text-xs text-gray-500">Reputation Score</p>
-        <p class={`text-lg font-bold ${getScoreColor(peer.score)}`}>
-          {(peer.score * 100).toFixed(1)}%
+        <p class={`text-lg font-bold ${getScoreColor(peer.trustLevel)}`}>
+          {starRating.toFixed(1)}/5
         </p>
       </div>
       <div class="text-right">
@@ -86,34 +101,36 @@
       </div>
     </div>
 
-    <!-- Progress Bar -->
-    <div class="w-full bg-gray-200 rounded-full h-2">
-      <div 
-        class="h-2 rounded-full transition-all duration-300"
-        class:bg-green-500={peer.score >= 0.8}
-        class:bg-blue-500={peer.score >= 0.6 && peer.score < 0.8}
-        class:bg-yellow-500={peer.score >= 0.4 && peer.score < 0.6}
-        class:bg-orange-500={peer.score >= 0.2 && peer.score < 0.4}
-        class:bg-red-500={peer.score < 0.2}
-        style="width: {peer.score * 100}%"
-      ></div>
+  <!-- Star Rating Display -->
+    <div class="flex items-center justify-center gap-1" title={`Score: ${starRating.toFixed(1)}/5`}>
+      {#each Array(5) as _, index}
+        <div class="relative w-4 h-4">
+          <span class="text-gray-300 absolute">☆</span>
+          <span 
+            class="text-yellow-400 absolute overflow-hidden"
+            style={`width: ${Math.max(0, Math.min(1, starRating - index)) * 100}%;`}
+          >
+            ★
+          </span>
+        </div>
+      {/each}
     </div>
 
     <!-- Metrics Grid -->
-    <div class="grid grid-cols-2 gap-3 text-xs">
-      <div class="flex justify-between">
+    <div class="grid grid-cols-4 gap-3 text-xs">
+      <div class="flex justify-between w-full col-span-2">
         <span class="text-gray-500">Interactions:</span>
         <span class="font-medium">{peer.totalInteractions}</span>
       </div>
-      <div class="flex justify-between">
+      <div class="flex justify-between w-full col-span-2">
         <span class="text-gray-500">Latency:</span>
         <span class="font-medium">{peer.metrics.averageLatency}ms</span>
       </div>
-      <div class="flex justify-between">
+      <div class="flex justify-between w-full col-span-2">
         <span class="text-gray-500">Bandwidth:</span>
         <span class="font-medium">{peer.metrics.bandwidth} Mbps</span>
       </div>
-      <div class="flex justify-between">
+      <div class="flex justify-between w-full col-span-2">
         <span class="text-gray-500">Uptime:</span>
         <span class="font-medium">{peer.metrics.uptime}%</span>
       </div>

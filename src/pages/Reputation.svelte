@@ -10,14 +10,62 @@
   // State
   let peers: PeerReputation[] = [];
   let analytics: ReputationAnalytics;
-  let selectedTrustLevel: TrustLevel | 'All' = 'All';
   let sortBy: 'score' | 'interactions' | 'lastSeen' = 'score';
   let searchQuery = '';
   let isLoading = true;
   let showAnalytics = true;
 
+  // Filter states
+  let isFilterOpen = false;
+  let selectedTrustLevels: TrustLevel[] = [];
+  let filterEncryptionSupported: boolean | null = null;
+  let minUptime = 70;
+
+  // Pending filter states for the dropdown
+  let pendingSelectedTrustLevels: TrustLevel[] = [];
+  let pendingFilterEncryptionSupported: boolean | null = null;
+  let pendingMinUptime = 70;
+
+  function openFilters() {
+    // Sync pending state with applied state when opening
+    pendingSelectedTrustLevels = [...selectedTrustLevels];
+    pendingFilterEncryptionSupported = filterEncryptionSupported;
+    pendingMinUptime = minUptime;
+    isFilterOpen = true;
+  }
+
+  function applyFilters() {
+    selectedTrustLevels = [...pendingSelectedTrustLevels];
+    filterEncryptionSupported = pendingFilterEncryptionSupported;
+    minUptime = pendingMinUptime;
+    isFilterOpen = false;
+  }
+
+  function clearFilters() {
+    pendingSelectedTrustLevels = [];
+    pendingFilterEncryptionSupported = null;
+    pendingMinUptime = 70;
+  }
+
+  // Action to detect clicks outside an element
+  function clickOutside(node: HTMLElement) {
+    const handleClick = (event: MouseEvent) => {
+      if (node && !node.contains(event.target as Node) && isFilterOpen) {
+        isFilterOpen = false;
+      }
+    };
+
+    document.addEventListener('click', handleClick, true);
+
+    return {
+      destroy() {
+        document.removeEventListener('click', handleClick, true);
+      }
+    };
+  }
+
   // Trust level options for filter
-  const trustLevelOptions: (TrustLevel | 'All')[] = ['All', TrustLevel.Trusted, TrustLevel.High, TrustLevel.Medium, TrustLevel.Low, TrustLevel.Unknown];
+  const trustLevelOptions: TrustLevel[] = [TrustLevel.Trusted, TrustLevel.High, TrustLevel.Medium, TrustLevel.Low, TrustLevel.Unknown];
 
   // Sort options
   const sortOptions = [
@@ -103,9 +151,12 @@
   // Filter and sort peers
   $: filteredPeers = peers
     .filter(peer => {
-      const matchesTrustLevel = selectedTrustLevel === 'All' || peer.trustLevel === selectedTrustLevel;
+      const matchesTrustLevel = selectedTrustLevels.length === 0 || selectedTrustLevels.includes(peer.trustLevel);
       const matchesSearch = searchQuery === '' || peer.peerId.toLowerCase().includes(searchQuery.toLowerCase());
-      return matchesTrustLevel && matchesSearch;
+      const matchesEncryption = filterEncryptionSupported === null || peer.metrics.encryptionSupported === filterEncryptionSupported;
+      const matchesUptime = peer.metrics.uptime >= minUptime;
+
+      return matchesTrustLevel && matchesSearch && matchesEncryption && matchesUptime;
     })
     .sort((a, b) => {
       switch (sortBy) {
@@ -145,16 +196,16 @@
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <!-- Header -->
     <div class="mb-8">
-      <div class="flex items-center justify-between">
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 class="text-3xl font-bold text-gray-900">Reputation System</h1>
           <p class="mt-2 text-gray-600">Monitor peer trust levels and network health</p>
         </div>
-        <div class="flex items-center space-x-3">
-          <Button on:click={refreshData} disabled={isLoading} variant="outline">
+        <div class="flex flex-wrap gap-2 sm:justify-end">
+          <Button on:click={refreshData} disabled={isLoading} variant="outline" class="w-full sm:w-auto">
             {isLoading ? 'Refreshing...' : 'Refresh Data'}
           </Button>
-          <Button on:click={() => showAnalytics = !showAnalytics} variant="outline">
+          <Button on:click={() => showAnalytics = !showAnalytics} variant="outline" class="w-full sm:w-auto">
             {showAnalytics ? 'Hide Analytics' : 'Show Analytics'}
           </Button>
         </div>
@@ -177,50 +228,99 @@
         </div>
       {/if}
 
-      <!-- Filters and Controls -->
-      <Card class="p-6 mb-6">
-        <div class="flex flex-col sm:flex-row gap-4">
-          <!-- Search -->
-          <div class="flex-1">
-            <label for="search" class="block text-sm font-medium text-gray-700 mb-2">Search Peers</label>
-            <input
-              id="search"
-              type="text"
-              bind:value={searchQuery}
-              placeholder="Search by peer ID..."
-              class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-          </div>
+      <!-- Search Box -->
+      <Card class="p-6 mb-4">
+        <h3 class="text-lg font-bold text-gray-900 mb-4">Search Peers</h3>
+        <div>
+          <input
+            id="search"
+            type="text"
+            bind:value={searchQuery}
+            placeholder="Search by peer ID..."
+            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          />
+        </div>
+      </Card>
 
-          <!-- Trust Level Filter -->
-          <div class="sm:w-48">
-            <label for="trustLevel" class="block text-sm font-medium text-gray-700 mb-2">Trust Level</label>
-            <select
-              id="trustLevel"
-              bind:value={selectedTrustLevel}
-              class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            >
-              {#each trustLevelOptions as option}
-                <option value={option}>{option}</option>
-              {/each}
-            </select>
-          </div>
+      <!-- Filters and Sort Controls -->
+      <div class="flex items-center justify-between mb-4 gap-2 flex-wrap">
+        <!-- Filter Dropdown -->
+        <div class="relative">
+          <Button variant="outline" class="sm:w-auto" on:click={openFilters}>Filters</Button>
+          {#if isFilterOpen}
+            <div use:clickOutside>
+              <Card class="absolute top-full mt-2 p-6 w-72 z-10">
+                <div class="space-y-6">
+                  <!-- Trust Level Filter -->
+                  <div>
+                    <h4 class="font-medium text-gray-800 mb-3">Trust Level</h4>
+                    <div class="space-y-2">
+                      {#each trustLevelOptions as level}
+                        <label class="flex items-center gap-2 text-sm font-normal">
+                          <input type="checkbox" bind:group={pendingSelectedTrustLevels} value={level} />
+                          {level}
+                        </label>
+                      {/each}
+                    </div>
+                  </div>
 
-          <!-- Sort By -->
-          <div class="sm:w-48">
-            <label for="sortBy" class="block text-sm font-medium text-gray-700 mb-2">Sort By</label>
+                  <!-- Encryption Filter -->
+                  <div>
+                    <h4 class="font-medium text-gray-800 mb-3">Encryption</h4>
+                    <div class="space-y-2">
+                      <label class="flex items-center gap-2 text-sm font-normal">
+                        <input type="radio" bind:group={pendingFilterEncryptionSupported} value={null} />
+                        Any
+                      </label>
+                      <label class="flex items-center gap-2 text-sm font-normal">
+                        <input type="radio" bind:group={pendingFilterEncryptionSupported} value={true} />
+                        Supported
+                      </label>
+                      <label class="flex items-center gap-2 text-sm font-normal">
+                        <input type="radio" bind:group={pendingFilterEncryptionSupported} value={false} />
+                        Not Supported
+                      </label>
+                    </div>
+                  </div>
+
+                  <!-- Uptime Filter -->
+                  <div>
+                    <h4 class="font-medium text-gray-800 mb-3">Minimum Uptime</h4>
+                    <div class="flex items-center gap-3">
+                      <input type="range" min="0" max="100" bind:value={pendingMinUptime} class="w-full" />
+                      <span class="text-sm font-medium w-12 text-right">{pendingMinUptime}%</span>
+                    </div>
+                  </div>
+                </div>
+                <!-- Action Buttons -->
+                <div class="flex justify-between items-center mt-6 pt-4 border-t border-gray-200">
+                  <Button variant="ghost" on:click={clearFilters}>Clear</Button>
+                  <Button on:click={applyFilters}>Apply</Button>
+                </div>
+              </Card>
+            </div>
+          {/if}
+        </div>
+
+        <!-- Sort Dropdown -->
+        <div class="flex items-center gap-2">
+          <label for="sortBy" class="text-sm font-medium text-gray-700 sr-only">Sort By</label>
+          <div class="relative">
             <select
               id="sortBy"
               bind:value={sortBy}
-              class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              class="appearance-none bg-white border border-gray-300 rounded-md py-2 pl-3 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             >
               {#each sortOptions as option}
                 <option value={option.value}>{option.label}</option>
               {/each}
             </select>
+            <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-700">
+              <svg class="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
+            </div>
           </div>
         </div>
-      </Card>
+      </div>
 
       <!-- Results Summary -->
       <div class="flex items-center justify-between mb-4">
