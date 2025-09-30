@@ -57,9 +57,9 @@
       <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-sm font-bold">
         {peer.peerId.slice(0, 2).toUpperCase()}
       </div>
-      <div>
-        <h3 class="font-semibold text-gray-900 text-sm">
-          {peer.peerId.slice(0, 8)}...{peer.peerId.slice(-4)}
+      <div class="min-w-0">
+        <h3 class="font-semibold text-gray-900 text-sm truncate" title={peer.peerId}>
+          {peer.peerId}
         </h3>
         <p class="text-xs text-gray-500">{formatLastSeen(peer.lastSeen)}</p>
       </div>

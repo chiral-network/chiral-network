@@ -115,19 +115,19 @@
     <h3 class="text-lg font-semibold text-gray-900 mb-4">Trust Level Distribution</h3>
     <div class="space-y-3">
       {#each trustLevelData as { level, count, percentage }}
-        <div class="flex items-center justify-between">
-          <div class="flex items-center space-x-3">
-            <div class="w-4 h-4 rounded-full {getTrustLevelColor(level)}"></div>
-            <span class="text-sm font-medium text-gray-700">{level}</span>
+        <div class="flex items-center gap-3 flex-wrap">
+          <div class="flex items-center gap-3 min-w-0">
+            <div class="w-4 h-4 rounded-full {getTrustLevelColor(level)} flex-shrink-0"></div>
+            <span class="text-sm font-medium text-gray-700 truncate" title={level}>{level}</span>
           </div>
-          <div class="flex items-center space-x-3">
-            <div class="w-32 bg-gray-200 rounded-full h-2">
+          <div class="flex items-center gap-3 min-w-0 flex-1">
+            <div class="bg-gray-200 rounded-full h-2 flex-1 min-w-[6rem] overflow-hidden">
               <div 
                 class="h-2 rounded-full {getTrustLevelColor(level)}"
                 style="width: {percentage}%"
               ></div>
             </div>
-            <span class="text-sm text-gray-600 w-12 text-right">{count}</span>
+            <span class="text-sm text-gray-600 w-12 text-right shrink-0">{count}</span>
           </div>
         </div>
       {/each}
@@ -139,19 +139,19 @@
     <h3 class="text-lg font-semibold text-gray-900 mb-4">Top Performers</h3>
     <div class="space-y-3">
       {#each analytics.topPerformers.slice(0, 5) as peer, index}
-        <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-          <div class="flex items-center space-x-3">
+        <div class="flex items-center p-3 bg-gray-50 rounded-lg gap-3 flex-wrap">
+          <div class="flex items-center space-x-3 min-w-0 flex-1">
             <div class="w-6 h-6 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-xs font-bold">
               {index + 1}
             </div>
-            <div>
-              <p class="text-sm font-medium text-gray-900">
-                {peer.peerId.slice(0, 8)}...{peer.peerId.slice(-4)}
+            <div class="min-w-0">
+              <p class="text-sm font-medium text-gray-900 truncate" title={peer.peerId}>
+                {peer.peerId}
               </p>
               <p class="text-xs text-gray-500">{peer.totalInteractions} interactions</p>
             </div>
           </div>
-          <div class="flex items-center space-x-2">
+          <div class="flex items-center space-x-2 shrink-0">
             <Badge class={getTrustLevelColor(peer.trustLevel).replace('bg-', 'bg-').replace('text-', 'text-')}>
               {peer.trustLevel}
             </Badge>
