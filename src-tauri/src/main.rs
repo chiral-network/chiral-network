@@ -223,6 +223,7 @@ async fn upload_versioned_file(
                 file_hash.clone(),
                 file_name,
                 file_size,
+                file_data,
                 created_at,
                 mime_type,
                 is_encrypted,
@@ -607,6 +608,7 @@ async fn publish_file_metadata(
             file_hash,
             file_name,
             file_size,
+            file_data: vec![],
             seeders: vec![],
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1105,6 +1107,7 @@ async fn upload_file_to_network(
                 file_hash: file_hash.clone(),
                 file_name: file_name.to_string(),
                 file_size: file_data.len() as u64,
+                file_data: file_data.clone(),
                 seeders: vec![],
                 created_at: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -1223,6 +1226,7 @@ async fn upload_file_data_to_network(
 
         // Store the file data directly in memory
         let file_size = file_data.len() as u64;
+        let cloned_fd = file_data.clone(); 
         ft.store_file_data(file_hash.clone(), file_name.clone(), file_data)
             .await;
 
@@ -1237,6 +1241,7 @@ async fn upload_file_data_to_network(
                 file_hash: file_hash.clone(),
                 file_name: file_name.clone(),
                 file_size: file_size,
+                file_data: cloned_fd,
                 seeders: vec![],
                 created_at: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
