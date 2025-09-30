@@ -144,7 +144,17 @@
     "locationHint": "Ayuda a conectar con pares cercanos para un mejor rendimiento.",
     "enableUpnp": "Habilitar UPnP",
     "enableNat": "Habilitar mapeo de puertos NAT",
-    "enableDht": "Habilitar DHT"
+    "enableDht": "Habilitar DHT",
+    "geoDistribution": {
+      "title": "Distribución geográfica",
+      "subtitle": "Mapeando {peers} pares observados",
+      "topRegion": "Región principal: {region}",
+      "noData": "Esperando datos de ubicación",
+      "tooltip": "{region}: {count} pares",
+      "peersShort": "{count} pares",
+      "emptyState": "Conéctate al DHT para comenzar a mapear pares.",
+      "unknownNotice": "{count} pares todavía no informan su ubicación."
+    }
   },
   "regions.usEast": "EE. UU. Este",
   "regions.usWest": "EE. UU. Oeste",
@@ -626,6 +636,7 @@
     "downloads": "Descargas",
     "searchPlaceholder": "Buscar descargas...",
     "clearSearch": "Borrar búsqueda",
+    "clearFinished": "Limpiar finalizados",
     "filters": {
       "all": "Todas",
       "active": "Activas",
@@ -664,7 +675,8 @@
       "resume": "Reanudar",
       "remove": "Eliminar",
       "cancel": "Cancelar",
-      "openFile": "Abrir archivo"
+      "showInFolder": "Mostrar en carpeta",
+      "retry": "Reintentar"
     },
     "notifications": {
       "enterHash": "Por favor introduce un hash de archivo",

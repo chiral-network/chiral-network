@@ -6,7 +6,7 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
   import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation } from 'lucide-svelte'
-  import { files, downloadQueue } from '$lib/stores'
+  import { files, downloadQueue, activeTransfers } from '$lib/stores'
   import DownloadSearchSection from '$lib/components/download/DownloadSearchSection.svelte'
   import type { FileMetadata } from '$lib/dht'
   import { onDestroy, onMount } from 'svelte'
@@ -14,7 +14,8 @@
   import { get } from 'svelte/store'
   import { toHumanReadableSize } from '$lib/utils'
   import { initDownloadTelemetry, disposeDownloadTelemetry } from '$lib/downloadTelemetry'
-  const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
+  
+  const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params)
 
   onMount(() => {
     initDownloadTelemetry()
@@ -229,6 +230,9 @@
       size: metadata.fileSize,
       status: 'queued' as const,
       priority: 'normal' as const,
+      version: metadata.version, // Preserve version info if available
+      seeders: metadata.seeders.length, // Convert array length to number
+      seederAddresses: metadata.seeders, // Store the actual seeder addresses
     }
 
     downloadQueue.update((queue) => [...queue, newFile])
@@ -258,8 +262,8 @@
   }
 
   // Function to handle input and only allow positive numbers
-  function handleMaxConcurrentInput(event: any) {
-    const target = event.target as HTMLInputElement
+  function handleMaxConcurrentInput(event: Event) {
+    const target = (event.target as HTMLInputElement)
     let value = target.value
     
     // Remove any non-digit characters
@@ -428,16 +432,26 @@
     }))
   }
   
-  function cancelDownload(fileId: string) {
-  files.update(f => f.map(file => 
-    file.id === fileId 
-      ? { ...file, status: 'canceled' }
-      : file
-  ))
-  downloadQueue.update(q => q.filter(file => file.id !== fileId))
-  activeSimulations.delete(fileId)
-}
+  async function cancelDownload(fileId: string) {
+    files.update(f => f.map(file =>
+      file.id === fileId
+        ? { ...file, status: 'canceled' }
+        : file
+    ))
+    downloadQueue.update(q => q.filter(file => file.id !== fileId))
+    activeSimulations.delete(fileId)
 
+    // Clean up P2P transfer
+    const transfer = get(activeTransfers).get(fileId);
+    if (transfer && transfer.type === 'p2p') {
+      const { p2pFileTransferService } = await import('$lib/services/p2pFileTransfer');
+      p2pFileTransferService.cancelTransfer(transfer.transferId);
+      activeTransfers.update(transfers => {
+        transfers.delete(fileId);
+        return transfers;
+      });
+    }
+  }
   
   function startQueuedDownload(fileId: string) {
     downloadQueue.update(queue => {
@@ -471,92 +485,103 @@
       return;
     }
 
-    // Proceed directly to file dialog
-    try {
-      const [, { save }] = await Promise.all([
-        import('@tauri-apps/api/core'),
-        import('@tauri-apps/plugin-dialog')
-      ]);
-      
-      // Show file save dialog
-      const outputPath = await save({
-        defaultPath: fileToDownload.name,
-        filters: [{
-          name: 'All Files',
-          extensions: ['*']
-        }]
-      });
-      
-      if (!outputPath) {
-        // User cancelled the save dialog
-        activeSimulations.delete(fileId);
-        files.update(f => f.map(file => 
-          file.id === fileId 
-            ? { ...file, status: 'canceled' }
-            : file
-        ));
-        return;
-      }
+      // Proceed directly to file dialog
+      try {
+        const { save } = await import('@tauri-apps/plugin-dialog');
+        
+        // Show file save dialog
+        const outputPath = await save({
+          defaultPath: fileToDownload.name,
+          filters: [{
+            name: 'All Files',
+            extensions: ['*']
+          }]
+        });
+        
+        if (!outputPath) {
+          // User cancelled the save dialog
+          activeSimulations.delete(fileId);
+          files.update(f => f.map(file => 
+            file.id === fileId 
+              ? { ...file, status: 'canceled' }
+              : file
+          ));
+          return;
+        }
       
       // Show "automatically started" message now that download is proceeding
       showNotification(tr('download.notifications.autostart'), 'info');
       
-      // Start the actual download
-      files.update(f => f.map(file => 
-        file.id === fileId ? { ...file, progress: 10 } : file
-      ));
-      let lastProgress = 10;
-      let lastTimestamp = Date.now();
-      
-      // Simulate progress while downloading - complete when progress reaches 100%
-      const progressInterval = setInterval(() => {
-        files.update(f => f.map(file => {
-          if (file.id === fileId && file.status === 'downloading') {
-            const currentProgress = file.progress || 10;
-            const newProgress = Math.min(100, currentProgress + Math.random() * 5 + 1); // 1-6% increment
+      // Import P2P file transfer service
+      const { p2pFileTransferService } = await import('$lib/services/p2pFileTransfer');
 
-            // Calculate speed and ETA
-            const now = Date.now();
-            const timeDiff = (now - lastTimestamp) / 1000; // in seconds
-            const progressDiff = newProgress - lastProgress;
-            const bytesDownloaded = (progressDiff / 100) * file.size;
-            const speed = bytesDownloaded / timeDiff; // bytes per second
-            const speedStr = `${toHumanReadableSize(speed)}/s`;
+      // Start P2P download using the P2P file transfer service
+      try {
+        const seeders = fileToDownload.seederAddresses || [];
 
-            const remainingBytes = file.size * (100 - newProgress) / 100;
-            const etaSeconds = speed > 0 ? Math.round(remainingBytes / speed) : Infinity;
-            const etaStr = etaSeconds === Infinity ? '∞' : `${Math.floor(etaSeconds / 60)}m ${etaSeconds % 60}s`;
-            lastProgress = newProgress;
-            lastTimestamp = now;
-
-            // Check if download just completed
-            if (newProgress >= 100) {
-              // Complete the download
-              clearInterval(progressInterval);
-              activeSimulations.delete(fileId);
-              showNotification(`Download completed: ${fileToDownload.name} saved to ${outputPath}`, 'success');
-              
-              // New: Auto-clear if enabled
-              if (autoClearCompleted) {
-                setTimeout(() => {
-                  clearDownload(fileId);
-                }, 5000); // 5-second delay before removing
-              }
-              return { ...file, progress: 100, status: 'completed', downloadPath: outputPath, speed: '0 B/s', eta: 'Done' };
-            }
-
-            return { ...file, progress: newProgress, speed: speedStr, eta: etaStr };
-          }
-          return file;
-        }));
-
-        // Check if download was cancelled (cleanup if needed)
-        const currentFile = $files.find(f => f.id === fileId);
-        if (!currentFile || currentFile.status === 'canceled') {
-          clearInterval(progressInterval);
-          activeSimulations.delete(fileId);
+        if (seeders.length === 0) {
+          throw new Error('No seeders available for this file');
         }
-      }, 1000); // Update every second for more stable speed/ETA
+
+        // Create file metadata for P2P transfer
+        const fileMetadata = {
+          fileHash: fileToDownload.hash,
+          fileName: fileToDownload.name,
+          fileSize: fileToDownload.size,
+          seeders: seeders,
+          createdAt: Date.now(),
+          isEncrypted: false
+        };
+
+        // Initiate P2P download with file saving
+        const transferId = await p2pFileTransferService.initiateDownloadWithSave(
+          fileMetadata,
+          seeders,
+          outputPath,
+          (transfer) => {
+            // Update UI with transfer progress
+            files.update(f => f.map(file => {
+              if (file.id === fileId) {
+                return {
+                  ...file,
+                  progress: transfer.progress,
+                  status: transfer.status === 'completed' ? 'completed' :
+                         transfer.status === 'failed' ? 'failed' :
+                         transfer.status === 'transferring' ? 'downloading' : file.status,
+                  speed: `${Math.round(transfer.speed / 1024)} KB/s`,
+                  eta: transfer.eta ? `${Math.round(transfer.eta)}s` : 'N/A',
+                  downloadPath: transfer.outputPath // Store the download path
+                };
+              }
+              return file;
+            }));
+
+            // Show notification on completion or failure
+            if (transfer.status === 'completed') {
+              showNotification(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
+            } else if (transfer.status === 'failed') {
+              showNotification(tr('download.notifications.downloadFailed', { values: { name: fileToDownload.name } }), 'error');
+            }
+          }
+        );
+
+        // Store transfer ID for cleanup
+        activeTransfers.update(transfers => {
+          transfers.set(fileId, { fileId, transferId, type: 'p2p' });
+          return transfers;
+        });
+
+        activeSimulations.delete(fileId);
+
+      } catch (error) {
+        console.error('P2P download failed:', error);
+        activeSimulations.delete(fileId);
+        files.update(f => f.map(file =>
+          file.id === fileId
+            ? { ...file, status: 'failed' }
+            : file
+        ));
+      }
       
     } catch (error) {
       // Download failed
@@ -645,6 +670,7 @@
   const formatFileSize = toHumanReadableSize
 
 
+
 </script>
 
 <div class="space-y-6">
@@ -698,7 +724,7 @@
             disabled={completedCount === 0 && failedCount === 0 && allFilteredDownloads.filter(f => f.status === 'canceled').length === 0}
           >
             <X class="h-3 w-3 mr-1" />
-            Clear Finished
+            {$t('download.clearFinished')}
           </Button>
           <Button
             size="sm"
@@ -864,6 +890,11 @@
                     <div class="flex-1 min-w-0">
                       <div class="flex items-center gap-3 mb-1">
                         <h3 class="font-semibold text-sm truncate">{file.name}</h3>
+                        {#if file.version}
+                          <Badge class="bg-blue-100 text-blue-800 text-xs px-2 py-0.5">
+                            v{file.version}
+                          </Badge>
+                        {/if}
                         <Badge class="text-xs font-semibold bg-muted-foreground/20 text-foreground border-0 px-2 py-0.5">
                           {formatFileSize(file.size)}
                         </Badge>
@@ -971,7 +1002,7 @@
                     class="h-7 px-3 text-sm"
                   >
                     <FolderOpen class="h-3 w-3 mr-1" />
-                    Show in Folder
+                    {$t('download.actions.showInFolder')}
                   </Button>
                   <Button
                     size="sm"
@@ -1011,3 +1042,4 @@
     {/if}
   </Card>
 </div>
+

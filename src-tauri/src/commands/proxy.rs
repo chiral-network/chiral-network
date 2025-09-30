@@ -2,7 +2,11 @@ use crate::dht::DhtService;
 use crate::AppState;
 use tauri::Emitter;
 use tauri::State;
-use tracing::info;
+// use tracing::info;
+use tracing::{info, warn};
+use libp2p::PeerId;
+use std::str::FromStr;
+use std::sync::Arc;
 
 #[derive(Clone, serde::Serialize)]
 pub struct ProxyNode {
@@ -88,14 +92,44 @@ pub(crate) async fn proxy_disconnect(
     url: String,
 ) -> Result<(), String> {
     info!("Disconnecting from proxy: {}", url);
-    // For proto v1: mark offline locally (no full teardown API yet)
-    let mut proxies = state.proxies.lock().await;
-    if let Some(p) = proxies.iter_mut().find(|p| p.address == url || p.id == url) {
-        p.status = "offline".into();
-        let _ = app.emit("proxy_status_update", p.clone());
-    }
-    // Note: This doesn't actually disconnect the peer in libp2p in this version.
-    Ok(())
+    // // For proto v1: mark offline locally (no full teardown API yet)
+    // let mut proxies = state.proxies.lock().await;
+    // if let Some(p) = proxies.iter_mut().find(|p| p.address == url || p.id == url) {
+    //     p.status = "offline".into();
+    //     let _ = app.emit("proxy_status_update", p.clone());
+    // }
+    // // Note: This doesn't actually disconnect the peer in libp2p in this version.
+    // Ok(())
+    
+    // Update local cache optimistically and capture the peer ID if known
+    let maybe_peer_id = {
+        let mut proxies = state.proxies.lock().await;
+        proxies
+            .iter_mut()
+            .find(|p| p.address == url || p.id == url)
+            .map(|p| {
+                p.status = "offline".into();
+                let _ = app.emit("proxy_status_update", p.clone());
+                p.id.clone()
+            })
+    };
+
+    let dht: Arc<DhtService> = {
+        let guard = state.dht.lock().await;
+        guard
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "DHT not initialized".to_string())?
+    };
+
+    let peer_id_str = maybe_peer_id.unwrap_or_else(|| url.clone());
+    let peer_id = PeerId::from_str(&peer_id_str).map_err(|_| {
+        warn!("Could not parse peer id for disconnect: {}", peer_id_str);
+        format!("Invalid peer id: {}", peer_id_str)
+    })?;
+
+    dht.disconnect_peer(peer_id).await
+
 }
 
 #[tauri::command]

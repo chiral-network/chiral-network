@@ -10,10 +10,11 @@
   import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw } from 'lucide-svelte'
   import { onDestroy, onMount, getContext } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
-  import { etcAccount, miningState, transactions, type Transaction } from '$lib/stores'
+  import { etcAccount, miningState, transactions } from '$lib/stores'
   import { getVersion } from "@tauri-apps/api/app";
   import { t } from 'svelte-i18n';
   import { goto } from '@mateothegreat/svelte5-router';
+  import { walletService } from '$lib/wallet'; 
 
   // Interfaces - MiningHistoryPoint is now defined in stores.ts
   
@@ -31,7 +32,6 @@
   let isGethRunning = false
   let currentBlock = 0
   let totalHashes = 0
-  let currentDifficulty = 4
   let lastHashUpdate = Date.now()
   let cpuThreads = navigator.hardwareConcurrency || 4
   let selectedThreads = Math.floor(cpuThreads / 2)
@@ -201,10 +201,12 @@
 
   const navigation = getContext('navigation') as { setCurrentPage: (page: string) => void };
   
-  // Computed values for actual threads based on intensity
+  // Computed values for threads based on intensity
   const maxThreads = cpuThreads
-  $: actualThreads = Math.ceil(($miningState.minerIntensity / 100) * maxThreads)
-  // Don't directly modify store in reactive statement to avoid infinite loops
+  // Intensity slider directly controls selectedThreads
+  $: if (!$miningState.isMining) {
+    selectedThreads = Math.ceil(($miningState.minerIntensity / 100) * maxThreads)
+  }
 
 
   // Threads warning
@@ -221,6 +223,17 @@
     intensityWarning = (numIntensity < 1 || numIntensity > 100)
             ? $t('mining.errors.intensity')
             : '';
+  }
+
+  $: if (!$etcAccount) {
+    // Clear mining state when no account is present
+    if ($miningState.isMining) {
+      stopMining(); // Stop mining if running
+    }
+    // Reset mining display state
+    $miningState.totalRewards = 0;
+    $miningState.blocksFound = 0;
+    $miningState.recentBlocks = [];
   }
 
   // Button disabled if either warning exists
@@ -241,9 +254,6 @@
 
     await checkGethStatus()
     await updateNetworkStats()
-    try {
-      seenHashes = new Set(($miningState.recentBlocks ?? []).map((b: any) => b.hash))
-    } catch{} 
     // If mining is already active from before, restore session and update stats
     if ($miningState.isMining) {
       // Restore session start time if it exists
@@ -259,15 +269,15 @@
     
     // Start polling for mining stats
     statsInterval = setInterval(async () => {
-      if ($miningState.isMining) {
-        await updateMiningStats() 
-        await appendNewBlocksFromBackend()
-      }
-      await updateNetworkStats()
-      if (isTauri) {
-        await updateCpuTemperature()
-      }
-    }, 1000) as unknown as number
+    if ($miningState.isMining) {
+       await updateMiningStats();
+       await walletService.refreshTransactions();
+    }
+    await updateNetworkStats();
+    if (isTauri) {
+      await updateCpuTemperature();
+    }
+  }, 1000) as unknown as number;
   })
   
   async function checkGethStatus() {
@@ -313,13 +323,7 @@
           if (hashRateFromLogs > 0) {
             // Use actual hash rate from logs
             $miningState.hashRate = formatHashRate(hashRateFromLogs)
-            
-            console.log('From mining stats - blocks:', blocksFound);
-            console.log('Current blocksFound before:', $miningState.blocksFound);
-            
             $miningState.blocksFound = blocksFound;
-            
-            console.log('blocksFound after:', $miningState.blocksFound);
           
             
           } else if ($miningState.activeThreads > 0) {
@@ -417,13 +421,8 @@
       
       if (results[4] !== undefined) {
         const blocksMined = results[4] as number;
-        
-        console.log('Backend returned blocks:', blocksMined);
-        console.log('Current blocksFound before update:', $miningState.blocksFound);
-        
+
         $miningState.blocksFound = blocksMined;
-        
-        console.log('blocksFound after update:', $miningState.blocksFound);
       }
     }
   } catch (e) {
@@ -494,7 +493,7 @@
       sessionStartTime = Date.now()
       // Store session start time in the store for persistence
       $miningState.sessionStartTime = sessionStartTime
-      $miningState.activeThreads = actualThreads  // Use computed actualThreads
+      $miningState.activeThreads = selectedThreads  // Use selectedThreads
       totalHashes = 0 // Reset total hashes
       lastHashUpdate = Date.now()
       startUptimeTimer() 
@@ -535,10 +534,6 @@
       console.error('Failed to stop mining:', e)
     }
   }
-  // Simulation removed; recent blocks come from backend
-
-  // Keep a set of hashes we've already shown to avoid duplicates
-  let seenHashes = new Set<string>();
 
   // Pagination for recent blocks
   let pageSizes = [5, 10, 20, 50]
@@ -559,80 +554,80 @@
 
   $: displayedBlocks = ($miningState.recentBlocks || []).slice((currentPage - 1) * pageSize, currentPage * pageSize)
 
-function pushRecentBlock(b: {
-  hash: string;
-  nonce?: number;
-  difficulty?: number;
-  timestamp?: Date;
-  number?: number;
-  reward?: number;
-}) {
+// function pushRecentBlock(b: {
+//   hash: string;
+//   nonce?: number;
+//   difficulty?: number;
+//   timestamp?: Date;
+//   number?: number;
+//   reward?: number;
+// }) {
 
-  const reward = typeof b.reward === "number" ? b.reward : 0;
+//   const reward = typeof b.reward === "number" ? b.reward : 0;
 
-  const item = {
-    id: `block-${b.hash}-${b.timestamp?.getTime() ?? Date.now()}`,
-    hash: b.hash,
-    reward,
-    timestamp: b.timestamp ?? new Date(),
-    difficulty: b.difficulty ?? currentDifficulty,
-    nonce: b.nonce ?? 0,
-    number: b.number ?? 0,
-  };
+//   const item = {
+//     id: `block-${b.hash}-${b.timestamp?.getTime() ?? Date.now()}`,
+//     hash: b.hash,
+//     reward,
+//     timestamp: b.timestamp ?? new Date(),
+//     difficulty: b.difficulty ?? currentDifficulty,
+//     nonce: b.nonce ?? 0,
+//     number: b.number ?? 0,
+//   };
 
-  // Add block to recentBlocks
-  $miningState.recentBlocks = [item, ...($miningState.recentBlocks ?? [])].slice(0, 50);
+//   // Add block to recentBlocks
+//   $miningState.recentBlocks = [item, ...($miningState.recentBlocks ?? [])].slice(0, 50);
 
-  // Reset pagination so newest block is visible
-  currentPage = 1;
+//   // Reset pagination so newest block is visible
+//   currentPage = 1;
 
-  if (reward > 0) {
-    const last4 = b.hash.slice(-4); // grab last 4 chars of hash
-    const tx: Transaction = {
-      id: Date.now(),
-      type: 'received',
-      amount: 2,
-      from: 'Mining reward',
-      date: new Date(),
-      description: `Block Reward (…${last4})`,
-      status: 'pending' // will flip to 'completed' when backend confirms
-    };
-    transactions.update(list => [tx, ...list]);
-  }
-}
+//   if (reward > 0) {
+//     const last4 = b.hash.slice(-4); // grab last 4 chars of hash
+//     const tx: Transaction = {
+//       id: Date.now(),
+//       type: 'received',
+//       amount: 2,
+//       from: 'Mining reward',
+//       date: new Date(),
+//       description: `Block Reward (…${last4})`,
+//       status: 'pending' // will flip to 'completed' when backend confirms
+//     };
+//     transactions.update(list => [tx, ...list]);
+//   }
+// }
 
-  async function appendNewBlocksFromBackend() {
-    try {
-      if (!($etcAccount && $miningState.isMining)) return;
-      const lookback = 2000;
-      const limit = 50;
-      const blocks = await invoke('get_recent_mined_blocks_pub', {
-        address: $etcAccount.address,
-        lookback,
-        limit
-      }) as Array<{ hash: string, nonce?: string, difficulty?: string, timestamp: number, number: number, reward?: number }>;
-      for (const b of blocks) {
-        if (seenHashes.has(b.hash)) continue;
-        seenHashes.add(b.hash);
-        pushRecentBlock({
-          hash: b.hash,
-          nonce: b.nonce ? parseInt(b.nonce, 16) : undefined,
-          difficulty: b.difficulty ? parseInt(b.difficulty, 16) : undefined,
-          timestamp: new Date((b.timestamp || 0) * 1000),
-          number: b.number,
-          reward: 2
-        });
-      }
-      // Hard de-duplication by hash as a safety net
-      const uniq = new Map<string, any>();
-      for (const it of ($miningState.recentBlocks ?? [])) {
-        if (!uniq.has(it.hash)) uniq.set(it.hash, it);
-      }
-  $miningState.recentBlocks = Array.from(uniq.values()).slice(0, 50);
-    } catch (e) {
-      console.error('Failed to append recent blocks:', e);
-    } 
-  } 
+  // async function appendNewBlocksFromBackend() {
+  //   try {
+  //     if (!($etcAccount && $miningState.isMining)) return;
+  //     const lookback = 2000;
+  //     const limit = 50;
+  //     const blocks = await invoke('get_recent_mined_blocks_pub', {
+  //       address: $etcAccount.address,
+  //       lookback,
+  //       limit
+  //     }) as Array<{ hash: string, nonce?: string, difficulty?: string, timestamp: number, number: number, reward?: number }>;
+  //     for (const b of blocks) {
+  //       if (seenHashes.has(b.hash)) continue;
+  //       seenHashes.add(b.hash);
+  //       pushRecentBlock({
+  //         hash: b.hash,
+  //         nonce: b.nonce ? parseInt(b.nonce, 16) : undefined,
+  //         difficulty: b.difficulty ? parseInt(b.difficulty, 16) : undefined,
+  //         timestamp: new Date((b.timestamp || 0) * 1000),
+  //         number: b.number,
+  //         reward: 2
+  //       });
+  //     }
+  //     // Hard de-duplication by hash as a safety net
+  //     const uniq = new Map<string, any>();
+  //     for (const it of ($miningState.recentBlocks ?? [])) {
+  //       if (!uniq.has(it.hash)) uniq.set(it.hash, it);
+  //     }
+  // $miningState.recentBlocks = Array.from(uniq.values()).slice(0, 50);
+  //   } catch (e) {
+  //     console.error('Failed to append recent blocks:', e);
+  //   } 
+  // } 
   
   function formatUptime(now: number = Date.now()) {
     const uptime = now - sessionStartTime
@@ -1223,7 +1218,7 @@ function pushRecentBlock(b: {
           <div class="flex items-center gap-2">
             <AlertCircle class="h-4 w-4 text-blue-500 flex-shrink-0" />
             <p class="text-sm text-blue-600">
-              {$t('mining.errors.noAccountLink')} <button on:click={() => { navigation.setCurrentPage('account'); goto('/account'); }} class="underline font-medium">{$t('mining.accountPage')}</button>
+              Please create a Chiral Network account from the <a href="/account" class="underline font-medium">Account page</a> to start mining
             </p>
           </div>
         </div>
@@ -1743,18 +1738,4 @@ function pushRecentBlock(b: {
         </div>
       </div>
     </div>
-  {/if} 
-<div class="balance-info" style="background: #f5f5f5; padding: 15px; margin: 10px 0; border-radius: 8px;">
-  <h3>Account Information</h3>
-  <div style="display: flex; gap: 30px;">
-    <div>
-      <strong>Current Balance:</strong> {($miningState.totalRewards || 0).toFixed(2)} Chiral
-    </div>
-    <div>
-      <strong>Blocks Found:</strong> {$miningState.blocksFound} blocks
-    </div>
-    <div>
-      <strong>Mining Status:</strong> {$miningState.isMining ? 'Active' : 'Stopped'}
-    </div>
-  </div>
-</div>
+  {/if}

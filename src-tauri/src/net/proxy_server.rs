@@ -1,6 +1,5 @@
 use libp2p::futures::StreamExt;
 use libp2p::relay::client::Behaviour as RelayClientBehaviour;
-use libp2p::relay::Behaviour as Relay;
 use libp2p::swarm::{Swarm, SwarmEvent};
 use libp2p::SwarmBuilder;
 use libp2p::{identity, noise, tcp, yamux, Multiaddr, PeerId};
@@ -16,15 +15,16 @@ pub async fn run_proxy_server(
     info!("Local peer id: {:?}", local_peer_id);
 
     // SwarmBuilder: TCP + RelayClient + with_behaviour + build()
-    let mut swarm: Swarm<RelayClientBehaviour> =
-        SwarmBuilder::with_existing_identity(local_key)
-            .with_tokio()
-            .with_tcp(tcp::Config::default(), noise::Config::new, yamux::Config::default)?
-            .with_relay_client(noise::Config::new, yamux::Config::default)?                 
-            .with_behaviour(|_keypair, relay_client| {
-                Ok(relay_client)
-            })?
-            .build(); 
+    let mut swarm: Swarm<RelayClientBehaviour> = SwarmBuilder::with_existing_identity(local_key)
+        .with_tokio()
+        .with_tcp(
+            tcp::Config::default(),
+            noise::Config::new,
+            yamux::Config::default,
+        )?
+        .with_relay_client(noise::Config::new, yamux::Config::default)?
+        .with_behaviour(|_keypair, relay_client| Ok(relay_client))?
+        .build();
 
     let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", port).parse()?;
     swarm.listen_on(listen_addr)?;

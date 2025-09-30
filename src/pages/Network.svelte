@@ -6,6 +6,7 @@
   import Label from '$lib/components/ui/label.svelte'
   import GethStatusCard from '$lib/components/GethStatusCard.svelte'
   import PeerMetrics from '$lib/components/PeerMetrics.svelte'
+  import GeoDistributionCard from '$lib/components/GeoDistributionCard.svelte'
   import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Play, Square, Download, AlertCircle, Wifi } from 'lucide-svelte'
   import { peers, networkStats, networkStatus, userLocation, etcAccount } from '$lib/stores'
   import { get } from 'svelte/store'
@@ -15,16 +16,24 @@
   import { dhtService, DEFAULT_BOOTSTRAP_NODES } from '$lib/dht'
   import { getStatus as fetchGethStatus, type GethStatus } from '$lib/services/gethService'
   import { resetConnectionAttempts } from '$lib/dhtHelpers'
-  import type { DhtHealth } from '$lib/dht'
+  import type { DhtHealth, NatConfidence, NatReachabilityState } from '$lib/dht'
   import { Clipboard } from "lucide-svelte"
   import { t } from 'svelte-i18n';
   import { showToast } from '$lib/toast';
   import DropDown from '$lib/components/ui/dropDown.svelte'
-  import { settings} from '$lib/stores'; 
+  import { SignalingService } from '$lib/services/signalingService';
+  import { createWebRTCSession } from '$lib/services/webrtcService';
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
-  const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
+  const tr = (k: string, params?: Record<string, any>): string => (get(t) as (key: string, params?: any) => string)(k, params)
+
+  type NatStatusPayload = {
+    state: NatReachabilityState
+    confidence: NatConfidence
+    lastError?: string | null
+    summary?: string | null
+  }
   
   let discoveryRunning = false
   let newPeerAddress = ''
@@ -64,9 +73,6 @@
   let chainId = 98765
   let gethStatusCardRef: { refresh?: () => Promise<void> } | null = null
   
-  // Local settings state
-  // let localSettings = get(settings); // Initialize local settings
-
   // DHT variables
   let dhtStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
   let dhtPeerId: string | null = null
@@ -78,6 +84,15 @@
   let dhtError: string | null = null
   let connectionAttempts = 0
   let dhtPollInterval: number | undefined
+  let natStatusUnlisten: (() => void) | null = null
+  let lastNatState: NatReachabilityState | null = null
+  let lastNatConfidence: NatConfidence | null = null
+  
+  // WebRTC and Signaling variables
+  let signaling: SignalingService;
+  let webrtcSession: ReturnType<typeof createWebRTCSession> | null = null;
+  let discoveredPeers: string[] = [];
+  let signalingConnected = false;
   
   // UI variables
   const nodeAddress = "enode://277ac35977fc0a230e3ca4ccbf6df6da486fd2af9c129925b1193b25da6f013a301788fceed458f03c6c0d289dfcbf7a7ca5c0aef34b680fcbbc8c2ef79c0f71@127.0.0.1:30303"
@@ -107,6 +122,112 @@
   function formatHealthMessage(value: string | null): string {
     return value ?? tr('network.dht.health.none')
   }
+
+  function formatReachabilityState(state?: NatReachabilityState | null): string {
+    switch (state) {
+      case 'public':
+        return tr('network.dht.reachability.state.public')
+      case 'private':
+        return tr('network.dht.reachability.state.private')
+      default:
+        return tr('network.dht.reachability.state.unknown')
+    }
+  }
+
+  function formatNatConfidence(confidence?: NatConfidence | null): string {
+    switch (confidence) {
+      case 'high':
+        return tr('network.dht.reachability.confidence.high')
+      case 'medium':
+        return tr('network.dht.reachability.confidence.medium')
+      default:
+        return tr('network.dht.reachability.confidence.low')
+    }
+  }
+
+  function reachabilityBadgeClass(state?: NatReachabilityState | null): string {
+    switch (state) {
+      case 'public':
+        return 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
+      case 'private':
+        return 'bg-amber-500/10 text-amber-600 dark:text-amber-300'
+      default:
+        return 'bg-muted text-muted-foreground'
+    }
+  }
+
+  function formatNatTimestamp(epoch?: number | null): string {
+    if (!epoch) return tr('network.dht.health.never')
+    return new Date(epoch * 1000).toLocaleString()
+  }
+
+  async function copyObservedAddr(addr: string) {
+    try {
+      await navigator.clipboard.writeText(addr)
+      showToast(tr('network.dht.reachability.copySuccess'), 'success')
+    } catch (error) {
+      console.error('Failed to copy observed address', error)
+      showToast(tr('network.dht.reachability.copyError'), 'error')
+    }
+  }
+
+  function showNatToast(payload: NatStatusPayload) {
+    if (lastNatState === null) {
+      lastNatState = payload.state
+      lastNatConfidence = payload.confidence
+      return
+    }
+
+    if (payload.state === lastNatState && payload.confidence === lastNatConfidence) {
+      lastNatState = payload.state
+      lastNatConfidence = payload.confidence
+      return
+    }
+
+    lastNatState = payload.state
+    lastNatConfidence = payload.confidence
+
+    const rawSummary = payload.summary ?? payload.lastError ?? ''
+    const summaryText = rawSummary.trim().length > 0
+      ? rawSummary
+      : tr('network.dht.reachability.genericSummary')
+
+    let toastKey = 'network.dht.reachability.toast.unknown'
+    let tone: 'success' | 'warning' | 'info' = 'info'
+
+    if (payload.state === 'public') {
+      toastKey = 'network.dht.reachability.toast.public'
+      tone = 'success'
+    } else if (payload.state === 'private') {
+      toastKey = 'network.dht.reachability.toast.private'
+      tone = 'warning'
+    }
+
+    showToast(tr(toastKey, { values: { summary: summaryText } }), tone)
+  }
+
+  async function registerNatListener() {
+    if (!isTauri || natStatusUnlisten) return
+    try {
+      natStatusUnlisten = await listen('nat_status_update', async (event) => {
+        const payload = event.payload as NatStatusPayload
+        if (!payload) return
+        showNatToast(payload)
+        try {
+          const snapshot = await dhtService.getHealth()
+          if (snapshot) {
+            dhtHealth = snapshot
+            lastNatState = snapshot.reachability
+            lastNatConfidence = snapshot.reachabilityConfidence
+          }
+        } catch (error) {
+          console.error('Failed to refresh NAT status', error)
+        }
+      })
+    } catch (error) {
+      console.error('Failed to subscribe to NAT status updates', error)
+    }
+  }
   
   async function startDht() {
     if (!isTauri) {
@@ -127,12 +248,11 @@
       try {
         backendPeerId = await invoke<string | null>('get_dht_peer_id')
       } catch (error) {
-        console.log('Failed to check backend DHT status:', error)
+        // Failed to check backend DHT status
       }
       
       if (backendPeerId) {
         // DHT is already running in backend, sync the frontend state immediately
-        console.log('DHT already running in backend with peer ID:', backendPeerId)
         dhtPeerId = backendPeerId
         dhtService.setPeerId(backendPeerId) // Update frontend service state
         dhtEvents = [...dhtEvents, `✓ DHT already running with peer ID: ${backendPeerId.slice(0, 16)}...`]
@@ -171,15 +291,9 @@
         await new Promise(resolve => setTimeout(resolve, 500))
         // DHT not running, start it
         try {
-          
-          const proxyAddress = $settings.enableProxy 
-            ? $settings.proxyAddress 
-            : undefined; // Get proxy address from local settings
-
           const peerId = await dhtService.start({
             port: dhtPort,
-            bootstrapNodes: DEFAULT_BOOTSTRAP_NODES,
-            proxyAddress: proxyAddress, 
+            bootstrapNodes: DEFAULT_BOOTSTRAP_NODES
           })
           dhtPeerId = peerId
           // Also ensure the service knows its own peer ID
@@ -215,7 +329,6 @@
       // Try to connect to bootstrap nodes
       let connectionSuccessful = false
       if (DEFAULT_BOOTSTRAP_NODES.length > 0) {
-        console.log('Attempting to connect to bootstrap nodes:', DEFAULT_BOOTSTRAP_NODES)
         dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to ${DEFAULT_BOOTSTRAP_NODES.length} bootstrap node(s)...`]
         
         // Add another small delay to show the connection attempt
@@ -224,7 +337,6 @@
         try {
           // Try connecting to the first available bootstrap node
           await dhtService.connectPeer(DEFAULT_BOOTSTRAP_NODES[0])
-          console.log('Connection initiated to bootstrap nodes')
           connectionSuccessful = true
           dhtEvents = [...dhtEvents, `✓ Connection initiated to bootstrap nodes (waiting for handshake...)`]
           
@@ -282,6 +394,8 @@
       if (snapshot) {
         dhtHealth = snapshot
         dhtPeerCount = snapshot.peerCount
+        lastNatState = snapshot.reachability
+        lastNatConfidence = snapshot.reachabilityConfidence
       }
       startDhtPolling()
     } catch (error: any) {
@@ -306,6 +420,8 @@
         if (health) {
           dhtHealth = health
           dhtPeerCount = health.peerCount
+          lastNatState = health.reachability
+          lastNatConfidence = health.reachabilityConfidence
         } else {
           dhtPeerCount = await dhtService.getPeerCount()
         }
@@ -347,9 +463,13 @@
           dhtHealth = health
           peerCount = health.peerCount
           dhtPeerCount = peerCount
+          lastNatState = health.reachability
+          lastNatConfidence = health.reachabilityConfidence
         } else {
           peerCount = await dhtService.getPeerCount()
           dhtPeerCount = peerCount
+          lastNatState = null
+          lastNatConfidence = null
         }
 
         // Update connection status based on peer count
@@ -374,6 +494,8 @@
       connectionAttempts = 0
       dhtHealth = null
       copiedListenAddr = null
+      lastNatState = null
+      lastNatConfidence = null
       return
     }
     
@@ -386,110 +508,117 @@
       dhtEvents = [...dhtEvents, `✓ DHT stopped`]
       dhtHealth = null
       copiedListenAddr = null
+      lastNatState = null
+      lastNatConfidence = null
     } catch (error) {
       console.error('Failed to stop DHT:', error)
       dhtEvents = [...dhtEvents, `✗ Failed to stop DHT: ${error}`]
     }
   }
 
-  function runDiscovery() {
+  async function runDiscovery() {
     if (dhtStatus !== 'connected') {
       showToast($t('network.errors.dhtNotConnected'), 'error');
       return;
     }
-    discoveryRunning = true
     
-    // Simulate discovering new peers
-    setTimeout(() => {
-      const newPeer = {
-        id: `peer-${Date.now()}`,
-        address: `${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`,
-        nickname: `Node${Math.floor(Math.random() * 1000)}`,
-        status: 'online' as const,
-        reputation: 3 + Math.random() * 2,
-        sharedFiles: Math.floor(Math.random() * 500),
-        totalSize: Math.floor(Math.random() * 10737418240),
-        joinDate: new Date(),
-        lastSeen: new Date(),
-        location: ['US-East', 'EU-West', 'Asia-Pacific', 'US-West'][Math.floor(Math.random() * 4)]
+    if (!signalingConnected) {
+      try {
+        if (!signaling) {
+          signaling = new SignalingService();
+        }
+        await signaling.connect();
+        signalingConnected = true;
+        signaling.peers.subscribe(peers => {
+          discoveredPeers = peers;
+          console.log('Updated discovered peers:', peers);
+        });
+        showToast('Connected to signaling server', 'success');
+      } catch (error) {
+        console.error('Failed to connect to signaling server:', error);
+        showToast('Failed to connect to signaling server. Make sure DHT is running.', 'error');
+        return;
       }
-      
-      peers.update(p => [...p, newPeer])
-      networkStats.update(s => ({
-        ...s,
-        totalPeers: s.totalPeers + 1,
-        onlinePeers: s.onlinePeers + 1
-      }))
-      
-      discoveryRunning = false
-    }, 2000)
+    }
+    
+    // discoveredPeers will update automatically
+    showToast('Discovery started. Found peers: ' + discoveredPeers.length, 'info');
   }
   
   function connectToPeer() {
-  if (!newPeerAddress.trim()) return
-  
-  const trimmedAddress = newPeerAddress.trim()
-  
-  // Parse IP and port first to check for duplicates properly
-  const [ip, portStr] = trimmedAddress.split(':')
-  const port = portStr ? parseInt(portStr) : 8080
-  const fullAddress = portStr ? trimmedAddress : `${ip}:${port}`
-  
-  // Check if peer with this exact IP:port combination already exists
-  const existingPeer = $peers.find(peer => peer.address === fullAddress)
-  if (existingPeer) {
-    showToast($t('Peer Already Connected'), 'error')
-    return
+    if (!newPeerAddress.trim()) {
+      showToast('Please enter a peer ID', 'error');
+      return;
+    }
+    
+    if (!signalingConnected) {
+      showToast('Signaling server not connected. Please start DHT first.', 'error');
+      return;
+    }
+    
+    const peerId = newPeerAddress.trim();
+    
+    // Check if peer exists in discovered peers
+    if (!discoveredPeers.includes(peerId)) {
+      showToast(`Peer ${peerId} not found in discovered peers`, 'warning');
+      // Still attempt connection in case peer was discovered recently
+    }
+    
+    try {
+      webrtcSession = createWebRTCSession({
+        peerId,
+        signaling,
+        isInitiator: true,
+        onMessage: (data) => {
+          showToast('Received from peer: ' + data, 'info');
+        },
+        onConnectionStateChange: (state) => {
+          showToast('WebRTC state: ' + state, 'info');
+          
+          if (state === 'connected') {
+            showToast('Successfully connected to peer!', 'success');
+          } else if (state === 'failed' || state === 'disconnected') {
+            showToast('Connection to peer failed or disconnected', 'error');
+          }
+        },
+        onDataChannelOpen: () => {
+          showToast('Data channel open - you can now send messages!', 'success');
+        },
+        onDataChannelClose: () => {
+          showToast('Data channel closed', 'warning');
+        },
+        onError: (e) => {
+          showToast('WebRTC error: ' + e, 'error');
+          console.error('WebRTC error:', e);
+        }
+      });
+      
+      webrtcSession.createOffer();
+      showToast('Connecting to peer: ' + peerId, 'info');
+      
+      // Clear input on successful connection attempt
+      newPeerAddress = '';
+      
+    } catch (error) {
+      console.error('Failed to create WebRTC session:', error);
+      showToast('Failed to create connection: ' + error, 'error');
+    }
   }
   
-  // Basic IP format validation (supports IP:port format)
-  const ipPortRegex = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$/
-  if (!ipPortRegex.test(trimmedAddress)) {
-    showToast($t('Invalid IP Format'), 'error')
-    return
+  function sendTestMessage() {
+    if (!webrtcSession || !webrtcSession.channel || webrtcSession.channel.readyState !== 'open') {
+      showToast('No active WebRTC connection', 'error');
+      return;
+    }
+    
+    const testMessage = `Hello from ${signaling.getClientId()} at ${new Date().toLocaleTimeString()}`;
+    try {
+      webrtcSession.send(testMessage);
+      showToast('Test message sent: ' + testMessage, 'success');
+    } catch (error) {
+      showToast('Failed to send message: ' + error, 'error');
+    }
   }
-  
-  // Validate IP ranges (0-255 for each octet)
-  const ipParts = ip.split('.').map(Number)
-  if (ipParts.some(part => part < 0 || part > 255)) {
-    showToast($t('Invalid IP Range'), 'error')
-    return
-  }
-  
-  // Validate port range
-  if (port < 1 || port > 65535) {
-    showToast($t('Invalid Port Number'), 'error')
-    return
-  }
-  
-  // Create new peer
-  const newPeer = {
-    id: `peer-${Date.now()}`,
-    address: fullAddress, // Use the normalized IP:port format
-    nickname: `DirectPeer${Math.floor(Math.random() * 100)}`,
-    status: 'online' as const,
-    reputation: 0,
-    sharedFiles: 0,
-    totalSize: 0,
-    joinDate: new Date(),
-    lastSeen: new Date(),
-    location: 'Unknown'
-  }
-  
-  // Add to peers list
-  peers.update(p => [...p, newPeer])
-  
-  // Update network stats
-  networkStats.update(s => ({
-    ...s,
-    totalPeers: s.totalPeers + 1,
-    onlinePeers: s.onlinePeers + 1
-  }))
-  
-  // Clear input and show success
-  newPeerAddress = ''
-  showToast($t('Peer Connected Successfully'), 'success')
-}
   
   function refreshStats() {
     networkStats.update(s => ({
@@ -585,7 +714,6 @@
 
   async function startGethNode() {
     if (!isTauri) {
-      console.log('Cannot start Chiral Node in web mode - desktop app required')
       return
     }
     
@@ -611,7 +739,6 @@
 
   async function stopGethNode() {
     if (!isTauri) {
-      console.log('Cannot stop Chiral Node in web mode - desktop app required')
       return
     }
     
@@ -662,24 +789,40 @@
     const interval = setInterval(refreshStats, 5000)
     let unlistenProgress: (() => void) | null = null
     
-    // Initialize async operations
-    const initAsync = async () => {
-      await checkGethStatus()
-      
-      // DHT check will happen in startDht()
-
-      // Also passively sync DHT state if it's already running
-      await syncDhtStatusOnMount()
-      
-      // Listen for download progress updates (only in Tauri)
-      if (isTauri) {
-        unlistenProgress = await listen('geth-download-progress', (event) => {
-          downloadProgress = event.payload as typeof downloadProgress
-        })
+    // Initialize signaling service
+    ;(async () => {
+      try {
+        signaling = new SignalingService();
+        await signaling.connect();
+        signalingConnected = true;
+        signaling.peers.subscribe(peers => {
+          discoveredPeers = peers;
+        });
+      } catch (error) {
+        // Signaling service not available (DHT not running) - this is normal
+        signalingConnected = false;
       }
-    }
-    
-    initAsync()
+      
+      // Initialize async operations
+      const initAsync = async () => {
+        await checkGethStatus()
+        
+        // DHT check will happen in startDht()
+
+        // Also passively sync DHT state if it's already running
+        await syncDhtStatusOnMount()
+        
+        // Listen for download progress updates (only in Tauri)
+        if (isTauri) {
+          await registerNatListener()
+          unlistenProgress = await listen('geth-download-progress', (event) => {
+            downloadProgress = event.payload as typeof downloadProgress
+          })
+        }
+      }
+      
+      initAsync()
+    })()
     
     return () => {
       clearInterval(interval)
@@ -688,6 +831,14 @@
       }
       if (unlistenProgress) {
         unlistenProgress()
+      }
+      if (natStatusUnlisten) {
+        natStatusUnlisten()
+        natStatusUnlisten = null
+      }
+      // Disconnect signaling service
+      if (signaling) {
+        signaling.disconnect()
       }
     }
   })
@@ -698,6 +849,10 @@
     }
     if (dhtPollInterval) {
       clearInterval(dhtPollInterval)
+    }
+    if (natStatusUnlisten) {
+      natStatusUnlisten()
+      natStatusUnlisten = null
     }
     // Note: We do NOT stop the DHT service here
     // The DHT should persist across page navigations
@@ -990,6 +1145,83 @@
             </div>
           {/if}
 
+          <div class="pt-4 space-y-4">
+            <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.reachability.title')}</p>
+                <div class="mt-2 flex items-center gap-2">
+                  <Badge class={reachabilityBadgeClass(dhtHealth?.reachability)}>
+                    {formatReachabilityState(dhtHealth?.reachability)}
+                  </Badge>
+                  <span class="text-sm text-muted-foreground">
+                    {formatNatConfidence(dhtHealth?.reachabilityConfidence)}
+                  </span>
+                </div>
+              </div>
+              <div class="text-sm text-muted-foreground space-y-1 text-right">
+                <p>{$t('network.dht.reachability.lastProbe')}: {formatNatTimestamp(dhtHealth?.lastProbeAt ?? null)}</p>
+                <p>{$t('network.dht.reachability.lastChange')}: {formatNatTimestamp(dhtHealth?.lastReachabilityChange ?? null)}</p>
+                {#if dhtHealth && !dhtHealth.autonatEnabled}
+                  <p class="text-xs text-yellow-600">{$t('network.dht.reachability.autonatDisabled')}</p>
+                {/if}
+              </div>
+            </div>
+
+            <div class="grid gap-4 md:grid-cols-2">
+              <div>
+                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.reachability.observedAddrs')}</p>
+                {#if dhtHealth?.observedAddrs && dhtHealth.observedAddrs.length > 0}
+                  <div class="mt-2 flex flex-wrap gap-2">
+                    {#each dhtHealth.observedAddrs as addr}
+                      <button
+                        class="inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1 text-xs font-mono hover:bg-muted/80"
+                        on:click={() => copyObservedAddr(addr)}
+                        type="button"
+                      >
+                        {addr}
+                        <Clipboard class="h-3 w-3" />
+                      </button>
+                    {/each}
+                  </div>
+                {:else}
+                  <p class="mt-2 text-sm text-muted-foreground">{$t('network.dht.reachability.observedEmpty')}</p>
+                {/if}
+              </div>
+              <div>
+                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.reachability.lastError')}</p>
+                <p class="mt-2 text-sm text-muted-foreground">{dhtHealth?.lastReachabilityError ?? tr('network.dht.health.none')}</p>
+              </div>
+            </div>
+
+            <div>
+              <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.reachability.history')}</p>
+              {#if dhtHealth?.reachabilityHistory && dhtHealth.reachabilityHistory.length > 0}
+                <div class="mt-2 overflow-hidden rounded-md border border-muted/40">
+                  <table class="min-w-full text-sm">
+                    <thead class="bg-muted/50 text-left text-xs uppercase text-muted-foreground">
+                      <tr>
+                        <th class="px-3 py-2">{$t('network.dht.reachability.timestamp')}</th>
+                        <th class="px-3 py-2">{$t('network.dht.reachability.stateLabel')}</th>
+                        <th class="px-3 py-2">{$t('network.dht.reachability.summary')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each dhtHealth.reachabilityHistory as item}
+                        <tr class="border-t border-muted/30">
+                          <td class="px-3 py-2">{formatNatTimestamp(item.timestamp)}</td>
+                          <td class="px-3 py-2">{formatReachabilityState(item.state)}</td>
+                          <td class="px-3 py-2 text-muted-foreground">{item.summary ?? '—'}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              {:else}
+                <p class="mt-2 text-sm text-muted-foreground">{$t('network.dht.reachability.historyEmpty')}</p>
+              {/if}
+            </div>
+          </div>
+
           {#if dhtHealth}
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-3">
               <div class="bg-muted/40 rounded-lg p-3">
@@ -1091,6 +1323,10 @@
     </Card>
   </div>
   
+  <div class="mt-6">
+    <GeoDistributionCard />
+  </div>
+  
   <!-- Peer Discovery -->
   <Card class="p-6">
     <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
@@ -1121,6 +1357,13 @@
           <Button on:click={connectToPeer} disabled={!newPeerAddress}>
             <UserPlus class="h-4 w-4 mr-2" />
             {$t('network.peerDiscovery.connect')}
+          </Button>
+          <Button 
+            on:click={sendTestMessage} 
+            disabled={!webrtcSession || !webrtcSession.channel || webrtcSession.channel.readyState !== 'open'}
+            variant="outline"
+          >
+            Send Test
           </Button>
         </div>
       </div>
