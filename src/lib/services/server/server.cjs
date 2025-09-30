@@ -1,45 +1,44 @@
 // WebSocket signaling server for peer discovery and WebRTC signaling
-const WebSocket = require('ws');
+const WebSocket = require("ws");
 const wss = new WebSocket.Server({ port: 9000 });
 
 // Track connected peers
 const peers = new Map(); // clientId -> WebSocket
 
-wss.on('connection', function connection(ws) {
-  console.log('New client connected');
-  
-  ws.on('message', function incoming(data) {
+wss.on("connection", function connection(ws) {
+  ws.on("message", function incoming(data) {
     try {
       const message = JSON.parse(data);
-      console.log('Received message:', message);
-      
-      if (message.type === 'register') {
+
+      if (message.type === "register") {
         // Register new peer
         peers.set(message.clientId, ws);
         ws.clientId = message.clientId;
-        console.log(`Peer registered: ${message.clientId}`);
-        
+
         // Send current peer list to new client
-        const peerList = Array.from(peers.keys()).filter(id => id !== message.clientId);
-        ws.send(JSON.stringify({
-          type: 'peers',
-          peers: peerList
-        }));
-        
+        const peerList = Array.from(peers.keys()).filter(
+          (id) => id !== message.clientId
+        );
+        ws.send(
+          JSON.stringify({
+            type: "peers",
+            peers: peerList,
+          })
+        );
+
         // Notify other peers about new peer
-        broadcastToPeers({
-          type: 'peers',
-          peers: Array.from(peers.keys())
-        }, message.clientId);
-        
+        broadcastToPeers(
+          {
+            type: "peers",
+            peers: Array.from(peers.keys()),
+          },
+          message.clientId
+        );
       } else if (message.to) {
         // Route message to specific peer
         const targetWs = peers.get(message.to);
         if (targetWs && targetWs.readyState === WebSocket.OPEN) {
           targetWs.send(JSON.stringify(message));
-          console.log(`Routed ${message.type} from ${message.from} to ${message.to}`);
-        } else {
-          console.log(`Target peer ${message.to} not found or disconnected`);
         }
       } else {
         // Broadcast to all other clients (fallback)
@@ -50,25 +49,24 @@ wss.on('connection', function connection(ws) {
         });
       }
     } catch (error) {
-      console.error('Error processing message:', error);
+      console.error("Error processing message:", error);
     }
   });
-  
-  ws.on('close', function() {
+
+  ws.on("close", function () {
     if (ws.clientId) {
-      console.log(`Peer disconnected: ${ws.clientId}`);
       peers.delete(ws.clientId);
-      
+
       // Notify remaining peers about disconnection
       broadcastToPeers({
-        type: 'peers',
-        peers: Array.from(peers.keys())
+        type: "peers",
+        peers: Array.from(peers.keys()),
       });
     }
   });
-  
-  ws.on('error', function(error) {
-    console.error('WebSocket error:', error);
+
+  ws.on("error", function (error) {
+    console.error("WebSocket error:", error);
   });
 });
 
@@ -79,6 +77,3 @@ function broadcastToPeers(message, excludeClientId = null) {
     }
   });
 }
-
-console.log('Signaling server running on ws://localhost:9000');
-console.log('Ready for peer connections...');
