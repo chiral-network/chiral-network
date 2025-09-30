@@ -269,7 +269,7 @@ npm run tauri build # Desktop production build
 ### Phase 3: Core P2P Features (In Progress)
 
 - ✅ End-to-end encryption (AES-256-GCM with PBKDF2)
-- [ ] Real P2P file transfer protocol
+- ✅ Real P2P file transfer protocol
 - ✅ File versioning system
 - [ ] Selective sync capabilities
 - [ ] Advanced bandwidth scheduling
