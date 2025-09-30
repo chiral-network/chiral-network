@@ -16,7 +16,7 @@
   import { t } from 'svelte-i18n'
   import { get } from 'svelte/store'
 
-  const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
+  const tr = (k: string, params?: Record<string, any>) => (get(t) as (key: string, params?: any) => string)(k, params)
 
   export let transactions: any[] = []
   export let onTransactionClick: (tx: any) => void = () => {}

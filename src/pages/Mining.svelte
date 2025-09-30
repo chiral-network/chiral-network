@@ -10,7 +10,7 @@
   import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw } from 'lucide-svelte'
   import { onDestroy, onMount, getContext } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
-  import { etcAccount, miningState, transactions, type Transaction } from '$lib/stores'
+  import { etcAccount, miningState, transactions } from '$lib/stores'
   import { getVersion } from "@tauri-apps/api/app";
   import { t } from 'svelte-i18n';
   import { goto } from '@mateothegreat/svelte5-router';
@@ -32,7 +32,6 @@
   let isGethRunning = false
   let currentBlock = 0
   let totalHashes = 0
-  let currentDifficulty = 4
   let lastHashUpdate = Date.now()
   let cpuThreads = navigator.hardwareConcurrency || 4
   let selectedThreads = Math.floor(cpuThreads / 2)
@@ -255,9 +254,6 @@
 
     await checkGethStatus()
     await updateNetworkStats()
-    try {
-      seenHashes = new Set(($miningState.recentBlocks ?? []).map((b: any) => b.hash))
-    } catch{} 
     // If mining is already active from before, restore session and update stats
     if ($miningState.isMining) {
       // Restore session start time if it exists
@@ -327,13 +323,7 @@
           if (hashRateFromLogs > 0) {
             // Use actual hash rate from logs
             $miningState.hashRate = formatHashRate(hashRateFromLogs)
-            
-            console.log('From mining stats - blocks:', blocksFound);
-            console.log('Current blocksFound before:', $miningState.blocksFound);
-            
             $miningState.blocksFound = blocksFound;
-            
-            console.log('blocksFound after:', $miningState.blocksFound);
           
             
           } else if ($miningState.activeThreads > 0) {
@@ -431,13 +421,8 @@
       
       if (results[4] !== undefined) {
         const blocksMined = results[4] as number;
-        
-        console.log('Backend returned blocks:', blocksMined);
-        console.log('Current blocksFound before update:', $miningState.blocksFound);
-        
+
         $miningState.blocksFound = blocksMined;
-        
-        console.log('blocksFound after update:', $miningState.blocksFound);
       }
     }
   } catch (e) {
@@ -549,10 +534,6 @@
       console.error('Failed to stop mining:', e)
     }
   }
-  // Simulation removed; recent blocks come from backend
-
-  // Keep a set of hashes we've already shown to avoid duplicates
-  let seenHashes = new Set<string>();
 
   // Pagination for recent blocks
   let pageSizes = [5, 10, 20, 50]
@@ -1757,21 +1738,4 @@
         </div>
       </div>
     </div>
-  {/if} 
-<div class="balance-info" style="background: #f5f5f5; padding: 15px; margin: 10px 0; border-radius: 8px;">
-  <h3>Account Information</h3>
-  <div style="display: flex; gap: 30px;">
-    <div>
-      <strong>Current Balance:</strong> {($miningState.totalRewards || 0).toFixed(2)} Chiral
-    </div>
-    <div>
-      <strong>Blocks Found:</strong> {$miningState.blocksFound} blocks
-    </div>
-    <div>
-      <strong>Mining Status:</strong> {$miningState.isMining ? 'Active' : 'Stopped'}
-    </div>
-    <div>
-      <strong>Account:</strong> {$etcAccount ? `${$etcAccount.address.slice(0, 10)}...${$etcAccount.address.slice(-8)}` : 'No Account'}
-    </div>
-  </div>
-</div>
+  {/if}
