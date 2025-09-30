@@ -285,7 +285,7 @@
 {/if}
 
     <!-- Main Content -->
-    <div class="flex-1 overflow-auto">
+    <div class="flex-1">
       <div class="p-6">
         <!-- <Router {routes} /> -->
          

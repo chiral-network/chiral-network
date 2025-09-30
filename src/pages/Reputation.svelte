@@ -192,161 +192,161 @@
   <title>Reputation System - Chiral Network</title>
 </svelte:head>
 
-<div class="min-h-screen bg-gray-50">
+<div class="h-full overflow-y-auto">
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-    <!-- Header -->
-    <div class="mb-8">
-      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 class="text-3xl font-bold text-gray-900">Reputation System</h1>
-          <p class="mt-2 text-gray-600">Monitor peer trust levels and network health</p>
-        </div>
-        <div class="flex flex-wrap gap-2 sm:justify-end">
-          <Button on:click={refreshData} disabled={isLoading} variant="outline" class="w-full sm:w-auto">
-            {isLoading ? 'Refreshing...' : 'Refresh Data'}
-          </Button>
-          <Button on:click={() => showAnalytics = !showAnalytics} variant="outline" class="w-full sm:w-auto">
-            {showAnalytics ? 'Hide Analytics' : 'Show Analytics'}
-          </Button>
-        </div>
-      </div>
-    </div>
-
-    {#if isLoading}
-      <!-- Loading State -->
-      <div class="flex items-center justify-center py-12">
-        <div class="text-center">
-          <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-          <p class="mt-4 text-gray-600">Loading reputation data...</p>
-        </div>
-      </div>
-    {:else}
-      <!-- Analytics Section -->
-      {#if showAnalytics && analytics}
-        <div class="mb-8">
-          <ReputationAnalyticsComponent {analytics} />
-        </div>
-      {/if}
-
-      <!-- Search Box -->
-      <Card class="p-6 mb-4">
-        <h3 class="text-lg font-bold text-gray-900 mb-4">Search Peers</h3>
-        <div>
-          <input
-            id="search"
-            type="text"
-            bind:value={searchQuery}
-            placeholder="Search by peer ID..."
-            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          />
-        </div>
-      </Card>
-
-      <!-- Filters and Sort Controls -->
-      <div class="flex items-center justify-between mb-4 gap-2 flex-wrap">
-        <!-- Filter Dropdown -->
-        <div class="relative">
-          <Button variant="outline" class="sm:w-auto" on:click={openFilters}>Filters</Button>
-          {#if isFilterOpen}
-            <div use:clickOutside>
-              <Card class="absolute top-full mt-2 p-6 w-72 z-10">
-                <div class="space-y-6">
-                  <!-- Trust Level Filter -->
-                  <div>
-                    <h4 class="font-medium text-gray-800 mb-3">Trust Level</h4>
-                    <div class="space-y-2">
-                      {#each trustLevelOptions as level}
-                        <label class="flex items-center gap-2 text-sm font-normal">
-                          <input type="checkbox" bind:group={pendingSelectedTrustLevels} value={level} />
-                          {level}
-                        </label>
-                      {/each}
-                    </div>
-                  </div>
-
-                  <!-- Encryption Filter -->
-                  <div>
-                    <h4 class="font-medium text-gray-800 mb-3">Encryption</h4>
-                    <div class="space-y-2">
-                      <label class="flex items-center gap-2 text-sm font-normal">
-                        <input type="radio" bind:group={pendingFilterEncryptionSupported} value={null} />
-                        Any
-                      </label>
-                      <label class="flex items-center gap-2 text-sm font-normal">
-                        <input type="radio" bind:group={pendingFilterEncryptionSupported} value={true} />
-                        Supported
-                      </label>
-                      <label class="flex items-center gap-2 text-sm font-normal">
-                        <input type="radio" bind:group={pendingFilterEncryptionSupported} value={false} />
-                        Not Supported
-                      </label>
-                    </div>
-                  </div>
-
-                  <!-- Uptime Filter -->
-                  <div>
-                    <h4 class="font-medium text-gray-800 mb-3">Minimum Uptime</h4>
-                    <div class="flex items-center gap-3">
-                      <input type="range" min="0" max="100" bind:value={pendingMinUptime} class="w-full" />
-                      <span class="text-sm font-medium w-12 text-right">{pendingMinUptime}%</span>
-                    </div>
-                  </div>
-                </div>
-                <!-- Action Buttons -->
-                <div class="flex justify-between items-center mt-6 pt-4 border-t border-gray-200">
-                  <Button variant="ghost" on:click={clearFilters}>Clear</Button>
-                  <Button on:click={applyFilters}>Apply</Button>
-                </div>
-              </Card>
-            </div>
-          {/if}
-        </div>
-
-        <!-- Sort Dropdown -->
-        <div class="flex items-center gap-2">
-          <label for="sortBy" class="text-sm font-medium text-gray-700 sr-only">Sort By</label>
-          <div class="relative">
-            <select
-              id="sortBy"
-              bind:value={sortBy}
-              class="appearance-none bg-white border border-gray-300 rounded-md py-2 pl-3 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            >
-              {#each sortOptions as option}
-                <option value={option.value}>{option.label}</option>
-              {/each}
-            </select>
-            <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-700">
-              <svg class="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
-            </div>
+      <!-- Header -->
+      <div class="mb-8">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h1 class="text-3xl font-bold text-gray-900">Reputation System</h1>
+            <p class="mt-2 text-gray-600">Monitor peer trust levels and network health</p>
+          </div>
+          <div class="flex flex-wrap gap-2 sm:justify-end">
+            <Button on:click={refreshData} disabled={isLoading} variant="outline" class="w-full sm:w-auto">
+              {isLoading ? 'Refreshing...' : 'Refresh Data'}
+            </Button>
+            <Button on:click={() => showAnalytics = !showAnalytics} variant="outline" class="w-full sm:w-auto">
+              {showAnalytics ? 'Hide Analytics' : 'Show Analytics'}
+            </Button>
           </div>
         </div>
       </div>
 
-      <!-- Results Summary -->
-      <div class="flex items-center justify-between mb-4">
-        <p class="text-sm text-gray-600">
-          Showing {filteredPeers.length} of {peers.length} peers
-        </p>
-        <div class="flex items-center space-x-2">
-          <span class="text-sm text-gray-500">View:</span>
-          <Badge variant="outline">Cards</Badge>
+      {#if isLoading}
+        <!-- Loading State -->
+        <div class="flex items-center justify-center py-12">
+          <div class="text-center">
+            <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
+            <p class="mt-4 text-gray-600">Loading reputation data...</p>
+          </div>
         </div>
-      </div>
-
-      <!-- Peer Cards Grid -->
-      {#if filteredPeers.length === 0}
-        <Card class="p-12 text-center">
-          <div class="text-gray-400 text-6xl mb-4">🔍</div>
-          <h3 class="text-lg font-medium text-gray-900 mb-2">No peers found</h3>
-          <p class="text-gray-500">Try adjusting your search criteria or filters.</p>
-        </Card>
       {:else}
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {#each filteredPeers as peer (peer.peerId)}
-            <ReputationCard {peer} />
-          {/each}
+        <!-- Analytics Section -->
+        {#if showAnalytics && analytics}
+          <div class="mb-8">
+            <ReputationAnalyticsComponent {analytics} />
+          </div>
+        {/if}
+
+        <!-- Search Box -->
+        <Card class="p-6 mb-4">
+          <h3 class="text-lg font-bold text-gray-900 mb-4">Search Peers</h3>
+          <div>
+            <input
+              id="search"
+              type="text"
+              bind:value={searchQuery}
+              placeholder="Search by peer ID..."
+              class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+          </div>
+        </Card>
+
+        <!-- Filters and Sort Controls -->
+        <div class="flex items-center justify-between mb-4 gap-2 flex-wrap">
+          <!-- Filter Dropdown -->
+          <div class="relative">
+            <Button variant="outline" class="sm:w-auto" on:click={openFilters}>Filters</Button>
+            {#if isFilterOpen}
+              <div use:clickOutside>
+                <Card class="absolute top-full mt-2 p-6 w-72 z-10">
+                  <div class="space-y-6">
+                    <!-- Trust Level Filter -->
+                    <div>
+                      <h4 class="font-medium text-gray-800 mb-3">Trust Level</h4>
+                      <div class="space-y-2">
+                        {#each trustLevelOptions as level}
+                          <label class="flex items-center gap-2 text-sm font-normal">
+                            <input type="checkbox" bind:group={pendingSelectedTrustLevels} value={level} />
+                            {level}
+                          </label>
+                        {/each}
+                      </div>
+                    </div>
+
+                    <!-- Encryption Filter -->
+                    <div>
+                      <h4 class="font-medium text-gray-800 mb-3">Encryption</h4>
+                      <div class="space-y-2">
+                        <label class="flex items-center gap-2 text-sm font-normal">
+                          <input type="radio" bind:group={pendingFilterEncryptionSupported} value={null} />
+                          Any
+                        </label>
+                        <label class="flex items-center gap-2 text-sm font-normal">
+                          <input type="radio" bind:group={pendingFilterEncryptionSupported} value={true} />
+                          Supported
+                        </label>
+                        <label class="flex items-center gap-2 text-sm font-normal">
+                          <input type="radio" bind:group={pendingFilterEncryptionSupported} value={false} />
+                          Not Supported
+                        </label>
+                      </div>
+                    </div>
+
+                    <!-- Uptime Filter -->
+                    <div>
+                      <h4 class="font-medium text-gray-800 mb-3">Minimum Uptime</h4>
+                      <div class="flex items-center gap-3">
+                        <input type="range" min="0" max="100" bind:value={pendingMinUptime} class="w-full" />
+                        <span class="text-sm font-medium w-12 text-right">{pendingMinUptime}%</span>
+                      </div>
+                    </div>
+                  </div>
+                  <!-- Action Buttons -->
+                  <div class="flex justify-between items-center mt-6 pt-4 border-t border-gray-200">
+                    <Button variant="ghost" on:click={clearFilters}>Clear</Button>
+                    <Button on:click={applyFilters}>Apply</Button>
+                  </div>
+                </Card>
+              </div>
+            {/if}
+          </div>
+
+          <!-- Sort Dropdown -->
+          <div class="flex items-center gap-2">
+            <label for="sortBy" class="text-sm font-medium text-gray-700 sr-only">Sort By</label>
+            <div class="relative">
+              <select
+                id="sortBy"
+                bind:value={sortBy}
+                class="appearance-none bg-white border border-gray-300 rounded-md py-2 pl-3 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              >
+                {#each sortOptions as option}
+                  <option value={option.value}>{option.label}</option>
+                {/each}
+              </select>
+              <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-700">
+                <svg class="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
+              </div>
+            </div>
+          </div>
         </div>
+
+        <!-- Results Summary -->
+        <div class="flex items-center justify-between mb-4">
+          <p class="text-sm text-gray-600">
+            Showing {filteredPeers.length} of {peers.length} peers
+          </p>
+          <div class="flex items-center space-x-2">
+            <span class="text-sm text-gray-500">View:</span>
+            <Badge variant="outline">Cards</Badge>
+          </div>
+        </div>
+
+        <!-- Peer Cards Grid -->
+        {#if filteredPeers.length === 0}
+          <Card class="p-12 text-center">
+            <div class="text-gray-400 text-6xl mb-4">🔍</div>
+            <h3 class="text-lg font-medium text-gray-900 mb-2">No peers found</h3>
+            <p class="text-gray-500">Try adjusting your search criteria or filters.</p>
+          </Card>
+        {:else}
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+            {#each filteredPeers as peer (peer.peerId)}
+              <ReputationCard {peer} />
+            {/each}
+          </div>
+        {/if}
       {/if}
-    {/if}
-  </div>
+    </div>
 </div>
