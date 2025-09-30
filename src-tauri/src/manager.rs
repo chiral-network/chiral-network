@@ -11,7 +11,7 @@ use x25519_dalek::PublicKey;
 use std::sync::Mutex;
 
 // Import the new encryption functions and the bundle struct
-use crate::crypto::{decrypt_aes_key, encrypt_aes_key, EncryptedAesKeyBundle, DiffieHellman};
+use crate::encryption::{decrypt_aes_key, encrypt_aes_key, EncryptedAesKeyBundle, DiffieHellman};
 
 use std::collections::HashMap;
 use lazy_static::lazy_static;
@@ -309,10 +309,10 @@ impl ChunkManager {
 
         let mut output_file = File::create(output_path).map_err(|e| e.to_string())?;
 
+        // Assuming chunks are ordered by index. If not, they should be sorted first.
         let result: Result<(), String> = (|| {
-            // Assuming chunks are ordered by index. If not, they should be sorted first.
             for chunk_info in chunks {
-                // Gather all shards from storage. Missing shards will be `None`.
+                // Gather all available encrypted shards from storage. Missing shards will be `None`.
                 let available_encrypted_shards: Vec<Option<Vec<u8>>> = chunk_info
                     .shards
                     .iter()
@@ -321,8 +321,6 @@ impl ChunkManager {
 
                 // Count available shards and fail fast if reconstruction is impossible.
                 let available_shards = available_encrypted_shards.iter().filter(|s| s.is_some()).count();
-                
-                // Fix: We need at least DATA_SHARDS (10) out of total (14) shards to reconstruct
                 if available_shards < DATA_SHARDS {
                     return Err(format!(
                         "Not enough shards to reconstruct chunk {}: found {}, need at least {}",
@@ -334,7 +332,6 @@ impl ChunkManager {
                 let mut shards: Vec<Option<Vec<u8>>> = Vec::with_capacity(DATA_SHARDS + PARITY_SHARDS);
                 for encrypted_shard_option in available_encrypted_shards {
                     if let Some(encrypted_shard) = encrypted_shard_option {
-                        // If a shard is present but fails to decrypt, it's a critical error.
                         shards.push(Some(self.decrypt_chunk(&encrypted_shard, &key)?));
                     } else {
                         shards.push(None);
@@ -354,10 +351,10 @@ impl ChunkManager {
                     if let Some(shard_data) = shard {
                         decrypted_data.extend_from_slice(shard_data);
                     } else {
-                        // This should not happen if reconstruction succeeded.
                         return Err(format!("Reconstruction of chunk {} failed unexpectedly: missing a data shard post-reconstruction.", chunk_info.index));
                     }
                 }
+
 
             // Verify that the decrypted data matches the original hash
             let calculated_hash = Self::hash_chunk(&decrypted_data);
@@ -370,6 +367,9 @@ impl ChunkManager {
             }
 
                 // Trim padding
+
+                // Trim padding to original size
+
                 decrypted_data.truncate(chunk_info.size);
 
 
@@ -379,14 +379,6 @@ impl ChunkManager {
                     return Err(format!(
                         "Hash mismatch for chunk {}. Data may be corrupt. Expected: {}, Got: {}",
                         chunk_info.index, chunk_info.hash, calculated_hash_hex
-                    ));
-                }
-
-                // Also verify the size
-                if decrypted_data.len() != chunk_info.size {
-                    return Err(format!(
-                        "Size mismatch for chunk {}. Expected {}, got {}.",
-                        chunk_info.index, chunk_info.size, decrypted_data.len()
                     ));
                 }
 
@@ -410,6 +402,7 @@ impl ChunkManager {
             hasher.update(&buffer[..bytes_read]);
         }
         Ok(format!("{:x}", hasher.finalize()))
+
     }
 
     /// Generates a Merkle proof for a specific chunk.
@@ -626,13 +619,10 @@ mod tests {
         let manifest = manager.chunk_and_encrypt_file(&original_file_path, &recipient_public).unwrap();
         assert!(!manifest.chunks.is_empty(), "Test file should produce at least one chunk");
 
-        println!("Generated {} chunks", manifest.chunks.len());
-
         // 3. Simulate critical data loss by deleting too many shards
         // We have 10 data + 4 parity shards. We can lose up to 4. Let's delete 5.
         const SHARDS_TO_DELETE: usize = 5;
         if let Some(first_chunk_info) = manifest.chunks.first() {
-            println!("First chunk has {} shards", first_chunk_info.shards.len());
             
             let mut actually_deleted = 0;
             for i in 0..SHARDS_TO_DELETE {
@@ -641,18 +631,14 @@ mod tests {
                 if shard_path.exists() {
                     fs::remove_file(shard_path).unwrap();
                     actually_deleted += 1;
-                    //println!("Deleted shard {}: {}", i, shard_hash_to_delete);
                 } else {
-                    println!("Shard {} doesn't exist: {}", i, shard_hash_to_delete);
                 }
             }
-            println!("Actually deleted {} shards", actually_deleted);
             
             // Count remaining shards
             let remaining_shards = first_chunk_info.shards.iter()
                 .filter(|hash| storage_path.join(hash).exists())
                 .count();
-            println!("Remaining shards: {}", remaining_shards);
         }
 
         // CRITICAL FIX: Clear the L1 cache after deleting files
@@ -660,7 +646,6 @@ mod tests {
         {
             let mut cache = L1_CACHE.lock().unwrap();
             *cache = LruCache::new(L1_CACHE_CAPACITY);
-            println!("Cleared L1 cache");
         }
 
         // 4. Attempt to reassemble the file. This should fail.
@@ -678,7 +663,6 @@ mod tests {
             },
             Err(error_message) => {
                 // The error should indicate not enough shards were available.
-                println!("Got expected error: {}", error_message);
                 assert!(error_message.contains("Not enough shards to reconstruct chunk"));
             }
         }
