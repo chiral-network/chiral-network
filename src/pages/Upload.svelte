@@ -61,6 +61,7 @@
   let isRefreshingStorage = false
   let storageError: string | null = null
   let lastChecked: Date | null = null
+  let isUploading = false
 
   $: storageLabel = isRefreshingStorage
     ? tr('upload.storage.checking')
@@ -156,10 +157,15 @@
         }
       }
 
-      const handleDrop = async (e: DragEvent) => {
+            const handleDrop = async (e: DragEvent) => {
         e.preventDefault()
         e.stopPropagation()
         isDragging = false
+
+        if (isUploading) {
+          showToast('Upload already in progress. Please wait for the current upload to complete.', 'warning')
+          return
+        }
 
         const droppedFiles = Array.from(e.dataTransfer?.files || [])
 
@@ -171,6 +177,7 @@
           }
 
           try {
+            isUploading = true
             let duplicateCount = 0
             let addedCount = 0
 
@@ -182,7 +189,7 @@
                 try {
                   existingVersions = await invoke('get_file_versions_by_name', { fileName: file.name }) as any[];
                 } catch (versionError) {
-                  // No existing versions found
+                  console.log('No existing versions found for', file.name);
                 }
 
                 // Use fileService.uploadFile method for File objects with versioning
@@ -200,7 +207,7 @@
                   const updatedVersions = await invoke('get_file_versions_by_name', { fileName: file.name }) as any[];
                   versionInfo = updatedVersions.find(v => v.file_hash === hash);
                 } catch (versionError) {
-                  // Could not get version info for uploaded file
+                  console.log('Could not get version info for uploaded file');
                 }
 
                 const isNewVersion = existingVersions.length > 0;
@@ -240,6 +247,7 @@
                     createdAt: Date.now(),
                     isEncrypted: false
                   });
+                  console.log('Dropped file published to DHT:', hash);
                 } catch (publishError) {
                   console.warn('Failed to publish dropped file to DHT:', publishError);
                 }
@@ -254,14 +262,14 @@
             }
 
             if (addedCount > 0) {
-              showToast(tr('upload.filesAdded', { values: { count: addedCount } }), 'success')
-              showToast('Files published to DHT network for sharing!', 'success')
               // Make storage refresh non-blocking to prevent UI hanging
               setTimeout(() => refreshAvailableStorage(), 100)
             }
           } catch (error) {
             console.error('Error handling dropped files:', error)
             showToast('Error processing dropped files. Please try again or use the "Add Files" button instead.', 'error')
+          } finally {
+            isUploading = false
           }
         }
       }
@@ -289,18 +297,23 @@
   })
 
   async function openFileDialog() {
+    if (isUploading) return
+
     try {
+      isUploading = true
       const selectedPaths = await open({
         multiple: true,
       });
 
       if (Array.isArray(selectedPaths)) {
-        addFilesFromPaths(selectedPaths);
+        await addFilesFromPaths(selectedPaths);
       } else if (selectedPaths) {
-        addFilesFromPaths([selectedPaths]);
+        await addFilesFromPaths([selectedPaths]);
       }
     } catch (e) {
       showToast(tr('upload.fileDialogError'), 'error');
+    } finally {
+      isUploading = false
     }
   }
 
@@ -315,6 +328,7 @@
         // Stop publishing file to DHT network
         try {
           await invoke('stop_publishing_file', { fileHash });
+          console.log('File unpublished from DHT:', fileHash);
         } catch (unpublishError) {
           console.warn('Failed to unpublish file from DHT:', unpublishError);
         }
@@ -341,21 +355,21 @@
         try {
           existingVersions = await invoke('get_file_versions_by_name', { fileName }) as any[];
         } catch (versionError) {
-          // No existing versions found
+          console.log('No existing versions found for', fileName);
         }
 
         // Use versioned upload
         const metadata = await invoke('upload_versioned_file', {
-          file_name: fileName,
-          file_path: filePath,
-          file_size: 0, // Will be calculated by backend
-          mime_type: null,
-          is_encrypted: false,
-          encryption_method: null,
-          key_fingerprint: null,
+          fileName: fileName,
+          filePath: filePath,
+          fileSize: 0, // Will be calculated by backend
+          mimeType: null,
+          isEncrypted: false,
+          encryptionMethod: null,
+          keyFingerprint: null,
         }) as any;
 
-        if (isDuplicateHash(get(files), metadata.file_hash)) {
+        if (isDuplicateHash(get(files), metadata.fileHash)) {
           duplicateCount++
           continue;
         }
@@ -367,14 +381,14 @@
 
         const newFile = {
           id: `file-${Date.now()}-${Math.random()}`,
-          name: metadata.file_name,
+          name: metadata.fileName,
           path: filePath,
-          hash: metadata.file_hash,
-          size: metadata.file_size,
+          hash: metadata.fileHash,
+          size: metadata.fileSize,
           status: 'seeding' as const,
           seeders: 1,
           leechers: 0,
-          uploadDate: new Date(metadata.created_at * 1000),
+          uploadDate: new Date(metadata.createdAt * 1000),
           version: metadata.version,
           isNewVersion: isNewVersion
         };
@@ -392,6 +406,7 @@
         // Publish file metadata to DHT network for discovery
         try {
           await dhtService.publishFile(metadata);
+          console.log('File published to DHT:', metadata.fileHash);
         } catch (publishError) {
           console.warn('Failed to publish file to DHT:', publishError);
           // Don't show error to user as upload succeeded, just DHT publishing failed
@@ -407,12 +422,6 @@
     }
 
     if (addedCount > 0) {
-      if (versionCount > 0) {
-        showToast(`${addedCount} file(s) uploaded (${versionCount} version update(s))`, 'success')
-      } else {
-        showToast(tr('upload.filesAdded', { values: { count: addedCount } }), 'success')
-      }
-      showToast('Files published to DHT network for sharing!', 'success')
       // Make storage refresh non-blocking to prevent UI hanging
       setTimeout(() => refreshAvailableStorage(), 100)
     }
@@ -438,7 +447,7 @@
       }
 
       const versionList = versions.map(v =>
-        `v${v.version}: ${v.file_hash.slice(0, 8)}... (${new Date(v.created_at * 1000).toLocaleDateString()})`
+        `v${v.version}: ${v.fileHash.slice(0, 8)}... (${new Date(v.createdAt * 1000).toLocaleDateString()})`
       ).join('\n');
 
       showToast(`Version history for ${fileName}:\n${versionList}`, 'info');
@@ -494,7 +503,7 @@
   </Card>
   {/if}
 
-  <Card class="drop-zone relative p-6 transition-all duration-200 border-dashed {isDragging ? 'border-primary bg-primary/5 scale-[1.01]' : 'border-muted-foreground/25 hover:border-muted-foreground/50'}"
+  <Card class="drop-zone relative p-6 transition-all duration-200 border-dashed {isDragging ? 'border-primary bg-primary/5 scale-[1.01]' : isUploading ? 'border-orange-500 bg-orange-500/5' : 'border-muted-foreground/25 hover:border-muted-foreground/50'}"
         role="button"
         tabindex="0"
         aria-label="Drop zone for file uploads">
@@ -527,11 +536,13 @@
             </div>
 
             <!-- Dynamic text -->
-            <h3 class="text-2xl font-bold mb-3 transition-all duration-300 {isDragging ? 'text-primary scale-110' : 'text-foreground'}">{isDragging ? '✨ Drop files here!' : $t('upload.dropFiles')}</h3>
+            <h3 class="text-2xl font-bold mb-3 transition-all duration-300 {isDragging ? 'text-primary scale-110' : isUploading ? 'text-orange-500 scale-105' : 'text-foreground'}">{isDragging ? '✨ Drop files here!' : isUploading ? '🔄 Uploading files...' : $t('upload.dropFiles')}</h3>
             <p class="text-muted-foreground mb-8 text-lg transition-colors duration-300">
               {isDragging
                 ? (isTauri ? 'Release to upload your files instantly' : 'Drag and drop not available in web version')
-                : (isTauri ? $t('upload.dropFilesHint') : 'Drag and drop requires desktop app')
+                : isUploading
+                  ? 'Please wait while your files are being processed...'
+                  : (isTauri ? $t('upload.dropFilesHint') : 'Drag and drop requires desktop app')
               }
             </p>
 
@@ -547,9 +558,9 @@
 
               <div class="flex justify-center gap-3">
                 {#if isTauri}
-                  <button class="group inline-flex items-center justify-center h-12 rounded-xl px-6 text-sm font-medium bg-gradient-to-r from-primary to-primary/90 text-primary-foreground hover:from-primary/90 hover:to-primary shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105" on:click={openFileDialog}>
+                  <button class="group inline-flex items-center justify-center h-12 rounded-xl px-6 text-sm font-medium bg-gradient-to-r from-primary to-primary/90 text-primary-foreground hover:from-primary/90 hover:to-primary shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100" disabled={isUploading} on:click={openFileDialog}>
                     <Plus class="h-5 w-5 mr-2 group-hover:rotate-90 transition-transform duration-300" />
-                    {$t('upload.addFiles')}
+                    {isUploading ? 'Uploading...' : $t('upload.addFiles')}
                   </button>
                 {:else}
                   <div class="text-center">
@@ -582,9 +593,9 @@
           </div>
           <div class="flex gap-2">
             {#if isTauri}
-              <button class="inline-flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90" on:click={openFileDialog}>
+              <button class="inline-flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed" disabled={isUploading} on:click={openFileDialog}>
                 <Plus class="h-4 w-4 mr-2" />
-                {$t('upload.addMoreFiles')}
+                {isUploading ? 'Uploading...' : $t('upload.addMoreFiles')}
               </button>
             {:else}
               <div class="text-center">
