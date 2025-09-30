@@ -85,7 +85,7 @@
     // Scroll to top when page changes
     $: if (currentPage) {
         tick().then(() => {
-            const mainContent = document.querySelector('.flex-1.overflow-auto')
+            const mainContent = document.querySelector('#main-content')
             if (mainContent) {
                 mainContent.scrollTop = 0
             }
@@ -166,7 +166,7 @@
     
   </script>
   
-  <div class="flex h-screen bg-background">
+  <div class="flex bg-background h-full">
     {#if !loading}
     <!-- Desktop Sidebar -->
     <div class="hidden md:block {sidebarCollapsed ? 'w-16' : 'w-64'} bg-card border-r transition-all">
@@ -285,7 +285,7 @@
 {/if}
 
     <!-- Main Content -->
-    <div class="flex-1">
+    <div id="main-content" class="flex-1 overflow-y-auto">
       <div class="p-6">
         <!-- <Router {routes} /> -->
          
@@ -305,4 +305,3 @@
   </div>
   <!-- add Toast  -->
 <SimpleToast />
-  
