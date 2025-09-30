@@ -4,7 +4,6 @@ use futures::io::{AsyncRead as FAsyncRead, AsyncWrite as FAsyncWrite};
 use futures::{AsyncReadExt as _, AsyncWriteExt as _};
 use futures_util::StreamExt;
 use tokio_util::compat::TokioAsyncReadCompatExt;
-
 use blockstore::{
     block::{Block, CidError},
     Blockstore, InMemoryBlockstore,
@@ -59,6 +58,7 @@ use rand::rngs::OsRng;
 const EXPECTED_PROTOCOL_VERSION: &str = "/chiral/1.0.0";
 const MAX_MULTIHASH_LENGHT: usize = 64;
 const RAW_CODEC: u64 = 0x55;
+const CHUNK_SIZE: usize = 256 * 1024; // 256 KiB (262144 bytes)
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,6 +67,7 @@ pub struct FileMetadata {
     pub file_hash: String, // This is the Merkle Root
     pub file_name: String,
     pub file_size: u64,
+    pub file_data: Vec<u8>, // Added field to hold the actual file data
     pub seeders: Vec<String>,
     pub created_at: u64,
     pub mime_type: Option<String>,
@@ -125,6 +126,7 @@ struct ReachabilityRecord {
     timestamp: SystemTime,
     summary: Option<String>,
 }
+/// thread-safe, mutable block store
 
 #[derive(NetworkBehaviour)]
 struct DhtBehaviour {
@@ -137,7 +139,6 @@ struct DhtBehaviour {
     autonat_client: toggle::Toggle<v2::client::Behaviour>,
     autonat_server: toggle::Toggle<v2::server::Behaviour>,
 }
-
 #[derive(Debug)]
 pub enum DhtCommand {
     PublishFile(FileMetadata),
@@ -612,8 +613,6 @@ async fn run_dht_node(
 
     'outer: loop {
         tokio::select! {
-
-
             cmd = cmd_rx.recv() => {
                 match cmd {
                     Some(DhtCommand::Shutdown(ack)) => {
@@ -621,33 +620,69 @@ async fn run_dht_node(
                         shutdown_ack = Some(ack);
                         break 'outer;
                     }
-                    Some(DhtCommand::PublishFile(metadata)) => {
-                        let key = kad::RecordKey::new(&metadata.file_hash.as_bytes());
-                        match serde_json::to_vec(&metadata) {
-                            Ok(value) => {
-                                let record = Record {
-                                    key,
-                                    value,
-                                    publisher: Some(peer_id),
-                                    expires: None,
-                                };
-
-                                match swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One) {
-                                    Ok(_) => {
-                                        info!("Published file metadata: {}", metadata.file_hash);
-                                    }
-                                    Err(e) => {
-                                        error!("Failed to publish file metadata {}: {}", metadata.file_hash, e);
-                                        let _ = event_tx.send(DhtEvent::Error(format!("Failed to publish: {}", e))).await;
-                                    }
+                    Some(DhtCommand::PublishFile(mut metadata)) => {
+                        let blocks = split_into_blocks(&metadata.file_data);
+                        let mut block_cids = Vec::new();
+                        for (idx, block) in blocks.iter().enumerate() {
+                            let cid = match block.cid() {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    error!("failed to get cid for block: {}", e);
+                                    let _ = event_tx.send(DhtEvent::Error(format!("failed to get cid for block: {}", e))).await;
+                                    return; 
                                 }
+                            };
+                            println!("block {} size={} cid={}", idx, block.data().len(), cid);
+
+                            match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(cid.clone(), block.data().to_vec())                          {
+                                Ok(_) => {},
+                                Err(e) => {
+                                    error!("failed to store block {}: {}", cid, e);
+                                    let _ = event_tx.send(DhtEvent::Error(format!("failed to store block {}: {}", cid, e))).await;
+                                    return; 
+                                }
+                            };
+                            block_cids.push(cid);
+                        }
+
+                        // create a root block that links to all data block cids
+                        let root_links_data = match serde_json::to_vec(&block_cids) {
+                            Ok(data) => data,
+                            Err(e) => {
+                                error!("failed to serialize block cids for root: {}", e);
+                                let _ = event_tx.send(DhtEvent::Error(format!("failed to serialize block cids for root: {}", e))).await;
+                                return;
+                            }
+                        };
+
+                        let root_cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&root_links_data));
+
+                        // store this new root block
+                        match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(root_cid, root_links_data.clone())
+                        {
+                            Ok(_) => {},
+                            Err(e) => {
+                                error!("failed to store root block {}: {}", root_cid, e);
+                                let _ = event_tx.send(DhtEvent::Error(format!("failed to store root block {}: {}", root_cid, e))).await;
+                                return;
+                            }
+                        };
+
+                        // update metadata.file_hash with the new root cid
+                        metadata.file_hash = root_cid.to_string();
+
+                        let key = kad::RecordKey::new(&metadata.file_hash.as_bytes());
+                        match swarm.behaviour_mut().kademlia.start_providing(key) {
+                            Ok(query_id) => {
+                                info!("started providing file: {}, query id: {:?}", metadata.file_hash, query_id);
                             }
                             Err(e) => {
-                                error!("Failed to serialize file metadata {}: {}", metadata.file_hash, e);
-                                let _ = event_tx.send(DhtEvent::Error(format!("Failed to serialize metadata: {}", e))).await;
+                                error!("failed to start providing file {}: {}", metadata.file_hash, e);
+                                let _ = event_tx.send(DhtEvent::Error(format!("failed to start providing: {}", e))).await;
                             }
                         }
                     }
+                    
                     Some(DhtCommand::StopPublish(file_hash)) => {
                         let key = kad::RecordKey::new(&file_hash);
                         // Remove the record
@@ -753,6 +788,7 @@ async fn run_dht_node(
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) => match bitswap {
                         // !TODO: implement this
+                        
                         beetswap::Event::GetQueryResponse { query_id, data } => {
                             // let cid = queries.get(&query_id).expect("unknown cid received");
                             // info!("received response for {cid:?}: {data:?}");
@@ -1715,6 +1751,7 @@ impl DhtService {
         file_hash: String,
         file_name: String,
         file_size: u64,
+        file_data: Vec<u8>,
         created_at: u64,
         mime_type: Option<String>,
         is_encrypted: bool,
@@ -1735,6 +1772,7 @@ impl DhtService {
             file_hash,
             file_name,
             file_size,
+            file_data,
             seeders: vec![],
             created_at,
             mime_type,
@@ -2017,6 +2055,20 @@ impl Block<64> for StringBlock {
     fn data(&self) -> &[u8] {
         self.0.as_ref()
     }
+}
+
+pub fn split_into_blocks(bytes: &[u8]) -> Vec<StringBlock> {
+    let mut blocks = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let end = (i + CHUNK_SIZE).min(bytes.len());
+        let slice = &bytes[i..end];
+        // Convert slice to String, replacing invalid UTF-8 with �
+        let string = String::from_utf8_lossy(slice).to_string();
+        blocks.push(StringBlock(string));
+        i = end;
+    }
+    blocks
 }
 
 #[cfg(test)]
