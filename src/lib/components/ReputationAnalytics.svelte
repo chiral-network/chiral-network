@@ -172,7 +172,7 @@
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-gray-500">Avg Score</p>
-          <p class="text-2xl font-bold text-purple-600">{(analytics.averageScore * 5).toFixed(1)}/5</p>
+          <p class="text-2xl font-bold text-purple-600">{(analytics.averageScore * 5).toFixed(1)}/5.0</p>
         </div>
         <div class="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center">
           <span class="text-purple-600 text-sm">⭐</span>
@@ -321,7 +321,7 @@
               {peer.trustLevel}
             </Badge>
             <span class="text-sm font-semibold text-gray-900">
-              {(peer.score * 5).toFixed(1)}/5
+              {(peer.score * 5).toFixed(1)}/5.0 ⭐
             </span>
           </div>
           <div class="sm:hidden -mt-2"></div>

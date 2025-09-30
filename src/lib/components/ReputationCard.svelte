@@ -90,7 +90,7 @@
       <div>
         <p class="text-xs text-gray-500">Reputation Score</p>
         <p class={`text-lg font-bold ${getScoreColor(peer.trustLevel)}`}>
-          {starRating.toFixed(1)}/5
+          {starRating.toFixed(1)}/5.0
         </p>
       </div>
       <div class="text-right">
