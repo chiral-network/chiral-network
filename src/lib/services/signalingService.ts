@@ -1,4 +1,5 @@
 import { writable, type Writable } from "svelte/store";
+import { invoke } from "@tauri-apps/api/core";
 
 function createClientId(): string {
   const randomUUID = globalThis?.crypto?.randomUUID;
@@ -12,80 +13,98 @@ function createClientId(): string {
 }
 
 export class SignalingService {
-  private ws: WebSocket | null = null;
   private clientId: string;
-  
+  private dhtConnected: boolean = false;
+
   public connected: Writable<boolean> = writable(false);
   public peers: Writable<string[]> = writable([]);
 
-  // handler for WebRTC signaling messages
-  private onMessageHandler: ((msg: any) => void) | null = null;
-
-  constructor(private url: string = "ws://localhost:9000") {
+  constructor() {
     this.clientId = createClientId();
   }
 
   async connect(): Promise<void> {
     return new Promise((resolve, reject) => {
-      try {
-        console.log("[SignalingService] Initializing connection to:", this.url);
-        console.log("[SignalingService] Client ID:", this.clientId);
-        
-        this.ws = new WebSocket(this.url);
-        
-        this.ws.onopen = () => {
-          console.log("[SignalingService] WebSocket connection established");
-          this.connected.set(true);
-          const msg = { type: "register", clientId: this.clientId };
-          console.log("[SignalingService] Sending register message:", msg);
-          this.ws?.send(JSON.stringify(msg));
-          resolve();
-        };
+      (async () => {
+        try {
+          console.log("[SignalingService] Initializing DHT-based signaling");
+          console.log("[SignalingService] Client ID:", this.clientId);
 
-        this.ws.onmessage = (event) => {
-          console.log("[SignalingService] Received message:", event.data);
-          const message = JSON.parse(event.data);
-          
-          if (message.type === "peers") {
-            this.peers.set(message.peers);
+          // Check if DHT is running and get our peer ID
+          const peerId = await invoke("get_dht_peer_id");
+          if (peerId) {
+            this.dhtConnected = true;
+            this.connected.set(true);
+            console.log(
+              "[SignalingService] DHT signaling connected with peer ID:",
+              peerId
+            );
+
+            // Get connected peers from DHT
+            this.refreshPeers();
+            resolve();
           } else {
-            // Forward other messages (offer/answer/candidate)
-            this.onMessageHandler?.(message);
+            throw new Error("DHT not available for signaling");
           }
-        };
-
-        this.ws.onclose = () => {
-          console.log("[SignalingService] WebSocket connection closed");
-          this.connected.set(false);
-          this.peers.set([]);
-        };
-
-        this.ws.onerror = (error) => {
-          console.error("[SignalingService] WebSocket error:", error);
+        } catch (error) {
+          console.error(
+            "[SignalingService] DHT signaling connection failed:",
+            error
+          );
           reject(error);
-        };
-
-      } catch (error) {
-        console.error("[SignalingService] Connection failed:", error);
-        reject(error);
-      }
+        }
+      })();
     });
   }
 
-  //Set a callback for incoming signaling messages
-  setOnMessage(handler: (msg: any) => void) {
-    this.onMessageHandler = handler;
+  private async refreshPeers(): Promise<void> {
+    try {
+      // Get connected peers from DHT
+      const peers = (await invoke("get_dht_connected_peers")) as string[];
+      this.peers.set(peers || []);
+    } catch (error) {
+      console.error("[SignalingService] Failed to refresh peers:", error);
+    }
   }
 
-  // Send a signaling message to another peer
-  send(msg: any) {
-    if (!this.ws) throw new Error("WebSocket not connected");
-    this.ws.send(JSON.stringify({ ...msg, from: this.clientId }));
+  //Set a callback for incoming signaling messages (not implemented)
+  setOnMessage(_handler: (msg: any) => void) {
+    // TODO: Implement message handling if needed
+  }
+
+  // Send a signaling message to another peer via DHT
+  async send(msg: any): Promise<void> {
+    if (!this.dhtConnected) throw new Error("DHT signaling not connected");
+
+    try {
+      const signalingMessage = {
+        ...msg,
+        from: this.clientId,
+        timestamp: Date.now(),
+        type: "webrtc_signaling",
+      };
+
+      // Send the signaling message through DHT to the target peer
+      await invoke("send_dht_message", {
+        peerId: msg.to,
+        message: signalingMessage,
+      });
+
+      console.log(
+        "[SignalingService] Sent DHT signaling message:",
+        signalingMessage
+      );
+    } catch (error) {
+      console.error(
+        "[SignalingService] Failed to send DHT signaling message:",
+        error
+      );
+      throw error;
+    }
   }
 
   disconnect(): void {
-    this.ws?.close();
-    this.ws = null;
+    this.dhtConnected = false;
     this.connected.set(false);
     this.peers.set([]);
   }

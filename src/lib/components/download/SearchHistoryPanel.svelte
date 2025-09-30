@@ -14,7 +14,7 @@
 
   const dispatch = createEventDispatcher<{ select: string; clear: void }>();
 
-  const tr = (key: string, params?: Record<string, unknown>) => get(t)(key, params);
+  const tr = (key: string, params?: Record<string, unknown>): string => (get(t) as (key: string, params?: any) => string)(key, params)
 
   function statusLabel(status: string) {
     switch (status) {

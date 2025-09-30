@@ -11,8 +11,8 @@ export const DEFAULT_BOOTSTRAP_NODES = [
   "/ip4/54.198.145.146/tcp/4001/p2p/12D3KooWNHdYWRTe98KMF1cDXXqGXvNjd1SAchDaeP5o4MsoJLu2",
 ];
 
-export type NatReachabilityState = 'unknown' | 'public' | 'private';
-export type NatConfidence = 'low' | 'medium' | 'high';
+export type NatReachabilityState = "unknown" | "public" | "private";
+export type NatConfidence = "low" | "medium" | "high";
 
 export interface NatHistoryItem {
   state: NatReachabilityState;
@@ -41,6 +41,7 @@ export interface FileMetadata {
   isEncrypted: boolean;
   encryptionMethod?: string;
   keyFingerprint?: string;
+  version?: number;
 }
 
 export interface DhtHealth {
@@ -96,16 +97,19 @@ export class DhtService {
         port,
         bootstrapNodes,
       };
-      if (typeof config?.enableAutonat === 'boolean') {
+      if (typeof config?.enableAutonat === "boolean") {
         payload.enableAutonat = config.enableAutonat;
       }
-      if (typeof config?.autonatProbeIntervalSeconds === 'number') {
+      if (typeof config?.autonatProbeIntervalSeconds === "number") {
         payload.autonatProbeIntervalSecs = config.autonatProbeIntervalSeconds;
       }
       if (config?.autonatServers && config.autonatServers.length > 0) {
         payload.autonatServers = config.autonatServers;
       }
-      if (typeof config?.proxyAddress === 'string' && config.proxyAddress.trim().length > 0) {
+      if (
+        typeof config?.proxyAddress === "string" &&
+        config.proxyAddress.trim().length > 0
+      ) {
         payload.proxyAddress = config.proxyAddress;
       }
 

@@ -26,7 +26,7 @@
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
-  const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
+  const tr = (k: string, params?: Record<string, any>): string => (get(t) as (key: string, params?: any) => string)(k, params)
 
   type NatStatusPayload = {
     state: NatReachabilityState
@@ -93,7 +93,6 @@
   let webrtcSession: ReturnType<typeof createWebRTCSession> | null = null;
   let discoveredPeers: string[] = [];
   let signalingConnected = false;
-  let selectedPeerId = '';
   
   // UI variables
   const nodeAddress = "enode://277ac35977fc0a230e3ca4ccbf6df6da486fd2af9c129925b1193b25da6f013a301788fceed458f03c6c0d289dfcbf7a7ca5c0aef34b680fcbbc8c2ef79c0f71@127.0.0.1:30303"
@@ -779,45 +778,47 @@
     }
   }
 
-  onMount(async () => {
+  onMount(() => {
     const interval = setInterval(refreshStats, 5000)
     let unlistenProgress: (() => void) | null = null
     
     // Initialize signaling service
-    try {
-      signaling = new SignalingService('ws://localhost:9000');
-      await signaling.connect();
-      signalingConnected = true;
-      signaling.peers.subscribe(peers => {
-        discoveredPeers = peers;
-        console.log('Updated discovered peers:', peers);
-      });
-      showToast('Connected to signaling server', 'success');
-    } catch (error) {
-      console.error('Failed to connect to signaling server:', error);
-      showToast('Failed to connect to signaling server. Make sure it\'s running.', 'error');
-      signalingConnected = false;
-    }
-    
-    // Initialize async operations
-    const initAsync = async () => {
-      await checkGethStatus()
-      
-      // DHT check will happen in startDht()
-
-      // Also passively sync DHT state if it's already running
-      await syncDhtStatusOnMount()
-      
-      // Listen for download progress updates (only in Tauri)
-      if (isTauri) {
-        await registerNatListener()
-        unlistenProgress = await listen('geth-download-progress', (event) => {
-          downloadProgress = event.payload as typeof downloadProgress
-        })
+    ;(async () => {
+      try {
+        signaling = new SignalingService();
+        await signaling.connect();
+        signalingConnected = true;
+        signaling.peers.subscribe(peers => {
+          discoveredPeers = peers;
+          console.log('Updated discovered peers:', peers);
+        });
+        showToast('Connected to signaling server', 'success');
+      } catch (error) {
+        console.error('Failed to connect to signaling server:', error);
+        showToast('Failed to connect to signaling server. Make sure it\'s running.', 'error');
+        signalingConnected = false;
       }
-    }
-    
-    initAsync()
+      
+      // Initialize async operations
+      const initAsync = async () => {
+        await checkGethStatus()
+        
+        // DHT check will happen in startDht()
+
+        // Also passively sync DHT state if it's already running
+        await syncDhtStatusOnMount()
+        
+        // Listen for download progress updates (only in Tauri)
+        if (isTauri) {
+          await registerNatListener()
+          unlistenProgress = await listen('geth-download-progress', (event) => {
+            downloadProgress = event.payload as typeof downloadProgress
+          })
+        }
+      }
+      
+      initAsync()
+    })()
     
     return () => {
       clearInterval(interval)

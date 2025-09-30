@@ -10,7 +10,7 @@
   import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw } from 'lucide-svelte'
   import { onDestroy, onMount, getContext } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
-  import { etcAccount, miningState, transactions, type Transaction } from '$lib/stores'
+  import { etcAccount, miningState, transactions } from '$lib/stores'
   import { getVersion } from "@tauri-apps/api/app";
   import { t } from 'svelte-i18n';
   import { goto } from '@mateothegreat/svelte5-router';
@@ -32,7 +32,6 @@
   let isGethRunning = false
   let currentBlock = 0
   let totalHashes = 0
-  let currentDifficulty = 4
   let lastHashUpdate = Date.now()
   let cpuThreads = navigator.hardwareConcurrency || 4
   let selectedThreads = Math.floor(cpuThreads / 2)
@@ -256,7 +255,7 @@
     await checkGethStatus()
     await updateNetworkStats()
     try {
-      seenHashes = new Set(($miningState.recentBlocks ?? []).map((b: any) => b.hash))
+      // seenHashes initialization removed - no longer used
     } catch{} 
     // If mining is already active from before, restore session and update stats
     if ($miningState.isMining) {
@@ -549,10 +548,6 @@
       console.error('Failed to stop mining:', e)
     }
   }
-  // Simulation removed; recent blocks come from backend
-
-  // Keep a set of hashes we've already shown to avoid duplicates
-  let seenHashes = new Set<string>();
 
   // Pagination for recent blocks
   let pageSizes = [5, 10, 20, 50]
