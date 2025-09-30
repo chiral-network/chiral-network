@@ -508,47 +508,89 @@
     showToast('Transaction cancelled', 'warning')
   }
 
-  function sendTransaction() {
-    if (!isAddressValid || !isAmountValid || !isAddressValid || sendAmount <= 0) return
+  async function sendTransaction() {
+    if (!isAddressValid || !isAmountValid || sendAmount <= 0) return
     
-    // Notify submission (mocked)
-    showToast('Transaction submitted', 'info')
-
-    // Simulate transaction
-    wallet.update((w: typeof $wallet) => ({
-      ...w,
-      balance: w.balance - sendAmount,
-      pendingTransactions: w.pendingTransactions + 1,
-    }))
-
-    transactions.update(txs => [
-    {
-      id: Date.now(),
-      type: 'sent',
-      amount: sendAmount,
-      to: recipientAddress,
-      date: new Date(),
-      description: tr('transactions.manual'),
-      status: 'pending'
-    },
-    ...txs // prepend so latest is first
-  ])
-    
-    // Clear form
-    recipientAddress = ''
-    sendAmount = 0
-    rawAmountInput = ''
-    
-    // Simulate transaction completion
-    setTimeout(() => {
-      wallet.update(w => ({
+    try {
+      showToast('Sending transaction...', 'info')
+      
+      // Call backend to send real transaction
+      const txHash = await invoke('send_chiral_transaction', {
+        toAddress: recipientAddress,
+        amount: sendAmount
+      }) as string
+      
+      // Update local state immediately (optimistic update)
+      wallet.update((w: typeof $wallet) => ({
         ...w,
-        pendingTransactions: Math.max(0, w.pendingTransactions - 1)
+        balance: w.balance - sendAmount,
+        pendingTransactions: w.pendingTransactions + 1,
       }))
-      transactions.update(txs => txs.map(tx => tx.status === 'pending' ? { ...tx, status: 'completed' } : tx))
-      // Notify success (mocked)
-      showToast('Transaction confirmed', 'success')
-    }, 3000)
+
+      transactions.update(txs => [{
+        id: Date.now(),
+        type: 'sent',
+        amount: sendAmount,
+        to: recipientAddress,
+        date: new Date(),
+        description: tr('transactions.manual'),
+        status: 'pending',
+        txHash: txHash // Store transaction hash
+      }, ...txs])
+      
+      // Clear form
+      recipientAddress = ''
+      sendAmount = 0
+      rawAmountInput = ''
+      
+      showToast('Transaction submitted!', 'success')
+      
+      // Poll for transaction confirmation
+      pollTransactionStatus(txHash)
+      
+    } catch (error) {
+      console.error('Transaction failed:', error)
+      showToast('Transaction failed: ' + String(error), 'error')
+      
+      // Refresh balance to get accurate state
+      await fetchBalance()
+    }
+  }
+
+  async function pollTransactionStatus(txHash: string) {
+    const maxAttempts = 60 // 5 minutes
+    let attempts = 0
+    
+    const interval = setInterval(async () => {
+      attempts++
+      
+      try {
+        // Check if transaction is mined
+        const receipt = await invoke('get_transaction_receipt', { txHash })
+        
+        if (receipt) {
+          // Transaction confirmed
+          clearInterval(interval)
+          
+          // Update transaction status
+          transactions.update(txs => txs.map(tx => 
+            tx.txHash === txHash ? { ...tx, status: 'completed' } : tx
+          ))
+          
+          // Refresh balance
+          await fetchBalance()
+          
+          showToast('Transaction confirmed!', 'success')
+        }
+      } catch (error) {
+        console.error('Error checking transaction status:', error)
+      }
+      
+      if (attempts >= maxAttempts) {
+        clearInterval(interval)
+        showToast('Transaction confirmation timeout', 'warning')
+      }
+    }, 5000) // Check every 5 seconds
   }
   
   function formatDate(date: Date): string {
@@ -608,63 +650,39 @@
     }
   }
 
-  // async function fetchBalance() {
-  //   if (!$etcAccount) return
-    
-  //   try {
-  //     // FIRST: Reset wallet to a clean state for the new account
-  //     wallet.update(w => ({ 
-  //       ...w, 
-  //       balance: 0, // Start with 0
-  //       address: $etcAccount.address 
-  //     }));
-
-  //     if (isTauri && isGethRunning) {
-  //       // Desktop app with local geth node - get real blockchain balance
-  //       const balanceStr = await invoke('get_account_balance', { address: $etcAccount.address }) as string
-  //       const realBalance = parseFloat(balanceStr);
-
-  //       // Update wallet with the real balance
-  //       wallet.update(w => ({ 
-  //         ...w, 
-  //         balance: realBalance,
-  //       }));
-  //       if (!isNaN(realBalance)) {
-  //       if (realBalance > ($miningState.totalRewards ?? 0)) {
-  //           miningState.update(state => ({
-  //             ...state,
-  //             totalRewards: realBalance
-  //           }));
-  //         }
-  //       }
-
-  //       // Now, fetch real transactions like mining rewards
-  //       // (This assumes you have a function to fetch recent blocks/transactions)
-  //       // For example:
-  //       // await appendNewBlocksFromBackend(); 
-
-  //     } else if (isTauri && !isGethRunning) {
-  //       // Desktop app but geth not running - use stored balance
-  //       console.log('Geth not running - using stored balance')
-  //     } else {
-  //       // Web environment - For now, simulate balance updates for demo purposes
-  //       const simulatedBalance = $wallet.balance + Math.random() * 10 // Small random changes
-  //       wallet.update(w => ({ ...w, balance: Math.max(0, simulatedBalance) }))
-  //     }
-  //   } catch (error) {
-  //     console.error('Failed to fetch balance:', error)
-  //     // Fallback to stored balance on error
-  //   }
-  // }
   async function fetchBalance() {
     if (!$etcAccount) return;
     
     try {
-      // These service calls now handle everything
-      await walletService.refreshBalance();
-      await walletService.refreshTransactions(); 
+      if (isTauri && isGethRunning) {
+        // Get real blockchain balance
+        const balanceStr = await invoke('get_account_balance', { 
+          address: $etcAccount.address 
+        }) as string
+        const realBalance = parseFloat(balanceStr);
+
+        // Calculate pending transaction total
+        const pendingAmount = $transactions
+          .filter(tx => tx.status === 'pending' && tx.type === 'sent')
+          .reduce((sum, tx) => sum + tx.amount, 0)
+        
+        // Display balance minus pending transactions
+        wallet.update(w => ({ 
+          ...w, 
+          balance: Math.max(0, realBalance - pendingAmount),
+          actualBalance: realBalance // Store actual on-chain balance
+        }));
+        
+        // Update mining state
+        if (!isNaN(realBalance)) {
+          miningState.update(state => ({
+            ...state,
+            totalRewards: realBalance
+          }));
+        }
+      }
     } catch (error) {
-      console.error('Failed to fetch balance and transactions:', error);
+      console.error('Failed to fetch balance:', error);
     }
   }
 

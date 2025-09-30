@@ -7,6 +7,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use ethers::prelude::*;
 
 //Structs
 #[derive(Debug, Serialize, Deserialize)]
@@ -295,6 +296,8 @@ impl GethProcess {
 
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
+
+
 
         Ok(())
     }
@@ -1278,4 +1281,74 @@ pub async fn get_network_hashrate() -> Result<String, String> {
     };
 
     Ok(formatted)
+}
+
+
+pub async fn send_transaction(
+    from_address: &str,
+    to_address: &str,
+    amount_chiral: f64,
+    private_key: &str,
+) -> Result<String, String> {
+    let private_key_clean = private_key.strip_prefix("0x").unwrap_or(private_key);
+    
+    let wallet: LocalWallet = private_key_clean
+        .parse()
+        .map_err(|e| format!("Invalid private key: {}", e))?;
+    
+    let wallet_address = format!("{:?}", wallet.address());
+    if wallet_address.to_lowercase() != from_address.to_lowercase() {
+        return Err(format!(
+            "Private key doesn't match account. Expected: {}, Got: {}",
+            from_address, wallet_address
+        ));
+    }
+    
+    let provider = Provider::<Http>::try_from("http://127.0.0.1:8545")
+        .map_err(|e| format!("Failed to connect to Geth: {}", e))?;
+    
+    let chain_id = 98765u64;
+    let wallet = wallet.with_chain_id(chain_id);
+    
+    let client = SignerMiddleware::new(provider.clone(), wallet);
+    
+    let to: Address = to_address
+        .parse()
+        .map_err(|e| format!("Invalid to address: {}", e))?;
+    
+    let amount_wei = U256::from((amount_chiral * 1_000_000_000_000_000_000.0) as u128);
+    
+    // Get nonce for pending block (includes pending transactions)
+    let from_addr: Address = from_address
+        .parse()
+        .map_err(|e| format!("Invalid from address: {}", e))?;
+    
+    let nonce = provider
+        .get_transaction_count(from_addr, Some(BlockNumber::Pending.into()))
+        .await
+        .map_err(|e| format!("Failed to get nonce: {}", e))?;
+    
+    let gas_price = provider
+        .get_gas_price()
+        .await
+        .map_err(|e| format!("Failed to get gas price: {}", e))?;
+    
+    // Increase gas price by 10% to ensure it's not underpriced
+    let gas_price_adjusted = gas_price * 110 / 100;
+    
+    let tx = TransactionRequest::new()
+        .to(to)
+        .value(amount_wei)
+        .gas(21000)
+        .gas_price(gas_price_adjusted)
+        .nonce(nonce);
+    
+    let pending_tx = client
+        .send_transaction(tx, None)
+        .await
+        .map_err(|e| format!("Failed to send transaction: {}", e))?;
+    
+    let tx_hash = format!("{:?}", pending_tx.tx_hash());
+    
+    Ok(tx_hash)
 }
