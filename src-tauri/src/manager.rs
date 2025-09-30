@@ -252,7 +252,16 @@ impl ChunkManager {
     // This function now saves the combined [nonce][ciphertext] blob
     fn save_chunk(&self, hash: &str, data_with_nonce: &[u8]) -> Result<(), Error> {
         fs::create_dir_all(&self.storage_path)?;
-        fs::write(self.storage_path.join(hash), data_with_nonce)?;
+        let chunk_path = self.storage_path.join(hash);
+        // --- Deduplication: Only write if the chunk does not already exist ---
+        if chunk_path.exists() {
+            // Already present, skip writing
+            // Prime the L1 cache anyway
+            let mut cache = L1_CACHE.lock().unwrap();
+            cache.put(hash.to_string(), data_with_nonce.to_vec());
+            return Ok(());
+        }
+        fs::write(&chunk_path, data_with_nonce)?;
         // Prime the L1 cache
         {
             let mut cache = L1_CACHE.lock().unwrap();
@@ -426,7 +435,7 @@ impl ChunkManager {
         let proof = merkle_tree.proof(&[chunk_index_to_prove]);
 
         let proof_indices = vec![chunk_index_to_prove];
-        let proof_hashes_hex = proof.proof_hashes_hex();
+        let proof_hashes_hex = proof.proof_hashes();
 
         Ok((proof_indices, proof_hashes_hex, all_chunk_hashes.len()))
     }
@@ -722,5 +731,4 @@ mod tests {
         let is_tampered_valid = manager.verify_chunk(&manifest.merkle_root, chunk_info, &tampered_data, &proof_indices, &proof_hashes, total_leaves).unwrap();
         assert!(!is_tampered_valid, "Merkle proof verification should fail for tampered data.");
     }
-}
 }
