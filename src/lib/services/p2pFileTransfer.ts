@@ -45,7 +45,7 @@ export class P2PFileTransferService {
     this.signalingService = new SignalingService();
   }
 
-    private async getPeerMetrics(
+  private async getPeerMetrics(
     seeders: string[]
   ): Promise<Record<string, any>> {
     try {
@@ -198,10 +198,6 @@ export class P2PFileTransferService {
       const seederId = transfer.seeders[transfer.currentSeederIndex!];
 
       try {
-        console.log(
-          `Attempting to establish WebRTC connection with seeder ${seederId} (attempt ${transfer.retryCount! + 1})`
-        );
-
         transfer.status = "connecting";
         transfer.lastError = undefined;
         this.notifyProgress(transfer);
@@ -212,7 +208,6 @@ export class P2PFileTransferService {
           peerId: seederId,
           signaling: this.signalingService,
           onConnectionStateChange: (state) => {
-            console.log(`WebRTC connection state: ${state}`);
             if (state === "connected") {
               transfer.status = "transferring";
               transfer.retryCount = 0; // Reset retry count on successful connection
@@ -226,9 +221,7 @@ export class P2PFileTransferService {
               );
             }
           },
-          onDataChannelOpen: () => {
-            console.log("Data channel opened");
-          },
+          onDataChannelOpen: () => {},
           onMessage: (data) => {
             this.handleIncomingChunk(transfer, data);
           },
@@ -311,18 +304,12 @@ export class P2PFileTransferService {
     transfer.lastError = error;
     transfer.retryCount = (transfer.retryCount || 0) + 1;
 
-    console.log(`Connection attempt ${transfer.retryCount} failed: ${error}`);
-
     // Try next seeder
     transfer.currentSeederIndex = (transfer.currentSeederIndex || 0) + 1;
 
     if (transfer.currentSeederIndex! < transfer.seeders.length) {
-      console.log(
-        `Trying next seeder: ${transfer.seeders[transfer.currentSeederIndex!]}`
-      );
       // Continue trying other seeders
     } else if (transfer.retryCount! < 3) {
-      console.log("All seeders failed, retrying from beginning...");
       transfer.currentSeederIndex = 0;
       transfer.status = "retrying";
       this.notifyProgress(transfer);
@@ -369,7 +356,6 @@ export class P2PFileTransferService {
 
     try {
       transfer.webrtcSession.send(JSON.stringify(fileRequest));
-      console.log("Sent file request:", fileRequest);
 
       // Start parallel chunk downloading
       this.startParallelChunkDownload(transfer, metadata);
@@ -387,10 +373,6 @@ export class P2PFileTransferService {
   ): void {
     const totalChunks = Math.ceil(metadata.fileSize / (16 * 1024)); // 16KB chunks
     const parallelRequests = Math.min(5, totalChunks); // Request up to 5 chunks in parallel
-
-    console.log(
-      `Starting parallel chunk download: ${totalChunks} total chunks, ${parallelRequests} parallel requests`
-    );
 
     // Request initial batch of chunks
     for (let i = 0; i < parallelRequests && i < totalChunks; i++) {
@@ -456,7 +438,6 @@ export class P2PFileTransferService {
       };
 
       transfer.webrtcSession.send(JSON.stringify(chunkRequest));
-      console.log(`Requested chunk ${chunkIndex}`);
     } catch (error) {
       console.error(`Failed to request chunk ${chunkIndex}:`, error);
     }
@@ -478,8 +459,6 @@ export class P2PFileTransferService {
 
       if (message.type === "file_chunk") {
         // Handle incoming file chunk
-        console.log("Received file chunk:", message);
-
         // Initialize chunks map if not exists
         if (!transfer.receivedChunks) {
           transfer.receivedChunks = new Map();
@@ -516,7 +495,6 @@ export class P2PFileTransferService {
         // Check if transfer is complete
         if (this.isTransferComplete(transfer, message.total_chunks)) {
           transfer.status = "completed";
-          console.log("File transfer completed");
 
           // Save file if output path is specified
           if (transfer.outputPath) {
@@ -571,7 +549,6 @@ export class P2PFileTransferService {
       };
 
       transfer.webrtcSession.send(JSON.stringify(chunkRequest));
-      console.log(`Requested chunk ${chunkIndex} again`);
     } catch (error) {
       console.error("Failed to request chunk again:", error);
     }
@@ -601,8 +578,6 @@ export class P2PFileTransferService {
         path: transfer.outputPath,
         contents: Array.from(fileData),
       });
-
-      console.log(`File saved to: ${transfer.outputPath}`);
     } catch (error) {
       console.error("Error saving completed file:", error);
       transfer.status = "failed";
@@ -612,17 +587,11 @@ export class P2PFileTransferService {
   }
 
   private handleDhtMessage(message: any): void {
-    console.log("Received DHT message:", message);
-
     // Handle WebRTC signaling messages received through DHT
     if (message.message?.type === "webrtc_signaling") {
       // This would contain WebRTC signaling data (offer/answer/candidate)
-      // For now, we'll log it, but in a complete implementation,
+      // For now, we'll log it, but in a real implementation,
       // this would be passed to the WebRTC session
-      console.log(
-        "WebRTC signaling message received through DHT:",
-        message.message
-      );
     }
   }
 

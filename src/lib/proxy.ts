@@ -57,7 +57,6 @@ export async function initProxyEvents() {
   // State update (ProxyStatus) - merge by PeerId
   unlisten = await listen("proxy_status_update", (event) => {
     const updated = event.payload as ProxyUpdate;
-    console.log("[proxy_status_update]", updated);
 
     proxyNodes.update((nodes) => {
       const i = nodes.findIndex((n) => n.id === updated.id);
@@ -99,7 +98,6 @@ export function disposeProxyEvents() {
 
 export async function connectProxy(url: string, token: string) {
   try {
-    console.log(`Connecting to proxy: ${url}`);
     await invoke("proxy_connect", { url, token });
     // if needed: optimistic placeholder if PeerId is unknown
   } catch (e) {
@@ -109,7 +107,6 @@ export async function connectProxy(url: string, token: string) {
 
 export async function disconnectProxy(url: string) {
   try {
-    console.log(`Disconnecting from proxy: ${url}`);
     await invoke("proxy_disconnect", { url });
   } catch (e) {
     console.error("proxy_disconnect failed:", e);
@@ -118,7 +115,6 @@ export async function disconnectProxy(url: string) {
 
 export async function listProxies() {
   try {
-    console.log("Refreshing proxy list");
     const incoming = (await invoke<ProxyNode[]>("list_proxies")) ?? [];
     // merge with existing nodes to preserve status/latency if possible
     proxyNodes.update((nodes) => {

@@ -602,7 +602,6 @@
       } else {
         // Fallback for web environment - assume geth is not running
         isGethRunning = false
-        console.log('Running in web mode - geth not available')
       }
     } catch (error) {
       console.error('Failed to check geth status:', error)
@@ -686,7 +685,6 @@
         private_key: demoPrivateKey,
         blacklist: []
       }
-      console.log('Running in web mode - using demo account')
     }
 
     etcAccount.set(account)
@@ -736,7 +734,6 @@
             keystoreSaveMessage = tr('keystore.success');
         } else {
             // Simulate for web
-            console.log('Simulating save to keystore with password:', keystorePassword);
             await new Promise(resolve => setTimeout(resolve, 1000));
             keystoreSaveMessage = tr('keystore.successSimulated');
         }
@@ -760,8 +757,6 @@
     // 3. This function runs when a QR code is successfully scanned
     function onScanSuccess(decodedText: string, decodedResult: any) {
       // Handle the scanned code
-      console.log(`Code matched = ${decodedText}`, decodedResult);
-      
       // Paste the address into the input field
       recipientAddress = decodedText;
       
@@ -809,7 +804,6 @@
           address: demoAddress,
           private_key: importPrivateKey
         }
-        console.log('Running in web mode - using provided private key')
       }
       
       etcAccount.set(account)
@@ -993,7 +987,6 @@
 
         } else {
             // Web demo mode simulation
-            console.log('Simulating keystore load in web mode');
             // Save or clear the password from local storage based on the checkbox
             saveOrClearPassword(selectedKeystoreAccount, loadKeystorePassword);
             await new Promise(resolve => setTimeout(resolve, 1000));
