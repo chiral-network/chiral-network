@@ -20,7 +20,7 @@
   import { totalEarned, totalSpent, miningState } from '$lib/stores';
   import { walletService } from '$lib/wallet'; 
 
-  const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
+  const tr = (k: string, params?: Record<string, any>): string => (get(t) as (key: string, params?: any) => string)(k, params)
   
   // Basic obfuscation for locally stored passwords. NOT for cryptographic security.
   const OBFUSCATION_KEY = 'chiral-network-p@ssw0rd-key'; // A simple key
@@ -553,7 +553,7 @@
   
   function formatDate(date: Date): string {
     const loc = get(locale) || 'en-US'
-    return new Intl.DateTimeFormat(loc, { month: 'short', day: 'numeric', year: 'numeric' }).format(date)
+    return new Intl.DateTimeFormat(typeof loc === 'string' ? loc : 'en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(date)
   }
 
   function handleTransactionClick(tx: any) {

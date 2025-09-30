@@ -126,7 +126,7 @@
   }
 
   async function selectStoragePath() {
-    const tr = get(t);
+    const tr = get(t) as (key: string, params?: any) => string;
     try {
       // Try Tauri first
       await getVersion(); // only works in Tauri

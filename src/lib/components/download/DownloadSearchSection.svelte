@@ -18,7 +18,7 @@
   type ToastPayload = { message: string; type?: ToastType; duration?: number };
 
   const dispatch = createEventDispatcher<{ download: FileMetadata; message: ToastPayload }>();
-  const tr = (key: string, params?: Record<string, unknown>) => get(t)(key, params);
+  const tr = (key: string, params?: Record<string, unknown>) => (get(t) as any)(key, params);
 
   const SEARCH_TIMEOUT_MS = 12_000;
 
@@ -211,7 +211,8 @@
       isEncrypted: version.is_encrypted || false,
       mimeType: version.mime_type,
       encryptionMethod: version.encryption_method,
-      keyFingerprint: version.key_fingerprint
+      keyFingerprint: version.key_fingerprint,
+      version: version.version
     };
     
     dispatch('download', metadata);
