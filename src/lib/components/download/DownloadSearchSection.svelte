@@ -215,11 +215,11 @@
       case 'found':
         return tr('download.search.status.found');
       case 'not_found':
-        return tr('download.search.status.notFound');
+        return tr('download.search.history.notFound');
       case 'error':
         return tr('download.search.status.error');
       default:
-        return tr('download.search.status.pending');
+        return tr('download.search.history.pending');
     }
   }
 
