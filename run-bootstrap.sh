@@ -26,6 +26,10 @@ while [[ $# -gt 0 ]]; do
             ENABLE_GETH=true
             shift
             ;;
+        --secret)
+            SECRET="$2"
+            shift 2
+            ;;
         --help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
