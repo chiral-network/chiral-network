@@ -2033,6 +2033,29 @@ fn main() {
                     .output();
             }
 
+            #[cfg(windows)]
+            {
+                use std::process::Command;
+                // On Windows, use taskkill to terminate geth processes
+                let _ = Command::new("taskkill")
+                    .args(["/F", "/IM", "geth.exe"])
+                    .output();
+            }
+
+            // Also remove the lock file if it exists
+            let lock_file = std::path::Path::new(DEFAULT_GETH_DATA_DIR).join("LOCK");
+            if lock_file.exists() {
+                println!("Removing stale LOCK file: {:?}", lock_file);
+                let _ = std::fs::remove_file(&lock_file);
+            }
+
+            // Remove geth.ipc file if it exists (another common lock point)
+            let ipc_file = std::path::Path::new(DEFAULT_GETH_DATA_DIR).join("geth.ipc");
+            if ipc_file.exists() {
+                println!("Removing stale IPC file: {:?}", ipc_file);
+                let _ = std::fs::remove_file(&ipc_file);
+            }
+
             println!("App setup complete");
             println!("Window should be visible now!");
 
