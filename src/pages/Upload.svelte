@@ -7,7 +7,7 @@
   import { get } from 'svelte/store'
   import { onMount, onDestroy } from 'svelte';
   import { showToast } from '$lib/toast'
-  import { getStorageStatus, isDuplicateHash } from '$lib/uploadHelpers'
+  import { getStorageStatus } from '$lib/uploadHelpers'
   import { fileService } from '$lib/services/fileService'
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
@@ -193,37 +193,27 @@
                 }
 
                 // Use fileService.uploadFile method for File objects with versioning
-                const hash = await fileService.uploadFile(file)
+                const metadata = await fileService.uploadFile(file)
 
-                // Check if this hash is already in our files
-                if (isDuplicateHash(get(files), hash)) {
+                // Check if this hash is already in our files (duplicate detection)
+                if (get(files).some(f => f.hash === metadata.fileHash)) {
                   duplicateCount++
                   continue;
                 }
 
-                // Try to get version info from latest upload
-                let versionInfo: any = null;
-                try {
-                  const updatedVersions = await invoke('get_file_versions_by_name', { fileName: file.name }) as any[];
-                  versionInfo = updatedVersions.find(v => v.file_hash === hash);
-                } catch (versionError) {
-                  console.log('Could not get version info for uploaded file');
-                }
-
                 const isNewVersion = existingVersions.length > 0;
-                const version = versionInfo?.version || (isNewVersion ? existingVersions[0]?.version + 1 : 1);
 
                 const newFile = {
                   id: `file-${Date.now()}-${Math.random()}`,
-                  name: file.name,
+                  name: metadata.fileName,
                   path: file.name, // Use file name as path for display
-                  hash: hash,
-                  size: file.size,
+                  hash: metadata.fileHash,
+                  size: metadata.fileSize, // Use backend-calculated size for consistency
                   status: 'seeding' as const,
                   seeders: 1,
                   leechers: 0,
-                  uploadDate: new Date(),
-                  version: version,
+                  uploadDate: new Date(metadata.createdAt * 1000),
+                  version: metadata.version,
                   isNewVersion: isNewVersion
                 };
 
@@ -232,22 +222,15 @@
 
                 // Show version-specific success message
                 if (isNewVersion) {
-                  showToast(`${file.name} uploaded as v${version} (update from v${existingVersions[0]?.version || 1})`, 'success');
+                  showToast(`${file.name} uploaded as v${metadata.version} (update from v${existingVersions[0]?.version || 1})`, 'success');
                 } else {
-                  showToast(`${file.name} uploaded as v${version} (new file)`, 'success');
+                  showToast(`${file.name} uploaded as v${metadata.version} (new file)`, 'success');
                 }
 
                 // Publish file metadata to DHT network for discovery
                 try {
-                  await dhtService.publishFile({
-                    fileHash: hash,
-                    fileName: file.name,
-                    fileSize: file.size,
-                    seeders: [],
-                    createdAt: Date.now(),
-                    isEncrypted: false
-                  });
-                  console.log('Dropped file published to DHT:', hash);
+                  await dhtService.publishFile(metadata);
+                  console.log('Dropped file published to DHT:', metadata.fileHash);
                 } catch (publishError) {
                   console.warn('Failed to publish dropped file to DHT:', publishError);
                 }
@@ -300,15 +283,13 @@
     if (isUploading) return
 
     try {
-      isUploading = true
       const selectedPaths = await open({
         multiple: true,
-      });
+      }) as string[] | null;
 
-      if (Array.isArray(selectedPaths)) {
+      if (selectedPaths && selectedPaths.length > 0) {
+        isUploading = true
         await addFilesFromPaths(selectedPaths);
-      } else if (selectedPaths) {
-        await addFilesFromPaths([selectedPaths]);
       }
     } catch (e) {
       showToast(tr('upload.fileDialogError'), 'error');
@@ -358,19 +339,21 @@
           console.log('No existing versions found for', fileName);
         }
 
-        // Use versioned upload
+        // Use versioned upload - let backend handle duplicate detection
         const metadata = await invoke('upload_versioned_file', {
           fileName: fileName,
           filePath: filePath,
-          fileSize: 0, // Will be calculated by backend
+          fileSize: 0, // Backend will calculate actual size
           mimeType: null,
           isEncrypted: false,
           encryptionMethod: null,
           keyFingerprint: null,
         }) as any;
 
-        if (isDuplicateHash(get(files), metadata.fileHash)) {
-          duplicateCount++
+        // Check if this exact file (same hash) was already uploaded by comparing with existing files
+        const isDuplicate = get(files).some(f => f.hash === metadata.fileHash);
+        if (isDuplicate) {
+          duplicateCount++;
           continue;
         }
 
@@ -384,7 +367,7 @@
           name: metadata.fileName,
           path: filePath,
           hash: metadata.fileHash,
-          size: metadata.fileSize,
+          size: metadata.fileSize, // Use the actual file size from backend calculation
           status: 'seeding' as const,
           seeders: 1,
           leechers: 0,

@@ -35,20 +35,24 @@ export class FileService {
    * Uploads a file to the network by sending its data to the backend.
    * This is suitable for files selected via a file input in the browser.
    * @param file The file object to upload.
-   * @returns The hash of the uploaded file.
+   * @returns The metadata of the uploaded file.
    */
-  async uploadFile(file: File): Promise<string> {
+  async uploadFile(file: File): Promise<any> {
     const buffer = await file.arrayBuffer();
     const bytes = new Uint8Array(buffer);
 
     // Calls 'upload_file_data_to_network' on the backend.
     // Tauri automatically converts camelCase JS arguments to snake_case Rust arguments.
-    const hash = await invoke<string>("upload_file_data_to_network", {
+    const metadata = await invoke("upload_file_data_to_network", {
       fileName: file.name,
       fileData: Array.from(bytes), // Convert Uint8Array to number[] for serialization
+      mimeType: file.type || null,
+      isEncrypted: false,
+      encryptionMethod: null,
+      keyFingerprint: null,
     });
 
-    return hash;
+    return metadata;
   }
 
   /**

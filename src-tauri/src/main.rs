@@ -281,7 +281,7 @@ async fn upload_versioned_file(
             .prepare_versioned_metadata(
                 file_hash.clone(),
                 file_name,
-                file_size,
+                file_data.len() as u64,  // Use file size directly from data
                 created_at,
                 mime_type,
                 is_encrypted,
@@ -1440,53 +1440,51 @@ async fn upload_file_data_to_network(
     state: State<'_, AppState>,
     file_name: String,
     file_data: Vec<u8>,
-) -> Result<String, String> {
-    let ft = {
-        let ft_guard = state.file_transfer.lock().await;
-        ft_guard.as_ref().cloned()
-    };
-
-    if let Some(ft) = ft {
+    mime_type: Option<String>,
+    is_encrypted: bool,
+    encryption_method: Option<String>,
+    key_fingerprint: Option<String>,
+) -> Result<FileMetadata, String> {
+    let dht_opt = { state.dht.lock().await.as_ref().cloned() };
+    if let Some(dht) = dht_opt {
         // Calculate file hash from the data
         let file_hash = file_transfer::FileTransferService::calculate_file_hash(&file_data);
 
         // Store the file data directly in memory
         let file_size = file_data.len() as u64;
-        ft.store_file_data(file_hash.clone(), file_name.clone(), file_data)
-            .await;
-
-        // Also publish to DHT if it's running
-        let dht = {
-            let dht_guard = state.dht.lock().await;
-            dht_guard.as_ref().cloned()
+        let ft = {
+            let ft_guard = state.file_transfer.lock().await;
+            ft_guard.as_ref().cloned()
         };
 
-        if let Some(dht) = dht {
-            let metadata = FileMetadata {
-                file_hash: file_hash.clone(),
-                file_name: file_name.clone(),
-                file_size: file_size,
-                seeders: vec![],
-                created_at: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
-                mime_type: None,
-                is_encrypted: false,
-                encryption_method: None,
-                key_fingerprint: None,
-                parent_hash: None,
-                version: Some(1),
-            };
-
-            if let Err(e) = dht.publish_file(metadata).await {
-                warn!("Failed to publish file metadata to DHT: {}", e);
-            }
+        if let Some(ft) = ft {
+            ft.store_file_data(file_hash.clone(), file_name.clone(), file_data)
+                .await;
         }
 
-        Ok(file_hash)
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // Use the DHT versioning helper to fill in parent_hash/version
+        let metadata = dht
+            .prepare_versioned_metadata(
+                file_hash.clone(),
+                file_name,
+                file_size,
+                created_at,
+                mime_type,
+                is_encrypted,
+                encryption_method,
+                key_fingerprint,
+            )
+            .await?;
+
+        dht.publish_file(metadata.clone()).await?;
+        Ok(metadata)
     } else {
-        Err("File transfer service is not running".to_string())
+        Err("DHT not running".into())
     }
 }
 
