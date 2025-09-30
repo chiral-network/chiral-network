@@ -2568,9 +2568,7 @@ mod tests {
                 let message = err.to_string();
                 let lowered = message.to_ascii_lowercase();
                 if lowered.contains("permission denied") || lowered.contains("not permitted") {
-                    eprintln!(
-                        "skipping shutdown_command_stops_dht_service: {message} (likely sandboxed)"
-                    );
+                    // skipping shutdown_command_stops_dht_service (likely sandboxed)
                     return;
                 }
                 panic!("start service: {message}");

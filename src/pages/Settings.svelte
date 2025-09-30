@@ -170,8 +170,6 @@
 
   async function clearCache() {
     clearingCache = true;
-    // Clear application cache
-    console.log("Clearing cache...");
     // Simulate cache clearing work
     await new Promise((resolve) => setTimeout(resolve, 1500));
     clearingCache = false;

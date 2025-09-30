@@ -4,7 +4,7 @@
 )]
 
 pub mod commands;
-mod crypto;
+
 mod dht;
 mod manager;
 mod encryption;

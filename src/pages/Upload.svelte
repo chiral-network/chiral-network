@@ -189,7 +189,7 @@
                 try {
                   existingVersions = await invoke('get_file_versions_by_name', { fileName: file.name }) as any[];
                 } catch (versionError) {
-                  console.log('No existing versions found for', file.name);
+                  // No existing versions found
                 }
 
                 // Use fileService.uploadFile method for File objects with versioning
@@ -207,7 +207,7 @@
                   const updatedVersions = await invoke('get_file_versions_by_name', { fileName: file.name }) as any[];
                   versionInfo = updatedVersions.find(v => v.file_hash === hash);
                 } catch (versionError) {
-                  console.log('Could not get version info for uploaded file');
+                  // Could not get version info for uploaded file
                 }
 
                 const isNewVersion = existingVersions.length > 0;
@@ -247,7 +247,6 @@
                     createdAt: Date.now(),
                     isEncrypted: false
                   });
-                  console.log('Dropped file published to DHT:', hash);
                 } catch (publishError) {
                   console.warn('Failed to publish dropped file to DHT:', publishError);
                 }
@@ -323,7 +322,6 @@
         // Stop publishing file to DHT network
         try {
           await invoke('stop_publishing_file', { fileHash });
-          console.log('File unpublished from DHT:', fileHash);
         } catch (unpublishError) {
           console.warn('Failed to unpublish file from DHT:', unpublishError);
         }
@@ -350,7 +348,7 @@
         try {
           existingVersions = await invoke('get_file_versions_by_name', { fileName }) as any[];
         } catch (versionError) {
-          console.log('No existing versions found for', fileName);
+          // No existing versions found
         }
 
         // Use versioned upload
@@ -401,7 +399,6 @@
         // Publish file metadata to DHT network for discovery
         try {
           await dhtService.publishFile(metadata);
-          console.log('File published to DHT:', metadata.file_hash);
         } catch (publishError) {
           console.warn('Failed to publish file to DHT:', publishError);
           // Don't show error to user as upload succeeded, just DHT publishing failed

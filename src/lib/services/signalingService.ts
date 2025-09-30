@@ -27,36 +27,22 @@ export class SignalingService {
     return new Promise((resolve) => {
       (async () => {
         try {
-          console.log("[SignalingService] Initializing DHT-based signaling");
-          console.log("[SignalingService] Client ID:", this.clientId);
-
           // Check if DHT is running and get our peer ID
           const peerId = await invoke("get_dht_peer_id");
           if (peerId) {
             this.dhtConnected = true;
             this.connected.set(true);
-            console.log(
-              "[SignalingService] DHT signaling connected with peer ID:",
-              peerId
-            );
 
             // Get connected peers from DHT
             this.refreshPeers();
             resolve();
           } else {
-            console.log(
-              "[SignalingService] DHT not available for signaling - will retry when DHT starts"
-            );
             this.dhtConnected = false;
             this.connected.set(false);
             // Don't reject - just resolve since this is expected when DHT isn't running
             resolve();
           }
         } catch (error) {
-          console.log(
-            "[SignalingService] DHT signaling connection failed (expected if DHT not running):",
-            error
-          );
           this.dhtConnected = false;
           this.connected.set(false);
           // Don't reject - resolve since this is expected when DHT isn't running
@@ -105,11 +91,6 @@ export class SignalingService {
         peerId: msg.to,
         message: signalingMessage,
       });
-
-      console.log(
-        "[SignalingService] Sent DHT signaling message:",
-        signalingMessage
-      );
     } catch (error) {
       console.error(
         "[SignalingService] Failed to send DHT signaling message:",
