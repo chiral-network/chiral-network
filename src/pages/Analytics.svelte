@@ -9,6 +9,8 @@
   import { t } from 'svelte-i18n'
   import { suspiciousActivity } from '$lib/stores'; // only import
   import type { FileItem } from '$lib/stores';
+  import { miningState } from '$lib/stores';
+
   
   let uploadedFiles: FileItem[] = []
   let downloadedFiles: FileItem[] = []
@@ -388,7 +390,7 @@
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">{$t('analytics.totalEarnings')}</p>
-          <p class="text-2xl font-bold">{($wallet.totalEarned ?? 0).toFixed(2)} Chiral</p>
+          <p class="text-2xl font-bold">{($miningState.totalRewards ?? 0).toFixed(2)} Chiral</p>
           <p class="text-xs text-green-600 flex items-center gap-1 mt-1">
             <TrendingUp class="h-3 w-3" />
             {$t('analytics.earningsThisWeek')}
