@@ -98,10 +98,10 @@
       if (searchMode === 'name') {
         // Search for file versions by name
         pushMessage('Searching for file versions...', 'info', 2000);
-        
+
         // Import invoke function for backend calls
         const { invoke } = await import("@tauri-apps/api/core");
-        
+
         const versions = await invoke('get_file_versions_by_name', { fileName: trimmed }) as any[];
         const elapsed = Math.round(performance.now() - startedAt);
         lastSearchDuration = elapsed;
@@ -118,7 +118,7 @@
         // Original hash search
         const entry = dhtSearchHistory.addPending(trimmed);
         activeHistoryId = entry.id;
-        
+
         pushMessage(tr('download.search.status.started'), 'info', 2000);
         const metadata = await dhtService.searchFileMetadata(trimmed, SEARCH_TIMEOUT_MS);
         const elapsed = Math.round(performance.now() - startedAt);
@@ -153,7 +153,7 @@
       lastSearchDuration = elapsed;
       latestStatus = 'error';
       searchError = message;
-      
+
       if (searchMode === 'hash' && activeHistoryId) {
         dhtSearchHistory.updateEntry(activeHistoryId, {
           status: 'error',
@@ -161,7 +161,7 @@
           elapsedMs: elapsed,
         });
       }
-      
+
       console.error('Search failed:', error);
       pushMessage(`${tr('download.search.status.errorNotification')}: ${message}`, 'error', 6000);
     } finally {
@@ -177,11 +177,6 @@
     latestStatus = 'pending';
     searchError = null;
     hasSearched = false;
-  }
-
-  function handleDownload(event: CustomEvent<FileMetadata>) {
-    // dhtService.downloadFile(event.detail)
-    // dispatch('download', event.detail);
   }
 
   function handleCopy(event: CustomEvent<string>) {
@@ -204,9 +199,9 @@
       mimeType: version.mime_type,
       encryptionMethod: version.encryption_method,
       keyFingerprint: version.key_fingerprint,
-      // version: version.version
+      version: version.version
     };
-    
+
     dispatch('download', metadata);
     pushMessage(`Starting download of ${version.file_name} v${version.version}`, 'info', 3000);
   }
@@ -274,7 +269,7 @@
       <p class="text-sm text-muted-foreground mt-1 mb-3">
         {tr('download.addNewSubtitle')}
       </p>
-      
+
       <!-- Search Mode Switcher -->
       <div class="flex gap-2 mb-3">
         <button
@@ -290,7 +285,7 @@
           Search by Name (Versions)
         </button>
       </div>
-      
+
       <div class="flex flex-col sm:flex-row gap-3">
         <div class="relative flex-1 search-input-container">
           <Input
@@ -392,7 +387,7 @@
                     Search completed in {(lastSearchDuration / 1000).toFixed(1)}s
                   </p>
                 </div>
-                
+
                 <div class="space-y-2 max-h-80 overflow-y-auto">
                   {#each versionResults as version}
                     <div class="flex items-center justify-between p-3 bg-muted/50 rounded-lg hover:bg-muted/70 transition-colors">
@@ -425,7 +420,6 @@
             {:else if latestStatus === 'found' && latestMetadata}
               <SearchResultCard
                 metadata={latestMetadata}
-                on:download={handleDownload}
                 on:copy={handleCopy}
               />
               <p class="text-xs text-muted-foreground">

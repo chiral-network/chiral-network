@@ -45,6 +45,7 @@ export interface FileMetadata {
   isEncrypted: boolean;
   encryptionMethod?: string;
   keyFingerprint?: string;
+  version?: number;
 }
 
 export interface DhtHealth {
