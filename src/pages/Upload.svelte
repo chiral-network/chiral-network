@@ -146,7 +146,7 @@
     const handleDrop = async (e: DragEvent) => {
         e.preventDefault()
         e.stopPropagation()
-        // not working
+        // TODO: not working
         // isDragging = false
 
         // if (isUploading) {
@@ -304,11 +304,34 @@
   }
 
   async function addFilesFromPaths(paths: string[]) {
+    let duplicateCount = 0
     let addedCount = 0
+    let versionCount = 0
 
     for (const filePath of paths) {
       try {
+        // Get just the filename from the path
+        const fileName = filePath.split(/[\/\\]/).pop() || '';
+        // Check for existing versions before upload
+        let existingVersions: any[] = [];
+        try {
+          existingVersions = await invoke('get_file_versions_by_name', { fileName }) as any[];
+        } catch (versionError) {
+          console.log('No existing versions found for', fileName);
+        }
+        // Use versioned upload - let backend handle duplicate detection
         const metadata = await dhtService.publishFileToNetwork(filePath);
+
+        // Check if this exact file (same hash) was already uploaded by comparing with existing files
+        const isDuplicate = get(files).some(f => f.hash === metadata.fileHash);
+        if (isDuplicate) {
+          duplicateCount++;
+          continue;
+        }
+        const isNewVersion = existingVersions.length > 0;
+        if (isNewVersion) {
+          versionCount++;
+        }
 
         const newFile = {
           id: `file-${Date.now()}-${Math.random()}`,
@@ -319,11 +342,20 @@
           status: 'seeding' as const,
           seeders: 1,
           leechers: 0,
-          uploadDate: new Date(metadata.createdAt)
+          uploadDate: new Date(metadata.createdAt),
+          version: metadata.version,
+          isNewVersion: isNewVersion
         };
 
         files.update(f => [...f, newFile]);
         addedCount++;
+
+        // Show version-specific success message
+        if (isNewVersion) {
+          showToast(`${fileName} uploaded as v${metadata.version} (update from v${existingVersions[0]?.version || 1})`, 'success');
+        } else {
+          showToast(`${fileName} uploaded as v${metadata.version} (new file)`, 'success');
+        }
 
         // Publish file metadata to DHT network for discovery
         try {
@@ -559,6 +591,15 @@
                   <div class="flex-1 min-w-0 space-y-2">
                     <div class="flex items-center gap-2">
                       <p class="text-sm font-semibold truncate text-foreground">{file.name}</p>
+                       {#if file.version}
+                        <Badge
+                          class="bg-blue-100 text-blue-800 text-xs px-2 py-0.5 cursor-pointer hover:bg-blue-200 transition-colors"
+                          title="v{file.version} - Click to view version history"
+                          on:click={() => showVersionHistory(file.name)}
+                        >
+                          v{file.version}
+                        </Badge>
+                      {/if}
                       <div class="flex items-center gap-1">
                         <div class="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div>
                         <span class="text-xs text-green-600 font-medium">Active</span>
