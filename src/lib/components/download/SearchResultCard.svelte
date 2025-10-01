@@ -4,7 +4,7 @@
   import Button from '$lib/components/ui/button.svelte';
   import { FileIcon, Copy, Download, Server } from 'lucide-svelte';
   import { createEventDispatcher } from 'svelte';
-  import type { FileMetadata } from '$lib/dht';
+  import { dhtService, type FileMetadata } from '$lib/dht';
   import { formatRelativeTime, toHumanReadableSize } from '$lib/utils';
 
   const dispatch = createEventDispatcher<{ download: FileMetadata; copy: string }>();
@@ -44,8 +44,9 @@
     });
   }
 
-  function handleDownload() {
-    dispatch('download', metadata);
+  async function handleDownload() {
+    await dhtService.downloadFile(metadata);
+    // dispatch('download', data);
   }
 
   const seederIds = metadata.seeders?.map((address, index) => ({

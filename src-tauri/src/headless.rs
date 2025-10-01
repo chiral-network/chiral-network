@@ -183,6 +183,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             file_hash: "QmBootstrap123Example".to_string(),
             file_name: "welcome.txt".to_string(),
             file_size: 1024,
+            file_data: b"Hello, world!".to_vec(),
             seeders: vec![peer_id.clone()],
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -194,6 +195,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             key_fingerprint: None,
             parent_hash: None,
             version: Some(1),
+            cids: None,
         };
 
         dht_service.publish_file(example_metadata).await?;

@@ -13,7 +13,8 @@
   import { invoke } from "@tauri-apps/api/core";
   import { dhtService } from '$lib/dht';
 
-  const tr = (k: string, params?: Record<string, any>): string => (get(t) as (key: string, params?: any) => string)(k, params)
+
+  const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -95,14 +96,7 @@
     if (isRefreshingStorage) return
     isRefreshingStorage = true
     try {
-      // Add timeout to prevent infinite hanging
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Storage check timeout')), 5000)
-      );
-
-      const storagePromise = fileService.getAvailableStorage();
-      const result = await Promise.race([storagePromise, timeoutPromise]) as number | null;
-
+      const result = await fileService.getAvailableStorage()
       storageStatus = getStorageStatus(result, LOW_STORAGE_THRESHOLD)
 
       if (result === null) {
@@ -114,14 +108,6 @@
         storageError = null
         lastChecked = new Date()
       }
-    } catch (error) {
-      console.error('Storage check failed:', error);
-      storageError = error instanceof Error && error.message.includes('timeout')
-        ? 'Storage check timed out'
-        : tr('upload.storage.error')
-      availableStorage = null
-      lastChecked = null
-      storageStatus = 'unknown'
     } finally {
       isRefreshingStorage = false
     }
@@ -157,104 +143,100 @@
         }
       }
 
-            const handleDrop = async (e: DragEvent) => {
+    const handleDrop = async (e: DragEvent) => {
         e.preventDefault()
         e.stopPropagation()
-        isDragging = false
+        // TODO: not working
+        // isDragging = false
 
-        if (isUploading) {
-          showToast('Upload already in progress. Please wait for the current upload to complete.', 'warning')
-          return
-        }
+        // if (isUploading) {
+        //   showToast('Upload already in progress. Please wait for the current upload to complete.', 'warning')
+        //   return
+        // }
 
-        const droppedFiles = Array.from(e.dataTransfer?.files || [])
+        // const droppedFiles = Array.from(e.dataTransfer?.files || [])
 
-        if (droppedFiles.length > 0) {
-          // Check if we're in Tauri environment
-          if (!isTauri) {
-            showToast('File upload is only available in the desktop app', 'error')
-            return
-          }
+        // if (droppedFiles.length > 0) {
+        //   // Check if we're in Tauri environment
+        //   if (!isTauri) {
+        //     showToast('File upload is only available in the desktop app', 'error')
+        //     return
+        //   }
 
-          try {
-            isUploading = true
-            let duplicateCount = 0
-            let addedCount = 0
+        //   try {
+        //     isUploading = true
+        //     let duplicateCount = 0
+        //     let addedCount = 0
 
-            // Process each dropped file using versioned upload
-            for (const file of droppedFiles) {
-              try {
-                // Check for existing versions before upload
-                let existingVersions: any[] = [];
-                try {
-                  existingVersions = await invoke('get_file_versions_by_name', { fileName: file.name }) as any[];
-                } catch (versionError) {
-                  console.log('No existing versions found for', file.name);
-                }
+        //     // Process each dropped file directly using the File object
+        //     for (const file of droppedFiles) {
+        //       try {
+        //         // Use the fileService.uploadFile method which handles File objects
+        //         const hash = await fileService.uploadFile(file)
 
-                // Use fileService.uploadFile method for File objects with versioning
-                const metadata = await fileService.uploadFile(file)
+        //         // Check if this hash is already in our files (duplicate detection)
+        //         if (get(files).some(f => f.hash === metadata.fileHash)) {
+        //           duplicateCount++
+        //           continue;
+        //         }
 
-                // Check if this hash is already in our files (duplicate detection)
-                if (get(files).some(f => f.hash === metadata.fileHash)) {
-                  duplicateCount++
-                  continue;
-                }
+        //         const newFile = {
+        //           id: `file-${Date.now()}-${Math.random()}`,
+        //           name: metadata.fileName,
+        //           path: file.name, // Use file name as path for display
+        //           hash: metadata.fileHash,
+        //           size: metadata.fileSize, // Use backend-calculated size for consistency
+        //           status: 'seeding' as const,
+        //           seeders: 1,
+        //           leechers: 0,
+        //           uploadDate: new Date()
+        //         };
 
-                const isNewVersion = existingVersions.length > 0;
+        //         files.update((currentFiles) => [...currentFiles, newFile]);
+        //         addedCount++;
 
-                const newFile = {
-                  id: `file-${Date.now()}-${Math.random()}`,
-                  name: metadata.fileName,
-                  path: file.name, // Use file name as path for display
-                  hash: metadata.fileHash,
-                  size: metadata.fileSize, // Use backend-calculated size for consistency
-                  status: 'seeding' as const,
-                  seeders: 1,
-                  leechers: 0,
-                  uploadDate: new Date(metadata.createdAt * 1000),
-                  version: metadata.version,
-                  isNewVersion: isNewVersion
-                };
+        //     // Publish file metadata to DHT network for discovery
+        //     try {
+        //       await dhtService.publishFile({
+        //         fileHash: hash,
+        //         fileName: file.name,
+        //         fileSize: file.size,
+        //         seeders: [],
+        //         createdAt: Date.now(),
+        //         isEncrypted: false
+        //       });
+        //       // console.log('Dropped file published to DHT:', hash);
+        //       await listen('published_file', (event) => {
+        //         console.log('DHT published_file event:', event.payload);
+        //       });
 
-                    files.update((currentFiles) => [...currentFiles, newFile]);
-                    addedCount++;
+        //     } catch (publishError) {
+        //       console.warn('Failed to publish dropped file to DHT:', publishError);
+        //     }
+        //   } catch (error) {
+        //     console.error('Error uploading dropped file:', file.name, error);
+        //     showToast(tr('upload.fileFailed', { values: { name: file.name, error: String(error) } }), 'error');
+        //   }
+        //     }
 
-                // Show version-specific success message
-                if (isNewVersion) {
-                  showToast(`${file.name} uploaded as v${metadata.version} (update from v${existingVersions[0]?.version || 1})`, 'success');
-                } else {
-                  showToast(`${file.name} uploaded as v${metadata.version} (new file)`, 'success');
-                }
+        //     if (duplicateCount > 0) {
+        //       showToast(tr('upload.duplicateSkipped', { values: { count: duplicateCount } }), 'warning')
+        //     }
 
-                // Publish file metadata to DHT network for discovery
-                try {
-                  await dhtService.publishFile(metadata);
-                  console.log('Dropped file published to DHT:', metadata.fileHash);
-                } catch (publishError) {
-                  console.warn('Failed to publish dropped file to DHT:', publishError);
-                }
-              } catch (error) {
-                console.error('Error uploading dropped file:', file.name, error);
-                showToast(tr('upload.fileFailed', { values: { name: file.name, error: String(error) } }), 'error');
-              }
-            }
-
-            if (duplicateCount > 0) {
-              showToast(tr('upload.duplicateSkipped', { values: { count: duplicateCount } }), 'warning')
-            }
-
-            if (addedCount > 0) {
-              // Make storage refresh non-blocking to prevent UI hanging
-              setTimeout(() => refreshAvailableStorage(), 100)
-            }
-          } catch (error) {
-            console.error('Error handling dropped files:', error)
-            showToast('Error processing dropped files. Please try again or use the "Add Files" button instead.', 'error')
-          } finally {
-            isUploading = false
-          }
-        }
+        //     if (addedCount > 0) {
+        //       showToast(tr('upload.filesAdded', { values: { count: addedCount } }), 'success')
+        //       showToast('Files published to DHT network for sharing!', 'success')
+        //       refreshAvailableStorage()
+        //       // Make storage refresh non-blocking to prevent UI hanging
+        //       setTimeout(() => refreshAvailableStorage(), 100)
+        //     }
+        //   } catch (error) {
+        //     console.error('Error handling dropped files:', error)
+        //     showToast('Error processing dropped files. Please try again or use the "Add Files" button instead.', 'error')
+        //   } finally {
+        //     isUploading = false
+        //   }
+        // }
       }
 
       dropZone.addEventListener('dragenter', handleDragEnter)
@@ -330,7 +312,6 @@
       try {
         // Get just the filename from the path
         const fileName = filePath.split(/[\/\\]/).pop() || '';
-
         // Check for existing versions before upload
         let existingVersions: any[] = [];
         try {
@@ -338,17 +319,8 @@
         } catch (versionError) {
           console.log('No existing versions found for', fileName);
         }
-
         // Use versioned upload - let backend handle duplicate detection
-        const metadata = await invoke('upload_versioned_file', {
-          fileName: fileName,
-          filePath: filePath,
-          fileSize: 0, // Backend will calculate actual size
-          mimeType: null,
-          isEncrypted: false,
-          encryptionMethod: null,
-          keyFingerprint: null,
-        }) as any;
+        const metadata = await dhtService.publishFileToNetwork(filePath);
 
         // Check if this exact file (same hash) was already uploaded by comparing with existing files
         const isDuplicate = get(files).some(f => f.hash === metadata.fileHash);
@@ -356,7 +328,6 @@
           duplicateCount++;
           continue;
         }
-
         const isNewVersion = existingVersions.length > 0;
         if (isNewVersion) {
           versionCount++;
@@ -367,11 +338,11 @@
           name: metadata.fileName,
           path: filePath,
           hash: metadata.fileHash,
-          size: metadata.fileSize, // Use the actual file size from backend calculation
+          size: metadata.fileSize,
           status: 'seeding' as const,
           seeders: 1,
           leechers: 0,
-          uploadDate: new Date(metadata.createdAt * 1000),
+          uploadDate: new Date(metadata.createdAt),
           version: metadata.version,
           isNewVersion: isNewVersion
         };
@@ -389,22 +360,16 @@
         // Publish file metadata to DHT network for discovery
         try {
           await dhtService.publishFile(metadata);
-          console.log('File published to DHT:', metadata.fileHash);
+          console.log('File being published to DHT:', metadata.fileHash);
         } catch (publishError) {
           console.warn('Failed to publish file to DHT:', publishError);
-          // Don't show error to user as upload succeeded, just DHT publishing failed
         }
       } catch (error) {
         console.error(error);
-        showToast(tr('upload.fileFailed', { values: { name: filePath.split(/[\/\\]/).pop(), error: String(error) } }), 'error');
+        showToast(tr('upload.fileFailed', { values: { name: filePath.split(/[\/]/).pop(), error: String(error) } }), 'error');
       }
-    }
-
-    if (duplicateCount > 0) {
-      showToast(tr('upload.duplicateSkipped', { values: { count: duplicateCount } }), 'warning')
-    }
-
-    if (addedCount > 0) {
+      showToast('Files published to DHT network for sharing!', 'success')
+      refreshAvailableStorage()
       // Make storage refresh non-blocking to prevent UI hanging
       setTimeout(() => refreshAvailableStorage(), 100)
     }
@@ -421,6 +386,26 @@
     showToast('File hash copied to clipboard!', 'success');
   }
 
+  let selectedFile: File | null = null;
+  let existingVersions: any[] = [];
+  let uploadMsg = '';
+  let errorMsg = '';
+
+  async function handleFileSelect(e: Event) {
+    errorMsg = '';
+    uploadMsg = '';
+    selectedFile = (e.target as HTMLInputElement).files?.[0] ?? null;
+    existingVersions = [];
+    if (selectedFile) {
+      try {
+        existingVersions = await invoke('get_file_versions_by_name', {
+          file_name: selectedFile.name
+        }) as any[];
+      } catch (err) {
+        errorMsg = 'Could not query versions: ' + String(err);
+      }
+    }
+  }
   async function showVersionHistory(fileName: string) {
     try {
       const versions = await invoke('get_file_versions_by_name', { fileName }) as any[];
@@ -438,10 +423,6 @@
       showToast('Failed to load version history', 'error');
     }
   }
-
-
-
-
 </script>
 
 <div class="space-y-6">
@@ -610,7 +591,7 @@
                   <div class="flex-1 min-w-0 space-y-2">
                     <div class="flex items-center gap-2">
                       <p class="text-sm font-semibold truncate text-foreground">{file.name}</p>
-                      {#if file.version}
+                       {#if file.version}
                         <Badge
                           class="bg-blue-100 text-blue-800 text-xs px-2 py-0.5 cursor-pointer hover:bg-blue-200 transition-colors"
                           title="v{file.version} - Click to view version history"

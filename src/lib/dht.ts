@@ -1,6 +1,9 @@
 // DHT configuration and utilities
 import { invoke } from "@tauri-apps/api/core";
-
+import { listen } from "@tauri-apps/api/event";
+import type { AppSettings } from "./stores";
+import { writeFile } from "@tauri-apps/plugin-fs";
+import { homeDir, join } from "@tauri-apps/api/path";
 // Default bootstrap nodes for network connectivity
 export const DEFAULT_BOOTSTRAP_NODES = [
   "/ip4/145.40.118.135/tcp/4001/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
@@ -35,6 +38,7 @@ export interface FileMetadata {
   fileHash: string;
   fileName: string;
   fileSize: number;
+  fileData?: Uint8Array | number[];
   seeders: string[];
   createdAt: number;
   mimeType?: string;
@@ -87,6 +91,9 @@ export class DhtService {
     // Use default bootstrap nodes if none provided
     if (bootstrapNodes.length === 0) {
       bootstrapNodes = DEFAULT_BOOTSTRAP_NODES;
+      console.log("Using default bootstrap nodes for network connectivity");
+    } else {
+      console.log(`Using ${bootstrapNodes.length} custom bootstrap nodes`);
     }
 
     try {
@@ -113,6 +120,8 @@ export class DhtService {
       const peerId = await invoke<string>("start_dht_node", payload);
       this.peerId = peerId;
       this.port = port;
+      console.log("DHT started with peer ID:", this.peerId);
+      console.log("Your multiaddr for others to connect:", this.getMultiaddr());
       return this.peerId;
     } catch (error) {
       console.error("Failed to start DHT:", error);
@@ -125,6 +134,7 @@ export class DhtService {
     try {
       await invoke("stop_dht_node");
       this.peerId = null;
+      console.log("DHT stopped");
     } catch (error) {
       console.error("Failed to stop DHT:", error);
       throw error;
@@ -143,6 +153,93 @@ export class DhtService {
         fileSize: metadata.fileSize,
         mimeType: metadata.mimeType,
       });
+      console.log("Published file metadata:", metadata.fileHash);
+    } catch (error) {
+      console.error("Failed to publish file:", error);
+      throw error;
+    }
+  }
+
+  async publishFileToNetwork(filePath: string): Promise<FileMetadata> {
+    try {
+      // Start listening for the published_file event
+      const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {
+        const unlistenPromise = listen<FileMetadata>(
+          "published_file",
+          (event) => {
+            resolve(event.payload);
+            // Unsubscribe once we got the event
+            unlistenPromise.then((unlistenFn) => unlistenFn());
+          }
+        );
+      });
+
+      // Trigger the backend upload
+      await invoke("upload_file_to_network", { filePath });
+
+      // Wait until the event arrives
+      return await metadataPromise;
+    } catch (error) {
+      console.error("Failed to publish file:", error);
+      throw error;
+    }
+  }
+
+  async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
+    try {
+      console.log("Initiating download for file:", fileMetadata.fileHash);
+      // Start listening for the published_file event
+      const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {
+        const unlistenPromise = listen<FileMetadata>(
+          "file_content",
+          async (event) => {
+            console.log("Received file content event:", event.payload);
+            const stored = localStorage.getItem("chiralSettings");
+            let storagePath = "."; // Default fallback
+
+            if (stored) {
+              try {
+                const loadedSettings: AppSettings = JSON.parse(stored);
+                storagePath = loadedSettings.storagePath;
+              } catch (e) {
+                console.error("Failed to load settings:", e);
+              }
+            }
+            if (event.payload.fileData) {
+              //
+              // Construct full file path
+              let resolvedStoragePath = storagePath;
+
+              if (storagePath.startsWith("~")) {
+                const home = await homeDir();
+                resolvedStoragePath = storagePath.replace("~", home);
+              }
+              resolvedStoragePath += "/" + event.payload.fileName;
+              // Convert to Uint8Array if needed
+              const fileData =
+                event.payload.fileData instanceof Uint8Array
+                  ? event.payload.fileData
+                  : new Uint8Array(event.payload.fileData);
+
+              // Write file to disk
+              console.log(`File saved to: ${resolvedStoragePath}`);
+
+              await writeFile(resolvedStoragePath, fileData);
+              console.log(`File saved to: ${resolvedStoragePath}`);
+            }
+
+            resolve(event.payload);
+            // Unsubscribe once we got the event
+            unlistenPromise.then((unlistenFn) => unlistenFn());
+          }
+        );
+      });
+
+      // Trigger the backend upload
+      await invoke("download_blocks_from_network", { fileMetadata });
+
+      // Wait until the event arrives
+      return await metadataPromise;
     } catch (error) {
       console.error("Failed to publish file:", error);
       throw error;
@@ -156,6 +253,7 @@ export class DhtService {
 
     try {
       await invoke("search_file_metadata", { fileHash, timeoutMs: 0 });
+      console.log("Searching for file:", fileHash);
     } catch (error) {
       console.error("Failed to search file:", error);
       throw error;
@@ -174,6 +272,7 @@ export class DhtService {
 
     try {
       await invoke("connect_to_peer", { peerAddress });
+      console.log("Connecting to peer:", peerAddress);
     } catch (error) {
       console.error("Failed to connect to peer:", error);
       throw error;
@@ -237,19 +336,43 @@ export class DhtService {
     }
 
     try {
-      const result = await invoke<FileMetadata | null>("search_file_metadata", {
+      // Start listening for the search_result event
+      const metadataPromise = new Promise<FileMetadata | null>(
+        (resolve, reject) => {
+          const timeoutId = setTimeout(() => {
+            reject(new Error(`Search timeout after ${timeoutMs}ms`));
+          }, timeoutMs);
+
+          const unlistenPromise = listen<FileMetadata | null>(
+            "found_file",
+            (event) => {
+              clearTimeout(timeoutId);
+              const result = event.payload;
+              resolve(
+                result
+                  ? {
+                      ...result,
+                      seeders: Array.isArray(result.seeders)
+                        ? result.seeders
+                        : [],
+                    }
+                  : null
+              );
+              // Unsubscribe once we got the event
+              unlistenPromise.then((unlistenFn) => unlistenFn());
+            }
+          );
+        }
+      );
+
+      // Trigger the backend search
+      await invoke("search_file_metadata", {
         fileHash: trimmed,
         timeoutMs,
       });
 
-      if (!result) {
-        return null;
-      }
-
-      return {
-        ...result,
-        seeders: Array.isArray(result.seeders) ? result.seeders : [],
-      };
+      // Wait until the event arrives
+      return await metadataPromise;
     } catch (error) {
       console.error("Failed to search file metadata:", error);
       throw error;
