@@ -715,9 +715,9 @@
         address: $etcAccount.address,
         name: newPool.name,
         description: newPool.description,
-        fee_percentage: newPool.fee_percentage,
-        min_payout: newPool.min_payout,
-        payment_method: newPool.payment_method,
+        feePercentage: newPool.fee_percentage,
+        minPayout: newPool.min_payout,
+        paymentMethod: newPool.payment_method,
         region: newPool.region,
       }) as MiningPool;
       

@@ -1062,7 +1062,6 @@ dependencies = [
  "base64 0.21.7",
  "beetswap",
  "blockstore",
- "chrono",
  "cid",
  "clap",
  "ctr",
@@ -1078,9 +1077,7 @@ dependencies = [
  "hmac",
  "lazy_static",
  "libp2p",
- "md5",
  "multihash-codetable",
- "once_cell",
  "pbkdf2 0.12.2",
  "rand 0.8.5",
  "reed-solomon-erasure",
@@ -4754,12 +4751,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "md5"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae960838283323069879657ca3de837e9f7bbb4c7bf6ea7f1b290d5e9476d2e0"
-
-[[package]]
 name = "memchr"
 version = "2.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6843,6 +6834,12 @@ name = "rustc-hash"
 version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "357703d41365b4b27c590e3ed91eabb1b663f07c4c084095e60cbed4362dff0d"
+
+[[package]]
+name = "rustc-hex"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e75f6a532d0fd9f7f13144f392b6ad56a32696bfcd9c78f797f16bbb6f072d6"
 
 [[package]]
 name = "rustc_version"
