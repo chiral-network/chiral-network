@@ -16,9 +16,13 @@ mod keystore;
 mod pool;
 pub mod net;
 mod peer_selection;
-mod transaction;
+mod transaction_services;
 use crate::commands::proxy::{
     list_proxies, proxy_connect, proxy_disconnect, proxy_echo, ProxyNode,
+};
+use crate::commands::transaction_commands::{
+    broadcast_transaction, estimate_transaction, get_address_nonce, get_network_gas_price,
+    get_network_status, get_transaction_history, get_transaction_status,
 };
 use dht::{DhtEvent, DhtMetricsSnapshot, DhtService, FileMetadata};
 use ethereum::{
@@ -1948,6 +1952,14 @@ fn main() {
             select_peers_with_strategy,
             set_peer_encryption_support,
             cleanup_inactive_peers,
+            // Transaction commands
+            broadcast_transaction,
+            get_transaction_status,
+            get_transaction_history,
+            get_address_nonce,
+            estimate_transaction,
+            get_network_gas_price,
+            get_network_status,
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
