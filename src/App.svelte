@@ -1,6 +1,6 @@
 <script lang="ts">
     import './styles/globals.css'
-    import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X } from 'lucide-svelte'
+    import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star } from 'lucide-svelte'
     import UploadPage from './pages/Upload.svelte'
     import DownloadPage from './pages/Download.svelte'
     import ProxyPage from './pages/Proxy.svelte'
@@ -9,6 +9,7 @@
     import AnalyticsPage from './pages/Analytics.svelte'
     import SettingsPage from './pages/Settings.svelte'
     import MiningPage from './pages/Mining.svelte'
+    import ReputationPage from './pages/Reputation.svelte'
     import NotFound from './pages/NotFound.svelte'
     import ProxySelfTest from './routes/proxy-self-test.svelte'
     import { networkStatus } from './lib/stores'
@@ -84,7 +85,7 @@
     // Scroll to top when page changes
     $: if (currentPage) {
         tick().then(() => {
-            const mainContent = document.querySelector('.flex-1.overflow-auto')
+            const mainContent = document.querySelector('#main-content')
             if (mainContent) {
                 mainContent.scrollTop = 0
             }
@@ -106,6 +107,7 @@
         { id: 'mining', label: $t('nav.mining'), icon: Cpu },
         { id: 'proxy', label: $t('nav.proxy'), icon: Shield },
         { id: 'analytics', label: $t('nav.analytics'), icon: BarChart3 },
+        { id: 'reputation', label: 'Reputation', icon: Star },
         { id: 'account', label: $t('nav.account'), icon: Wallet },
         { id: 'settings', label: $t('nav.settings'), icon: Settings },
 
@@ -144,6 +146,10 @@
         component: AnalyticsPage
       },
       {
+        path: "reputation",
+        component: ReputationPage
+      },
+      {
         path: "account",
         component: AccountPage,
       },
@@ -160,7 +166,7 @@
     
   </script>
   
-  <div class="flex h-screen bg-background">
+  <div class="flex bg-background h-full">
     {#if !loading}
     <!-- Desktop Sidebar -->
     <div class="hidden md:block {sidebarCollapsed ? 'w-16' : 'w-64'} bg-card border-r transition-all">
@@ -279,7 +285,7 @@
 {/if}
 
     <!-- Main Content -->
-    <div class="flex-1 overflow-auto">
+    <div id="main-content" class="flex-1 overflow-y-auto">
       <div class="p-6">
         <!-- <Router {routes} /> -->
          
@@ -299,4 +305,3 @@
   </div>
   <!-- add Toast  -->
 <SimpleToast />
-  
