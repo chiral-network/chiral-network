@@ -17,6 +17,7 @@ mod keystore;
 mod pool;
 pub mod net;
 mod peer_selection;
+mod transaction;
 use crate::commands::proxy::{
     list_proxies, proxy_connect, proxy_disconnect, proxy_echo, ProxyNode,
 };
