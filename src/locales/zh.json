@@ -144,7 +144,17 @@
     "locationHint": "帮助连接附近节点以获得更好性能。",
     "enableUpnp": "启用UPnP",
     "enableNat": "启用NAT端口映射",
-    "enableDht": "启用DHT"
+    "enableDht": "启用DHT",
+    "geoDistribution": {
+      "title": "地理分布",
+      "subtitle": "正在映射 {peers} 个已观测的节点",
+      "topRegion": "节点最多的区域：{region}",
+      "noData": "等待位置数据",
+      "tooltip": "{region}：{count} 个节点",
+      "peersShort": "{count} 个节点",
+      "emptyState": "连接到 DHT 后即可开始绘制节点地图。",
+      "unknownNotice": "仍有 {count} 个节点未提供位置信息。"
+    }
   },
   "regions.usEast": "美国东部",
   "regions.usWest": "美国西部",
@@ -634,6 +644,7 @@
     "downloads": "下载",
     "searchPlaceholder": "搜索下载...",
     "clearSearch": "清除搜索",
+    "clearFinished": "清除已完成",
     "filters": {
       "all": "全部",
       "active": "活跃",
@@ -672,7 +683,8 @@
       "resume": "继续",
       "remove": "移除",
       "cancel": "取消",
-      "openFile": "打开文件"
+      "openFile": "打开文件",
+      "showInFolder": "在文件夹中显示"
     },
     "notifications": {
       "enterHash": "请输入文件哈希",

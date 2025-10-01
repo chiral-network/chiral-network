@@ -130,6 +130,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         probe_interval,
         args.autonat_server.clone(),
         args.socks5_proxy,
+        file_transfer_service.clone(),
     )
     .await?;
     let peer_id = dht_service.get_peer_id().await;
@@ -191,6 +192,8 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
+            parent_hash: None,
+            version: Some(1),
         };
 
         dht_service.publish_file(example_metadata).await?;
@@ -201,8 +204,12 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             match dht_service.connect_peer(bootstrap_addr.clone()).await {
                 Ok(_) => {
                     info!("Connected to bootstrap: {}", bootstrap_addr);
-                    // In a real implementation, the bootstrap nodes would add us as a peer
-                    // For now, simulate this by adding the bootstrap as a connected peer
+                    // In a real implementation, bootstrap nodes would:
+                    // 1. Add us to their routing table
+                    // 2. Announce our presence to other peers in the network
+                    // 3. Help us discover other peers
+                    // For now, we rely on the DHT's automatic peer discovery mechanisms
+                    // that were initiated when we called connect_peer()
                 }
                 Err(e) => error!("Failed to connect to {}: {}", bootstrap_addr, e),
             }
