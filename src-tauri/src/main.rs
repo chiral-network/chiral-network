@@ -629,6 +629,10 @@ async fn start_dht_node(
                             let _ = app_handle.emit("proxy_status_update", p.clone());
                         }
                     }
+                    DhtEvent::DownloadedFile(metadata) => {
+                        let payload = serde_json::json!(metadata);
+                        let _ = app_handle.emit("file_content", payload);
+                    }
                     DhtEvent::PublishedFile(metadata) => {
                         let payload = serde_json::json!(metadata);
                         let _ = app_handle.emit("published_file", payload);
@@ -831,6 +835,7 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                     "file_discovered:{}:{}:{}",
                     meta.file_hash, meta.file_name, meta.file_size
                 ),
+                DhtEvent::DownloadedFile(_) => "file_downloaded".to_string(),
                 DhtEvent::PublishedFile(meta) => format!(
                     "file_published:{}:{}:{}",
                     meta.file_hash, meta.file_name, meta.file_size
@@ -1274,11 +1279,12 @@ async fn upload_file_to_network(
 }
 
 #[tauri::command]
-async fn download_blocks_from_network(
+async fn download_blocks_from_network (
     state: State<'_, AppState>,
     file_metadata: FileMetadata,
 ) -> Result<(), String> {
     {
+
         let dht = {
             let dht_guard = state.dht.lock().await;
             dht_guard.as_ref().cloned()
@@ -2298,6 +2304,7 @@ fn main() {
             upload_file_to_network,
             upload_file_data_to_network,
             // download_file_from_network,
+            download_blocks_from_network,
             get_file_transfer_events,
             get_download_metrics,
             encrypt_file_with_password,

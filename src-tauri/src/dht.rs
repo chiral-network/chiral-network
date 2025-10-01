@@ -4,6 +4,7 @@ use blockstore::{
     Blockstore, InMemoryBlockstore,
 };
 use cid::Cid;
+use std::str::FromStr;
 use futures::future::{BoxFuture, FutureExt};
 use futures::io::{AsyncRead as FAsyncRead, AsyncWrite as FAsyncWrite};
 use futures::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -31,6 +32,8 @@ use std::task::{Context, Poll};
 // Import the missing types
 use crate::file_transfer::FileTransferService;
 use std::error::Error;
+
+use std::env::args;
 
 // Trait alias to abstract over async I/O types used by proxy transport
 pub trait AsyncIo: FAsyncRead + FAsyncWrite + Unpin + Send {}
@@ -83,7 +86,7 @@ pub struct FileMetadata {
     // --- VERSIONING FIELDS ---
     pub version: Option<u32>,
     pub parent_hash: Option<String>,
-    pub cids: Option<Vec<String>>, // list of CIDs for all chunks
+    pub cids: Option<Vec<Cid>>, // list of CIDs for all chunks
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -181,6 +184,7 @@ pub enum DhtEvent {
     PeerDisconnected(String), // Replaced by ProxyStatus
     FileDiscovered(FileMetadata),
     FileNotFound(String),
+    DownloadedFile(FileMetadata),
     FileDownloaded {
         file_hash: String,
     },
@@ -723,6 +727,9 @@ async fn run_dht_node(
     // Periodic bootstrap interval
     let mut shutdown_ack: Option<oneshot::Sender<()>> = None;
     let mut ping_failures: HashMap<PeerId, u8> = HashMap::new();
+    let mut queries: HashMap<beetswap::QueryId, u32> = HashMap::new();
+    let mut downloaded_chunks: HashMap<usize, Vec<u8>> = HashMap::new();
+    let mut current_metadata: Option<FileMetadata> = None;
 
     'outer: loop {
         tokio::select! {
@@ -757,17 +764,7 @@ async fn run_dht_node(
                             };
                             block_cids.push(cid);
                         }
-
-                        // create a root block that links to all data block cids
-                        // let root_links_data = match serde_json::to_vec(&block_cids) {
-                        //     Ok(data) => data,
-                        //     Err(e) => {
-                        //         error!("failed to serialize block cids for root: {}", e);
-                        //         let _ = event_tx.send(DhtEvent::Error(format!("failed to serialize block cids for root: {}", e))).await;
-                        //         return;
-                        //     }
-                        // };
-                        metadata.cids = Some(block_cids.iter().map(|c| c.to_string()).collect());
+                        metadata.cids = Some(block_cids);
                         metadata.file_data.clear(); // clear out the actual file data to save space in dht
 
                         let root_block_data = match serde_json::to_vec(&metadata) {
@@ -806,6 +803,16 @@ async fn run_dht_node(
                         // todo: get cids from file_metadata, then use bitswap query and in
                         // the bitswap protocol events, eventually report back to frontend (through an event)
                         // so need to add new event to be processed in main.rs loop as well.
+                        current_metadata = Some(file_metadata.clone());
+                      if let Some(cids) = &file_metadata.cids {
+                            for (i, cid) in cids.iter().enumerate() {
+                                let query_id = swarm.behaviour_mut().bitswap.get(cid);
+                                queries.insert(query_id, i as u32);
+                            }
+                        } else {
+                            error!("No CIDs found in file metadata");
+                            let _ = event_tx.send(DhtEvent::Error("No CIDs found in file metadata".to_string())).await;
+                        }
                     }
 
                     Some(DhtCommand::StopPublish(file_hash)) => {
@@ -946,15 +953,41 @@ async fn run_dht_node(
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) => match bitswap {
                         beetswap::Event::GetQueryResponse { query_id, data } => {
                             // Handle successful Bitswap response
-                            info!("Bitswap query {:?} succeeded - received {} bytes", query_id, data.len());
-
-                            // Process the received data - this is a file chunk that was requested
-                            // Parse the chunk data and assemble the complete file
-                            if let Some(ref ft_service) = file_transfer_service {
-                                process_bitswap_chunk(&query_id, &data, &event_tx, &received_chunks, ft_service).await;
-                            } else {
-                                warn!("File transfer service not available, cannot process Bitswap chunk");
+                            match queries.get(&query_id) {
+                                Some(index) => {
+                                    downloaded_chunks.insert(*index as usize, data.clone());
+                                    queries.remove(&query_id);
+                                    if queries.is_empty() {
+                                        info!("all requested cids have been downloaded.");
+                                        // reassemble file from downloaded chunks
+                                        let mut file = Vec::new();
+                                        for i in 0..=downloaded_chunks.len()-1 {
+                                            file.extend_from_slice(&downloaded_chunks.remove(&i).unwrap());
+                                        }
+                                        if let Some(metadata) = current_metadata.as_mut() {
+                                                metadata.file_data = file.clone(); // OK, file_data is Vec<u8>
+                                            }
+                                        if let Some(metadata) = current_metadata.take() {
+                                                let _ = event_tx.send(DhtEvent::DownloadedFile(metadata.clone())).await;
+                                            }
+                                        downloaded_chunks.clear();
+                                        current_metadata = None;
+                                    }
+                                }
+                                None => {
+                                }
                             }
+                                 
+
+                            // info!("Bitswap query {:?} succeeded - received {} bytes", query_id, data.len());
+                            
+                            // // Process the received data - this is a file chunk that was requested
+                            // // Parse the chunk data and assemble the complete file
+                            // if let Some(ref ft_service) = file_transfer_service {
+                            //     process_bitswap_chunk(&query_id, &data, &event_tx, &received_chunks, ft_service).await;
+                            // } else {
+                            //     warn!("File transfer service not available, cannot process Bitswap chunk");
+                            // }
                         }
                         beetswap::Event::GetQueryError { query_id, error } => {
                             // Handle Bitswap query error

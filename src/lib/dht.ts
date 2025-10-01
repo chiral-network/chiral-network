@@ -36,6 +36,7 @@ export interface FileMetadata {
   fileHash: string;
   fileName: string;
   fileSize: number;
+  fileData?: Uint8Array | number[];
   seeders: string[];
   createdAt: number;
   mimeType?: string;
@@ -183,11 +184,13 @@ export class DhtService {
 
   async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
     try {
+      console.log("Initiating download for file:", fileMetadata.fileHash);
       // Start listening for the published_file event
       const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {
         const unlistenPromise = listen<FileMetadata>(
           "file_content",
           (event) => {
+            console.log("Received file content event:", event.payload);
             resolve(event.payload);
             // Unsubscribe once we got the event
             unlistenPromise.then((unlistenFn) => unlistenFn());
