@@ -55,51 +55,6 @@ pub static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
         .expect("Failed to create HTTP client")
 });
 
-// ============================================================================
-// Configuration & Shared Resources
-// ============================================================================
-
-#[derive(Debug, Clone)]
-pub struct NetworkConfig {
-    pub rpc_endpoint: String,
-    pub chain_id: u64,
-    pub network_id: u64,
-}
-
-impl Default for NetworkConfig {
-    fn default() -> Self {
-        Self {
-            rpc_endpoint: "http://127.0.0.1:8545".to_string(),
-            chain_id: 98765,
-            network_id: 98765,
-        }
-    }
-}
-
-// Global configuration - can be updated via environment variables
-pub static NETWORK_CONFIG: Lazy<NetworkConfig> = Lazy::new(|| {
-    NetworkConfig {
-        rpc_endpoint: std::env::var("CHIRAL_RPC_ENDPOINT")
-            .unwrap_or_else(|_| "http://127.0.0.1:8545".to_string()),
-        chain_id: std::env::var("CHIRAL_CHAIN_ID")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(98765),
-        network_id: std::env::var("CHIRAL_NETWORK_ID")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(98765),
-    }
-});
-
-// Shared HTTP client for all RPC calls
-pub static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .expect("Failed to create HTTP client")
-});
-
 //Structs
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EthAccount {

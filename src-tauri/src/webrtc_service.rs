@@ -470,7 +470,7 @@ impl WebRTCService {
         file_hash: &str,
         chunk_index: u32,
         event_tx: &mpsc::Sender<WebRTCEvent>,
-        connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
+        _connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
     ) {
         let _ = event_tx.send(WebRTCEvent::FileChunkRequested {
             peer_id: peer_id.to_string(),

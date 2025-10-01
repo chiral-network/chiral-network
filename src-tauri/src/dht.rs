@@ -7,7 +7,7 @@ use tokio_util::compat::TokioAsyncReadCompatExt;
 
 use blockstore::{
     block::{Block, CidError},
-    Blockstore, InMemoryBlockstore,
+    InMemoryBlockstore,
 };
 use cid::Cid;
 use libp2p::multiaddr::Protocol;
