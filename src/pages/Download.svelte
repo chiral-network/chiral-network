@@ -230,7 +230,6 @@
       size: metadata.fileSize,
       status: 'queued' as const,
       priority: 'normal' as const,
-      version: metadata.version, // Preserve version info if available
       seeders: metadata.seeders.length, // Convert array length to number
       seederAddresses: metadata.seeders, // Store the actual seeder addresses
     }

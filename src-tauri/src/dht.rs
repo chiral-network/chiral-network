@@ -1316,18 +1316,14 @@ async fn handle_kademlia_event(
                 QueryResult::GetRecord(Ok(ok)) => match ok {
                     GetRecordOk::FoundRecord(peer_record) => {
                         // Try to parse file metadata from record value
+                        info!("FOUND RECORD");
                         if let Ok(metadata) =
                             serde_json::from_slice::<FileMetadata>(&peer_record.record.value)
                         {
-                            let notify_metadata = metadata.clone();
-                            let file_hash = notify_metadata.file_hash.clone();
+                            // let notify_metadata = metadata.clone();
+                            // let file_hash = notify_metadata.file_hash.clone();
+                            info!("parsed correctly");
                             let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
-                            notify_pending_searches(
-                                pending_searches,
-                                &file_hash,
-                                SearchResponse::Found(notify_metadata),
-                            )
-                            .await;
                         } else {
                             debug!("Received non-file metadata record");
                         }
@@ -2039,7 +2035,7 @@ impl DhtService {
     //         cids: vec![],
     //     })
     // }
-    
+
     pub async fn search_file(&self, file_hash: String) -> Result<(), String> {
         self.cmd_tx
             .send(DhtCommand::SearchFile(file_hash))
@@ -2051,64 +2047,11 @@ impl DhtService {
         self.search_file(file_hash).await
     }
 
-    pub async fn search_metadata(
-        &self,
-        file_hash: String,
-        timeout_ms: u64,
-    ) -> Result<Option<FileMetadata>, String> {
-        if timeout_ms == 0 {
-            self.cmd_tx
-                .send(DhtCommand::SearchFile(file_hash))
-                .await
-                .map_err(|e| e.to_string())?;
-            return Ok(None);
-        }
-
-        let timeout_duration = Duration::from_millis(timeout_ms);
-        let waiter_id = self.search_counter.fetch_add(1, Ordering::Relaxed);
-        let (tx, rx) = oneshot::channel();
-
-        {
-            let mut pending = self.pending_searches.lock().await;
-            pending
-                .entry(file_hash.clone())
-                .or_default()
-                .push(PendingSearch {
-                    id: waiter_id,
-                    sender: tx,
-                });
-        }
-
-        if let Err(err) = self
-            .cmd_tx
+    pub async fn search_metadata(&self, file_hash: String, timeout_ms: u64) -> Result<(), String> {
+        self.cmd_tx
             .send(DhtCommand::SearchFile(file_hash.clone()))
             .await
-        {
-            let mut pending = self.pending_searches.lock().await;
-            if let Some(waiters) = pending.get_mut(&file_hash) {
-                waiters.retain(|w| w.id != waiter_id);
-                if waiters.is_empty() {
-                    pending.remove(&file_hash);
-                }
-            }
-            return Err(err.to_string());
-        }
-
-        match tokio::time::timeout(timeout_duration, rx).await {
-            Ok(Ok(SearchResponse::Found(metadata))) => Ok(Some(metadata)),
-            Ok(Ok(SearchResponse::NotFound)) => Ok(None),
-            Ok(Err(_)) => Err("Search channel closed".into()),
-            Err(_) => {
-                let mut pending = self.pending_searches.lock().await;
-                if let Some(waiters) = pending.get_mut(&file_hash) {
-                    waiters.retain(|w| w.id != waiter_id);
-                    if waiters.is_empty() {
-                        pending.remove(&file_hash);
-                    }
-                }
-                Err("Search timed out".into())
-            }
-        }
+            .map_err(|e| e.to_string())
     }
 
     pub async fn connect_peer(&self, addr: String) -> Result<(), String> {

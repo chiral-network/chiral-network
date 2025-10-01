@@ -633,6 +633,10 @@ async fn start_dht_node(
                         let payload = serde_json::json!(metadata);
                         let _ = app_handle.emit("published_file", payload);
                     }
+                    DhtEvent::FileDiscovered(metadata) => {
+                        let payload = serde_json::json!(metadata);
+                        let _ = app_handle.emit("found_file", payload);
+                    }
                     _ => {}
                 }
             }
@@ -692,7 +696,7 @@ async fn publish_file_metadata(
             key_fingerprint: None,
             parent_hash: None,
             version: Some(1),
-            cids: None
+            cids: None,
         };
 
         dht.publish_file(metadata).await
@@ -1253,7 +1257,7 @@ async fn upload_file_to_network(
                 key_fingerprint: None,
                 parent_hash: None,
                 version: Some(1),
-                cids: None
+                cids: None,
             };
 
             match dht.publish_file(metadata.clone()).await {
@@ -1269,231 +1273,230 @@ async fn upload_file_to_network(
     }
 }
 
-#[tauri::command]
-async fn download_file_from_network(
-    state: State<'_, AppState>,
-    file_hash: String,
-    output_path: String,
-) -> Result<String, String> {
-    let ft = {
-        let ft_guard = state.file_transfer.lock().await;
-        ft_guard.as_ref().cloned()
-    };
+// #[tauri::command]
+// async fn download_file_from_network(
+//     state: State<'_, AppState>,
+//     file_hash: String,
+//     output_path: String,
+// ) -> Result<String, String> {
+//     let ft = {
+//         let ft_guard = state.file_transfer.lock().await;
+//         ft_guard.as_ref().cloned()
+//     };
 
-    if let Some(_ft) = ft {
-        info!("Starting P2P download for: {}", file_hash);
+//     if let Some(_ft) = ft {
+//         info!("Starting P2P download for: {}", file_hash);
 
-        // Search DHT for file metadata
-        let dht = {
-            let dht_guard = state.dht.lock().await;
-            dht_guard.as_ref().cloned()
-        };
+//         // Search DHT for file metadata
+//         let dht = {
+//             let dht_guard = state.dht.lock().await;
+//             dht_guard.as_ref().cloned()
+//         };
 
-        if let Some(dht_service) = dht {
-            // Search for file metadata in DHT with 5 second timeout
-            match dht_service.search_metadata(file_hash.clone(), 5000).await {
-                Ok(Some(metadata)) => {
-                    info!(
-                        "Found file metadata in DHT: {} (size: {} bytes)",
-                        metadata.file_name, metadata.file_size
-                    );
+//         if let Some(dht_service) = dht {
+//             // Search for file metadata in DHT with 5 second timeout
+//             match dht_service.search_metadata(file_hash.clone(), 5000).await {
+//                 Ok(Some(metadata)) => {
+//                     info!(
+//                         "Found file metadata in DHT: {} (size: {} bytes)",
+//                         metadata.file_name, metadata.file_size
+//                     );
 
-                    // Implement peer discovery for file chunks
-                    info!(
-                        "Discovering peers for file: {} with {} known seeders",
-                        metadata.file_name,
-                        metadata.seeders.len()
-                    );
+//                     // Implement peer discovery for file chunks
+//                     info!(
+//                         "Discovering peers for file: {} with {} known seeders",
+//                         metadata.file_name,
+//                         metadata.seeders.len()
+//                     );
 
-                    if metadata.seeders.is_empty() {
-                        return Err(format!(
-                            "No seeders available for file: {} ({})",
-                            metadata.file_name, metadata.file_hash
-                        ));
-                    }
+//                     if metadata.seeders.is_empty() {
+//                         return Err(format!(
+//                             "No seeders available for file: {} ({})",
+//                             metadata.file_name, metadata.file_hash
+//                         ));
+//                     }
 
-                    // Discover and verify available peers for this file
-                    let available_peers = dht_service
-                        .discover_peers_for_file(&metadata)
-                        .await
-                        .map_err(|e| format!("Peer discovery failed: {}", e))?;
+//                     // Discover and verify available peers for this file
+//                     let available_peers = dht_service
+//                         .discover_peers_for_file(&metadata)
+//                         .await
+//                         .map_err(|e| format!("Peer discovery failed: {}", e))?;
 
-                    if available_peers.is_empty() {
-                        info!("File found but no seeders currently available");
-                        // TODO: Return metadata to frontend with 0 seeders instead of error
-                        return Err(format!(
-                            "File found but no seeders available: {} ({} bytes) - 0 seeders online",
-                            metadata.file_name, metadata.file_size
-                        ));
-                    }
+//                     if available_peers.is_empty() {
+//                         info!("File found but no seeders currently available");
+//                         // TODO: Return metadata to frontend with 0 seeders instead of error
+//                         return Err(format!(
+//                             "File found but no seeders available: {} ({} bytes) - 0 seeders online",
+//                             metadata.file_name, metadata.file_size
+//                         ));
+//                     }
 
-                    // Implement chunk requesting protocol with real WebRTC
-                    // Create WebRTC offer for the first available peer
-                    let webrtc = {
-                        let webrtc_guard = state.webrtc.lock().await;
-                        webrtc_guard.as_ref().cloned()
-                    };
+//                     // Implement chunk requesting protocol with real WebRTC
+//                     // Create WebRTC offer for the first available peer
+//                     let webrtc = {
+//                         let webrtc_guard = state.webrtc.lock().await;
+//                         webrtc_guard.as_ref().cloned()
+//                     };
 
-                    if let Some(webrtc_service) = webrtc {
-                        // Select the best peer for download
-                        let selected_peer = if available_peers.len() == 1 {
-                            available_peers[0].clone()
-                        } else {
-                            // Use peer selection strategy to pick the best peer
-                            let recommended = dht_service
-                                .select_peers_with_strategy(
-                                    &available_peers,
-                                    1,
-                                    crate::peer_selection::SelectionStrategy::FastestFirst,
-                                    false,
-                                )
-                                .await;
-                            recommended
-                                .into_iter()
-                                .next()
-                                .unwrap_or_else(|| available_peers[0].clone())
-                        };
+//                     if let Some(webrtc_service) = webrtc {
+//                         // Select the best peer for download
+//                         let selected_peer = if available_peers.len() == 1 {
+//                             available_peers[0].clone()
+//                         } else {
+//                             // Use peer selection strategy to pick the best peer
+//                             let recommended = dht_service
+//                                 .select_peers_with_strategy(
+//                                     &available_peers,
+//                                     1,
+//                                     crate::peer_selection::SelectionStrategy::FastestFirst,
+//                                     false,
+//                                 )
+//                                 .await;
+//                             recommended
+//                                 .into_iter()
+//                                 .next()
+//                                 .unwrap_or_else(|| available_peers[0].clone())
+//                         };
 
-                        info!("Selected peer {} for WebRTC download", selected_peer);
+//                         info!("Selected peer {} for WebRTC download", selected_peer);
 
-                        // Create WebRTC offer
-                        match webrtc_service.create_offer(selected_peer.clone()).await {
-                            Ok(offer) => {
-                                info!("Created WebRTC offer for peer {}", selected_peer);
+//                         // Create WebRTC offer
+//                         match webrtc_service.create_offer(selected_peer.clone()).await {
+//                             Ok(offer) => {
+//                                 info!("Created WebRTC offer for peer {}", selected_peer);
 
-                                // Send WebRTC offer via DHT signaling
-                                let offer_request = dht::WebRTCOfferRequest {
-                                    offer_sdp: offer,
-                                    file_hash: metadata.file_hash.clone(),
-                                    requester_peer_id: dht_service.get_peer_id().await,
-                                };
+//                                 // Send WebRTC offer via DHT signaling
+//                                 let offer_request = dht::WebRTCOfferRequest {
+//                                     offer_sdp: offer,
+//                                     file_hash: metadata.file_hash.clone(),
+//                                     requester_peer_id: dht_service.get_peer_id().await,
+//                                 };
 
-                                match dht_service
-                                    .send_webrtc_offer(selected_peer.clone(), offer_request)
-                                    .await
-                                {
-                                    Ok(answer_receiver) => {
-                                        info!(
-                                            "Sent WebRTC offer to peer {}, waiting for answer",
-                                            selected_peer
-                                        );
+//                                 match dht_service
+//                                     .send_webrtc_offer(selected_peer.clone(), offer_request)
+//                                     .await
+//                                 {
+//                                     Ok(answer_receiver) => {
+//                                         info!(
+//                                             "Sent WebRTC offer to peer {}, waiting for answer",
+//                                             selected_peer
+//                                         );
 
-                                        // Wait for WebRTC answer with timeout
-                                        match tokio::time::timeout(
-                                            Duration::from_secs(30),
-                                            answer_receiver,
-                                        )
-                                        .await
-                                        {
-                                            Ok(Ok(Ok(answer_response))) => {
-                                                info!(
-                                                    "Received WebRTC answer from peer {}",
-                                                    selected_peer
-                                                );
+//                                         // Wait for WebRTC answer with timeout
+//                                         match tokio::time::timeout(
+//                                             Duration::from_secs(30),
+//                                             answer_receiver,
+//                                         )
+//                                         .await
+//                                         {
+//                                             Ok(Ok(Ok(answer_response))) => {
+//                                                 info!(
+//                                                     "Received WebRTC answer from peer {}",
+//                                                     selected_peer
+//                                                 );
 
-                                                // Establish WebRTC connection with the answer
-                                                match webrtc_service
-                                                    .establish_connection_with_answer(
-                                                        selected_peer.clone(),
-                                                        answer_response.answer_sdp,
-                                                    )
-                                                    .await
-                                                {
-                                                    Ok(_) => {
-                                                        info!("WebRTC connection established with peer {}", selected_peer);
+//                                                 // Establish WebRTC connection with the answer
+//                                                 match webrtc_service
+//                                                     .establish_connection_with_answer(
+//                                                         selected_peer.clone(),
+//                                                         answer_response.answer_sdp,
+//                                                     )
+//                                                     .await
+//                                                 {
+//                                                     Ok(_) => {
+//                                                         info!("WebRTC connection established with peer {}", selected_peer);
 
-                                                        // Send file request over WebRTC data channel
-                                                        let file_request = crate::webrtc_service::WebRTCFileRequest {
-                                                            file_hash: metadata.file_hash.clone(),
-                                                            file_name: metadata.file_name.clone(),
-                                                            file_size: metadata.file_size,
-                                                            requester_peer_id: dht_service.get_peer_id().await,
-                                                        };
+//                                                         // Send file request over WebRTC data channel
+//                                                         let file_request = crate::webrtc_service::WebRTCFileRequest {
+//                                                             file_hash: metadata.file_hash.clone(),
+//                                                             file_name: metadata.file_name.clone(),
+//                                                             file_size: metadata.file_size,
+//                                                             requester_peer_id: dht_service.get_peer_id().await,
+//                                                         };
 
-                                                        match webrtc_service
-                                                            .send_file_request(
-                                                                selected_peer.clone(),
-                                                                file_request,
-                                                            )
-                                                            .await
-                                                        {
-                                                            Ok(_) => {
-                                                                info!("Sent file request for {} to peer {}", metadata.file_name, selected_peer);
+//                                                         match webrtc_service
+//                                                             .send_file_request(
+//                                                                 selected_peer.clone(),
+//                                                                 file_request,
+//                                                             )
+//                                                             .await
+//                                                         {
+//                                                             Ok(_) => {
+//                                                                 info!("Sent file request for {} to peer {}", metadata.file_name, selected_peer);
 
-                                                                // The peer will now start sending chunks automatically
-                                                                // We don't need to request individual chunks - the WebRTC service handles this
-                                                                Ok(format!(
-                                                                    "WebRTC download initiated: {} ({} bytes) from peer {}",
-                                                                    metadata.file_name, metadata.file_size, selected_peer
-                                                                ))
-                                                            }
-                                                            Err(e) => {
-                                                                warn!("Failed to send file request: {}", e);
-                                                                Err(format!("Failed to send file request: {}", e))
-                                                            }
-                                                        }
-                                                    }
-                                                    Err(e) => {
-                                                        warn!("Failed to establish WebRTC connection: {}", e);
-                                                        Err(format!(
-                                                            "WebRTC connection failed: {}",
-                                                            e
-                                                        ))
-                                                    }
-                                                }
-                                            }
-                                            Ok(Ok(Err(e))) => {
-                                                warn!("WebRTC signaling failed: {}", e);
-                                                Err(format!("WebRTC signaling failed: {}", e))
-                                            }
-                                            Ok(Err(_)) => {
-                                                warn!("WebRTC answer receiver was canceled");
-                                                Err("WebRTC answer receiver was canceled"
-                                                    .to_string())
-                                            }
-                                            Err(_) => {
-                                                warn!(
-                                                    "WebRTC answer timeout from peer {}",
-                                                    selected_peer
-                                                );
-                                                Err(format!(
-                                                    "WebRTC answer timeout from peer {}",
-                                                    selected_peer
-                                                ))
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        warn!("Failed to send WebRTC offer: {}", e);
-                                        Err(format!("Failed to send WebRTC offer: {}", e))
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                warn!("Failed to create WebRTC offer: {}", e);
-                                Err(format!("WebRTC setup failed: {}", e))
-                            }
-                        }
-                    } else {
-                        Err("WebRTC service not available".to_string())
-                    }
-                }
-                Ok(None) => {
-                    return Err("DHT search timed out - file metadata not found".to_string());
-                }
-                Err(e) => {
-                    warn!("DHT search failed: {}", e);
-                    return Err(format!("DHT search failed: {}", e));
-                }
-            }
-        } else {
-            return Err("DHT service not available".to_string());
-        }
-    } else {
-        Err("File transfer service is not running".to_string())
-    }
-}
-
+//                                                                 // The peer will now start sending chunks automatically
+//                                                                 // We don't need to request individual chunks - the WebRTC service handles this
+//                                                                 Ok(format!(
+//                                                                     "WebRTC download initiated: {} ({} bytes) from peer {}",
+//                                                                     metadata.file_name, metadata.file_size, selected_peer
+//                                                                 ))
+//                                                             }
+//                                                             Err(e) => {
+//                                                                 warn!("Failed to send file request: {}", e);
+//                                                                 Err(format!("Failed to send file request: {}", e))
+//                                                             }
+//                                                         }
+//                                                     }
+//                                                     Err(e) => {
+//                                                         warn!("Failed to establish WebRTC connection: {}", e);
+//                                                         Err(format!(
+//                                                             "WebRTC connection failed: {}",
+//                                                             e
+//                                                         ))
+//                                                     }
+//                                                 }
+//                                             }
+//                                             Ok(Ok(Err(e))) => {
+//                                                 warn!("WebRTC signaling failed: {}", e);
+//                                                 Err(format!("WebRTC signaling failed: {}", e))
+//                                             }
+//                                             Ok(Err(_)) => {
+//                                                 warn!("WebRTC answer receiver was canceled");
+//                                                 Err("WebRTC answer receiver was canceled"
+//                                                     .to_string())
+//                                             }
+//                                             Err(_) => {
+//                                                 warn!(
+//                                                     "WebRTC answer timeout from peer {}",
+//                                                     selected_peer
+//                                                 );
+//                                                 Err(format!(
+//                                                     "WebRTC answer timeout from peer {}",
+//                                                     selected_peer
+//                                                 ))
+//                                             }
+//                                         }
+//                                     }
+//                                     Err(e) => {
+//                                         warn!("Failed to send WebRTC offer: {}", e);
+//                                         Err(format!("Failed to send WebRTC offer: {}", e))
+//                                     }
+//                                 }
+//                             }
+//                             Err(e) => {
+//                                 warn!("Failed to create WebRTC offer: {}", e);
+//                                 Err(format!("WebRTC setup failed: {}", e))
+//                             }
+//                         }
+//                     } else {
+//                         Err("WebRTC service not available".to_string())
+//                     }
+//                 }
+//                 Ok(()) => {
+//                     return Err("DHT search timed out - file metadata not found".to_string());
+//                 }
+//                 Err(e) => {
+//                     warn!("DHT search failed: {}", e);
+//                     return Err(format!("DHT search failed: {}", e));
+//                 }
+//             }
+//         } else {
+//             return Err("DHT service not available".to_string());
+//         }
+//     } else {
+//         Err("File transfer service is not running".to_string())
+//     }
+// }
 #[tauri::command]
 async fn upload_file_data_to_network(
     state: State<'_, AppState>,
@@ -1538,7 +1541,7 @@ async fn upload_file_data_to_network(
                 key_fingerprint: None,
                 parent_hash: None,
                 version: Some(1),
-                cids: None
+                cids: None,
             };
 
             if let Err(e) = dht.publish_file(metadata).await {
@@ -1753,7 +1756,7 @@ async fn search_file_metadata(
     state: State<'_, AppState>,
     file_hash: String,
     timeout_ms: Option<u64>,
-) -> Result<Option<FileMetadata>, String> {
+) -> Result<(), String> {
     let dht = {
         let dht_guard = state.dht.lock().await;
         dht_guard.as_ref().cloned()
@@ -2274,7 +2277,7 @@ fn main() {
             start_file_transfer_service,
             upload_file_to_network,
             upload_file_data_to_network,
-            download_file_from_network,
+            // download_file_from_network,
             get_file_transfer_events,
             get_download_metrics,
             encrypt_file_with_password,

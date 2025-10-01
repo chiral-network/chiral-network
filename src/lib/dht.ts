@@ -155,6 +155,7 @@ export class DhtService {
       throw error;
     }
   }
+
   async publishFileToNetwork(filePath: string): Promise<FileMetadata> {
     try {
       // Start listening for the published_file event
@@ -270,19 +271,43 @@ export class DhtService {
     }
 
     try {
-      const result = await invoke<FileMetadata | null>("search_file_metadata", {
+      // Start listening for the search_result event
+      const metadataPromise = new Promise<FileMetadata | null>(
+        (resolve, reject) => {
+          const timeoutId = setTimeout(() => {
+            reject(new Error(`Search timeout after ${timeoutMs}ms`));
+          }, timeoutMs);
+
+          const unlistenPromise = listen<FileMetadata | null>(
+            "found_file",
+            (event) => {
+              clearTimeout(timeoutId);
+              const result = event.payload;
+              resolve(
+                result
+                  ? {
+                      ...result,
+                      seeders: Array.isArray(result.seeders)
+                        ? result.seeders
+                        : [],
+                    }
+                  : null
+              );
+              // Unsubscribe once we got the event
+              unlistenPromise.then((unlistenFn) => unlistenFn());
+            }
+          );
+        }
+      );
+
+      // Trigger the backend search
+      await invoke("search_file_metadata", {
         fileHash: trimmed,
         timeoutMs,
       });
 
-      if (!result) {
-        return null;
-      }
-
-      return {
-        ...result,
-        seeders: Array.isArray(result.seeders) ? result.seeders : [],
-      };
+      // Wait until the event arrives
+      return await metadataPromise;
     } catch (error) {
       console.error("Failed to search file metadata:", error);
       throw error;
