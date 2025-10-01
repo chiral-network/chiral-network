@@ -6,7 +6,6 @@ use rand::RngCore;
 use std::fs::{File, self};
 use std::io::{Read, Error, Write};
 use std::path::{Path, PathBuf};
-use reed_solomon_erasure::galois_8::ReedSolomon;
 use x25519_dalek::PublicKey;
 use std::sync::Mutex;
 
@@ -71,7 +70,7 @@ pub struct ChunkInfo {
     pub index: u32,
     pub hash: String,
     pub size: usize,
-    pub shard_hashes: Vec<String>, // Hashes of the Reed-Solomon shards
+    pub encrypted_hash: String,
     pub encrypted_size: usize,
 }
 
@@ -95,7 +94,7 @@ impl Hasher for Sha256Hasher {
     type Hash = [u8; 32];
 
     fn hash(data: &[u8]) -> [u8; 32] {
-        let mut hasher = Sha256::new();
+        let mut hasher = sha2::Sha256::default();
         hasher.update(data);
         hasher.finalize().into()
     }
@@ -120,10 +119,6 @@ impl ChunkManager {
         file_path: &Path,
         recipient_public_key: &PublicKey,
     ) -> Result<FileManifest, String> {
-        const DATA_SHARDS: usize = 10;
-        const PARITY_SHARDS: usize = 4;
-        let r = ReedSolomon::new(DATA_SHARDS, PARITY_SHARDS).unwrap();
-
         let mut key_bytes = [0u8; 32];
         OsRng.fill_bytes(&mut key_bytes);
         let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
@@ -143,42 +138,17 @@ impl ChunkManager {
             chunk_hashes.push(chunk_hash_bytes);
             let chunk_hash_hex = hex::encode(chunk_hash_bytes); // This is the original hash
 
-            // Create data shards from the original chunk data.
-            let mut shards: Vec<Vec<u8>> = chunk_data
-                .chunks((chunk_data.len() + DATA_SHARDS - 1) / DATA_SHARDS)
-                .map(|c| c.to_vec())
-                .collect();
-
-            // Calculate the size of the largest shard and pad all other shards to match.
-            // This is crucial for the Reed-Solomon library to work correctly.
-            let shard_len = shards.iter().map(|s| s.len()).max().unwrap_or(0);
-            for shard in &mut shards {
-                shard.resize(shard_len, 0);
-            }
-
-            // Add empty parity shards to be filled by the encoder.
-            shards.resize(DATA_SHARDS + PARITY_SHARDS, vec![0; shard_len]);
-
-            // Encode the data, creating the parity shards.
-            r.encode(&mut shards).unwrap();
-
-            let mut shard_hashes = Vec::new();
-            let mut total_encrypted_size = 0;
-
-            for shard in shards {
-                let encrypted_shard_with_nonce = self.encrypt_shard(&shard, &key)?;
-                let shard_hash = Self::hash_data(&encrypted_shard_with_nonce);
-                self.save_shard(&shard_hash, &encrypted_shard_with_nonce).map_err(|e| e.to_string())?;
-                shard_hashes.push(shard_hash);
-                total_encrypted_size += encrypted_shard_with_nonce.len();
-            }
+            // Encrypt the chunk
+            let encrypted_chunk_with_nonce = self.encrypt_chunk(chunk_data, &key)?;
+            let encrypted_chunk_hash = Self::hash_data(&encrypted_chunk_with_nonce);
+            self.save_chunk(&encrypted_chunk_hash, &encrypted_chunk_with_nonce).map_err(|e| e.to_string())?;
 
             chunks_info.push(ChunkInfo {
                 index,
                 hash: chunk_hash_hex.clone(),
                 size: bytes_read,
-                shard_hashes,
-                encrypted_size: total_encrypted_size,
+                encrypted_hash: encrypted_chunk_hash,
+                encrypted_size: encrypted_chunk_with_nonce.len(),
             });
 
             index += 1;
@@ -199,7 +169,7 @@ impl ChunkManager {
     }
 
     // This function now returns the nonce and ciphertext combined for easier storage
-    fn encrypt_shard(&self, data: &[u8], key: &Key<Aes256Gcm>) -> Result<Vec<u8>, String> {
+    fn encrypt_chunk(&self, data: &[u8], key: &Key<Aes256Gcm>) -> Result<Vec<u8>, String> {
         let cipher = Aes256Gcm::new(key);
         let nonce = Aes256Gcm::generate_nonce(&mut OsRng); // Generate a unique nonce for each chunk
         let ciphertext = cipher.encrypt(&nonce, data).map_err(|e| e.to_string())?;
@@ -209,13 +179,13 @@ impl ChunkManager {
     }
 
     fn hash_data(data: &[u8]) -> String {
-        let mut hasher = Sha256::new();
+        let mut hasher = sha2::Sha256::default();
         hasher.update(data);
         format!("{:x}", hasher.finalize())
     }
 
     // This function now saves the combined [nonce][ciphertext] blob
-    fn save_shard(&self, hash: &str, data_with_nonce: &[u8]) -> Result<(), Error> {
+    fn save_chunk(&self, hash: &str, data_with_nonce: &[u8]) -> Result<(), Error> {
         fs::create_dir_all(&self.storage_path)?;
         let chunk_path = self.storage_path.join(hash);
         // --- Deduplication: Only write if the chunk does not already exist ---
@@ -235,7 +205,7 @@ impl ChunkManager {
         Ok(())
     }
 
-    pub fn read_shard(&self, hash: &str) -> Result<Vec<u8>, Error> {
+    pub fn read_chunk(&self, hash: &str) -> Result<Vec<u8>, Error> {
         // Check L1 cache first
         {
             let mut cache = L1_CACHE.lock().unwrap();
@@ -253,7 +223,7 @@ impl ChunkManager {
         Ok(data)
     }
 
-    fn decrypt_shard(&self, data_with_nonce: &[u8], key: &Key<Aes256Gcm>) -> Result<Vec<u8>, String> {
+    fn decrypt_chunk(&self, data_with_nonce: &[u8], key: &Key<Aes256Gcm>) -> Result<Vec<u8>, String> {
         let cipher = Aes256Gcm::new(key);
         // AES-GCM nonce is 12 bytes. The nonce is prepended to the ciphertext.
         if data_with_nonce.len() < 12 {
@@ -264,7 +234,7 @@ impl ChunkManager {
 
         cipher
             .decrypt(nonce, ciphertext)
-            .map_err(|e| format!("Shard decryption failed: {}", e))
+            .map_err(|e| format!("Chunk decryption failed: {}", e))
     }
 
     pub fn reassemble_and_decrypt_file<S: DiffieHellman>(
@@ -274,10 +244,6 @@ impl ChunkManager {
     encrypted_key_bundle: &EncryptedAesKeyBundle,
     recipient_secret_key: S,
     ) -> Result<(), String> {
-        const DATA_SHARDS: usize = 10;
-        const PARITY_SHARDS: usize = 4;
-        let r = ReedSolomon::new(DATA_SHARDS, PARITY_SHARDS).unwrap();
-
         let key_bytes = decrypt_aes_key(encrypted_key_bundle, recipient_secret_key)?;
         let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
 
@@ -286,52 +252,16 @@ impl ChunkManager {
         // Assuming chunks are ordered by index. If not, they should be sorted first.
         let result: Result<(), String> = (|| {
             for chunk_info in chunks {
-                // Gather all available encrypted shards from storage. Missing shards will be `None`.
-                let available_encrypted_shards: Vec<Option<Vec<u8>>> = chunk_info
-                    .shard_hashes
-                    .iter()
-                    .map(|shard_hash| self.read_shard(shard_hash).ok())
-                    .collect();
+                // Read the encrypted chunk from storage
+                let encrypted_chunk = self.read_chunk(&chunk_info.encrypted_hash)
+                    .map_err(|e| format!("Failed to read encrypted chunk {}: {}", chunk_info.index, e))?;
 
-                // Count available shards and fail fast if reconstruction is impossible.
-                let available_shards = available_encrypted_shards.iter().filter(|s| s.is_some()).count();
-                if available_shards < DATA_SHARDS {
-                    return Err(format!(
-                        "Not enough shards to reconstruct chunk {}: found {}, need at least {}",
-                        chunk_info.index, available_shards, DATA_SHARDS
-                    ));
-                }
-
-                // Now, decrypt the available shards.
-                let mut shards: Vec<Option<Vec<u8>>> = Vec::with_capacity(DATA_SHARDS + PARITY_SHARDS);
-                for encrypted_shard_option in available_encrypted_shards {
-                    if let Some(encrypted_shard) = encrypted_shard_option {
-                        shards.push(Some(self.decrypt_shard(&encrypted_shard, &key)?));
-                    } else {
-                        shards.push(None);
-                    }
-                }
-
-                // Reconstruct all missing shards (data and parity).
-                if let Err(e) = r.reconstruct(&mut shards) {
-                    return Err(format!(
-                        "Failed to reconstruct data for chunk {} from {} available shards: {:?}",
-                        chunk_info.index, available_shards, e
-                    ));
-                }
-
-                let mut decrypted_data = Vec::new();
-                for shard in shards.iter().take(DATA_SHARDS) {
-                    if let Some(shard_data) = shard {
-                        decrypted_data.extend_from_slice(shard_data);
-                    } else {
-                        return Err(format!("Reconstruction of chunk {} failed unexpectedly: missing a data shard post-reconstruction.", chunk_info.index));
-                    }
-                }
+                // Decrypt the chunk
+                let decrypted_data = self.decrypt_chunk(&encrypted_chunk, &key)?;
 
                 // Trim padding to original size
+                let mut decrypted_data = decrypted_data;
                 decrypted_data.truncate(chunk_info.size);
-
 
                 // Verify that the decrypted data matches the original hash
                 let calculated_hash_hex = hex::encode(Sha256Hasher::hash(&decrypted_data));
@@ -351,7 +281,7 @@ impl ChunkManager {
 
     pub fn _hash_file(&self, file_path: &Path) -> Result<String, Error> {
         let mut file = File::open(file_path)?;
-        let mut hasher = Sha256::new();
+        let mut hasher = sha2::Sha256::default();
         let mut buffer = vec![0; 1024 * 1024]; // 1MB buffer on the heap
 
         loop {
@@ -452,16 +382,16 @@ mod tests {
 
         let original_file_path = dir.path().join("original.txt");
         let reassembled_file_path = dir.path().join("reassembled.txt");
-        let file_content = "This is a test file for erasure coding.".repeat(1000);
+        let file_content = "This is a test file for chunking and encryption.".repeat(1000);
         fs::write(&original_file_path, &file_content).unwrap();
 
         let recipient_secret = StaticSecret::random_from_rng(OsRng);
         let recipient_public = PublicKey::from(&recipient_secret);
 
-        // 2. Chunk, encrypt, and apply erasure coding
+        // 2. Chunk and encrypt the file
         let manifest = manager.chunk_and_encrypt_file(&original_file_path, &recipient_public).unwrap();
 
-        // 3. Reassemble, reconstruct from shards, and decrypt
+        // 3. Reassemble and decrypt
         manager.reassemble_and_decrypt_file(
             &manifest.chunks,
             &reassembled_file_path,
@@ -523,7 +453,8 @@ mod tests {
 
     }
 
-    fn test_reconstruction_with_missing_shards() {
+    #[test]
+    fn test_reconstruction_with_missing_chunks() {
         // 1. Setup
         let dir = tempdir().unwrap();
         let storage_path = dir.path().to_path_buf();
@@ -532,43 +463,46 @@ mod tests {
         let original_file_path = dir.path().join("original_for_loss.txt");
         let reassembled_file_path = dir.path().join("reassembled_from_loss.txt");
         // Use enough content to create at least one full chunk
-        let file_content = "This is a test file for erasure coding with simulated data loss.".repeat(5000);
+        let file_content = "This is a test file for chunking with simulated data loss.".repeat(5000);
         fs::write(&original_file_path, &file_content).unwrap();
  
         let recipient_secret = StaticSecret::random_from_rng(OsRng);
         let recipient_public = PublicKey::from(&recipient_secret);
  
-        // 2. Chunk, encrypt, and apply erasure coding
+        // 2. Chunk and encrypt the file
         let manifest = manager.chunk_and_encrypt_file(&original_file_path, &recipient_public).unwrap();
  
-        // 3. Simulate data loss by deleting some shards
-        // We have 10 data + 4 parity shards. We can lose up to 4. Let's delete 3.
-        let shards_to_delete = 3;
+        // 3. Simulate data loss by deleting some chunks
+        // Delete the first chunk
         if let Some(first_chunk_info) = manifest.chunks.first() {
-            for i in 0..shards_to_delete {
-                let shard_hash_to_delete = &first_chunk_info.shard_hashes[i];
-                let shard_path = storage_path.join(shard_hash_to_delete);
-                if shard_path.exists() {
-                    fs::remove_file(shard_path).unwrap();
-                }
+            let chunk_path = storage_path.join(&first_chunk_info.encrypted_hash);
+            if chunk_path.exists() {
+                fs::remove_file(chunk_path).unwrap();
             }
         }
  
-        // 4. Attempt to reassemble the file from the incomplete set of shards
-        manager.reassemble_and_decrypt_file(
+        // 4. Attempt to reassemble the file. This should fail since we can't reconstruct missing chunks
+        let result = manager.reassemble_and_decrypt_file(
             &manifest.chunks,
             &reassembled_file_path,
             &manifest.encrypted_key_bundle,
             &recipient_secret,
-        ).unwrap();
- 
-        // 5. Verify that the file was reconstructed correctly despite the missing shards
-        let reassembled_content = fs::read_to_string(&reassembled_file_path).unwrap();
-        assert_eq!(file_content, reassembled_content);
+        );
+
+        // 5. Verify that the operation failed as expected.
+        match result {
+            Ok(_) => {
+                panic!("Reconstruction succeeded when it should have failed due to missing chunk.");
+            },
+            Err(error_message) => {
+                // The error should indicate the chunk could not be read
+                assert!(error_message.contains("Failed to read encrypted chunk"));
+            }
+        }
     }
 
     #[test]
-    fn test_reconstruction_fails_with_too_many_missing_shards() {
+    fn test_reconstruction_fails_with_missing_chunk() {
         // 1. Setup
         let dir = tempdir().unwrap();
         let storage_path = dir.path().to_path_buf();
@@ -576,40 +510,26 @@ mod tests {
 
         let original_file_path = dir.path().join("original_for_failure.txt");
         let reassembled_file_path = dir.path().join("reassembled_from_failure.txt");
-        let file_content = "This test should fail to reconstruct due to heavy data loss.".repeat(5000);
+        let file_content = "This test should fail to reconstruct due to missing chunk.".repeat(5000);
         fs::write(&original_file_path, &file_content).unwrap();
 
         let recipient_secret = StaticSecret::random_from_rng(OsRng);
         let recipient_public = PublicKey::from(&recipient_secret);
 
-        // 2. Chunk, encrypt, and apply erasure coding
+        // 2. Chunk and encrypt the file
         let manifest = manager.chunk_and_encrypt_file(&original_file_path, &recipient_public).unwrap();
         assert!(!manifest.chunks.is_empty(), "Test file should produce at least one chunk");
 
-        // 3. Simulate critical data loss by deleting too many shards
-        // We have 10 data + 4 parity shards. We can lose up to 4. Let's delete 5.
-        const SHARDS_TO_DELETE: usize = 5;
+        // 3. Simulate chunk loss by deleting the first chunk
         if let Some(first_chunk_info) = manifest.chunks.first() {
-            
-            let mut actually_deleted = 0;
-            for i in 0..SHARDS_TO_DELETE {
-                let shard_hash_to_delete = &first_chunk_info.shard_hashes[i];
-                let shard_path = storage_path.join(shard_hash_to_delete);
-                if shard_path.exists() {
-                    fs::remove_file(shard_path).unwrap();
-                    actually_deleted += 1;
-                } else {
-                }
+            let chunk_path = storage_path.join(&first_chunk_info.encrypted_hash);
+            if chunk_path.exists() {
+                fs::remove_file(chunk_path).unwrap();
             }
-            
-            // Count remaining shards
-            let remaining_shards = first_chunk_info.shard_hashes.iter()
-                .filter(|hash| storage_path.join(hash).exists())
-                .count();
         }
 
         // CRITICAL FIX: Clear the L1 cache after deleting files
-        // This ensures read_shard() will actually fail for deleted shards
+        // This ensures read_chunk() will actually fail for deleted chunks
         {
             let mut cache = L1_CACHE.lock().unwrap();
             *cache = LruCache::new(L1_CACHE_CAPACITY);
@@ -629,8 +549,8 @@ mod tests {
                 panic!("Reconstruction succeeded when it should have failed. Check the debug output above.");
             },
             Err(error_message) => {
-                // The error should indicate not enough shards were available.
-                assert!(error_message.contains("Not enough shards to reconstruct chunk"));
+                // The error should indicate the chunk could not be read
+                assert!(error_message.contains("Failed to read encrypted chunk"));
             }
         }
     }
@@ -658,7 +578,7 @@ mod tests {
         let all_chunk_hashes: Vec<String> = manifest.chunks.iter().map(|c| c.hash.clone()).collect();
 
         // 4. Generate a Merkle proof for this chunk.
-        let (proof_indices, proof_hashes, total_leaves) = manager._generate_merkle_proof(
+        let (proof_indices, proof_hashes, total_leaves) = manager.generate_merkle_proof(
             &all_chunk_hashes,
             chunk_to_verify_index
         ).unwrap();
@@ -672,7 +592,7 @@ mod tests {
         let original_chunk_data = &buffer[..bytes_read];
 
         // 6. Verify the chunk using the proof.
-        let is_valid = manager._verify_chunk(
+        let is_valid = manager.verify_chunk(
             &manifest.merkle_root,
             chunk_info,
             original_chunk_data,
@@ -686,7 +606,7 @@ mod tests {
         // 7. Negative test: Verify that tampered data fails verification.
         let mut tampered_data = original_chunk_data.to_vec();
         tampered_data[0] = tampered_data[0].wrapping_add(1); // Modify one byte
-        let is_tampered_valid = manager._verify_chunk(&manifest.merkle_root, chunk_info, &tampered_data, &proof_indices, &proof_hashes, total_leaves).unwrap();
+        let is_tampered_valid = manager.verify_chunk(&manifest.merkle_root, chunk_info, &tampered_data, &proof_indices, &proof_hashes, total_leaves).unwrap();
         assert!(!is_tampered_valid, "Merkle proof verification should fail for tampered data.");
     }
 }
