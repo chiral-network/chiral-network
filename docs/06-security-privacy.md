@@ -2,7 +2,7 @@
 
 ## Security Overview
 
-The Chiral Network implements multiple layers of security to protect data integrity, user privacy, and network resilience. This document outlines security measures, threat models, and best practices for maintaining a secure distributed file storage network.
+The Ch1. **Fetch Chunks**: Download encrypted chunks from the network. Each chunk is requested by the hash of its encrypted content. 2. **Decrypt Chunks**: Decrypt the main file AES key, then use it to decrypt each downloaded chunk individually. 3. **Verify Chunk Integrity**: Hash the decrypted chunk and compare against the original chunk hash stored in the file's manifest. 4. **Verify Merkle Proof**: Use the provided Merkle proof to verify the chunk hash against the file's trusted root hash. 5. If all verifications pass, the chunk is valid and can be written to the output file. If verification fails, the data is considered corrupt or tampered with.Network implements multiple layers of security to protect data integrity, user privacy, and network resilience. This document outlines security measures, threat models, and best practices for maintaining a secure distributed file storage network.
 
 ## Cryptographic Foundations
 
@@ -41,9 +41,9 @@ Master Seed (BIP39 Mnemonic)
 
 ## File Security
 
-### Encryption and Sharding Process
+### Encryption and Chunking Process
 
-The network ensures both confidentiality and availability using a combination of encryption and erasure coding.
+The network ensures both confidentiality and availability using encryption and replication.
 
 ```
 1. File Input
@@ -54,14 +54,14 @@ The network ensures both confidentiality and availability using a combination of
     ↓
 4. For Each Original Chunk:
    a. Hash the original chunk to get its unique identifier (used for the Merkle tree)
-   b. Apply Reed-Solomon erasure coding to create N data shards and K parity shards (e.g., 10 data, 4 parity)
-   c. For Each Shard (data and parity):
-      - Encrypt the shard with AES-256-GCM using a unique nonce
-      - Hash the *encrypted* shard to get its storage hash (used for retrieval)
+   b. Encrypt and chunk file into 256 KB pieces
+   c. For Each Chunk:
+      - Encrypt the chunk with AES-256-GCM using a unique nonce
+      - Hash the *encrypted* chunk to get its storage hash (used for retrieval)
     ↓
 5. Encrypt the file's AES Key with the Recipient's Public Key
     ↓
-6. Store the individually encrypted shards across the network
+6. Store the individually encrypted chunks across the network
 ```
 
 ### File Integrity and Retrieval
@@ -79,14 +79,13 @@ Merkle Tree Structure (built from original chunk hashes):
 
 **Verification and Decryption Steps:**
 
-The process of retrieving and verifying a file is the reverse of the encryption process. Verification against the Merkle root can only happen *after* the original chunk has been reconstructed.
+The process of retrieving and verifying a file is the reverse of the encryption process. Verification against the Merkle root can only happen _after_ the original chunk has been reconstructed.
 
-1.  **Fetch Shards**: Download a sufficient number of encrypted shards (e.g., any 10 of the 14 total shards) from the network. Each shard is requested by the hash of its encrypted content.
-2.  **Decrypt Shards**: Decrypt the main file AES key, then use it to decrypt each downloaded shard individually.
-3.  **Reconstruct Chunk**: Use the Reed-Solomon algorithm to reconstruct the original chunk from the decrypted shards. This step corrects for any missing or unavailable shards.
-4.  **Verify Chunk Integrity**: Hash the fully reconstructed (plaintext) chunk.
-5.  **Verify Merkle Proof**: Compare the new hash against the original chunk hash stored in the file's manifest. Then, use the provided Merkle proof to verify this hash against the file's trusted root hash.
-6.  If all verifications pass, the chunk is valid and can be written to the output file. If verification fails, the data is considered corrupt or tampered with.
+1.  **Fetch Chunks**: Download encrypted chunks from the network. Each chunk is requested by the hash of its encrypted content.
+2.  **Decrypt Chunks**: Decrypt the main file AES key, then use it to decrypt each downloaded chunk individually.
+3.  **Verify Chunk Integrity**: Hash the fully decrypted (plaintext) chunk.
+4.  **Verify Merkle Proof**: Compare the new hash against the original chunk hash stored in the file's manifest. Then, use the provided Merkle proof to verify this hash against the file's trusted root hash.
+5.  If all verifications pass, the chunk is valid and can be written to the output file. If verification fails, the data is considered corrupt or tampered with.
 
 ### Access Control
 
