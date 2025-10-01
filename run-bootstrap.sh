@@ -26,6 +26,10 @@ while [[ $# -gt 0 ]]; do
             ENABLE_GETH=true
             shift
             ;;
+        --secret)
+            SECRET="$2"
+            shift 2
+            ;;
         --help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
@@ -56,7 +60,7 @@ if [ ! -f "target/release/chiral-network" ]; then
 fi
 
 # Prepare the command
-CMD="./target/release/chiral-network --headless --dht-port $DHT_PORT --log-level $LOG_LEVEL --show-multiaddr"
+CMD="./target/release/chiral-network --headless --is_bootstrap --dht-port $DHT_PORT --log-level $LOG_LEVEL --show-multiaddr"
 
 if [ "$ENABLE_GETH" = "true" ]; then
     CMD="$CMD --enable-geth"

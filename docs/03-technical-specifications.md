@@ -73,6 +73,18 @@
 | **Compression**        | Optional (zstd)  |
 | **Max File Size**      | 10 GB (per file) |
 | **Replication Factor** | 3 (configurable) |
+| **Erasure Coding**     | 10 data, 4 parity shards |
+
+### Erasure Coding
+
+To enhance data durability without the high storage overhead of full replication, the Chiral Network employs Reed-Solomon erasure coding. Each 256 KB file chunk is encoded into a set of shards, which are then distributed across the network.
+
+- **Data Shards**: Each chunk is divided into 10 data shards.
+- **Parity Shards**: An additional 4 parity shards are generated for each chunk.
+- **Total Shards**: This results in a total of 14 shards per chunk.
+- **Reconstruction**: The original chunk can be fully reconstructed from any 10 of these 14 shards. This means the network can tolerate the loss of up to 4 shards per chunk without any data loss.
+
+This (10, 4) erasure coding scheme provides a high degree of fault tolerance while being more space-efficient than simple replication. Each of these 14 shards is then treated as an individual piece of data to be stored on the network, subject to the standard replication factor for availability.
 
 ### Chunk Structure
 
@@ -105,37 +117,54 @@ Chunk Format:
 
 ### File Metadata Structure
 
+The system uses two primary JSON structures for metadata, which are derived directly from the Rust code.
+
+#### 1. DHT Record Specification
+
+This is the public record stored on the network for file discovery. It corresponds to the `FileMetadata` struct in `dht.rs`.
+
 ```json
 {
-  "version": "1.0",
-  "file_hash": "sha256_hash_of_complete_file",
-  "file_name": "example.pdf",
-  "file_size": 10485760,
-  "mime_type": "application/pdf",
-  "chunk_size": 262144,
-  "total_chunks": 40,
+  "fileHash": "string (The Merkle Root of the file, used as the unique identifier)",
+  "fileName": "string",
+  "fileSize": "u64 (Total size of the original file in bytes)",
+  "seeders": [
+    "string (A list of PeerIDs that are hosting the file)"
+  ],
+  "createdAt": "u64 (Unix timestamp of creation)",
+  "mimeType": "string | null",
+  "isEncrypted": "boolean",
+  "encryptionMethod": "string | null (e.g., 'AES-256-GCM')",
+  "keyFingerprint": "string | null",
+  "version": "u32 | null (For file versioning)",
+}
+```
+
+#### 2. File Manifest Specification
+
+This is a client-side structure, generated upon upload and required for download. It contains all information needed to reassemble and decrypt the file from its constituent shards. It corresponds to the `FileManifest` struct in `manager.rs`.
+
+```json
+{
+  "merkleRoot": "string (hex)",
   "chunks": [
     {
-      "index": 0,
-      "hash": "chunk_sha256_hash",
-      "size": 262144,
-      "storage_nodes": ["node_id_1", "node_id_2", "node_id_3"]
+      "index": "u32 (The sequential order of the chunk)",
+      "hash": "string (hex, The SHA-256 hash of the original, unencrypted chunk data)",
+      "size": "usize (The size of the original chunk in bytes)",
+      "shards": [
+        "string (hex, The hash of encrypted shard 0)",
+        "string (hex, The hash of encrypted shard 1)",
+        "...",
+        "string (hex, The hash of encrypted shard 13)"
+      ],
+      "encryptedSize": "usize (The total size of all 14 encrypted shards in bytes)"
     }
   ],
-  "encryption": {
-    "algorithm": "AES-256-GCM",
-    "key_derivation": "PBKDF2",
-    "iterations": 100000
-  },
-  "timestamps": {
-    "created": 1234567890,
-    "modified": 1234567890,
-    "accessed": 1234567890
-  },
-  "permissions": {
-    "owner": "wallet_address",
-    "public": false,
-    "shared_with": []
+  "encryptedKeyBundle": {
+    "ephemeralPublicKey": "Vec<u8> (The ephemeral public key from the Diffie-Hellman exchange)",
+    "nonce": "Vec<u8> (The nonce used for encrypting the AES key)",
+    "encryptedKey": "Vec<u8> (The AES file key, encrypted)"
   }
 }
 ```
@@ -329,13 +358,13 @@ Handshake {
 
 ### File Hash Format
 
-```
-Format: cn1<version><hash>
-Example: cn1a7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1
-- Prefix: "cn1" (3 chars)
-- Version: "a" (1 char)
-- Hash: SHA-256 in hex (64 chars)
-```
+The file hash is the hex-encoded SHA-256 Merkle root of the file's original chunks. It is a standard 64-character hexadecimal string.
+
+**Format**: `<merkle_root_hash>`
+**Example**: `7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a17d8f9e8c7b6a5d4f3e2d1c0`
+- **Hash**: SHA-256 Merkle root in hex (64 chars)
+
+(Note: The `version` of a file is tracked as a separate field in the DHT Record, not as part of the hash string itself.)
 
 ### Address Format
 
