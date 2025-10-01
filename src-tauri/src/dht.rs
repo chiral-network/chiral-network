@@ -766,8 +766,8 @@ async fn run_dht_node(
                         //         return;
                         //     }
                         // };
-                        metadata.file_hash = root_cid.to_string();
                         metadata.cids = Some(block_cids.iter().map(|c| c.to_string()).collect());
+                        metadata.file_data.clear(); // clear out the actual file data to save space in dht
 
                         let root_block_data = match serde_json::to_vec(&metadata) {
                             Ok(data) => data,
@@ -778,20 +778,19 @@ async fn run_dht_node(
                         };
 
                         let root_cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&root_block_data));
+                        metadata.file_hash = root_cid.to_string();
 
-                        // store this new root block
-                        match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(root_cid, root_links_data.clone())
-                        {
-                            Ok(_) => {},
-                            Err(e) => {
-                                error!("failed to store root block {}: {}", root_cid, e);
-                                let _ = event_tx.send(DhtEvent::Error(format!("failed to store root block {}: {}", root_cid, e))).await;
-                                return;
-                            }
-                        };
+                        // store this new root block in dht
 
                         let key = kad::RecordKey::new(&metadata.file_hash.as_bytes());
-                        match swarm.behaviour_mut().kademlia.start_providing(key) {
+                        let record = Record {
+                                    key,
+                                    value: root_block_data,
+                                    publisher: Some(peer_id),
+                                    expires: None,
+                                };
+
+                        match swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One){
                             Ok(query_id) => {
                                 info!("started providing file: {}, query id: {:?}", metadata.file_hash, query_id);
                             }
@@ -2002,43 +2001,45 @@ impl DhtService {
     }
 
     /// Prepare a new FileMetadata for upload (auto-increment version, set parent_hash)
-    pub async fn prepare_versioned_metadata(
-        &self,
-        file_hash: String,
-        file_name: String,
-        file_size: u64,
-        file_data: Vec<u8>,
-        created_at: u64,
-        mime_type: Option<String>,
-        is_encrypted: bool,
-        encryption_method: Option<String>,
-        key_fingerprint: Option<String>,
-    ) -> Result<FileMetadata, String> {
-        let latest = self
-            .get_latest_version_by_file_name(file_name.clone())
-            .await?;
-        let (version, parent_hash) = match latest {
-            Some(ref prev) => (
-                prev.version.map(|v| v + 1).unwrap_or(2),
-                Some(prev.file_hash.clone()),
-            ),
-            None => (1, None),
-        };
-        Ok(FileMetadata {
-            file_hash,
-            file_name,
-            file_size,
-            file_data,
-            seeders: vec![],
-            created_at,
-            mime_type,
-            is_encrypted,
-            encryption_method,
-            key_fingerprint,
-            version: Some(version),
-            parent_hash,
-        })
-    }
+    // pub async fn prepare_versioned_metadata(
+    //     &self,
+    //     file_hash: String,
+    //     file_name: String,
+    //     file_size: u64,
+    //     file_data: Vec<u8>,
+    //     created_at: u64,
+    //     mime_type: Option<String>,
+    //     is_encrypted: bool,
+    //     encryption_method: Option<String>,
+    //     key_fingerprint: Option<String>,
+    // ) -> Result<FileMetadata, String> {
+    //     let latest = self
+    //         .get_latest_version_by_file_name(file_name.clone())
+    //         .await?;
+    //     let (version, parent_hash) = match latest {
+    //         Some(ref prev) => (
+    //             prev.version.map(|v| v + 1).unwrap_or(2),
+    //             Some(prev.file_hash.clone()),
+    //         ),
+    //         None => (1, None),
+    //     };
+    //     Ok(FileMetadata {
+    //         file_hash,
+    //         file_name,
+    //         file_size,
+    //         file_data,
+    //         seeders: vec![],
+    //         created_at,
+    //         mime_type,
+    //         is_encrypted,
+    //         encryption_method,
+    //         key_fingerprint,
+    //         version: Some(version),
+    //         parent_hash,
+    //         cids: vec![],
+    //     })
+    // }
+    
     pub async fn search_file(&self, file_hash: String) -> Result<(), String> {
         self.cmd_tx
             .send(DhtCommand::SearchFile(file_hash))

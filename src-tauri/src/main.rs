@@ -254,51 +254,51 @@ async fn get_webrtc_connection_status(
     }
 }
 
-#[tauri::command]
-async fn upload_versioned_file(
-    state: State<'_, AppState>,
-    file_name: String,
-    file_path: String,
-    file_size: u64,
-    mime_type: Option<String>,
-    is_encrypted: bool,
-    encryption_method: Option<String>,
-    key_fingerprint: Option<String>,
-) -> Result<FileMetadata, String> {
-    let dht_opt = { state.dht.lock().await.as_ref().cloned() };
-    if let Some(dht) = dht_opt {
-        // --- FIX: Calculate file_hash using file_transfer helper
-        let file_data = tokio::fs::read(&file_path)
-            .await
-            .map_err(|e| e.to_string())?;
-        let file_hash = FileTransferService::calculate_file_hash(&file_data);
+// #[tauri::command]
+// async fn upload_versioned_file(
+//     state: State<'_, AppState>,
+//     file_name: String,
+//     file_path: String,
+//     file_size: u64,
+//     mime_type: Option<String>,
+//     is_encrypted: bool,
+//     encryption_method: Option<String>,
+//     key_fingerprint: Option<String>,
+// ) -> Result<FileMetadata, String> {
+//     let dht_opt = { state.dht.lock().await.as_ref().cloned() };
+//     if let Some(dht) = dht_opt {
+//         // --- FIX: Calculate file_hash using file_transfer helper
+//         let file_data = tokio::fs::read(&file_path)
+//             .await
+//             .map_err(|e| e.to_string())?;
+//         let file_hash = FileTransferService::calculate_file_hash(&file_data);
 
-        let created_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+//         let created_at = std::time::SystemTime::now()
+//             .duration_since(std::time::UNIX_EPOCH)
+//             .unwrap()
+//             .as_secs();
 
-        // Use the DHT versioning helper to fill in parent_hash/version
-        let metadata = dht
-            .prepare_versioned_metadata(
-                file_hash.clone(),
-                file_name,
-                file_size,
-                file_data,
-                created_at,
-                mime_type,
-                is_encrypted,
-                encryption_method,
-                key_fingerprint,
-            )
-            .await?;
+//         // Use the DHT versioning helper to fill in parent_hash/version
+//         let metadata = dht
+//             .prepare_versioned_metadata(
+//                 file_hash.clone(),
+//                 file_name,
+//                 file_size,
+//                 file_data,
+//                 created_at,
+//                 mime_type,
+//                 is_encrypted,
+//                 encryption_method,
+//                 key_fingerprint,
+//             )
+//             .await?;
 
-        dht.publish_file(metadata.clone()).await?;
-        Ok(metadata)
-    } else {
-        Err("DHT not running".into())
-    }
-}
+//         dht.publish_file(metadata.clone()).await?;
+//         Ok(metadata)
+//     } else {
+//         Err("DHT not running".into())
+//     }
+// }
 
 /// Checks if the Geth RPC endpoint is ready to accept connections.
 async fn is_geth_rpc_ready(state: &State<'_, AppState>) -> bool {
@@ -692,6 +692,7 @@ async fn publish_file_metadata(
             key_fingerprint: None,
             parent_hash: None,
             version: Some(1),
+            cids: None
         };
 
         dht.publish_file(metadata).await
@@ -1252,6 +1253,7 @@ async fn upload_file_to_network(
                 key_fingerprint: None,
                 parent_hash: None,
                 version: Some(1),
+                cids: None
             };
 
             match dht.publish_file(metadata.clone()).await {
@@ -1536,6 +1538,7 @@ async fn upload_file_data_to_network(
                 key_fingerprint: None,
                 parent_hash: None,
                 version: Some(1),
+                cids: None
             };
 
             if let Err(e) = dht.publish_file(metadata).await {
@@ -2297,7 +2300,7 @@ fn main() {
             select_peers_with_strategy,
             set_peer_encryption_support,
             cleanup_inactive_peers,
-            upload_versioned_file,
+            // upload_versioned_file,
             get_file_versions_by_name,
             establish_webrtc_connection,
             send_webrtc_file_request,
