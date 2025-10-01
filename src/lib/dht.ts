@@ -181,6 +181,31 @@ export class DhtService {
     }
   }
 
+  async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
+    try {
+      // Start listening for the published_file event
+      const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {
+        const unlistenPromise = listen<FileMetadata>(
+          "file_content",
+          (event) => {
+            resolve(event.payload);
+            // Unsubscribe once we got the event
+            unlistenPromise.then((unlistenFn) => unlistenFn());
+          }
+        );
+      });
+
+      // Trigger the backend upload
+      await invoke("download_blocks_from_network", { fileMetadata });
+
+      // Wait until the event arrives
+      return await metadataPromise;
+    } catch (error) {
+      console.error("Failed to publish file:", error);
+      throw error;
+    }
+  }
+
   async searchFile(fileHash: string): Promise<void> {
     if (!this.peerId) {
       throw new Error("DHT not started");

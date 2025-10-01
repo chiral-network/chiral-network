@@ -212,7 +212,7 @@
       mimeType: version.mime_type,
       encryptionMethod: version.encryption_method,
       keyFingerprint: version.key_fingerprint,
-      version: version.version
+      // version: version.version
     };
     
     dispatch('download', metadata);

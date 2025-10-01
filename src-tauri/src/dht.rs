@@ -148,6 +148,7 @@ struct DhtBehaviour {
 pub enum DhtCommand {
     PublishFile(FileMetadata),
     SearchFile(String),
+    DownloadFile(FileMetadata),
     ConnectPeer(String),
     DisconnectPeer(PeerId),
     GetPeerCount(oneshot::Sender<usize>),
@@ -800,6 +801,11 @@ async fn run_dht_node(
                             }
                         }
                         let _ = event_tx.send(DhtEvent::PublishedFile(metadata)).await;
+                    }
+                    Some(DhtCommand::DownloadFile(file_metadata)) =>{
+                        // todo: get cids from file_metadata, then use bitswap query and in
+                        // the bitswap protocol events, eventually report back to frontend (through an event)
+                        // so need to add new event to be processed in main.rs loop as well.
                     }
 
                     Some(DhtCommand::StopPublish(file_hash)) => {
@@ -2035,6 +2041,13 @@ impl DhtService {
     //         cids: vec![],
     //     })
     // }
+
+    pub async fn download_file(&self, file_metadata: FileMetadata) -> Result<(), String> {
+        self.cmd_tx
+            .send(DhtCommand::DownloadFile(file_metadata))
+            .await
+            .map_err(|e| e.to_string())
+    }
 
     pub async fn search_file(&self, file_hash: String) -> Result<(), String> {
         self.cmd_tx

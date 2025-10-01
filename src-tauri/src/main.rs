@@ -1273,6 +1273,25 @@ async fn upload_file_to_network(
     }
 }
 
+#[tauri::command]
+async fn download_blocks_from_network(
+    state: State<'_, AppState>,
+    file_metadata: FileMetadata,
+) -> Result<(), String> {
+    {
+        let dht = {
+            let dht_guard = state.dht.lock().await;
+            dht_guard.as_ref().cloned()
+        };
+
+        if let Some(dht) = dht {
+            dht.download_file(file_metadata).await
+        } else {
+            Err("DHT node is not running".to_string())
+        }
+    }
+}
+
 // #[tauri::command]
 // async fn download_file_from_network(
 //     state: State<'_, AppState>,
@@ -1497,6 +1516,7 @@ async fn upload_file_to_network(
 //         Err("File transfer service is not running".to_string())
 //     }
 // }
+
 #[tauri::command]
 async fn upload_file_data_to_network(
     state: State<'_, AppState>,
