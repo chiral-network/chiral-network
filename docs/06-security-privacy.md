@@ -2,7 +2,7 @@
 
 ## Security Overview
 
-The Ch1. **Fetch Chunks**: Download encrypted chunks from the network. Each chunk is requested by the hash of its encrypted content. 2. **Decrypt Chunks**: Decrypt the main file AES key, then use it to decrypt each downloaded chunk individually. 3. **Verify Chunk Integrity**: Hash the decrypted chunk and compare against the original chunk hash stored in the file's manifest. 4. **Verify Merkle Proof**: Use the provided Merkle proof to verify the chunk hash against the file's trusted root hash. 5. If all verifications pass, the chunk is valid and can be written to the output file. If verification fails, the data is considered corrupt or tampered with.Network implements multiple layers of security to protect data integrity, user privacy, and network resilience. This document outlines security measures, threat models, and best practices for maintaining a secure distributed file storage network.
+The Chiral Network implements multiple layers of security to protect data integrity, user privacy, and network resilience. This document outlines security measures, threat models, and best practices for maintaining a secure distributed file storage network.
 
 ## Cryptographic Foundations
 
@@ -63,6 +63,8 @@ The network ensures both confidentiality and availability using encryption and r
     ↓
 6. Store the individually encrypted chunks across the network
 ```
+
+
 
 ### File Integrity and Retrieval
 
