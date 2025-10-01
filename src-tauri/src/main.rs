@@ -39,7 +39,7 @@ use std::process::Command;
 use std::{
     io::{BufRead, BufReader},
     sync::Arc,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use sysinfo::{Components, System, MINIMUM_CPU_UPDATE_INTERVAL};
 use systemstat::{Platform, System as SystemStat};
@@ -934,7 +934,7 @@ fn get_cpu_temperature() -> Option<f32> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static LAST_UPDATE: AtomicU64 = AtomicU64::new(0);
 
-    let now = Instant::now();
+    let now = SystemTime::now();
     let now_secs = now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
     let last_update = LAST_UPDATE.load(Ordering::Relaxed);
 
