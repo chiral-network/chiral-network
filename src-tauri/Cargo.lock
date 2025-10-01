@@ -962,6 +962,7 @@ dependencies = [
  "beetswap",
  "blockstore",
  "cid",
+ "chrono",
  "clap",
  "ctr",
  "directories",
@@ -975,11 +976,14 @@ dependencies = [
  "hmac",
  "lazy_static",
  "libp2p",
+ "md5",
+ "once_cell",
  "multihash-codetable",
  "pbkdf2 0.12.2",
  "rand 0.8.5",
  "reed-solomon-erasure",
  "reqwest 0.11.27",
+ "rlp",
  "rs_merkle",
  "secp256k1",
  "serde",
@@ -1018,8 +1022,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "145052bdd345b87320e369255277e3fb5152762ad123a901ef5c262dd38fe8d2"
 dependencies = [
  "iana-time-zone",
+ "js-sys",
  "num-traits",
  "serde",
+ "wasm-bindgen",
  "windows-link 0.2.0",
 ]
 
@@ -5811,6 +5817,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rlp"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb919243f34364b6bd2fc10ef797edbfa75f33c252e7998527479c6d6b47e1ec"
+dependencies = [
+ "bytes",
+ "rustc-hex",
+]
+
+[[package]]
 name = "ripemd"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5881,6 +5897,12 @@ name = "rustc-hash"
 version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "357703d41365b4b27c590e3ed91eabb1b663f07c4c084095e60cbed4362dff0d"
+
+[[package]]
+name = "rustc-hex"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e75f6a532d0fd9f7f13144f392b6ad56a32696bfcd9c78f797f16bbb6f072d6"
 
 [[package]]
 name = "rustc_version"
