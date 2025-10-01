@@ -21,7 +21,7 @@ mod peer_selection;
 mod pool;
 mod proxy_latency;
 mod stream_auth;
-mod transaction;
+mod transaction_services;
 mod webrtc_service;
 
 use crate::commands::auth::{
@@ -32,6 +32,10 @@ use crate::commands::bootstrap::get_bootstrap_nodes_command;
 use crate::commands::proxy::{
     disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
     proxy_echo, proxy_remove, ProxyNode,
+};
+use crate::commands::transaction_commands::{
+    broadcast_transaction, estimate_transaction, get_address_nonce, get_network_gas_price,
+    get_network_status, get_transaction_history, get_transaction_status,
 };
 use crate::stream_auth::{
     AuthMessage, HmacKeyExchangeConfirmation, HmacKeyExchangeRequest, HmacKeyExchangeResponse,
@@ -4002,7 +4006,15 @@ fn main() {
             get_relay_reputation_stats,
             set_relay_alias,
             get_relay_alias,
-            get_multiaddresses
+            get_multiaddresses,
+            // Transaction commands
+            broadcast_transaction,
+            get_transaction_status,
+            get_transaction_history,
+            get_address_nonce,
+            estimate_transaction,
+            get_network_gas_price,
+            get_network_status
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())

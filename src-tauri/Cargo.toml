@@ -67,7 +67,7 @@ tokio-util = { version = "0.7", features = ["compat"] }
 tokio-socks = "0.5"
 once_cell = "1.19"
 rlp = "0.5"
-chrono = "0.4"
+md5 = "0.8.0"
 
 # Bitswap and related dependencies
 beetswap = { git = "https://github.com/totoro-ming-lin/beetswap.git", branch = "older-version" }
