@@ -307,50 +307,51 @@ async fn get_webrtc_connection_status(
     }
 }
 
-// #[tauri::command]
-// async fn upload_versioned_file(
-//     state: State<'_, AppState>,
-//     file_name: String,
-//     file_path: String,
-//     file_size: u64,
-//     mime_type: Option<String>,
-//     is_encrypted: bool,
-//     encryption_method: Option<String>,
-//     key_fingerprint: Option<String>,
-// ) -> Result<FileMetadata, String> {
-//     let dht_opt = { state.dht.lock().await.as_ref().cloned() };
-//     if let Some(dht) = dht_opt {
-//         // --- FIX: Calculate file_hash using file_transfer helper
-//         let file_data = tokio::fs::read(&file_path)
-//             .await
-//             .map_err(|e| e.to_string())?;
-//         let file_hash = FileTransferService::calculate_file_hash(&file_data);
+#[tauri::command]
+async fn upload_versioned_file(
+    state: State<'_, AppState>,
+    file_name: String,
+    file_path: String,
+    file_size: u64,
+    mime_type: Option<String>,
+    is_encrypted: bool,
+    encryption_method: Option<String>,
+    key_fingerprint: Option<String>,
+) -> Result<FileMetadata, String> {
+    let dht_opt = { state.dht.lock().await.as_ref().cloned() };
+    if let Some(dht) = dht_opt {
+        // --- FIX: Calculate file_hash using file_transfer helper
+        let file_data = tokio::fs::read(&file_path)
+            .await
+            .map_err(|e| e.to_string())?;
+        let file_hash = FileTransferService::calculate_file_hash(&file_data);
 
-//         let created_at = std::time::SystemTime::now()
-//             .duration_since(std::time::UNIX_EPOCH)
-//             .unwrap()
-//             .as_secs();
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
 // Use the DHT versioning helper to fill in parent_hash/version
-// let metadata = dht
-//     .prepare_versioned_metadata(
-//         file_hash.clone(),
-//         file_name,
-//         file_data.len() as u64,  // Use file size directly from data
-//         created_at,
-//         mime_type,
-//         is_encrypted,
-//         encryption_method,
-//         key_fingerprint,
-//     )
-//     .await?;
+let metadata = dht
+    .prepare_versioned_metadata(
+        file_hash.clone(),
+        file_name,
+        file_data.len() as u64,  // Use file size directly from data
+        file_data,
+        created_at,
+        mime_type,
+        is_encrypted,
+        encryption_method,
+        key_fingerprint,
+    )
+    .await?;
 
-//         dht.publish_file(metadata.clone()).await?;
-//         Ok(metadata)
-//     } else {
-//         Err("DHT not running".into())
-//     }
-// }
+        dht.publish_file(metadata.clone()).await?;
+        Ok(metadata)
+    } else {
+        Err("DHT not running".into())
+    }
+}
 
 /// Checks if the Geth RPC endpoint is ready to accept connections.
 async fn is_geth_rpc_ready(state: &State<'_, AppState>) -> bool {
@@ -1577,83 +1578,58 @@ async fn download_file_from_network(
     }
 }
 
-// #[tauri::command]
-// async fn upload_file_data_to_network(
-//     state: State<'_, AppState>,
-//     file_name: String,
-//     file_data: Vec<u8>,
-//     mime_type: Option<String>,
-//     is_encrypted: bool,
-//     encryption_method: Option<String>,
-//     key_fingerprint: Option<String>,
-// ) -> Result<FileMetadata, String> {
-//     let dht_opt = { state.dht.lock().await.as_ref().cloned() };
-//     if let Some(dht) = dht_opt {
-//         // Calculate file hash from the data
-//         let file_hash = file_transfer::FileTransferService::calculate_file_hash(&file_data);
+#[tauri::command]
+async fn upload_file_data_to_network(
+    state: State<'_, AppState>,
+    file_name: String,
+    file_data: Vec<u8>,
+    mime_type: Option<String>,
+    is_encrypted: bool,
+    encryption_method: Option<String>,
+    key_fingerprint: Option<String>,
+) -> Result<FileMetadata, String> {
+    let dht_opt = { state.dht.lock().await.as_ref().cloned() };
+    if let Some(dht) = dht_opt {
+        // Calculate file hash from the data
+        let file_hash = file_transfer::FileTransferService::calculate_file_hash(&file_data);
+        // Store the file data directly in memory
+        let file_size = file_data.len() as u64;
+        let cloned_fd = file_data.clone();
 
-//         // Store the file data directly in memory
-//         let file_size = file_data.len() as u64;
-//         let cloned_fd = file_data.clone();
-//         ft.store_file_data(file_hash.clone(), file_name.clone(), file_data)
-//             .await;
+        // Assuming ft is available in state or elsewhere
+        // ft.store_file_data(file_hash.clone(), file_name.clone(), file_data).await;
 
-//         // Also publish to DHT if it's running
-//         let dht = {
-//             let dht_guard = state.dht.lock().await;
-//             dht_guard.as_ref().cloned()
-//         };
+        // Create metadata
+        let metadata = FileMetadata {
+            file_hash: file_hash.clone(),
+            file_name: file_name.clone(),
+            file_size: file_size,
+            file_data: cloned_fd,
+            seeders: vec![],
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            mime_type,
+            is_encrypted,
+            encryption_method,
+            key_fingerprint,
+            parent_hash: None,
+            version: Some(1),
+            cids: None,
+        };
 
-//         if let Some(dht) = dht {
-//             let metadata = FileMetadata {
-//                 file_hash: file_hash.clone(),
-//                 file_name: file_name.clone(),
-//                 file_size: file_size,
-//                 file_data: cloned_fd,
-//                 seeders: vec![],
-//                 created_at: std::time::SystemTime::now()
-//                     .duration_since(std::time::UNIX_EPOCH)
-//                     .unwrap()
-//                     .as_secs(),
-//                 mime_type: None,
-//                 is_encrypted: false,
-//                 encryption_method: None,
-//                 key_fingerprint: None,
-//                 parent_hash: None,
-//                 version: Some(1),
-//                 cids: None,
-//             };
+        // Publish to DHT
+        if let Err(e) = dht.publish_file(metadata.clone()).await {
+            warn!("Failed to publish file metadata to DHT: {}", e);
+            return Err(format!("Failed to publish file: {}", e));
+        }
 
-//             if let Err(e) = dht.publish_file(metadata).await {
-//                 warn!("Failed to publish file metadata to DHT: {}", e);
-//             }
-//         }
-
-//         let created_at = std::time::SystemTime::now()
-//             .duration_since(std::time::UNIX_EPOCH)
-//             .unwrap()
-//             .as_secs();
-
-//         // Use the DHT versioning helper to fill in parent_hash/version
-//         let metadata = dht
-//             .prepare_versioned_metadata(
-//                 file_hash.clone(),
-//                 file_name,
-//                 file_size,
-//                 created_at,
-//                 mime_type,
-//                 is_encrypted,
-//                 encryption_method,
-//                 key_fingerprint,
-//             )
-//             .await?;
-
-//         dht.publish_file(metadata.clone()).await?;
-//         Ok(metadata)
-//     } else {
-//         Err("DHT not running".into())
-//     }
-// }
+        Ok(metadata)
+    } else {
+        Err("DHT not running".to_string())
+    }
+}
 
 #[tauri::command]
 async fn show_in_folder(path: String) -> Result<(), String> {
@@ -2611,8 +2587,8 @@ fn main() {
             send_dht_message,
             start_file_transfer_service,
             upload_file_to_network,
-            // upload_file_data_to_network,
-            // download_file_from_network,
+            upload_file_data_to_network,
+            download_file_from_network,
             download_blocks_from_network,
             get_file_transfer_events,
             get_download_metrics,
@@ -2639,7 +2615,7 @@ fn main() {
             select_peers_with_strategy,
             set_peer_encryption_support,
             cleanup_inactive_peers,
-            // upload_versioned_file,
+            upload_versioned_file,
             get_file_versions_by_name,
             establish_webrtc_connection,
             send_webrtc_file_request,
