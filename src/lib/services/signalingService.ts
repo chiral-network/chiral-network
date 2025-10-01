@@ -2,11 +2,12 @@ import { writable, type Writable } from "svelte/store";
 import { invoke } from "@tauri-apps/api/core";
 
 function createClientId(): string {
-  const randomUUID = globalThis?.crypto?.randomUUID;
-  if (typeof randomUUID === "function") {
-    return randomUUID();
+  // Check if crypto.randomUUID exists and call it directly to preserve 'this' context
+  if (globalThis?.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
   }
 
+  // Fallback for environments without crypto.randomUUID
   const timePart = Date.now().toString(36);
   const randomPart = Math.random().toString(36).slice(2, 10);
   return `client-${timePart}-${randomPart}`;
