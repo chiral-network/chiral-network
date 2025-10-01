@@ -2,9 +2,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { AppSettings } from "./stores";
-import { writeFile, BaseDirectory } from "@tauri-apps/plugin-fs";
-// import { homeDir } from "@tauri-apps/api/path";
-import { join } from "path";
+import { writeFile } from "@tauri-apps/plugin-fs";
+import { homeDir, join } from "@tauri-apps/api/path";
 // Default bootstrap nodes for network connectivity
 export const DEFAULT_BOOTSTRAP_NODES = [
   "/ip4/145.40.118.135/tcp/4001/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
@@ -210,11 +209,11 @@ export class DhtService {
               // Construct full file path
               let resolvedStoragePath = storagePath;
 
-              // if (storagePath.startsWith("~")) {
-              //   const home = await homeDir();
-              //   resolvedStoragePath = storagePath.replace("~", home);
-              // }
-              resolvedStoragePath = join(storagePath, event.payload.fileName);
+              if (storagePath.startsWith("~")) {
+                const home = await homeDir();
+                resolvedStoragePath = storagePath.replace("~", home);
+              }
+              resolvedStoragePath += "/" + event.payload.fileName;
               // Convert to Uint8Array if needed
               const fileData =
                 event.payload.fileData instanceof Uint8Array
