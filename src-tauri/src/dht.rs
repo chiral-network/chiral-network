@@ -70,7 +70,7 @@ pub struct FileMetadata {
     pub file_hash: String, // This is the Merkle Root
     pub file_name: String,
     pub file_size: u64,
-    pub file_data: Vec<u8>, // Added field to hold the actual file data
+    pub file_data: Vec<u8>, // holds the actual file data
     pub seeders: Vec<String>,
     pub created_at: u64,
     pub mime_type: Option<String>,
@@ -83,6 +83,7 @@ pub struct FileMetadata {
     // --- VERSIONING FIELDS ---
     pub version: Option<u32>,
     pub parent_hash: Option<String>,
+    pub cids: Option<Vec<String>>, // list of CIDs for all chunks
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -757,16 +758,26 @@ async fn run_dht_node(
                         }
 
                         // create a root block that links to all data block cids
-                        let root_links_data = match serde_json::to_vec(&block_cids) {
+                        // let root_links_data = match serde_json::to_vec(&block_cids) {
+                        //     Ok(data) => data,
+                        //     Err(e) => {
+                        //         error!("failed to serialize block cids for root: {}", e);
+                        //         let _ = event_tx.send(DhtEvent::Error(format!("failed to serialize block cids for root: {}", e))).await;
+                        //         return;
+                        //     }
+                        // };
+                        metadata.file_hash = root_cid.to_string();
+                        metadata.cids = Some(block_cids.iter().map(|c| c.to_string()).collect());
+
+                        let root_block_data = match serde_json::to_vec(&metadata) {
                             Ok(data) => data,
                             Err(e) => {
-                                error!("failed to serialize block cids for root: {}", e);
-                                let _ = event_tx.send(DhtEvent::Error(format!("failed to serialize block cids for root: {}", e))).await;
+                                eprintln!("Failed to serialize metadata: {}", e);
                                 return;
                             }
                         };
 
-                        let root_cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&root_links_data));
+                        let root_cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&root_block_data));
 
                         // store this new root block
                         match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(root_cid, root_links_data.clone())
@@ -778,9 +789,6 @@ async fn run_dht_node(
                                 return;
                             }
                         };
-
-                        // update metadata.file_hash with the new root cid
-                        metadata.file_hash = root_cid.to_string();
 
                         let key = kad::RecordKey::new(&metadata.file_hash.as_bytes());
                         match swarm.behaviour_mut().kademlia.start_providing(key) {
