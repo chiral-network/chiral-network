@@ -2067,44 +2067,44 @@ impl DhtService {
     }
 
     /// Prepare a new FileMetadata for upload (auto-increment version, set parent_hash)
-    // pub async fn prepare_versioned_metadata(
-    //     &self,
-    //     file_hash: String,
-    //     file_name: String,
-    //     file_size: u64,
-    //     file_data: Vec<u8>,
-    //     created_at: u64,
-    //     mime_type: Option<String>,
-    //     is_encrypted: bool,
-    //     encryption_method: Option<String>,
-    //     key_fingerprint: Option<String>,
-    // ) -> Result<FileMetadata, String> {
-    //     let latest = self
-    //         .get_latest_version_by_file_name(file_name.clone())
-    //         .await?;
-    //     let (version, parent_hash) = match latest {
-    //         Some(ref prev) => (
-    //             prev.version.map(|v| v + 1).unwrap_or(2),
-    //             Some(prev.file_hash.clone()),
-    //         ),
-    //         None => (1, None),
-    //     };
-    //     Ok(FileMetadata {
-    //         file_hash,
-    //         file_name,
-    //         file_size,
-    //         file_data,
-    //         seeders: vec![],
-    //         created_at,
-    //         mime_type,
-    //         is_encrypted,
-    //         encryption_method,
-    //         key_fingerprint,
-    //         version: Some(version),
-    //         parent_hash,
-    //         cids: vec![],
-    //     })
-    // }
+    pub async fn prepare_versioned_metadata(
+        &self,
+        file_hash: String,
+        file_name: String,
+        file_size: u64,
+        file_data: Vec<u8>,
+        created_at: u64,
+        mime_type: Option<String>,
+        is_encrypted: bool,
+        encryption_method: Option<String>,
+        key_fingerprint: Option<String>,
+    ) -> Result<FileMetadata, String> {
+        let latest = self
+            .get_latest_version_by_file_name(file_name.clone())
+            .await?;
+        let (version, parent_hash) = match latest {
+            Some(ref prev) => (
+                prev.version.map(|v| v + 1).unwrap_or(2),
+                Some(prev.file_hash.clone()),
+            ),
+            None => (1, None),
+        };
+        Ok(FileMetadata {
+            file_hash,
+            file_name,
+            file_size,
+            file_data,
+            seeders: vec![],
+            created_at,
+            mime_type,
+            is_encrypted,
+            encryption_method,
+            key_fingerprint,
+            version: Some(version),
+            parent_hash,
+            cids: None,
+        })
+    }
 
     pub async fn download_file(&self, file_metadata: FileMetadata) -> Result<(), String> {
         self.cmd_tx
