@@ -642,11 +642,14 @@
     poolError = '';
     
     try {
+      console.log('🔍 Invoking discover_mining_pools command...');
       const pools = await invoke('discover_mining_pools') as MiningPool[];
+      console.log('✅ Received pools:', pools);
       availablePools = pools;
       showPoolList = true;
       await invoke('update_pool_discovery'); // Update pool stats
     } catch (e) {
+      console.error('❌ Pool discovery error:', e);
       poolError = String(e);
     } finally {
       isDiscovering = false;
@@ -668,7 +671,7 @@
     
     try {
       const joinedInfo = await invoke('join_mining_pool', { 
-        pool_id: pool.id, 
+        poolId: pool.id, 
         address: $etcAccount.address 
       }) as JoinedPoolInfo;
       

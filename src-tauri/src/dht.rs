@@ -1682,7 +1682,14 @@ impl DhtService {
             // ensures bootstrap node only keeps active peers in its routing table
             kad_cfg.set_periodic_bootstrap_interval(None);
         } else {
-            kad_cfg.set_periodic_bootstrap_interval(Some(bootstrap_interval));
+            // Only enable periodic bootstrap if we have bootstrap nodes
+            // This prevents "No known peers" warnings when running standalone
+            if !bootstrap_nodes.is_empty() {
+                kad_cfg.set_periodic_bootstrap_interval(Some(bootstrap_interval));
+            } else {
+                kad_cfg.set_periodic_bootstrap_interval(None);
+                info!("Periodic bootstrap disabled - no bootstrap nodes configured");
+            }
         }
 
         // Align with docs: shorter queries, higher replication

@@ -188,49 +188,6 @@ async fn list_keystore_accounts() -> Result<Vec<String>, String> {
     Ok(keystore.list_accounts())
 }
 
-#[tauri::command(rename = "discover_mining_pools")]
-async fn discover_mining_pools_command() -> Result<Vec<pool::MiningPool>, String> {
-    pool::discover_mining_pools().await
-}
-
-#[tauri::command(rename = "create_mining_pool")]
-async fn create_mining_pool_command(
-    address: String,
-    name: String,
-    description: String,
-    fee_percentage: f64,
-    min_payout: f64,
-    payment_method: String,
-    region: String,
-) -> Result<pool::MiningPool, String> {
-    pool::create_mining_pool(address, name, description, fee_percentage, min_payout, payment_method, region).await
-}
-
-#[tauri::command(rename = "join_mining_pool")]
-async fn join_mining_pool_command(pool_id: String, address: String) -> Result<pool::JoinedPoolInfo, String> {
-    pool::join_mining_pool(pool_id, address).await
-}
-
-#[tauri::command(rename = "leave_mining_pool")]
-async fn leave_mining_pool_command() -> Result<(), String> {
-    pool::leave_mining_pool().await
-}
-
-#[tauri::command(rename = "get_current_pool_info")]
-async fn get_current_pool_info_command() -> Result<Option<pool::JoinedPoolInfo>, String> {
-    pool::get_current_pool_info().await
-}
-
-#[tauri::command(rename = "get_pool_stats")]
-async fn get_pool_stats_command() -> Result<Option<pool::PoolStats>, String> {
-    pool::get_pool_stats().await
-}
-
-#[tauri::command(rename = "update_pool_discovery")]
-async fn update_pool_discovery_command() -> Result<(), String> {
-    pool::update_pool_discovery().await
-}
-
 #[tauri::command]
 async fn get_disk_space(path: String) -> Result<u64, String> {
     match available_space(Path::new(&path)) {
@@ -568,7 +525,9 @@ async fn start_dht_node(
         }
     }
 
-    let auto_enabled = enable_autonat.unwrap_or(true);
+    // Disable autonat by default to prevent warnings when no servers are available
+    // Users can explicitly enable it when needed
+    let auto_enabled = enable_autonat.unwrap_or(false);
     let probe_interval = autonat_probe_interval_secs.map(Duration::from_secs);
     let autonat_server_list = autonat_servers.unwrap_or_default();
 
@@ -2463,6 +2422,7 @@ fn main() {
     }
 
     println!("Starting Chiral Network...");
+    tracing::info!("🚀 Registering pool mining commands...");
 
     tauri::Builder::default()
         .manage(AppState {
@@ -2492,13 +2452,13 @@ fn main() {
             save_account_to_keystore,
             load_account_from_keystore,
             list_keystore_accounts,
-            discover_mining_pools_command,
-            create_mining_pool_command,
-            join_mining_pool_command,
-            leave_mining_pool_command,
-            get_current_pool_info_command,
-            get_pool_stats_command,
-            update_pool_discovery_command,
+            pool::discover_mining_pools,
+            pool::create_mining_pool,
+            pool::join_mining_pool,
+            pool::leave_mining_pool,
+            pool::get_current_pool_info,
+            pool::get_pool_stats,
+            pool::update_pool_discovery,
             get_disk_space,
             send_chiral_transaction,
             queue_transaction,
