@@ -15,15 +15,18 @@ pub struct PeerMetrics {
     pub success_rate: f64,         // 0.0 to 1.0 (successful transfers)
     pub last_seen: u64,            // Unix timestamp
     pub transfer_count: u64,       // Total transfers attempted
-    pub successful_transfers: u64,  // Successful transfers
+    pub successful_transfers: u64, // Successful transfers
     pub failed_transfers: u64,     // Failed transfers
     pub total_bytes_transferred: u64,
-    pub encryption_support: bool,   // Supports encrypted transfers
+    pub encryption_support: bool, // Supports encrypted transfers
 }
 
 impl PeerMetrics {
     pub fn new(peer_id: String, address: String) -> Self {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         Self {
             peer_id,
             address,
@@ -46,18 +49,21 @@ impl PeerMetrics {
         self.transfer_count += 1;
         self.successful_transfers += 1;
         self.total_bytes_transferred += bytes;
-        self.last_seen = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-        
+        self.last_seen = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
         // Calculate bandwidth from this transfer
         if duration_ms > 0 {
             let bandwidth = (bytes * 8) / (duration_ms); // bits per ms = kbps
             self.bandwidth_kbps = Some(
                 self.bandwidth_kbps
                     .map(|existing| (existing + bandwidth) / 2) // Moving average
-                    .unwrap_or(bandwidth)
+                    .unwrap_or(bandwidth),
             );
         }
-        
+
         self.update_scores();
     }
 
@@ -65,8 +71,11 @@ impl PeerMetrics {
     pub fn record_failed_transfer(&mut self, error_type: &str) {
         self.transfer_count += 1;
         self.failed_transfers += 1;
-        self.last_seen = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-        
+        self.last_seen = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
         // Penalize certain error types more heavily
         let penalty = match error_type {
             "timeout" => 0.1,
@@ -74,7 +83,7 @@ impl PeerMetrics {
             "encryption_error" => 0.15,
             _ => 0.05,
         };
-        
+
         self.reliability_score = (self.reliability_score - penalty).max(0.0);
         self.update_scores();
     }
@@ -84,9 +93,12 @@ impl PeerMetrics {
         self.latency_ms = Some(
             self.latency_ms
                 .map(|existing| (existing + latency_ms) / 2) // Moving average
-                .unwrap_or(latency_ms)
+                .unwrap_or(latency_ms),
         );
-        self.last_seen = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        self.last_seen = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
     }
 
     /// Set encryption support capability
@@ -106,29 +118,43 @@ impl PeerMetrics {
         let latency_weight = 0.3;
         let uptime_weight = 0.3;
 
-        let latency_score = self.latency_ms
+        let latency_score = self
+            .latency_ms
             .map(|lat| (1000.0 - lat.min(1000) as f64) / 1000.0) // Better latency = higher score
             .unwrap_or(0.5);
 
-        self.reliability_score = (success_weight * self.success_rate +
-                                 latency_weight * latency_score +
-                                 uptime_weight * self.uptime_score).min(1.0);
+        self.reliability_score = (success_weight * self.success_rate
+            + latency_weight * latency_score
+            + uptime_weight * self.uptime_score)
+            .min(1.0);
     }
 
     /// Get overall peer quality score (0.0 to 1.0)
     pub fn get_quality_score(&self, prefer_encrypted: bool) -> f64 {
         let base_score = self.reliability_score;
-        
-        // Bonus for encryption support if preferred
-        let encryption_bonus = if prefer_encrypted && self.encryption_support { 0.1 } else { 0.0 };
-        
-        // Penalty for old data
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-        let age_penalty = if now > self.last_seen + 300 { // 5 minutes old
-            (now - self.last_seen - 300) as f64 * 0.0001 // Gradual penalty
-        } else { 0.0 };
 
-        (base_score + encryption_bonus - age_penalty).max(0.0).min(1.0)
+        // Bonus for encryption support if preferred
+        let encryption_bonus = if prefer_encrypted && self.encryption_support {
+            0.1
+        } else {
+            0.0
+        };
+
+        // Penalty for old data
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let age_penalty = if now > self.last_seen + 300 {
+            // 5 minutes old
+            (now - self.last_seen - 300) as f64 * 0.0001 // Gradual penalty
+        } else {
+            0.0
+        };
+
+        (base_score + encryption_bonus - age_penalty)
+            .max(0.0)
+            .min(1.0)
     }
 }
 
@@ -173,8 +199,10 @@ impl PeerSelectionService {
     pub fn record_transfer_success(&mut self, peer_id: &str, bytes: u64, duration_ms: u64) {
         if let Some(metrics) = self.metrics.get_mut(peer_id) {
             metrics.record_successful_transfer(bytes, duration_ms);
-            info!("Recorded successful transfer for peer {}: {} bytes in {}ms", 
-                  peer_id, bytes, duration_ms);
+            info!(
+                "Recorded successful transfer for peer {}: {} bytes in {}ms",
+                peer_id, bytes, duration_ms
+            );
         }
     }
 
@@ -217,48 +245,59 @@ impl PeerSelectionService {
             return Vec::new();
         }
 
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-        
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
         // Filter peers based on requirements
         let mut candidates: Vec<_> = available_peers
             .iter()
             .filter_map(|peer_id| {
-                self.metrics.get(peer_id).map(|metrics| {
-                    // Skip if encryption required but not supported
-                    if require_encryption && !metrics.encryption_support {
-                        return None;
-                    }
-                    
-                    // Calculate selection score based on strategy
-                    let score = match strategy {
-                        SelectionStrategy::FastestFirst => {
-                            metrics.latency_ms.map(|lat| 1000.0 - lat.min(1000) as f64).unwrap_or(0.0)
-                        },
-                        SelectionStrategy::MostReliable => {
-                            metrics.reliability_score * 1000.0
-                        },
-                        SelectionStrategy::HighestBandwidth => {
-                            metrics.bandwidth_kbps.unwrap_or(0) as f64
-                        },
-                        SelectionStrategy::Balanced => {
-                            metrics.get_quality_score(false) * 1000.0
-                        },
-                        SelectionStrategy::EncryptionPreferred => {
-                            let base = metrics.get_quality_score(true) * 1000.0;
-                            if metrics.encryption_support { base + 100.0 } else { base }
-                        },
-                        SelectionStrategy::LoadBalanced => {
-                            let base_score = metrics.get_quality_score(false) * 1000.0;
-                            // Penalize recently selected peers to distribute load
-                            let last_selected = self.selection_history.get(peer_id).unwrap_or(&0);
-                            let time_since_selected = now.saturating_sub(*last_selected);
-                            let recency_penalty = if time_since_selected < 60 { 50.0 } else { 0.0 };
-                            base_score - recency_penalty
+                self.metrics
+                    .get(peer_id)
+                    .map(|metrics| {
+                        // Skip if encryption required but not supported
+                        if require_encryption && !metrics.encryption_support {
+                            return None;
                         }
-                    };
 
-                    Some((peer_id.clone(), score))
-                }).flatten()
+                        // Calculate selection score based on strategy
+                        let score = match strategy {
+                            SelectionStrategy::FastestFirst => metrics
+                                .latency_ms
+                                .map(|lat| 1000.0 - lat.min(1000) as f64)
+                                .unwrap_or(0.0),
+                            SelectionStrategy::MostReliable => metrics.reliability_score * 1000.0,
+                            SelectionStrategy::HighestBandwidth => {
+                                metrics.bandwidth_kbps.unwrap_or(0) as f64
+                            }
+                            SelectionStrategy::Balanced => {
+                                metrics.get_quality_score(false) * 1000.0
+                            }
+                            SelectionStrategy::EncryptionPreferred => {
+                                let base = metrics.get_quality_score(true) * 1000.0;
+                                if metrics.encryption_support {
+                                    base + 100.0
+                                } else {
+                                    base
+                                }
+                            }
+                            SelectionStrategy::LoadBalanced => {
+                                let base_score = metrics.get_quality_score(false) * 1000.0;
+                                // Penalize recently selected peers to distribute load
+                                let last_selected =
+                                    self.selection_history.get(peer_id).unwrap_or(&0);
+                                let time_since_selected = now.saturating_sub(*last_selected);
+                                let recency_penalty =
+                                    if time_since_selected < 60 { 50.0 } else { 0.0 };
+                                base_score - recency_penalty
+                            }
+                        };
+
+                        Some((peer_id.clone(), score))
+                    })
+                    .flatten()
             })
             .collect();
 
@@ -276,8 +315,12 @@ impl PeerSelectionService {
             })
             .collect();
 
-        info!("Selected {} peers using strategy {:?}: {:?}", 
-              selected.len(), strategy, selected);
+        info!(
+            "Selected {} peers using strategy {:?}: {:?}",
+            selected.len(),
+            strategy,
+            selected
+        );
         selected
     }
 
@@ -293,13 +336,15 @@ impl PeerSelectionService {
 
     /// Remove inactive peers (haven't been seen for a while)
     pub fn cleanup_inactive_peers(&mut self, max_age_seconds: u64) {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let before_count = self.metrics.len();
-        
-        self.metrics.retain(|_peer_id, metrics| {
-            now.saturating_sub(metrics.last_seen) < max_age_seconds
-        });
-        
+
+        self.metrics
+            .retain(|_peer_id, metrics| now.saturating_sub(metrics.last_seen) < max_age_seconds);
+
         let removed_count = before_count - self.metrics.len();
         if removed_count > 0 {
             info!("Cleaned up {} inactive peers", removed_count);
@@ -315,17 +360,19 @@ impl PeerSelectionService {
     ) -> Vec<String> {
         let strategy = if encryption_required {
             SelectionStrategy::EncryptionPreferred
-        } else if file_size > 100_000_000 { // > 100MB, prefer bandwidth
+        } else if file_size > 100_000_000 {
+            // > 100MB, prefer bandwidth
             SelectionStrategy::HighestBandwidth
-        } else { // Small files, prefer low latency
+        } else {
+            // Small files, prefer low latency
             SelectionStrategy::Balanced
         };
 
         // For large files, select more peers for parallel download
-        let peer_count = if file_size > 50_000_000 { 
-            (available_peers.len().min(5)).max(1) 
-        } else { 
-            (available_peers.len().min(2)).max(1) 
+        let peer_count = if file_size > 50_000_000 {
+            (available_peers.len().min(5)).max(1)
+        } else {
+            (available_peers.len().min(2)).max(1)
         };
 
         self.select_peers(available_peers, peer_count, strategy, encryption_required)
@@ -348,7 +395,7 @@ mod tests {
     fn test_successful_transfer_recording() {
         let mut metrics = PeerMetrics::new("test_peer".to_string(), "127.0.0.1:8080".to_string());
         metrics.record_successful_transfer(1000, 100); // 1KB in 100ms
-        
+
         assert_eq!(metrics.transfer_count, 1);
         assert_eq!(metrics.successful_transfers, 1);
         assert_eq!(metrics.success_rate, 1.0);
@@ -358,41 +405,41 @@ mod tests {
     #[test]
     fn test_peer_selection_service() {
         let mut service = PeerSelectionService::new();
-        
+
         // Add test peers
         let mut peer1 = PeerMetrics::new("peer1".to_string(), "127.0.0.1:8080".to_string());
         peer1.latency_ms = Some(50);
         peer1.reliability_score = 0.9;
-        
+
         let mut peer2 = PeerMetrics::new("peer2".to_string(), "127.0.0.1:8081".to_string());
         peer2.latency_ms = Some(200);
         peer2.reliability_score = 0.7;
-        
+
         service.update_peer_metrics(peer1);
         service.update_peer_metrics(peer2);
-        
+
         let available = vec!["peer1".to_string(), "peer2".to_string()];
         let selected = service.select_peers(&available, 1, SelectionStrategy::FastestFirst, false);
-        
+
         assert_eq!(selected[0], "peer1"); // Should select peer with lower latency
     }
 
     #[test]
     fn test_encryption_filtering() {
         let mut service = PeerSelectionService::new();
-        
+
         let mut peer1 = PeerMetrics::new("peer1".to_string(), "127.0.0.1:8080".to_string());
         peer1.encryption_support = true;
-        
+
         let mut peer2 = PeerMetrics::new("peer2".to_string(), "127.0.0.1:8081".to_string());
         peer2.encryption_support = false;
-        
+
         service.update_peer_metrics(peer1);
         service.update_peer_metrics(peer2);
-        
+
         let available = vec!["peer1".to_string(), "peer2".to_string()];
         let selected = service.select_peers(&available, 2, SelectionStrategy::Balanced, true);
-        
+
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0], "peer1"); // Only peer with encryption support
     }

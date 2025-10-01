@@ -45,8 +45,8 @@
   }
 
   async function handleDownload() {
-    const data = await dhtService.downloadFile(metadata);
-    dispatch('download', data);
+    await dhtService.downloadFile(metadata);
+    // dispatch('download', data);
   }
 
   const seederIds = metadata.seeders?.map((address, index) => ({

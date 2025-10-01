@@ -1,7 +1,10 @@
 // DHT configuration and utilities
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-
+import type { AppSettings } from "./stores";
+import { writeFile, BaseDirectory } from "@tauri-apps/plugin-fs";
+// import { homeDir } from "@tauri-apps/api/path";
+import { join } from "path";
 // Default bootstrap nodes for network connectivity
 export const DEFAULT_BOOTSTRAP_NODES = [
   "/ip4/145.40.118.135/tcp/4001/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
@@ -189,8 +192,42 @@ export class DhtService {
       const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {
         const unlistenPromise = listen<FileMetadata>(
           "file_content",
-          (event) => {
+          async (event) => {
             console.log("Received file content event:", event.payload);
+            const stored = localStorage.getItem("chiralSettings");
+            let storagePath = "."; // Default fallback
+
+            if (stored) {
+              try {
+                const loadedSettings: AppSettings = JSON.parse(stored);
+                storagePath = loadedSettings.storagePath;
+              } catch (e) {
+                console.error("Failed to load settings:", e);
+              }
+            }
+            if (event.payload.fileData) {
+              //
+              // Construct full file path
+              let resolvedStoragePath = storagePath;
+
+              // if (storagePath.startsWith("~")) {
+              //   const home = await homeDir();
+              //   resolvedStoragePath = storagePath.replace("~", home);
+              // }
+              resolvedStoragePath = join(storagePath, event.payload.fileName);
+              // Convert to Uint8Array if needed
+              const fileData =
+                event.payload.fileData instanceof Uint8Array
+                  ? event.payload.fileData
+                  : new Uint8Array(event.payload.fileData);
+
+              // Write file to disk
+              console.log(`File saved to: ${resolvedStoragePath}`);
+
+              await writeFile(resolvedStoragePath, fileData);
+              console.log(`File saved to: ${resolvedStoragePath}`);
+            }
+
             resolve(event.payload);
             // Unsubscribe once we got the event
             unlistenPromise.then((unlistenFn) => unlistenFn());

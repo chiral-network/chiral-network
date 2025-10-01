@@ -4,7 +4,6 @@ use blockstore::{
     Blockstore, InMemoryBlockstore,
 };
 use cid::Cid;
-use std::str::FromStr;
 use futures::future::{BoxFuture, FutureExt};
 use futures::io::{AsyncRead as FAsyncRead, AsyncWrite as FAsyncWrite};
 use futures::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -14,6 +13,7 @@ use multihash_codetable::{Code, MultihashDigest};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, SocketAddr};
+use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -800,11 +800,9 @@ async fn run_dht_node(
                         let _ = event_tx.send(DhtEvent::PublishedFile(metadata)).await;
                     }
                     Some(DhtCommand::DownloadFile(file_metadata)) =>{
-                        // todo: get cids from file_metadata, then use bitswap query and in
-                        // the bitswap protocol events, eventually report back to frontend (through an event)
-                        // so need to add new event to be processed in main.rs loop as well.
+                        // currently only able to process one download at a time
                         current_metadata = Some(file_metadata.clone());
-                      if let Some(cids) = &file_metadata.cids {
+                        if let Some(cids) = &file_metadata.cids {
                             for (i, cid) in cids.iter().enumerate() {
                                 let query_id = swarm.behaviour_mut().bitswap.get(cid);
                                 queries.insert(query_id, i as u32);
@@ -943,7 +941,7 @@ async fn run_dht_node(
                         .await;
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Identify(identify_event)) => {
-                        handle_identify_event(identify_event, &mut swarm, &event_tx).await;
+                        handle_identify_event(identify_event, &mut swarm, &event_tx, metrics.clone()).await;
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Mdns(mdns_event)) => {
                         if !is_bootstrap{
@@ -965,11 +963,11 @@ async fn run_dht_node(
                                             file.extend_from_slice(&downloaded_chunks.remove(&i).unwrap());
                                         }
                                         if let Some(metadata) = current_metadata.as_mut() {
-                                                metadata.file_data = file.clone(); // OK, file_data is Vec<u8>
+                                                metadata.file_data = file; // OK, file_data is Vec<u8>
                                             }
                                         if let Some(metadata) = current_metadata.take() {
-                                                let _ = event_tx.send(DhtEvent::DownloadedFile(metadata.clone())).await;
-                                            }
+                                            let _ = event_tx.send(DhtEvent::DownloadedFile(metadata)).await;
+                                        }
                                         downloaded_chunks.clear();
                                         current_metadata = None;
                                     }
@@ -977,10 +975,10 @@ async fn run_dht_node(
                                 None => {
                                 }
                             }
-                                 
+
 
                             // info!("Bitswap query {:?} succeeded - received {} bytes", query_id, data.len());
-                            
+
                             // // Process the received data - this is a file chunk that was requested
                             // // Parse the chunk data and assemble the complete file
                             // if let Some(ref ft_service) = file_transfer_service {
@@ -1355,14 +1353,20 @@ async fn handle_kademlia_event(
                 QueryResult::GetRecord(Ok(ok)) => match ok {
                     GetRecordOk::FoundRecord(peer_record) => {
                         // Try to parse file metadata from record value
-                        info!("FOUND RECORD");
                         if let Ok(metadata) =
                             serde_json::from_slice::<FileMetadata>(&peer_record.record.value)
                         {
-                            // let notify_metadata = metadata.clone();
-                            // let file_hash = notify_metadata.file_hash.clone();
-                            info!("parsed correctly");
+                            let notify_metadata = metadata.clone();
+                            let file_hash = notify_metadata.file_hash.clone();
                             let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
+
+                            // only for synchronous_search_metadata
+                            notify_pending_searches(
+                                pending_searches,
+                                &file_hash,
+                                SearchResponse::Found(notify_metadata),
+                            )
+                            .await;
                         } else {
                             debug!("Received non-file metadata record");
                         }
@@ -1403,15 +1407,22 @@ async fn handle_kademlia_event(
     }
 }
 
+fn record_identify_push_metrics(metrics: &Arc<Mutex<DhtMetrics>>, info: &identify::Info) {
+    if let Ok(mut metrics_guard) = metrics.try_lock() {
+        for addr in &info.listen_addrs {
+            metrics_guard.record_listen_addr(addr);
+        }
+    }
+}
 async fn handle_identify_event(
     event: IdentifyEvent,
     swarm: &mut Swarm<DhtBehaviour>,
-    _event_tx: &mpsc::Sender<DhtEvent>,
+    event_tx: &mpsc::Sender<DhtEvent>,
+    metrics: Arc<Mutex<DhtMetrics>>,
 ) {
     match event {
         IdentifyEvent::Received { peer_id, info, .. } => {
             info!("Identified peer {}: {:?}", peer_id, info.protocol_version);
-            // Add identified peer to Kademlia routing table
             if info.protocol_version != EXPECTED_PROTOCOL_VERSION {
                 warn!(
                     "Peer {} has a mismatched protocol version: '{}'. Expected: '{}'. Removing peer.",
@@ -1421,6 +1432,9 @@ async fn handle_identify_event(
                 );
                 swarm.behaviour_mut().kademlia.remove_peer(&peer_id);
             } else {
+                if let Ok(mut metrics_guard) = metrics.try_lock() {
+                    metrics_guard.record_observed_addr(&info.observed_addr);
+                }
                 for addr in info.listen_addrs {
                     if not_loopback(&addr) {
                         swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
@@ -1428,10 +1442,26 @@ async fn handle_identify_event(
                 }
             }
         }
+        IdentifyEvent::Pushed { peer_id, info, .. } => {
+            info!(
+                "Pushed identify update to {} (listen addrs: {})",
+                peer_id,
+                info.listen_addrs.len()
+            );
+            record_identify_push_metrics(&metrics, &info);
+        }
         IdentifyEvent::Sent { peer_id, .. } => {
             debug!("Sent identify info to {}", peer_id);
         }
-        _ => {}
+        IdentifyEvent::Error { peer_id, error, .. } => {
+            warn!("Identify protocol error with {}: {}", peer_id, error);
+            let _ = event_tx
+                .send(DhtEvent::Error(format!(
+                    "Identify error with {}: {}",
+                    peer_id, error
+                )))
+                .await;
+        }
     }
 }
 
@@ -1764,11 +1794,12 @@ impl DhtService {
         // Set Kademlia to server mode to accept incoming connections
         kademlia.set_mode(Some(Mode::Server));
 
-        // Create identify behaviour
-        let identify = identify::Behaviour::new(identify::Config::new(
-            EXPECTED_PROTOCOL_VERSION.to_string(),
-            local_key.public(),
-        ));
+        // Create identify behaviour with proactive push updates
+        let identify_config =
+            identify::Config::new(EXPECTED_PROTOCOL_VERSION.to_string(), local_key.public())
+                .with_agent_version(format!("chiral-network/{}", env!("CARGO_PKG_VERSION")))
+                .with_push_listen_addr_updates(true);
+        let identify = identify::Behaviour::new(identify_config);
 
         // mDNS for local peer discovery
         let mdns = Mdns::new(Default::default(), local_peer_id)?;
@@ -2098,6 +2129,65 @@ impl DhtService {
             .send(DhtCommand::SearchFile(file_hash.clone()))
             .await
             .map_err(|e| e.to_string())
+    }
+    pub async fn synchronous_search_metadata(
+        &self,
+        file_hash: String,
+        timeout_ms: u64,
+    ) -> Result<Option<FileMetadata>, String> {
+        if timeout_ms == 0 {
+            self.cmd_tx
+                .send(DhtCommand::SearchFile(file_hash))
+                .await
+                .map_err(|e| e.to_string())?;
+            return Ok(None);
+        }
+
+        let timeout_duration = Duration::from_millis(timeout_ms);
+        let waiter_id = self.search_counter.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = oneshot::channel();
+
+        {
+            let mut pending = self.pending_searches.lock().await;
+            pending
+                .entry(file_hash.clone())
+                .or_default()
+                .push(PendingSearch {
+                    id: waiter_id,
+                    sender: tx,
+                });
+        }
+
+        if let Err(err) = self
+            .cmd_tx
+            .send(DhtCommand::SearchFile(file_hash.clone()))
+            .await
+        {
+            let mut pending = self.pending_searches.lock().await;
+            if let Some(waiters) = pending.get_mut(&file_hash) {
+                waiters.retain(|w| w.id != waiter_id);
+                if waiters.is_empty() {
+                    pending.remove(&file_hash);
+                }
+            }
+            return Err(err.to_string());
+        }
+
+        match tokio::time::timeout(timeout_duration, rx).await {
+            Ok(Ok(SearchResponse::Found(metadata))) => Ok(Some(metadata)),
+            Ok(Ok(SearchResponse::NotFound)) => Ok(None),
+            Ok(Err(_)) => Err("Search channel closed".into()),
+            Err(_) => {
+                let mut pending = self.pending_searches.lock().await;
+                if let Some(waiters) = pending.get_mut(&file_hash) {
+                    waiters.retain(|w| w.id != waiter_id);
+                    if waiters.is_empty() {
+                        pending.remove(&file_hash);
+                    }
+                }
+                Err("Search timed out".into())
+            }
+        }
     }
 
     pub async fn connect_peer(&self, addr: String) -> Result<(), String> {
@@ -2695,5 +2785,34 @@ mod tests {
             .contains(&"/ip4/0.0.0.0/tcp/4001".to_string()));
         assert!(snapshot.observed_addrs.is_empty());
         assert!(snapshot.reachability_history.is_empty());
+    }
+
+    #[tokio::test]
+    async fn identify_push_records_listen_addrs() {
+        let metrics = Arc::new(Mutex::new(DhtMetrics::default()));
+        let listen_addr: Multiaddr = "/ip4/10.0.0.1/tcp/4001".parse().unwrap();
+        let secondary_addr: Multiaddr = "/ip4/192.168.0.1/tcp/4001".parse().unwrap();
+        let info = identify::Info {
+            public_key: identity::Keypair::generate_ed25519().public(),
+            protocol_version: EXPECTED_PROTOCOL_VERSION.to_string(),
+            agent_version: "test-agent/1.0.0".to_string(),
+            listen_addrs: vec![listen_addr.clone(), secondary_addr.clone()],
+            protocols: vec![StreamProtocol::new("/chiral/test/1.0.0")],
+            observed_addr: "/ip4/127.0.0.1/tcp/4001".parse().unwrap(),
+        };
+
+        record_identify_push_metrics(&metrics, &info);
+
+        {
+            let guard = metrics.lock().await;
+            assert_eq!(guard.listen_addrs.len(), 2);
+            assert!(guard.listen_addrs.contains(&listen_addr.to_string()));
+            assert!(guard.listen_addrs.contains(&secondary_addr.to_string()));
+        }
+
+        record_identify_push_metrics(&metrics, &info);
+
+        let guard = metrics.lock().await;
+        assert_eq!(guard.listen_addrs.len(), 2);
     }
 }
