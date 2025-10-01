@@ -21,6 +21,7 @@ mod peer_selection;
 mod pool;
 mod proxy_latency;
 mod stream_auth;
+mod transaction;
 mod webrtc_service;
 
 use crate::commands::auth::{
