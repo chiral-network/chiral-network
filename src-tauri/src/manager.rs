@@ -217,7 +217,16 @@ impl ChunkManager {
     // This function now saves the combined [nonce][ciphertext] blob
     fn save_shard(&self, hash: &str, data_with_nonce: &[u8]) -> Result<(), Error> {
         fs::create_dir_all(&self.storage_path)?;
-        fs::write(self.storage_path.join(hash), data_with_nonce)?;
+        let chunk_path = self.storage_path.join(hash);
+        // --- Deduplication: Only write if the chunk does not already exist ---
+        if chunk_path.exists() {
+            // Already present, skip writing
+            // Prime the L1 cache anyway
+            let mut cache = L1_CACHE.lock().unwrap();
+            cache.put(hash.to_string(), data_with_nonce.to_vec());
+            return Ok(());
+        }
+        fs::write(&chunk_path, data_with_nonce)?;
         // Prime the L1 cache
         {
             let mut cache = L1_CACHE.lock().unwrap();
@@ -358,7 +367,7 @@ impl ChunkManager {
 
     /// Generates a Merkle proof for a specific chunk.
     /// This would be called by a seeder node when a peer requests a chunk.
-    pub fn _generate_merkle_proof(
+    pub fn generate_merkle_proof(
         &self,
         all_chunk_hashes_hex: &[String],
         chunk_index_to_prove: usize,
@@ -377,14 +386,19 @@ impl ChunkManager {
         let proof = merkle_tree.proof(&[chunk_index_to_prove]);
 
         let proof_indices = vec![chunk_index_to_prove];
-        let proof_hashes_hex = proof.proof_hashes_hex();
+        // Convert proof hashes to Vec<String> (hex)
+        let proof_hashes_hex: Vec<String> = proof
+            .proof_hashes()
+            .iter()
+            .map(|h| hex::encode(h))
+            .collect();
 
         Ok((proof_indices, proof_hashes_hex, all_chunk_hashes.len()))
     }
 
     /// Verifies a downloaded chunk against the file's Merkle root using a proof.
     /// This is called by a downloader node to ensure chunk integrity.
-    pub fn _verify_chunk(
+    pub fn verify_chunk(
         &self,
         merkle_root_hex: &str,
         chunk_info: &ChunkInfo,
@@ -506,6 +520,8 @@ mod tests {
             leaves.len(),
         );
         assert!(!is_invalid, "Merkle proof verification should fail for an incorrect leaf.");
+
+    }
 
     fn test_reconstruction_with_missing_shards() {
         // 1. Setup
@@ -673,5 +689,4 @@ mod tests {
         let is_tampered_valid = manager._verify_chunk(&manifest.merkle_root, chunk_info, &tampered_data, &proof_indices, &proof_hashes, total_leaves).unwrap();
         assert!(!is_tampered_valid, "Merkle proof verification should fail for tampered data.");
     }
-}
 }
