@@ -12,6 +12,7 @@ mod file_transfer;
 mod geth_downloader;
 mod headless;
 mod keystore;
+mod pool;
 mod manager;
 pub mod net;
 mod peer_selection;
@@ -187,10 +188,11 @@ async fn list_keystore_accounts() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-async fn remove_account_from_keystore(address: String) -> Result<(), String> {
-    let mut keystore = Keystore::load()?;
-    keystore.remove_account(&address)?;
-    Ok(())
+async fn get_disk_space(path: String) -> Result<u64, String> {
+    match available_space(Path::new(&path)) {
+        Ok(space) => Ok(space),
+        Err(e) => Err(format!("Failed to get disk space: {}", e)),
+    }
 }
 
 #[tauri::command]
@@ -527,7 +529,9 @@ async fn start_dht_node(
         }
     }
 
-    let auto_enabled = enable_autonat.unwrap_or(true);
+    // Disable autonat by default to prevent warnings when no servers are available
+    // Users can explicitly enable it when needed
+    let auto_enabled = enable_autonat.unwrap_or(false);
     let probe_interval = autonat_probe_interval_secs.map(Duration::from_secs);
     let autonat_server_list = autonat_servers.unwrap_or_default();
 
@@ -2526,6 +2530,7 @@ fn main() {
     }
 
     println!("Starting Chiral Network...");
+    tracing::info!("🚀 Registering pool mining commands...");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
@@ -2556,12 +2561,18 @@ fn main() {
             save_account_to_keystore,
             load_account_from_keystore,
             list_keystore_accounts,
-            remove_account_from_keystore,
-            get_account_balance,
+            pool::discover_mining_pools,
+            pool::create_mining_pool,
+            pool::join_mining_pool,
+            pool::leave_mining_pool,
+            pool::get_current_pool_info,
+            pool::get_pool_stats,
+            pool::update_pool_discovery,
+            get_disk_space,
             send_chiral_transaction,
             queue_transaction,
             get_transaction_queue_status,
-            get_network_peer_count,
+            get_cpu_temperature,
             is_geth_running,
             check_geth_binary,
             get_geth_status,
