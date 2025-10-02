@@ -980,14 +980,20 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
 
 #[tauri::command]
 fn get_cpu_temperature() -> Option<f32> {
-    static mut LAST_UPDATE: Option<Instant> = None;
-    unsafe {
-        if let Some(last) = LAST_UPDATE {
+    use std::sync::OnceLock;
+
+    static LAST_UPDATE: OnceLock<std::sync::Mutex<Option<Instant>>> = OnceLock::new();
+    
+    let last_update_mutex = LAST_UPDATE.get_or_init(|| std::sync::Mutex::new(None));
+    
+    {
+        let mut last_update = last_update_mutex.lock().unwrap();
+        if let Some(last) = *last_update {
             if last.elapsed() < MINIMUM_CPU_UPDATE_INTERVAL {
                 return None;
             }
         }
-        LAST_UPDATE = Some(Instant::now());
+        *last_update = Some(Instant::now());
     }
 
     // Try sysinfo first (works on some platforms including M1 macs and some Windows)
