@@ -270,7 +270,7 @@
     // Start polling for mining stats
     statsInterval = setInterval(async () => {
       if ($miningState.isMining) {
-        // ✅ 并行执行，不互相等待
+        // ✅ Execute in parallel without waiting for each other
         await Promise.all([
           updateMiningStats(),
           walletService.refreshTransactions(),
