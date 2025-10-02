@@ -893,6 +893,8 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
             .into_iter()
             .map(|e| match e {
                 DhtEvent::PeerDiscovered(p) => format!("peer_discovered:{}", p),
+                DhtEvent::PeerConnected(p) => format!("peer_connected:{}", p),
+                DhtEvent::PeerDisconnected(p) => format!("peer_disconnected:{}", p),
                 DhtEvent::FileDiscovered(meta) => format!(
                     "file_discovered:{}:{}:{}",
                     meta.file_hash, meta.file_name, meta.file_size
