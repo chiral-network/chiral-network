@@ -69,25 +69,25 @@ async function refreshBalance() {
   if (!account) return;
 
   try {
-      // 获取链上余额
+      // Retrieve on-chain balance
       const balanceStr = await invoke('get_account_balance', { 
           address: account.address 
       }) as string;
       const realBalance = parseFloat(balanceStr);
 
-      // 获取挖矿区块数和总收益
+      // Retrieve the number of mined blocks and total earnings
       const blocksMined = await invoke('get_blocks_mined', { 
           address: account.address 
       }) as number;
       const totalEarned = blocksMined * 2;
 
-      // 更新 wallet store 的 balance
+      // Update the balance stored in the wallet
       wallet.update(w => ({ 
           ...w, 
           balance: realBalance
       }));
 
-      // 更新 mining state 的 totalRewards
+      // Update the totalRewards field in the mining state
       miningState.update(state => ({ 
           ...state, 
           totalRewards: totalEarned,
