@@ -393,6 +393,8 @@ export const miningState = writable<MiningState>({
   miningHistory: [],
 });
 
+export const miningProgress = writable({ cumulative: 0, lastBlock: 0 });
+
 export const totalEarned = derived(
   miningState,
   ($miningState) => $miningState.totalRewards

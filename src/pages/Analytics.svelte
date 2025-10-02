@@ -10,7 +10,7 @@
   import { suspiciousActivity } from '$lib/stores'; // only import
   import type { FileItem } from '$lib/stores';
   import { miningState } from '$lib/stores';
-
+  import { miningProgress } from '$lib/stores';
   
   let uploadedFiles: FileItem[] = []
   let downloadedFiles: FileItem[] = []
@@ -194,6 +194,27 @@
     // Return empty array if the range is invalid or not set
     return [];
   })();
+
+  let percentChange = 0;
+
+  $: {
+    const currentTotal = $miningState.totalRewards ?? 0;
+
+    miningProgress.update(prev => {
+      let lastBlock = 0;
+      let cumulative = prev.cumulative;
+
+      if (currentTotal > cumulative) {
+        lastBlock = currentTotal - cumulative;
+        cumulative = currentTotal;
+      } else {
+        lastBlock = prev.lastBlock;
+      }
+
+      percentChange = cumulative > 0 ? (lastBlock / cumulative) * 100 : 0;
+      return { cumulative, lastBlock };
+    });
+  }
 
   function handlePresetChange(value: string) {
     periodPreset = value;
@@ -391,9 +412,11 @@
         <div>
           <p class="text-sm text-muted-foreground">{$t('analytics.totalEarnings')}</p>
           <p class="text-2xl font-bold">{($miningState.totalRewards ?? 0).toFixed(2)} Chiral</p>
-          <p class="text-xs text-green-600 flex items-center gap-1 mt-1">
-            <TrendingUp class="h-3 w-3" />
-            {$t('analytics.earningsThisWeek')}
+          <p class="text-xs flex items-center gap-1 mt-1"
+            class:text-green-600={percentChange >= 0}
+            class:text-red-600={percentChange < 0}>
+            <TrendingUp class="h-3 w-3 transform {percentChange < 0 ? 'rotate-180' : ''}" />
+            {percentChange.toFixed(1)}% share of total
           </p>
         </div>
         <div class="p-2 bg-green-500/10 rounded-lg">
