@@ -505,7 +505,7 @@ lazy_static! {
 #[tauri::command]
 
 async fn get_blocks_mined(address: String) -> Result<u64, String> {
-    // 检查缓存（500ms 内直接返回）
+    // Check cache (directly return within 500ms)
     {
         let cache = BLOCKS_CACHE.lock().unwrap();
         if let Some((cached_addr, cached_blocks, cached_time)) = cache.as_ref() {
@@ -515,10 +515,10 @@ async fn get_blocks_mined(address: String) -> Result<u64, String> {
         }
     }
     
-    // 调用原有逻辑（慢速查询）
+    // Invoke existing logic (slow query)
     let blocks = get_mined_blocks_count(&address).await?;
     
-    // 更新缓存
+    // Update Cache
     {
         let mut cache = BLOCKS_CACHE.lock().unwrap();
         *cache = Some((address, blocks, Instant::now()));
