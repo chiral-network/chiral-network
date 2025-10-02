@@ -29,6 +29,10 @@
   import { settings, type AppSettings } from "$lib/stores";
 
   let showResetConfirmModal = false;
+  let storageSectionOpen = false;
+  let networkSectionOpen = false;
+  let advancedSectionOpen = false;
+
   // Settings state
   let defaultSettings: AppSettings = {
     // Storage settings
@@ -112,6 +116,20 @@
     userLocation.set(localSettings.userLocation);
     importExportFeedback = null;
     showToast("Settings Updated!");
+  }
+
+  $: {
+    // Expand Storage section if it has any errors
+    const hasStorageError = !!maxStorageError || !!errors.maxStorageSize || !!errors.cleanupThreshold;
+    storageSectionOpen = hasStorageError;
+
+    // Expand Network section if it has any errors
+    const hasNetworkError = !!errors.maxConnections || !!errors.port || !!errors.uploadBandwidth || !!errors.downloadBandwidth;
+    networkSectionOpen = hasNetworkError;
+
+    // Expand Advanced section if it has any errors
+    const hasAdvancedError = !!errors.chunkSize || !!errors.cacheSize;
+    advancedSectionOpen = hasAdvancedError;
   }
 
   function handleConfirmReset() {
@@ -405,7 +423,7 @@ function sectionMatches(section: string, query: string) {
 
   <!-- Storage Settings -->
   {#if sectionMatches("storage", search)}
-    <Expandable>
+    <Expandable bind:isOpen={storageSectionOpen}>
       <div slot="title" class="flex items-center gap-3">
         <HardDrive class="h-6 w-6 text-blue-600" />
         <h2 class="text-xl font-semibold text-black">{$t("storage.title")}</h2>
@@ -489,7 +507,7 @@ function sectionMatches(section: string, query: string) {
 
   <!-- Network Settings -->
   {#if sectionMatches("network", search)}
-    <Expandable>
+    <Expandable bind:isOpen={networkSectionOpen}>
       <div slot="title" class="flex items-center gap-3">
         <Wifi class="h-6 w-6 text-blue-600" />
         <h2 class="text-xl font-semibold text-black">{$t("network.title")}</h2>
@@ -758,7 +776,7 @@ function sectionMatches(section: string, query: string) {
 
   <!-- Advanced Settings -->
   {#if sectionMatches("advanced", search)}
-    <Expandable>
+    <Expandable bind:isOpen={advancedSectionOpen}>
       <div slot="title" class="flex items-center gap-3">
         <Database class="h-6 w-6 text-blue-600" />
         <h2 class="text-xl font-semibold text-black">{$t("advanced.title")}</h2>
