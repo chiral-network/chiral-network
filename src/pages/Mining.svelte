@@ -18,15 +18,6 @@
 
   // Interfaces - MiningHistoryPoint is now defined in stores.ts
   
-  // interface RecentBlock {
-  //   id: string
-  //   hash: string
-  //   reward: number
-  //   timestamp: Date
-  //   difficulty: number
-  //   nonce: number
-  // }
-  
   // Local UI state only
   let isTauri = false
   let isGethRunning = false
@@ -553,81 +544,6 @@
   // pushRecentBlock to set currentPage = 1 so the newest block is visible.
 
   $: displayedBlocks = ($miningState.recentBlocks || []).slice((currentPage - 1) * pageSize, currentPage * pageSize)
-
-// function pushRecentBlock(b: {
-//   hash: string;
-//   nonce?: number;
-//   difficulty?: number;
-//   timestamp?: Date;
-//   number?: number;
-//   reward?: number;
-// }) {
-
-//   const reward = typeof b.reward === "number" ? b.reward : 0;
-
-//   const item = {
-//     id: `block-${b.hash}-${b.timestamp?.getTime() ?? Date.now()}`,
-//     hash: b.hash,
-//     reward,
-//     timestamp: b.timestamp ?? new Date(),
-//     difficulty: b.difficulty ?? currentDifficulty,
-//     nonce: b.nonce ?? 0,
-//     number: b.number ?? 0,
-//   };
-
-//   // Add block to recentBlocks
-//   $miningState.recentBlocks = [item, ...($miningState.recentBlocks ?? [])].slice(0, 50);
-
-//   // Reset pagination so newest block is visible
-//   currentPage = 1;
-
-//   if (reward > 0) {
-//     const last4 = b.hash.slice(-4); // grab last 4 chars of hash
-//     const tx: Transaction = {
-//       id: Date.now(),
-//       type: 'received',
-//       amount: 2,
-//       from: 'Mining reward',
-//       date: new Date(),
-//       description: `Block Reward (…${last4})`,
-//       status: 'pending' // will flip to 'completed' when backend confirms
-//     };
-//     transactions.update(list => [tx, ...list]);
-//   }
-// }
-
-  // async function appendNewBlocksFromBackend() {
-  //   try {
-  //     if (!($etcAccount && $miningState.isMining)) return;
-  //     const lookback = 2000;
-  //     const limit = 50;
-  //     const blocks = await invoke('get_recent_mined_blocks_pub', {
-  //       address: $etcAccount.address,
-  //       lookback,
-  //       limit
-  //     }) as Array<{ hash: string, nonce?: string, difficulty?: string, timestamp: number, number: number, reward?: number }>;
-  //     for (const b of blocks) {
-  //       if (seenHashes.has(b.hash)) continue;
-  //       seenHashes.add(b.hash);
-  //       pushRecentBlock({
-  //         hash: b.hash,
-  //         nonce: b.nonce ? parseInt(b.nonce, 16) : undefined,
-  //         difficulty: b.difficulty ? parseInt(b.difficulty, 16) : undefined,
-  //         timestamp: new Date((b.timestamp || 0) * 1000),
-  //         number: b.number,
-  //         reward: 2
-  //       });
-  //     }
-  //     // Hard de-duplication by hash as a safety net
-  //     const uniq = new Map<string, any>();
-  //     for (const it of ($miningState.recentBlocks ?? [])) {
-  //       if (!uniq.has(it.hash)) uniq.set(it.hash, it);
-  //     }
-  // $miningState.recentBlocks = Array.from(uniq.values()).slice(0, 50);
-  //   } catch (e) {
-  //     console.error('Failed to append recent blocks:', e);
-  //   } 
-  // } 
   
   function formatUptime(now: number = Date.now()) {
     const uptime = now - sessionStartTime
