@@ -31,7 +31,7 @@ function pushRecentBlock(b: { hash: string; reward?: number; timestamp?: Date })
       from: 'Mining reward',
       date: b.timestamp ?? new Date(),
       description: `Block Reward (…${last4})`,
-      status: 'pending'
+      status: 'completed'
     };
     transactions.update(list => [tx, ...list]);
   }
@@ -65,21 +65,37 @@ async function refreshTransactions() {
 }
 
 async function refreshBalance() {
-    const account = get(etcAccount);
-    if (!account) return;
+  const account = get(etcAccount);
+  if (!account) return;
 
-    try {
-        const balanceStr = await invoke('get_account_balance', { address: account.address }) as string;
-        const realBalance = parseFloat(balanceStr);
+  try {
+      // Retrieve on-chain balance
+      const balanceStr = await invoke('get_account_balance', { 
+          address: account.address 
+      }) as string;
+      const realBalance = parseFloat(balanceStr);
 
-        wallet.update(w => ({ ...w, balance: realBalance }));
+      // Retrieve the number of mined blocks and total earnings
+      const blocksMined = await invoke('get_blocks_mined', { 
+          address: account.address 
+      }) as number;
+      const totalEarned = blocksMined * 2;
 
-        if (!isNaN(realBalance) && realBalance > (get(miningState).totalRewards ?? 0)) {
-            miningState.update(state => ({ ...state, totalRewards: realBalance }));
-        }
-    } catch (e) {
-        console.error('Failed to refresh balance:', e);
-    }
+      // Update the balance stored in the wallet
+      wallet.update(w => ({ 
+          ...w, 
+          balance: realBalance
+      }));
+
+      // Update the totalRewards field in the mining state
+      miningState.update(state => ({ 
+          ...state, 
+          totalRewards: totalEarned,
+          blocksFound: blocksMined 
+      }));
+  } catch (e) {
+      console.error('Failed to refresh balance:', e);
+  }
 }
 
 // Export the functions as a service object

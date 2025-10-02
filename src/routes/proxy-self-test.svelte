@@ -45,6 +45,19 @@
     }
   }
 
+  async function disconnectByPeer(_id: string, address?: string) {
+    try {
+      if (!address) return; // no-op
+      await disconnectProxy(address);
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  async function removeOffline() {
+    await listProxies(); // we don't have forget, so just refresh
+  }
+
   onMount(async () => {
     await initProxyEvents();
     await listProxies();
@@ -67,33 +80,55 @@
     <div class="flex gap-4">
       <button on:click={() => connectProxy(url, token)} class="btn btn-primary">Connect</button>
       <button on:click={() => disconnectProxy(url)} class="btn">Disconnect</button>
-      <button on:click={listProxies} class="btn">Refresh List</button>
+      <button on:click={() => listProxies()} class="btn">Refresh List</button>
     </div>
   </section>
 
   <!-- Connected Proxies -->
   <section class="space-y-2">
+    <div class="flex gap-2">
+      <button class="btn" on:click={listProxies}>Refresh</button>
+      <button class="btn" on:click={removeOffline}>Remove offline</button>
+    </div>
+
     <h2 class="text-xl font-bold">Connected Proxies</h2>
     {#if $proxyNodes.length === 0}
       <div class="text-sm text-gray-500">No proxies yet. Connect above.</div>
     {/if}
+
     <ul class="space-y-1">
       {#each $proxyNodes as node}
         <li class="flex flex-wrap items-center gap-2">
-          <strong>{node.address}</strong>
-          <span>— {node.status} ({node.latency}ms)</span>
+          <!-- ID/Address/Status display -->
+          <code class="font-mono text-xs">{node.id}</code>
+          {#if node.address}
+            <span class="text-xs opacity-60">· {node.address}</span>
+          {/if}
+          <span>— {node.status}{#if node.latency !== undefined} ({node.latency}ms){/if}</span>
           {#if node.error}
             <span class="text-red-500">· {node.error}</span>
           {/if}
+
+          <!-- Echo target selection -->
           {#if node.id}
             <button
               class="btn btn-xs ml-2"
               on:click={() => { selectedPeerId = node.id; }}
-              title="Use this peer for Echo"
-            >
+              title="Use this peer for Echo">
               Use for Echo
             </button>
           {/if}
+
+
+          <!-- Disconnect button -->
+          <button
+            class="btn btn-xs ml-auto"
+            title="Disconnect"
+            on:click={() => disconnectByPeer(node.id, node.address)}
+            disabled={!node.address}
+          >
+            Disconnect
+          </button>
         </li>
       {/each}
     </ul>
@@ -110,7 +145,7 @@
         {#each $proxyNodes as node}
           {#if node.id}
             <option value={node.id}>
-              {node.id} ({node.latency}ms)
+              {node.id} {#if node.latency !== undefined} ({node.latency}ms){/if}
             </option>
           {/if}
         {/each}

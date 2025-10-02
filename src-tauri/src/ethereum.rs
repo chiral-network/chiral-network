@@ -975,7 +975,7 @@ pub async fn get_mined_blocks_count(miner_address: &str) -> Result<u64, String> 
 
     // Check recent blocks (last 100 or current block count, whichever is smaller)
     let blocks_to_check = std::cmp::min(1000, current_block);
-    let start_block = current_block.saturating_sub(blocks_to_check);
+    let start_block = current_block.saturating_sub(blocks_to_check).max(1);
 
     // Normalize the miner address for comparison
     let normalized_miner = miner_address.to_lowercase();

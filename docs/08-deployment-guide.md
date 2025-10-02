@@ -221,7 +221,6 @@ bootstrap_peers = [
 path = "/var/lib/chiral/storage"
 max_file_size = "10GB"
 chunk_size = 262144
-replication_factor = 3
 
 [api]
 enabled = true
@@ -231,7 +230,6 @@ max_upload_size = "100MB"
 [dht]
 protocol = "/chiral/kad/1.0.0"
 bucket_size = 20
-replication = 20
 ```
 
 ### 3. DHT Configuration (Decentralized)
@@ -780,7 +778,6 @@ server {
 - **Daily:** Configuration files, DHT state
 - **Weekly:** Full blockchain snapshot
 - **Monthly:** Complete system backup
-- **Offsite:** Cloud storage replication
 
 ### 2. Recovery Time Objectives
 

@@ -39,17 +39,6 @@
 
   // Interfaces - Transaction is now defined in stores.ts
 
-  // interface Transaction {
-  //   id: number;
-  //   type: 'sent' | 'received';
-  //   amount: number;
-  //   to?: string;
-  //   from?: string;
-  //   date: Date;
-  //   description: string;
-  //   status: 'pending' | 'completed';
-  // }
-
   interface BlacklistEntry {
     chiral_address: string;
     reason: string;
@@ -110,14 +99,6 @@
   let twoFaPassword = ''; // To hold password for 2FA operations
 
   let Html5QrcodeScanner: InstanceType<typeof Html5QrcodeScannerClass> | null = null;
-  
-  // Demo transactions - in real app these will be fetched from blockchain
-  // const transactions = writable<Transaction[]>([
-  //   { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', to: undefined, date: new Date('2024-03-15'), description: 'Storage reward', status: 'completed' },
-  //   { id: 2, type: 'sent', amount: 10.25, to: '0x1234...5678', from: undefined, date: new Date('2024-03-14'), description: 'Proxy service', status: 'completed' },
-  //   { id: 3, type: 'received', amount: 100, from: '0xabcd...ef12', to: undefined, date: new Date('2024-03-13'), description: 'Upload reward', status: 'completed' },
-  //   { id: 4, type: 'sent', amount: 5.5, to: '0x9876...5432', from: undefined, date: new Date('2024-03-12'), description: 'File download', status: 'completed' },
-  // ]);
 
   // Enhanced validation states
   let validationWarning = '';
@@ -516,7 +497,7 @@
         date: new Date(),
         description: tr('transactions.manual'),
         status: 'pending',
-        txHash: txHash // Store transaction hash
+        txHash: txHash
       }, ...txs])
       
       // Clear form
@@ -526,8 +507,7 @@
       
       showToast('Transaction submitted!', 'success')
       
-      // Poll for transaction confirmation
-      pollTransactionStatus(txHash)
+      
       
     } catch (error) {
       console.error('Transaction failed:', error)
@@ -538,41 +518,7 @@
     }
   }
 
-  async function pollTransactionStatus(txHash: string) {
-    const maxAttempts = 60 // 5 minutes
-    let attempts = 0
-    
-    const interval = setInterval(async () => {
-      attempts++
-      
-      try {
-        // Check if transaction is mined
-        const receipt = await invoke('get_transaction_receipt', { txHash })
-        
-        if (receipt) {
-          // Transaction confirmed
-          clearInterval(interval)
-          
-          // Update transaction status
-          transactions.update(txs => txs.map(tx => 
-            tx.txHash === txHash ? { ...tx, status: 'completed' } : tx
-          ))
-          
-          // Refresh balance
-          await fetchBalance()
-          
-          showToast('Transaction confirmed!', 'success')
-        }
-      } catch (error) {
-        console.error('Error checking transaction status:', error)
-      }
-      
-      if (attempts >= maxAttempts) {
-        clearInterval(interval)
-        showToast('Transaction confirmation timeout', 'warning')
-      }
-    }, 5000) // Check every 5 seconds
-  }
+  
   
   function formatDate(date: Date): string {
     const loc = get(locale) || 'en-US'
@@ -651,15 +597,22 @@
         wallet.update(w => ({ 
           ...w, 
           balance: Math.max(0, realBalance - pendingAmount),
-          actualBalance: realBalance // Store actual on-chain balance
+          actualBalance: realBalance
         }));
         
-        // Update mining state
-        if (!isNaN(realBalance)) {
-          miningState.update(state => ({
-            ...state,
-            totalRewards: realBalance
-          }));
+        // If the on-chain balance changes, it indicates that some pending transactions have been confirmed
+        // Automatically change the status of these transactions to completed
+        if (pendingAmount > 0) {
+          const expectedBalance = realBalance - pendingAmount;
+          
+          // If the actual balance is close to the expected amount (indicating the transaction has been confirmed)
+          if (Math.abs(realBalance - expectedBalance) < 0.01) {
+            transactions.update(txs => txs.map(tx => 
+              tx.status === 'pending' && tx.type === 'sent' 
+                ? { ...tx, status: 'completed' } 
+                : tx
+            ));
+          }
         }
       }
     } catch (error) {

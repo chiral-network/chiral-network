@@ -12,10 +12,14 @@ mod file_transfer;
 mod geth_downloader;
 mod headless;
 mod keystore;
+mod pool;
 mod manager;
 pub mod net;
 mod peer_selection;
 mod webrtc_service;
+use std::sync::Mutex as StdMutex;
+
+use lazy_static::lazy_static;
 use crate::commands::proxy::{
     list_proxies, proxy_connect, proxy_disconnect, proxy_echo, ProxyNode,
 };
@@ -38,7 +42,7 @@ use std::process::Command;
 use std::{
     io::{BufRead, BufReader},
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use sysinfo::{Components, System, MINIMUM_CPU_UPDATE_INTERVAL};
 use systemstat::{Platform, System as SystemStat};
@@ -191,10 +195,11 @@ async fn list_keystore_accounts() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-async fn remove_account_from_keystore(address: String) -> Result<(), String> {
-    let mut keystore = Keystore::load()?;
-    keystore.remove_account(&address)?;
-    Ok(())
+async fn get_disk_space(path: String) -> Result<u64, String> {
+    match available_space(Path::new(&path)) {
+        Ok(space) => Ok(space),
+        Err(e) => Err(format!("Failed to get disk space: {}", e)),
+    }
 }
 
 #[tauri::command]
@@ -500,10 +505,32 @@ async fn get_miner_logs(data_dir: String, lines: usize) -> Result<Vec<String>, S
 async fn get_miner_performance(data_dir: String) -> Result<(u64, f64), String> {
     get_mining_performance(&data_dir)
 }
-
+lazy_static! {
+    static ref BLOCKS_CACHE: StdMutex<Option<(String, u64, Instant)>> = StdMutex::new(None);
+}
 #[tauri::command]
+
 async fn get_blocks_mined(address: String) -> Result<u64, String> {
-    get_mined_blocks_count(&address).await
+    // Check cache (directly return within 500ms)
+    {
+        let cache = BLOCKS_CACHE.lock().unwrap();
+        if let Some((cached_addr, cached_blocks, cached_time)) = cache.as_ref() {
+            if cached_addr == &address && cached_time.elapsed() < Duration::from_millis(500) {
+                return Ok(*cached_blocks);
+            }
+        }
+    }
+    
+    // Invoke existing logic (slow query)
+    let blocks = get_mined_blocks_count(&address).await?;
+    
+    // Update Cache
+    {
+        let mut cache = BLOCKS_CACHE.lock().unwrap();
+        *cache = Some((address, blocks, Instant::now()));
+    }
+    
+    Ok(blocks)
 }
 #[tauri::command]
 async fn get_recent_mined_blocks_pub(
@@ -523,6 +550,7 @@ async fn start_dht_node(
     autonat_probe_interval_secs: Option<u64>,
     autonat_servers: Option<Vec<String>>,
     proxy_address: Option<String>,
+    is_bootstrap: Option<bool>,
 ) -> Result<String, String> {
     {
         let dht_guard = state.dht.lock().await;
@@ -531,7 +559,9 @@ async fn start_dht_node(
         }
     }
 
-    let auto_enabled = enable_autonat.unwrap_or(true);
+    // Disable autonat by default to prevent warnings when no servers are available
+    // Users can explicitly enable it when needed
+    let auto_enabled = enable_autonat.unwrap_or(false);
     let probe_interval = autonat_probe_interval_secs.map(Duration::from_secs);
     let autonat_server_list = autonat_servers.unwrap_or_default();
 
@@ -550,7 +580,7 @@ async fn start_dht_node(
         port,
         bootstrap_nodes,
         None,
-        false,
+        is_bootstrap.unwrap_or(false),
         auto_enabled,
         probe_interval,
         autonat_server_list,
@@ -597,48 +627,38 @@ async fn start_dht_node(
                         latency_ms,
                         error,
                     } => {
-                        let mut proxies = proxies_arc.lock().await;
+                        let to_emit: ProxyNode = {
+                            let mut proxies = proxies_arc.lock().await;
 
-                        // 1) Find existing proxy by id, then by address, then by address==id
-                        let mut idx = proxies.iter().position(|p| p.id == id);
-                        if idx.is_none() && !address.is_empty() {
-                            idx = proxies.iter().position(|p| p.address == address);
-                        }
-                        if idx.is_none() {
-                            idx = proxies.iter().position(|p| p.address == id);
-                        }
+                            if let Some(i) = proxies.iter().position(|p| p.id == id) {
 
-                        if let Some(i) = idx {
-                            // 2) Safe merge: only overwrite with incoming values
-                            let p = &mut proxies[i];
-                            if p.id != id {
-                                p.id = id.clone();
+                                let p = &mut proxies[i];
+                                if p.id != id {
+                                    p.id = id.clone();
+                                }
+                                if !address.is_empty() {
+                                    p.address = address.clone();
+                                }
+                                p.status = status.clone();
+                                if let Some(ms) = latency_ms {
+                                    p.latency = ms as u32;
+                                }
+                                p.error = error.clone();
+                                p.clone()
+                            } else {
+                                let node = ProxyNode {
+                                    id: id.clone(),
+                                    address: address.clone(),
+                                    status,
+                                    latency: latency_ms.unwrap_or(0) as u32,
+                                    error,
+                                };
+                                proxies.push(node.clone());
+                                node
                             }
-                            if !address.is_empty() {
-                                p.address = address.clone();
-                            }
-                            p.status = status.clone();
-                            if let Some(ms) = latency_ms {
-                                p.latency = ms as u32;
-                            }
-                            p.error = error.clone();
-                            let _ = app_handle.emit("proxy_status_update", p.clone());
-                        } else {
-                            // 3) If not found, add new (if address is empty, use id instead)
-                            let new_node = ProxyNode {
-                                id: id.clone(),
-                                address: if address.is_empty() {
-                                    id.clone()
-                                } else {
-                                    address.clone()
-                                },
-                                status,
-                                latency: latency_ms.unwrap_or(0) as u32,
-                                error,
-                            };
-                            proxies.push(new_node.clone());
-                            let _ = app_handle.emit("proxy_status_update", new_node);
-                        }
+                        };
+
+                        let _ = app_handle.emit("proxy_status_update", to_emit);
                     }
                     DhtEvent::NatStatus {
                         state,
@@ -659,27 +679,10 @@ async fn start_dht_node(
                         let payload =
                             serde_json::json!({ "from": from, "text": utf8, "bytes": bytes });
                         let _ = app_handle.emit("proxy_echo_rx", payload);
-
-                        // If recieved an echo, mark the node as online in the proxy list
-                        {
-                            let mut proxies = proxies_arc.lock().await;
-                            if let Some(p) = proxies.iter_mut().find(|p| p.id == from) {
-                                p.status = "online".to_string();
-                                let _ = app_handle.emit("proxy_status_update", p.clone());
-                            } else {
-                                let new_node = ProxyNode {
-                                    id: from.clone(),
-                                    address: String::new(),
-                                    status: "online".to_string(),
-                                    latency: 0,
-                                    error: None,
-                                };
-                                proxies.push(new_node.clone());
-                                let _ = app_handle.emit("proxy_status_update", new_node);
-                            }
-                        }
                     }
                     DhtEvent::PeerRtt { peer, rtt_ms } => {
+                        // NOTE: if from dht.rs only sends rtt for known proxies, then this is fine.
+                        // If it can send rtt for any peer, we need to first check if it's generated from ProxyStatus
                         let mut proxies = proxies_arc.lock().await;
                         if let Some(p) = proxies.iter_mut().find(|p| p.id == peer) {
                             p.latency = rtt_ms as u32;
@@ -713,7 +716,7 @@ async fn start_dht_node(
 }
 
 #[tauri::command]
-async fn stop_dht_node(state: State<'_, AppState>) -> Result<(), String> {
+async fn stop_dht_node(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let dht = {
         let mut dht_guard = state.dht.lock().await;
         dht_guard.take()
@@ -724,6 +727,14 @@ async fn stop_dht_node(state: State<'_, AppState>) -> Result<(), String> {
             .await
             .map_err(|e| format!("Failed to stop DHT: {}", e))?;
     }
+
+    // Proxy reset
+    {
+        let mut proxies = state.proxies.lock().await;
+        proxies.clear();
+    }
+    let _ = app.emit("proxy_reset", ());
+
     Ok(())
 }
 
@@ -959,21 +970,21 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
 
 #[tauri::command]
 fn get_cpu_temperature() -> Option<f32> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static LAST_UPDATE: AtomicU64 = AtomicU64::new(0);
+    use std::sync::OnceLock;
 
-    let now = SystemTime::now();
-    let now_secs = now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-    let last_update = LAST_UPDATE.load(Ordering::Relaxed);
-
-    if last_update > 0 {
-        let last_instant = std::time::UNIX_EPOCH + Duration::from_secs(last_update);
-        if now.duration_since(last_instant).unwrap_or_default() < MINIMUM_CPU_UPDATE_INTERVAL {
-            return None;
+    static LAST_UPDATE: OnceLock<std::sync::Mutex<Option<Instant>>> = OnceLock::new();
+    
+    let last_update_mutex = LAST_UPDATE.get_or_init(|| std::sync::Mutex::new(None));
+    
+    {
+        let mut last_update = last_update_mutex.lock().unwrap();
+        if let Some(last) = *last_update {
+            if last.elapsed() < MINIMUM_CPU_UPDATE_INTERVAL {
+                return None;
+            }
         }
+        *last_update = Some(Instant::now());
     }
-
-    LAST_UPDATE.store(now_secs, Ordering::Relaxed);
 
     // Try sysinfo first (works on some platforms including M1 macs and some Windows)
     let mut sys = System::new_all();
@@ -2530,6 +2541,7 @@ fn main() {
     }
 
     println!("Starting Chiral Network...");
+    tracing::info!("🚀 Registering pool mining commands...");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
@@ -2560,12 +2572,18 @@ fn main() {
             save_account_to_keystore,
             load_account_from_keystore,
             list_keystore_accounts,
-            remove_account_from_keystore,
-            get_account_balance,
+            pool::discover_mining_pools,
+            pool::create_mining_pool,
+            pool::join_mining_pool,
+            pool::leave_mining_pool,
+            pool::get_current_pool_info,
+            pool::get_pool_stats,
+            pool::update_pool_discovery,
+            get_disk_space,
             send_chiral_transaction,
             queue_transaction,
             get_transaction_queue_status,
-            get_network_peer_count,
+            get_cpu_temperature,
             is_geth_running,
             check_geth_binary,
             get_geth_status,
