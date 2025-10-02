@@ -546,6 +546,7 @@ async fn start_dht_node(
     autonat_probe_interval_secs: Option<u64>,
     autonat_servers: Option<Vec<String>>,
     proxy_address: Option<String>,
+    is_bootstrap: Option<bool>,
 ) -> Result<String, String> {
     {
         let dht_guard = state.dht.lock().await;
@@ -575,7 +576,7 @@ async fn start_dht_node(
         port,
         bootstrap_nodes,
         None,
-        false,
+        is_bootstrap.unwrap_or(false),
         auto_enabled,
         probe_interval,
         autonat_server_list,
@@ -622,48 +623,38 @@ async fn start_dht_node(
                         latency_ms,
                         error,
                     } => {
-                        let mut proxies = proxies_arc.lock().await;
+                        let to_emit: ProxyNode = {
+                            let mut proxies = proxies_arc.lock().await;
 
-                        // 1) Find existing proxy by id, then by address, then by address==id
-                        let mut idx = proxies.iter().position(|p| p.id == id);
-                        if idx.is_none() && !address.is_empty() {
-                            idx = proxies.iter().position(|p| p.address == address);
-                        }
-                        if idx.is_none() {
-                            idx = proxies.iter().position(|p| p.address == id);
-                        }
+                            if let Some(i) = proxies.iter().position(|p| p.id == id) {
 
-                        if let Some(i) = idx {
-                            // 2) Safe merge: only overwrite with incoming values
-                            let p = &mut proxies[i];
-                            if p.id != id {
-                                p.id = id.clone();
+                                let p = &mut proxies[i];
+                                if p.id != id {
+                                    p.id = id.clone();
+                                }
+                                if !address.is_empty() {
+                                    p.address = address.clone();
+                                }
+                                p.status = status.clone();
+                                if let Some(ms) = latency_ms {
+                                    p.latency = ms as u32;
+                                }
+                                p.error = error.clone();
+                                p.clone()
+                            } else {
+                                let node = ProxyNode {
+                                    id: id.clone(),
+                                    address: address.clone(),
+                                    status,
+                                    latency: latency_ms.unwrap_or(0) as u32,
+                                    error,
+                                };
+                                proxies.push(node.clone());
+                                node
                             }
-                            if !address.is_empty() {
-                                p.address = address.clone();
-                            }
-                            p.status = status.clone();
-                            if let Some(ms) = latency_ms {
-                                p.latency = ms as u32;
-                            }
-                            p.error = error.clone();
-                            let _ = app_handle.emit("proxy_status_update", p.clone());
-                        } else {
-                            // 3) If not found, add new (if address is empty, use id instead)
-                            let new_node = ProxyNode {
-                                id: id.clone(),
-                                address: if address.is_empty() {
-                                    id.clone()
-                                } else {
-                                    address.clone()
-                                },
-                                status,
-                                latency: latency_ms.unwrap_or(0) as u32,
-                                error,
-                            };
-                            proxies.push(new_node.clone());
-                            let _ = app_handle.emit("proxy_status_update", new_node);
-                        }
+                        };
+
+                        let _ = app_handle.emit("proxy_status_update", to_emit);
                     }
                     DhtEvent::NatStatus {
                         state,
@@ -684,27 +675,10 @@ async fn start_dht_node(
                         let payload =
                             serde_json::json!({ "from": from, "text": utf8, "bytes": bytes });
                         let _ = app_handle.emit("proxy_echo_rx", payload);
-
-                        // If recieved an echo, mark the node as online in the proxy list
-                        {
-                            let mut proxies = proxies_arc.lock().await;
-                            if let Some(p) = proxies.iter_mut().find(|p| p.id == from) {
-                                p.status = "online".to_string();
-                                let _ = app_handle.emit("proxy_status_update", p.clone());
-                            } else {
-                                let new_node = ProxyNode {
-                                    id: from.clone(),
-                                    address: String::new(),
-                                    status: "online".to_string(),
-                                    latency: 0,
-                                    error: None,
-                                };
-                                proxies.push(new_node.clone());
-                                let _ = app_handle.emit("proxy_status_update", new_node);
-                            }
-                        }
                     }
                     DhtEvent::PeerRtt { peer, rtt_ms } => {
+                        // NOTE: if from dht.rs only sends rtt for known proxies, then this is fine.
+                        // If it can send rtt for any peer, we need to first check if it's generated from ProxyStatus
                         let mut proxies = proxies_arc.lock().await;
                         if let Some(p) = proxies.iter_mut().find(|p| p.id == peer) {
                             p.latency = rtt_ms as u32;
@@ -738,7 +712,7 @@ async fn start_dht_node(
 }
 
 #[tauri::command]
-async fn stop_dht_node(state: State<'_, AppState>) -> Result<(), String> {
+async fn stop_dht_node(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let dht = {
         let mut dht_guard = state.dht.lock().await;
         dht_guard.take()
@@ -749,6 +723,14 @@ async fn stop_dht_node(state: State<'_, AppState>) -> Result<(), String> {
             .await
             .map_err(|e| format!("Failed to stop DHT: {}", e))?;
     }
+
+    // Proxy reset
+    {
+        let mut proxies = state.proxies.lock().await;
+        proxies.clear();
+    }
+    let _ = app.emit("proxy_reset", ());
+
     Ok(())
 }
 
