@@ -526,8 +526,7 @@
       
       showToast('Transaction submitted!', 'success')
       
-      // ❌ 删除这部分 - 不再轮询
-      // pollTransactionStatus(txHash)
+      
       
     } catch (error) {
       console.error('Transaction failed:', error)
@@ -620,12 +619,12 @@
           actualBalance: realBalance
         }));
         
-        // 如果链上余额变化了，说明某些 pending 交易已确认
-        // 自动将这些交易状态改为 completed
+        // If the on-chain balance changes, it indicates that some pending transactions have been confirmed
+        // Automatically change the status of these transactions to completed
         if (pendingAmount > 0) {
           const expectedBalance = realBalance - pendingAmount;
           
-          // 如果实际余额接近预期（说明交易已确认）
+          // If the actual balance is close to the expected amount (indicating the transaction has been confirmed)
           if (Math.abs(realBalance - expectedBalance) < 0.01) {
             transactions.update(txs => txs.map(tx => 
               tx.status === 'pending' && tx.type === 'sent' 
