@@ -1770,7 +1770,7 @@ impl DhtService {
         // Create a Kademlia behaviour with tuned configuration
         let store = MemoryStore::new(local_peer_id);
         let mut kad_cfg = KademliaConfig::new(StreamProtocol::new("/chiral/kad/1.0.0"));
-        let bootstrap_interval = Duration::from_secs(30);
+        let bootstrap_interval = Duration::from_secs(1);
         if is_bootstrap {
             // These settings result in node to not provide files, only acts as a router
             kad_cfg.set_record_ttl(Some(Duration::from_secs(0)));
@@ -2680,7 +2680,7 @@ async fn assemble_file_from_chunks(
 
 fn not_loopback(ip: &Multiaddr) -> bool {
     if let Some(ip) = multiaddr_to_ip(ip) {
-        ip.is_loopback()
+        !ip.is_loopback()
     } else {
         false
     }
