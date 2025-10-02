@@ -2680,7 +2680,7 @@ async fn assemble_file_from_chunks(
 
 fn not_loopback(ip: &Multiaddr) -> bool {
     if let Some(ip) = multiaddr_to_ip(ip) {
-        ip.is_loopback()
+        !ip.is_loopback()
     } else {
         false
     }
