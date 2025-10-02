@@ -57,7 +57,6 @@ The system uses a Kademlia-based DHT for distributed file indexing:
 DHT Structure:
 - Node ID: 160-bit identifier
 - Routing Table: K-buckets (k=20)
-- Replication Factor: 3
 - Lookup Complexity: O(log n)
 ```
 
@@ -175,16 +174,6 @@ message FileResponse {
   string next_chunk_hash = 3;
 }
 
-message StorageRequest {
-  string file_hash = 1;
-  uint64 duration = 2; // storage duration in seconds
-}
-
-message StorageResponse {
-  uint64 reward_amount = 1; // algorithmic reward
-  uint64 gas_cost = 2;
-  bool accepted = 3;
-}
 ```
 
 ### 5. Client Architecture
@@ -212,9 +201,9 @@ File Upload:
 1. Select File → Generate Hash
 2. Create Chunks → Encrypt
 3. Chunking → 256 KB encrypted chunks
-4. Query DHT → Find Storage Nodes
+4. Query DHT → Find Nodes
 5. Calculate Rewards → Create Transaction
-6. Upload Chunks → Verify Storage
+6. Verify Chunks → Verify Storage
 7. Register in DHT → Complete
 
 File Download:
@@ -340,24 +329,15 @@ Load Balancing:
 
 ### 9. Fault Tolerance
 
-#### Redundancy Mechanisms
 
-```
-File Redundancy:
-- Replication Factor: 3 (minimum)
-- Replication: Multiple copies stored across nodes for availability
-- Geographic Distribution: Different regions
-- Automatic Repair: Self-healing on node failure
-```
 
-#### Failure Recovery
+#### Node Recovery
 
 ```
 Node Failure:
 1. Detection: Heartbeat timeout (30 seconds)
 2. Mark Offline: Update DHT records
-3. Redirect: Route requests to replicas
-4. Repair: Re-replicate to maintain redundancy
+3. Redirect: Route requests to alternative providers
 5. Cleanup: Remove after grace period
 
 Network Partition:
