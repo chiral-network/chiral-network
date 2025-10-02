@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { createWebRTCSession } from "./webrtcService";
 import { SignalingService } from "./signalingService";
 import type { FileMetadata } from "../dht";
+import type { FileManifestForJs } from "./encryption"; 
 
 export interface P2PTransfer {
   id: string;
@@ -583,6 +584,76 @@ export class P2PFileTransferService {
       transfer.status = "failed";
       transfer.error = "Failed to save file";
       this.notifyProgress(transfer);
+    }
+  }
+
+  /**
+   * Manages the download of all encrypted chunks for a given file manifest.
+   * It downloads chunks in parallel and reports overall progress.
+   */
+  async downloadEncryptedChunks(
+    manifest: FileManifestForJs,
+    seederAddresses: string[],
+    onProgress: (progress: { percentage: number; speed: string; eta: string }) => void
+  ): Promise<void> {
+    const totalChunks = manifest.chunks.length;
+    let downloadedChunks = 0;
+    const totalSize = manifest.chunks.reduce((sum, chunk) => sum + chunk.encryptedSize, 0);
+    let bytesDownloaded = 0;
+    const startTime = Date.now();
+
+    // Create a download promise for each encrypted chunk. This allows for parallel downloads.
+    const downloadPromises = manifest.chunks.map(chunkInfo => {
+      // Use the helper function to download each individual chunk.
+      return this.initiateChunkDownload(
+        chunkInfo.encryptedHash,
+        seederAddresses
+      ).then(() => {
+        // This code runs every time a single chunk download completes successfully.
+        downloadedChunks++;
+        bytesDownloaded += chunkInfo.encryptedSize;
+        const percentage = (downloadedChunks / totalChunks) * 100;
+        
+        // Calculate speed and ETA for the UI
+        const elapsedTime = (Date.now() - startTime) / 1000; // in seconds
+        const speedBps = elapsedTime > 0 ? bytesDownloaded / elapsedTime : 0;
+        const remainingBytes = totalSize - bytesDownloaded;
+        const etaSeconds = speedBps > 0 ? Math.round(remainingBytes / speedBps) : 0;
+
+        // Update the UI via the progress callback
+        onProgress({
+          percentage,
+          speed: `${Math.round(speedBps / 1024)} KB/s`,
+          eta: `${etaSeconds}s`,
+        });
+      });
+    });
+
+    // Promise.all waits for every single chunk download to complete before continuing.
+    await Promise.all(downloadPromises);
+  }
+
+  /**
+   * Helper function to download a single encrypted chunk from the network.
+   * It tries to connect to one of the available seeders and request the chunk.
+   */
+  async initiateChunkDownload(chunkHash: string, seeders: string[]): Promise<void> {
+    if (seeders.length === 0) {
+      throw new Error(`No seeders available to download chunk ${chunkHash}`);
+    }
+
+    // A more advanced implementation could try multiple seeders if one fails.
+    const seederId = seeders[0];
+
+    try {
+      await invoke('request_file_chunk', { 
+        fileHash: chunkHash,
+        peerId: seederId 
+      });
+      console.log(`Successfully received and stored chunk: ${chunkHash}`);
+    } catch (error) {
+      console.error(`Failed to request chunk ${chunkHash} from peer ${seederId}:`, error);
+      throw error;
     }
   }
 

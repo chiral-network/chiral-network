@@ -33,6 +33,9 @@ export interface FileItem {
   isNewVersion?: boolean; // Whether this is a new version of an existing file
   speed?: string; // Download/upload speed display
   eta?: string; // Estimated time remaining display
+  isEncrypted?: boolean;
+  manifest?: any;
+  path?: string; 
 }
 
 export interface ProxyNode {

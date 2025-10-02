@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { AppSettings } from "./stores";
 import { writeFile } from "@tauri-apps/plugin-fs";
 import { homeDir, join } from "@tauri-apps/api/path";
+
 // Default bootstrap nodes for network connectivity
 export const DEFAULT_BOOTSTRAP_NODES = [
   "/ip4/145.40.118.135/tcp/4001/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
@@ -46,7 +47,24 @@ export interface FileMetadata {
   encryptionMethod?: string;
   keyFingerprint?: string;
   version?: number;
+  manifest?: string;
 }
+
+export interface FileManifestForJs {
+  merkleRoot: string;
+  chunks: any[]; // Define a proper type for ChunkInfo if you can
+  encryptedKeyBundle: string; // This is the JSON string
+}
+
+export const encryptionService = {
+  async encryptFile(filePath: string): Promise<FileManifestForJs> {
+    return await invoke('encrypt_file_for_upload', { filePath });
+  },
+
+  async decryptFile(manifest: FileManifestForJs, outputPath: string): Promise<void> {
+    await invoke('decrypt_and_reassemble_file', { manifestJs: manifest, outputPath });
+  }
+};
 
 export interface DhtHealth {
   peerCount: number;
