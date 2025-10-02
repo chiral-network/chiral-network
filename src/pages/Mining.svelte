@@ -269,16 +269,20 @@
     
     // Start polling for mining stats
     statsInterval = setInterval(async () => {
-    if ($miningState.isMining) {
-       await updateMiningStats();
-       await walletService.refreshTransactions();
-    }
-    await updateNetworkStats();
-    if (isTauri) {
-      await updateCpuTemperature();
-    }
-  }, 1000) as unknown as number;
-  })
+      if ($miningState.isMining) {
+        // ✅ 并行执行，不互相等待
+        await Promise.all([
+          updateMiningStats(),
+          walletService.refreshTransactions(),
+          walletService.refreshBalance()
+        ]);
+      }
+      await updateNetworkStats();
+      if (isTauri) {
+        await updateCpuTemperature();
+      }
+    }, 1000);
+  })  
   
   async function checkGethStatus() {
     try {
@@ -384,12 +388,9 @@
       
       // Also fetch account balance and blocks mined if we have an account and are mining
       if ($etcAccount && $miningState.isMining) {
-        promises.push(invoke('get_account_balance', { 
-          address: $etcAccount.address 
-        }) as Promise<string>)
-        promises.push(invoke('get_blocks_mined', { 
-          address: $etcAccount.address 
-        }) as Promise<number>)
+          promises.push(invoke('get_blocks_mined', { 
+            address: $etcAccount.address 
+          }) as Promise<number>)
       }
       
       const results = await Promise.all(promises)
@@ -399,31 +400,12 @@
       currentBlock = results[1]
       peerCount = results[2]
       
-      // Update total rewards from actual balance
-      if (results[3] !== undefined) {
-        const balance = parseFloat(results[3]);
-        if (!isNaN(balance)) {
-          // Only update if backend balance is higher
-          if (balance > ($miningState.totalRewards ?? 0)) {
-            $miningState.totalRewards = balance;
-
-            // Mark all "pending" mining reward txs as completed
-            transactions.update(list =>
-              list.map(tx =>
-                tx.status === 'pending' ? { ...tx, status: 'completed' } : tx
-              )
-            );
-          }
-        }
-      }  
+      
+       
               
       // Update blocks mined from blockchain query
       
-      if (results[4] !== undefined) {
-        const blocksMined = results[4] as number;
-
-        $miningState.blocksFound = blocksMined;
-      }
+      
     }
   } catch (e) {
     console.error('Failed to update network stats:', e)

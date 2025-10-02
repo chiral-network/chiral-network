@@ -16,6 +16,9 @@ mod manager;
 pub mod net;
 mod peer_selection;
 mod webrtc_service;
+use std::sync::Mutex as StdMutex;
+
+use lazy_static::lazy_static;
 use crate::commands::proxy::{
     list_proxies, proxy_connect, proxy_disconnect, proxy_echo, ProxyNode,
 };
@@ -38,7 +41,7 @@ use std::process::Command;
 use std::{
     io::{BufRead, BufReader},
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use sysinfo::{Components, System, MINIMUM_CPU_UPDATE_INTERVAL};
 use systemstat::{Platform, System as SystemStat};
@@ -496,10 +499,32 @@ async fn get_miner_logs(data_dir: String, lines: usize) -> Result<Vec<String>, S
 async fn get_miner_performance(data_dir: String) -> Result<(u64, f64), String> {
     get_mining_performance(&data_dir)
 }
-
+lazy_static! {
+    static ref BLOCKS_CACHE: StdMutex<Option<(String, u64, Instant)>> = StdMutex::new(None);
+}
 #[tauri::command]
+
 async fn get_blocks_mined(address: String) -> Result<u64, String> {
-    get_mined_blocks_count(&address).await
+    // 检查缓存（500ms 内直接返回）
+    {
+        let cache = BLOCKS_CACHE.lock().unwrap();
+        if let Some((cached_addr, cached_blocks, cached_time)) = cache.as_ref() {
+            if cached_addr == &address && cached_time.elapsed() < Duration::from_millis(500) {
+                return Ok(*cached_blocks);
+            }
+        }
+    }
+    
+    // 调用原有逻辑（慢速查询）
+    let blocks = get_mined_blocks_count(&address).await?;
+    
+    // 更新缓存
+    {
+        let mut cache = BLOCKS_CACHE.lock().unwrap();
+        *cache = Some((address, blocks, Instant::now()));
+    }
+    
+    Ok(blocks)
 }
 #[tauri::command]
 async fn get_recent_mined_blocks_pub(
@@ -955,21 +980,15 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
 
 #[tauri::command]
 fn get_cpu_temperature() -> Option<f32> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static LAST_UPDATE: AtomicU64 = AtomicU64::new(0);
-
-    let now = SystemTime::now();
-    let now_secs = now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-    let last_update = LAST_UPDATE.load(Ordering::Relaxed);
-
-    if last_update > 0 {
-        let last_instant = std::time::UNIX_EPOCH + Duration::from_secs(last_update);
-        if now.duration_since(last_instant).unwrap_or_default() < MINIMUM_CPU_UPDATE_INTERVAL {
-            return None;
+    static mut LAST_UPDATE: Option<Instant> = None;
+    unsafe {
+        if let Some(last) = LAST_UPDATE {
+            if last.elapsed() < MINIMUM_CPU_UPDATE_INTERVAL {
+                return None;
+            }
         }
+        LAST_UPDATE = Some(Instant::now());
     }
-
-    LAST_UPDATE.store(now_secs, Ordering::Relaxed);
 
     // Try sysinfo first (works on some platforms including M1 macs and some Windows)
     let mut sys = System::new_all();

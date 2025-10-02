@@ -31,7 +31,7 @@ function pushRecentBlock(b: { hash: string; reward?: number; timestamp?: Date })
       from: 'Mining reward',
       date: b.timestamp ?? new Date(),
       description: `Block Reward (…${last4})`,
-      status: 'pending'
+      status: 'completed'
     };
     transactions.update(list => [tx, ...list]);
   }
@@ -65,21 +65,37 @@ async function refreshTransactions() {
 }
 
 async function refreshBalance() {
-    const account = get(etcAccount);
-    if (!account) return;
+  const account = get(etcAccount);
+  if (!account) return;
 
-    try {
-        const balanceStr = await invoke('get_account_balance', { address: account.address }) as string;
-        const realBalance = parseFloat(balanceStr);
+  try {
+      // 获取链上余额
+      const balanceStr = await invoke('get_account_balance', { 
+          address: account.address 
+      }) as string;
+      const realBalance = parseFloat(balanceStr);
 
-        wallet.update(w => ({ ...w, balance: realBalance }));
+      // 获取挖矿区块数和总收益
+      const blocksMined = await invoke('get_blocks_mined', { 
+          address: account.address 
+      }) as number;
+      const totalEarned = blocksMined * 2;
 
-        if (!isNaN(realBalance) && realBalance > (get(miningState).totalRewards ?? 0)) {
-            miningState.update(state => ({ ...state, totalRewards: realBalance }));
-        }
-    } catch (e) {
-        console.error('Failed to refresh balance:', e);
-    }
+      // 更新 wallet store 的 balance
+      wallet.update(w => ({ 
+          ...w, 
+          balance: realBalance
+      }));
+
+      // 更新 mining state 的 totalRewards
+      miningState.update(state => ({ 
+          ...state, 
+          totalRewards: totalEarned,
+          blocksFound: blocksMined 
+      }));
+  } catch (e) {
+      console.error('Failed to refresh balance:', e);
+  }
 }
 
 // Export the functions as a service object

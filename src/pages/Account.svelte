@@ -516,7 +516,7 @@
         date: new Date(),
         description: tr('transactions.manual'),
         status: 'pending',
-        txHash: txHash // Store transaction hash
+        txHash: txHash
       }, ...txs])
       
       // Clear form
@@ -526,8 +526,8 @@
       
       showToast('Transaction submitted!', 'success')
       
-      // Poll for transaction confirmation
-      pollTransactionStatus(txHash)
+      // ❌ 删除这部分 - 不再轮询
+      // pollTransactionStatus(txHash)
       
     } catch (error) {
       console.error('Transaction failed:', error)
@@ -538,41 +538,7 @@
     }
   }
 
-  async function pollTransactionStatus(txHash: string) {
-    const maxAttempts = 60 // 5 minutes
-    let attempts = 0
-    
-    const interval = setInterval(async () => {
-      attempts++
-      
-      try {
-        // Check if transaction is mined
-        const receipt = await invoke('get_transaction_receipt', { txHash })
-        
-        if (receipt) {
-          // Transaction confirmed
-          clearInterval(interval)
-          
-          // Update transaction status
-          transactions.update(txs => txs.map(tx => 
-            tx.txHash === txHash ? { ...tx, status: 'completed' } : tx
-          ))
-          
-          // Refresh balance
-          await fetchBalance()
-          
-          showToast('Transaction confirmed!', 'success')
-        }
-      } catch (error) {
-        console.error('Error checking transaction status:', error)
-      }
-      
-      if (attempts >= maxAttempts) {
-        clearInterval(interval)
-        showToast('Transaction confirmation timeout', 'warning')
-      }
-    }, 5000) // Check every 5 seconds
-  }
+  
   
   function formatDate(date: Date): string {
     const loc = get(locale) || 'en-US'
@@ -651,15 +617,22 @@
         wallet.update(w => ({ 
           ...w, 
           balance: Math.max(0, realBalance - pendingAmount),
-          actualBalance: realBalance // Store actual on-chain balance
+          actualBalance: realBalance
         }));
         
-        // Update mining state
-        if (!isNaN(realBalance)) {
-          miningState.update(state => ({
-            ...state,
-            totalRewards: realBalance
-          }));
+        // 如果链上余额变化了，说明某些 pending 交易已确认
+        // 自动将这些交易状态改为 completed
+        if (pendingAmount > 0) {
+          const expectedBalance = realBalance - pendingAmount;
+          
+          // 如果实际余额接近预期（说明交易已确认）
+          if (Math.abs(realBalance - expectedBalance) < 0.01) {
+            transactions.update(txs => txs.map(tx => 
+              tx.status === 'pending' && tx.type === 'sent' 
+                ? { ...tx, status: 'completed' } 
+                : tx
+            ));
+          }
         }
       }
     } catch (error) {
