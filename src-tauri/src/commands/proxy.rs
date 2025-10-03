@@ -3,10 +3,10 @@ use crate::AppState;
 use tauri::Emitter;
 use tauri::State;
 // use tracing::info;
-use tracing::{info, warn};
 use libp2p::PeerId;
 use std::str::FromStr;
 use std::sync::Arc;
+use tracing::{info, warn};
 
 #[derive(Clone, serde::Serialize)]
 pub struct ProxyNode {
@@ -100,7 +100,7 @@ pub(crate) async fn proxy_disconnect(
     // }
     // // Note: This doesn't actually disconnect the peer in libp2p in this version.
     // Ok(())
-    
+
     // Update local cache optimistically and capture the peer ID if known
     let maybe_peer_id = {
         let mut proxies = state.proxies.lock().await;
@@ -129,7 +129,6 @@ pub(crate) async fn proxy_disconnect(
     })?;
 
     dht.disconnect_peer(peer_id).await
-
 }
 
 #[tauri::command]
