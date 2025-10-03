@@ -1566,6 +1566,9 @@ async fn upload_file_data_to_network(
     encryption_method: Option<String>,
     key_fingerprint: Option<String>,
 ) -> Result<FileMetadata, String> {
+    // Check for active account - require login for all uploads
+    let _account = get_active_account(&state).await?;
+
     let dht_opt = { state.dht.lock().await.as_ref().cloned() };
     if let Some(dht) = dht_opt {
         // Calculate file hash from the provided data
@@ -1606,6 +1609,9 @@ async fn upload_file_to_network(
     state: State<'_, AppState>,
     file_path: String,
 ) -> Result<FileMetadata, String> {
+    // Check for active account - require login for all uploads
+    let _account = get_active_account(&state).await?;
+
     let dht_opt = { state.dht.lock().await.as_ref().cloned() };
     if let Some(dht) = dht_opt {
         // Stream the file data instead of loading it all into memory
@@ -1705,6 +1711,9 @@ async fn start_streaming_upload(
     file_size: u64,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
+    // Check for active account - require login for all uploads
+    let _account = get_active_account(&state).await?;
+
     let dht_opt = { state.dht.lock().await.as_ref().cloned() };
     if dht_opt.is_none() {
         return Err("DHT not running".into());
@@ -3079,7 +3088,7 @@ async fn encrypt_file_for_self_upload(
         .lock()
         .await
         .clone()
-        .ok_or("No active account. Please log in to share files.")?;
+        .ok_or("No account is currently active. Please log in.")?;
 
     // Get the app data directory for chunk storage
     let app_data_dir = app
@@ -3136,7 +3145,7 @@ async fn decrypt_and_reassemble_file(
         .lock()
         .await
         .clone()
-        .ok_or("No active account. Please log in to access files.")?;
+        .ok_or("No account is currently active. Please log in.")?;
 
     let pk_bytes = hex::decode(private_key_hex.trim_start_matches("0x"))
         .map_err(|_| "Invalid private key format".to_string())?;
