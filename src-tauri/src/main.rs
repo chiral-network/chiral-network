@@ -1011,9 +1011,10 @@ fn get_cpu_temperature() -> Option<f32> {
     // Windows-specific temperature detection methods
     #[cfg(target_os = "windows")]
     {
-        if let Some(temp) = get_windows_temperature() {
-            return Some(temp);
-        }
+        // todo: Getting windows temp needs fixing - currently makes app performance very slow
+        // if let Some(temp) = get_windows_temperature() {
+        //     return None;
+        // }
     }
 
     // Linux-specific temperature detection methods
@@ -1033,6 +1034,7 @@ fn get_cpu_temperature() -> Option<f32> {
     None
 }
 
+//todo for fixing later
 #[cfg(target_os = "windows")]
 fn get_windows_temperature() -> Option<f32> {
     use std::process::Command;
@@ -1620,7 +1622,7 @@ async fn upload_file_data_to_network(
         let metadata = FileMetadata {
             file_hash: file_hash.clone(),
             file_name: file_name.clone(),
-            file_size: file_size,
+            file_size,
             file_data: cloned_fd,
             seeders: vec![],
             created_at: std::time::SystemTime::now()
