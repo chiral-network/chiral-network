@@ -769,6 +769,7 @@ async fn publish_file_metadata(
             parent_hash: None,
             version: Some(1),
             cids: None,
+            is_root: false,
         };
 
         dht.publish_file(metadata).await
@@ -1339,6 +1340,7 @@ async fn upload_file_to_network(
                 parent_hash: None,
                 version: Some(1),
                 cids: None,
+                is_root: true,
             };
 
             match dht.publish_file(metadata.clone()).await {
@@ -1640,6 +1642,7 @@ async fn upload_file_data_to_network(
             parent_hash: None,
             version: Some(1),
             cids: None,
+            is_root: true, 
         };
 
         // Publish to DHT
