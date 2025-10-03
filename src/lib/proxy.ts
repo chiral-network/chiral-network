@@ -141,6 +141,7 @@ export function disposeProxyEvents() {
 }
 
 export async function connectProxy(url: string, token: string) {
+  await initProxyEvents();
   try {
     await invoke("proxy_connect", { url, token });
   } catch (e) {
