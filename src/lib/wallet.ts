@@ -39,6 +39,8 @@ export interface WalletExportSnapshot {
   privateKey?: string;
 }
 
+
+
 export class WalletService {
   private initialized = false;
   private pollHandle: ReturnType<typeof setInterval> | null = null;
@@ -86,6 +88,31 @@ export class WalletService {
     }
     this.initialized = false;
     this.seenHashes.clear();
+  }
+
+  isDesktopEnvironment(): boolean {
+    return this.isTauri;
+  }
+
+  async signApiRequest(
+    method: string,
+    path: string,
+    body?: Uint8Array | null,
+    options?: { timestamp?: number }
+  ): Promise<ApiRequestSignature> {
+    if (!this.isTauri) {
+      throw new Error('Ethereum authentication headers require the desktop app');
+    }
+
+    const payload = body && body.length > 0 ? Array.from(body) : null;
+    const result = (await invoke('sign_api_request', {
+      method,
+      path,
+      body: payload,
+      timestamp: options?.timestamp ?? null,
+    })) as ApiRequestSignature;
+
+    return result;
   }
 
   private startPolling(): void {
