@@ -6,7 +6,7 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import { ShieldCheck, ShieldX, Globe, Activity, Plus, Power, Trash2 } from 'lucide-svelte'
   import { onMount } from 'svelte';
-  import { proxyNodes, connectProxy, disconnectProxy, listProxies } from '$lib/proxy';
+  import { proxyNodes, connectProxy, disconnectProxy, removeProxy, listProxies } from '$lib/proxy';
   import { t } from 'svelte-i18n'
   import DropDown from '$lib/components/ui/dropDown.svelte'
   
@@ -68,8 +68,8 @@
   }
 
   function confirmRemoveNode() {
-    if (nodeToRemove) {
-      disconnectProxy(nodeToRemove.address)
+    if (nodeToRemove && nodeToRemove.address) {
+      removeProxy(nodeToRemove.address)
     }
     showConfirmDialog = false
     nodeToRemove = null
@@ -98,12 +98,12 @@
 <!-- Confirmation Dialog -->
 {#if showConfirmDialog && nodeToRemove}
   <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-    <div class="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+    <div class="bg-white rounded-lg p-6 max-w-md w-full mx-4 overflow-hidden">
       <h3 class="text-lg font-semibold mb-4">Confirm Removal</h3>
-      <p class="text-muted-foreground mb-6">
+      <p class="text-muted-foreground mb-6 break-words">
         Confirm the removal of proxy node <span class="font-medium">{nodeToRemove.address}</span>
       </p>
-      <div class="flex gap-3 justify-end">
+      <div class="flex gap-3 justify-center">
         <Button variant="outline" on:click={cancelRemoveNode}>
           Cancel
         </Button>
@@ -260,20 +260,19 @@
     <div class="space-y-3">
       {#each sortedNodes as node}
         <div class="p-4 bg-secondary rounded-lg">
-          <div class="flex items-center justify-between mb-3">
-            <div class="flex items-center gap-3">
-              <div class="w-2 h-2 rounded-full {
-                node.status === 'online' ? 'bg-green-500' : 
-                node.status === 'offline' ? 'bg-red-500' : 
-                node.status === 'connecting' ? 'bg-yellow-500' :
-                'bg-gray-500'
-              }"></div>
-              <div>
-                <p class="font-medium">{node.address || node.id}</p>
-                <p class="text-xs text-muted-foreground">{node.address ? 'Proxy Node' : 'DHT Peer'}</p>
-              </div>
-            </div>
-              <Badge variant={node.status === 'online' ? 'default' :
+           <div class="flex items-center justify-between mb-3">
+                      <div class="flex items-center gap-3 min-w-0">
+                        <div class="w-2 h-2 rounded-full flex-shrink-0 {
+                          node.status === 'online' ? 'bg-green-500' : 
+                          node.status === 'offline' ? 'bg-red-500' : 
+                          node.status === 'connecting' ? 'bg-yellow-500' :
+                          'bg-gray-500'
+                        }"></div>
+                        <div class="min-w-0">
+                          <p class="font-medium break-words" title={node.address || node.id}>{node.address || node.id}</p>
+                          <p class="text-xs text-muted-foreground">{node.address ? 'Proxy Node' : 'DHT Peer'}</p>
+                        </div>
+                      </div>              <Badge variant={node.status === 'online' ? 'default' :
                    node.status === 'offline' ? 'secondary' :
                    node.status === 'connecting' ? 'outline' : 'outline'}
                       class={
@@ -303,7 +302,7 @@
             <Button
               size="sm"
               variant="outline"
-              on:click={() => toggleNode(node.id)}
+              on:click={() => toggleNode(node)}
             >
               <Power class="h-3 w-3 mr-1" />
               {node.status === 'online' ? $t('proxy.disconnect') : $t('proxy.connect')}
@@ -311,6 +310,7 @@
             <Button
               size="sm"
               variant="destructive"
+              disabled={!node.address}
               on:click={() => requestRemoveNode(node)}
             >
               <Trash2 class="h-3 w-3 mr-1" />

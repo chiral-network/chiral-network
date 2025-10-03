@@ -157,6 +157,15 @@ export async function disconnectProxy(url: string) {
   }
 }
 
+export async function removeProxy(url: string) {
+  try {
+    await invoke("proxy_remove", { url });
+    proxyNodes.update((nodes) => nodes.filter((n) => n.address !== url));
+  } catch (e) {
+    console.error("proxy_remove failed:", e);
+  }
+}
+
 export async function listProxies() {
   try {
     const incoming = (await invoke<ProxyNode[]>("list_proxies")) ?? [];
