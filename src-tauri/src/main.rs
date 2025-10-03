@@ -2569,6 +2569,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
             import_chiral_account,
+            get_network_peer_count,
             start_geth_node,
             stop_geth_node,
             save_account_to_keystore,
@@ -2827,7 +2828,6 @@ async fn encrypt_file_for_self_upload(
         .await
         .clone()
         .ok_or("No active account. Please log in to encrypt.")?;
-
     let pk_bytes = hex::decode(private_key_hex.trim_start_matches("0x"))
         .map_err(|_| "Invalid private key format".to_string())?;
     let secret_key = StaticSecret::from(
