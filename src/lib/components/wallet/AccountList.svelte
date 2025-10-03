@@ -6,7 +6,7 @@
   import { deriveNext } from '$lib/wallet/hd'
   import { showToast } from '$lib/toast'
   import { wallet, etcAccount } from '$lib/stores'
-  import { invoke } from '@tauri-apps/api/core'
+  import { walletService } from '$lib/wallet'
 
   interface AccountItem { index: number; change: number; address: string; label?: string; privateKeyHex?: string }
   export let mnemonic: string
@@ -60,10 +60,10 @@
   async function saveToKeystore(acc: AccountItem) {
     try {
       if (!acc.privateKeyHex) return
-      const pk = '0x' + acc.privateKeyHex
-      // Ensure address correctness from backend
-      const info = await invoke<{ address: string, private_key: string }>('import_chiral_account', { privateKey: pk })
-      await invoke('save_account_to_keystore', { address: info.address, privateKey: info.private_key, password: prompt('Enter keystore password') || '' })
+      const pk = acc.privateKeyHex.startsWith('0x') ? acc.privateKeyHex : acc.privateKeyHex
+      const password = prompt('Enter keystore password') || ''
+      if (!password) return
+      await walletService.saveToKeystore(password, { address: acc.address, private_key: pk })
       showToast('Saved to keystore', 'success')
     } catch (e) {
       showToast('Keystore save failed: ' + String(e), 'error')
