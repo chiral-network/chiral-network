@@ -190,11 +190,11 @@
   async function downloadVersion(version: any) {
     // Convert version data to FileMetadata format for download
     const metadata: FileMetadata = {
-      fileHash: version.file_hash,
-      fileName: version.file_name,
-      fileSize: version.file_size,
+      fileHash: version.fileHash,
+      fileName: version.fileName,
+      fileSize: version.fileSize,
       seeders: version.seeders || [],
-      createdAt: version.created_at * 1000, // Convert to milliseconds
+      createdAt: version.createdAt * 1000, // Convert to milliseconds
       isEncrypted: version.is_encrypted || false,
       mimeType: version.mime_type,
       encryptionMethod: version.encryption_method,
@@ -396,13 +396,13 @@
                           v{version.version}
                         </Badge>
                         <div class="flex-1 min-w-0">
-                          <div class="font-medium text-sm truncate">{version.file_name}</div>
+                          <div class="font-medium text-sm truncate">{version.fileName}</div>
                           <div class="flex items-center gap-2 text-xs text-muted-foreground">
-                            <span>Hash: {version.file_hash.slice(0, 8)}...</span>
+                            <span>Hash: {version.fileHash.slice(0, 8)}...</span>
                             <span>•</span>
-                            <span>{(version.file_size / 1048576).toFixed(2)} MB</span>
+                            <span>{(version.fileSize / 1048576).toFixed(2)} MB</span>
                             <span>•</span>
-                            <span>{new Date(version.created_at * 1000).toLocaleDateString()}</span>
+                            <span>{new Date(version.createdAt * 1000).toLocaleDateString()}</span>
                           </div>
                         </div>
                       </div>
