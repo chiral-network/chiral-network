@@ -39,7 +39,13 @@ export interface WalletExportSnapshot {
   privateKey?: string;
 }
 
-
+export interface ApiRequestSignature {
+  address: string;
+  signature: string;
+  timestamp: number;
+  bodyHash: string;
+  canonicalMessage: string;
+}
 
 export class WalletService {
   private initialized = false;
