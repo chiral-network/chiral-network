@@ -2887,6 +2887,7 @@ fn main() {
             create_chiral_account,
             import_chiral_account,
             has_active_account,
+            get_network_peer_count,
             start_geth_node,
             stop_geth_node,
             save_account_to_keystore,
