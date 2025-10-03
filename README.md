@@ -31,7 +31,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 - ✅ **Drag & Drop Interface**: Simple, compact file addition with real-time feedback
 - ✅ **Content Hashing**: SHA-256 hash generation for unique file identifiers
 - ✅ **DHT Metadata Distribution**: File information shared via distributed hash table
-- ❌ **Network Integration**: Files registered with P2P network for discovery (no seeder/provider registration)
+- ❌ **Network Integration**: Files registered with P2P network for discovery (metadata stored in DHT but provider records not registered)
 - ✅ **No Size Limits**: Share files of any size efficiently
 
 ### 2. Intelligent Download Management
@@ -354,7 +354,7 @@ MIT License - See LICENSE file for details
 
 ### BitTorrent-Like Architecture
 
-- **Instant Seeding**: Files immediately available when added (no upload step)
+- **Instant Seeding**: Files immediately available when added
 - **Continuous Availability**: Files remain accessible while in your list
 - **Peer Statistics**: Track seeders and leechers for each file
 - **No Pending State**: Eliminates confusion between "uploading" and "shared"

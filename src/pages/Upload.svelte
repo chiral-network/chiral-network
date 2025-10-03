@@ -2,7 +2,7 @@
   import Card from '$lib/components/ui/card.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import { File as FileIcon, X, Plus, FolderOpen, FileText, Image, Music, Video, Archive, Code, FileSpreadsheet, Upload, Download, RefreshCw } from 'lucide-svelte'
-  import { files, type FileItem } from '$lib/stores'
+  import { files, type FileItem, etcAccount } from '$lib/stores'
   import { t } from 'svelte-i18n';
   import { get } from 'svelte/store'
   import { onMount, onDestroy } from 'svelte';
@@ -183,6 +183,11 @@
         e.stopPropagation()
         isDragging = false
 
+        if (!$etcAccount) {
+          showToast('Please create or import an account to upload files', 'warning')
+          return
+        }
+
         if (isUploading) {
           showToast('Upload already in progress. Please wait for the current upload to complete.', 'warning')
           return
@@ -224,14 +229,17 @@
 
                 const isNewVersion = existingVersions.length > 0;
 
+                // Check if DHT is running to determine initial status
+                const isDhtRunning = dhtService.getPeerId() !== null;
+
                 const newFile = {
                   id: `file-${Date.now()}-${Math.random()}`,
                   name: metadata.fileName,
                   path: file.name, // Use file name as path for display
                   hash: metadata.fileHash,
                   size: metadata.fileSize, // Use backend-calculated size for consistency
-                  status: 'seeding' as const,
-                  seeders: 1,
+                  status: isDhtRunning ? ('seeding' as const) : ('uploaded' as const),
+                  seeders: isDhtRunning ? 1 : 0,
                   leechers: 0,
                   uploadDate: new Date(metadata.createdAt * 1000),
                   version: metadata.version,
@@ -241,20 +249,21 @@
                     files.update((currentFiles) => [...currentFiles, newFile]);
                     addedCount++;
 
-                // Show version-specific success message
-                if (isNewVersion) {
-                  showToast(`${file.name} uploaded as v${metadata.version} (update from v${existingVersions[0]?.version || 1})`, 'success');
-                } else {
-                  showToast(`${file.name} uploaded as v${metadata.version} (new file)`, 'success');
-                }
-
-                // Publish file metadata to DHT network for discovery
-                try {
-                  await dhtService.publishFile(metadata);
-                  console.log('Dropped file published to DHT:', metadata.fileHash);
-                } catch (publishError) {
-                  console.warn('Failed to publish dropped file to DHT:', publishError);
-                }
+                    // Publish file metadata to DHT network for discovery
+                    try {
+                      await dhtService.publishFile(metadata);
+                      console.log('Dropped file published to DHT:', metadata.fileHash);
+                    } catch (publishError) {
+                      console.warn('Failed to publish dropped file to DHT:', publishError);
+                      // Update status to 'uploaded' since publishing failed
+                      files.update((currentFiles) => 
+                        currentFiles.map(f => 
+                          f.hash === metadata.fileHash 
+                            ? { ...f, status: 'uploaded', seeders: 0 }
+                            : f
+                        )
+                      );
+                    }
               } catch (error) {
                 console.error('Error uploading dropped file:', file.name, error);
                 const fileName = file.name || 'unknown file';
@@ -267,6 +276,12 @@
             }
 
             if (addedCount > 0) {
+              const isDhtRunning = dhtService.getPeerId() !== null;
+              if (isDhtRunning) {
+                showToast('Files published to DHT network for sharing!', 'success')
+              } else {
+                showToast('Files stored locally. Start DHT network to share with others.', 'info')
+              }
               // Make storage refresh non-blocking to prevent UI hanging
               setTimeout(() => refreshAvailableStorage(), 100)
             }
@@ -308,6 +323,11 @@
   })
 
   async function openFileDialog() {
+    if (!$etcAccount) {
+      showToast('Please create or import an account to upload files', 'warning')
+      return
+    }
+
     if (isUploading) return
 
     try {
@@ -350,6 +370,11 @@
   }
 
   async function addFilesFromPaths(paths: string[]) {
+    if (!$etcAccount) {
+      showToast('Please create or import an account to upload files', 'warning')
+      return
+    }
+
     let duplicateCount = 0
     let addedCount = 0
 
@@ -402,14 +427,25 @@
         if (isDhtRunning) {
           try {
             await dhtService.publishFile(fileMetadataForDht);
-            showToast(`${fileName} uploaded and is now seeding!`, 'success');
+            // Success - status remains 'seeding'
           } catch (publishError) {
-            console.warn('Failed to publish encrypted file to DHT:', publishError);
-            showToast(`${fileName} stored locally but failed to share on network. Start DHT to share files.`, 'warning');
+            console.warn('Failed to publish file to DHT:', publishError);
+            // Failed to publish - update status to 'uploaded'
+            files.update(f => f.map(file => 
+              file.hash === fileMetadataForDht.fileHash 
+                ? { ...file, status: 'uploaded', seeders: 0 }
+                : file
+            ));
           }
         } else {
-          showToast(`${fileName} stored locally. Start DHT network to share with others.`, 'info');
+          // DHT not running - update status to 'uploaded'
+          files.update(f => f.map(file => 
+            file.hash === fileMetadataForDht.fileHash 
+              ? { ...file, status: 'uploaded', seeders: 0 }
+              : file
+          ));
         }
+        
         return { type: 'success', fileName };
       } catch (error) {
         console.error(error);
@@ -437,13 +473,20 @@
     }
 
     if (addedCount > 0) {
+      showUploadSummaryMessage(addedCount);
+    }
+  }
+
+  function showUploadSummaryMessage(addedCount: number) {
+    if (addedCount > 0) {
       const isDhtRunning = dhtService.getPeerId() !== null;
       if (isDhtRunning) {
         showToast('Files published to DHT network for sharing!', 'success')
       } else {
         showToast('Files stored locally. Start DHT network to share with others.', 'info')
       }
-      refreshAvailableStorage()
+      // Make storage refresh non-blocking to prevent UI hanging
+      setTimeout(() => refreshAvailableStorage(), 100)
     }
   }
 
@@ -604,6 +647,9 @@
             <p class="text-sm text-muted-foreground mt-1">
               {$files.filter(f => f.status === 'seeding' || f.status === 'uploaded').length} {$t('upload.files')} •
               {formatFileSize($files.filter(f => f.status === 'seeding' || f.status === 'uploaded').reduce((sum, f) => sum + f.size, 0))} {$t('upload.total')}
+              {#if $files.filter(f => f.status === 'seeding').length > 0}
+                <span class="text-green-600 font-medium">({$files.filter(f => f.status === 'seeding').length} seeding)</span>
+              {/if}
             </p>
             <p class="text-xs text-muted-foreground mt-1">{$t('upload.tip')}</p>
           </div>
@@ -684,10 +730,17 @@
                 </div>
 
                 <div class="flex items-center gap-2">
-                  <Badge variant="secondary" class="bg-green-500/10 text-green-600 border-green-500/20 font-medium">
-                    <div class="w-1.5 h-1.5 bg-green-500 rounded-full mr-1.5 animate-pulse"></div>
-                    {$t('upload.seeding')}
-                  </Badge>
+                  {#if file.status === 'seeding'}
+                    <Badge variant="secondary" class="bg-green-500/10 text-green-600 border-green-500/20 font-medium">
+                      <div class="w-1.5 h-1.5 bg-green-500 rounded-full mr-1.5 animate-pulse"></div>
+                      {$t('upload.seeding')}
+                    </Badge>
+                  {:else if file.status === 'uploaded'}
+                    <Badge variant="secondary" class="bg-blue-500/10 text-blue-600 border-blue-500/20 font-medium">
+                      <div class="w-1.5 h-1.5 bg-blue-500 rounded-full mr-1.5"></div>
+                      Stored Locally
+                    </Badge>
+                  {/if}
 
                   <button
                     on:click={() => handleCopy(file.hash)}
