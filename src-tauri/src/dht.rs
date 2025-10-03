@@ -1404,6 +1404,7 @@ async fn handle_kademlia_event(
                                     version: metadata_json.get("version").and_then(|v| v.as_u64()).map(|v| v as u32),
                                     parent_hash: metadata_json.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                     cids: None, // CIDs are in the root block
+                                    is_root: metadata_json.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
                                 };
 
                                 let notify_metadata = metadata.clone();
