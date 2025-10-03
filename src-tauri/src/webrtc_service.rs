@@ -14,7 +14,7 @@ use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
-use crate::FileTransferService;
+use crate::file_transfer::FileTransferService;
 
 const CHUNK_SIZE: usize = 16384; // 16KB chunks
 
