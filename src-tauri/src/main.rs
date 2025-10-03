@@ -5,6 +5,7 @@
 
 pub mod commands;
 
+pub mod analytics;
 mod dht;
 mod encryption;
 mod ethereum;
@@ -84,6 +85,7 @@ struct AppState {
     proxies: Arc<Mutex<Vec<ProxyNode>>>,
     file_transfer_pump: Mutex<Option<JoinHandle<()>>>,
     socks5_proxy_cli: Mutex<Option<String>>,
+    analytics: Arc<analytics::AnalyticsService>,
 
     // New fields for transaction queue
     transaction_queue: Arc<Mutex<VecDeque<QueuedTransaction>>>,
@@ -1342,7 +1344,12 @@ async fn upload_file_to_network(
             };
 
             match dht.publish_file(metadata.clone()).await {
-                Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
+                Ok(_) => {
+                    info!("Published file metadata to DHT: {}", file_hash);
+                    // Track upload in analytics
+                    state.analytics.record_upload(file_data.len() as u64).await;
+                    state.analytics.record_upload_completed().await;
+                }
                 Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
             };
             Ok(())
@@ -1645,8 +1652,13 @@ async fn upload_file_data_to_network(
         // Publish to DHT
         if let Err(e) = dht.publish_file(metadata.clone()).await {
             warn!("Failed to publish file metadata to DHT: {}", e);
+            state.analytics.record_upload(file_size).await;
             return Err(format!("Failed to publish file: {}", e));
         }
+
+        // Track upload in analytics
+        state.analytics.record_upload(file_size).await;
+        state.analytics.record_upload_completed().await;
 
         Ok(metadata)
     } else {
@@ -2505,6 +2517,57 @@ async fn get_transaction_queue_status(
     }))
 }
 
+// Analytics commands
+#[tauri::command]
+async fn get_bandwidth_stats(
+    state: State<'_, AppState>,
+) -> Result<analytics::BandwidthStats, String> {
+    Ok(state.analytics.get_bandwidth_stats().await)
+}
+
+#[tauri::command]
+async fn get_bandwidth_history(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<analytics::BandwidthDataPoint>, String> {
+    Ok(state.analytics.get_bandwidth_history(limit).await)
+}
+
+#[tauri::command]
+async fn get_performance_metrics(
+    state: State<'_, AppState>,
+) -> Result<analytics::PerformanceMetrics, String> {
+    Ok(state.analytics.get_performance_metrics().await)
+}
+
+#[tauri::command]
+async fn get_network_activity(
+    state: State<'_, AppState>,
+) -> Result<analytics::NetworkActivity, String> {
+    Ok(state.analytics.get_network_activity().await)
+}
+
+#[tauri::command]
+async fn get_resource_contribution(
+    state: State<'_, AppState>,
+) -> Result<analytics::ResourceContribution, String> {
+    Ok(state.analytics.get_resource_contribution().await)
+}
+
+#[tauri::command]
+async fn get_contribution_history(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<analytics::ContributionDataPoint>, String> {
+    Ok(state.analytics.get_contribution_history(limit).await)
+}
+
+#[tauri::command]
+async fn reset_analytics(state: State<'_, AppState>) -> Result<(), String> {
+    state.analytics.reset_stats().await;
+    Ok(())
+}
+
 #[cfg(not(test))]
 fn main() {
     // Initialize logging for debug builds
@@ -2560,6 +2623,7 @@ fn main() {
             proxies: Arc::new(Mutex::new(Vec::new())),
             file_transfer_pump: Mutex::new(None),
             socks5_proxy_cli: Mutex::new(args.socks5_proxy),
+            analytics: Arc::new(analytics::AnalyticsService::new()),
 
             // Initialize transaction queue
             transaction_queue: Arc::new(Mutex::new(VecDeque::new())),
@@ -2650,6 +2714,13 @@ fn main() {
             establish_webrtc_connection,
             send_webrtc_file_request,
             get_webrtc_connection_status,
+            get_bandwidth_stats,
+            get_bandwidth_history,
+            get_performance_metrics,
+            get_network_activity,
+            get_resource_contribution,
+            get_contribution_history,
+            reset_analytics,
             encrypt_file_for_self_upload,
             decrypt_and_reassemble_file,
         ])
