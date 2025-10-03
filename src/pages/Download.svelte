@@ -14,7 +14,7 @@
   import { get } from 'svelte/store'
   import { toHumanReadableSize } from '$lib/utils'
   import { initDownloadTelemetry, disposeDownloadTelemetry } from '$lib/downloadTelemetry'
-
+  
   const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params)
 
   onMount(() => {
@@ -250,6 +250,9 @@
       version: metadata.version, // Preserve version info if available
       seeders: metadata.seeders.length, // Convert array length to number
       seederAddresses: metadata.seeders, // Store the actual seeder addresses
+      // Pass encryption info to the download item
+      isEncrypted: metadata.isEncrypted,
+      manifest: metadata.manifest ? JSON.parse(metadata.manifest) : null
     }
 
     downloadQueue.update((queue) => [...queue, newFile])
@@ -529,77 +532,106 @@
       // Show "automatically started" message now that download is proceeding
       showNotification(tr('download.notifications.autostart'), 'info');
 
-      // Import P2P file transfer service
-      const { p2pFileTransferService } = await import('$lib/services/p2pFileTransfer');
-
-      // Start P2P download using the P2P file transfer service
-      try {
-        const seeders = fileToDownload.seederAddresses || [];
-
-        if (seeders.length === 0) {
-          throw new Error('No seeders available for this file');
-        }
-
-        // Create file metadata for P2P transfer
-        const fileMetadata = {
-          fileHash: fileToDownload.hash,
-          fileName: fileToDownload.name,
-          fileSize: fileToDownload.size,
-          seeders: seeders,
-          createdAt: Date.now(),
-          isEncrypted: false
-        };
-
-        // Initiate P2P download with file saving
-        const transferId = await p2pFileTransferService.initiateDownloadWithSave(
-          fileMetadata,
-          seeders,
-          outputPath,
-          (transfer) => {
-            // Update UI with transfer progress
-            files.update(f => f.map(file => {
-              if (file.id === fileId) {
-                return {
-                  ...file,
-                  progress: transfer.progress,
-                  status: transfer.status === 'completed' ? 'completed' :
-                         transfer.status === 'failed' ? 'failed' :
-                         transfer.status === 'transferring' ? 'downloading' : file.status,
-                  speed: `${Math.round(transfer.speed / 1024)} KB/s`,
-                  eta: transfer.eta ? `${Math.round(transfer.eta)}s` : 'N/A',
-                  downloadPath: transfer.outputPath // Store the download path
-                };
-              }
-              return file;
-            }));
-
-            // Show notification on completion or failure
-            if (transfer.status === 'completed') {
-              showNotification(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
-            } else if (transfer.status === 'failed') {
-              showNotification(tr('download.notifications.downloadFailed', { values: { name: fileToDownload.name } }), 'error');
-            }
+       if (fileToDownload.isEncrypted && fileToDownload.manifest) {
+        // 1. Download all the required encrypted chunks using the P2P service.
+        //    This new function will handle fetching multiple chunks in parallel.
+        showNotification(`Downloading encrypted chunks for "${fileToDownload.name}"...`, 'info');
+        
+        const { p2pFileTransferService } = await import('$lib/services/p2pFileTransfer');
+        await p2pFileTransferService.downloadEncryptedChunks(
+          fileToDownload.manifest,
+          fileToDownload.seederAddresses || [], // Pass the list of seeders
+          (progress) => { // This is the progress callback
+            files.update(f => f.map(file =>
+              file.id === fileId ? { ...file, progress: progress.percentage, status: 'downloading', speed: progress.speed, eta: progress.eta } : file
+            ));
           }
         );
 
-        // Store transfer ID for cleanup
-        activeTransfers.update(transfers => {
-          transfers.set(fileId, { fileId, transferId, type: 'p2p' });
-          return transfers;
-        });
+        // 2. Once all chunks are downloaded, call the backend to decrypt.
+        showNotification(`All chunks received. Decrypting file...`, 'info');
+        const { encryptionService } = await import('$lib/services/encryption');
+        await encryptionService.decryptFile(fileToDownload.manifest, outputPath);
 
-        activeSimulations.delete(fileId);
-
-      } catch (error) {
-        console.error('P2P download failed:', error);
-        activeSimulations.delete(fileId);
+        // 3. Mark the download as complete.
         files.update(f => f.map(file =>
-          file.id === fileId
-            ? { ...file, status: 'failed' }
-            : file
+          file.id === fileId ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath } : file
         ));
-      }
+        showNotification(`Successfully decrypted and saved "${fileToDownload.name}"!`, 'success');
+        activeSimulations.delete(fileId);
 
+      } else {
+        // Import P2P file transfer service
+        const { p2pFileTransferService } = await import('$lib/services/p2pFileTransfer');
+
+        // Start P2P download using the P2P file transfer service
+        try {
+          const seeders = fileToDownload.seederAddresses || [];
+
+          if (seeders.length === 0) {
+            throw new Error('No seeders available for this file');
+          }
+
+          // Create file metadata for P2P transfer
+          const fileMetadata = {
+            fileHash: fileToDownload.hash,
+            fileName: fileToDownload.name,
+            fileSize: fileToDownload.size,
+            seeders: seeders,
+            createdAt: Date.now(),
+            isEncrypted: false
+          };
+
+          // Initiate P2P download with file saving
+          const transferId = await p2pFileTransferService.initiateDownloadWithSave(
+            fileMetadata,
+            seeders,
+            outputPath,
+            (transfer) => {
+              // Update UI with transfer progress
+              files.update(f => f.map(file => {
+                if (file.id === fileId) {
+                  return {
+                    ...file,
+                    progress: transfer.progress,
+                    status: transfer.status === 'completed' ? 'completed' :
+                          transfer.status === 'failed' ? 'failed' :
+                          transfer.status === 'transferring' ? 'downloading' : file.status,
+                    speed: `${Math.round(transfer.speed / 1024)} KB/s`,
+                    eta: transfer.eta ? `${Math.round(transfer.eta)}s` : 'N/A',
+                    downloadPath: transfer.outputPath // Store the download path
+                  };
+                }
+                return file;
+              }));
+
+              // Show notification on completion or failure
+              if (transfer.status === 'completed') {
+                showNotification(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
+              } else if (transfer.status === 'failed') {
+                showNotification(tr('download.notifications.downloadFailed', { values: { name: fileToDownload.name } }), 'error');
+              }
+            }
+          );
+
+          // Store transfer ID for cleanup
+          activeTransfers.update(transfers => {
+            transfers.set(fileId, { fileId, transferId, type: 'p2p' });
+            return transfers;
+          });
+
+          activeSimulations.delete(fileId);
+
+        } catch (error) {
+          console.error('P2P download failed:', error);
+          activeSimulations.delete(fileId);
+          files.update(f => f.map(file =>
+            file.id === fileId
+              ? { ...file, status: 'failed' }
+              : file
+          ));
+        }
+      }
     } catch (error) {
       // Download failed
       activeSimulations.delete(fileId);
