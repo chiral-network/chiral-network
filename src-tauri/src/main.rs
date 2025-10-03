@@ -35,7 +35,7 @@ use file_transfer::{DownloadMetricsSnapshot, FileTransferEvent, FileTransferServ
 use fs2::available_space;
 use geth_downloader::GethDownloader;
 use keystore::Keystore;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -56,6 +56,10 @@ use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{info, warn};
 use webrtc_service::{WebRTCFileRequest, WebRTCService};
+
+use crate::manager::ChunkManager; // Import the ChunkManager
+use x25519_dalek::{PublicKey, StaticSecret}; // For key handling
+use base64::{engine::general_purpose, Engine as _}; // For key encoding
 
 #[derive(Clone)]
 struct QueuedTransaction {
@@ -1013,9 +1017,10 @@ fn get_cpu_temperature() -> Option<f32> {
     // Windows-specific temperature detection methods
     #[cfg(target_os = "windows")]
     {
-        if let Some(temp) = get_windows_temperature() {
-            return Some(temp);
-        }
+        // todo: Getting windows temp needs fixing - currently makes app performance very slow
+        // if let Some(temp) = get_windows_temperature() {
+        //     return None;
+        // }
     }
 
     // Linux-specific temperature detection methods
@@ -1035,6 +1040,7 @@ fn get_cpu_temperature() -> Option<f32> {
     None
 }
 
+//todo for fixing later
 #[cfg(target_os = "windows")]
 fn get_windows_temperature() -> Option<f32> {
     use std::process::Command;
@@ -1627,7 +1633,7 @@ async fn upload_file_data_to_network(
         let metadata = FileMetadata {
             file_hash: file_hash.clone(),
             file_name: file_name.clone(),
-            file_size: file_size,
+            file_size,
             file_data: cloned_fd,
             seeders: vec![],
             created_at: std::time::SystemTime::now()
@@ -2715,6 +2721,8 @@ fn main() {
             get_resource_contribution,
             get_contribution_history,
             reset_analytics,
+            encrypt_file_for_self_upload,
+            decrypt_and_reassemble_file,
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -2868,4 +2876,89 @@ fn main() {
             }
             _ => {}
         });
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct FileManifestForJs {
+    merkle_root: String,
+    chunks: Vec<manager::ChunkInfo>,
+    encrypted_key_bundle: String, // Serialized JSON of the bundle
+}
+
+#[tauri::command]
+async fn encrypt_file_for_self_upload(
+    state: State<'_, AppState>,
+    file_path: String,
+) -> Result<FileManifestForJs, String> {
+    // 1. Get the active user's private key from state to derive the public key.
+    let private_key_hex = state
+        .active_account_private_key
+        .lock()
+        .await
+        .clone()
+        .ok_or("No active account. Please log in to encrypt.")?;
+
+    let pk_bytes = hex::decode(private_key_hex.trim_start_matches("0x"))
+        .map_err(|_| "Invalid private key format".to_string())?;
+    let secret_key = StaticSecret::from(
+        <[u8; 32]>::try_from(pk_bytes).map_err(|_| "Private key is not 32 bytes")?,
+    );
+    let public_key = PublicKey::from(&secret_key);
+
+    // 2. Initialize ChunkManager. This assumes your storage path is configured.
+    //    You might need to get this path from your settings store.
+    let storage_path = PathBuf::from("./chunk_storage"); // Or get from config
+    let manager = ChunkManager::new(storage_path);
+
+    // 3. Call the existing backend function to perform the encryption.
+    let manifest = manager
+        .chunk_and_encrypt_file(Path::new(&file_path), &public_key)?;
+
+    // 4. Serialize the key bundle to a JSON string so it can be sent to the frontend easily.
+    let bundle_json = serde_json::to_string(&manifest.encrypted_key_bundle)
+        .map_err(|e| e.to_string())?;
+
+    Ok(FileManifestForJs {
+        merkle_root: manifest.merkle_root,
+        chunks: manifest.chunks,
+        encrypted_key_bundle: bundle_json,
+    })
+}
+
+#[tauri::command]
+async fn decrypt_and_reassemble_file(
+    state: State<'_, AppState>,
+    manifest_js: FileManifestForJs,
+    output_path: String,
+) -> Result<(), String> {
+    // 1. Get the active user's private key for decryption.
+    let private_key_hex = state
+        .active_account_private_key
+        .lock()
+        .await
+        .clone()
+        .ok_or("No active account. Please log in to decrypt.")?;
+
+    let pk_bytes = hex::decode(private_key_hex.trim_start_matches("0x"))
+        .map_err(|_| "Invalid private key format".to_string())?;
+    let secret_key = StaticSecret::from(
+        <[u8; 32]>::try_from(pk_bytes).map_err(|_| "Private key is not 32 bytes")?,
+    );
+
+    // 2. Deserialize the key bundle from the string.
+    let encrypted_key_bundle: encryption::EncryptedAesKeyBundle =
+        serde_json::from_str(&manifest_js.encrypted_key_bundle).map_err(|e| e.to_string())?;
+
+    // 3. Initialize ChunkManager.
+    let storage_path = PathBuf::from("./chunk_storage"); // Or get from config
+    let manager = ChunkManager::new(storage_path);
+
+    // 4. Call the existing backend function to decrypt and save the file.
+    manager.reassemble_and_decrypt_file(
+        &manifest_js.chunks,
+        Path::new(&output_path),
+        &encrypted_key_bundle,
+        &secret_key, // Pass the secret key
+    )
 }

@@ -72,7 +72,6 @@
 | **Encryption**         | AES-256-GCM             |
 | **Compression**        | Optional (zstd)         |
 | **Max File Size**      | 10 GB (per file)        |
-| **Replication Factor** | 3 (configurable)        |
 | **Chunking**           | 256 KB encrypted chunks |
 
 ### Chunking
@@ -164,7 +163,6 @@ This is a client-side structure, generated upon upload and required for download
 | **K**                | 20       | Bucket size           |
 | **α**                | 3        | Concurrency parameter |
 | **Key Space**        | 160 bits | Node ID size          |
-| **Replication**      | 20       | Number of replicas    |
 | **Refresh Interval** | 3600s    | Bucket refresh time   |
 | **Expiration**       | 86400s   | Record expiration     |
 

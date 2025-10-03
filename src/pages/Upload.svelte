@@ -2,7 +2,7 @@
   import Card from '$lib/components/ui/card.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import { File as FileIcon, X, Plus, FolderOpen, FileText, Image, Music, Video, Archive, Code, FileSpreadsheet, Upload, Download, RefreshCw } from 'lucide-svelte'
-  import { files } from '$lib/stores'
+  import { files, settings, type FileItem } from '$lib/stores'
   import { t } from 'svelte-i18n';
   import { get } from 'svelte/store'
   import { onMount, onDestroy } from 'svelte';
@@ -12,7 +12,7 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
   import { dhtService } from '$lib/dht';
-
+  import { encryptionService } from '$lib/services/encryption'; 
 
   const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
 
@@ -308,61 +308,108 @@
     let addedCount = 0
     let versionCount = 0
 
+    const useEncryption = get(settings).enableEncryption;
+
     for (const filePath of paths) {
       try {
         // Get just the filename from the path
         const fileName = filePath.split(/[\/\\]/).pop() || '';
-        // Check for existing versions before upload
-        let existingVersions: any[] = [];
-        try {
-          existingVersions = await invoke('get_file_versions_by_name', { fileName }) as any[];
-        } catch (versionError) {
-          console.log('No existing versions found for', fileName);
-        }
-        // Use versioned upload - let backend handle duplicate detection
-        const metadata = await dhtService.publishFileToNetwork(filePath);
+        if (useEncryption) {
+          // --- ENCRYPTION FLOW ---
+          showToast(`Encrypting "${fileName}"... This may take a moment.`, 'info');
+          const manifest = await encryptionService.encryptFile(filePath);
 
-        // Check if this exact file (same hash) was already uploaded by comparing with existing files
-        const isDuplicate = get(files).some(f => f.hash === metadata.fileHash);
-        if (isDuplicate) {
-          duplicateCount++;
-          continue;
-        }
-        const isNewVersion = existingVersions.length > 0;
-        if (isNewVersion) {
-          versionCount++;
-        }
+          // Check for duplicates using the Merkle Root
+          if (get(files).some((f: FileItem) => f.hash === manifest.merkleRoot)) {
+            duplicateCount++;
+            continue;
+          }
 
-        const newFile = {
-          id: `file-${Date.now()}-${Math.random()}`,
-          name: metadata.fileName,
-          path: filePath,
-          hash: metadata.fileHash,
-          size: metadata.fileSize,
-          status: 'seeding' as const,
-          seeders: 1,
-          leechers: 0,
-          uploadDate: new Date(metadata.createdAt),
-          version: metadata.version,
-          isNewVersion: isNewVersion
-        };
+          const fileMetadataForDht = {
+            fileHash: manifest.merkleRoot,
+            fileName: fileName,
+            fileSize: manifest.chunks.reduce((sum, chunk) => sum + chunk.size, 0),
+            isEncrypted: true,
+            manifest: JSON.stringify(manifest),
+            createdAt: Date.now(),
+            seeders: [], // Will be populated by the network
+            version: 1, // Versioning for encrypted files can be a future enhancement
+          };
 
-        files.update(f => [...f, newFile]);
-        addedCount++;
+          const newFile: FileItem = {
+            id: `file-${Date.now()}-${Math.random()}`,
+            name: fileMetadataForDht.fileName,
+            path: filePath,
+            hash: fileMetadataForDht.fileHash,
+            size: fileMetadataForDht.fileSize,
+            status: 'seeding',
+            seeders: 1,
+            leechers: 0,
+            uploadDate: new Date(),
+            version: fileMetadataForDht.version,
+            isEncrypted: true,
+            manifest: manifest, // Store the object here for the UI
+          };
+          
+          files.update(f => [...f, newFile]);
+          addedCount++;
+          showToast(`${fileName} (encrypted) uploaded and is now seeding!`, 'success');
+          
+          await dhtService.publishFile(fileMetadataForDht);
 
-        // Show version-specific success message
-        if (isNewVersion) {
-          showToast(`${fileName} uploaded as v${metadata.version} (update from v${existingVersions[0]?.version || 1})`, 'success');
         } else {
-          showToast(`${fileName} uploaded as v${metadata.version} (new file)`, 'success');
-        }
+          // Check for existing versions before upload
+          let existingVersions: any[] = [];
+          try {
+            existingVersions = await invoke('get_file_versions_by_name', { fileName }) as any[];
+          } catch (versionError) {
+            console.log('No existing versions found for', fileName);
+          }
+          // Use versioned upload - let backend handle duplicate detection
+          const metadata = await dhtService.publishFileToNetwork(filePath);
 
-        // Publish file metadata to DHT network for discovery
-        try {
-          await dhtService.publishFile(metadata);
-          console.log('File being published to DHT:', metadata.fileHash);
-        } catch (publishError) {
-          console.warn('Failed to publish file to DHT:', publishError);
+          // Check if this exact file (same hash) was already uploaded by comparing with existing files
+          const isDuplicate = get(files).some(f => f.hash === metadata.fileHash);
+          if (isDuplicate) {
+            duplicateCount++;
+            continue;
+          }
+          const isNewVersion = existingVersions.length > 0;
+          if (isNewVersion) {
+            versionCount++;
+          }
+
+          const newFile = {
+            id: `file-${Date.now()}-${Math.random()}`,
+            name: metadata.fileName,
+            path: filePath,
+            hash: metadata.fileHash,
+            size: metadata.fileSize,
+            status: 'seeding' as const,
+            seeders: 1,
+            leechers: 0,
+            uploadDate: new Date(metadata.createdAt),
+            version: metadata.version,
+            isNewVersion: isNewVersion
+          };
+
+          files.update(f => [...f, newFile]);
+          addedCount++;
+
+          // Show version-specific success message
+          if (isNewVersion) {
+            showToast(`${fileName} uploaded as v${metadata.version} (update from v${existingVersions[0]?.version || 1})`, 'success');
+          } else {
+            showToast(`${fileName} uploaded as v${metadata.version} (new file)`, 'success');
+          }
+
+          // Publish file metadata to DHT network for discovery
+          try {
+            await dhtService.publishFile(metadata);
+            console.log('File being published to DHT:', metadata.fileHash);
+          } catch (publishError) {
+            console.warn('Failed to publish file to DHT:', publishError);
+          }
         }
       } catch (error) {
         console.error(error);
