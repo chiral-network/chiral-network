@@ -1311,74 +1311,6 @@ async fn start_file_transfer_service(
 }
 
 #[tauri::command]
-async fn upload_file_to_network(
-    state: State<'_, AppState>,
-    file_path: String,
-) -> Result<(), String> {
-    let ft = {
-        let ft_guard = state.file_transfer.lock().await;
-        ft_guard.as_ref().cloned()
-    };
-
-    if let Some(ft) = ft {
-        // Upload the file
-        let file_name = file_path.split('/').last().unwrap_or(&file_path);
-
-        ft.upload_file(file_path.clone(), file_name.to_string())
-            .await
-            .map_err(|e| format!("Failed to upload file: {}", e))?;
-
-        // Get the file hash by reading the file and calculating it
-        let file_data = tokio::fs::read(&file_path)
-            .await
-            .map_err(|e| format!("Failed to read file: {}", e))?;
-        let file_hash = file_transfer::FileTransferService::calculate_file_hash(&file_data);
-
-        // Also publish to DHT if it's running
-        let dht = {
-            let dht_guard = state.dht.lock().await;
-            dht_guard.as_ref().cloned()
-        };
-
-        if let Some(dht) = dht {
-            let mut metadata = FileMetadata {
-                file_hash: file_hash.clone(),
-                file_name: file_name.to_string(),
-                file_size: file_data.len() as u64,
-                file_data: file_data.clone(),
-                seeders: vec![],
-                created_at: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
-                mime_type: None,
-                is_encrypted: false,
-                encryption_method: None,
-                key_fingerprint: None,
-                parent_hash: None,
-                version: Some(1),
-                cids: None,
-            };
-
-            match dht.publish_file(metadata.clone()).await {
-                Ok(_) => {
-                    info!("Published file metadata to DHT: {}", file_hash);
-                    // Track upload in analytics
-                    state.analytics.record_upload(file_data.len() as u64).await;
-                    state.analytics.record_upload_completed().await;
-                }
-                Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
-            };
-            Ok(())
-        } else {
-            Err("DHT Service not running.".to_string())
-        }
-    } else {
-        Err("File transfer service is not running".to_string())
-    }
-}
-
-#[tauri::command]
 async fn download_blocks_from_network(
     state: State<'_, AppState>,
     file_metadata: FileMetadata,
@@ -1741,14 +1673,9 @@ async fn upload_file_to_network(
 
         // Publish to DHT
         dht.publish_file(metadata.clone()).await?;
-        if let Err(e) = dht.publish_file(metadata.clone()).await {
-            warn!("Failed to publish file metadata to DHT: {}", e);
-            state.analytics.record_upload(file_size).await;
-            return Err(format!("Failed to publish file: {}", e));
-        }
 
         // Track upload in analytics
-        state.analytics.record_upload(file_size).await;
+        state.analytics.record_upload(metadata.file_size).await;
         state.analytics.record_upload_completed().await;
 
       Ok(metadata)
