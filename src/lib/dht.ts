@@ -2,7 +2,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { AppSettings } from "./stores";
-import { writeFile } from "@tauri-apps/plugin-fs";
 import { homeDir, join } from "@tauri-apps/api/path";
 // Default bootstrap nodes for network connectivity
 export const DEFAULT_BOOTSTRAP_NODES = [
@@ -224,7 +223,7 @@ export class DhtService {
               // Write file to disk
               console.log(`File saved to: ${resolvedStoragePath}`);
 
-              await writeFile(resolvedStoragePath, fileData);
+              await invoke("write_file", { path: resolvedStoragePath, contents: Array.from(fileData) });
               console.log(`File saved to: ${resolvedStoragePath}`);
             }
 

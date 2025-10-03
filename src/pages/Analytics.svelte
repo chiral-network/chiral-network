@@ -5,12 +5,14 @@
   import { TrendingUp, Upload, DollarSign, HardDrive, Award, BarChart3, TrendingUp as LineChart } from 'lucide-svelte'
   import { files, wallet, networkStats } from '$lib/stores';
   import { proxyNodes } from '$lib/proxy';
-  import { onMount } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
   import { t } from 'svelte-i18n'
   import { suspiciousActivity } from '$lib/stores'; // only import
   import type { FileItem } from '$lib/stores';
   import { miningState } from '$lib/stores';
   import { miningProgress } from '$lib/stores';
+  import { analyticsService } from '$lib/services/analyticsService';
+  import type { BandwidthStats, PerformanceMetrics, NetworkActivity, ResourceContribution } from '$lib/services/analyticsService';
   
   let uploadedFiles: FileItem[] = []
   let downloadedFiles: FileItem[] = []
@@ -19,6 +21,12 @@
   // let earningsHistory: any[] = []
   let storageUsed = 0
   let bandwidthUsed = { upload: 0, download: 0 }
+
+  // Real analytics data
+  let realBandwidthStats: BandwidthStats | null = null
+  let realPerformanceMetrics: PerformanceMetrics | null = null
+  let realNetworkActivity: NetworkActivity | null = null
+  let realResourceContribution: ResourceContribution | null = null
   
   // Latency analytics (derived from proxy nodes)
   let avgLatency = 0
@@ -255,8 +263,24 @@
     }
   }
 
+  // Fetch real analytics data
+  async function fetchAnalyticsData() {
+    realBandwidthStats = await analyticsService.getBandwidthStats();
+    realPerformanceMetrics = await analyticsService.getPerformanceMetrics();
+    realNetworkActivity = await analyticsService.getNetworkActivity();
+    realResourceContribution = await analyticsService.getResourceContribution();
+
+    // Update bandwidth used with real data
+    if (realBandwidthStats) {
+      bandwidthUsed = {
+        upload: realBandwidthStats.uploadBytes / (1024 * 1024), // Convert to MB
+        download: realBandwidthStats.downloadBytes / (1024 * 1024)
+      };
+    }
+  }
+
   // Generate mock latency history once on mount
-  onMount(() => {   
+  onMount(() => {
     const now = new Date();
     // Options to include the timezone name
     const dateOptions: Intl.DateTimeFormatOptions = {
@@ -276,14 +300,13 @@
       latency: avgLatency
     });
 
+    // Fetch initial analytics data
+    fetchAnalyticsData();
 
     // Update bandwidth & latency periodically
     const interval = setInterval(() => {
-      // Mock bandwidth usage update
-      bandwidthUsed = {
-        upload: bandwidthUsed.upload + Math.random() * 100,
-        download: bandwidthUsed.download + Math.random() * 150
-      }
+      // Fetch real analytics data
+      fetchAnalyticsData();
 
       // First, re-calculate the current latency statistics
       computeLatencyStats();
@@ -298,6 +321,10 @@
 
     return () => clearInterval(interval)
   })
+
+  onDestroy(() => {
+    analyticsService.stopAutoUpdate();
+  });
 
   // Aggregation function
   function aggregateData(data: any[], maxBars: number) {
@@ -518,23 +545,27 @@
       <div class="space-y-3">
         <div class="flex justify-between items-center">
           <span class="text-sm">{$t('analytics.activeUploads')}</span>
-          <Badge>{uploadedFiles.filter(f => f.status === 'seeding').length}</Badge>
+          <Badge>{realNetworkActivity?.activeUploads ?? uploadedFiles.filter(f => f.status === 'seeding').length}</Badge>
         </div>
         <div class="flex justify-between items-center">
           <span class="text-sm">{$t('analytics.activeDownloads')}</span>
-          <Badge>{$files.filter(f => f.status === 'downloading').length}</Badge>
+          <Badge>{realNetworkActivity?.activeDownloads ?? $files.filter(f => f.status === 'downloading').length}</Badge>
         </div>
         <div class="flex justify-between items-center">
           <span class="text-sm">{$t('analytics.queuedDownloads')}</span>
-          <Badge variant="outline">{$files.filter(f => f.status === 'queued').length}</Badge>
+          <Badge variant="outline">{realNetworkActivity?.queuedDownloads ?? $files.filter(f => f.status === 'queued').length}</Badge>
         </div>
         <div class="flex justify-between items-center">
-          <span class="text-sm">{$t('analytics.totalTransactions')}</span>
-          <Badge variant="secondary">{$networkStats.totalTransactions}</Badge>
+          <span class="text-sm">{$t('analytics.completedUploads')}</span>
+          <Badge variant="secondary">{realNetworkActivity?.completedUploads ?? 0}</Badge>
         </div>
         <div class="flex justify-between items-center">
-          <span class="text-sm">{$t('analytics.networkFiles')}</span>
-          <Badge variant="secondary">{$networkStats.totalFiles}</Badge>
+          <span class="text-sm">{$t('analytics.completedDownloads')}</span>
+          <Badge variant="secondary">{realNetworkActivity?.completedDownloads ?? 0}</Badge>
+        </div>
+        <div class="flex justify-between items-center">
+          <span class="text-sm">{$t('analytics.uniquePeers')}</span>
+          <Badge variant="secondary">{realNetworkActivity?.uniquePeersAllTime ?? 0}</Badge>
         </div>
       </div>
     </Card>

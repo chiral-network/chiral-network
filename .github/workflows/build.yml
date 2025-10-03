@@ -39,3 +39,6 @@ jobs:
 
     - name: Build backend
       run: cd src-tauri && cargo build
+
+    - name: Run analytics integration tests
+      run: cd src-tauri && cargo test analytics_integration_tests --verbose
