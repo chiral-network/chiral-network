@@ -4,11 +4,11 @@
 
 ### Prerequisites
 
-* Node.js 18+ and npm
-* Rust 1.70+ and Cargo
-* Git
-* Python 3.8+ (for build scripts)
-* C++ compiler (for native modules)
+- Node.js 18+ and npm
+- Rust 1.70+ and Cargo
+- Git
+- Python 3.8+ (for build scripts)
+- C++ compiler (for native modules)
 
 ### Repository Structure
 
@@ -138,6 +138,7 @@ impl DhtService {
         let store = MemoryStore::new(local_peer_id);
         let mut kad_cfg = KademliaConfig::new(StreamProtocol::new("/chiral/kad/1.0.0"));
         kad_cfg.set_query_timeout(Duration::from_secs(10));
+        kad_cfg.set_replication_factor(20);
 
         let mut kademlia = Kademlia::with_config(local_peer_id, store, kad_cfg);
         kademlia.set_mode(Some(Mode::Server));
@@ -432,14 +433,14 @@ pub async fn download_file(
 
 ### NAT reachability instrumentation
 
-* AutoNAT v2 client and server behaviours are mounted alongside Kademlia. The
+- AutoNAT v2 client and server behaviours are mounted alongside Kademlia. The
   probe interval defaults to 30 s and can be adjusted with
   `--autonat-probe-interval`; disable probing entirely via `--disable-autonat`.
-* Additional AutoNAT servers can be supplied with repeated
+- Additional AutoNAT servers can be supplied with repeated
   `--autonat-server` flags. `--show-reachability` streams a periodic summary in
   headless mode (state, confidence, observed addresses, last error) so ops can
   validate reachability without the GUI.
-* The Network → DHT page now surfaces a “Reachability” card that mirrors Kubo’s
+- The Network → DHT page now surfaces a “Reachability” card that mirrors Kubo’s
   vocabulary (Direct/Relayed/Unknown), confidence badge, observed external
   addresses with copy affordances, and the last few probe summaries. Toasts are
   emitted when reachability changes (restored, degraded, reset) to give desktop
@@ -460,7 +461,6 @@ frontend event and exposes a `get_download_metrics` command returning aggregate
 success/failure counters and the last 20 attempts. Headless mode gains a
 `--show-downloads` flag that prints the same snapshot at startup so operators can
 confirm retry behaviour without the GUI.
-
 ### Test Network Setup
 
 ```bash
@@ -495,6 +495,146 @@ describe("Chiral Network Integration", () => {
     const file = new File([content], "test.txt");
 
     // Upload file
-    const hash = await fileService.upload
+    const hash = await fileService.uploadFile(file);
+    expect(hash).toMatch(/^[a-f0-9]{64}$/);
 
+    // Wait for propagation
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+
+    // Download file
+    const downloaded = await fileService.downloadFile(hash);
+    const text = await downloaded.text();
+    expect(text).toBe(content);
+  });
+
+  test("DHT peer discovery", async () => {
+    const metadata = await fileService.searchDHT("test_hash");
+    expect(metadata).toBeTruthy();
+    expect(metadata.seeders.length).toBeGreaterThan(0);
+  });
+});
+```
+
+## Deployment
+
+### Production Build
+
+```bash
+# Build blockchain
+cd blockchain && cargo build --release
+
+# Build storage node
+cd storage && cargo build --release
+
+# Build desktop app
+cd chiral-app && npm run tauri build
+```
+
+### Docker Deployment
+
+Create `docker-compose.yml`:
+
+```yaml
+version: "3.8"
+
+services:
+  blockchain:
+    image: chiral/blockchain:latest
+    ports:
+      - "30304:30304"
+      - "8546:8546"
+    volumes:
+      - blockchain-data:/data
+    command: --chain /config/chiral-spec.json --config /config/chiral-config.toml
+
+  storage:
+    image: chiral/storage:latest
+    ports:
+      - "8080:8080"
+      - "4001:4001"
+    volumes:
+      - storage-data:/storage
+    environment:
+      - DHT_BOOTSTRAP=/ip4/bootstrap.chiral.network/tcp/4001
+
+volumes:
+  blockchain-data:
+  storage-data:
+```
+
+## Monitoring
+
+### Metrics Collection
+
+```javascript
+// Prometheus metrics
+const prometheus = require("prom-client");
+
+const metrics = {
+  filesUploaded: new prometheus.Counter({
+    name: "chiral_files_uploaded_total",
+    help: "Total number of files uploaded",
+  }),
+
+  bytesTransferred: new prometheus.Counter({
+    name: "chiral_bytes_transferred_total",
+    help: "Total bytes transferred",
+  }),
+
+  activeNodes: new prometheus.Gauge({
+    name: "chiral_active_nodes",
+    help: "Number of active nodes",
+  }),
+};
+```
+
+## Troubleshooting
+
+### Common Issues
+
+#### Issue: Blockchain not syncing
+
+```bash
+# Check peer connections
+curl -X POST -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
+  http://localhost:8546
+
+# Add manual peer
+curl -X POST -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"admin_addPeer","params":["enode://..."],"id":1}' \
+  http://localhost:8546
+
+# Check sync status
+curl -X POST -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"eth_syncing","params":[],"id":1}' \
+  http://localhost:8546
+```
+
+#### Issue: DHT lookup failures
+
+```bash
+# Check DHT status
+curl http://localhost:8080/api/dht/status
+
+# Bootstrap DHT
+curl -X POST http://localhost:8080/api/dht/bootstrap
+
+# Check routing table
+curl http://localhost:8080/api/dht/peers
+```
+
+#### Issue: File upload failures
+
+```bash
+# Check storage node logs
+tail -f storage-node.log
+
+# Verify chunk storage
+ls -la /storage/chunks/
+
+# Test chunk upload manually
+curl -X POST http://localhost:8080/chunks \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @test-chunk.bin
 ```
