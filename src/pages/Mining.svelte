@@ -9,13 +9,11 @@
   import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw } from 'lucide-svelte'
   import { onDestroy, onMount, getContext } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
-  import { etcAccount, miningState, transactions } from '$lib/stores'
+  import { etcAccount, miningState } from '$lib/stores'
   import { getVersion } from "@tauri-apps/api/app";
   import { t } from 'svelte-i18n';
   import { goto } from '@mateothegreat/svelte5-router';
   import { walletService } from '$lib/wallet'; 
-
-  // Interfaces - MiningHistoryPoint is now defined in stores.ts
   
   // Local UI state only
   let isTauri = false
@@ -30,7 +28,7 @@
   // Network statistics
   let networkHashRate = '0 H/s'
   let networkDifficulty = '0'
-  let blockReward = 2// Chiral per block
+  let blockReward = 2 // Chiral per block
   let peerCount = 0
 
   // Statistics - preserve across page navigation
@@ -98,9 +96,6 @@
   }
 
   $: displayedTemperature = temperatureUnit === 'F' ? toFahrenheit(temperature).toFixed(1) : temperature.toFixed(1);
-
-
-  
 
   function parseHashRate(rateStr: string): number {
     const match = rateStr.match(/^~?\s*([\d.]+)\s*([KMGT])H\/s$/i);
@@ -368,7 +363,7 @@
       if (isTauri) {
         await updateCpuTemperature();
       }
-    }, 1000);
+    }, 1000) as unknown as number;
   })  
   
   async function checkGethStatus() {
@@ -860,10 +855,6 @@
 
   // Define pools variable as an alias for availablePools for compatibility
   $: pools = availablePools;
-  // Simulation removed; recent blocks come from backend
-
-  // Keep a set of hashes we've already shown to avoid duplicates
-  let seenHashes = new Set<string>();
 
   // Pagination for recent blocks
   let pageSizes = [5, 10, 20, 50]

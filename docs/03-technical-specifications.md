@@ -65,14 +65,13 @@
 
 ### File Processing
 
-| Aspect                 | Specification           |
-| ---------------------- | ----------------------- |
-| **Hash Algorithm**     | SHA-256                 |
-| **Chunk Size**         | 256 KB                  |
-| **Encryption**         | AES-256-GCM             |
-| **Compression**        | Optional (zstd)         |
-| **Max File Size**      | 10 GB (per file)        |
-| **Chunking**           | 256 KB encrypted chunks |
+| Aspect             | Specification           |
+| ------------------ | ----------------------- |
+| **Hash Algorithm** | SHA-256                 |
+| **Chunk Size**     | 256 KB                  |
+| **Encryption**     | AES-256-GCM             |
+| **Compression**    | Optional (zstd)         |
+| **Chunking**       | 256 KB encrypted chunks |
 
 ### Chunking
 
