@@ -22,7 +22,7 @@ use std::sync::Mutex as StdMutex;
 
 use lazy_static::lazy_static;
 use crate::commands::proxy::{
-    list_proxies, proxy_connect, proxy_disconnect, proxy_echo, ProxyNode,
+    list_proxies, proxy_connect, proxy_disconnect, proxy_remove, proxy_echo, ProxyNode,
 };
 use dht::{DhtEvent, DhtMetricsSnapshot, DhtService, FileMetadata, split_into_blocks, StringBlock};
 use ethereum::{
@@ -2952,6 +2952,7 @@ fn main() {
             get_available_storage,
             proxy_connect,
             proxy_disconnect,
+            proxy_remove,
             proxy_echo,
             list_proxies,
             generate_totp_secret,
