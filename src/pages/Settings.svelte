@@ -27,6 +27,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import Expandable from "$lib/components/ui/Expandable.svelte";
   import { settings, type AppSettings } from "$lib/stores";
+  import { bandwidthScheduler } from "$lib/services/bandwidthScheduler";
 
   let showResetConfirmModal = false;
   let storageSectionOpen = false;
@@ -70,6 +71,8 @@
     cacheSize: 1024, // MB
     logLevel: "info",
     autoUpdate: true,
+    enableBandwidthScheduling: false,
+    bandwidthSchedules: [],
   };
   let localSettings: AppSettings = get(settings); 
   let savedSettings: AppSettings = get(settings);
@@ -114,6 +117,10 @@
     
     savedSettings = JSON.parse(JSON.stringify(localSettings));
     userLocation.set(localSettings.userLocation);
+    
+    // Force bandwidth scheduler to update with new settings
+    bandwidthScheduler.forceUpdate();
+    
     importExportFeedback = null;
     showToast("Settings Updated!");
   }
@@ -357,6 +364,11 @@ const sectionLabels: Record<string, string[]> = {
     $t("network.enableUpnp"),
     $t("network.enableNat"),
     $t("network.enableDht"),
+  ],
+  bandwidthScheduling: [
+    "Bandwidth Scheduling",
+    "Enable Bandwidth Scheduling",
+    "Schedule different bandwidth limits",
   ],
   language: [
     $t("language.title"),
@@ -622,6 +634,172 @@ function sectionMatches(section: string, query: string) {
             </Label>
           </div>
         </div>
+      </div>
+    </Expandable>
+  {/if}
+
+  <!-- Bandwidth Scheduling -->
+  {#if sectionMatches("bandwidthScheduling", search)}
+    <Expandable>
+      <div slot="title" class="flex items-center gap-3">
+        <RefreshCw class="h-6 w-6 text-blue-600" />
+        <h2 class="text-xl font-semibold text-black">Bandwidth Scheduling</h2>
+      </div>
+      <div class="space-y-4">
+        <div class="flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="enable-bandwidth-scheduling"
+            bind:checked={localSettings.enableBandwidthScheduling}
+          />
+          <Label for="enable-bandwidth-scheduling" class="cursor-pointer">
+            Enable Bandwidth Scheduling
+          </Label>
+        </div>
+        <p class="text-xs text-muted-foreground">
+          Schedule different bandwidth limits for specific times and days
+        </p>
+
+        {#if localSettings.enableBandwidthScheduling}
+          <div class="space-y-3 mt-4">
+            {#each localSettings.bandwidthSchedules as schedule, index}
+              <div class="p-4 border rounded-lg bg-muted/30">
+                <div class="flex items-start justify-between gap-4 mb-3">
+                  <div class="flex items-center gap-2 flex-1">
+                    <input
+                      type="checkbox"
+                      id="schedule-enabled-{index}"
+                      bind:checked={schedule.enabled}
+                      on:change={() => {
+                        localSettings.bandwidthSchedules = [...localSettings.bandwidthSchedules];
+                      }}
+                    />
+                    <Input
+                      type="text"
+                      bind:value={schedule.name}
+                      placeholder="Schedule name"
+                      class="flex-1"
+                      on:input={() => {
+                        localSettings.bandwidthSchedules = [...localSettings.bandwidthSchedules];
+                      }}
+                    />
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    on:click={() => {
+                      localSettings.bandwidthSchedules = localSettings.bandwidthSchedules.filter((_, i) => i !== index);
+                    }}
+                  >
+                    Remove
+                  </Button>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3 mb-3">
+                  <div>
+                    <Label for="schedule-start-{index}" class="text-xs">Start Time</Label>
+                    <Input
+                      id="schedule-start-{index}"
+                      type="time"
+                      bind:value={schedule.startTime}
+                      class="mt-1"
+                      on:input={() => {
+                        localSettings.bandwidthSchedules = [...localSettings.bandwidthSchedules];
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <Label for="schedule-end-{index}" class="text-xs">End Time</Label>
+                    <Input
+                      id="schedule-end-{index}"
+                      type="time"
+                      bind:value={schedule.endTime}
+                      class="mt-1"
+                      on:input={() => {
+                        localSettings.bandwidthSchedules = [...localSettings.bandwidthSchedules];
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div class="mb-3">
+                  <Label class="text-xs">Days of Week</Label>
+                  <div class="flex gap-2 mt-1">
+                    {#each [{value: 0, label: 'Sun'}, {value: 1, label: 'Mon'}, {value: 2, label: 'Tue'}, {value: 3, label: 'Wed'}, {value: 4, label: 'Thu'}, {value: 5, label: 'Fri'}, {value: 6, label: 'Sat'}] as day}
+                      <button
+                        type="button"
+                        class="px-2 py-1 text-xs rounded border {schedule.daysOfWeek.includes(day.value) ? 'bg-primary text-primary-foreground' : 'bg-background'}"
+                        on:click={() => {
+                          // Update the schedule's days
+                          if (schedule.daysOfWeek.includes(day.value)) {
+                            schedule.daysOfWeek = schedule.daysOfWeek.filter(d => d !== day.value);
+                          } else {
+                            schedule.daysOfWeek = [...schedule.daysOfWeek, day.value].sort();
+                          }
+                          // Trigger reactivity by reassigning the entire array
+                          localSettings.bandwidthSchedules = [...localSettings.bandwidthSchedules];
+                        }}
+                      >
+                        {day.label}
+                      </button>
+                    {/each}
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label for="schedule-upload-{index}" class="text-xs">Upload Limit (KB/s, 0 = unlimited)</Label>
+                    <Input
+                      id="schedule-upload-{index}"
+                      type="number"
+                      bind:value={schedule.uploadLimit}
+                      min="0"
+                      class="mt-1"
+                      on:input={() => {
+                        localSettings.bandwidthSchedules = [...localSettings.bandwidthSchedules];
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <Label for="schedule-download-{index}" class="text-xs">Download Limit (KB/s, 0 = unlimited)</Label>
+                    <Input
+                      id="schedule-download-{index}"
+                      type="number"
+                      bind:value={schedule.downloadLimit}
+                      min="0"
+                      class="mt-1"
+                      on:input={() => {
+                        localSettings.bandwidthSchedules = [...localSettings.bandwidthSchedules];
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            {/each}
+
+            <Button
+              size="sm"
+              variant="outline"
+              on:click={() => {
+                localSettings.bandwidthSchedules = [
+                  ...localSettings.bandwidthSchedules,
+                  {
+                    id: `schedule-${Date.now()}`,
+                    name: `Schedule ${localSettings.bandwidthSchedules.length + 1}`,
+                    startTime: '00:00',
+                    endTime: '23:59',
+                    daysOfWeek: [0, 1, 2, 3, 4, 5, 6],
+                    uploadLimit: 0,
+                    downloadLimit: 0,
+                    enabled: true,
+                  },
+                ];
+              }}
+            >
+              Add Schedule
+            </Button>
+          </div>
+        {/if}
       </div>
     </Expandable>
   {/if}
