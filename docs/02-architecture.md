@@ -218,6 +218,7 @@ File Upload:
 5. Calculate Rewards → Create Transaction
 6. Verify Chunks → Verify Storage
 7. Register in DHT → Complete
+8. Set Price → Configure per-MB rate
 
 File Download:
 1. Input Hash → Query DHT
@@ -227,7 +228,26 @@ File Download:
 5. Reassemble File from Chunks → Decrypt
 6. Reassemble File from Chunks
 7. Distribute Rewards → Complete
+
+File Download (BitTorrent-style):
+1. Input Hash → Query DHT
+2. Get Seeder List → Display to user (with option to auto-select)
+3. User Selects Seeders → Or system auto-selects
+4. Establish Connections → Handshake with all selected seeders
+5. Broadcast Chunk Needs → Tell seeders what chunks are needed
+6. Receive Chunks → First-come-first-serve basis from any seeder
+7. Track & Blacklist → Monitor performance, blacklist poor seeders
+8. Verify Chunks → Check hashes against manifest
+9. Reassemble & Decrypt → Rebuild original file
+10. Distribute Payments → Send Chiral to seeders per chunk delivered
+
+
 ```
+##### Seeder and Leecher Roles
+
+##### Seeder: A peer who has the complete file and shares it with others. Earns Chiral when others download from them.
+#### Leecher: A peer actively downloading a file but only has partial chunks. Once download completes, automatically becomes a seeder.
+#### All nodes are peers: No distinction between "storage nodes" and "regular nodes" - anyone can seed and earn.
 
 ### 6. Security Architecture
 
