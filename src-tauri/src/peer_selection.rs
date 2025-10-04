@@ -19,6 +19,7 @@ pub struct PeerMetrics {
     pub failed_transfers: u64,     // Failed transfers
     pub total_bytes_transferred: u64,
     pub encryption_support: bool,   // Supports encrypted transfers
+    pub malicious_reports: u64,     // Number of malicious behavior reports
 }
 
 impl PeerMetrics {
@@ -38,6 +39,7 @@ impl PeerMetrics {
             failed_transfers: 0,
             total_bytes_transferred: 0,
             encryption_support: false,
+            malicious_reports: 0,
         }
     }
 
@@ -94,6 +96,23 @@ impl PeerMetrics {
         self.encryption_support = supported;
     }
 
+    /// Report malicious behavior from this peer
+    /// A single report drastically reduces the peer's score
+    pub fn report_malicious_behavior(&mut self, severity: &str) {
+        self.malicious_reports += 1;
+
+        // Apply severe penalty based on severity
+        let penalty = match severity {
+            "minor" => 0.2,      // Suspicious behavior, unusual patterns
+            "moderate" => 0.5,   // Clear policy violation, corrupted data
+            "severe" => 0.9,     // Malicious attack, intentional harm
+            _ => 0.3,            // Default moderate penalty
+        };
+
+        self.reliability_score = (self.reliability_score - penalty).max(0.0);
+        self.update_scores();
+    }
+
     /// Recalculate derived scores based on current metrics
     fn update_scores(&mut self) {
         // Update success rate
@@ -115,20 +134,52 @@ impl PeerMetrics {
                                  uptime_weight * self.uptime_score).min(1.0);
     }
 
-    /// Get overall peer quality score (0.0 to 1.0)
+    /// Get overall peer quality score using weighted formula (0.0 to 1.0)
+    /// Formula: LocalScore = (w_r * reliability) + (w_u * uptime) + (w_s * success_rate) + (w_b * bandwidth) - (p_a * age_penalty) - (p_m * malicious_penalty)
     pub fn get_quality_score(&self, prefer_encrypted: bool) -> f64 {
-        let base_score = self.reliability_score;
-        
-        // Bonus for encryption support if preferred
-        let encryption_bonus = if prefer_encrypted && self.encryption_support { 0.1 } else { 0.0 };
-        
-        // Penalty for old data
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-        let age_penalty = if now > self.last_seen + 300 { // 5 minutes old
-            (now - self.last_seen - 300) as f64 * 0.0001 // Gradual penalty
-        } else { 0.0 };
+        // Weight constants for scoring formula
+        let w_reliability = 0.25;
+        let w_uptime = 0.20;
+        let w_success = 0.25;
+        let w_bandwidth = 0.20;
+        let p_age = 0.0001;          // Age penalty coefficient
+        let p_malicious = 0.3;       // Heavy penalty for malicious reports
 
-        (base_score + encryption_bonus - age_penalty).max(0.0).min(1.0)
+        // Normalize bandwidth to 0.0-1.0 scale
+        // Assume max bandwidth of 10 Mbps (10,000 kbps) for normalization
+        let bandwidth_score = self.bandwidth_kbps
+            .map(|bw| (bw as f64 / 10_000.0).min(1.0))
+            .unwrap_or(0.0);
+
+        // Age penalty calculation
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let age_seconds = now.saturating_sub(self.last_seen);
+        let age_penalty = if age_seconds > 300 { // 5 minutes threshold
+            (age_seconds - 300) as f64 * p_age
+        } else {
+            0.0
+        };
+
+        // Malicious behavior penalty (compounds with number of reports)
+        let malicious_penalty = (self.malicious_reports as f64) * p_malicious;
+
+        // Calculate base weighted score
+        let base_score = (w_reliability * self.reliability_score)
+            + (w_uptime * self.uptime_score)
+            + (w_success * self.success_rate)
+            + (w_bandwidth * bandwidth_score);
+
+        // Encryption bonus (if preferred)
+        let encryption_bonus = if prefer_encrypted && self.encryption_support {
+            0.1
+        } else {
+            0.0
+        };
+
+        // Final score with all adjustments
+        (base_score + encryption_bonus - age_penalty - malicious_penalty)
+            .max(0.0)
+            .min(1.0)
     }
 }
 
@@ -202,6 +253,16 @@ impl PeerSelectionService {
     pub fn set_peer_encryption_support(&mut self, peer_id: &str, supported: bool) {
         if let Some(metrics) = self.metrics.get_mut(peer_id) {
             metrics.set_encryption_support(supported);
+        }
+    }
+
+    /// Report malicious behavior for a peer
+    pub fn report_malicious_peer(&mut self, peer_id: &str, severity: &str) {
+        if let Some(metrics) = self.metrics.get_mut(peer_id) {
+            metrics.report_malicious_behavior(severity);
+            warn!("Reported malicious behavior for peer {}: severity={}", peer_id, severity);
+        } else {
+            warn!("Cannot report malicious behavior for unknown peer: {}", peer_id);
         }
     }
 

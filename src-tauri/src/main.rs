@@ -2488,6 +2488,21 @@ async fn get_peer_metrics(
 }
 
 #[tauri::command]
+async fn report_malicious_peer(
+    peer_id: String,
+    severity: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let dht_guard = state.dht.lock().await;
+    if let Some(ref dht) = *dht_guard {
+        dht.report_malicious_peer(&peer_id, &severity).await;
+        Ok(())
+    } else {
+        Err("DHT service not available".to_string())
+    }
+}
+
+#[tauri::command]
 async fn select_peers_with_strategy(
     state: State<'_, AppState>,
     available_peers: Vec<String>,
@@ -2965,6 +2980,7 @@ fn main() {
             record_transfer_success,
             record_transfer_failure,
             get_peer_metrics,
+            report_malicious_peer,
             select_peers_with_strategy,
             set_peer_encryption_support,
             cleanup_inactive_peers,
