@@ -18,7 +18,6 @@
   import { showToast } from '$lib/toast'
   import { get } from 'svelte/store'
   import { totalEarned, totalSpent, miningState } from '$lib/stores';
-  import { walletService } from '$lib/wallet'; 
 
   const tr = (k: string, params?: Record<string, any>): string => (get(t) as (key: string, params?: any) => string)(k, params)
   
@@ -707,7 +706,7 @@
     await tick();
 
     // 3. This function runs when a QR code is successfully scanned
-    function onScanSuccess(decodedText: string, decodedResult: any) {
+    function onScanSuccess(decodedText: string, _decodedResult: any) {
       // Handle the scanned code
       // Paste the address into the input field
       recipientAddress = decodedText;
@@ -875,7 +874,7 @@
       if (savedPasswordsRaw) {
         const savedPasswords = JSON.parse(savedPasswordsRaw);
         if (savedPasswords[address]) {
-          loadKeystorePassword = deobfuscate(savedPasswords[address]);
+          loadKeystorePassword = savedPasswords[address];
           rememberKeystorePassword = true;
         } else {
           // Clear if no password is saved for this account
@@ -963,7 +962,7 @@
       let savedPasswords = savedPasswordsRaw ? JSON.parse(savedPasswordsRaw) : {};
 
       if (rememberKeystorePassword) {
-        savedPasswords[address] = obfuscate(password);
+        savedPasswords[address] = password;
       } else {
         delete savedPasswords[address];
       }
@@ -1520,13 +1519,13 @@
                     />
                   </div>
                   <div class="flex items-center space-x-2">
-                    <input type="checkbox" id="remember-password" bind:checked={rememberKeystorePassword} />
-                    <label for="remember-password" class="text-sm font-medium leading-none">
-                      {$t('keystore.load.savePassword')}
+                    <input type="checkbox" id="remember-password" bind:checked={rememberKeystorePassword} disabled />
+                    <label for="remember-password" class="text-sm font-medium leading-none text-muted-foreground">
+                      {$t('keystore.load.savePassword')} (Disabled for security)
                     </label>
                   </div>
-                  <div class="text-xs text-muted-foreground p-2 bg-yellow-50 border border-yellow-200 rounded-md">
-                    {$t('keystore.load.savePasswordWarning')}
+                  <div class="text-xs text-red-600 p-2 bg-red-50 border border-red-200 rounded-md">
+                    {$t('keystore.load.savePasswordDisabled')}
                   </div>
                   <Button
                     class="w-full"
