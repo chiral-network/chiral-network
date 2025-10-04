@@ -184,7 +184,6 @@
   },
   "privacy.title": "隐私与安全",
   "privacy.enableProxy": "启用代理路由以保持匿名",
-  "privacy.enableEncryption": "启用端到端加密",
   "privacy.anonymousMode": "匿名模式（隐藏所有身份信息）",
   "privacy.shareAnalytics": "共享匿名使用分析",
   "notifications.title": "通知",

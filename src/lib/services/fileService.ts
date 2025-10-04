@@ -32,27 +32,67 @@ export class FileService {
   }
 
   /**
-   * Uploads a file to the network by sending its data to the backend.
-   * This is suitable for files selected via a file input in the browser.
+   * Uploads a file to the network using streaming upload for unlimited file sizes.
+   * This reads the file in chunks and streams them to the backend without temp files.
    * @param file The file object to upload.
    * @returns The metadata of the uploaded file.
    */
   async uploadFile(file: File): Promise<any> {
-    const buffer = await file.arrayBuffer();
-    const bytes = new Uint8Array(buffer);
+    const chunkSize = 64 * 1024; // 64KB chunks for efficient streaming
+    const totalChunks = Math.ceil(file.size / chunkSize);
 
-    // Calls 'upload_file_data_to_network' on the backend.
-    // Tauri automatically converts camelCase JS arguments to snake_case Rust arguments.
-    const metadata = await invoke("upload_file_data_to_network", {
-      fileName: file.name,
-      fileData: Array.from(bytes), // Convert Uint8Array to number[] for serialization
-      mimeType: file.type || null,
-      isEncrypted: false,
-      encryptionMethod: null,
-      keyFingerprint: null,
-    });
+    try {
+      // Start the streaming upload session
+      const uploadId = await invoke<string>("start_streaming_upload", {
+        fileName: file.name,
+        fileSize: file.size,
+      });
 
-    return metadata;
+      let fileHash: string | null = null;
+
+      // Stream the file in chunks
+      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+        const start = chunkIndex * chunkSize;
+        const end = Math.min(start + chunkSize, file.size);
+        const chunk = file.slice(start, end);
+        const buffer = await chunk.arrayBuffer();
+        const chunkData = Array.from(new Uint8Array(buffer));
+
+        const isLastChunk = chunkIndex === totalChunks - 1;
+
+        // Upload this chunk
+        const result = await invoke<string | null>("upload_file_chunk", {
+          uploadId,
+          chunkData,
+          chunkIndex,
+          isLastChunk,
+        });
+
+        // If this was the last chunk, we get the file hash back
+        if (isLastChunk && result) {
+          fileHash = result;
+        }
+      }
+
+      if (!fileHash) {
+        throw new Error("Upload completed but no file hash received");
+      }
+
+      // Return metadata similar to what the backend would provide
+      return {
+        fileHash,
+        fileName: file.name,
+        fileSize: file.size,
+        seeders: [],
+        createdAt: Date.now(),
+        mimeType: file.type || undefined,
+        isEncrypted: false,
+        version: 1,
+      };
+    } catch (error: any) {
+      console.error("Streaming upload failed:", error);
+      throw new Error(`Upload failed: ${error}`);
+    }
   }
 
   /**

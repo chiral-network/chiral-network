@@ -23,9 +23,20 @@ pub struct EncryptedKeystore {
     pub encrypted_two_fa_secret: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub two_fa_iv: Option<String>,
+    // File encryption keys stored by file hash
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub file_encryption_keys: std::collections::HashMap<String, EncryptedFileKey>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct EncryptedFileKey {
+    pub encrypted_key: String,
+    pub key_iv: String,
+    pub file_hash: String,
+    pub created_at: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Keystore {
     pub accounts: Vec<EncryptedKeystore>,
 }
@@ -92,6 +103,7 @@ impl Keystore {
             iv,
             encrypted_two_fa_secret: None,
             two_fa_iv: None,
+            file_encryption_keys: std::collections::HashMap::new(),
         });
 
         self.save()?;
@@ -187,6 +199,153 @@ impl Keystore {
 
     pub fn list_accounts(&self) -> Vec<String> {
         self.accounts.iter().map(|a| a.address.clone()).collect()
+    }
+
+    pub fn store_file_encryption_key(
+        &mut self,
+        address: &str,
+        file_hash: String,
+        encryption_key: &[u8; 32],
+        password: &str,
+    ) -> Result<(), String> {
+        let account = self
+            .accounts
+            .iter_mut()
+            .find(|a| a.address == address)
+            .ok_or_else(|| "Account not found".to_string())?;
+
+        // Encrypt the file encryption key using the account's password-derived key
+        let (encrypted_key, key_iv) = encrypt_data(&hex::encode(encryption_key), password, &account.salt)?;
+
+        let file_key = EncryptedFileKey {
+            encrypted_key,
+            key_iv,
+            file_hash: file_hash.clone(),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        };
+
+        account.file_encryption_keys.insert(file_hash, file_key);
+        self.save()
+    }
+
+    pub fn get_file_encryption_key(
+        &self,
+        address: &str,
+        file_hash: &str,
+        password: &str,
+    ) -> Result<[u8; 32], String> {
+        let account = self
+            .accounts
+            .iter()
+            .find(|a| a.address == address)
+            .ok_or_else(|| "Account not found".to_string())?;
+
+        let file_key = account
+            .file_encryption_keys
+            .get(file_hash)
+            .ok_or_else(|| "File encryption key not found".to_string())?;
+
+        // Decrypt the file encryption key
+        let decrypted_hex = decrypt_data(&file_key.encrypted_key, &account.salt, &file_key.key_iv, password)?;
+        let key_bytes = hex::decode(decrypted_hex)
+            .map_err(|e| format!("Invalid key format: {}", e))?;
+
+        key_bytes.try_into()
+            .map_err(|_| "Invalid key length".to_string())
+    }
+
+    pub fn list_file_encryption_keys(&self, address: &str) -> Result<Vec<String>, String> {
+        let account = self
+            .accounts
+            .iter()
+            .find(|a| a.address == address)
+            .ok_or_else(|| "Account not found".to_string())?;
+
+        Ok(account.file_encryption_keys.keys().cloned().collect())
+    }
+
+    pub fn store_file_encryption_key_with_private_key(
+        &mut self,
+        address: &str,
+        file_hash: String,
+        encryption_key: &[u8; 32],
+        private_key: &str,
+    ) -> Result<(), String> {
+        let account = self
+            .accounts
+            .iter_mut()
+            .find(|a| a.address == address)
+            .ok_or_else(|| "Account not found".to_string())?;
+
+        // Use the account's salt but derive key from private key instead of password
+        let private_key_bytes = hex::decode(private_key.trim_start_matches("0x"))
+            .map_err(|e| format!("Invalid private key: {}", e))?;
+        
+        // Use first 32 bytes of private key as encryption key (or hash it)
+        let key_bytes: [u8; 32] = private_key_bytes[..32].try_into()
+            .map_err(|_| "Private key too short".to_string())?;
+        
+        let mut iv = [0u8; 16];
+        rand::thread_rng().fill_bytes(&mut iv);
+
+        let mut data = encryption_key.to_vec();
+        let mut cipher = Aes256Ctr::new(&key_bytes.into(), &iv.into());
+        cipher.apply_keystream(&mut data);
+
+        let file_key = EncryptedFileKey {
+            encrypted_key: hex::encode(data),
+            key_iv: hex::encode(iv),
+            file_hash: file_hash.clone(),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        };
+
+        account.file_encryption_keys.insert(file_hash, file_key);
+        self.save()
+    }
+
+    pub fn get_file_encryption_key_with_private_key(
+        &self,
+        address: &str,
+        file_hash: &str,
+        private_key: &str,
+    ) -> Result<[u8; 32], String> {
+        let account = self
+            .accounts
+            .iter()
+            .find(|a| a.address == address)
+            .ok_or_else(|| "Account not found".to_string())?;
+
+        let file_key = account
+            .file_encryption_keys
+            .get(file_hash)
+            .ok_or_else(|| "File encryption key not found".to_string())?;
+
+        // Use private key to decrypt
+        let private_key_bytes = hex::decode(private_key.trim_start_matches("0x"))
+            .map_err(|e| format!("Invalid private key: {}", e))?;
+        
+        let key_bytes: [u8; 32] = private_key_bytes[..32].try_into()
+            .map_err(|_| "Private key too short".to_string())?;
+        
+        let iv_bytes = hex::decode(&file_key.key_iv)
+            .map_err(|e| format!("Invalid IV: {}", e))?;
+        let iv_array: [u8; 16] = iv_bytes.try_into()
+            .map_err(|_| "Invalid IV length".to_string())?;
+
+        let mut ciphertext = hex::decode(&file_key.encrypted_key)
+            .map_err(|e| format!("Invalid ciphertext: {}", e))?;
+
+        let mut cipher = Aes256Ctr::new(&key_bytes.into(), &iv_array.into());
+        cipher.apply_keystream(&mut ciphertext);
+
+        ciphertext.try_into()
+            .map_err(|_| "Invalid key length".to_string())
     }
 }
 
