@@ -202,7 +202,7 @@ impl FileEncryption {
 
 /// A bundle containing the encrypted AES key and the necessary data for decryption.
 /// This struct is designed to be serialized (e.g., to JSON) and stored as file metadata.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct EncryptedAesKeyBundle {
     /// The sender's temporary public key (32 bytes), hex-encoded.
     pub ephemeral_public_key: String,

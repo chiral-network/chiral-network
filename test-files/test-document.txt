@@ -1,0 +1,18 @@
+# Multi-Source Download Test Document
+
+This is a test document to verify multi-source download functionality.
+It contains some sample text that can be easily verified after download.
+
+Test Information:
+- Created: $(date)
+- Purpose: Multi-source download testing
+- Size: Small text file
+
+Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor 
+incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis 
+nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+
+This file should be downloaded using single-peer mode due to its small size.
+The large binary files should trigger multi-source downloads.
+
+End of test document.

@@ -35,7 +35,7 @@ export interface FileItem {
   eta?: string; // Estimated time remaining display
   isEncrypted?: boolean;
   manifest?: any;
-  path?: string; 
+  path?: string;
 }
 
 export interface ProxyNode {
@@ -160,15 +160,6 @@ const dummyFiles: FileItem[] = [
     status: "completed",
     progress: 100,
     visualOrder: 2,
-  },
-  {
-    id: "2",
-    name: "Archive.zip",
-    hash: "QmZ4tDuvesekqMG",
-    size: 10485760,
-    status: "uploaded",
-    progress: 100,
-    visualOrder: 3,
   },
 ];
 
@@ -433,7 +424,6 @@ export interface AppSettings {
   userLocation: string;
   enableProxy: boolean; // For SOCKS5 feature
   proxyAddress: string; // For SOCKS5 feature
-  enableEncryption: boolean;
   anonymousMode: boolean;
   shareAnalytics: boolean;
   enableNotifications: boolean;
@@ -464,7 +454,6 @@ export const settings = writable<AppSettings>({
   userLocation: "US-East",
   enableProxy: true, // Defaulting to enabled for SOCKS5 feature
   proxyAddress: "127.0.0.1:9050", // Default Tor SOCKS address
-  enableEncryption: true,
   anonymousMode: false,
   shareAnalytics: true,
   enableNotifications: true,

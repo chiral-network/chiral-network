@@ -36,12 +36,44 @@
 
   const unsubscribe = dhtSearchHistory.subscribe((entries) => {
     historyEntries = entries;
-    if (!activeHistoryId && entries.length > 0) {
-      activeHistoryId = entries[0].id;
-      latestStatus = entries[0].status;
-      latestMetadata = entries[0].metadata ?? null;
-      searchError = entries[0].errorMessage ?? null;
-      hasSearched = entries.length > 0;
+    // if (!activeHistoryId && entries.length > 0) {
+    //   activeHistoryId = entries[0].id;
+    //   latestStatus = entries[0].status;
+    //   latestMetadata = entries[0].metadata ?? null;
+    //   searchError = entries[0].errorMessage ?? null;
+    //   hasSearched = entries.length > 0;
+    // }
+    if (entries.length > 0) {
+      // 1. Always set the active ID from the most recent entry for the history dropdown.
+      activeHistoryId = entries[0].id; 
+
+      // 2. Control the main UI state based on whether a search has been initiated in this session.
+      if (!hasSearched) {
+        // If it's a fresh load (hasSearched is false):
+        // Keep the input clear, and the result panel empty.
+        searchHash = ''; 
+        latestStatus = 'pending'; 
+        latestMetadata = null;
+        searchError = null;
+      } else {
+        // If the user has searched in this session, ensure the current search results are displayed.
+        const entry = entries.find(e => e.id === activeHistoryId) || entries[0];
+        if (entry) {
+          latestStatus = entry.status;
+          latestMetadata = entry.metadata ?? null;
+          searchError = entry.errorMessage ?? null;
+          searchHash = entry.hash;
+        }
+      }
+    } else {
+      activeHistoryId = null;
+      // On empty history, ensure the main state is also reset.
+      if (!hasSearched) {
+        searchHash = '';
+        latestStatus = 'pending';
+        latestMetadata = null;
+        searchError = null;
+      }
     }
   });
 
