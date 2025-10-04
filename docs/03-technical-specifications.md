@@ -51,7 +51,7 @@
 | **Network** | 100 Mbps symmetric    |
 | **OS**      | Latest stable version |
 
-#### Storage Node Requirements
+#### Recommended Requirements for Providers Who Want to Serve Files
 
 | Component   | Specification      |
 | ----------- | ------------------ |
@@ -273,8 +273,6 @@ Master Key (from mnemonic)
 | Type                | Description          | Base Gas Cost |
 | ------------------- | -------------------- | ------------- |
 | **Transfer**        | Send coins           | 21,000 gas    |
-| **Storage Request** | Request file storage | 100,000 gas   |
-| **Storage Proof**   | Prove file storage   | 50,000 gas    |
 | **File Access**     | Access stored file   | 30,000 gas    |
 
 ### Transaction Structure
