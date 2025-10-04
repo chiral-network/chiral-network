@@ -175,12 +175,12 @@ GET /api/v1/files/list
 }
 ```
 
-### Storage Node Operations
+### Provider Node Operations
 
-#### Register Storage Node
+#### Register provider Node
 
 ```http
-POST /api/v1/storage/register
+POST /api/v1/provider/register
 ```
 
 **Request Body:**
@@ -215,10 +215,10 @@ POST /api/v1/storage/register
 }
 ```
 
-#### Update Storage Node Status
+#### Update Provider Node Status
 
 ```http
-PUT /api/v1/storage/status
+PUT /api/v1/provider/status
 ```
 
 **Request Body:**
@@ -236,10 +236,10 @@ PUT /api/v1/storage/status
 }
 ```
 
-#### Get Storage Statistics
+#### Get Provider Statistics
 
 ```http
-GET /api/v1/storage/stats
+GET /api/v1/provider/stats
 ```
 
 **Response:**
@@ -285,7 +285,7 @@ GET /api/v1/peers/discover
       "reputation": 4.5,
       "uptime": 0.99,
       "last_seen": 1234567890,
-      "capabilities": ["storage", "relay", "proxy"]
+      "capabilities": ["provider", "relay", "proxy"]
     }
   ]
 }
@@ -772,7 +772,7 @@ ws.onopen = () => {
 | 1003 | FILE_NOT_FOUND     | File not in network           |
 | 1004 | INSUFFICIENT_FUNDS | Not enough balance            |
 | 1005 | PERMISSION_DENIED  | Access not authorized         |
-| 1006 | STORAGE_FULL       | Node storage capacity reached |
+| 1006 | STORAGE_FULL       | Node provider capacity reached |
 | 1007 | INVALID_CHUNK      | Chunk verification failed     |
 | 1008 | PEER_UNREACHABLE   | Cannot connect to peer        |
 | 1009 | INVALID_SIGNATURE  | Transaction signature invalid |
