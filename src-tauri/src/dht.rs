@@ -2388,6 +2388,12 @@ impl DhtService {
         peer_selection.set_peer_encryption_support(peer_id, supported);
     }
 
+    /// Report malicious behavior from a peer
+    pub async fn report_malicious_peer(&self, peer_id: &str, severity: &str) {
+        let mut peer_selection = self.peer_selection.lock().await;
+        peer_selection.report_malicious_peer(peer_id, severity);
+    }
+
     /// Get all peer metrics for monitoring
     pub async fn get_peer_metrics(&self) -> Vec<PeerMetrics> {
         let peer_selection = self.peer_selection.lock().await;
