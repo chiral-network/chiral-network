@@ -231,11 +231,11 @@ File Download:
 
 File Download (BitTorrent-style):
 1. Input Hash → Query DHT
-2. Get Seeder List → Display to user (with option to auto-select)
-3. User Selects Seeders → Or system auto-selects
-4. Establish Connections → Handshake with all selected seeders
-5. Broadcast Chunk Needs → Tell seeders what chunks are needed
-6. Receive Chunks → First-come-first-serve basis from any seeder
+2. Get Seeder List → Display list of available providers to user
+3. User Selects Provider(s) → Choose which seeder(s) to download from
+4. Establish Connections → Handshake with selected seeder(s)
+5. Request Chunks → Request specific chunks from chosen seeder(s)
+6. Receive Chunks → Download chunks from selected provider(s)
 7. Track & Blacklist → Monitor performance, blacklist poor seeders
 8. Verify Chunks → Check hashes against manifest
 9. Reassemble & Decrypt → Rebuild original file
