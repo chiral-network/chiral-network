@@ -21,6 +21,7 @@
     import SimpleToast from './lib/components/SimpleToast.svelte';
     import { startNetworkMonitoring } from './lib/services/networkService';
     import { fileService } from '$lib/services/fileService';
+    import { bandwidthScheduler } from '$lib/services/bandwidthScheduler';
     // gets path name not entire url:
     // ex: http://locatlhost:1420/download -> /download
     
@@ -55,6 +56,10 @@
           console.error('Failed to initialize backend services:', error);
         }
 
+        // Start bandwidth scheduler
+        bandwidthScheduler.start();
+        console.log('Bandwidth scheduler started.');
+
         // set the currentPage var
         syncFromUrl();
 
@@ -70,6 +75,7 @@
       return () => {
         window.removeEventListener('popstate', onPop);
         stopNetworkMonitoring();
+        bandwidthScheduler.stop();
       };
     })
 
