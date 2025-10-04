@@ -219,7 +219,6 @@ bootstrap_peers = [
 
 [storage]
 path = "/var/lib/chiral/storage"
-max_file_size = "10GB"
 chunk_size = 262144
 
 [api]
