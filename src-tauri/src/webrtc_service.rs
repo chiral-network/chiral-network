@@ -6,6 +6,8 @@ use tokio::sync::{mpsc, Mutex};
 use tokio::time::{sleep, Duration};
 use tracing::{info, warn, error};
 use sha2::{Digest, Sha256};
+use aes_gcm::{Aes256Gcm, KeyInit, AeadCore};
+use aes_gcm::aead::{Aead, OsRng};
 use webrtc::api::APIBuilder;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
 use webrtc::data_channel::RTCDataChannel;
@@ -15,6 +17,8 @@ use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
 use crate::FileTransferService;
+use crate::encryption::{encrypt_aes_key, decrypt_aes_key, EncryptedAesKeyBundle, FileEncryption};
+use crate::keystore::Keystore;
 
 const CHUNK_SIZE: usize = 16384; // 16KB chunks
 
@@ -24,6 +28,7 @@ pub struct WebRTCFileRequest {
     pub file_name: String,
     pub file_size: u64,
     pub requester_peer_id: String,
+    pub recipient_public_key: Option<String>, // For encrypted transfers
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +38,7 @@ pub struct FileChunk {
     pub total_chunks: u32,
     pub data: Vec<u8>,
     pub checksum: String,
+    pub encrypted_key_bundle: Option<EncryptedAesKeyBundle>, // For encrypted transfers
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,10 +160,11 @@ pub struct WebRTCService {
     event_rx: Arc<Mutex<mpsc::Receiver<WebRTCEvent>>>,
     connections: Arc<Mutex<HashMap<String, PeerConnection>>>,
     file_transfer_service: Arc<FileTransferService>,
+    keystore: Arc<Mutex<Keystore>>,
 }
 
 impl WebRTCService {
-    pub async fn new(file_transfer_service: Arc<FileTransferService>) -> Result<Self, String> {
+    pub async fn new(file_transfer_service: Arc<FileTransferService>, keystore: Arc<Mutex<Keystore>>) -> Result<Self, String> {
         let (cmd_tx, cmd_rx) = mpsc::channel(100);
         let (event_tx, event_rx) = mpsc::channel(100);
         let connections = Arc::new(Mutex::new(HashMap::new()));
@@ -168,6 +175,7 @@ impl WebRTCService {
             event_tx.clone(),
             connections.clone(),
             file_transfer_service.clone(),
+            keystore.clone(),
         ));
 
         Ok(WebRTCService {
@@ -176,6 +184,7 @@ impl WebRTCService {
             event_rx: Arc::new(Mutex::new(event_rx)),
             connections,
             file_transfer_service,
+            keystore,
         })
     }
 
@@ -184,11 +193,12 @@ impl WebRTCService {
         event_tx: mpsc::Sender<WebRTCEvent>,
         connections: Arc<Mutex<HashMap<String, PeerConnection>>>,
         file_transfer_service: Arc<FileTransferService>,
+        keystore: Arc<Mutex<Keystore>>,
     ) {
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
                 WebRTCCommand::EstablishConnection { peer_id, offer } => {
-                    Self::handle_establish_connection(&peer_id, &offer, &event_tx, &connections, &file_transfer_service).await;
+                    Self::handle_establish_connection(&peer_id, &offer, &event_tx, &connections, &file_transfer_service, &keystore).await;
                 }
                 WebRTCCommand::HandleAnswer { peer_id, answer } => {
                     Self::handle_answer(&peer_id, &answer, &connections).await;
@@ -197,7 +207,7 @@ impl WebRTCService {
                     Self::handle_ice_candidate(&peer_id, &candidate, &connections).await;
                 }
                 WebRTCCommand::SendFileRequest { peer_id, request } => {
-                    Self::handle_file_request(&peer_id, &request, &event_tx, &file_transfer_service, &connections).await;
+                    Self::handle_file_request(&peer_id, &request, &event_tx, &file_transfer_service, &connections, &keystore).await;
                 }
                 WebRTCCommand::SendFileChunk { peer_id, chunk } => {
                     Self::handle_send_chunk(&peer_id, &chunk, &connections).await;
@@ -218,6 +228,7 @@ impl WebRTCService {
         event_tx: &mpsc::Sender<WebRTCEvent>,
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
         file_transfer_service: &Arc<FileTransferService>,
+        keystore: &Arc<Mutex<Keystore>>,
     ) {
         info!("Establishing WebRTC connection with peer: {}", peer_id);
 
@@ -256,15 +267,17 @@ impl WebRTCService {
         let peer_id_clone = peer_id.to_string();
         let file_transfer_service_clone = file_transfer_service.clone();
         let connections_clone = connections.clone();
+        let keystore_clone = keystore.clone();
 
         data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
             let event_tx = event_tx_clone.clone();
             let peer_id = peer_id_clone.clone();
             let file_transfer_service = file_transfer_service_clone.clone();
             let connections = connections_clone.clone();
+            let keystore = keystore_clone.clone();
 
             Box::pin(async move {
-                Self::handle_data_channel_message(&peer_id, &msg, &event_tx, &file_transfer_service, &connections).await;
+                Self::handle_data_channel_message(&peer_id, &msg, &event_tx, &file_transfer_service, &connections, &keystore).await;
             })
         }));
 
@@ -427,6 +440,7 @@ impl WebRTCService {
         event_tx: &mpsc::Sender<WebRTCEvent>,
         file_transfer_service: &Arc<FileTransferService>,
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
+        keystore: &Arc<Mutex<Keystore>>,
     ) {
         info!("Handling file request from peer {}: {}", peer_id, request.file_hash);
 
@@ -436,7 +450,7 @@ impl WebRTCService {
 
         if has_file {
             // Start sending file chunks
-            Self::start_file_transfer(peer_id, request, event_tx, file_transfer_service, connections).await;
+            Self::start_file_transfer(peer_id, request, event_tx, file_transfer_service, connections, keystore).await;
         } else {
             let _ = event_tx.send(WebRTCEvent::TransferFailed {
                 peer_id: peer_id.to_string(),
@@ -495,12 +509,13 @@ impl WebRTCService {
         event_tx: &mpsc::Sender<WebRTCEvent>,
         file_transfer_service: &Arc<FileTransferService>,
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
+        keystore: &Arc<Mutex<Keystore>>,
     ) {
         if let Ok(text) = std::str::from_utf8(&msg.data) {
             // Try to parse as FileChunk
             if let Ok(chunk) = serde_json::from_str::<FileChunk>(text) {
                 // Handle received chunk
-                Self::process_incoming_chunk(&chunk, file_transfer_service, connections, event_tx, peer_id).await;
+                Self::process_incoming_chunk(&chunk, file_transfer_service, connections, event_tx, peer_id, keystore).await;
                 let _ = event_tx.send(WebRTCEvent::FileChunkReceived {
                     peer_id: peer_id.to_string(),
                     chunk,
@@ -513,7 +528,7 @@ impl WebRTCService {
                     request: request.clone(),
                 }).await;
                 // Actually handle the file request to start transfer
-                Self::handle_file_request(peer_id, &request, event_tx, file_transfer_service, connections).await;
+                Self::handle_file_request(peer_id, &request, event_tx, file_transfer_service, connections, keystore).await;
             }
         }
     }
@@ -524,7 +539,8 @@ impl WebRTCService {
         event_tx: &mpsc::Sender<WebRTCEvent>,
         file_transfer_service: &Arc<FileTransferService>,
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
-    ) {
+        keystore: &Arc<Mutex<Keystore>>,
+    ) -> Result<(), String> {
         // Get file data from local storage
         let file_data = match file_transfer_service.get_file_data(&request.file_hash).await {
             Some(data) => data,
@@ -534,7 +550,7 @@ impl WebRTCService {
                     file_hash: request.file_hash.clone(),
                     error: "File data not available".to_string(),
                 }).await;
-                return;
+                return Ok(());
             }
         };
 
@@ -567,15 +583,32 @@ impl WebRTCService {
             let end = (start + CHUNK_SIZE).min(file_data.len());
             let chunk_data: Vec<u8> = file_data[start..end].to_vec();
 
-            // Calculate checksum for chunk
-            let checksum = Self::calculate_chunk_checksum(&chunk_data);
+            let (final_chunk_data, encrypted_key_bundle) = if let Some(ref recipient_key) = request.recipient_public_key {
+                match Self::encrypt_chunk_for_peer(&chunk_data, recipient_key, keystore).await {
+                    Ok((encrypted_data, key_bundle)) => (encrypted_data, Some(key_bundle)),
+                    Err(e) => {
+                        let _ = event_tx.send(WebRTCEvent::TransferFailed {
+                            peer_id: peer_id.to_string(),
+                            file_hash: request.file_hash.clone(),
+                            error: format!("Encryption failed: {}", e),
+                        }).await;
+                        return Err(format!("Encryption failed: {}", e));
+                    }
+                }
+            } else {
+                (chunk_data, None)
+            };
+
+            // Calculate checksum for the final data (encrypted or not)
+            let checksum = Self::calculate_chunk_checksum(&final_chunk_data);
 
             let chunk = FileChunk {
                 file_hash: request.file_hash.clone(),
                 chunk_index,
                 total_chunks,
-                data: chunk_data,
+                data: final_chunk_data,
                 checksum,
+                encrypted_key_bundle,
             };
 
             // Send chunk via WebRTC data channel
@@ -626,6 +659,7 @@ impl WebRTCService {
             peer_id: peer_id.to_string(),
             file_hash: request.file_hash.clone(),
         }).await;
+        Ok(())
     }
 
     async fn process_incoming_chunk(
@@ -634,9 +668,22 @@ impl WebRTCService {
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
         event_tx: &mpsc::Sender<WebRTCEvent>,
         peer_id: &str,
+        keystore: &Arc<Mutex<Keystore>>,
     ) {
+        // Decrypt chunk data if it was encrypted
+        let final_chunk_data = if let Some(ref encrypted_key_bundle) = chunk.encrypted_key_bundle {
+            // Get the recipient's private key from keystore (assuming we're the recipient)
+            // For now, we'll need to get the active account's private key
+            // This is a simplified approach - in practice, we'd need to know which account to use
+            // TODO: Implement proper decryption with active account private key
+            warn!("Encrypted chunk received but decryption not implemented for peer: {}", peer_id);
+            chunk.data.clone() // Return encrypted data as-is for now
+        } else {
+            chunk.data.clone()
+        };
+
         // Verify chunk checksum
-        let calculated_checksum = Self::calculate_chunk_checksum(&chunk.data);
+        let calculated_checksum = Self::calculate_chunk_checksum(&final_chunk_data);
         if calculated_checksum != chunk.checksum {
             warn!("Chunk checksum mismatch for file {}", chunk.file_hash);
             return;
@@ -688,7 +735,7 @@ impl WebRTCService {
     }
 
     fn calculate_chunk_checksum(data: &[u8]) -> String {
-        let mut hasher = Sha256::new();
+        let mut hasher = Sha256::default();
         hasher.update(data);
         format!("{:x}", hasher.finalize())
     }
@@ -701,7 +748,7 @@ impl WebRTCService {
 
         // Create peer connection
         let config = RTCConfiguration::default();
-        let peer_connection = match api.new_peer_connection(config).await {
+        let peer_connection: Arc<RTCPeerConnection> = match api.new_peer_connection(config).await {
             Ok(pc) => Arc::new(pc),
             Err(e) => {
                 error!("Failed to create peer connection: {}", e);
@@ -723,15 +770,17 @@ impl WebRTCService {
         let peer_id_clone = peer_id.clone();
         let file_transfer_service_clone = Arc::new(self.file_transfer_service.clone());
         let connections_clone = Arc::new(self.connections.clone());
+        let keystore_clone = Arc::new(self.keystore.clone());
 
         data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
             let event_tx = event_tx_clone.clone();
             let peer_id = peer_id_clone.clone();
             let file_transfer_service = file_transfer_service_clone.clone();
             let connections = connections_clone.clone();
+            let keystore = keystore_clone.clone();
 
             Box::pin(async move {
-                Self::handle_data_channel_message(&peer_id, &msg, &event_tx, &file_transfer_service, &connections).await;
+                Self::handle_data_channel_message(&peer_id, &msg, &event_tx, &file_transfer_service, &connections, &keystore).await;
             })
         }));
 
@@ -833,7 +882,7 @@ impl WebRTCService {
 
         // Create peer connection
         let config = RTCConfiguration::default();
-        let peer_connection = match api.new_peer_connection(config).await {
+        let peer_connection: Arc<RTCPeerConnection> = match api.new_peer_connection(config).await {
             Ok(pc) => Arc::new(pc),
             Err(e) => {
                 error!("Failed to create peer connection: {}", e);
@@ -855,15 +904,17 @@ impl WebRTCService {
         let peer_id_clone = peer_id.clone();
         let file_transfer_service_clone = Arc::new(self.file_transfer_service.clone());
         let connections_clone = Arc::new(self.connections.clone());
+        let keystore_clone = Arc::new(self.keystore.clone());
 
         data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
             let event_tx = event_tx_clone.clone();
             let peer_id = peer_id_clone.clone();
             let file_transfer_service = file_transfer_service_clone.clone();
             let connections = connections_clone.clone();
+            let keystore = keystore_clone.clone();
 
             Box::pin(async move {
-                Self::handle_data_channel_message(&peer_id, &msg, &event_tx, &file_transfer_service, &connections).await;
+                Self::handle_data_channel_message(&peer_id, &msg, &event_tx, &file_transfer_service, &connections, &keystore).await;
             })
         }));
 
@@ -1019,6 +1070,80 @@ impl WebRTCService {
         let connections = self.connections.lock().await;
         connections.get(peer_id).map(|c| c.is_connected).unwrap_or(false)
     }
+
+    /// Encrypt a chunk using AES-GCM with a randomly generated key, then encrypt the key with recipient's public key
+    async fn encrypt_chunk_for_peer(
+        chunk_data: &[u8],
+        recipient_public_key_hex: &str,
+        keystore: &Arc<Mutex<Keystore>>,
+    ) -> Result<(Vec<u8>, EncryptedAesKeyBundle), String> {
+        use x25519_dalek::PublicKey;
+
+        // Generate random AES key for this chunk
+        let aes_key = FileEncryption::generate_random_key();
+
+        // Parse recipient's public key
+        let recipient_public_key_bytes = hex::decode(recipient_public_key_hex)
+            .map_err(|e| format!("Invalid recipient public key: {}", e))?;
+        let recipient_public_key_bytes: [u8; 32] = recipient_public_key_bytes.try_into()
+            .map_err(|_| "Invalid recipient public key length")?;
+        let recipient_public_key = PublicKey::from(recipient_public_key_bytes);
+
+        // Encrypt the AES key with recipient's public key (ECIES)
+        let encrypted_key_bundle = encrypt_aes_key(&aes_key, &recipient_public_key)?;
+
+        // Encrypt the chunk data with AES-GCM
+        let key = aes_gcm::Key::<aes_gcm::Aes256Gcm>::from_slice(&aes_key);
+        let cipher = aes_gcm::Aes256Gcm::new(key);
+        let nonce = aes_gcm::Aes256Gcm::generate_nonce(&mut aes_gcm::aead::OsRng);
+
+        let encrypted_data = cipher
+            .encrypt(&nonce, chunk_data)
+            .map_err(|e| format!("Chunk encryption failed: {}", e))?;
+
+        // Prepend nonce to encrypted data
+        let mut result = nonce.to_vec();
+        result.extend(encrypted_data);
+
+        Ok((result, encrypted_key_bundle))
+    }
+
+    /// Decrypt a chunk using the encrypted AES key bundle and recipient's private key
+    async fn decrypt_chunk_from_peer(
+        &self,
+        encrypted_data: &[u8],
+        encrypted_key_bundle: &EncryptedAesKeyBundle,
+        recipient_private_key: &str,
+    ) -> Result<Vec<u8>, String> {
+        use x25519_dalek::StaticSecret;
+
+        // Parse recipient's private key
+        let recipient_private_key_bytes = hex::decode(recipient_private_key)
+            .map_err(|e| format!("Invalid recipient private key: {}", e))?;
+        let recipient_private_key_bytes: [u8; 32] = recipient_private_key_bytes.try_into()
+            .map_err(|_| "Invalid recipient private key length")?;
+        let recipient_private_key = StaticSecret::from(recipient_private_key_bytes);
+
+        // Decrypt the AES key using recipient's private key
+        let aes_key = decrypt_aes_key(encrypted_key_bundle, &recipient_private_key)?;
+
+        // Extract nonce and encrypted data
+        if encrypted_data.len() < 12 {
+            return Err("Encrypted data too short".to_string());
+        }
+        let nonce = aes_gcm::Nonce::from_slice(&encrypted_data[..12]);
+        let ciphertext = &encrypted_data[12..];
+
+        // Decrypt the chunk data with AES-GCM
+        let key = aes_gcm::Key::<aes_gcm::Aes256Gcm>::from_slice(&aes_key);
+        let cipher = aes_gcm::Aes256Gcm::new(key);
+
+        let decrypted_data = cipher
+            .decrypt(nonce, ciphertext)
+            .map_err(|e| format!("Chunk decryption failed: {}", e))?;
+
+        Ok(decrypted_data)
+    }
 }
 
 // Singleton instance
@@ -1028,10 +1153,10 @@ lazy_static! {
     static ref WEBRTC_SERVICE: Mutex<Option<Arc<WebRTCService>>> = Mutex::new(None);
 }
 
-pub async fn init_webrtc_service(file_transfer_service: Arc<FileTransferService>) -> Result<(), String> {
+pub async fn init_webrtc_service(file_transfer_service: Arc<FileTransferService>, keystore: Arc<Mutex<Keystore>>) -> Result<(), String> {
     let mut service = WEBRTC_SERVICE.lock().await;
     if service.is_none() {
-        let webrtc_service = WebRTCService::new(file_transfer_service).await?;
+        let webrtc_service = WebRTCService::new(file_transfer_service, keystore).await?;
         *service = Some(Arc::new(webrtc_service));
     }
     Ok(())
@@ -1057,6 +1182,7 @@ impl FileTransferService {
                 file_name: "downloaded_file".to_string(), // Will be updated when we get metadata
                 file_size: 0, // Will be updated
                 requester_peer_id: "local_peer".to_string(), // Should be actual local peer ID
+                recipient_public_key: None, // No encryption for basic downloads
             };
 
             webrtc_service.send_file_request(peer_id, request).await?;

@@ -45,7 +45,7 @@ fn get_active_address(active_account: &State<'_, ActiveAccount>) -> Result<Strin
     address_lock
         .as_deref()
         .map(String::from)
-        .ok_or_else(|| "No active account. Please log in.".to_string())
+        .ok_or_else(|| "No account is currently active. Please log in.".to_string())
 }
 
 /// Generate a random salt for encryption

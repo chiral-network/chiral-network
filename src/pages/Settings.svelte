@@ -54,7 +54,6 @@
     // Privacy settings
     enableProxy: true,
     proxyAddress: "127.0.0.1:9050", // Default Tor SOCKS address
-    enableEncryption: true,
     anonymousMode: false,
     shareAnalytics: true,
 
@@ -377,7 +376,6 @@ const sectionLabels: Record<string, string[]> = {
   privacy: [
     $t("privacy.title"),
     $t("privacy.enableProxy"),
-    $t("privacy.enableEncryption"),
     $t("privacy.anonymousMode"),
     $t("privacy.shareAnalytics"),
   ],
@@ -856,17 +854,6 @@ function sectionMatches(section: string, query: string) {
             <p class="text-xs text-muted-foreground mt-1">{$t("privacy.proxyHint")}</p>
           </div>
         {/if}
-
-        <div class="flex items-center gap-2">
-          <input
-            type="checkbox"
-            id="enable-encryption"
-            bind:checked={localSettings.enableEncryption}
-          />
-          <Label for="enable-encryption" class="cursor-pointer">
-            {$t("privacy.enableEncryption")}
-          </Label>
-        </div>
 
         <div class="flex items-center gap-2">
           <input
