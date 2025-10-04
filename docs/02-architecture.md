@@ -283,7 +283,7 @@ sequenceDiagram
     participant Client
     participant FileService
     participant DHT
-    participant StorageNode
+    participant ProviderNode
     participant Blockchain
 
     Client->>+FileService: Request File (Merkle Root)
@@ -292,9 +292,8 @@ sequenceDiagram
     FileService->>+StorageNode: Request encrypted chunks
     StorageNode-->>-FileService: Send available encrypted chunks
     FileService->>FileService: Decrypt individual chunks
-    FileService->>FileService: Decrypt and reassemble original file from chunks
     FileService->>FileService: Verify chunk hash against original hash in manifest
-    FileService->>FileService: Assemble file from verified chunks
+    FileService->>FileService: Assemble original file from verified chunks
     FileService->>+Blockchain: Send Payment
     Blockchain-->>-FileService: Payment Confirmed
     FileService-->>-Client: File Ready
