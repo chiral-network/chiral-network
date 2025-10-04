@@ -96,7 +96,8 @@ Note: There is no external storage node, the user is the storage node, client no
 
 - Store file chunks
 - Serve retrieval requests
-- Advertise pricing and availability
+- Communicate to DHT regarding availability of file chunks
+- Can dynamically change file pricing
 - Maintain uptime for reliability
 
 ### 2. Client Nodes
