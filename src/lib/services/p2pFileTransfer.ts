@@ -46,57 +46,9 @@ export class P2PFileTransferService {
     this.signalingService = new SignalingService();
   }
 
-  private async getPeerMetrics(
-    seeders: string[]
-  ): Promise<Record<string, any>> {
-    try {
-      // Get peer metrics from DHT backend
-      const metrics = (await invoke("get_peer_metrics")) as any[];
-
-      // Convert to map for easy lookup
-      const metricsMap: Record<string, any> = {};
-      metrics.forEach((metric) => {
-        if (seeders.includes(metric.peerId)) {
-          metricsMap[metric.peerId] = metric;
-        }
-      });
-
-      return metricsMap;
-    } catch (error) {
-      console.error("Failed to get peer metrics:", error);
-      return {};
-    }
-  }
-
-  private calculateSeederScore(_seederId: string, metrics: any): number {
-    let score = 0;
-
-    // Base score for being available
-    score += 10;
-
-    // Boost score for successful transfers
-    if (metrics.successCount) {
-      score += Math.min(metrics.successCount * 2, 20);
-    }
-
-    // Boost score for low latency (if available)
-    if (metrics.averageLatency) {
-      // Lower latency = higher score (inverse relationship)
-      const latencyScore = Math.max(0, 10 - metrics.averageLatency / 100);
-      score += latencyScore;
-    }
-
-    // Penalize for failures
-    if (metrics.failureCount) {
-      score -= Math.min(metrics.failureCount * 3, 15);
-    }
-
-    // Boost for recent activity
-    if (metrics.lastSeenRecently) {
-      score += 5;
-    }
-
-    return Math.max(0, score);
+  async getFileMetadata(fileHash: string): Promise<any> {
+    // Use the file hash to retrieve metadata from DHT
+    return await invoke("get_file_metadata", { fileHash });
   }
 
   async initiateDownload(

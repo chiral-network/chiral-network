@@ -16,7 +16,7 @@ use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
-use crate::FileTransferService;
+use crate::file_transfer::FileTransferService;
 use crate::encryption::{encrypt_aes_key, decrypt_aes_key, EncryptedAesKeyBundle, FileEncryption};
 use crate::keystore::Keystore;
 

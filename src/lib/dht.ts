@@ -2,7 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { AppSettings } from "./stores";
-import { homeDir, join } from "@tauri-apps/api/path";
+import { homeDir } from "@tauri-apps/api/path";
 
 // Default bootstrap nodes for network connectivity
 export const DEFAULT_BOOTSTRAP_NODES = [
@@ -180,7 +180,7 @@ export class DhtService {
   async publishFileToNetwork(filePath: string): Promise<FileMetadata> {
     try {
       // Start listening for the published_file event
-      const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {
+      const metadataPromise = new Promise<FileMetadata>((resolve) => {
         const unlistenPromise = listen<FileMetadata>(
           "published_file",
           (event) => {
@@ -206,7 +206,7 @@ export class DhtService {
     try {
       console.log("Initiating download for file:", fileMetadata.fileHash);
       // Start listening for the published_file event
-      const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {
+      const metadataPromise = new Promise<FileMetadata>((resolve) => {
         const unlistenPromise = listen<FileMetadata>(
           "file_content",
           async (event) => {
