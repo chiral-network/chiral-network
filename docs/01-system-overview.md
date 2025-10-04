@@ -18,7 +18,6 @@ Chiral Network is a decentralized peer-to-peer file storage and sharing system t
 - **File Storage**: Distributed across network nodes as encrypted chunks
 - **Content Addressing**: Files identified by SHA-256 hashes
 - **DHT Integration**: Direct mapping of file hashes to network locations
-- **Redundancy**: High durability and availability
 
 ### 3. Network Layer
 
@@ -189,7 +188,6 @@ Chiral Network is a decentralized peer-to-peer file storage and sharing system t
 
 - Network uptime > 99.9%
 - Average file retrieval time < 5 seconds
-- Storage redundancy factor > 3
 - Transaction confirmation time < 1 minute
 
 ### Economic Metrics
