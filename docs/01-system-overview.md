@@ -86,6 +86,10 @@ Chiral Network is a decentralized peer-to-peer file storage and sharing system t
 - No tracking of user activities
 
 ## Node Types
+The user in this project can be any of these node types and can transition to any of the other types: 
+- They can act as "storage nodes" where they host their own files to be chunked and downloaded by others. 
+- They can also act as "client nodes" where they request files and make payments. 
+- They can also transition to "mining nodes" and focus on validating transactions and earning Chiral. 
 
 ### 1. Storage Nodes
 
