@@ -266,21 +266,13 @@ Permission Model:
 sequenceDiagram
     participant Client
     participant FileService
-    participant StorageNode
     participant DHT
-    participant Blockchain
 
     Client->>+FileService: Upload File
+    FileService->>FileService: Chunk and/or Encrypt chunk file into 256 KB pieces
     FileService->>FileService: Generate Merkle Root from original chunk hashes
-    FileService->>FileService: Chunk file into 256KB pieces
-    FileService->>FileService: Encrypt and chunk file into 256 KB pieces
-    FileService->>FileService: Encrypt each chunk
-    FileService->>+StorageNode: Upload encrypted chunks
-    StorageNode-->>-FileService: Confirm chunk storage
     FileService->>+DHT: Register File Manifest (Merkle Root, Chunk Hashes)
     DHT-->>-FileService: Confirm Registration
-    FileService->>+Blockchain: Create Payment TX
-    Blockchain-->>-FileService: TX Confirmed
     FileService-->>-Client: Upload Complete
 ```
 
