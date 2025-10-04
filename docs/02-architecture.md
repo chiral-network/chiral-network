@@ -289,8 +289,8 @@ sequenceDiagram
     Client->>+FileService: Request File (Merkle Root)
     FileService->>+DHT: Lookup File Manifest
     DHT-->>-FileService: Return Manifest (includes chunk hashes)
-    FileService->>+StorageNode: Request encrypted chunks
-    StorageNode-->>-FileService: Send available encrypted chunks
+    FileService->>+ProviderNode: Request encrypted chunks
+    ProviderNode-->>-FileService: Send available encrypted chunks
     FileService->>FileService: Decrypt individual chunks
     FileService->>FileService: Verify chunk hash against original hash in manifest
     FileService->>FileService: Assemble original file from verified chunks
