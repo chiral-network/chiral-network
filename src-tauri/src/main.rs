@@ -1773,7 +1773,7 @@ async fn upload_file_chunk(
     if let Some(dht) = state.dht.lock().await.as_ref() {
         // Create a block from the chunk data
         use dht::{split_into_blocks, StringBlock};
-        let blocks = split_into_blocks(&chunk_data);
+        let blocks = split_into_blocks(&chunk_data, dht.chunk_size());
 
         for block in blocks.iter() {
             let cid = match block.cid() {

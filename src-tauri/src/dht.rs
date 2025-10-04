@@ -2077,6 +2077,10 @@ impl DhtService {
         info!("DHT node is running");
     }
 
+    pub fn chunk_size(&self) -> usize {
+        self.chunk_size
+    }
+
     pub async fn publish_file(&self, metadata: FileMetadata) -> Result<(), String> {
         self.file_metadata_cache
             .lock()
