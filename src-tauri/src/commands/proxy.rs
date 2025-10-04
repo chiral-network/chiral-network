@@ -3,10 +3,10 @@ use crate::AppState;
 use tauri::Emitter;
 use tauri::State;
 // use tracing::info;
-use tracing::{info, warn};
 use libp2p::PeerId;
 use std::str::FromStr;
 use std::sync::Arc;
+use tracing::{info, warn};
 
 #[derive(Clone, serde::Serialize)]
 pub struct ProxyNode {
@@ -92,7 +92,6 @@ pub(crate) async fn proxy_disconnect(
     url: String,
 ) -> Result<(), String> {
     info!("Disconnecting from proxy: {}", url);
-
     let maybe_peer_id = {
         let mut proxies = state.proxies.lock().await;
         proxies
