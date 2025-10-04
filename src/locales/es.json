@@ -131,7 +131,10 @@
       "unknown": "Desconocido",
       "joined": "Unido",
       "now": "Ahora",
-      "noPeers": "No hay pares conectados. Ejecuta descubrimiento para encontrar pares."
+      "noPeers": "No hay pares conectados. Ejecuta descubrimiento para encontrar pares.",
+      "disconnect": "Desconectar",
+      "disconnected": "Desconectado exitosamente del par",
+      "disconnectError": "Error al desconectar del par"
     },
     "errors": {
       "downloadOnlyTauri": "La descarga del Nodo Chiral solo está disponible en la aplicación de escritorio. Descarga y ejecuta la versión de escritorio Tauri."

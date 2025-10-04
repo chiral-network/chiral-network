@@ -336,6 +336,19 @@ async fn get_webrtc_connection_status(
 }
 
 #[tauri::command]
+async fn disconnect_from_peer(
+    state: State<'_, AppState>,
+    peer_id: String,
+) -> Result<(), String> {
+    let webrtc = { state.webrtc.lock().await.as_ref().cloned() };
+    if let Some(webrtc) = webrtc {
+        webrtc.close_connection(peer_id).await
+    } else {
+        Err("WebRTC service not running".into())
+    }
+}
+
+#[tauri::command]
 async fn upload_versioned_file(
     state: State<'_, AppState>,
     file_name: String,
@@ -2973,6 +2986,7 @@ fn main() {
             establish_webrtc_connection,
             send_webrtc_file_request,
             get_webrtc_connection_status,
+            disconnect_from_peer,
             start_streaming_upload,
             upload_file_chunk,
             cancel_streaming_upload,

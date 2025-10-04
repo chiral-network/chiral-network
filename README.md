@@ -51,7 +51,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 - ✅ **Automatic Peer Discovery**: DHT-based peer finding with manual connect option
 - ✅ **Peer Reputation**: Track and display peer reliability scores
 - ❌ **Geographic Distribution**: View real peer locations and regional statistics (real geolocation not implemented)
-- ❌ **Connection Management**: Direct control over peer connections (not implemented)
+- ✅ **Connection Management**: Direct control over peer connections with disconnect functionality
 - ✅ **Network Health Indicators**: Visual status of network connectivity
 
 ### 4. Comprehensive Analytics Dashboard

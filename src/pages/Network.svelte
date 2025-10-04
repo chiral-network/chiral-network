@@ -7,7 +7,7 @@
   import GethStatusCard from '$lib/components/GethStatusCard.svelte'
   import PeerMetrics from '$lib/components/PeerMetrics.svelte'
   import GeoDistributionCard from '$lib/components/GeoDistributionCard.svelte'
-  import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Play, Square, Download, AlertCircle, Wifi } from 'lucide-svelte'
+  import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Play, Square, Download, AlertCircle, Wifi, UserMinus } from 'lucide-svelte'
   import { peers, networkStats, networkStatus, userLocation, etcAccount } from '$lib/stores'
   import { get } from 'svelte/store'
   import { onMount, onDestroy } from 'svelte'
@@ -617,6 +617,25 @@
       showToast('Test message sent: ' + testMessage, 'success');
     } catch (error) {
       showToast('Failed to send message: ' + error, 'error');
+    }
+  }
+  
+  async function disconnectFromPeer(peerId: string) {
+    if (!isTauri) {
+      // Mock disconnection in web mode
+      peers.update(p => p.filter(peer => peer.address !== peerId))
+      showToast($t('network.connectedPeers.disconnected'), 'success')
+      return
+    }
+    
+    try {
+      await invoke('disconnect_from_peer', { peerId })
+      // Remove peer from local store
+      peers.update(p => p.filter(peer => peer.address !== peerId))
+      showToast($t('network.connectedPeers.disconnected'), 'success')
+    } catch (error) {
+      console.error('Failed to disconnect from peer:', error)
+      showToast($t('network.connectedPeers.disconnectError') + ': ' + error, 'error')
     }
   }
   
@@ -1526,6 +1545,15 @@
                 >
                 {peer.status}
               </Badge>
+              <Button
+                size="sm"
+                variant="outline"
+                class="h-8 px-2"
+                on:click={() => disconnectFromPeer(peer.address)}
+              >
+                <UserMinus class="h-3.5 w-3.5 mr-1" />
+                {$t('network.connectedPeers.disconnect')}
+              </Button>
             </div>
           </div>
           

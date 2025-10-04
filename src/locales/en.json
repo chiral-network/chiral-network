@@ -163,7 +163,10 @@
       "unknown": "Unknown",
       "joined": "Joined",
       "now": "Now",
-      "noPeers": "No peers connected. Run discovery to find peers."
+      "noPeers": "No peers connected. Run discovery to find peers.",
+      "disconnect": "Disconnect",
+      "disconnected": "Successfully disconnected from peer",
+      "disconnectError": "Failed to disconnect from peer"
     },
     "errors": {
       "downloadOnlyTauri": "Chiral Node download is only available in the desktop app. Please download and run the Tauri desktop version."
