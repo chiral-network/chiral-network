@@ -73,7 +73,9 @@ File Processing Pipeline:
 ```
 
 #### Storage Node Structure
-
+All nodes in the network are equal peers. 
+Any node that stores a file becomes a seeder 
+and can earn rewards when others download from them.
 ```
 Storage Node:
 {
@@ -82,9 +84,9 @@ Storage Node:
   port: 8080,
   capacity: 1099511627776, // 1TB in bytes
   used: 549755813888, // 512GB in bytes
-  rewardRate: 0.001, // algorithmic reward rate
   uptime: 0.99,
-  reputation: 4.5
+  reputation: 4.5,
+  seeding: ["file_hash_1", "file_hash_2", ...] // Files being shared
 }
 ```
 
