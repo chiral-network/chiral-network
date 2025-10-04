@@ -32,6 +32,8 @@ export interface DhtConfig {
   autonatProbeIntervalSeconds?: number;
   autonatServers?: string[];
   proxyAddress?: string;
+  chunkSizeKb?: number;
+  cacheSizeMb?: number;
 }
 
 export interface FileMetadata {
@@ -132,6 +134,12 @@ export class DhtService {
         config.proxyAddress.trim().length > 0
       ) {
         payload.proxyAddress = config.proxyAddress;
+      }
+      if (typeof config?.chunkSizeKb === "number") {
+        payload.chunkSizeKb = config.chunkSizeKb;
+      }
+      if (typeof config?.cacheSizeMb === "number") {
+        payload.cacheSizeMb = config.cacheSizeMb;
       }
 
       const peerId = await invoke<string>("start_dht_node", payload);
