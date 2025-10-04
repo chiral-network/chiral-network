@@ -18,7 +18,7 @@ The Chiral Network implements a multi-layered protocol stack combining blockchai
 │   DHT Routing | Peer Discovery | NAT    │
 ├─────────────────────────────────────────┤
 │         Transport Layer                 │
-│   libp2p | TCP | UDP | QUIC | WebRTC   │
+│   libp2p | TCP | UDP | QUIC | WebRTC    │
 └─────────────────────────────────────────┘
 ```
 
@@ -334,31 +334,16 @@ TransactionTypes:
 }
 ```
 
-### 5. Storage Proof Protocol
+### 5. Provider Verification Protocol
 
-#### Proof of Storage
+#### On-Stream Chunk Validation
 
-```
-Challenge-Response Protocol:
-1. Challenger generates random seed
-2. Storage node computes proof
-3. Verification of proof
+1) Requesters select providers via the DHT and local reputation cache, then stream chunks.
+2) For every chunk received, the requester hashes the ciphertext and compares it to the expected chunk hash in the manifest before attempting decryption.
+3) When a provider includes an Merkle path, the requester validates the chunk hash against the manifest’s Merkle root for end-to-end integrity.
+4) Any failed verification aborts the transfer, blacklists the provider locally, and emits a reputation penalty signal to interested peers.
+5) Providers that successfully deliver all requested chunks earn a positive reputation update and remain eligible for future download selection.
 
-Challenge {
-  file_hash: [u8; 32],
-  chunk_indices: Vec<u32>,
-  nonce: [u8; 32],
-  deadline: u64
-}
-
-Proof {
-  file_hash: [u8; 32],
-  merkle_proofs: Vec<MerkleProof>,
-  chunk_hashes: Vec<[u8; 32]>,
-  timestamp: u64,
-  signature: [u8; 64]
-}
-```
 
 #### Proof Generation
 
@@ -381,7 +366,6 @@ fn generate_proof(challenge: Challenge) -> Proof {
     }
 }
 ```
-
 ## Network Protocols
 
 ### 1. libp2p Integration
@@ -552,12 +536,12 @@ Message Structure:
 ```
 Client: HELLO {
   versions: [0x0003, 0x0002, 0x0001],
-  capabilities: ["storage", "relay", "mining"]
+  capabilities: ["serve", "relay", "mine"]
 }
 
 Server: HELLO_ACK {
   selected_version: 0x0002,
-  capabilities: ["storage", "relay"],
+  capabilities: ["serve", "relay"],
   features: ["encryption", "compression"]
 }
 ```
@@ -585,10 +569,10 @@ Super Nodes (High Bandwidth/Storage)
     ├── Regional Hubs
     │       │
     │       ├── Edge Nodes
-    │       │       │
-    │       │       └── Client Nodes
-    │       │
-    │       └── Storage Nodes
+    │               │
+    │               └── Client Nodes
+    │       
+    │       
     │
     └── Relay Nodes
             │
