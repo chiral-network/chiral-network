@@ -52,7 +52,6 @@ Content-Type: multipart/form-data
 ```
 file: binary
 encryption_key: string (optional)
-replication_factor: integer (default: 3)
 ```
 
 **Response:**
@@ -120,7 +119,6 @@ GET /api/v1/files/{file_hash}/info
   },
   "availability": {
     "online_nodes": 15,
-    "total_replicas": 45,
     "health_score": 0.95
   }
 }
@@ -851,7 +849,6 @@ const client = new ChiralClient({
 // Upload file
 const result = await client.files.upload(file, {
   encryption: true,
-  replication: 3,
 });
 
 // Download file
@@ -878,7 +875,6 @@ client = ChiralClient(
 result = client.files.upload(
     file_path='document.pdf',
     encryption=True,
-    replication=3
 )
 
 # Get file info
@@ -901,7 +897,6 @@ func main() {
     // Upload file
     result, err := client.Files.Upload("document.pdf", &chiral.UploadOptions{
         Encryption:  true,
-        Replication: 3,
     })
 
     // Start mining
@@ -913,29 +908,4 @@ func main() {
 ```
 
 ## Testing
-
-### Test Network
-
-- Endpoint: `https://testnet.chiralnetwork.org/api/v1`
-- Free test coins available from faucet
-- Reset daily at 00:00 UTC
-
-### API Testing Tools
-
-- Postman Collection: [Download](https://api.chiralnetwork.org/postman)
-- OpenAPI Spec: [Download](https://api.chiralnetwork.org/openapi.yaml)
-- GraphQL Playground: [Access](https://api.chiralnetwork.org/graphql)
-
-## Support
-
-### Documentation
-
-- API Docs: https://docs.chiralnetwork.org/api
-- SDK Guides: https://docs.chiralnetwork.org/sdk
-- Examples: https://github.com/chiral-network/examples
-
-### Community
-
-- Discord: https://discord.gg/chiralnetwork
-- Forum: https://forum.chiralnetwork.org
-- Stack Overflow: [chiral-network] tag
+Testing API documentation to be added here later.
