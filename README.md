@@ -95,7 +95,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 - ✅ **Network Configuration**: Set bandwidth limits and connection parameters
 - ❌ **Privacy Controls**: Enable encryption, proxy, and anonymous mode (anonymous mode not implemented)
 - ✅ **Notification Preferences**: Customize alerts and notifications
-- ❌ **Advanced Options**: Fine-tune DHT, chunk size, and cache settings (backend uses hardcoded values)
+- ✅ **Advanced Options**: Fine-tune DHT, chunk size, and cache settings (configurable through UI)
 - ✅ **Import/Export**: Backup and restore settings
 - ✅ **Multi-language Support**: English, Spanish, Chinese, Korean
 

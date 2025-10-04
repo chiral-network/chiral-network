@@ -553,6 +553,8 @@ async fn start_dht_node(
     autonat_servers: Option<Vec<String>>,
     proxy_address: Option<String>,
     is_bootstrap: Option<bool>,
+    chunk_size_kb: Option<usize>,
+    cache_size_mb: Option<usize>,
 ) -> Result<String, String> {
     {
         let dht_guard = state.dht.lock().await;
@@ -588,6 +590,8 @@ async fn start_dht_node(
         autonat_server_list,
         final_proxy_address,
         file_transfer_service,
+        chunk_size_kb,
+        cache_size_mb,
     )
     .await
     .map_err(|e| format!("Failed to start DHT: {}", e))?;

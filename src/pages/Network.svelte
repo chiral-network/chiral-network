@@ -8,7 +8,7 @@
   import PeerMetrics from '$lib/components/PeerMetrics.svelte'
   import GeoDistributionCard from '$lib/components/GeoDistributionCard.svelte'
   import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Play, Square, Download, AlertCircle, Wifi } from 'lucide-svelte'
-  import { peers, networkStats, networkStatus, userLocation, etcAccount } from '$lib/stores'
+  import { peers, networkStats, networkStatus, userLocation, etcAccount, settings } from '$lib/stores'
   import { get } from 'svelte/store'
   import { onMount, onDestroy } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
@@ -293,7 +293,9 @@
         try {
           const peerId = await dhtService.start({
             port: dhtPort,
-            bootstrapNodes: DEFAULT_BOOTSTRAP_NODES
+            bootstrapNodes: DEFAULT_BOOTSTRAP_NODES,
+            chunkSizeKb: $settings.chunkSize,
+            cacheSizeMb: $settings.cacheSize
           })
           dhtPeerId = peerId
           // Also ensure the service knows its own peer ID
