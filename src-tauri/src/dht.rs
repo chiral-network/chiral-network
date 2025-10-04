@@ -2644,6 +2644,7 @@ fn multiaddr_to_ip(addr: &Multiaddr) -> Option<IpAddr> {
 }
 
 pub struct StringBlock(pub String);
+pub struct ByteBlock(pub Vec<u8>);
 
 impl Block<64> for ByteBlock {
     fn cid(&self) -> Result<Cid, CidError> {
