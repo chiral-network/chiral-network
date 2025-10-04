@@ -141,6 +141,7 @@ export function disposeProxyEvents() {
 }
 
 export async function connectProxy(url: string, token: string) {
+  await initProxyEvents();
   try {
     await invoke("proxy_connect", { url, token });
   } catch (e) {
@@ -153,6 +154,15 @@ export async function disconnectProxy(url: string) {
     await invoke("proxy_disconnect", { url });
   } catch (e) {
     console.error("proxy_disconnect failed:", e);
+  }
+}
+
+export async function removeProxy(url: string) {
+  try {
+    await invoke("proxy_remove", { url });
+    proxyNodes.update((nodes) => nodes.filter((n) => n.address !== url));
+  } catch (e) {
+    console.error("proxy_remove failed:", e);
   }
 }
 

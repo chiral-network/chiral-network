@@ -19,7 +19,7 @@ export default defineConfig({
   },
   build: {
     rollupOptions: {
-      external: ["@tauri-apps/api/tauri"],
+      external: ["@tauri-apps/api/tauri", "@tauri-apps/plugin-fs"],
     },
   },
 });

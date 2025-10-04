@@ -92,16 +92,6 @@ pub(crate) async fn proxy_disconnect(
     url: String,
 ) -> Result<(), String> {
     info!("Disconnecting from proxy: {}", url);
-    // // For proto v1: mark offline locally (no full teardown API yet)
-    // let mut proxies = state.proxies.lock().await;
-    // if let Some(p) = proxies.iter_mut().find(|p| p.address == url || p.id == url) {
-    //     p.status = "offline".into();
-    //     let _ = app.emit("proxy_status_update", p.clone());
-    // }
-    // // Note: This doesn't actually disconnect the peer in libp2p in this version.
-    // Ok(())
-
-    // Update local cache optimistically and capture the peer ID if known
     let maybe_peer_id = {
         let mut proxies = state.proxies.lock().await;
         proxies
@@ -114,22 +104,48 @@ pub(crate) async fn proxy_disconnect(
             })
     };
 
-    let dht: Arc<DhtService> = {
-        let guard = state.dht.lock().await;
-        guard
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| "DHT not initialized".to_string())?
+    if let Some(peer_id_str) = maybe_peer_id {
+        if let Ok(peer_id) = PeerId::from_str(&peer_id_str) {
+            if let Some(dht) = state.dht.lock().await.as_ref() {
+                return dht.disconnect_peer(peer_id).await;
+            }
+        }
+    }
+
+    Err("Could not disconnect peer".into())
+}
+
+#[tauri::command]
+pub(crate) async fn proxy_remove(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    url: String,
+) -> Result<(), String> {
+    info!("Removing proxy: {}", url);
+
+    let maybe_peer_id = {
+        let mut proxies = state.proxies.lock().await;
+        let maybe_idx = proxies.iter().position(|p| p.address == url || p.id == url);
+        if let Some(idx) = maybe_idx {
+            let p = proxies.remove(idx);
+            Some(p.id)
+        } else {
+            None
+        }
     };
 
-    let peer_id_str = maybe_peer_id.unwrap_or_else(|| url.clone());
-    let peer_id = PeerId::from_str(&peer_id_str).map_err(|_| {
-        warn!("Could not parse peer id for disconnect: {}", peer_id_str);
-        format!("Invalid peer id: {}", peer_id_str)
-    })?;
+    if let Some(peer_id_str) = maybe_peer_id {
+        if let Ok(peer_id) = PeerId::from_str(&peer_id_str) {
+            if let Some(dht) = state.dht.lock().await.as_ref() {
+                let _ = dht.disconnect_peer(peer_id).await;
+            }
+        }
+    }
 
-    dht.disconnect_peer(peer_id).await
+    let _ = app.emit("proxy_reset", ());
+    Ok(())
 }
+
 
 #[tauri::command]
 pub(crate) async fn list_proxies(state: State<'_, AppState>) -> Result<Vec<ProxyNode>, String> {
