@@ -1285,6 +1285,55 @@
     </div>
   </Card>
 
+  <!-- DCUtR Hole-Punching Card -->
+  {#if dhtStatus === 'connected' && dhtHealth}
+    <Card class="p-6">
+      <h3 class="text-lg font-semibold mb-4">{$t('network.dht.dcutr.title')}</h3>
+      <p class="text-sm text-muted-foreground mb-4">{$t('network.dht.dcutr.description')}</p>
+
+      <div class="grid gap-4 md:grid-cols-3">
+        <div>
+          <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.dcutr.attempts')}</p>
+          <p class="mt-1 text-2xl font-bold">{dhtHealth.dcutrHolePunchAttempts ?? 0}</p>
+        </div>
+        <div>
+          <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.dcutr.successes')}</p>
+          <p class="mt-1 text-2xl font-bold text-emerald-600 dark:text-emerald-400">{dhtHealth.dcutrHolePunchSuccesses ?? 0}</p>
+        </div>
+        <div>
+          <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.dcutr.failures')}</p>
+          <p class="mt-1 text-2xl font-bold text-rose-600 dark:text-rose-400">{dhtHealth.dcutrHolePunchFailures ?? 0}</p>
+        </div>
+      </div>
+
+      <div class="mt-4 pt-4 border-t border-muted/40">
+        <div class="grid gap-4 md:grid-cols-2">
+          <div>
+            <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.dcutr.successRate')}</p>
+            <p class="mt-1 text-lg font-semibold">
+              {#if dhtHealth.dcutrHolePunchAttempts > 0}
+                {((dhtHealth.dcutrHolePunchSuccesses / dhtHealth.dcutrHolePunchAttempts) * 100).toFixed(1)}%
+              {:else}
+                —
+              {/if}
+            </p>
+          </div>
+          <div>
+            <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.dcutr.enabled')}</p>
+            <Badge class={dhtHealth.dcutrEnabled ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-300' : 'bg-muted text-muted-foreground'}>
+              {dhtHealth.dcutrEnabled ? $t('network.dht.dcutr.enabled') : $t('network.dht.dcutr.disabled')}
+            </Badge>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-4 text-sm text-muted-foreground space-y-1">
+        <p>{$t('network.dht.dcutr.lastSuccess')}: {formatNatTimestamp(dhtHealth.lastDcutrSuccess ?? null)}</p>
+        <p>{$t('network.dht.dcutr.lastFailure')}: {formatNatTimestamp(dhtHealth.lastDcutrFailure ?? null)}</p>
+      </div>
+    </Card>
+  {/if}
+
   <!-- Smart Peer Selection Metrics -->
   {#if dhtStatus === 'connected'}
     <PeerMetrics />
