@@ -1810,16 +1810,26 @@ async fn handle_identify_event(
 ) {
     match event {
         IdentifyEvent::Received { peer_id, info, .. } => {
-            info!("🔍 Identified peer {}: {:?} (listen_addrs: {})",
-                peer_id, info.protocol_version, info.listen_addrs.len());
+            info!(
+                "🔍 Identified peer {}: {:?} (listen_addrs: {})",
+                peer_id,
+                info.protocol_version,
+                info.listen_addrs.len()
+            );
 
             // Log AutoRelay debug info
             if enable_autorelay {
                 let is_candidate = is_relay_candidate(&peer_id, relay_candidates);
-                info!("  AutoRelay check: is_relay_candidate={}, total_candidates={}",
-                    is_candidate, relay_candidates.len());
+                info!(
+                    "  AutoRelay check: is_relay_candidate={}, total_candidates={}",
+                    is_candidate,
+                    relay_candidates.len()
+                );
                 if !relay_candidates.is_empty() {
-                    info!("  Relay candidates: {:?}", relay_candidates.iter().take(3).collect::<Vec<_>>());
+                    info!(
+                        "  Relay candidates: {:?}",
+                        relay_candidates.iter().take(3).collect::<Vec<_>>()
+                    );
                 }
             }
 
@@ -1836,6 +1846,7 @@ async fn handle_identify_event(
                     metrics_guard.record_observed_addr(&info.observed_addr);
                 }
                 for addr in info.listen_addrs {
+                    info!("  📍 Peer {} listen addr: {}", peer_id, addr);
                     if not_loopback(&addr) {
                         swarm
                             .behaviour_mut()
@@ -1844,6 +1855,8 @@ async fn handle_identify_event(
 
                         // AutoRelay: Check if this peer is a relay candidate
                         if enable_autorelay && is_relay_candidate(&peer_id, relay_candidates) {
+                            info!("  🎯 Relay candidate matched! Attempting relay setup...");
+
                             // Listen on relay address for incoming connections
                             if let Some(relay_addr) = build_relay_listen_addr(&addr) {
                                 info!(
@@ -2352,7 +2365,10 @@ impl DhtService {
                 }
                 preferred_relays.into_iter().collect()
             } else {
-                info!("🔗 AutoRelay enabled, using {} bootstrap nodes as relay candidates", bootstrap_set.len());
+                info!(
+                    "🔗 AutoRelay enabled, using {} bootstrap nodes as relay candidates",
+                    bootstrap_set.len()
+                );
                 for (i, node) in bootstrap_set.iter().enumerate().take(5) {
                     info!("   Candidate {}: {}", i + 1, node);
                 }
@@ -3140,7 +3156,7 @@ mod tests {
             Vec::new(),
             None,
             None,
-            false, // enable_autorelay
+            false,      // enable_autorelay
             Vec::new(), // preferred_relays
         )
         .await
