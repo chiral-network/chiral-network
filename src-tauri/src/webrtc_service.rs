@@ -161,6 +161,7 @@ pub struct WebRTCService {
     connections: Arc<Mutex<HashMap<String, PeerConnection>>>,
     file_transfer_service: Arc<FileTransferService>,
     keystore: Arc<Mutex<Keystore>>,
+    active_private_key: Arc<Mutex<Option<String>>>,
 }
 
 impl WebRTCService {
@@ -168,6 +169,7 @@ impl WebRTCService {
         let (cmd_tx, cmd_rx) = mpsc::channel(100);
         let (event_tx, event_rx) = mpsc::channel(100);
         let connections = Arc::new(Mutex::new(HashMap::new()));
+        let active_private_key = Arc::new(Mutex::new(None));
 
         // Spawn the WebRTC service task
         tokio::spawn(Self::run_webrtc_service(
@@ -176,6 +178,7 @@ impl WebRTCService {
             connections.clone(),
             file_transfer_service.clone(),
             keystore.clone(),
+            active_private_key.clone(),
         ));
 
         Ok(WebRTCService {
@@ -185,7 +188,14 @@ impl WebRTCService {
             connections,
             file_transfer_service,
             keystore,
+            active_private_key,
         })
+    }
+
+    /// Set the active private key for decryption operations
+    pub async fn set_active_private_key(&self, private_key: Option<String>) {
+        let mut key_guard = self.active_private_key.lock().await;
+        *key_guard = private_key;
     }
 
     async fn run_webrtc_service(
@@ -194,11 +204,12 @@ impl WebRTCService {
         connections: Arc<Mutex<HashMap<String, PeerConnection>>>,
         file_transfer_service: Arc<FileTransferService>,
         keystore: Arc<Mutex<Keystore>>,
+        active_private_key: Arc<Mutex<Option<String>>>,
     ) {
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
                 WebRTCCommand::EstablishConnection { peer_id, offer } => {
-                    Self::handle_establish_connection(&peer_id, &offer, &event_tx, &connections, &file_transfer_service, &keystore).await;
+                    Self::handle_establish_connection(&peer_id, &offer, &event_tx, &connections, &file_transfer_service, &keystore, &active_private_key).await;
                 }
                 WebRTCCommand::HandleAnswer { peer_id, answer } => {
                     Self::handle_answer(&peer_id, &answer, &connections).await;
@@ -229,6 +240,7 @@ impl WebRTCService {
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
         file_transfer_service: &Arc<FileTransferService>,
         keystore: &Arc<Mutex<Keystore>>,
+        active_private_key: &Arc<Mutex<Option<String>>>,
     ) {
         info!("Establishing WebRTC connection with peer: {}", peer_id);
 
@@ -268,6 +280,7 @@ impl WebRTCService {
         let file_transfer_service_clone = file_transfer_service.clone();
         let connections_clone = connections.clone();
         let keystore_clone = keystore.clone();
+        let active_private_key_clone = Arc::new(active_private_key.clone());
 
         data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
             let event_tx = event_tx_clone.clone();
@@ -275,9 +288,10 @@ impl WebRTCService {
             let file_transfer_service = file_transfer_service_clone.clone();
             let connections = connections_clone.clone();
             let keystore = keystore_clone.clone();
+            let active_private_key = active_private_key_clone.clone();
 
             Box::pin(async move {
-                Self::handle_data_channel_message(&peer_id, &msg, &event_tx, &file_transfer_service, &connections, &keystore).await;
+                Self::handle_data_channel_message(&peer_id, &msg, &event_tx, &file_transfer_service, &connections, &keystore, &active_private_key).await;
             })
         }));
 
@@ -510,12 +524,13 @@ impl WebRTCService {
         file_transfer_service: &Arc<FileTransferService>,
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
         keystore: &Arc<Mutex<Keystore>>,
+        active_private_key: &Arc<Mutex<Option<String>>>,
     ) {
         if let Ok(text) = std::str::from_utf8(&msg.data) {
             // Try to parse as FileChunk
             if let Ok(chunk) = serde_json::from_str::<FileChunk>(text) {
                 // Handle received chunk
-                Self::process_incoming_chunk(&chunk, file_transfer_service, connections, event_tx, peer_id, keystore).await;
+                Self::process_incoming_chunk(&chunk, file_transfer_service, connections, event_tx, peer_id, keystore, &active_private_key).await;
                 let _ = event_tx.send(WebRTCEvent::FileChunkReceived {
                     peer_id: peer_id.to_string(),
                     chunk,
@@ -669,15 +684,32 @@ impl WebRTCService {
         event_tx: &mpsc::Sender<WebRTCEvent>,
         peer_id: &str,
         keystore: &Arc<Mutex<Keystore>>,
+        active_private_key: &Arc<Mutex<Option<String>>>,
     ) {
         // Decrypt chunk data if it was encrypted
         let final_chunk_data = if let Some(ref encrypted_key_bundle) = chunk.encrypted_key_bundle {
-            // Get the recipient's private key from keystore (assuming we're the recipient)
-            // For now, we'll need to get the active account's private key
-            // This is a simplified approach - in practice, we'd need to know which account to use
-            // TODO: Implement proper decryption with active account private key
-            warn!("Encrypted chunk received but decryption not implemented for peer: {}", peer_id);
-            chunk.data.clone() // Return encrypted data as-is for now
+            // Get the active private key for decryption
+            let private_key_opt = {
+                let key_guard = active_private_key.lock().await;
+                key_guard.clone()
+            };
+
+            if let Some(private_key) = private_key_opt {
+                match Self::decrypt_chunk_from_peer(
+                    &chunk.data,
+                    encrypted_key_bundle,
+                    &private_key,
+                ).await {
+                    Ok(decrypted_data) => decrypted_data,
+                    Err(e) => {
+                        warn!("Failed to decrypt chunk from peer {}: {}", peer_id, e);
+                        chunk.data.clone() // Return encrypted data as fallback
+                    }
+                }
+            } else {
+                warn!("Encrypted chunk received but no active private key available for peer: {}", peer_id);
+                chunk.data.clone() // Return encrypted data as fallback
+            }
         } else {
             chunk.data.clone()
         };
@@ -771,6 +803,7 @@ impl WebRTCService {
         let file_transfer_service_clone = Arc::new(self.file_transfer_service.clone());
         let connections_clone = Arc::new(self.connections.clone());
         let keystore_clone = Arc::new(self.keystore.clone());
+        let active_private_key_clone = Arc::new(self.active_private_key.clone());
 
         data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
             let event_tx = event_tx_clone.clone();
@@ -778,9 +811,10 @@ impl WebRTCService {
             let file_transfer_service = file_transfer_service_clone.clone();
             let connections = connections_clone.clone();
             let keystore = keystore_clone.clone();
+            let active_private_key = active_private_key_clone.clone();
 
             Box::pin(async move {
-                Self::handle_data_channel_message(&peer_id, &msg, &event_tx, &file_transfer_service, &connections, &keystore).await;
+                Self::handle_data_channel_message(&peer_id, &msg, &event_tx, &file_transfer_service, &connections, &keystore, &active_private_key).await;
             })
         }));
 
@@ -905,6 +939,7 @@ impl WebRTCService {
         let file_transfer_service_clone = Arc::new(self.file_transfer_service.clone());
         let connections_clone = Arc::new(self.connections.clone());
         let keystore_clone = Arc::new(self.keystore.clone());
+        let active_private_key_clone = Arc::new(self.active_private_key.clone());
 
         data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
             let event_tx = event_tx_clone.clone();
@@ -912,9 +947,10 @@ impl WebRTCService {
             let file_transfer_service = file_transfer_service_clone.clone();
             let connections = connections_clone.clone();
             let keystore = keystore_clone.clone();
+            let active_private_key = active_private_key_clone.clone();
 
             Box::pin(async move {
-                Self::handle_data_channel_message(&peer_id, &msg, &event_tx, &file_transfer_service, &connections, &keystore).await;
+                Self::handle_data_channel_message(&peer_id, &msg, &event_tx, &file_transfer_service, &connections, &keystore, &active_private_key).await;
             })
         }));
 
@@ -1110,7 +1146,6 @@ impl WebRTCService {
 
     /// Decrypt a chunk using the encrypted AES key bundle and recipient's private key
     async fn decrypt_chunk_from_peer(
-        &self,
         encrypted_data: &[u8],
         encrypted_key_bundle: &EncryptedAesKeyBundle,
         recipient_private_key: &str,
