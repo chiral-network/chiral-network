@@ -37,7 +37,7 @@ use keystore::Keystore;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use std::collections::VecDeque;
-use std::fs::File;
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{
@@ -2923,6 +2923,7 @@ pub struct FileManifestForJs {
 
 #[tauri::command]
 async fn encrypt_file_for_self_upload(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     file_path: String,
 ) -> Result<FileManifestForJs, String> {
@@ -2941,28 +2942,36 @@ async fn encrypt_file_for_self_upload(
     );
     let public_key = PublicKey::from(&secret_key);
 
-    // 2. Initialize ChunkManager. This assumes your storage path is configured.
-    //    You might need to get this path from your settings store.
-    let storage_path = PathBuf::from("./chunk_storage"); // Or get from config
-    let manager = ChunkManager::new(storage_path);
+    // Get the app data directory for chunk storage
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Could not get app data directory: {}", e))?;
+    let chunk_storage_path = app_data_dir.join("chunk_storage");
 
-    // 3. Call the existing backend function to perform the encryption.
-    let manifest = manager
-        .chunk_and_encrypt_file(Path::new(&file_path), &public_key)?;
+    // Run the encryption in a blocking task to avoid blocking the async runtime
+    tokio::task::spawn_blocking(move || {
+        let manager = ChunkManager::new(chunk_storage_path);
 
-    // 4. Serialize the key bundle to a JSON string so it can be sent to the frontend easily.
-    let bundle_json = serde_json::to_string(&manifest.encrypted_key_bundle)
-        .map_err(|e| e.to_string())?;
+        let manifest = manager
+            .chunk_and_encrypt_file(Path::new(&file_path), &public_key)?;
 
-    Ok(FileManifestForJs {
-        merkle_root: manifest.merkle_root,
-        chunks: manifest.chunks,
-        encrypted_key_bundle: bundle_json,
+        let bundle_json =
+            serde_json::to_string(&manifest.encrypted_key_bundle).map_err(|e| e.to_string())?;
+
+        Ok(FileManifestForJs {
+            merkle_root: manifest.merkle_root,
+            chunks: manifest.chunks,
+            encrypted_key_bundle: bundle_json,
+        })
     })
+    .await
+    .map_err(|e| format!("Encryption task failed: {}", e))?
 }
 
 #[tauri::command]
 async fn decrypt_and_reassemble_file(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     manifest_js: FileManifestForJs,
     output_path: String,
@@ -2985,15 +2994,26 @@ async fn decrypt_and_reassemble_file(
     let encrypted_key_bundle: encryption::EncryptedAesKeyBundle =
         serde_json::from_str(&manifest_js.encrypted_key_bundle).map_err(|e| e.to_string())?;
 
-    // 3. Initialize ChunkManager.
-    let storage_path = PathBuf::from("./chunk_storage"); // Or get from config
-    let manager = ChunkManager::new(storage_path);
+    // Get the app data directory for chunk storage
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Could not get app data directory: {}", e))?;
+    let chunk_storage_path = app_data_dir.join("chunk_storage");
 
-    // 4. Call the existing backend function to decrypt and save the file.
-    manager.reassemble_and_decrypt_file(
-        &manifest_js.chunks,
-        Path::new(&output_path),
-        &encrypted_key_bundle,
-        &secret_key, // Pass the secret key
-    )
+    // Clone data needed inside blocking task
+    let chunks = manifest_js.chunks.clone();
+    let output_path_clone = output_path.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let manager = ChunkManager::new(chunk_storage_path);
+        manager.reassemble_and_decrypt_file(
+            &chunks,
+            Path::new(&output_path_clone),
+            &encrypted_key_bundle,
+            &secret_key,
+        )
+    })
+    .await
+    .map_err(|e| format!("Decryption task failed: {}", e))?
 }
