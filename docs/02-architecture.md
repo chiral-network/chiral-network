@@ -73,7 +73,9 @@ File Processing Pipeline:
 ```
 
 #### Storage Node Structure
-
+All nodes in the network are equal peers. 
+Any node that stores a file becomes a seeder 
+and can earn rewards when others download from them.
 ```
 Storage Node:
 {
@@ -82,9 +84,9 @@ Storage Node:
   port: 8080,
   capacity: 1099511627776, // 1TB in bytes
   used: 549755813888, // 512GB in bytes
-  rewardRate: 0.001, // algorithmic reward rate
   uptime: 0.99,
-  reputation: 4.5
+  reputation: 4.5,
+  seeding: ["file_hash_1", "file_hash_2", ...] // Files being shared
 }
 ```
 
@@ -107,6 +109,7 @@ File Metadata Structure:
   created_at: 1640995200,
   mime_type: "application/pdf",
   total_chunks: 16
+  price_per_mb: 0.001           // Chiral per MB (initially fixed, configurable)
 }
 ```
 
@@ -127,9 +130,9 @@ providers = dht.get_providers(file_hash);
 connect(providers[0]);  // Connect to seeders directly
 ```
 
-#### Decentralized Incentives
+#### Peer-to-Peer Compensation
 
-Rewards distributed via blockchain without centralized markets:
+When a user downloads a file, they pay the seeders who provide the chunks. Rewards are distributed via blockchain:
 
 ```rust
 // Proof-of-Storage validation
@@ -139,6 +142,16 @@ struct StorageProof {
     merkle_proof: MerkleProof,
     timestamp: u64,
 }
+
+// Payment transaction for chunk delivery
+struct ChunkPayment {
+    from: Address,           // Downloader
+    to: Address,             // Seeder
+    file_hash: Hash,
+    chunks_delivered: Vec<u32>,
+    amount: u64,             // Chiral amount
+}
+
 ```
 
 ### 4. Network Communication
