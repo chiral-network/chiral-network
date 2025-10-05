@@ -434,6 +434,8 @@ export interface AppSettings {
   port: number;
   enableUPnP: boolean;
   enableNAT: boolean;
+  enableAutoRelay: boolean; // Circuit Relay v2 for NAT traversal
+  preferredRelays: string; // Newline-separated relay multiaddrs
   userLocation: string;
   enableProxy: boolean; // For SOCKS5 feature
   proxyAddress: string; // For SOCKS5 feature
@@ -466,6 +468,8 @@ export const settings = writable<AppSettings>({
   port: 30303,
   enableUPnP: true,
   enableNAT: true,
+  enableAutoRelay: true, // Enabled by default
+  preferredRelays: "", // Empty by default, will use bootstrap nodes
   userLocation: "US-East",
   enableProxy: true, // Defaulting to enabled for SOCKS5 feature
   proxyAddress: "127.0.0.1:9050", // Default Tor SOCKS address

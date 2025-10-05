@@ -197,6 +197,13 @@
     "enableUpnp": "Enable UPnP",
     "enableNat": "Enable NAT Port Mapping",
     "enableDht": "Enable DHT",
+    "settings": {
+      "autorelay": {
+        "enable": "Enable AutoRelay (Circuit Relay v2)",
+        "relays": "Preferred Relay Nodes",
+        "description": "Enter relay node addresses (one per line). Leave empty to use bootstrap nodes."
+      }
+    },
     "geoDistribution": {
       "title": "Geographic Distribution",
       "subtitle": "Mapping {peers} observed peers",
