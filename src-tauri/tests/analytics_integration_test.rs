@@ -9,7 +9,9 @@
 
 #[cfg(test)]
 mod analytics_integration_tests {
-    use chiral_network::analytics::{AnalyticsService, BandwidthStats, PerformanceMetrics, NetworkActivity, ResourceContribution};
+    use chiral_network::analytics::{
+        AnalyticsService, BandwidthStats, NetworkActivity, PerformanceMetrics, ResourceContribution,
+    };
     use std::time::Duration;
     use tokio::time::sleep;
 
@@ -20,14 +22,20 @@ mod analytics_integration_tests {
         // Initial state should be zero
         let stats = analytics.get_bandwidth_stats().await;
         assert_eq!(stats.upload_bytes, 0, "Initial upload bytes should be 0");
-        assert_eq!(stats.download_bytes, 0, "Initial download bytes should be 0");
+        assert_eq!(
+            stats.download_bytes, 0,
+            "Initial download bytes should be 0"
+        );
 
         // Record some uploads
         analytics.record_upload(1024).await; // 1 KB
         analytics.record_upload(2048).await; // 2 KB
 
         let stats = analytics.get_bandwidth_stats().await;
-        assert_eq!(stats.upload_bytes, 3072, "Upload bytes should be 3072 (1KB + 2KB)");
+        assert_eq!(
+            stats.upload_bytes, 3072,
+            "Upload bytes should be 3072 (1KB + 2KB)"
+        );
         assert_eq!(stats.download_bytes, 0, "Download bytes should still be 0");
 
         // Record some downloads
@@ -36,7 +44,10 @@ mod analytics_integration_tests {
 
         let stats = analytics.get_bandwidth_stats().await;
         assert_eq!(stats.upload_bytes, 3072, "Upload bytes should remain 3072");
-        assert_eq!(stats.download_bytes, 12288, "Download bytes should be 12288 (4KB + 8KB)");
+        assert_eq!(
+            stats.download_bytes, 12288,
+            "Download bytes should be 12288 (4KB + 8KB)"
+        );
 
         println!("✅ Bandwidth tracking test passed!");
     }
@@ -58,16 +69,27 @@ mod analytics_integration_tests {
         assert_eq!(metrics.total_connections, 1);
         assert_eq!(metrics.successful_transfers, 1);
         assert_eq!(metrics.failed_transfers, 0);
-        assert!(metrics.avg_upload_speed_kbps > 0.0, "Average upload speed should be recorded");
-        assert!(metrics.peak_upload_speed_kbps > 0.0, "Peak upload speed should be recorded");
+        assert!(
+            metrics.avg_upload_speed_kbps > 0.0,
+            "Average upload speed should be recorded"
+        );
+        assert!(
+            metrics.peak_upload_speed_kbps > 0.0,
+            "Peak upload speed should be recorded"
+        );
 
         // Simulate successful download transfer (2MB in 2 seconds = 8000 kbps)
-        analytics.record_transfer(2_000_000, 2000, false, true).await;
+        analytics
+            .record_transfer(2_000_000, 2000, false, true)
+            .await;
 
         let metrics = analytics.get_performance_metrics().await;
         assert_eq!(metrics.total_connections, 2);
         assert_eq!(metrics.successful_transfers, 2);
-        assert!(metrics.avg_download_speed_kbps > 0.0, "Average download speed should be recorded");
+        assert!(
+            metrics.avg_download_speed_kbps > 0.0,
+            "Average download speed should be recorded"
+        );
 
         // Simulate failed transfer
         analytics.record_transfer(500_000, 500, false, false).await;
@@ -121,8 +143,14 @@ mod analytics_integration_tests {
         analytics.record_peer_connected("peer1".to_string()).await; // Duplicate
 
         let activity = analytics.get_network_activity().await;
-        assert_eq!(activity.total_peers_connected, 2, "Should have 2 unique peers");
-        assert_eq!(activity.unique_peers_all_time, 2, "Should track 2 unique peers all time");
+        assert_eq!(
+            activity.total_peers_connected, 2,
+            "Should have 2 unique peers"
+        );
+        assert_eq!(
+            activity.unique_peers_all_time, 2,
+            "Should track 2 unique peers all time"
+        );
 
         // Add another peer
         analytics.record_peer_connected("peer3".to_string()).await;
@@ -178,10 +206,19 @@ mod analytics_integration_tests {
         analytics.record_latency(120.0).await; // 120ms
 
         let metrics = analytics.get_performance_metrics().await;
-        assert!(metrics.avg_latency_ms > 0.0, "Average latency should be recorded");
-        assert!(metrics.avg_latency_ms < 200.0, "Average latency should be reasonable");
+        assert!(
+            metrics.avg_latency_ms > 0.0,
+            "Average latency should be recorded"
+        );
+        assert!(
+            metrics.avg_latency_ms < 200.0,
+            "Average latency should be reasonable"
+        );
 
-        println!("✅ Latency tracking test passed! Avg latency: {:.2}ms", metrics.avg_latency_ms);
+        println!(
+            "✅ Latency tracking test passed! Avg latency: {:.2}ms",
+            metrics.avg_latency_ms
+        );
     }
 
     #[tokio::test]
@@ -210,7 +247,11 @@ mod analytics_integration_tests {
 
         // History should be empty initially
         let history = analytics.get_contribution_history(None).await;
-        assert_eq!(history.len(), 0, "Contribution history should be empty initially");
+        assert_eq!(
+            history.len(),
+            0,
+            "Contribution history should be empty initially"
+        );
 
         // Record contributions
         analytics.update_storage_contribution(5_000_000, 2).await;
@@ -243,11 +284,20 @@ mod analytics_integration_tests {
         // Verify reset
         let stats = analytics.get_bandwidth_stats().await;
         assert_eq!(stats.upload_bytes, 0, "Upload bytes should be reset to 0");
-        assert_eq!(stats.download_bytes, 0, "Download bytes should be reset to 0");
+        assert_eq!(
+            stats.download_bytes, 0,
+            "Download bytes should be reset to 0"
+        );
 
         let metrics = analytics.get_performance_metrics().await;
-        assert_eq!(metrics.total_connections, 0, "Connections should be reset to 0");
-        assert_eq!(metrics.successful_transfers, 0, "Successful transfers should be reset to 0");
+        assert_eq!(
+            metrics.total_connections, 0,
+            "Connections should be reset to 0"
+        );
+        assert_eq!(
+            metrics.successful_transfers, 0,
+            "Successful transfers should be reset to 0"
+        );
 
         println!("✅ Reset stats test passed!");
     }
@@ -275,7 +325,9 @@ mod analytics_integration_tests {
 
         let transfer_task = tokio::spawn(async move {
             for i in 0..5 {
-                analytics_clone3.record_transfer(5000, 100, i % 2 == 0, true).await;
+                analytics_clone3
+                    .record_transfer(5000, 100, i % 2 == 0, true)
+                    .await;
             }
         });
 
@@ -320,7 +372,10 @@ mod analytics_integration_tests {
 
         let activity = analytics.get_network_activity().await;
         assert_eq!(activity.active_uploads, 0, "Should have 0 active uploads");
-        assert_eq!(activity.completed_uploads, 1, "Should have 1 completed upload");
+        assert_eq!(
+            activity.completed_uploads, 1,
+            "Should have 1 completed upload"
+        );
 
         let metrics = analytics.get_performance_metrics().await;
         assert_eq!(metrics.successful_transfers, 1);
@@ -336,8 +391,14 @@ mod analytics_integration_tests {
 
         println!("✅ Complete upload flow test passed!");
         println!("   - File size: {} bytes", file_size);
-        println!("   - Upload speed: {:.2} kbps", metrics.avg_upload_speed_kbps);
-        println!("   - Storage contributed: {} bytes", contribution.storage_contributed_bytes);
+        println!(
+            "   - Upload speed: {:.2} kbps",
+            metrics.avg_upload_speed_kbps
+        );
+        println!(
+            "   - Storage contributed: {} bytes",
+            contribution.storage_contributed_bytes
+        );
     }
 
     #[tokio::test]
@@ -349,13 +410,19 @@ mod analytics_integration_tests {
         analytics.update_network_activity(0, 0, 1).await;
 
         let activity = analytics.get_network_activity().await;
-        assert_eq!(activity.queued_downloads, 1, "Should have 1 queued download");
+        assert_eq!(
+            activity.queued_downloads, 1,
+            "Should have 1 queued download"
+        );
 
         // 2. Start download
         analytics.update_network_activity(0, 1, 0).await;
 
         let activity = analytics.get_network_activity().await;
-        assert_eq!(activity.active_downloads, 1, "Should have 1 active download");
+        assert_eq!(
+            activity.active_downloads, 1,
+            "Should have 1 active download"
+        );
         assert_eq!(activity.queued_downloads, 0, "Queue should be empty");
 
         // 3. Download in progress - track bytes
@@ -366,13 +433,21 @@ mod analytics_integration_tests {
         assert_eq!(stats.download_bytes, file_size);
 
         // 4. Download completes
-        analytics.record_transfer(file_size, 10000, false, true).await; // 10 seconds
+        analytics
+            .record_transfer(file_size, 10000, false, true)
+            .await; // 10 seconds
         analytics.record_download_completed().await;
         analytics.update_network_activity(0, 0, 0).await;
 
         let activity = analytics.get_network_activity().await;
-        assert_eq!(activity.active_downloads, 0, "Should have 0 active downloads");
-        assert_eq!(activity.completed_downloads, 1, "Should have 1 completed download");
+        assert_eq!(
+            activity.active_downloads, 0,
+            "Should have 0 active downloads"
+        );
+        assert_eq!(
+            activity.completed_downloads, 1,
+            "Should have 1 completed download"
+        );
 
         let metrics = analytics.get_performance_metrics().await;
         assert_eq!(metrics.successful_transfers, 1);
@@ -380,6 +455,9 @@ mod analytics_integration_tests {
 
         println!("✅ Complete download flow test passed!");
         println!("   - File size: {} bytes", file_size);
-        println!("   - Download speed: {:.2} kbps", metrics.avg_download_speed_kbps);
+        println!(
+            "   - Download speed: {:.2} kbps",
+            metrics.avg_download_speed_kbps
+        );
     }
 }

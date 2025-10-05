@@ -1,19 +1,19 @@
-use sha2::{Sha256, Digest};
-use rs_merkle::{MerkleTree, Hasher};
-use aes_gcm::{Aes256Gcm, Key, Nonce, KeyInit};
 use aes_gcm::aead::{Aead, AeadCore, OsRng};
+use aes_gcm::{Aes256Gcm, Key, KeyInit, Nonce};
 use rand::RngCore;
-use std::fs::{File, self};
-use std::io::{Read, Error, Write};
+use rs_merkle::{Hasher, MerkleTree};
+use sha2::{Digest, Sha256};
+use std::fs::{self, File};
+use std::io::{Error, Read, Write};
 use std::path::{Path, PathBuf};
-use x25519_dalek::PublicKey;
 use std::sync::Mutex;
+use x25519_dalek::PublicKey;
 
 // Import the new encryption functions and the bundle struct
-use crate::encryption::{decrypt_aes_key, encrypt_aes_key, EncryptedAesKeyBundle, DiffieHellman};
+use crate::encryption::{decrypt_aes_key, encrypt_aes_key, DiffieHellman, EncryptedAesKeyBundle};
 
-use std::collections::HashMap;
 use lazy_static::lazy_static;
+use std::collections::HashMap;
 
 // Simple thread-safe LRU cache implementation
 const L1_CACHE_CAPACITY: usize = 128;
@@ -65,8 +65,7 @@ lazy_static! {
     static ref L1_CACHE: Mutex<LruCache> = Mutex::new(LruCache::new(L1_CACHE_CAPACITY));
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
-#[derive(Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct ChunkInfo {
     pub index: u32,
     pub hash: String,
@@ -132,7 +131,9 @@ impl ChunkManager {
 
         loop {
             let bytes_read = file.read(&mut buffer).map_err(|e| e.to_string())?;
-            if bytes_read == 0 { break; }
+            if bytes_read == 0 {
+                break;
+            }
 
             let chunk_data = &buffer[..bytes_read];
             let chunk_hash_bytes = Sha256Hasher::hash(chunk_data);
@@ -142,7 +143,8 @@ impl ChunkManager {
             // Encrypt the chunk
             let encrypted_chunk_with_nonce = self.encrypt_chunk(chunk_data, &key)?;
             let encrypted_chunk_hash = Self::hash_data(&encrypted_chunk_with_nonce);
-            self.save_chunk(&encrypted_chunk_hash, &encrypted_chunk_with_nonce).map_err(|e| e.to_string())?;
+            self.save_chunk(&encrypted_chunk_hash, &encrypted_chunk_with_nonce)
+                .map_err(|e| e.to_string())?;
 
             chunks_info.push(ChunkInfo {
                 index,
@@ -224,7 +226,11 @@ impl ChunkManager {
         Ok(data)
     }
 
-    fn decrypt_chunk(&self, data_with_nonce: &[u8], key: &Key<Aes256Gcm>) -> Result<Vec<u8>, String> {
+    fn decrypt_chunk(
+        &self,
+        data_with_nonce: &[u8],
+        key: &Key<Aes256Gcm>,
+    ) -> Result<Vec<u8>, String> {
         let cipher = Aes256Gcm::new(key);
         // AES-GCM nonce is 12 bytes. The nonce is prepended to the ciphertext.
         if data_with_nonce.len() < 12 {
@@ -239,11 +245,11 @@ impl ChunkManager {
     }
 
     pub fn reassemble_and_decrypt_file<S: DiffieHellman>(
-    &self,
-    chunks: &[ChunkInfo],
-    output_path: &Path,
-    encrypted_key_bundle: &EncryptedAesKeyBundle,
-    recipient_secret_key: S,
+        &self,
+        chunks: &[ChunkInfo],
+        output_path: &Path,
+        encrypted_key_bundle: &EncryptedAesKeyBundle,
+        recipient_secret_key: S,
     ) -> Result<(), String> {
         let key_bytes = decrypt_aes_key(encrypted_key_bundle, recipient_secret_key)?;
         let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
@@ -254,8 +260,9 @@ impl ChunkManager {
         let result: Result<(), String> = (|| {
             for chunk_info in chunks {
                 // Read the encrypted chunk from storage
-                let encrypted_chunk = self.read_chunk(&chunk_info.encrypted_hash)
-                    .map_err(|e| format!("Failed to read encrypted chunk {}: {}", chunk_info.index, e))?;
+                let encrypted_chunk = self.read_chunk(&chunk_info.encrypted_hash).map_err(|e| {
+                    format!("Failed to read encrypted chunk {}: {}", chunk_info.index, e)
+                })?;
 
                 // Decrypt the chunk
                 let decrypted_data = self.decrypt_chunk(&encrypted_chunk, &key)?;
@@ -273,7 +280,9 @@ impl ChunkManager {
                     ));
                 }
 
-                output_file.write_all(&decrypted_data).map_err(|e| e.to_string())?;
+                output_file
+                    .write_all(&decrypted_data)
+                    .map_err(|e| e.to_string())?;
             }
             Ok(())
         })();
@@ -293,7 +302,6 @@ impl ChunkManager {
             hasher.update(&buffer[..bytes_read]);
         }
         Ok(format!("{:x}", hasher.finalize()))
-
     }
 
     /// Generates a Merkle proof for a specific chunk.
@@ -362,7 +370,12 @@ impl ChunkManager {
 
         // 3. Construct a Merkle proof object and verify it against the root.
         let proof = rs_merkle::MerkleProof::<Sha256Hasher>::new(proof_hashes);
-        Ok(proof.verify(merkle_root, proof_indices, &[calculated_hash], total_leaves_count))
+        Ok(proof.verify(
+            merkle_root,
+            proof_indices,
+            &[calculated_hash],
+            total_leaves_count,
+        ))
     }
 }
 
@@ -370,8 +383,8 @@ impl ChunkManager {
 mod tests {
     use super::*;
     use std::fs;
-    use tempfile::tempdir;
     use std::io::Seek;
+    use tempfile::tempdir;
     use x25519_dalek::StaticSecret;
 
     #[test]
@@ -390,15 +403,19 @@ mod tests {
         let recipient_public = PublicKey::from(&recipient_secret);
 
         // 2. Chunk and encrypt the file
-        let manifest = manager.chunk_and_encrypt_file(&original_file_path, &recipient_public).unwrap();
+        let manifest = manager
+            .chunk_and_encrypt_file(&original_file_path, &recipient_public)
+            .unwrap();
 
         // 3. Reassemble and decrypt
-        manager.reassemble_and_decrypt_file(
-            &manifest.chunks,
-            &reassembled_file_path,
-            &manifest.encrypted_key_bundle,
-            &recipient_secret,
-        ).unwrap();
+        manager
+            .reassemble_and_decrypt_file(
+                &manifest.chunks,
+                &reassembled_file_path,
+                &manifest.encrypted_key_bundle,
+                &recipient_secret,
+            )
+            .unwrap();
 
         // 4. Verify
         let reassembled_content = fs::read_to_string(&reassembled_file_path).unwrap();
@@ -439,7 +456,10 @@ mod tests {
             &[leaf_to_prove],
             leaves.len(),
         );
-        assert!(is_valid, "Merkle proof verification should succeed for the correct leaf.");
+        assert!(
+            is_valid,
+            "Merkle proof verification should succeed for the correct leaf."
+        );
 
         // 5. Test an invalid case: try to verify the proof with a different leaf
         let wrong_leaf_index = 3;
@@ -450,8 +470,10 @@ mod tests {
             &[wrong_leaf],     // But we provide data from index 3
             leaves.len(),
         );
-        assert!(!is_invalid, "Merkle proof verification should fail for an incorrect leaf.");
-
+        assert!(
+            !is_invalid,
+            "Merkle proof verification should fail for an incorrect leaf."
+        );
     }
 
     #[test]
@@ -460,19 +482,22 @@ mod tests {
         let dir = tempdir().unwrap();
         let storage_path = dir.path().to_path_buf();
         let manager = ChunkManager::new(storage_path.clone());
- 
+
         let original_file_path = dir.path().join("original_for_loss.txt");
         let reassembled_file_path = dir.path().join("reassembled_from_loss.txt");
         // Use enough content to create at least one full chunk
-        let file_content = "This is a test file for chunking with simulated data loss.".repeat(5000);
+        let file_content =
+            "This is a test file for chunking with simulated data loss.".repeat(5000);
         fs::write(&original_file_path, &file_content).unwrap();
- 
+
         let recipient_secret = StaticSecret::random_from_rng(OsRng);
         let recipient_public = PublicKey::from(&recipient_secret);
- 
+
         // 2. Chunk and encrypt the file
-        let manifest = manager.chunk_and_encrypt_file(&original_file_path, &recipient_public).unwrap();
- 
+        let manifest = manager
+            .chunk_and_encrypt_file(&original_file_path, &recipient_public)
+            .unwrap();
+
         // 3. Simulate data loss by deleting some chunks
         // Delete the first chunk
         if let Some(first_chunk_info) = manifest.chunks.first() {
@@ -481,7 +506,7 @@ mod tests {
                 fs::remove_file(chunk_path).unwrap();
             }
         }
- 
+
         // 4. Attempt to reassemble the file. This should fail since we can't reconstruct missing chunks
         let result = manager.reassemble_and_decrypt_file(
             &manifest.chunks,
@@ -494,7 +519,7 @@ mod tests {
         match result {
             Ok(_) => {
                 panic!("Reconstruction succeeded when it should have failed due to missing chunk.");
-            },
+            }
             Err(error_message) => {
                 // The error should indicate the chunk could not be read
                 assert!(error_message.contains("Failed to read encrypted chunk"));
@@ -511,15 +536,21 @@ mod tests {
 
         let original_file_path = dir.path().join("original_for_failure.txt");
         let reassembled_file_path = dir.path().join("reassembled_from_failure.txt");
-        let file_content = "This test should fail to reconstruct due to missing chunk.".repeat(5000);
+        let file_content =
+            "This test should fail to reconstruct due to missing chunk.".repeat(5000);
         fs::write(&original_file_path, &file_content).unwrap();
 
         let recipient_secret = StaticSecret::random_from_rng(OsRng);
         let recipient_public = PublicKey::from(&recipient_secret);
 
         // 2. Chunk and encrypt the file
-        let manifest = manager.chunk_and_encrypt_file(&original_file_path, &recipient_public).unwrap();
-        assert!(!manifest.chunks.is_empty(), "Test file should produce at least one chunk");
+        let manifest = manager
+            .chunk_and_encrypt_file(&original_file_path, &recipient_public)
+            .unwrap();
+        assert!(
+            !manifest.chunks.is_empty(),
+            "Test file should produce at least one chunk"
+        );
 
         // 3. Simulate chunk loss by deleting the first chunk
         if let Some(first_chunk_info) = manifest.chunks.first() {
@@ -548,7 +579,7 @@ mod tests {
         match result {
             Ok(_) => {
                 panic!("Reconstruction succeeded when it should have failed. Check the debug output above.");
-            },
+            }
             Err(error_message) => {
                 // The error should indicate the chunk could not be read
                 assert!(error_message.contains("Failed to read encrypted chunk"));
@@ -570,44 +601,70 @@ mod tests {
         let recipient_public = PublicKey::from(&recipient_secret);
 
         // 2. Chunk the file to get the manifest, which contains the Merkle root and chunk hashes.
-        let manifest = manager.chunk_and_encrypt_file(&original_file_path, &recipient_public).unwrap();
-        assert!(manifest.chunks.len() > 1, "Test file should produce multiple chunks");
+        let manifest = manager
+            .chunk_and_encrypt_file(&original_file_path, &recipient_public)
+            .unwrap();
+        assert!(
+            manifest.chunks.len() > 1,
+            "Test file should produce multiple chunks"
+        );
 
         // 3. Choose a chunk to prove and verify (e.g., the second chunk).
         let chunk_to_verify_index = 1;
         let chunk_info = &manifest.chunks[chunk_to_verify_index];
-        let all_chunk_hashes: Vec<String> = manifest.chunks.iter().map(|c| c.hash.clone()).collect();
+        let all_chunk_hashes: Vec<String> =
+            manifest.chunks.iter().map(|c| c.hash.clone()).collect();
 
         // 4. Generate a Merkle proof for this chunk.
-        let (proof_indices, proof_hashes, total_leaves) = manager.generate_merkle_proof(
-            &all_chunk_hashes,
-            chunk_to_verify_index
-        ).unwrap();
+        let (proof_indices, proof_hashes, total_leaves) = manager
+            .generate_merkle_proof(&all_chunk_hashes, chunk_to_verify_index)
+            .unwrap();
 
         // 5. Simulate downloading the original chunk data.
         // For this test, we'll just read the original file to get the chunk data.
         let mut original_file = File::open(&original_file_path).unwrap();
         let mut buffer = vec![0; manager.chunk_size];
-        original_file.seek(std::io::SeekFrom::Start((chunk_to_verify_index * manager.chunk_size) as u64)).unwrap();
+        original_file
+            .seek(std::io::SeekFrom::Start(
+                (chunk_to_verify_index * manager.chunk_size) as u64,
+            ))
+            .unwrap();
         let bytes_read = original_file.read(&mut buffer).unwrap();
         let original_chunk_data = &buffer[..bytes_read];
 
         // 6. Verify the chunk using the proof.
-        let is_valid = manager.verify_chunk(
-            &manifest.merkle_root,
-            chunk_info,
-            original_chunk_data,
-            &proof_indices,
-            &proof_hashes,
-            total_leaves,
-        ).unwrap();
+        let is_valid = manager
+            .verify_chunk(
+                &manifest.merkle_root,
+                chunk_info,
+                original_chunk_data,
+                &proof_indices,
+                &proof_hashes,
+                total_leaves,
+            )
+            .unwrap();
 
-        assert!(is_valid, "Merkle proof verification should succeed for valid chunk data.");
+        assert!(
+            is_valid,
+            "Merkle proof verification should succeed for valid chunk data."
+        );
 
         // 7. Negative test: Verify that tampered data fails verification.
         let mut tampered_data = original_chunk_data.to_vec();
         tampered_data[0] = tampered_data[0].wrapping_add(1); // Modify one byte
-        let is_tampered_valid = manager.verify_chunk(&manifest.merkle_root, chunk_info, &tampered_data, &proof_indices, &proof_hashes, total_leaves).unwrap();
-        assert!(!is_tampered_valid, "Merkle proof verification should fail for tampered data.");
+        let is_tampered_valid = manager
+            .verify_chunk(
+                &manifest.merkle_root,
+                chunk_info,
+                &tampered_data,
+                &proof_indices,
+                &proof_hashes,
+                total_leaves,
+            )
+            .unwrap();
+        assert!(
+            !is_tampered_valid,
+            "Merkle proof verification should fail for tampered data."
+        );
     }
 }
