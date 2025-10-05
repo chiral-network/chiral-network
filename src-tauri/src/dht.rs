@@ -229,6 +229,7 @@ pub enum DhtEvent {
         query_id: String,
         error: String,
     },
+    Info(String),
 }
 
 // ------------ Proxy Manager Structs and Enums ------------

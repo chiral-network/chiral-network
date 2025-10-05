@@ -996,6 +996,7 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                 DhtEvent::FileDownloaded { file_hash } => {
                     format!("file_downloaded:{}", file_hash)
                 }
+                DhtEvent::Info(msg) => format!("info:{}", msg),
             })
             .collect();
         Ok(mapped)
