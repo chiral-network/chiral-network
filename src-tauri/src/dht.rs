@@ -2160,7 +2160,7 @@ impl DhtService {
             version: Some(version),
             parent_hash,
             cids: None,
-            is_root: true, 
+            is_root: true,
         })
     }
 
@@ -2644,27 +2644,27 @@ fn multiaddr_to_ip(addr: &Multiaddr) -> Option<IpAddr> {
 }
 
 pub struct StringBlock(pub String);
+pub struct ByteBlock(pub Vec<u8>);
 
-impl Block<64> for StringBlock {
+impl Block<64> for ByteBlock {
     fn cid(&self) -> Result<Cid, CidError> {
-        let hash = Code::Sha2_256.digest(self.0.as_ref());
+        let hash = Code::Sha2_256.digest(&self.0);
         Ok(Cid::new_v1(RAW_CODEC, hash))
     }
 
     fn data(&self) -> &[u8] {
-        self.0.as_ref()
+        &self.0
     }
 }
 
-pub fn split_into_blocks(bytes: &[u8]) -> Vec<StringBlock> {
+pub fn split_into_blocks(bytes: &[u8]) -> Vec<ByteBlock> {
     let mut blocks = Vec::new();
     let mut i = 0usize;
     while i < bytes.len() {
         let end = (i + CHUNK_SIZE).min(bytes.len());
         let slice = &bytes[i..end];
-        // Convert slice to String, replacing invalid UTF-8 with �
-        let string = String::from_utf8_lossy(slice).to_string();
-        blocks.push(StringBlock(string));
+        // Store raw bytes - no conversion needed
+        blocks.push(ByteBlock(slice.to_vec()));
         i = end;
     }
     blocks
