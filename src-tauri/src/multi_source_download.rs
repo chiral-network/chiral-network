@@ -646,6 +646,7 @@ impl MultiSourceDownloadService {
                 file_name: metadata.file_name.clone(),
                 file_size: metadata.file_size,
                 requester_peer_id: self.dht_service.get_peer_id().await,
+                recipient_public_key: None, // No encryption for basic multi-source downloads
             };
 
             if let Err(e) = self

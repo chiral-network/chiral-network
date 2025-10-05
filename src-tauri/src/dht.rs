@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use blockstore::{
     block::{Block, CidError},
-    Blockstore, InMemoryBlockstore,
+    InMemoryBlockstore,
 };
 use cid::Cid;
 use futures::future::{BoxFuture, FutureExt};
@@ -31,8 +31,6 @@ use std::task::{Context, Poll};
 // Import the missing types
 use crate::file_transfer::FileTransferService;
 use std::error::Error;
-
-use std::env::args;
 
 // Trait alias to abstract over async I/O types used by proxy transport
 pub trait AsyncIo: FAsyncRead + FAsyncWrite + Unpin + Send {}
