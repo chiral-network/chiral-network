@@ -52,7 +52,6 @@ Content-Type: multipart/form-data
 ```
 file: binary
 encryption_key: string (optional)
-replication_factor: integer (default: 3)
 ```
 
 **Response:**
@@ -120,7 +119,6 @@ GET /api/v1/files/{file_hash}/info
   },
   "availability": {
     "online_nodes": 15,
-    "total_replicas": 45,
     "health_score": 0.95
   }
 }
@@ -177,12 +175,12 @@ GET /api/v1/files/list
 }
 ```
 
-### Storage Node Operations
+### Provider Node Operations
 
-#### Register Storage Node
+#### Register provider Node
 
 ```http
-POST /api/v1/storage/register
+POST /api/v1/provider/register
 ```
 
 **Request Body:**
@@ -217,10 +215,10 @@ POST /api/v1/storage/register
 }
 ```
 
-#### Update Storage Node Status
+#### Update Provider Node Status
 
 ```http
-PUT /api/v1/storage/status
+PUT /api/v1/provider/status
 ```
 
 **Request Body:**
@@ -238,10 +236,10 @@ PUT /api/v1/storage/status
 }
 ```
 
-#### Get Storage Statistics
+#### Get Provider Statistics
 
 ```http
-GET /api/v1/storage/stats
+GET /api/v1/provider/stats
 ```
 
 **Response:**
@@ -287,7 +285,7 @@ GET /api/v1/peers/discover
       "reputation": 4.5,
       "uptime": 0.99,
       "last_seen": 1234567890,
-      "capabilities": ["storage", "relay", "proxy"]
+      "capabilities": ["provider", "relay", "proxy"]
     }
   ]
 }
@@ -774,7 +772,7 @@ ws.onopen = () => {
 | 1003 | FILE_NOT_FOUND     | File not in network           |
 | 1004 | INSUFFICIENT_FUNDS | Not enough balance            |
 | 1005 | PERMISSION_DENIED  | Access not authorized         |
-| 1006 | STORAGE_FULL       | Node storage capacity reached |
+| 1006 | STORAGE_FULL       | Node provider capacity reached |
 | 1007 | INVALID_CHUNK      | Chunk verification failed     |
 | 1008 | PEER_UNREACHABLE   | Cannot connect to peer        |
 | 1009 | INVALID_SIGNATURE  | Transaction signature invalid |
@@ -851,7 +849,6 @@ const client = new ChiralClient({
 // Upload file
 const result = await client.files.upload(file, {
   encryption: true,
-  replication: 3,
 });
 
 // Download file
@@ -878,7 +875,6 @@ client = ChiralClient(
 result = client.files.upload(
     file_path='document.pdf',
     encryption=True,
-    replication=3
 )
 
 # Get file info
@@ -901,7 +897,6 @@ func main() {
     // Upload file
     result, err := client.Files.Upload("document.pdf", &chiral.UploadOptions{
         Encryption:  true,
-        Replication: 3,
     })
 
     // Start mining
@@ -913,29 +908,4 @@ func main() {
 ```
 
 ## Testing
-
-### Test Network
-
-- Endpoint: `https://testnet.chiralnetwork.org/api/v1`
-- Free test coins available from faucet
-- Reset daily at 00:00 UTC
-
-### API Testing Tools
-
-- Postman Collection: [Download](https://api.chiralnetwork.org/postman)
-- OpenAPI Spec: [Download](https://api.chiralnetwork.org/openapi.yaml)
-- GraphQL Playground: [Access](https://api.chiralnetwork.org/graphql)
-
-## Support
-
-### Documentation
-
-- API Docs: https://docs.chiralnetwork.org/api
-- SDK Guides: https://docs.chiralnetwork.org/sdk
-- Examples: https://github.com/chiral-network/examples
-
-### Community
-
-- Discord: https://discord.gg/chiralnetwork
-- Forum: https://forum.chiralnetwork.org
-- Stack Overflow: [chiral-network] tag
+Testing API documentation to be added here later.
