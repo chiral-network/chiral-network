@@ -417,6 +417,9 @@
         dhtPeerId = backendPeerId
         dhtService.setPeerId(backendPeerId)
 
+        // Sync the port from the service
+        dhtPort = dhtService.getPort()
+
         // Pull health/peers and update UI without attempting a restart
         const health = await dhtService.getHealth()
         if (health) {
