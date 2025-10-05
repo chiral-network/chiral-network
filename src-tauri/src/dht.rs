@@ -50,6 +50,7 @@ use libp2p::{
             TransportEvent,
         },
     },
+    dcutr,
     identify::{self, Event as IdentifyEvent},
     identity,
     kad::{
@@ -151,6 +152,7 @@ struct DhtBehaviour {
     autonat_client: toggle::Toggle<v2::client::Behaviour>,
     autonat_server: toggle::Toggle<v2::server::Behaviour>,
     relay_client: relay::client::Behaviour,
+    dcutr: toggle::Toggle<dcutr::Behaviour>,
 }
 #[derive(Debug)]
 pub enum DhtCommand {
@@ -319,6 +321,13 @@ struct DhtMetrics {
     success_streak: u32,
     failure_streak: u32,
     autonat_enabled: bool,
+    // DCUtR metrics
+    dcutr_enabled: bool,
+    dcutr_hole_punch_attempts: u64,
+    dcutr_hole_punch_successes: u64,
+    dcutr_hole_punch_failures: u64,
+    last_dcutr_success: Option<SystemTime>,
+    last_dcutr_failure: Option<SystemTime>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -339,6 +348,13 @@ pub struct DhtMetricsSnapshot {
     pub observed_addrs: Vec<String>,
     pub reachability_history: Vec<NatHistoryItem>,
     pub autonat_enabled: bool,
+    // DCUtR metrics
+    pub dcutr_enabled: bool,
+    pub dcutr_hole_punch_attempts: u64,
+    pub dcutr_hole_punch_successes: u64,
+    pub dcutr_hole_punch_failures: u64,
+    pub last_dcutr_success: Option<u64>,
+    pub last_dcutr_failure: Option<u64>,
 }
 
 // ------Proxy Protocol Implementation------
@@ -697,6 +713,12 @@ impl DhtMetricsSnapshot {
             observed_addrs,
             reachability_history,
             autonat_enabled,
+            dcutr_enabled,
+            dcutr_hole_punch_attempts,
+            dcutr_hole_punch_successes,
+            dcutr_hole_punch_failures,
+            last_dcutr_success,
+            last_dcutr_failure,
             ..
         } = metrics;
 
@@ -731,6 +753,12 @@ impl DhtMetricsSnapshot {
             observed_addrs,
             reachability_history: history,
             autonat_enabled,
+            dcutr_enabled,
+            dcutr_hole_punch_attempts,
+            dcutr_hole_punch_successes,
+            dcutr_hole_punch_failures,
+            last_dcutr_success: last_dcutr_success.and_then(to_secs),
+            last_dcutr_failure: last_dcutr_failure.and_then(to_secs),
         }
     }
 }
@@ -1353,6 +1381,9 @@ async fn run_dht_node(
                     SwarmEvent::Behaviour(DhtBehaviourEvent::AutonatServer(ev)) => {
                         debug!(?ev, "AutoNAT server event");
                     }
+                    SwarmEvent::Behaviour(DhtBehaviourEvent::Dcutr(ev)) => {
+                        handle_dcutr_event(ev, &metrics, &event_tx).await;
+                    }
                     SwarmEvent::ExternalAddrConfirmed { address, .. } => {
                         handle_external_addr_confirmed(&address, &metrics, &event_tx, &proxy_mgr)
                             .await;
@@ -1863,6 +1894,92 @@ async fn handle_autonat_client_event(
         .await;
 }
 
+async fn handle_dcutr_event(
+    event: dcutr::Event,
+    metrics: &Arc<Mutex<DhtMetrics>>,
+    event_tx: &mpsc::Sender<DhtEvent>,
+) {
+    let mut metrics_guard = metrics.lock().await;
+    if !metrics_guard.dcutr_enabled {
+        return;
+    }
+
+    match event {
+        dcutr::Event::InitiatedDirectConnectionUpgrade {
+            remote_peer_id,
+            local_relayed_addr,
+        } => {
+            metrics_guard.dcutr_hole_punch_attempts += 1;
+            info!(
+                peer = %remote_peer_id,
+                relay_addr = %local_relayed_addr,
+                "DCUtR: initiated hole-punch attempt"
+            );
+            drop(metrics_guard);
+            let _ = event_tx
+                .send(DhtEvent::Info(format!(
+                    "Attempting direct connection upgrade to peer {} via relay {}",
+                    remote_peer_id, local_relayed_addr
+                )))
+                .await;
+        }
+        dcutr::Event::RemoteInitiatedDirectConnectionUpgrade {
+            remote_peer_id,
+            remote_relayed_addr,
+        } => {
+            metrics_guard.dcutr_hole_punch_attempts += 1;
+            info!(
+                peer = %remote_peer_id,
+                relay_addr = %remote_relayed_addr,
+                "DCUtR: remote peer initiated hole-punch"
+            );
+            drop(metrics_guard);
+            let _ = event_tx
+                .send(DhtEvent::Info(format!(
+                    "Remote peer {} initiated connection upgrade via relay {}",
+                    remote_peer_id, remote_relayed_addr
+                )))
+                .await;
+        }
+        dcutr::Event::DirectConnectionUpgradeSucceeded { remote_peer_id } => {
+            metrics_guard.dcutr_hole_punch_successes += 1;
+            metrics_guard.last_dcutr_success = Some(SystemTime::now());
+            info!(
+                peer = %remote_peer_id,
+                successes = metrics_guard.dcutr_hole_punch_successes,
+                "DCUtR: hole-punch succeeded, upgraded to direct connection"
+            );
+            drop(metrics_guard);
+            let _ = event_tx
+                .send(DhtEvent::Info(format!(
+                    "✓ Direct connection established with peer {} (hole-punch succeeded)",
+                    remote_peer_id
+                )))
+                .await;
+        }
+        dcutr::Event::DirectConnectionUpgradeFailed {
+            remote_peer_id,
+            error,
+        } => {
+            metrics_guard.dcutr_hole_punch_failures += 1;
+            metrics_guard.last_dcutr_failure = Some(SystemTime::now());
+            warn!(
+                peer = %remote_peer_id,
+                error = %error,
+                failures = metrics_guard.dcutr_hole_punch_failures,
+                "DCUtR: hole-punch failed"
+            );
+            drop(metrics_guard);
+            let _ = event_tx
+                .send(DhtEvent::Warning(format!(
+                    "✗ Direct connection upgrade to peer {} failed: {}",
+                    remote_peer_id, error
+                )))
+                .await;
+        }
+    }
+}
+
 async fn handle_external_addr_confirmed(
     addr: &Multiaddr,
     metrics: &Arc<Mutex<DhtMetrics>>,
@@ -2181,6 +2298,17 @@ impl DhtService {
         let (relay_transport, relay_client_behaviour) = relay::client::new(local_peer_id);
         let autonat_client_toggle = toggle::Toggle::from(autonat_client_behaviour);
         let autonat_server_toggle = toggle::Toggle::from(autonat_server_behaviour);
+
+        // DCUtR requires relay to be enabled
+        let dcutr_behaviour = if enable_autonat {
+            info!("DCUtR enabled (requires relay for hole-punching coordination)");
+            Some(dcutr::Behaviour::new(local_peer_id))
+        } else {
+            info!("DCUtR disabled (autonat is disabled)");
+            None
+        };
+        let dcutr_toggle = toggle::Toggle::from(dcutr_behaviour);
+
         let mut behaviour = Some(DhtBehaviour {
             kademlia,
             identify,
@@ -2192,6 +2320,7 @@ impl DhtService {
             autonat_client: autonat_client_toggle,
             autonat_server: autonat_server_toggle,
             relay_client: relay_client_behaviour,
+            dcutr: dcutr_toggle,
         });
 
         let bootstrap_set: HashSet<String> = bootstrap_nodes.iter().cloned().collect();
@@ -2306,6 +2435,7 @@ impl DhtService {
         {
             let mut guard = metrics.lock().await;
             guard.autonat_enabled = enable_autonat;
+            guard.dcutr_enabled = enable_autonat; // DCUtR enabled when AutoNAT is enabled
         }
 
         // Spawn the Dht node task
