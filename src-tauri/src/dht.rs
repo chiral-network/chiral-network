@@ -867,6 +867,7 @@ async fn run_dht_node(
         >,
     >,
     is_bootstrap: bool,
+    chunk_size: usize,
 ) {
     // Periodic bootstrap interval
     let mut shutdown_ack: Option<oneshot::Sender<()>> = None;
@@ -885,7 +886,7 @@ async fn run_dht_node(
                         break 'outer;
                     }
                     Some(DhtCommand::PublishFile(mut metadata)) => {
-                        let blocks = split_into_blocks(&metadata.file_data);
+                        let blocks = split_into_blocks(&metadata.file_data, chunk_size);
                         let mut block_cids = Vec::new();
                         for (idx, block) in blocks.iter().enumerate() {
                             let cid = match block.cid() {
@@ -2068,6 +2069,7 @@ pub struct DhtService {
             HashMap<rr::OutboundRequestId, oneshot::Sender<Result<WebRTCAnswerResponse, String>>>,
         >,
     >,
+    chunk_size: usize, // Configurable chunk size in bytes
 }
 
 impl DhtService {
@@ -2081,7 +2083,15 @@ impl DhtService {
         autonat_servers: Vec<String>,
         proxy_address: Option<String>,
         file_transfer_service: Option<Arc<FileTransferService>>,
+        chunk_size_kb: Option<usize>, // Chunk size in KB (default 256)
+        cache_size_mb: Option<usize>, // Cache size in MB (default 1024)
     ) -> Result<Self, Box<dyn Error>> {
+        // Convert chunk size from KB to bytes
+        let chunk_size = chunk_size_kb.unwrap_or(256) * 1024; // Default 256 KB
+        let _cache_size = cache_size_mb.unwrap_or(1024); // Default 1024 MB
+        
+        info!("DHT Configuration: chunk_size={} KB, cache_size={} MB", 
+              chunk_size / 1024, _cache_size);
         // Generate a new keypair for this node
         // Generate a keypair either from the secret or randomly
         let local_key = match secret {
@@ -2325,6 +2335,7 @@ impl DhtService {
             file_transfer_service.clone(),
             pending_webrtc_offers.clone(),
             is_bootstrap,
+            chunk_size,
         ));
 
         Ok(DhtService {
@@ -2342,12 +2353,17 @@ impl DhtService {
             received_chunks: received_chunks_clone,
             file_transfer_service,
             pending_webrtc_offers,
+            chunk_size,
         })
     }
 
     pub async fn run(&self) {
         // The node is already running in a spawned task
         info!("DHT node is running");
+    }
+
+    pub fn chunk_size(&self) -> usize {
+        self.chunk_size
     }
 
     pub async fn publish_file(&self, metadata: FileMetadata) -> Result<(), String> {
@@ -2950,11 +2966,11 @@ impl Block<64> for ByteBlock {
     }
 }
 
-pub fn split_into_blocks(bytes: &[u8]) -> Vec<ByteBlock> {
+pub fn split_into_blocks(bytes: &[u8], chunk_size: usize) -> Vec<ByteBlock> {
     let mut blocks = Vec::new();
     let mut i = 0usize;
     while i < bytes.len() {
-        let end = (i + CHUNK_SIZE).min(bytes.len());
+        let end = (i + chunk_size).min(bytes.len());
         let slice = &bytes[i..end];
         // Store raw bytes - no conversion needed
         blocks.push(ByteBlock(slice.to_vec()));

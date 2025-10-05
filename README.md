@@ -96,7 +96,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 - ✅ **Advanced Bandwidth Scheduling**: Set different bandwidth limits for specific times and days
 - ✅ **Privacy Controls**: Mandatory encryption, proxy support, and anonymous mode (anonymous mode not implemented)
 - ✅ **Notification Preferences**: Customize alerts and notifications
-- ❌ **Advanced Options**: Fine-tune DHT, chunk size, and cache settings (UI mockup only, settings not applied to backend)
+- ✅ **Advanced Options**: Fine-tune DHT, chunk size, and cache settings (configurable through UI)
 - ✅ **Import/Export**: Backup and restore settings
 - ✅ **Multi-language Support**: English, Spanish, Chinese, Korean
 
