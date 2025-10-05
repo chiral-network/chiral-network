@@ -5,7 +5,8 @@
   import Label from '$lib/components/ui/label.svelte'
   import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText } from 'lucide-svelte'
   import DropDown from "$lib/components/ui/dropDown.svelte";
-  import { wallet, etcAccount, blacklist} from '$lib/stores'
+  import { wallet, etcAccount, blacklist} from '$lib/stores' 
+  import { walletService } from '$lib/wallet';
   import { transactions } from '$lib/stores';
   import { walletService } from '$lib/wallet';
   import { derived } from 'svelte/store'
