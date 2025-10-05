@@ -2329,7 +2329,7 @@ impl DhtService {
         }
 
         // Configure AutoRelay relay candidate discovery
-        let mut relay_candidates: HashSet<String> = if enable_autorelay {
+        let relay_candidates: HashSet<String> = if enable_autorelay {
             if !preferred_relays.is_empty() {
                 info!(
                     "AutoRelay enabled with {} preferred relays",
@@ -3122,6 +3122,8 @@ mod tests {
             Vec::new(),
             None,
             None,
+            false, // enable_autorelay
+            Vec::new(), // preferred_relays
         )
         .await
         {
