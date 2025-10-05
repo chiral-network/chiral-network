@@ -3,6 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { AppSettings } from "./stores";
 import { homeDir, join } from "@tauri-apps/api/path";
+//importing reputation store for the reputation based peer discovery
+import ReputationStore from "$lib/reputationStore";
+const __rep = ReputationStore.getInstance();
 
 // Default bootstrap nodes for network connectivity
 export const DEFAULT_BOOTSTRAP_NODES = [
@@ -287,26 +290,29 @@ export class DhtService {
       throw new Error("DHT service not initialized properly");
     }
 
+    // ADD: parse a peerId from /p2p/<id> if present; if not, use addr
+    const __pid = (peerAddress?.split("/p2p/")[1] ?? peerAddress)?.trim();
+    if (__pid) {
+      // Mark we’ve seen this peer (freshness)
+      try { __rep.noteSeen(__pid); } catch {}
+    }
+
     try {
       await invoke("connect_to_peer", { peerAddress });
       console.log("Connecting to peer:", peerAddress);
+
+      // ADD: count a success (no RTT here, the backend doesn’t expose it)
+      if (__pid) {
+        try { __rep.success(__pid); } catch {}
+      }
     } catch (error) {
       console.error("Failed to connect to peer:", error);
+
+      // ADD: count a failure so low-quality peers drift down
+      if (__pid) {
+        try { __rep.failure(__pid); } catch {}
+      }
       throw error;
-    }
-  }
-
-  async getEvents(): Promise<string[]> {
-    if (!this.peerId) {
-      return [];
-    }
-
-    try {
-      const events = await invoke<string[]>("get_dht_events");
-      return events;
-    } catch (error) {
-      console.error("Failed to get DHT events:", error);
-      return [];
     }
   }
 
@@ -365,6 +371,18 @@ export class DhtService {
             (event) => {
               clearTimeout(timeoutId);
               const result = event.payload;
+              // ADDING FOR REPUTATION BASED PEER DISCOVERY: mark discovered providers as "seen" for freshness
+              try {
+                if (result && Array.isArray(result.seeders)) {
+                  for (const addr of result.seeders) {
+                    // Extract peer ID from multiaddr if present
+                    const pid = (addr?.split("/p2p/")[1] ?? addr)?.trim();
+                    if (pid) __rep.noteSeen(pid);
+                  }
+                }
+              } catch (e) {
+                console.warn("reputation noteSeen failed:", e);
+              }
               resolve(
                 result
                   ? {
