@@ -81,6 +81,7 @@ struct StreamingUploadSession {
     total_chunks: u32,
     hasher: sha2::Sha256,
     created_at: std::time::SystemTime,
+    chunk_cids: Vec<dht::Cid>, // Collect CIDs of all chunks for root block creation
 }
 
 struct AppState {
@@ -811,6 +812,7 @@ async fn publish_file_metadata(
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
+            merkle_root: None,
             parent_hash: None,
             version: Some(1),
             cids: None,
@@ -1655,10 +1657,11 @@ async fn upload_file_data_to_network(
             is_encrypted,
             encryption_method,
             key_fingerprint,
+            merkle_root: None,
             parent_hash: None,
             version: Some(1),
             cids: None,
-            is_root: true, 
+            is_root: true,
         };
 
         // Publish to DHT
@@ -1729,6 +1732,7 @@ async fn upload_file_to_network(
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
+            merkle_root: None,
             parent_hash: None,
             version: Some(1),
             cids: None,
@@ -1805,6 +1809,7 @@ async fn start_streaming_upload(
         total_chunks: 0, // Will be set when we know chunk count
         hasher: sha2::Sha256::new(),
         created_at: std::time::SystemTime::now(),
+        chunk_cids: Vec::new(),
     });
 
     Ok(upload_id)
@@ -1841,6 +1846,9 @@ async fn upload_file_chunk(
                 }
             };
 
+            // Collect CID for root block creation
+            session.chunk_cids.push(cid.clone());
+
             // Store block in Bitswap via DHT command
             if let Err(e) = dht.store_block(cid.clone(), block.data().to_vec()).await {
                 error!("failed to store chunk block {}: {}", cid, e);
@@ -1850,9 +1858,33 @@ async fn upload_file_chunk(
     }
 
     if is_last_chunk {
-        // Calculate final hash - take ownership of the hasher
+        // Calculate Merkle root for integrity verification
         let hasher = std::mem::replace(&mut session.hasher, sha2::Sha256::new());
-        let file_hash = format!("{:x}", hasher.finalize());
+        let merkle_root = format!("{:x}", hasher.finalize());
+
+        // Create root block containing the list of chunk CIDs
+        let chunk_cids = std::mem::take(&mut session.chunk_cids);
+        let root_block_data = match serde_json::to_vec(&chunk_cids) {
+            Ok(data) => data,
+            Err(e) => {
+                return Err(format!("Failed to serialize chunk CIDs: {}", e));
+            }
+        };
+
+        // Generate CID for the root block
+        use dht::{Cid, Code, MultihashDigest, RAW_CODEC};
+        let root_cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&root_block_data));
+
+        // Store root block in Bitswap
+        let dht_opt = { state.dht.lock().await.as_ref().cloned() };
+        if let Some(dht) = &dht_opt {
+            if let Err(e) = dht.store_block(root_cid.clone(), root_block_data).await {
+                error!("failed to store root block: {}", e);
+                return Err(format!("failed to store root block: {}", e));
+            }
+        } else {
+            return Err("DHT not running".into());
+        }
 
         // Create minimal metadata (without file_data to avoid DHT size limits)
         let created_at = std::time::SystemTime::now()
@@ -1861,7 +1893,7 @@ async fn upload_file_chunk(
             .as_secs();
 
         let metadata = dht::FileMetadata {
-            file_hash: file_hash.clone(),
+            file_hash: root_cid.to_string(), // Use root CID for retrieval
             file_name: session.file_name.clone(),
             file_size: session.file_size,
             file_data: vec![], // Empty - data is stored in Bitswap blocks
@@ -1871,6 +1903,7 @@ async fn upload_file_chunk(
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
+            merkle_root: Some(merkle_root), // Store Merkle root for verification
             parent_hash: None,
             version: Some(1),
             cids: None, // CIDs are stored in the root block, not in metadata
@@ -1878,7 +1911,6 @@ async fn upload_file_chunk(
         };
 
         // Publish to DHT
-        let dht_opt = { state.dht.lock().await.as_ref().cloned() };
         if let Some(dht) = dht_opt {
             dht.publish_file(metadata.clone()).await?;
         } else {
@@ -1886,6 +1918,7 @@ async fn upload_file_chunk(
         }
 
         // Clean up session
+        let file_hash = root_cid.to_string();
         upload_sessions.remove(&upload_id);
 
         Ok(Some(file_hash))

@@ -299,6 +299,15 @@
       dropZone.addEventListener('dragleave', handleDragLeave)
       dropZone.addEventListener('drop', handleDrop)
 
+      // Prevent default browser behavior for drag and drop on the entire window
+      const preventDefaults = (e: Event) => {
+        e.preventDefault()
+        e.stopPropagation()
+      }
+
+      window.addEventListener('dragover', preventDefaults)
+      window.addEventListener('drop', preventDefaults)
+
       // Add global drag end handlers to ensure dragging state is reset
       document.addEventListener('dragend', handleDragEnd)
       document.addEventListener('drop', handleDragEnd)
@@ -309,6 +318,8 @@
         dropZone.removeEventListener('dragover', handleDragOver)
         dropZone.removeEventListener('dragleave', handleDragLeave)
         dropZone.removeEventListener('drop', handleDrop)
+        window.removeEventListener('dragover', preventDefaults)
+        window.removeEventListener('drop', preventDefaults)
         document.removeEventListener('dragend', handleDragEnd)
         document.removeEventListener('drop', handleDragEnd)
       }
