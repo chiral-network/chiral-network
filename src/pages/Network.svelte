@@ -7,8 +7,8 @@
   import GethStatusCard from '$lib/components/GethStatusCard.svelte'
   import PeerMetrics from '$lib/components/PeerMetrics.svelte'
   import GeoDistributionCard from '$lib/components/GeoDistributionCard.svelte'
+  import { peers, networkStats, networkStatus, userLocation, etcAccount, settings } from '$lib/stores'
   import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Play, Square, Download, AlertCircle, Wifi, UserMinus } from 'lucide-svelte'
-  import { peers, networkStats, networkStatus, userLocation, etcAccount } from '$lib/stores'
   import { get } from 'svelte/store'
   import { onMount, onDestroy } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
@@ -293,7 +293,9 @@
         try {
           const peerId = await dhtService.start({
             port: dhtPort,
-            bootstrapNodes: DEFAULT_BOOTSTRAP_NODES
+            bootstrapNodes: DEFAULT_BOOTSTRAP_NODES,
+            chunkSizeKb: $settings.chunkSize,
+            cacheSizeMb: $settings.cacheSize
           })
           dhtPeerId = peerId
           // Also ensure the service knows its own peer ID
@@ -414,6 +416,9 @@
       if (backendPeerId) {
         dhtPeerId = backendPeerId
         dhtService.setPeerId(backendPeerId)
+
+        // Sync the port from the service
+        dhtPort = dhtService.getPort()
 
         // Pull health/peers and update UI without attempting a restart
         const health = await dhtService.getHealth()
