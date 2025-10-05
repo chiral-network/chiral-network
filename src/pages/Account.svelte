@@ -8,7 +8,6 @@
   import { wallet, etcAccount, blacklist} from '$lib/stores' 
   import { walletService } from '$lib/wallet';
   import { transactions } from '$lib/stores';
-  import { walletService } from '$lib/wallet';
   import { derived } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
   import QRCode from 'qrcode'
