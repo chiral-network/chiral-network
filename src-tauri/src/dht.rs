@@ -1810,7 +1810,19 @@ async fn handle_identify_event(
 ) {
     match event {
         IdentifyEvent::Received { peer_id, info, .. } => {
-            info!("Identified peer {}: {:?}", peer_id, info.protocol_version);
+            info!("🔍 Identified peer {}: {:?} (listen_addrs: {})",
+                peer_id, info.protocol_version, info.listen_addrs.len());
+
+            // Log AutoRelay debug info
+            if enable_autorelay {
+                let is_candidate = is_relay_candidate(&peer_id, relay_candidates);
+                info!("  AutoRelay check: is_relay_candidate={}, total_candidates={}",
+                    is_candidate, relay_candidates.len());
+                if !relay_candidates.is_empty() {
+                    info!("  Relay candidates: {:?}", relay_candidates.iter().take(3).collect::<Vec<_>>());
+                }
+            }
+
             if info.protocol_version != EXPECTED_PROTOCOL_VERSION {
                 warn!(
                     "Peer {} has a mismatched protocol version: '{}'. Expected: '{}'. Removing peer.",
@@ -2332,12 +2344,18 @@ impl DhtService {
         let relay_candidates: HashSet<String> = if enable_autorelay {
             if !preferred_relays.is_empty() {
                 info!(
-                    "AutoRelay enabled with {} preferred relays",
+                    "🔗 AutoRelay enabled with {} preferred relays",
                     preferred_relays.len()
                 );
+                for (i, relay) in preferred_relays.iter().enumerate().take(5) {
+                    info!("   Relay {}: {}", i + 1, relay);
+                }
                 preferred_relays.into_iter().collect()
             } else {
-                info!("AutoRelay enabled, will discover relays from bootstrap nodes");
+                info!("🔗 AutoRelay enabled, using {} bootstrap nodes as relay candidates", bootstrap_set.len());
+                for (i, node) in bootstrap_set.iter().enumerate().take(5) {
+                    info!("   Candidate {}: {}", i + 1, node);
+                }
                 bootstrap_set.iter().cloned().collect()
             }
         } else {
