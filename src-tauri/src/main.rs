@@ -202,6 +202,11 @@ async fn load_account_from_keystore(
         *active_key = Some(private_key.clone());
     }
 
+    // Update WebRTC service with the active private key for decryption
+    if let Some(webrtc_service) = state.webrtc.lock().await.as_ref() {
+        webrtc_service.set_active_private_key(Some(private_key.clone())).await;
+    }
+
     // Derive account details from private key
     get_account_from_private_key(&private_key)
 }
@@ -2302,6 +2307,11 @@ async fn logout(state: State<'_, AppState>) -> Result<(), ()> {
     // Clear private key from memory
     let mut active_key = state.active_account_private_key.lock().await;
     *active_key = None;
+
+    // Clear private key from WebRTC service
+    if let Some(webrtc_service) = state.webrtc.lock().await.as_ref() {
+        webrtc_service.set_active_private_key(None).await;
+    }
 
     Ok(())
 }
