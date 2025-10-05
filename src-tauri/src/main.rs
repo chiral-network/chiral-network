@@ -592,6 +592,8 @@ async fn start_dht_node(
     is_bootstrap: Option<bool>,
     chunk_size_kb: Option<usize>,
     cache_size_mb: Option<usize>,
+    enable_autorelay: Option<bool>,
+    preferred_relays: Option<Vec<String>>,
 ) -> Result<String, String> {
     {
         let dht_guard = state.dht.lock().await;
@@ -617,9 +619,9 @@ async fn start_dht_node(
         ft_guard.as_ref().cloned()
     };
 
-    // AutoRelay enabled by default in GUI
-    let enable_autorelay = true;
-    let preferred_relays: Vec<String> = vec![];
+    // AutoRelay settings from frontend (enabled by default)
+    let enable_autorelay = enable_autorelay.unwrap_or(true);
+    let preferred_relays = preferred_relays.unwrap_or_default();
 
     let dht_service = DhtService::new(
         port,

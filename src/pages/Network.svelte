@@ -295,7 +295,9 @@
             port: dhtPort,
             bootstrapNodes: DEFAULT_BOOTSTRAP_NODES,
             chunkSizeKb: $settings.chunkSize,
-            cacheSizeMb: $settings.cacheSize
+            cacheSizeMb: $settings.cacheSize,
+            enableAutorelay: $settings.enableAutoRelay,
+            preferredRelays: $settings.preferredRelays?.split('\n').filter(r => r.trim().length > 0) || []
           })
           dhtPeerId = peerId
           // Also ensure the service knows its own peer ID
