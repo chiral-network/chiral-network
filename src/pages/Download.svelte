@@ -7,6 +7,7 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation } from 'lucide-svelte'
   import { files, downloadQueue, activeTransfers } from '$lib/stores'
+  import { dhtService } from '$lib/dht'
   import DownloadSearchSection from '$lib/components/download/DownloadSearchSection.svelte'
   import type { FileMetadata } from '$lib/dht'
   import { onDestroy, onMount } from 'svelte'
@@ -538,9 +539,42 @@
         showNotification(`Downloading encrypted chunks for "${fileToDownload.name}"...`, 'info');
         
         const { p2pFileTransferService } = await import('$lib/services/p2pFileTransfer');
+        // Determine seeders, prefer local seeder when available
+        let seeders = (fileToDownload.seederAddresses || []).slice();
+        try {
+          const localPeerId = dhtService.getPeerId ? dhtService.getPeerId() : null;
+          if ((!seeders || seeders.length === 0) && fileToDownload.status === 'seeding') {
+            if (localPeerId) seeders.unshift(localPeerId)
+            else seeders.unshift('local_peer')
+          }
+        } catch (e) {
+          // ignore
+        }
+
+        // If the local copy is available and we're running in Tauri, copy directly to outputPath
+        const localPeerIdNow = dhtService.getPeerId ? dhtService.getPeerId() : null;
+        if (fileToDownload.status === 'seeding' && fileToDownload.path && (localPeerIdNow || seeders.includes('local_peer'))) {
+          try {
+            // Read local file and write to chosen output path
+            const fsModule = '@tauri-apps/api/fs';
+            const coreModule = '@tauri-apps/api/core';
+            const { readBinaryFile } = await import(fsModule);
+            const { invoke } = await import(coreModule);
+            const data = await readBinaryFile(fileToDownload.path as string);
+            await invoke('write_file', { path: outputPath, contents: Array.from(data) });
+            files.update(f => f.map(file => file.id === fileId ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath } : file));
+            showNotification(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
+            activeSimulations.delete(fileId);
+            return;
+          } catch (e) {
+            console.warn('Local copy fallback failed, continuing with P2P download', e);
+            // fall through to p2p path
+          }
+        }
+
         await p2pFileTransferService.downloadEncryptedChunks(
           fileToDownload.manifest,
-          fileToDownload.seederAddresses || [], // Pass the list of seeders
+          seeders, // Pass the list of seeders
           (progress) => { // This is the progress callback
             files.update(f => f.map(file =>
               file.id === fileId ? { ...file, progress: progress.percentage, status: 'downloading', speed: progress.speed, eta: progress.eta } : file
@@ -564,10 +598,37 @@
         // Import P2P file transfer service
         const { p2pFileTransferService } = await import('$lib/services/p2pFileTransfer');
 
+        // Determine seeders and prefer local copy if available
+        let seeders = (fileToDownload.seederAddresses || []).slice();
+        try {
+          const localPeerId = dhtService.getPeerId ? dhtService.getPeerId() : null;
+          if ((!seeders || seeders.length === 0) && fileToDownload.status === 'seeding') {
+            if (localPeerId) seeders.unshift(localPeerId)
+            else seeders.unshift('local_peer')
+          }
+        } catch (e) {}
+
+        // If local copy available and running in Tauri, copy directly
+        try {
+          const localPeerIdNow = dhtService.getPeerId ? dhtService.getPeerId() : null;
+          if (fileToDownload.status === 'seeding' && fileToDownload.path && (localPeerIdNow || seeders.includes('local_peer'))) {
+            const fsModule = '@tauri-apps/api/fs';
+            const coreModule = '@tauri-apps/api/core';
+            const { readBinaryFile } = await import(fsModule);
+            const { invoke } = await import(coreModule);
+            const data = await readBinaryFile(fileToDownload.path as string);
+            await invoke('write_file', { path: outputPath, contents: Array.from(data) });
+            files.update(f => f.map(file => file.id === fileId ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath } : file));
+            showNotification(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
+            activeSimulations.delete(fileId);
+            return;
+          }
+        } catch (e) {
+          console.warn('Local copy fallback failed, will try P2P', e);
+        }
+
         // Start P2P download using the P2P file transfer service
         try {
-          const seeders = fileToDownload.seederAddresses || [];
-
           if (seeders.length === 0) {
             throw new Error('No seeders available for this file');
           }
