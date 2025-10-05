@@ -36,7 +36,6 @@ use fs2::available_space;
 use geth_downloader::GethDownloader;
 use keystore::Keystore;
 use serde::{Deserialize, Serialize};
-use sha3::{Digest, Keccak256};
 use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -60,8 +59,6 @@ use tracing::{error, info, warn};
 use webrtc_service::{WebRTCFileRequest, WebRTCService};
 
 use crate::manager::ChunkManager; // Import the ChunkManager
-use ethers::signers::{LocalWallet, Signer};
-use reqwest::Url;
 use x25519_dalek::{PublicKey, StaticSecret}; // For key handling
 use base64::{engine::general_purpose, Engine as _}; // For key encoding
 use blockstore::block::Block;
@@ -109,7 +106,7 @@ struct AppState {
     processing_transaction: Arc<Mutex<bool>>,
 
     // New field for streaming upload sessions
-    upload_sessions: Arc<Mutex<HashMap<String, StreamingUploadSession>>>,
+    upload_sessions: Arc<Mutex<std::collections::HashMap<String, StreamingUploadSession>>>,
 }
 
 #[tauri::command]
@@ -151,108 +148,6 @@ async fn import_chiral_account(
     }
 
     Ok(account)
-}
-
-#[derive(Serialize)]
-struct ApiSignatureResponse {
-    address: String,
-    signature: String,
-    timestamp: u64,
-    body_hash: String,
-    canonical_message: String,
-}
-
-fn normalize_request_path(path: &str) -> String {
-    let trimmed = path.trim();
-    if trimmed.is_empty() {
-        return "/".to_string();
-    }
-
-    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        if let Ok(url) = Url::parse(trimmed) {
-            let mut normalized = url.path().to_string();
-            if let Some(query) = url.query() {
-                normalized.push('?');
-                normalized.push_str(query);
-            }
-            return if normalized.is_empty() { "/".to_string() } else { normalized };
-        }
-    }
-
-    if trimmed.starts_with('/') {
-        trimmed.to_string()
-    } else {
-        format!("/{}", trimmed)
-    }
-}
-
-#[tauri::command]
-async fn sign_api_request(
-    method: String,
-    path: String,
-    body: Option<Vec<u8>>,
-    timestamp: Option<u64>,
-    state: State<'_, AppState>,
-) -> Result<ApiSignatureResponse, String> {
-    let address = {
-        let guard = state.active_account.lock().await;
-        guard
-            .clone()
-            .ok_or_else(|| "No active wallet address set".to_string())?
-    };
-
-    let private_key = {
-        let guard = state.active_account_private_key.lock().await;
-        guard
-            .clone()
-            .ok_or_else(|| "No active wallet private key available".to_string())?
-    };
-
-    let ts = timestamp.unwrap_or_else(|| {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_else(|_| Duration::from_secs(0))
-            .as_secs()
-    });
-
-    let method_upper = method.trim().to_uppercase();
-    if method_upper.is_empty() {
-        return Err("HTTP method is required for signing".into());
-    }
-
-    let normalized_path = normalize_request_path(&path);
-    let body_bytes = body.unwrap_or_default();
-
-    let mut hasher = Keccak256::new();
-    hasher.update(&body_bytes);
-    let body_hash_bytes = hasher.finalize();
-    let body_hash_hex = hex::encode(body_hash_bytes);
-
-    let canonical_message = format!(
-        "CHIRAL1\n{}\n{}\n{}\n{}",
-        method_upper,
-        normalized_path,
-        ts,
-        body_hash_hex
-    );
-
-    let wallet: LocalWallet = private_key
-        .parse()
-        .map_err(|e| format!("Failed to parse private key: {}", e))?;
-    let signature = wallet
-        .sign_message(canonical_message.clone())
-        .await
-        .map_err(|e| format!("Failed to sign request: {}", e))?;
-
-    let signature_hex = format!("0x{}", hex::encode(signature.to_vec()));
-
-    Ok(ApiSignatureResponse {
-        address,
-        signature: signature_hex,
-        timestamp: ts,
-        body_hash: format!("0x{}", body_hash_hex),
-        canonical_message,
-    })
 }
 
 #[tauri::command]
@@ -3018,7 +2913,7 @@ fn main() {
             processing_transaction: Arc::new(Mutex::new(false)),
 
             // Initialize upload sessions
-            upload_sessions: Arc::new(Mutex::new(HashMap::new())),
+            upload_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
@@ -3030,7 +2925,6 @@ fn main() {
             save_account_to_keystore,
             load_account_from_keystore,
             list_keystore_accounts,
-            sign_api_request,
             pool::discover_mining_pools,
             pool::create_mining_pool,
             pool::join_mining_pool,
