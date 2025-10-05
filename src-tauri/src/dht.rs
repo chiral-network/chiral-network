@@ -3198,6 +3198,8 @@ mod tests {
             Vec::new(),
             None,
             None,
+            None,       // chunk_size_kb
+            None,       // cache_size_mb
             false,      // enable_autorelay
             Vec::new(), // preferred_relays
         )
