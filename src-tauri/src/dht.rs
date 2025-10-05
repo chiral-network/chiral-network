@@ -974,6 +974,18 @@ async fn run_dht_node(
                                 let _ = event_tx.send(DhtEvent::Error(format!("failed to start providing: {}", e))).await;
                             }
                         }
+
+                        // Register this peer as a provider for the file
+                        let provider_key = kad::RecordKey::new(&metadata.file_hash.as_bytes());
+                        match swarm.behaviour_mut().kademlia.start_providing(provider_key) {
+                            Ok(query_id) => {
+                                info!("registered as provider for file: {}, query id: {:?}", metadata.file_hash, query_id);
+                            }
+                            Err(e) => {
+                                error!("failed to register as provider for file {}: {}", metadata.file_hash, e);
+                                let _ = event_tx.send(DhtEvent::Error(format!("failed to register as provider: {}", e))).await;
+                            }
+                        }
                         let _ = event_tx.send(DhtEvent::PublishedFile(metadata)).await;
                     }
                     Some(DhtCommand::DownloadFile(file_metadata)) =>{
