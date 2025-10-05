@@ -191,7 +191,7 @@ export class DhtService {
   async publishFileToNetwork(filePath: string): Promise<FileMetadata> {
     try {
       // Start listening for the published_file event
-      const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {
+      const metadataPromise = new Promise<FileMetadata>((resolve) => {
         const unlistenPromise = listen<FileMetadata>(
           "published_file",
           (event) => {
@@ -217,7 +217,7 @@ export class DhtService {
     try {
       console.log("Initiating download for file:", fileMetadata.fileHash);
       // Start listening for the published_file event
-      const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {
+      const metadataPromise = new Promise<FileMetadata>((resolve) => {
         const unlistenPromise = listen<FileMetadata>(
           "file_content",
           async (event) => {
