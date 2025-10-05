@@ -203,6 +203,11 @@ async fn load_account_from_keystore(
         *active_key = Some(private_key.clone());
     }
 
+    // Update WebRTC service with the active private key for decryption
+    if let Some(webrtc_service) = state.webrtc.lock().await.as_ref() {
+        webrtc_service.set_active_private_key(Some(private_key.clone())).await;
+    }
+
     // Derive account details from private key
     get_account_from_private_key(&private_key)
 }
@@ -584,6 +589,8 @@ async fn start_dht_node(
     autonat_servers: Option<Vec<String>>,
     proxy_address: Option<String>,
     is_bootstrap: Option<bool>,
+    chunk_size_kb: Option<usize>,
+    cache_size_mb: Option<usize>,
 ) -> Result<String, String> {
     {
         let dht_guard = state.dht.lock().await;
@@ -619,6 +626,8 @@ async fn start_dht_node(
         autonat_server_list,
         final_proxy_address,
         file_transfer_service,
+        chunk_size_kb,
+        cache_size_mb,
     )
     .await
     .map_err(|e| format!("Failed to start DHT: {}", e))?;
@@ -1787,7 +1796,7 @@ async fn upload_file_chunk(
     if let Some(dht) = state.dht.lock().await.as_ref() {
         // Create a block from the chunk data
         use dht::{split_into_blocks, StringBlock};
-        let blocks = split_into_blocks(&chunk_data);
+        let blocks = split_into_blocks(&chunk_data, dht.chunk_size());
 
         for block in blocks.iter() {
             let cid = match block.cid() {
@@ -2331,6 +2340,11 @@ async fn logout(state: State<'_, AppState>) -> Result<(), ()> {
     // Clear private key from memory
     let mut active_key = state.active_account_private_key.lock().await;
     *active_key = None;
+
+    // Clear private key from WebRTC service
+    if let Some(webrtc_service) = state.webrtc.lock().await.as_ref() {
+        webrtc_service.set_active_private_key(None).await;
+    }
 
     Ok(())
 }
