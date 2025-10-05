@@ -293,7 +293,8 @@
         try {
           const peerId = await dhtService.start({
             port: dhtPort,
-            bootstrapNodes: DEFAULT_BOOTSTRAP_NODES
+            bootstrapNodes: DEFAULT_BOOTSTRAP_NODES,
+            enableAutonat: true  // Enable AutoNAT to activate DCUtR
           })
           dhtPeerId = peerId
           // Also ensure the service knows its own peer ID
