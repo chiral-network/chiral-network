@@ -59,6 +59,7 @@ export interface WalletInfo {
   miningRewards?: number;
   reputation?: number;
   totalEarned?: number;
+  totalSpent?: number;
 }
 
 export interface ETCAccount {
