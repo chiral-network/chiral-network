@@ -268,21 +268,13 @@ Permission Model:
 sequenceDiagram
     participant Client
     participant FileService
-    participant StorageNode
     participant DHT
-    participant Blockchain
 
     Client->>+FileService: Upload File
+    FileService->>FileService: Chunk and/or Encrypt chunk file into 256 KB pieces
     FileService->>FileService: Generate Merkle Root from original chunk hashes
-    FileService->>FileService: Chunk file into 256KB pieces
-    FileService->>FileService: Encrypt and chunk file into 256 KB pieces
-    FileService->>FileService: Encrypt each chunk
-    FileService->>+StorageNode: Upload encrypted chunks
-    StorageNode-->>-FileService: Confirm chunk storage
     FileService->>+DHT: Register File Manifest (Merkle Root, Chunk Hashes)
     DHT-->>-FileService: Confirm Registration
-    FileService->>+Blockchain: Create Payment TX
-    Blockchain-->>-FileService: TX Confirmed
     FileService-->>-Client: Upload Complete
 ```
 
@@ -293,18 +285,17 @@ sequenceDiagram
     participant Client
     participant FileService
     participant DHT
-    participant StorageNode
+    participant ProviderNode
     participant Blockchain
 
     Client->>+FileService: Request File (Merkle Root)
     FileService->>+DHT: Lookup File Manifest
     DHT-->>-FileService: Return Manifest (includes chunk hashes)
-    FileService->>+StorageNode: Request encrypted chunks
-    StorageNode-->>-FileService: Send available encrypted chunks
+    FileService->>+ProviderNode: Request encrypted chunks
+    ProviderNode-->>-FileService: Send available encrypted chunks
     FileService->>FileService: Decrypt individual chunks
-    FileService->>FileService: Decrypt and reassemble original file from chunks
     FileService->>FileService: Verify chunk hash against original hash in manifest
-    FileService->>FileService: Assemble file from verified chunks
+    FileService->>FileService: Assemble original file from verified chunks
     FileService->>+Blockchain: Send Payment
     Blockchain-->>-FileService: Payment Confirmed
     FileService-->>-Client: File Ready
