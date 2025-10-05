@@ -3,13 +3,13 @@ use blockstore::{
     block::{Block, CidError},
     Blockstore, InMemoryBlockstore,
 };
-use cid::Cid;
+pub use cid::Cid;
 use futures::future::{BoxFuture, FutureExt};
 use futures::io::{AsyncRead as FAsyncRead, AsyncWrite as FAsyncWrite};
 use futures::{AsyncReadExt as _, AsyncWriteExt as _};
 use futures_util::StreamExt;
 use libp2p::multiaddr::Protocol;
-use multihash_codetable::{Code, MultihashDigest};
+pub use multihash_codetable::{Code, MultihashDigest};
 use relay::client::Event as RelayClientEvent;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -66,14 +66,15 @@ use libp2p::{
 use rand::rngs::OsRng;
 const EXPECTED_PROTOCOL_VERSION: &str = "/chiral/1.0.0";
 const MAX_MULTIHASH_LENGHT: usize = 64;
-const RAW_CODEC: u64 = 0x55;
+pub const RAW_CODEC: u64 = 0x55;
 const CHUNK_SIZE: usize = 256 * 1024; // 256 KiB (262144 bytes)
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileMetadata {
-    /// The Merkle root of the file's chunks, which serves as its unique identifier.
-    pub file_hash: String, // This is the Merkle Root
+    /// The CID (Content Identifier) used for retrieval from the DHT/Bitswap network.
+    /// This is the root CID that points to a block containing child chunk CIDs.
+    pub file_hash: String, // This is the root CID
     pub file_name: String,
     pub file_size: u64,
     pub file_data: Vec<u8>, // holds the actual file data
@@ -86,6 +87,8 @@ pub struct FileMetadata {
     pub encryption_method: Option<String>,
     /// Fingerprint of the encryption key for identification
     pub key_fingerprint: Option<String>,
+    /// The Merkle root hash for integrity verification (optional, separate from file_hash)
+    pub merkle_root: Option<String>,
     // --- VERSIONING FIELDS ---
     pub version: Option<u32>,
     pub parent_hash: Option<String>,
@@ -885,8 +888,12 @@ async fn run_dht_node(
                         break 'outer;
                     }
                     Some(DhtCommand::PublishFile(mut metadata)) => {
-                        // If file_data is empty (encrypted files), skip block creation and use the provided hash as-is
+                        // If file_data is NOT empty (non-encrypted files or inline data),
+                        // create blocks and generate a root CID
                         if !metadata.file_data.is_empty() {
+                            // Store the Merkle root before processing
+                            let original_merkle_root = metadata.merkle_root.clone();
+
                             let blocks = split_into_blocks(&metadata.file_data);
                             let mut block_cids = Vec::new();
                             for (idx, block) in blocks.iter().enumerate() {
@@ -934,11 +941,21 @@ async fn run_dht_node(
                             // Clear file data and set file hash to root CID
                             metadata.file_data.clear();
                             metadata.file_hash = root_cid.to_string();
+                            // Preserve the Merkle root if it was provided
+                            if original_merkle_root.is_some() {
+                                metadata.merkle_root = original_merkle_root;
+                            }
                             // Don't store CIDs in metadata - they're in the root block now
                             metadata.cids = None;
+
+                            println!("Publishing file with root CID: {} (merkle_root: {:?})",
+                                metadata.file_hash, metadata.merkle_root);
                         } else {
-                            // For encrypted files with empty file_data, use the provided hash as-is (Merkle root)
-                            println!("Publishing encrypted file with hash: {}", metadata.file_hash);
+                            // File data is empty - chunks and root block are already in Bitswap
+                            // (from streaming upload or pre-processed encrypted file)
+                            // Use the provided file_hash (which should already be a CID)
+                            println!("Publishing file with pre-computed CID: {} (merkle_root: {:?})",
+                                metadata.file_hash, metadata.merkle_root);
                         }
 
                         // Store minimal metadata in DHT
@@ -1642,6 +1659,7 @@ async fn handle_kademlia_event(
                                     is_encrypted: metadata_json.get("is_encrypted").and_then(|v| v.as_bool()).unwrap_or(false),
                                     encryption_method: metadata_json.get("encryption_method").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                     key_fingerprint: metadata_json.get("key_fingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                    merkle_root: metadata_json.get("merkle_root").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                     version: metadata_json.get("version").and_then(|v| v.as_u64()).map(|v| v as u32),
                                     parent_hash: metadata_json.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                     cids: None, // CIDs are in the root block
@@ -2448,6 +2466,7 @@ impl DhtService {
             is_encrypted,
             encryption_method,
             key_fingerprint,
+            merkle_root: None,
             version: Some(version),
             parent_hash,
             cids: None,
