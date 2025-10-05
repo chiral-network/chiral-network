@@ -131,7 +131,10 @@
       "unknown": "未知",
       "joined": "加入",
       "now": "现在",
-      "noPeers": "没有已连接节点。运行发现以找到节点。"
+      "noPeers": "没有已连接节点。运行发现以找到节点。",
+      "disconnect": "断开连接",
+      "disconnected": "成功断开与节点的连接",
+      "disconnectError": "断开节点连接失败"
     },
     "errors": {
       "downloadOnlyTauri": "Chiral节点下载仅在桌面应用中可用。请下载并运行Tauri桌面版本。"
@@ -184,7 +187,6 @@
   },
   "privacy.title": "隐私与安全",
   "privacy.enableProxy": "启用代理路由以保持匿名",
-  "privacy.enableEncryption": "启用端到端加密",
   "privacy.anonymousMode": "匿名模式（隐藏所有身份信息）",
   "privacy.shareAnalytics": "共享匿名使用分析",
   "notifications.title": "通知",

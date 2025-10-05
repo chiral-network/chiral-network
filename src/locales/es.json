@@ -131,7 +131,10 @@
       "unknown": "Desconocido",
       "joined": "Unido",
       "now": "Ahora",
-      "noPeers": "No hay pares conectados. Ejecuta descubrimiento para encontrar pares."
+      "noPeers": "No hay pares conectados. Ejecuta descubrimiento para encontrar pares.",
+      "disconnect": "Desconectar",
+      "disconnected": "Desconectado exitosamente del par",
+      "disconnectError": "Error al desconectar del par"
     },
     "errors": {
       "downloadOnlyTauri": "La descarga del Nodo Chiral solo está disponible en la aplicación de escritorio. Descarga y ejecuta la versión de escritorio Tauri."
@@ -184,7 +187,6 @@
   },
   "privacy.title": "Privacidad y seguridad",
   "privacy.enableProxy": "Habilitar enrutamiento por proxy para anonimato",
-  "privacy.enableEncryption": "Habilitar cifrado de extremo a extremo",
   "privacy.anonymousMode": "Modo anónimo (ocultar toda información identificativa)",
   "privacy.shareAnalytics": "Compartir analíticas de uso anónimas",
   "notifications.title": "Notificaciones",
@@ -610,7 +612,7 @@
     "addFilesHint2": "Agrega archivos para empezar a compartir en la red",
     "duplicateSkipped": "{count, plural, one {Este archivo ya se está compartiendo. Duplicado omitido.} other {Se omitieron {count} archivos duplicados.}}",
     "filesAdded": "{count, plural, one {Se agregó 1 archivo a la lista de compartidos.} other {Se agregaron {count} archivos a la lista de compartidos.}}",
-    "fileFailed": "No se pudo compartir '{name}': {error}",
+    "fileFailed": "No se pudo compartir {name}: {error}",
     "storage": {
       "title": "Almacenamiento local",
       "available": "{space} GB libres",

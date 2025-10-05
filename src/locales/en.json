@@ -163,7 +163,10 @@
       "unknown": "Unknown",
       "joined": "Joined",
       "now": "Now",
-      "noPeers": "No peers connected. Run discovery to find peers."
+      "noPeers": "No peers connected. Run discovery to find peers.",
+      "disconnect": "Disconnect",
+      "disconnected": "Successfully disconnected from peer",
+      "disconnectError": "Failed to disconnect from peer"
     },
     "errors": {
       "downloadOnlyTauri": "Chiral Node download is only available in the desktop app. Please download and run the Tauri desktop version."
@@ -322,7 +325,6 @@
   },
   "privacy.title": "Privacy & Security",
   "privacy.enableProxy": "Enable proxy routing for anonymity",
-  "privacy.enableEncryption": "Enable end-to-end encryption",
   "privacy.anonymousMode": "Anonymous mode (hide all identifying information)",
   "privacy.shareAnalytics": "Share anonymous usage analytics",
   "notifications.title": "Notifications",
@@ -776,7 +778,7 @@
     "addFilesHint2": "Add files to start sharing on the network",
     "duplicateSkipped": "{count, plural, one {1 duplicate file was skipped.} other {{count} duplicate files were skipped.}}",
     "filesAdded": "{count, plural, one {Added 1 file to the share list.} other {Added {count} files to the share list.}}",
-    "fileFailed": "Failed to share '{name}': {error}",
+    "fileFailed": "Failed to share {name}: {error}",
     "storage": {
       "title": "Local Storage",
       "available": "{space} GB free",

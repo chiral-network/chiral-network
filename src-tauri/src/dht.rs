@@ -10,10 +10,10 @@ use futures::{AsyncReadExt as _, AsyncWriteExt as _};
 use futures_util::StreamExt;
 use libp2p::multiaddr::Protocol;
 use multihash_codetable::{Code, MultihashDigest};
+use relay::client::Event as RelayClientEvent;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, SocketAddr};
-use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -45,7 +45,10 @@ use libp2p::{
     core::{
         muxing::StreamMuxerBox,
         // FIXED E0432: ListenerEvent is removed, only import what is available.
-        transport::{Boxed, DialOpts, ListenerId, Transport, TransportError, TransportEvent},
+        transport::{
+            choice::OrTransport, Boxed, DialOpts, ListenerId, Transport, TransportError,
+            TransportEvent,
+        },
     },
     identify::{self, Event as IdentifyEvent},
     identity,
@@ -56,7 +59,7 @@ use libp2p::{
     mdns::{tokio::Behaviour as Mdns, Event as MdnsEvent},
     noise,
     ping::{self, Behaviour as Ping, Event as PingEvent},
-    request_response as rr,
+    relay, request_response as rr,
     swarm::{behaviour::toggle, NetworkBehaviour, SwarmEvent},
     tcp, Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
 };
@@ -87,6 +90,7 @@ pub struct FileMetadata {
     pub version: Option<u32>,
     pub parent_hash: Option<String>,
     pub cids: Option<Vec<Cid>>, // list of CIDs for all chunks
+    pub is_root: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -146,6 +150,7 @@ struct DhtBehaviour {
     webrtc_signaling_rr: rr::Behaviour<WebRTCSignalingCodec>,
     autonat_client: toggle::Toggle<v2::client::Behaviour>,
     autonat_server: toggle::Toggle<v2::server::Behaviour>,
+    relay_client: relay::client::Behaviour,
 }
 #[derive(Debug)]
 pub enum DhtCommand {
@@ -175,6 +180,7 @@ pub enum DhtCommand {
         target_peer_id: PeerId,
         message: serde_json::Value,
     },
+    StoreBlock { cid: Cid, data: Vec<u8> },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -227,7 +233,9 @@ pub enum DhtEvent {
 struct ProxyManager {
     targets: std::collections::HashSet<PeerId>,
     capable: std::collections::HashSet<PeerId>,
-    online:  std::collections::HashSet<PeerId>,
+    online: std::collections::HashSet<PeerId>,
+    relay_pending: std::collections::HashSet<PeerId>,
+    relay_ready: std::collections::HashSet<PeerId>,
 }
 
 impl ProxyManager {
@@ -250,9 +258,24 @@ impl ProxyManager {
         self.targets.remove(id);
         self.capable.remove(id);
         self.online.remove(id);
+        self.relay_pending.remove(id);
+        self.relay_ready.remove(id);
     }
     fn is_proxy(&self, id: &PeerId) -> bool {
         self.targets.contains(id) || self.capable.contains(id)
+    }
+    fn mark_relay_pending(&mut self, id: PeerId) -> bool {
+        if self.relay_ready.contains(&id) {
+            return false;
+        }
+        self.relay_pending.insert(id)
+    }
+    fn mark_relay_ready(&mut self, id: PeerId) -> bool {
+        self.relay_pending.remove(&id);
+        self.relay_ready.insert(id)
+    }
+    fn has_relay_request(&self, id: &PeerId) -> bool {
+        self.relay_pending.contains(id) || self.relay_ready.contains(id)
     }
 }
 
@@ -265,7 +288,6 @@ struct PendingEcho {
 type ProxyMgr = Arc<Mutex<ProxyManager>>;
 
 // ----------------------------------------------------------
-
 
 #[derive(Debug, Clone)]
 enum SearchResponse {
@@ -560,6 +582,100 @@ fn addr_to_socket_addr(addr: &libp2p::Multiaddr) -> Option<SocketAddr> {
     }
 }
 
+fn build_relay_listen_addr(base: &Multiaddr) -> Option<Multiaddr> {
+    let mut addr = base.clone();
+    match addr.pop() {
+        Some(libp2p::multiaddr::Protocol::P2p(_)) => {
+            addr.push(libp2p::multiaddr::Protocol::P2pCircuit);
+            Some(addr)
+        }
+        _ => None,
+    }
+}
+
+fn extract_relay_peer(address: &Multiaddr) -> Option<PeerId> {
+    use libp2p::multiaddr::Protocol;
+
+    let mut last_p2p: Option<PeerId> = None;
+    for protocol in address.iter() {
+        match protocol {
+            Protocol::P2p(peer_id) => {
+                last_p2p = Some(peer_id.clone());
+            }
+            Protocol::P2pCircuit => {
+                return last_p2p.clone();
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+enum RelayTransportOutput {
+    Relay(relay::client::Connection),
+    Direct(Box<dyn AsyncIo>),
+}
+
+impl FAsyncRead for RelayTransportOutput {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<Result<usize, std::io::Error>> {
+        // SAFETY: We never move the inner value after pinning, so projecting via
+        // `get_unchecked_mut` and re-pinning each variant is sound.
+        unsafe {
+            match self.get_unchecked_mut() {
+                RelayTransportOutput::Relay(conn) => Pin::new_unchecked(conn).poll_read(cx, buf),
+                RelayTransportOutput::Direct(stream) => {
+                    Pin::new_unchecked(stream.as_mut()).poll_read(cx, buf)
+                }
+            }
+        }
+    }
+}
+
+impl FAsyncWrite for RelayTransportOutput {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, std::io::Error>> {
+        unsafe {
+            match self.get_unchecked_mut() {
+                RelayTransportOutput::Relay(conn) => Pin::new_unchecked(conn).poll_write(cx, buf),
+                RelayTransportOutput::Direct(stream) => {
+                    Pin::new_unchecked(stream.as_mut()).poll_write(cx, buf)
+                }
+            }
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
+        // SAFETY: See comment in `poll_read`; variants remain pinned in place.
+        unsafe {
+            match self.get_unchecked_mut() {
+                RelayTransportOutput::Relay(conn) => Pin::new_unchecked(conn).poll_flush(cx),
+                RelayTransportOutput::Direct(stream) => {
+                    Pin::new_unchecked(stream.as_mut()).poll_flush(cx)
+                }
+            }
+        }
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
+        // SAFETY: See comment in `poll_read`; variants remain pinned in place.
+        unsafe {
+            match self.get_unchecked_mut() {
+                RelayTransportOutput::Relay(conn) => Pin::new_unchecked(conn).poll_close(cx),
+                RelayTransportOutput::Direct(stream) => {
+                    Pin::new_unchecked(stream.as_mut()).poll_close(cx)
+                }
+            }
+        }
+    }
+}
+
 impl DhtMetricsSnapshot {
     fn from(metrics: DhtMetrics, peer_count: usize) -> Self {
         fn to_secs(ts: SystemTime) -> Option<u64> {
@@ -792,26 +908,59 @@ async fn run_dht_node(
                             };
                             block_cids.push(cid);
                         }
-                        metadata.cids = Some(block_cids);
-                        metadata.file_data.clear(); // clear out the actual file data to save space in dht
 
-                        let root_block_data = match serde_json::to_vec(&metadata) {
+                        // Create root block containing just the CIDs
+                        let root_block_data = match serde_json::to_vec(&block_cids) {
                             Ok(data) => data,
                             Err(e) => {
-                                eprintln!("Failed to serialize metadata: {}", e);
+                                eprintln!("Failed to serialize CIDs: {}", e);
                                 return;
                             }
                         };
 
+                        // Store root block in Bitswap
                         let root_cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&root_block_data));
-                        metadata.file_hash = root_cid.to_string();
+                        match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(root_cid.clone(), root_block_data) {
+                            Ok(_) => {},
+                            Err(e) => {
+                                error!("failed to store root block: {}", e);
+                                let _ = event_tx.send(DhtEvent::Error(format!("failed to store root block: {}", e))).await;
+                                return;
+                            }
+                        }
 
-                        // store this new root block in dht
+                        // Clear file data and set file hash to root CID
+                        metadata.file_data.clear();
+                        metadata.file_hash = root_cid.to_string();
+                        // Don't store CIDs in metadata - they're in the root block now
+                        metadata.cids = None;
+
+                        // Store minimal metadata in DHT
+                        let dht_metadata = serde_json::json!({
+                            "file_hash": metadata.file_hash,
+                            "file_name": metadata.file_name,
+                            "file_size": metadata.file_size,
+                            "created_at": metadata.created_at,
+                            "mime_type": metadata.mime_type,
+                            "is_encrypted": metadata.is_encrypted,
+                            "encryption_method": metadata.encryption_method,
+                            "key_fingerprint": metadata.key_fingerprint,
+                            "version": metadata.version,
+                            "parent_hash": metadata.parent_hash
+                        });
+
+                        let dht_record_data = match serde_json::to_vec(&dht_metadata) {
+                            Ok(data) => data,
+                            Err(e) => {
+                                eprintln!("Failed to serialize DHT metadata: {}", e);
+                                return;
+                            }
+                        };
 
                         let key = kad::RecordKey::new(&metadata.file_hash.as_bytes());
                         let record = Record {
                                     key,
-                                    value: root_block_data,
+                                    value: dht_record_data,
                                     publisher: Some(peer_id),
                                     expires: None,
                                 };
@@ -830,15 +979,24 @@ async fn run_dht_node(
                     Some(DhtCommand::DownloadFile(file_metadata)) =>{
                         // currently only able to process one download at a time
                         current_metadata = Some(file_metadata.clone());
-                        if let Some(cids) = &file_metadata.cids {
-                            for (i, cid) in cids.iter().enumerate() {
-                                let query_id = swarm.behaviour_mut().bitswap.get(cid);
-                                queries.insert(query_id, i as u32);
+
+                        // Get root CID from file hash
+                        let root_cid: Cid = match file_metadata.file_hash.parse() {
+                            Ok(cid) => cid,
+                            Err(e) => {
+                                error!("Invalid root CID in file metadata: {}", e);
+                                let _ = event_tx.send(DhtEvent::Error(format!("Invalid root CID: {}", e))).await;
+                                return;
                             }
-                        } else {
-                            error!("No CIDs found in file metadata");
-                            let _ = event_tx.send(DhtEvent::Error("No CIDs found in file metadata".to_string())).await;
-                        }
+                        };
+
+                        // Request the root block which contains the CIDs
+                        let root_query_id = swarm.behaviour_mut().bitswap.get(&root_cid);
+                        info!("Requesting root block for file: {}", file_metadata.file_hash);
+
+                        // Store the root query ID to handle when we get the root block
+                        // We'll need to modify the Bitswap handling to distinguish root blocks from data blocks
+                        // For now, we'll handle this in the Bitswap event handler
                     }
 
                     Some(DhtCommand::StopPublish(file_hash)) => {
@@ -855,31 +1013,93 @@ async fn run_dht_node(
                     Some(DhtCommand::ConnectPeer(addr)) => {
                         info!("Attempting to connect to: {}", addr);
                         if let Ok(multiaddr) = addr.parse::<Multiaddr>() {
-                            if let Some(p2p) = multiaddr.iter().find_map(|p| {
-                                if let libp2p::multiaddr::Protocol::P2p(peer) = p { Some(peer) } else { None }
-                            }) {
-                                proxy_mgr.lock().await.set_target(PeerId::from(p2p));
+                            let maybe_peer_id = multiaddr.iter().find_map(|p| {
+                                if let libp2p::multiaddr::Protocol::P2p(peer_id) = p {
+                                    Some(peer_id.clone())
+                                } else {
+                                    None
+                                }
+                            });
+
+                            if let Some(peer_id) = maybe_peer_id.clone() {
+                                let mut mgr = proxy_mgr.lock().await;
+                                mgr.set_target(peer_id);
+                                let should_request = !mgr.has_relay_request(&peer_id);
+                                if should_request {
+                                    mgr.mark_relay_pending(peer_id);
+                                }
+                                drop(mgr);
+
+                                if should_request {
+                                    if let Some(relay_addr) = build_relay_listen_addr(&multiaddr) {
+                                        match swarm.listen_on(relay_addr.clone()) {
+                                            Ok(_) => {
+                                                info!(
+                                                    "Requested relay reservation via {}",
+                                                    relay_addr
+                                                );
+                                                let _ = event_tx
+                                                    .send(DhtEvent::ProxyStatus {
+                                                        id: peer_id.to_string(),
+                                                        address: relay_addr.to_string(),
+                                                        status: "relay_pending".into(),
+                                                        latency_ms: None,
+                                                        error: None,
+                                                    })
+                                                    .await;
+                                            }
+                                            Err(err) => {
+                                                warn!(
+                                                    "Failed to request relay reservation via {}: {}",
+                                                    relay_addr, err
+                                                );
+                                                let mut mgr = proxy_mgr.lock().await;
+                                                mgr.relay_pending.remove(&peer_id);
+                                                let _ = event_tx
+                                                    .send(DhtEvent::ProxyStatus {
+                                                        id: peer_id.to_string(),
+                                                        address: relay_addr.to_string(),
+                                                        status: "relay_error".into(),
+                                                        latency_ms: None,
+                                                        error: Some(err.to_string()),
+                                                    })
+                                                    .await;
+                                            }
+                                        }
+                                    } else {
+                                        warn!(
+                                            "Cannot derive relay listen address from {}",
+                                            multiaddr
+                                        );
+                                    }
+                                }
                             }
+
                             match swarm.dial(multiaddr.clone()) {
                                 Ok(_) => {
-                                    info!("✓ Initiated connection to: {}", addr);
+                                    info!("Requested connection to: {}", addr);
                                     info!("  Multiaddr: {}", multiaddr);
                                     info!("  Waiting for ConnectionEstablished event...");
                                 }
                                 Err(e) => {
-                                    error!("✗ Failed to dial {}: {}", addr, e);
-                                    let _ = event_tx.send(DhtEvent::Error(format!("Failed to connect: {}", e))).await;
+                                    error!("Failed to dial {}: {}", addr, e);
+                                    let _ = event_tx
+                                        .send(DhtEvent::Error(format!("Failed to connect: {}", e)))
+                                        .await;
                                 }
                             }
                         } else {
-                            error!("✗ Invalid multiaddr format: {}", addr);
-                            let _ = event_tx.send(DhtEvent::Error(format!("Invalid address: {}", addr))).await;
+                            error!("Invalid multiaddr format: {}", addr);
+                            let _ = event_tx
+                                .send(DhtEvent::Error(format!("Invalid address: {}", addr)))
+                                .await;
                         }
                     }
                     Some(DhtCommand::DisconnectPeer(peer_id)) => {
                         let _ = swarm.disconnect_peer_id(peer_id.clone());
                         proxy_mgr.lock().await.remove_all(&peer_id);
                     }
+
 
                     Some(DhtCommand::GetPeerCount(tx)) => {
                         let count = connected_peers.lock().await.len();
@@ -921,6 +1141,16 @@ async fn run_dht_node(
                             }
                         }
                     }
+                    Some(DhtCommand::StoreBlock { cid, data }) => {
+                        match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(cid, data) {
+                            Ok(_) => {
+                                debug!("Successfully stored block in Bitswap");
+                            }
+                            Err(e) => {
+                                error!("Failed to store block in Bitswap: {}", e);
+                            }
+                        }
+                    }
                     None => {
                         info!("DHT command channel closed; shutting down node task");
                         break 'outer;
@@ -946,44 +1176,100 @@ async fn run_dht_node(
                             handle_mdns_event(mdns_event, &mut swarm, &event_tx).await;
                         }
                     }
+                    SwarmEvent::Behaviour(DhtBehaviourEvent::RelayClient(relay_event)) => {
+                        match relay_event {
+                            RelayClientEvent::ReservationReqAccepted { relay_peer_id, .. } => {
+                                let mut mgr = proxy_mgr.lock().await;
+                                let newly_ready = mgr.mark_relay_ready(relay_peer_id);
+                                drop(mgr);
+                                if newly_ready {
+                                    let _ = event_tx
+                                        .send(DhtEvent::ProxyStatus {
+                                            id: relay_peer_id.to_string(),
+                                            address: String::new(),
+                                            status: "relay_ready".into(),
+                                            latency_ms: None,
+                                            error: None,
+                                        })
+                                        .await;
+                                }
+                            }
+                            RelayClientEvent::OutboundCircuitEstablished { relay_peer_id, .. } => {
+                                proxy_mgr.lock().await.set_online(relay_peer_id);
+                                let _ = event_tx
+                                    .send(DhtEvent::ProxyStatus {
+                                        id: relay_peer_id.to_string(),
+                                        address: String::new(),
+                                        status: "relay_circuit".into(),
+                                        latency_ms: None,
+                                        error: None,
+                                    })
+                                    .await;
+                            }
+                            RelayClientEvent::InboundCircuitEstablished { src_peer_id, .. } => {
+                                let _ = event_tx
+                                    .send(DhtEvent::ProxyStatus {
+                                        id: src_peer_id.to_string(),
+                                        address: String::new(),
+                                        status: "relay_inbound".into(),
+                                        latency_ms: None,
+                                        error: None,
+                                    })
+                                    .await;
+                            }
+                        }
+                    }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) => match bitswap {
                         beetswap::Event::GetQueryResponse { query_id, data } => {
                             // Handle successful Bitswap response
-                            match queries.get(&query_id) {
-                                Some(index) => {
-                                    downloaded_chunks.insert(*index as usize, data.clone());
-                                    queries.remove(&query_id);
-                                    if queries.is_empty() {
-                                        info!("all requested cids have been downloaded.");
-                                        // reassemble file from downloaded chunks
-                                        let mut file = Vec::new();
-                                        for i in 0..=downloaded_chunks.len()-1 {
-                                            file.extend_from_slice(&downloaded_chunks.remove(&i).unwrap());
-                                        }
-                                        if let Some(metadata) = current_metadata.as_mut() {
-                                                metadata.file_data = file; // OK, file_data is Vec<u8>
-                                            }
-                                        if let Some(metadata) = current_metadata.take() {
-                                            let _ = event_tx.send(DhtEvent::DownloadedFile(metadata)).await;
-                                        }
-                                        downloaded_chunks.clear();
-                                        current_metadata = None;
+                            if let Some(metadata) = &current_metadata {
+                                // Check if this is the root block (contains CIDs array)
+                                if let Ok(cids) = serde_json::from_slice::<Vec<Cid>>(&data) {
+                                    info!("Received root block with {} CIDs", cids.len());
+                                    // This is the root block containing CIDs - request all data blocks
+                                    for (i, cid) in cids.iter().enumerate() {
+                                        let block_query_id = swarm.behaviour_mut().bitswap.get(cid);
+                                        queries.insert(block_query_id, i as u32);
                                     }
-                                }
-                                None => {
+                                } else {
+                                    // This is a regular data block
+                                    match queries.get(&query_id) {
+                                        Some(index) => {
+                                            downloaded_chunks.insert(*index as usize, data.clone());
+                                            queries.remove(&query_id);
+                                            if queries.is_empty() {
+                                                info!("all requested cids have been downloaded.");
+                                                // reassemble file from downloaded chunks
+                                                let mut file = Vec::new();
+                                                for i in 0..=downloaded_chunks.len()-1 {
+                                                    file.extend_from_slice(&downloaded_chunks.remove(&i).unwrap());
+                                                }
+                                                if let Some(metadata) = current_metadata.as_mut() {
+                                                        metadata.file_data = file; // OK, file_data is Vec<u8>
+                                                    }
+                                                if let Some(metadata) = current_metadata.take() {
+                                                    let _ = event_tx.send(DhtEvent::DownloadedFile(metadata)).await;
+                                                }
+                                                downloaded_chunks.clear();
+                                                current_metadata = None;
+                                            }
+                                        }
+                                        None => {
+                                            // This might be an unexpected block - ignore for now
+                                        }
+                                    }
                                 }
                             }
 
+                            info!("Bitswap query {:?} succeeded - received {} bytes", query_id, data.len());
 
-                            // info!("Bitswap query {:?} succeeded - received {} bytes", query_id, data.len());
-
-                            // // Process the received data - this is a file chunk that was requested
-                            // // Parse the chunk data and assemble the complete file
-                            // if let Some(ref ft_service) = file_transfer_service {
-                            //     process_bitswap_chunk(&query_id, &data, &event_tx, &received_chunks, ft_service).await;
-                            // } else {
-                            //     warn!("File transfer service not available, cannot process Bitswap chunk");
-                            // }
+                            // Process the received data - this is a file chunk that was requested
+                            // Parse the chunk data and assemble the complete file
+                            if let Some(ref ft_service) = file_transfer_service {
+                                process_bitswap_chunk(&query_id, &data, &event_tx, &received_chunks, ft_service).await;
+                            } else {
+                                warn!("File transfer service not available, cannot process Bitswap chunk");
+                            }
                         }
                         beetswap::Event::GetQueryError { query_id, error } => {
                             // Handle Bitswap query error
@@ -1056,10 +1342,12 @@ async fn run_dht_node(
                         debug!(?ev, "AutoNAT server event");
                     }
                     SwarmEvent::ExternalAddrConfirmed { address, .. } => {
-                        handle_external_addr_confirmed(&address, &metrics, &event_tx).await;
+                        handle_external_addr_confirmed(&address, &metrics, &event_tx, &proxy_mgr)
+                            .await;
                     }
                     SwarmEvent::ExternalAddrExpired { address, .. } => {
-                        handle_external_addr_expired(&address, &metrics, &event_tx).await;
+                        handle_external_addr_expired(&address, &metrics, &event_tx, &proxy_mgr)
+                            .await;
                     }
                     SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                         info!("✅ CONNECTION ESTABLISHED with peer: {}", peer_id);
@@ -1097,6 +1385,7 @@ async fn run_dht_node(
                             peers.remove(&peer_id);
                             peers.len()
                         };
+                        proxy_mgr.lock().await.remove_all(&peer_id);
                         info!("   Remaining connected peers: {}", peers_count);
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
@@ -1315,23 +1604,48 @@ async fn handle_kademlia_event(
             match result {
                 QueryResult::GetRecord(Ok(ok)) => match ok {
                     GetRecordOk::FoundRecord(peer_record) => {
-                        // Try to parse file metadata from record value
-                        if let Ok(metadata) =
-                            serde_json::from_slice::<FileMetadata>(&peer_record.record.value)
-                        {
-                            let notify_metadata = metadata.clone();
-                            let file_hash = notify_metadata.file_hash.clone();
-                            let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
+                        // Try to parse DHT record as essential metadata JSON
+                        if let Ok(metadata_json) = serde_json::from_slice::<serde_json::Value>(&peer_record.record.value) {
+                            // Construct FileMetadata from the JSON
+                            if let (Some(file_hash), Some(file_name), Some(file_size), Some(created_at)) = (
+                                metadata_json.get("file_hash").and_then(|v| v.as_str()),
+                                metadata_json.get("file_name").and_then(|v| v.as_str()),
+                                metadata_json.get("file_size").and_then(|v| v.as_u64()),
+                                metadata_json.get("created_at").and_then(|v| v.as_u64()),
+                            ) {
+                                let metadata = FileMetadata {
+                                    file_hash: file_hash.to_string(),
+                                    file_name: file_name.to_string(),
+                                    file_size,
+                                    file_data: Vec::new(), // Will be populated during download
+                                    seeders: vec![peer_record.peer.map(|p| p.to_string()).unwrap_or_default()],
+                                    created_at,
+                                    mime_type: metadata_json.get("mime_type").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                    is_encrypted: metadata_json.get("is_encrypted").and_then(|v| v.as_bool()).unwrap_or(false),
+                                    encryption_method: metadata_json.get("encryption_method").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                    key_fingerprint: metadata_json.get("key_fingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                    version: metadata_json.get("version").and_then(|v| v.as_u64()).map(|v| v as u32),
+                                    parent_hash: metadata_json.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                    cids: None, // CIDs are in the root block
+                                    is_root: metadata_json.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
+                                };
 
-                            // only for synchronous_search_metadata
-                            notify_pending_searches(
-                                pending_searches,
-                                &file_hash,
-                                SearchResponse::Found(notify_metadata),
-                            )
-                            .await;
+                                let notify_metadata = metadata.clone();
+                                let file_hash = notify_metadata.file_hash.clone();
+                                let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
+
+                                // only for synchronous_search_metadata
+                                notify_pending_searches(
+                                    pending_searches,
+                                    &file_hash,
+                                    SearchResponse::Found(notify_metadata),
+                                )
+                                .await;
+                            } else {
+                                debug!("DHT record missing required fields");
+                            }
                         } else {
-                            debug!("Received non-file metadata record");
+                            debug!("Received non-JSON DHT record");
                         }
                     }
                     GetRecordOk::FinishedWithNoAdditionalRecord { .. } => {
@@ -1541,6 +1855,7 @@ async fn handle_external_addr_confirmed(
     addr: &Multiaddr,
     metrics: &Arc<Mutex<DhtMetrics>>,
     event_tx: &mpsc::Sender<DhtEvent>,
+    proxy_mgr: &ProxyMgr,
 ) {
     let mut metrics_guard = metrics.lock().await;
     let nat_enabled = metrics_guard.autonat_enabled;
@@ -1556,24 +1871,43 @@ async fn handle_external_addr_confirmed(
     let last_error = metrics_guard.last_reachability_error.clone();
     drop(metrics_guard);
 
-    if !nat_enabled {
-        return;
+    if nat_enabled {
+        let _ = event_tx
+            .send(DhtEvent::NatStatus {
+                state,
+                confidence,
+                last_error,
+                summary: summary.clone(),
+            })
+            .await;
     }
 
-    let _ = event_tx
-        .send(DhtEvent::NatStatus {
-            state,
-            confidence,
-            last_error,
-            summary,
-        })
-        .await;
+    if let Some(relay_peer_id) = extract_relay_peer(addr) {
+        let mut mgr = proxy_mgr.lock().await;
+        let newly_ready = mgr.mark_relay_ready(relay_peer_id.clone());
+        drop(mgr);
+        let status = if newly_ready {
+            "relay_ready"
+        } else {
+            "relay_address"
+        };
+        let _ = event_tx
+            .send(DhtEvent::ProxyStatus {
+                id: relay_peer_id.to_string(),
+                address: addr.to_string(),
+                status: status.into(),
+                latency_ms: None,
+                error: None,
+            })
+            .await;
+    }
 }
 
 async fn handle_external_addr_expired(
     addr: &Multiaddr,
     metrics: &Arc<Mutex<DhtMetrics>>,
     event_tx: &mpsc::Sender<DhtEvent>,
+    proxy_mgr: &ProxyMgr,
 ) {
     let summary_text = format!("External address expired: {}", addr);
     let mut metrics_guard = metrics.lock().await;
@@ -1590,16 +1924,30 @@ async fn handle_external_addr_expired(
         let last_error = metrics_guard.last_reachability_error.clone();
         drop(metrics_guard);
 
-        if !nat_enabled {
-            return;
+        if nat_enabled {
+            let _ = event_tx
+                .send(DhtEvent::NatStatus {
+                    state,
+                    confidence,
+                    last_error,
+                    summary: summary.clone(),
+                })
+                .await;
         }
+    }
 
+    if let Some(relay_peer_id) = extract_relay_peer(addr) {
+        let mut mgr = proxy_mgr.lock().await;
+        mgr.relay_ready.remove(&relay_peer_id);
+        mgr.relay_pending.remove(&relay_peer_id);
+        drop(mgr);
         let _ = event_tx
-            .send(DhtEvent::NatStatus {
-                state,
-                confidence,
-                last_error,
-                summary,
+            .send(DhtEvent::ProxyStatus {
+                id: relay_peer_id.to_string(),
+                address: addr.to_string(),
+                status: "relay_expired".into(),
+                latency_ms: None,
+                error: None,
             })
             .await;
     }
@@ -1612,46 +1960,58 @@ impl Socks5Transport {
 }
 
 /// Build a libp2p transport, optionally tunneling through a SOCKS5 proxy.
-pub fn build_custom_transport(
-    keypair: identity::Keypair,
+pub fn build_transport_with_relay(
+    keypair: &identity::Keypair,
+    relay_transport: relay::client::Transport,
     proxy_address: Option<String>,
 ) -> Result<Boxed<(PeerId, StreamMuxerBox)>, Box<dyn Error>> {
-    let noise_keys = noise::Config::new(&keypair)?;
+    let noise_keys = noise::Config::new(keypair)?;
     let yamux_config = libp2p::yamux::Config::default();
 
-    // CORRECTED: The full transport stack is now built inside each branch
-    // to ensure the final types are identical.
-    if let Some(proxy) = proxy_address {
-        info!(
-            "SOCKS5 enabled. Routing all P2P dialing traffic via {}",
-            proxy
-        );
-        let proxy_addr = proxy.parse::<SocketAddr>().map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("Invalid proxy address: {}", e),
-            )
-        })?;
-        let socks5_transport = Socks5Transport::new(proxy_addr);
+    let transport = match (proxy_address, relay_transport) {
+        (Some(proxy), relay_transport) => {
+            info!(
+                "SOCKS5 enabled. Routing all P2P dialing traffic via {}",
+                proxy
+            );
+            let proxy_addr = proxy.parse::<SocketAddr>().map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("Invalid proxy address: {}", e),
+                )
+            })?;
+            let socks5_transport = Socks5Transport::new(proxy_addr);
 
-        Ok(socks5_transport
-            .upgrade(Version::V1)
-            .authenticate(noise_keys)
-            .multiplex(yamux_config)
-            .timeout(Duration::from_secs(30))
-            .boxed())
-    } else {
-        info!("Direct P2P connection mode.");
-        let direct_tcp = tcp::tokio::Transport::new(tcp::Config::default())
-            .map(|s, _| Box::new(s.0.compat()) as Box<dyn AsyncIo>);
+            OrTransport::new(relay_transport, socks5_transport)
+                .map(|either, _| match either {
+                    futures::future::Either::Left(conn) => RelayTransportOutput::Relay(conn),
+                    futures::future::Either::Right(stream) => RelayTransportOutput::Direct(stream),
+                })
+                .upgrade(Version::V1)
+                .authenticate(noise_keys)
+                .multiplex(yamux_config)
+                .timeout(Duration::from_secs(30))
+                .boxed()
+        }
+        (None, relay_transport) => {
+            info!("Direct P2P connection mode.");
+            let direct_tcp = tcp::tokio::Transport::new(tcp::Config::default())
+                .map(|s, _| Box::new(s.0.compat()) as Box<dyn AsyncIo>);
 
-        Ok(direct_tcp
-            .upgrade(Version::V1)
-            .authenticate(noise_keys)
-            .multiplex(yamux_config)
-            .timeout(Duration::from_secs(30))
-            .boxed())
-    }
+            OrTransport::new(relay_transport, direct_tcp)
+                .map(|either, _| match either {
+                    futures::future::Either::Left(conn) => RelayTransportOutput::Relay(conn),
+                    futures::future::Either::Right(stream) => RelayTransportOutput::Direct(stream),
+                })
+                .upgrade(Version::V1)
+                .authenticate(noise_keys)
+                .multiplex(yamux_config)
+                .timeout(Duration::from_secs(30))
+                .boxed()
+        }
+    };
+
+    Ok(transport)
 }
 
 impl DhtService {
@@ -1806,7 +2166,10 @@ impl DhtService {
 
         let blockstore = Arc::new(InMemoryBlockstore::new());
         let bitswap = beetswap::Behaviour::new(blockstore);
-        let behaviour = DhtBehaviour {
+        let (relay_transport, relay_client_behaviour) = relay::client::new(local_peer_id);
+        let autonat_client_toggle = toggle::Toggle::from(autonat_client_behaviour);
+        let autonat_server_toggle = toggle::Toggle::from(autonat_server_behaviour);
+        let mut behaviour = Some(DhtBehaviour {
             kademlia,
             identify,
             mdns,
@@ -1814,9 +2177,10 @@ impl DhtService {
             ping: Ping::new(ping::Config::new()),
             proxy_rr,
             webrtc_signaling_rr,
-            autonat_client: toggle::Toggle::from(autonat_client_behaviour),
-            autonat_server: toggle::Toggle::from(autonat_server_behaviour),
-        };
+            autonat_client: autonat_client_toggle,
+            autonat_server: autonat_server_toggle,
+            relay_client: relay_client_behaviour,
+        });
 
         let bootstrap_set: HashSet<String> = bootstrap_nodes.iter().cloned().collect();
         let mut autonat_targets: HashSet<String> = if enable_autonat && !autonat_servers.is_empty()
@@ -1829,15 +2193,15 @@ impl DhtService {
             autonat_targets.extend(bootstrap_set.iter().cloned());
         }
 
-        // Use the new SOCKS5-aware transport builder
-        let transport = build_custom_transport(local_key.clone(), proxy_address)?;
+        // Use the new relay-aware transport builder
+        let transport = build_transport_with_relay(&local_key, relay_transport, proxy_address)?;
 
         // Create the swarm
         let mut swarm = SwarmBuilder::with_existing_identity(local_key)
             .with_tokio()
             .with_other_transport(|_| Ok(transport))
             .expect("Failed to create libp2p transport")
-            .with_behaviour(|_| behaviour)?
+            .with_behaviour(move |_| behaviour.take().expect("behaviour already taken"))?
             .with_swarm_config(
                 |c| c.with_idle_connection_timeout(Duration::from_secs(300)), // 5 minutes
             )
@@ -1932,7 +2296,7 @@ impl DhtService {
             guard.autonat_enabled = enable_autonat;
         }
 
-        // Spawn the DHT node task
+        // Spawn the Dht node task
         let received_chunks_clone = Arc::new(Mutex::new(HashMap::new()));
         tokio::spawn(run_dht_node(
             swarm,
@@ -2010,7 +2374,7 @@ impl DhtService {
         let all = self.get_all_file_metadata().await?;
         let mut versions: Vec<FileMetadata> = all
             .into_iter()
-            .filter(|m| m.file_name == file_name)
+            .filter(|m| m.file_name == file_name && m.is_root)
             .collect();
         versions.sort_by(|a, b| b.version.unwrap_or(1).cmp(&a.version.unwrap_or(1)));
 
@@ -2047,12 +2411,13 @@ impl DhtService {
         let latest = self
             .get_latest_version_by_file_name(file_name.clone())
             .await?;
-        let (version, parent_hash) = match latest {
+        let (version, parent_hash, is_root) = match latest {
             Some(ref prev) => (
                 prev.version.map(|v| v + 1).unwrap_or(2),
                 Some(prev.file_hash.clone()),
+                false, // not root if there was a previous version
             ),
-            None => (1, None),
+            None => (1, None, true), // root if first version
         };
         Ok(FileMetadata {
             file_hash,
@@ -2068,6 +2433,7 @@ impl DhtService {
             version: Some(version),
             parent_hash,
             cids: None,
+            is_root: true,
         })
     }
 
@@ -2236,15 +2602,11 @@ impl DhtService {
         DhtMetricsSnapshot::from(metrics, peer_count)
     }
 
-    pub async fn shutdown(&self) -> Result<(), String> {
-        let (tx, rx) = oneshot::channel();
-        if self.cmd_tx.send(DhtCommand::Shutdown(tx)).await.is_err() {
-            return Ok(());
-        }
-
-        rx.await.map_err(|e| e.to_string())?;
-
-        Ok(())
+    pub async fn store_block(&self, cid: Cid, data: Vec<u8>) -> Result<(), String> {
+        self.cmd_tx
+            .send(DhtCommand::StoreBlock { cid, data })
+            .await
+            .map_err(|e| e.to_string())
     }
 
     // Drain up to `max` pending events without blocking
@@ -2299,6 +2661,12 @@ impl DhtService {
         peer_selection.set_peer_encryption_support(peer_id, supported);
     }
 
+    /// Report malicious behavior from a peer
+    pub async fn report_malicious_peer(&self, peer_id: &str, severity: &str) {
+        let mut peer_selection = self.peer_selection.lock().await;
+        peer_selection.report_malicious_peer(peer_id, severity);
+    }
+
     /// Get all peer metrics for monitoring
     pub async fn get_peer_metrics(&self) -> Vec<PeerMetrics> {
         let peer_selection = self.peer_selection.lock().await;
@@ -2323,78 +2691,50 @@ impl DhtService {
         peer_selection.cleanup_inactive_peers(max_age_seconds);
     }
 
-    /// Process received Bitswap chunk data and assemble complete files
-    async fn process_bitswap_chunk(
-        query_id: &beetswap::QueryId,
-        data: &[u8],
-        event_tx: &mpsc::Sender<DhtEvent>,
-        received_chunks: &Arc<Mutex<HashMap<String, HashMap<u32, FileChunk>>>>,
-        file_transfer_service: &Arc<FileTransferService>,
-    ) {
-        // Try to parse the data as a FileChunk
-        match serde_json::from_slice::<FileChunk>(data) {
-            Ok(chunk) => {
-                info!(
-                    "Received chunk {}/{} for file {} ({} bytes)",
-                    chunk.chunk_index + 1,
-                    chunk.total_chunks,
-                    chunk.file_hash,
-                    chunk.data.len()
-                );
+    /// Discover and verify available peers for a specific file
+    pub async fn discover_peers_for_file(
+        &self,
+        metadata: &FileMetadata,
+    ) -> Result<Vec<String>, String> {
+        info!(
+            "Starting peer discovery for file: {} with {} seeders",
+            metadata.file_hash,
+            metadata.seeders.len()
+        );
 
-                // Store the chunk
-                {
-                    let mut chunks_map = received_chunks.lock().await;
-                    let file_chunks = chunks_map
-                        .entry(chunk.file_hash.clone())
-                        .or_insert_with(HashMap::new);
-                    file_chunks.insert(chunk.chunk_index, chunk.clone());
+        let mut available_peers = Vec::new();
+        let connected_peers = self.connected_peers.lock().await;
+
+        // Check which seeders from metadata are currently connected
+        for seeder_id in &metadata.seeders {
+            if let Ok(peer_id) = seeder_id.parse::<libp2p::PeerId>() {
+                if connected_peers.contains(&peer_id) {
+                    info!("Seeder {} is currently connected", seeder_id);
+                    available_peers.push(seeder_id.clone());
+                } else {
+                    info!("Seeder {} is not currently connected", seeder_id);
+                    // TODO: Try to connect to this peer
                 }
-
-                // Check if we have all chunks for this file
-                let has_all_chunks = {
-                    let chunks_map = received_chunks.lock().await;
-                    if let Some(file_chunks) = chunks_map.get(&chunk.file_hash) {
-                        file_chunks.len() == chunk.total_chunks as usize
-                    } else {
-                        false
-                    }
-                };
-
-                if has_all_chunks {
-                    // Assemble the file from all chunks
-                    Self::assemble_file_from_chunks(
-                        &chunk.file_hash,
-                        received_chunks,
-                        file_transfer_service,
-                        event_tx,
-                    )
-                    .await;
-                }
-
-                let _ = event_tx
-                    .send(DhtEvent::BitswapDataReceived {
-                        query_id: format!("{:?}", query_id),
-                        data: data.to_vec(),
-                    })
-                    .await;
-            }
-            Err(e) => {
-                warn!("Failed to parse Bitswap data as FileChunk: {}", e);
-                // Emit raw data event for debugging
-                let _ = event_tx
-                    .send(DhtEvent::BitswapDataReceived {
-                        query_id: format!("{:?}", query_id),
-                        data: data.to_vec(),
-                    })
-                    .await;
+            } else {
+                warn!("Invalid peer ID in seeders list: {}", seeder_id);
             }
         }
+
+        // If no seeders are connected, the file is not available for download
+        if available_peers.is_empty() {
+            info!("No seeders are currently connected - file not available for download");
+            // TODO: In the future, we could try to connect to offline seeders
+        }
+
+        info!(
+            "Peer discovery completed: found {} available peers",
+            available_peers.len()
+        );
+        Ok(available_peers)
     }
 
     /// Get seeders for a specific file (searches DHT for providers)
-    async fn get_seeders_for_file(&self, file_hash: &str) -> Vec<String> {
-        // Implement real DHT provider record queries
+    pub async fn get_seeders_for_file(&self, file_hash: &str) -> Vec<String> {
         // Send command to DHT task to query provider records for this file
         let (tx, rx) = oneshot::channel();
 
@@ -2441,91 +2781,15 @@ impl DhtService {
         }
     }
 
-    /// Assemble a complete file from received chunks
-    async fn assemble_file_from_chunks(
-        file_hash: &str,
-        received_chunks: &Arc<Mutex<HashMap<String, HashMap<u32, FileChunk>>>>,
-        file_transfer_service: &Arc<FileTransferService>,
-        event_tx: &mpsc::Sender<DhtEvent>,
-    ) {
-        // Get all chunks for this file
-        let chunks = {
-            let mut chunks_map = received_chunks.lock().await;
-            chunks_map.remove(file_hash)
-        };
-
-        if let Some(mut file_chunks) = chunks {
-            // Sort chunks by index
-            let mut sorted_chunks: Vec<FileChunk> =
-                file_chunks.drain().map(|(_, chunk)| chunk).collect();
-            sorted_chunks.sort_by_key(|c| c.chunk_index);
-
-            // Get the count before consuming the vector
-            let chunk_count = sorted_chunks.len();
-
-            // Concatenate chunk data
-            let mut file_data = Vec::new();
-            for chunk in sorted_chunks {
-                file_data.extend_from_slice(&chunk.data);
-            }
-
-            // Store the assembled file
-            let file_name = format!("downloaded_{}", file_hash);
-            file_transfer_service.store_file_data(file_hash.to_string(), file_name, file_data);
-
-            info!(
-                "Successfully assembled file {} from {} chunks",
-                file_hash, chunk_count
-            );
-
-            let _ = event_tx
-                .send(DhtEvent::FileDownloaded {
-                    file_hash: file_hash.to_string(),
-                })
-                .await;
-        }
-    }
-
-    /// Discover and verify available peers for a specific file
-    pub async fn discover_peers_for_file(
-        &self,
-        metadata: &FileMetadata,
-    ) -> Result<Vec<String>, String> {
-        info!(
-            "Starting peer discovery for file: {} with {} seeders",
-            metadata.file_hash,
-            metadata.seeders.len()
-        );
-
-        let mut available_peers = Vec::new();
-        let connected_peers = self.connected_peers.lock().await;
-
-        // Check which seeders from metadata are currently connected
-        for seeder_id in &metadata.seeders {
-            if let Ok(peer_id) = seeder_id.parse::<libp2p::PeerId>() {
-                if connected_peers.contains(&peer_id) {
-                    info!("Seeder {} is currently connected", seeder_id);
-                    available_peers.push(seeder_id.clone());
-                } else {
-                    info!("Seeder {} is not currently connected", seeder_id);
-                    // TODO: Try to connect to this peer
-                }
-            } else {
-                warn!("Invalid peer ID in seeders list: {}", seeder_id);
-            }
-        }
-
-        // If no seeders are connected, the file is not available for download
-        if available_peers.is_empty() {
-            info!("No seeders are currently connected - file not available for download");
-            // TODO: In the future, we could try to connect to offline seeders
-        }
-
-        info!(
-            "Peer discovery completed: found {} available peers",
-            available_peers.len()
-        );
-        Ok(available_peers)
+    /// Shutdown the DHT service
+    pub async fn shutdown(&self) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(DhtCommand::Shutdown(tx))
+            .await
+            .map_err(|e| format!("Failed to send shutdown command: {}", e))?;
+        rx.await
+            .map_err(|e| format!("Failed to receive shutdown acknowledgment: {}", e))
     }
 }
 
@@ -2644,7 +2908,9 @@ async fn assemble_file_from_chunks(
 }
 
 fn not_loopback(ip: &Multiaddr) -> bool {
-    multiaddr_to_ip(ip).map(|ip| !ip.is_loopback()).unwrap_or(false)
+    multiaddr_to_ip(ip)
+        .map(|ip| !ip.is_loopback())
+        .unwrap_or(false)
 }
 
 fn multiaddr_to_ip(addr: &Multiaddr) -> Option<IpAddr> {
@@ -2658,28 +2924,28 @@ fn multiaddr_to_ip(addr: &Multiaddr) -> Option<IpAddr> {
     None
 }
 
-struct StringBlock(pub String);
+pub struct StringBlock(pub String);
+pub struct ByteBlock(pub Vec<u8>);
 
-impl Block<64> for StringBlock {
+impl Block<64> for ByteBlock {
     fn cid(&self) -> Result<Cid, CidError> {
-        let hash = Code::Sha2_256.digest(self.0.as_ref());
+        let hash = Code::Sha2_256.digest(&self.0);
         Ok(Cid::new_v1(RAW_CODEC, hash))
     }
 
     fn data(&self) -> &[u8] {
-        self.0.as_ref()
+        &self.0
     }
 }
 
-pub fn split_into_blocks(bytes: &[u8]) -> Vec<StringBlock> {
+pub fn split_into_blocks(bytes: &[u8]) -> Vec<ByteBlock> {
     let mut blocks = Vec::new();
     let mut i = 0usize;
     while i < bytes.len() {
         let end = (i + CHUNK_SIZE).min(bytes.len());
         let slice = &bytes[i..end];
-        // Convert slice to String, replacing invalid UTF-8 with �
-        let string = String::from_utf8_lossy(slice).to_string();
-        blocks.push(StringBlock(string));
+        // Store raw bytes - no conversion needed
+        blocks.push(ByteBlock(slice.to_vec()));
         i = end;
     }
     blocks

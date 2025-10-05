@@ -66,6 +66,7 @@ lazy_static! {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[derive(Clone)]
 pub struct ChunkInfo {
     pub index: u32,
     pub hash: String,

@@ -3314,11 +3314,17 @@ async fn encrypt_file_for_self_upload(
         );
         let public_key = PublicKey::from(&secret_key);
 
+        // 2. Initialize ChunkManager with proper app data directory
         let manager = ChunkManager::new(chunk_storage_path);
+
+        // 3. Call the existing backend function to perform the encryption.
         let manifest = manager
             .chunk_and_encrypt_file(Path::new(&file_path), &public_key)?;
-        let bundle_json =
-            serde_json::to_string(&manifest.encrypted_key_bundle).map_err(|e| e.to_string())?;
+
+        // 4. Serialize the key bundle to a JSON string so it can be sent to the frontend easily.
+        let bundle_json = serde_json::to_string(&manifest.encrypted_key_bundle)
+            .map_err(|e| e.to_string())?;
+
         Ok(FileManifestForJs {
             merkle_root: manifest.merkle_root,
             chunks: manifest.chunks,
@@ -3366,17 +3372,21 @@ async fn decrypt_and_reassemble_file(
         .map_err(|e| format!("Could not get app data directory: {}", e))?;
     let chunk_storage_path = app_data_dir.join("chunk_storage");
 
-    // Clone the data we need for the blocking task
+    // 3. Clone the data we need for the blocking task
     let chunks = manifest_js.chunks.clone();
     let output_path_clone = output_path.clone();
 
+    // Run the decryption in a blocking task to avoid blocking the async runtime
     tokio::task::spawn_blocking(move || {
+        // 4. Initialize ChunkManager with proper app data directory
         let manager = ChunkManager::new(chunk_storage_path);
+
+        // 5. Call the existing backend function to decrypt and save the file.
         manager.reassemble_and_decrypt_file(
             &chunks,
             Path::new(&output_path_clone),
             &encrypted_key_bundle,
-            &secret_key,
+            &secret_key, // Pass the secret key
         )
     })
     .await

@@ -8,6 +8,11 @@ repository = ""
 edition = "2021"
 default-run = "chiral-network"
 
+[lib]
+name = "chiral_network"
+path = "src/lib.rs"
+crate-type = ["lib"]
+
 [build-dependencies]
 tauri-build = { version = "2.0", features = [] }
 

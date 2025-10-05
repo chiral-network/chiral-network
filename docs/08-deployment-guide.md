@@ -219,7 +219,6 @@ bootstrap_peers = [
 
 [storage]
 path = "/var/lib/chiral/storage"
-max_file_size = "10GB"
 chunk_size = 262144
 
 [api]
@@ -802,18 +801,14 @@ chiral-node --fork-block 12345 --override
 
 ### Documentation
 
-- Deployment Docs: https://docs.chiral.network/deployment
-- API Reference: https://docs.chiral.network/api
-- Troubleshooting: https://docs.chiral.network/troubleshooting
+- Deployment Docs: https://github.com/chiral-network/chiral-network/blob/main/docs/08-deployment-guide.md
+- API Reference:   https://github.com/chiral-network/chiral-network/blob/main/docs/05-api-documentation.md
+- Troubleshooting: N/A
 
 ### Community Support
 
-- Discord: https://discord.gg/chiralnetwork
-- Forum: https://forum.chiral.network
-- Email: support@chiral.network
+TBD
 
 ### Professional Support
 
-- Enterprise Support: enterprise@chiral.network
-- SLA Options: 24/7, 4-hour response
-- Training: Available on request
+TBD

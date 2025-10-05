@@ -31,7 +31,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 - ✅ **Drag & Drop Interface**: Simple, compact file addition with real-time feedback
 - ✅ **Content Hashing**: SHA-256 hash generation for unique file identifiers
 - ✅ **DHT Metadata Distribution**: File information shared via distributed hash table
-- ❌ **Network Integration**: Files registered with P2P network for discovery (currently local-only storage)
+- ❌ **Network Integration**: Files registered with P2P network for discovery (metadata stored in DHT but provider records not registered)
 - ✅ **No Size Limits**: Share files of any size efficiently
 
 ### 2. Intelligent Download Management
@@ -51,17 +51,17 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 - ✅ **Automatic Peer Discovery**: DHT-based peer finding with manual connect option
 - ✅ **Peer Reputation**: Track and display peer reliability scores
 - ❌ **Geographic Distribution**: View real peer locations and regional statistics (real geolocation not implemented)
-- ❌ **Connection Management**: Direct control over peer connections (not implemented)
+- ✅ **Connection Management**: Direct control over peer connections with disconnect functionality
 - ✅ **Network Health Indicators**: Visual status of network connectivity
 
 ### 4. Comprehensive Analytics Dashboard
 
 - ✅ **Storage Metrics**: Track used space and file distribution
-- ❌ **Bandwidth Usage**: Real-time upload/download statistics (uses mock data)
-- ❌ **Performance Analytics**: Monitor network efficiency (no real network performance measurements)
-- ❌ **Network Activity**: Connection history and network-wide statistics (uses mock data)
-- ❌ **Resource Contribution**: Track your contribution to the network (rewards use mock data)
-- ❌ **Historical Data**: View trends over time (earnings history uses mock data)
+- ✅ **Bandwidth Usage**: Real-time upload/download statistics with persistent tracking
+- ✅ **Performance Analytics**: Monitor network efficiency with transfer speed metrics
+- ✅ **Network Activity**: Connection history and network-wide statistics
+- ✅ **Resource Contribution**: Track your contribution to the network with real bandwidth/storage metrics
+- ✅ **Historical Data**: View bandwidth and contribution trends over time (mining earnings use mock data)
 
 ### 5. Proxy Network Support
 
@@ -74,7 +74,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 
 ### 6. Security & Privacy
 
-- ❌ **End-to-End Encryption**: AES-256-GCM encryption with PBKDF2 key derivation (there is encryption infrastructure, but it is not applied to uploads and downloads)
+- ✅ **End-to-End Encryption**: AES-256-GCM encryption with PBKDF2 key derivation (can be enabled in Settings)
 - ✅ **Wallet Security**: Secure credential management with HD wallets
 - ❌ **Stream Authentication**: Cryptographic verification of data integrity (no actual stream authentication occurs during file transfers)
 - ❌ **Anonymous Routing**: Hide your IP from other peers (no IP hiding or anonymization implemented)
@@ -83,9 +83,9 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 ### 7. Mining & Network Security
 
 - ✅ **CPU Mining**: Real blockchain mining with Geth integration
-- ❌ **Mining Pool Support**: Solo or pool mining with real hashrate monitoring (no mining pool protocol implemented)
+- ❌ **Mining Pool Support**: Pool selection UI with mock data (actual pool mining not implemented)
 - ❌ **Real-Time Statistics**: Monitor hash rate, power usage, and efficiency (power and efficiency are mock data)
-- ❌ **Reward Tracking**: Track blocks found and actual earnings (rewards not calculated from actual block data)
+- ❌ **Reward Tracking**: Block counting works but rewards use hardcoded values (not actual earnings)
 - ✅ **Adjustable Intensity**: Control CPU usage and thread allocation
 - ✅ **Temperature Monitoring**: Keep track of system thermals
 
@@ -93,9 +93,10 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 
 - ✅ **Storage Management**: Configure storage location and limits
 - ✅ **Network Configuration**: Set bandwidth limits and connection parameters
-- ❌ **Privacy Controls**: Enable encryption, proxy, and anonymous mode (anonymous mode not implemented)
+- ✅ **Advanced Bandwidth Scheduling**: Set different bandwidth limits for specific times and days
+- ✅ **Privacy Controls**: Mandatory encryption, proxy support, and anonymous mode (anonymous mode not implemented)
 - ✅ **Notification Preferences**: Customize alerts and notifications
-- ❌ **Advanced Options**: Fine-tune DHT, chunk size, and cache settings (backend uses hardcoded values)
+- ❌ **Advanced Options**: Fine-tune DHT, chunk size, and cache settings (UI mockup only, settings not applied to backend)
 - ✅ **Import/Export**: Backup and restore settings
 - ✅ **Multi-language Support**: English, Spanish, Chinese, Korean
 
@@ -224,6 +225,21 @@ npm run tauri build # Desktop production build
 6. Monitor hash rate and rewards
 7. Track found blocks in history
 
+### Bandwidth Scheduling
+
+1. Navigate to Settings page
+2. Scroll to Bandwidth Scheduling section
+3. Enable "Enable Bandwidth Scheduling" toggle
+4. Click "Add Schedule" to create a new schedule
+5. Configure schedule:
+   - Set schedule name
+   - Select start and end times (24-hour format)
+   - Choose days of week when schedule applies
+   - Set upload and download limits (KB/s, 0 = unlimited)
+6. Toggle schedule on/off with checkbox
+7. Create multiple schedules for different time periods
+8. Scheduler automatically applies appropriate limits based on current time
+
 ## Legitimate Use Cases
 
 ### Personal Use
@@ -268,11 +284,14 @@ npm run tauri build # Desktop production build
 
 ### Phase 3: Core P2P Features (In Progress)
 
-- ✅ End-to-end encryption (AES-256-GCM with PBKDF2)
+- ✅ **File Upload Encryption**: AES-256-GCM encryption with PBKDF2 key derivation for uploaded files
+- ❌ **File Download Decryption**: Key management and decryption for downloaded files
+- ❌ **WebRTC Encryption**: Encrypted P2P chunk transfers
+- ❌ **Key Exchange UI**: Recipient public key input for encrypted sharing
 - ✅ Real P2P file transfer protocol
 - ✅ File versioning system
+- ✅ Advanced bandwidth scheduling
 - [ ] Selective sync capabilities
-- [ ] Advanced bandwidth scheduling
 - [ ] Mobile applications
 
 ### Phase 4: Enterprise Features
@@ -309,11 +328,17 @@ npm run tauri build # Desktop production build
 - XSS protection in user content
 - CORS configuration for API calls
 - Secure random for IDs
+- AES-256-GCM file encryption for uploads
+- PBKDF2 key derivation for encryption
+- ECIES key exchange infrastructure
 - No centralized servers to compromise
 - Fully decentralized architecture prevents single points of failure
 
 ### Planned Security
 
+- File download decryption with key management
+- WebRTC encrypted chunk transfers
+- Key exchange UI for encrypted sharing
 - File encryption at rest
 - Signed software updates
 - Two-factor authentication
@@ -345,7 +370,7 @@ MIT License - See LICENSE file for details
 
 ### BitTorrent-Like Architecture
 
-- **Instant Seeding**: Files immediately available when added (no upload step)
+- **Instant Seeding**: Files immediately available when added
 - **Continuous Availability**: Files remain accessible while in your list
 - **Peer Statistics**: Track seeders and leechers for each file
 - **No Pending State**: Eliminates confusion between "uploading" and "shared"

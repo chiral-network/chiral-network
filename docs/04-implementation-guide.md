@@ -79,6 +79,7 @@ Create `genesis.json` (Geth-compatible format):
   "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
   "timestamp": "0x68b3b2ca"
 }
+
 ```
 
 ### Step 3: Initialize Blockchain
@@ -138,7 +139,6 @@ impl DhtService {
         let store = MemoryStore::new(local_peer_id);
         let mut kad_cfg = KademliaConfig::new(StreamProtocol::new("/chiral/kad/1.0.0"));
         kad_cfg.set_query_timeout(Duration::from_secs(10));
-        kad_cfg.set_replication_factor(20);
 
         let mut kademlia = Kademlia::with_config(local_peer_id, store, kad_cfg);
         kademlia.set_mode(Some(Mode::Server));
@@ -195,6 +195,7 @@ impl DhtService {
         self.peer_id.clone()
     }
 }
+
 ```
 
 ### Step 2: Chunk Manager
