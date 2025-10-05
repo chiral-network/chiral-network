@@ -59,6 +59,7 @@ export interface WalletInfo {
   miningRewards?: number;
   reputation?: number;
   totalEarned?: number;
+  totalSpent?: number;
 }
 
 export interface ETCAccount {
@@ -409,6 +410,18 @@ export interface ActiveTransfer {
 
 export const activeTransfers = writable<Map<string, ActiveTransfer>>(new Map());
 
+// Interface for Bandwidth Schedule Entry
+export interface BandwidthScheduleEntry {
+  id: string;
+  name: string;
+  startTime: string; // Format: "HH:MM" (24-hour)
+  endTime: string; // Format: "HH:MM" (24-hour)
+  daysOfWeek: number[]; // 0-6, where 0 = Sunday
+  uploadLimit: number; // KB/s, 0 = unlimited
+  downloadLimit: number; // KB/s, 0 = unlimited
+  enabled: boolean;
+}
+
 // Interface for Application Settings
 export interface AppSettings {
   storagePath: string;
@@ -436,6 +449,8 @@ export interface AppSettings {
   cacheSize: number; // MB
   logLevel: string;
   autoUpdate: boolean;
+  enableBandwidthScheduling: boolean;
+  bandwidthSchedules: BandwidthScheduleEntry[];
 }
 
 // Export the settings store
@@ -466,4 +481,6 @@ export const settings = writable<AppSettings>({
   cacheSize: 1024,
   logLevel: "info",
   autoUpdate: true,
+  enableBandwidthScheduling: false,
+  bandwidthSchedules: [],
 });
