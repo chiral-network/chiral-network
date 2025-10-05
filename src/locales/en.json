@@ -118,6 +118,19 @@
           "private": "Reachability degraded. {summary}",
           "unknown": "Reachability status updated. {summary}"
         }
+      },
+      "dcutr": {
+        "title": "DCUtR Hole-Punching",
+        "enabled": "DCUtR enabled",
+        "disabled": "DCUtR disabled",
+        "attempts": "Hole-punch attempts",
+        "successes": "Successes",
+        "failures": "Failures",
+        "successRate": "Success rate",
+        "lastSuccess": "Last success",
+        "lastFailure": "Last failure",
+        "never": "Never",
+        "description": "Direct Connection Upgrade through Relay (DCUtR) enables NAT hole-punching to establish direct peer connections."
       }
     },
     "networkStatus": "Network Status",
