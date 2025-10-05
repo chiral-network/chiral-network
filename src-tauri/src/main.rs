@@ -3233,6 +3233,7 @@ fn main() {
             get_contribution_history,
             reset_analytics,
             encrypt_file_for_self_upload,
+            encrypt_file_for_recipient,
             decrypt_and_reassemble_file,
         ])
         .plugin(tauri_plugin_process::init())
@@ -3435,6 +3436,68 @@ async fn encrypt_file_for_self_upload(
             .chunk_and_encrypt_file(Path::new(&file_path), &public_key)?;
 
         // 4. Serialize the key bundle to a JSON string so it can be sent to the frontend easily.
+        let bundle_json = serde_json::to_string(&manifest.encrypted_key_bundle)
+            .map_err(|e| e.to_string())?;
+
+        Ok(FileManifestForJs {
+            merkle_root: manifest.merkle_root,
+            chunks: manifest.chunks,
+            encrypted_key_bundle: bundle_json,
+        })
+    })
+    .await
+    .map_err(|e| format!("Encryption task failed: {}", e))?
+}
+
+/// Encrypt a file for upload with optional recipient public key
+#[tauri::command]
+async fn encrypt_file_for_recipient(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    file_path: String,
+    recipient_public_key: Option<String>,
+) -> Result<FileManifestForJs, String> {
+    // Get the app data directory for chunk storage
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Could not get app data directory: {}", e))?;
+    let chunk_storage_path = app_data_dir.join("chunk_storage");
+
+    // Determine the public key to use for encryption
+    let recipient_pk = if let Some(pk_hex) = recipient_public_key {
+        // Use the provided recipient public key
+        let pk_bytes = hex::decode(pk_hex.trim_start_matches("0x"))
+            .map_err(|_| "Invalid recipient public key format".to_string())?;
+        PublicKey::from(
+            <[u8; 32]>::try_from(pk_bytes).map_err(|_| "Recipient public key is not 32 bytes")?,
+        )
+    } else {
+        // Use the active user's own public key
+        let private_key_hex = state
+            .active_account_private_key
+            .lock()
+            .await
+            .clone()
+            .ok_or("No account is currently active. Please log in.")?;
+        let pk_bytes = hex::decode(private_key_hex.trim_start_matches("0x"))
+            .map_err(|_| "Invalid private key format".to_string())?;
+        let secret_key = StaticSecret::from(
+            <[u8; 32]>::try_from(pk_bytes).map_err(|_| "Private key is not 32 bytes")?,
+        );
+        PublicKey::from(&secret_key)
+    };
+
+    // Run the encryption in a blocking task to avoid blocking the async runtime
+    tokio::task::spawn_blocking(move || {
+        // Initialize ChunkManager with proper app data directory
+        let manager = ChunkManager::new(chunk_storage_path);
+
+        // Call the existing backend function to perform the encryption with recipient's public key
+        let manifest = manager
+            .chunk_and_encrypt_file(Path::new(&file_path), &recipient_pk)?;
+
+        // Serialize the key bundle to a JSON string so it can be sent to the frontend easily.
         let bundle_json = serde_json::to_string(&manifest.encrypted_key_bundle)
             .map_err(|e| e.to_string())?;
 

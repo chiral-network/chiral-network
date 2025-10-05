@@ -633,6 +633,16 @@
       "error": "无法检查磁盘空间",
       "checking": "正在检查...",
       "lowDescription": "可用空间过低可能导致无法继续分享文件。"
+    },
+    "encryption": {
+      "title": "加密分享",
+      "subtitle": "为特定接收者加密分享文件",
+      "enableForRecipient": "启用为特定接收者加密分享",
+      "recipientPublicKey": "接收者公钥",
+      "publicKeyPlaceholder": "输入接收者的 X25519 公钥（64 个十六进制字符）",
+      "publicKeyHint": "输入接收者的 X25519 公钥（十六进制格式，64 个字符）。文件将被加密，只有他们可以解密。留空表示为自己加密。",
+      "invalidPublicKey": "⚠️ 公钥格式无效。必须是 64 个十六进制字符。",
+      "encryptedBadge": "已加密"
     }
   },
   "download": {

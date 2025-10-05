@@ -17,10 +17,18 @@ export const encryptionService = {
   /**
    * Invokes the backend to chunk and encrypt a file.
    * @param filePath The absolute path to the file.
+   * @param recipientPublicKey Optional recipient's X25519 public key (hex-encoded). If not provided, encrypts for self.
    * @returns A promise that resolves to the file manifest.
    */
-  async encryptFile(filePath: string): Promise<FileManifestForJs> {
-    return await invoke('encrypt_file_for_self_upload', { filePath });
+  async encryptFile(filePath: string, recipientPublicKey?: string): Promise<FileManifestForJs> {
+    if (recipientPublicKey) {
+      return await invoke('encrypt_file_for_recipient', { 
+        filePath, 
+        recipientPublicKey 
+      });
+    } else {
+      return await invoke('encrypt_file_for_self_upload', { filePath });
+    }
   },
 
   /**

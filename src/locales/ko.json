@@ -637,6 +637,16 @@
       "error": "디스크 공간을 확인할 수 없습니다",
       "checking": "확인 중...",
       "lowDescription": "여유 공간이 부족하면 새 파일을 공유할 수 없습니다."
+    },
+    "encryption": {
+      "title": "암호화 공유",
+      "subtitle": "특정 수신자를 위해 암호화된 파일 공유",
+      "enableForRecipient": "특정 수신자를 위한 암호화 공유 활성화",
+      "recipientPublicKey": "수신자 공개 키",
+      "publicKeyPlaceholder": "수신자의 X25519 공개 키 입력 (64자리 16진수)",
+      "publicKeyHint": "수신자의 X25519 공개 키를 입력하세요 (16진수 형식, 64자). 파일이 암호화되어 수신자만 해독할 수 있습니다. 비워두면 자신을 위해 암호화됩니다.",
+      "invalidPublicKey": "⚠️ 공개 키 형식이 잘못되었습니다. 64자리 16진수여야 합니다.",
+      "encryptedBadge": "암호화됨"
     }
   },
   "download": {

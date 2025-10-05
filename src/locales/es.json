@@ -625,6 +625,16 @@
       "error": "No se pudo comprobar el espacio en disco",
       "checking": "Comprobando...",
       "lowDescription": "El espacio libre bajo puede impedir compartir archivos nuevos."
+    },
+    "encryption": {
+      "title": "Compartir Cifrado",
+      "subtitle": "Compartir archivos cifrados para destinatarios específicos",
+      "enableForRecipient": "Habilitar compartir cifrado para destinatario específico",
+      "recipientPublicKey": "Clave Pública del Destinatario",
+      "publicKeyPlaceholder": "Ingrese la clave pública X25519 del destinatario (64 caracteres hexadecimales)",
+      "publicKeyHint": "Ingrese la clave pública X25519 del destinatario (formato hexadecimal, 64 caracteres). El archivo se cifrará para que solo ellos puedan descifrarlo. Déjelo vacío para cifrar para usted mismo.",
+      "invalidPublicKey": "⚠️ Formato de clave pública inválido. Debe tener 64 caracteres hexadecimales.",
+      "encryptedBadge": "Cifrado"
     }
   },
   "download": {
