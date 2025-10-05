@@ -1,6 +1,6 @@
 use crate::encryption::{decrypt_aes_key, encrypt_aes_key, EncryptedAesKeyBundle, FileEncryption};
+use crate::file_transfer::FileTransferService;
 use crate::keystore::Keystore;
-use crate::FileTransferService;
 use aes_gcm::aead::{Aead, OsRng};
 use aes_gcm::{AeadCore, Aes256Gcm, KeyInit};
 use serde::{Deserialize, Serialize};
