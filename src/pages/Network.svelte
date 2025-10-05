@@ -93,6 +93,45 @@
   let webrtcSession: ReturnType<typeof createWebRTCSession> | null = null;
   let discoveredPeers: string[] = [];
   let signalingConnected = false;
+
+  // Helper: add a connected peer to the central peers store (if not present)
+  function addConnectedPeer(address: string) {
+    peers.update(list => {
+      const exists = list.find(p => p.address === address || p.id === address)
+      if (exists) {
+        // mark online
+        exists.status = 'online'
+        exists.lastSeen = new Date()
+        return [...list]
+      }
+
+      // Minimal PeerInfo; other fields will be filled by DHT metadata when available
+      const newPeer = {
+        id: address,
+        address,
+        nickname: undefined,
+        status: 'online',
+        reputation: 0,
+        sharedFiles: 0,
+        totalSize: 0,
+        joinDate: new Date(),
+        lastSeen: new Date(),
+        location: undefined,
+      }
+      return [newPeer, ...list]
+    })
+  }
+
+  // Helper: mark a peer disconnected (set status offline) or remove
+  function markPeerDisconnected(address: string) {
+    peers.update(list => {
+      const idx = list.findIndex(p => p.address === address || p.id === address)
+      if (idx === -1) return list
+      const copy = [...list]
+      copy[idx] = { ...copy[idx], status: 'offline', lastSeen: new Date() }
+      return copy
+    })
+  }
   
   // UI variables
   const nodeAddress = "enode://277ac35977fc0a230e3ca4ccbf6df6da486fd2af9c129925b1193b25da6f013a301788fceed458f03c6c0d289dfcbf7a7ca5c0aef34b680fcbbc8c2ef79c0f71@127.0.0.1:30303"
@@ -545,7 +584,7 @@
     showToast('Discovery started. Found peers: ' + discoveredPeers.length, 'info');
   }
   
-  function connectToPeer() {
+  async function connectToPeer() {
     if (!newPeerAddress.trim()) {
       showToast('Please enter a peer ID', 'error');
       return;
@@ -574,27 +613,57 @@
         },
         onConnectionStateChange: (state) => {
           showToast('WebRTC state: ' + state, 'info');
-          
+
+          // When the data channel/peer connection becomes connected, add to connected peers
           if (state === 'connected') {
             showToast('Successfully connected to peer!', 'success');
-          } else if (state === 'failed' || state === 'disconnected') {
+            // Add minimal PeerInfo to peers store if not present
+            addConnectedPeer(peerId);
+          } else if (state === 'failed' || state === 'disconnected' || state === 'closed') {
             showToast('Connection to peer failed or disconnected', 'error');
+            // Mark peer as offline / remove from peers list
+            markPeerDisconnected(peerId);
           }
         },
         onDataChannelOpen: () => {
           showToast('Data channel open - you can now send messages!', 'success');
+          // Ensure peer is listed as connected when data channel opens
+          addConnectedPeer(peerId);
         },
         onDataChannelClose: () => {
           showToast('Data channel closed', 'warning');
+          markPeerDisconnected(peerId);
         },
         onError: (e) => {
           showToast('WebRTC error: ' + e, 'error');
           console.error('WebRTC error:', e);
         }
       });
-      
-      webrtcSession.createOffer();
-      showToast('Connecting to peer: ' + peerId, 'info');
+      // Optimistically add the peer as 'connecting' so it appears in UI while the handshake occurs
+      peers.update(list => {
+        const exists = list.find(p => p.address === peerId || p.id === peerId)
+        if (exists) {
+          exists.status = 'away'
+          exists.lastSeen = new Date()
+          return [...list]
+        }
+        const pending = {
+          id: peerId,
+          address: peerId,
+          nickname: undefined,
+          status: 'away', // using 'away' to indicate in-progress
+          reputation: 0,
+          sharedFiles: 0,
+          totalSize: 0,
+          joinDate: new Date(),
+          lastSeen: new Date(),
+          location: undefined,
+        }
+        return [pending, ...list]
+      })
+
+  await webrtcSession.createOffer();
+  showToast('Connecting to peer: ' + peerId, 'success');
       
       // Clear input on successful connection attempt
       newPeerAddress = '';
@@ -1385,6 +1454,23 @@
             Send Test
           </Button>
         </div>
+        {#if discoveredPeers && discoveredPeers.length > 0}
+          <div class="mt-4">
+            <p class="text-sm text-muted-foreground">Found peers: {discoveredPeers.length}</p>
+            <ul class="mt-2 space-y-2">
+              {#each discoveredPeers as p}
+                <li class="flex items-center justify-between p-2 border rounded">
+                  <div class="truncate mr-4">{p}</div>
+                      <div class="flex items-center gap-2">
+                        <Button size="sm" variant="outline" on:click={() => { newPeerAddress = p; showToast('Peer added to input', 'success'); }}>
+                          Add
+                        </Button>
+                      </div>
+                </li>
+              {/each}
+            </ul>
+          </div>
+        {/if}
       </div>
     </div>
   </Card>
