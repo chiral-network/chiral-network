@@ -84,6 +84,14 @@ export interface DhtHealth {
   observedAddrs: string[];
   reachabilityHistory: NatHistoryItem[];
   autonatEnabled: boolean;
+  // AutoRelay metrics
+  autorelayEnabled: boolean;
+  activeRelayPeerId: string | null;
+  relayReservationStatus: string | null;
+  lastReservationSuccess: number | null;
+  lastReservationFailure: number | null;
+  reservationRenewals: number;
+  reservationEvictions: number;
 }
 
 export class DhtService {

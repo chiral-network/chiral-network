@@ -118,6 +118,23 @@
           "private": "Reachability degraded. {summary}",
           "unknown": "Reachability status updated. {summary}"
         }
+      },
+      "relay": {
+        "title": "Relay Status",
+        "enabled": "AutoRelay Enabled",
+        "disabled": "AutoRelay Disabled",
+        "noPeer": "Not connected to relay",
+        "activePeer": "Active Relay",
+        "status": "Status",
+        "lastSuccess": "Last successful reservation",
+        "lastFailure": "Last reservation failure",
+        "renewals": "Reservations renewed",
+        "evictions": "Reservations evicted",
+        "never": "Never",
+        "noEvictions": "No evictions",
+        "accepted": "Reservation accepted",
+        "pending": "Pending",
+        "failed": "Failed"
       }
     },
     "networkStatus": "Network Status",
