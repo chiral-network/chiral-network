@@ -182,7 +182,10 @@ pub enum DhtCommand {
         target_peer_id: PeerId,
         message: serde_json::Value,
     },
-    StoreBlock { cid: Cid, data: Vec<u8> },
+    StoreBlock {
+        cid: Cid,
+        data: Vec<u8>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -197,6 +200,8 @@ pub enum DhtEvent {
         file_hash: String,
     },
     Error(String),
+    Info(String),
+    Warning(String),
     PublishedFile(FileMetadata),
     ProxyStatus {
         id: String,
@@ -1648,9 +1653,16 @@ async fn handle_kademlia_event(
                 QueryResult::GetRecord(Ok(ok)) => match ok {
                     GetRecordOk::FoundRecord(peer_record) => {
                         // Try to parse DHT record as essential metadata JSON
-                        if let Ok(metadata_json) = serde_json::from_slice::<serde_json::Value>(&peer_record.record.value) {
+                        if let Ok(metadata_json) =
+                            serde_json::from_slice::<serde_json::Value>(&peer_record.record.value)
+                        {
                             // Construct FileMetadata from the JSON
-                            if let (Some(file_hash), Some(file_name), Some(file_size), Some(created_at)) = (
+                            if let (
+                                Some(file_hash),
+                                Some(file_name),
+                                Some(file_size),
+                                Some(created_at),
+                            ) = (
                                 metadata_json.get("file_hash").and_then(|v| v.as_str()),
                                 metadata_json.get("file_name").and_then(|v| v.as_str()),
                                 metadata_json.get("file_size").and_then(|v| v.as_u64()),
@@ -1661,16 +1673,40 @@ async fn handle_kademlia_event(
                                     file_name: file_name.to_string(),
                                     file_size,
                                     file_data: Vec::new(), // Will be populated during download
-                                    seeders: vec![peer_record.peer.map(|p| p.to_string()).unwrap_or_default()],
+                                    seeders: vec![peer_record
+                                        .peer
+                                        .map(|p| p.to_string())
+                                        .unwrap_or_default()],
                                     created_at,
-                                    mime_type: metadata_json.get("mime_type").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                    is_encrypted: metadata_json.get("is_encrypted").and_then(|v| v.as_bool()).unwrap_or(false),
-                                    encryption_method: metadata_json.get("encryption_method").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                    key_fingerprint: metadata_json.get("key_fingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                    version: metadata_json.get("version").and_then(|v| v.as_u64()).map(|v| v as u32),
-                                    parent_hash: metadata_json.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                    mime_type: metadata_json
+                                        .get("mime_type")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string()),
+                                    is_encrypted: metadata_json
+                                        .get("is_encrypted")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false),
+                                    encryption_method: metadata_json
+                                        .get("encryption_method")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string()),
+                                    key_fingerprint: metadata_json
+                                        .get("key_fingerprint")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string()),
+                                    version: metadata_json
+                                        .get("version")
+                                        .and_then(|v| v.as_u64())
+                                        .map(|v| v as u32),
+                                    parent_hash: metadata_json
+                                        .get("parent_hash")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string()),
                                     cids: None, // CIDs are in the root block
-                                    is_root: metadata_json.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
+                                    is_root: metadata_json
+                                        .get("is_root")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(true),
                                 };
 
                                 let notify_metadata = metadata.clone();
@@ -1904,44 +1940,15 @@ async fn handle_dcutr_event(
         return;
     }
 
-    match event {
-        dcutr::Event::InitiatedDirectConnectionUpgrade {
-            remote_peer_id,
-            local_relayed_addr,
-        } => {
-            metrics_guard.dcutr_hole_punch_attempts += 1;
-            info!(
-                peer = %remote_peer_id,
-                relay_addr = %local_relayed_addr,
-                "DCUtR: initiated hole-punch attempt"
-            );
-            drop(metrics_guard);
-            let _ = event_tx
-                .send(DhtEvent::Info(format!(
-                    "Attempting direct connection upgrade to peer {} via relay {}",
-                    remote_peer_id, local_relayed_addr
-                )))
-                .await;
-        }
-        dcutr::Event::RemoteInitiatedDirectConnectionUpgrade {
-            remote_peer_id,
-            remote_relayed_addr,
-        } => {
-            metrics_guard.dcutr_hole_punch_attempts += 1;
-            info!(
-                peer = %remote_peer_id,
-                relay_addr = %remote_relayed_addr,
-                "DCUtR: remote peer initiated hole-punch"
-            );
-            drop(metrics_guard);
-            let _ = event_tx
-                .send(DhtEvent::Info(format!(
-                    "Remote peer {} initiated connection upgrade via relay {}",
-                    remote_peer_id, remote_relayed_addr
-                )))
-                .await;
-        }
-        dcutr::Event::DirectConnectionUpgradeSucceeded { remote_peer_id } => {
+    let dcutr::Event {
+        remote_peer_id,
+        result,
+    } = event;
+
+    metrics_guard.dcutr_hole_punch_attempts += 1;
+
+    match result {
+        Ok(_connection_id) => {
             metrics_guard.dcutr_hole_punch_successes += 1;
             metrics_guard.last_dcutr_success = Some(SystemTime::now());
             info!(
@@ -1957,10 +1964,7 @@ async fn handle_dcutr_event(
                 )))
                 .await;
         }
-        dcutr::Event::DirectConnectionUpgradeFailed {
-            remote_peer_id,
-            error,
-        } => {
+        Err(error) => {
             metrics_guard.dcutr_hole_punch_failures += 1;
             metrics_guard.last_dcutr_failure = Some(SystemTime::now());
             warn!(

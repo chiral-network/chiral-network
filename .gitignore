@@ -79,3 +79,6 @@ src-tauri/bin/
 src-tauri/geth-data/
 src-tauri/bin/
 src-tauri/geth-data/
+
+# exclude claude.md
+CLAUDE.md

@@ -146,7 +146,6 @@ pub(crate) async fn proxy_remove(
     Ok(())
 }
 
-
 #[tauri::command]
 pub(crate) async fn list_proxies(state: State<'_, AppState>) -> Result<Vec<ProxyNode>, String> {
     let proxies = state.proxies.lock().await;

@@ -318,7 +318,8 @@ fn log_reachability_snapshot(snapshot: &DhtMetricsSnapshot) {
 
 fn log_dcutr_snapshot(snapshot: &DhtMetricsSnapshot) {
     let success_rate = if snapshot.dcutr_hole_punch_attempts > 0 {
-        (snapshot.dcutr_hole_punch_successes as f64 / snapshot.dcutr_hole_punch_attempts as f64) * 100.0
+        (snapshot.dcutr_hole_punch_successes as f64 / snapshot.dcutr_hole_punch_attempts as f64)
+            * 100.0
     } else {
         0.0
     };
