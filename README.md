@@ -31,7 +31,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 - ✅ **Drag & Drop Interface**: Simple, compact file addition with real-time feedback
 - ✅ **Content Hashing**: SHA-256 hash generation for unique file identifiers
 - ✅ **DHT Metadata Distribution**: File information shared via distributed hash table
-- ✅ **Network Integration**: Files registered with P2P network for discovery (metadata stored in DHT and provider records registered)
+- ✅ **Network Integration**: Files registered with P2P network for discovery
 - ✅ **No Size Limits**: Share files of any size efficiently
 
 ### 2. Intelligent Download Management
