@@ -885,55 +885,61 @@ async fn run_dht_node(
                         break 'outer;
                     }
                     Some(DhtCommand::PublishFile(mut metadata)) => {
-                        let blocks = split_into_blocks(&metadata.file_data);
-                        let mut block_cids = Vec::new();
-                        for (idx, block) in blocks.iter().enumerate() {
-                            let cid = match block.cid() {
-                                Ok(c) => c,
+                        // If file_data is empty (encrypted files), skip block creation and use the provided hash as-is
+                        if !metadata.file_data.is_empty() {
+                            let blocks = split_into_blocks(&metadata.file_data);
+                            let mut block_cids = Vec::new();
+                            for (idx, block) in blocks.iter().enumerate() {
+                                let cid = match block.cid() {
+                                    Ok(c) => c,
+                                    Err(e) => {
+                                        error!("failed to get cid for block: {}", e);
+                                        let _ = event_tx.send(DhtEvent::Error(format!("failed to get cid for block: {}", e))).await;
+                                        return;
+                                    }
+                                };
+                                println!("block {} size={} cid={}", idx, block.data().len(), cid);
+
+                                match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(cid.clone(), block.data().to_vec())                          {
+                                    Ok(_) => {},
+                                    Err(e) => {
+                                        error!("failed to store block {}: {}", cid, e);
+                                        let _ = event_tx.send(DhtEvent::Error(format!("failed to store block {}: {}", cid, e))).await;
+                                        return;
+                                    }
+                                };
+                                block_cids.push(cid);
+                            }
+
+                            // Create root block containing just the CIDs
+                            let root_block_data = match serde_json::to_vec(&block_cids) {
+                                Ok(data) => data,
                                 Err(e) => {
-                                    error!("failed to get cid for block: {}", e);
-                                    let _ = event_tx.send(DhtEvent::Error(format!("failed to get cid for block: {}", e))).await;
+                                    eprintln!("Failed to serialize CIDs: {}", e);
                                     return;
                                 }
                             };
-                            println!("block {} size={} cid={}", idx, block.data().len(), cid);
 
-                            match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(cid.clone(), block.data().to_vec())                          {
+                            // Store root block in Bitswap
+                            let root_cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&root_block_data));
+                            match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(root_cid.clone(), root_block_data) {
                                 Ok(_) => {},
                                 Err(e) => {
-                                    error!("failed to store block {}: {}", cid, e);
-                                    let _ = event_tx.send(DhtEvent::Error(format!("failed to store block {}: {}", cid, e))).await;
+                                    error!("failed to store root block: {}", e);
+                                    let _ = event_tx.send(DhtEvent::Error(format!("failed to store root block: {}", e))).await;
                                     return;
                                 }
-                            };
-                            block_cids.push(cid);
-                        }
-
-                        // Create root block containing just the CIDs
-                        let root_block_data = match serde_json::to_vec(&block_cids) {
-                            Ok(data) => data,
-                            Err(e) => {
-                                eprintln!("Failed to serialize CIDs: {}", e);
-                                return;
                             }
-                        };
 
-                        // Store root block in Bitswap
-                        let root_cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&root_block_data));
-                        match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(root_cid.clone(), root_block_data) {
-                            Ok(_) => {},
-                            Err(e) => {
-                                error!("failed to store root block: {}", e);
-                                let _ = event_tx.send(DhtEvent::Error(format!("failed to store root block: {}", e))).await;
-                                return;
-                            }
+                            // Clear file data and set file hash to root CID
+                            metadata.file_data.clear();
+                            metadata.file_hash = root_cid.to_string();
+                            // Don't store CIDs in metadata - they're in the root block now
+                            metadata.cids = None;
+                        } else {
+                            // For encrypted files with empty file_data, use the provided hash as-is (Merkle root)
+                            println!("Publishing encrypted file with hash: {}", metadata.file_hash);
                         }
-
-                        // Clear file data and set file hash to root CID
-                        metadata.file_data.clear();
-                        metadata.file_hash = root_cid.to_string();
-                        // Don't store CIDs in metadata - they're in the root block now
-                        metadata.cids = None;
 
                         // Store minimal metadata in DHT
                         let dht_metadata = serde_json::json!({
