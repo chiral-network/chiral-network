@@ -285,8 +285,8 @@ npm run tauri build # Desktop production build
 ### Phase 3: Core P2P Features (In Progress)
 
 - ✅ **File Upload Encryption**: AES-256-GCM encryption with PBKDF2 key derivation for uploaded files
-- ❌ **File Download Decryption**: Key management and decryption for downloaded files
-- ❌ **WebRTC Encryption**: Encrypted P2P chunk transfers
+- ✅ **File Download Decryption**: Key management and decryption for downloaded files
+- ✅ **WebRTC Encryption**: Encrypted P2P chunk transfers
 - ❌ **Key Exchange UI**: Recipient public key input for encrypted sharing
 - ✅ Real P2P file transfer protocol
 - ✅ File versioning system
@@ -331,13 +331,13 @@ npm run tauri build # Desktop production build
 - AES-256-GCM file encryption for uploads
 - PBKDF2 key derivation for encryption
 - ECIES key exchange infrastructure
+- File download decryption with key management
+- WebRTC encrypted chunk transfers
 - No centralized servers to compromise
 - Fully decentralized architecture prevents single points of failure
 
 ### Planned Security
 
-- File download decryption with key management
-- WebRTC encrypted chunk transfers
 - Key exchange UI for encrypted sharing
 - File encryption at rest
 - Signed software updates
