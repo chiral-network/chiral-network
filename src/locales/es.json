@@ -1,6 +1,7 @@
 {
   "settings.title": "Configuración",
   "settings.subtitle": "Configura tus preferencias de la Red Chiral",
+  "settings.searchPlaceholder": "Buscar configuración...",
   "badges.unsaved": "Cambios no guardados",
   "storage.title": "Almacenamiento",
   "storage.location": "Ubicación de almacenamiento",
@@ -86,6 +87,38 @@
         "failures": "Intentos fallidos",
         "never": "Nunca",
         "none": "No registrado"
+      },
+      "reachability": {
+        "title": "Accesibilidad",
+        "state": {
+          "public": "Directo (Público)",
+          "private": "Retransmitido / Privado",
+          "unknown": "Desconocido"
+        },
+        "confidence": {
+          "low": "Confianza baja",
+          "medium": "Confianza moderada",
+          "high": "Confianza alta"
+        },
+        "lastProbe": "Última sonda",
+        "lastChange": "Último cambio",
+        "lastError": "Último error de sonda",
+        "observedAddrs": "Direcciones externas observadas",
+        "observedEmpty": "Aún no se han aprendido direcciones externas.",
+        "history": "Historial de sondas recientes",
+        "historyEmpty": "Aún no se han registrado sondas de accesibilidad.",
+        "summary": "Resumen",
+        "timestamp": "Marca de tiempo",
+        "stateLabel": "Estado",
+        "autonatDisabled": "Sondas AutoNAT deshabilitadas",
+        "copySuccess": "Dirección observada copiada",
+        "copyError": "No se puede copiar la dirección",
+        "genericSummary": "Sin detalles adicionales.",
+        "toast": {
+          "public": "Accesibilidad restaurada. {summary}",
+          "private": "Accesibilidad degradada. {summary}",
+          "unknown": "Estado de accesibilidad actualizado. {summary}"
+        }
       }
     },
     "networkStatus": "Estado de la red",
@@ -136,8 +169,33 @@
       "disconnected": "Desconectado exitosamente del par",
       "disconnectError": "Error al desconectar del par"
     },
+    "smartPeerSelection": "Selección inteligente de pares",
+    "peerSearch": "Búsqueda de pares",
+    "sendTest": "Enviar prueba",
+    "peerMetrics": {
+      "refresh": "Actualizar",
+      "refreshing": "Actualizando...",
+      "cleanupInactive": "Limpiar inactivos",
+      "error": "Error",
+      "loading": "Cargando métricas de pares...",
+      "noPeers": "No hay métricas de pares disponibles. Inicia el servicio DHT y conéctate a los pares.",
+      "totalPeers": "Total de pares",
+      "encryptionCapable": "Compatibles con cifrado",
+      "avgReliability": "Fiabilidad promedio",
+      "peerId": "ID de par",
+      "address": "Dirección",
+      "latency": "Latencia",
+      "bandwidth": "Ancho de banda",
+      "reliability": "Fiabilidad",
+      "successRate": "Tasa de éxito",
+      "transfers": "Transferencias",
+      "dataTransfer": "Transferencia de datos",
+      "encryption": "Cifrado",
+      "health": "Salud"
+    },
     "errors": {
-      "downloadOnlyTauri": "La descarga del Nodo Chiral solo está disponible en la aplicación de escritorio. Descarga y ejecuta la versión de escritorio Tauri."
+      "downloadOnlyTauri": "La descarga del Nodo Chiral solo está disponible en la aplicación de escritorio. Descarga y ejecuta la versión de escritorio Tauri.",
+      "dhtNotConnected": "DHT no está conectado. Por favor inicia el servicio DHT primero."
     },
     "maxConnections": "Máx. conexiones",
     "port": "Puerto",
@@ -176,7 +234,9 @@
     "network": "Red",
     "mining": "Minería",
     "proxy": "Proxy",
+    "proxySelfTest": "Proxy Self-Test",
     "analytics": "Analíticas",
+    "reputation": "Reputación",
     "account": "Cuenta",
     "settings": "Configuración",
     "connected": "Conectado",
@@ -207,6 +267,36 @@
   "advanced.exportSettings": "Exportar configuración",
   "advanced.importSettings": "Importar configuración",
   "advanced.invalidJsonAlert": "Archivo JSON no válido. Selecciona una exportación válida.",
+  "advanced.exportSuccess": "Configuración exportada a la carpeta de descargas de tu navegador.",
+  "advanced.importSuccess": "Configuración importada correctamente.",
+  "advanced.importError": "Archivo JSON no válido. Selecciona una exportación válida.",
+  "bandwidthScheduling": {
+    "title": "Programación de ancho de banda",
+    "enable": "Habilitar programación de ancho de banda",
+    "description": "Programa diferentes límites de ancho de banda para horarios y días específicos",
+    "schedules": "Horarios programados",
+    "scheduleName": "Nombre del horario",
+    "scheduleDefault": "Horario {number}",
+    "addSchedule": "Agregar horario",
+    "remove": "Eliminar",
+    "startTime": "Hora de inicio",
+    "endTime": "Hora de finalización",
+    "uploadSpeed": "Velocidad de subida",
+    "downloadSpeed": "Velocidad de descarga",
+    "uploadLimit": "Límite de subida (KB/s, 0 = ilimitado)",
+    "downloadLimit": "Límite de descarga (KB/s, 0 = ilimitado)",
+    "timeRange": "Rango horario",
+    "daysOfWeek": "Días de la semana",
+    "days": {
+      "sun": "Dom",
+      "mon": "Lun",
+      "tue": "Mar",
+      "wed": "Mié",
+      "thu": "Jue",
+      "fri": "Vie",
+      "sat": "Sáb"
+    }
+  },
   "actions.resetDefaults": "Restablecer valores predeterminados",
   "actions.cancel": "Cancelar",
   "actions.save": "Guardar configuración",
@@ -299,7 +389,38 @@
       "empty": "No se encontraron cuentas en el almacén.",
       "success": "Cuenta cargada correctamente",
       "successSimulated": "Cuenta cargada (modo demo)",
-      "error": "Error al cargar la cuenta: {error}"
+      "error": "Error al cargar la cuenta: {error}",
+      "savePassword": "Guardar contraseña en este equipo (caduca en 30 días)",
+      "savePasswordWarning": "Advertencia: Guardar tu contraseña localmente es conveniente pero menos seguro. Úsalo con precaución.",
+      "addressMismatch": "Error de descifrado: la dirección no coincide."
+    }
+  },
+  "security": {
+    "2fa": {
+      "title": "Autenticación de 2 factores (2FA)",
+      "subtitle_clear": "Añade una capa adicional de seguridad a tu cuenta.",
+      "status": {
+        "enabled": "2FA está habilitado",
+        "enabled_desc": "Las acciones sensibles ahora requieren un código de verificación.",
+        "disabled_desc": "Habilita 2FA para mejorar la seguridad de tu cuenta."
+      },
+      "how_it_works": "Cuando esté habilitado, necesitarás un código de una aplicación de autenticación (como Google Authenticator o Authy) para acciones sensibles.",
+      "enable": "Habilitar 2FA",
+      "disable": "Deshabilitar",
+      "setup": {
+        "title": "Configurar 2FA",
+        "step1_scan": "1. Escanea el código QR con tu aplicación de autenticación.",
+        "scanAlt": "¿No puedes escanear?",
+        "step2_manual": "O, introduce esta clave manualmente:",
+        "step3_verify": "2. Introduce el código de 6 dígitos de tu aplicación para verificar.",
+        "verifyLabel": "Código de verificación",
+        "verifyAndEnable": "Verificar y habilitar"
+      },
+      "prompt": {
+        "title": "Se requiere 2FA",
+        "enter_code": "Introduce el código de 6 dígitos de tu aplicación de autenticación para continuar.",
+        "label": "Código de autenticación"
+      }
     }
   },
   "blacklist": {
@@ -382,7 +503,9 @@
     "remove": "Eliminar",
     "edit": "Editar",
     "resetDefaults": "Restablecer valores predeterminados",
-    "lockWallet": "Bloquear billetera"
+    "lockWallet": "Bloquear billetera",
+    "verifying": "Verificando...",
+    "confirm": "Confirmar"
   },
   "placeholders": {
     "importPrivateKey": "Introduce la clave privada para importar",
@@ -451,6 +574,9 @@
     "activeUploads": "Subidas activas",
     "activeDownloads": "Descargas activas",
     "queuedDownloads": "Descargas en cola",
+    "completedUploads": "Subidas completadas",
+    "completedDownloads": "Descargas completadas",
+    "uniquePeers": "Pares únicos",
     "totalTransactions": "Transacciones totales",
     "networkFiles": "Archivos de la red",
     "networkLatency": "Latencia de la red",
@@ -491,7 +617,8 @@
     "multipleLogins": "Múltiples inicios de sesión",
     "multipleLoginsDesc": "El usuario inició sesión desde distintos países en 5 minutos",
     "failedDownloads": "Descargas fallidas",
-    "failedDownloadsDesc": "Se detectaron varios intentos de descarga fallidos"
+    "failedDownloadsDesc": "Se detectaron varios intentos de descarga fallidos",
+    "latencyNoNodes": "No hay nodos proxy conectados. Los datos de latencia aparecerán aquí una vez que te conectes."
   },
   "proxy": {
     "title": "Red proxy",
@@ -581,6 +708,49 @@
       "pool2": "ChiralPool #2",
       "community": "Pool de la comunidad"
     },
+    "decentralizedPools": "Pools de minería descentralizados",
+    "discovering": "Descubriendo...",
+    "discoverPools": "Descubrir pools",
+    "createPool": "Crear pool",
+    "poolConfiguration": "Configuración de pool",
+    "pool": {
+      "connectedTo": "Conectado a",
+      "leave": "Salir del pool",
+      "yourHashrate": "Tu tasa de hash",
+      "poolHashrate": "Tasa de hash del pool",
+      "yourShare": "Tu participación",
+      "est24hPayout": "Pago estimado 24h",
+      "shares": "Acciones (A/S)",
+      "connectedMiners": "Mineros conectados",
+      "poolFee": "Comisión del pool",
+      "lastShare": "Última acción",
+      "soloMining": "Minería en solitario",
+      "soloMiningDesc": "Estás minando en solitario. Descubre y únete a un pool para compartir recompensas y reducir la varianza.",
+      "availablePools": "Pools de minería disponibles",
+      "noPoolsFound": "Aún no se han descubierto pools. Intenta descubrir pools primero.",
+      "miners": "Mineros",
+      "hashrate": "Tasa de hash",
+      "fee": "Comisión",
+      "lastBlock": "Último bloque",
+      "never": "Nunca",
+      "blocks24h": "Bloques 24h",
+      "minPayout": "Pago mínimo",
+      "payment": "Pago",
+      "url": "URL",
+      "join": "Unirse al pool",
+      "createNew": "Crear nuevo pool de minería",
+      "poolName": "Nombre del pool",
+      "poolNamePlaceholder": "Mi pool de minería",
+      "region": "Región",
+      "description": "Descripción",
+      "descriptionPlaceholder": "Una breve descripción de tu pool...",
+      "feePercentage": "Porcentaje de comisión",
+      "minPayoutChiral": "Pago mínimo (Chiral)",
+      "paymentMethod": "Método de pago",
+      "note": "Nota",
+      "createNote": "Crear un pool te establecerá automáticamente como coordinador. Tu pool se anunciará en la red descentralizada para que otros lo descubran y se unan.",
+      "cancel": "Cancelar"
+    },
     "errors": {
       "threads": "Los hilos deben estar entre 1 y {cpuThreads}",
       "intensity": "La intensidad debe estar entre 1 y 100",
@@ -589,6 +759,53 @@
       "noAccountLink": "Por favor crea una cuenta de la Red Chiral desde la"
     },
     "starting": "Iniciando minería... (puede reiniciar el nodo si es necesario)"
+  },
+  "reputation": {
+    "title": "Sistema de reputación",
+    "subtitle": "Supervisa los niveles de confianza de los pares y la salud de la red",
+    "refreshing": "Actualizando...",
+    "refreshData": "Actualizar datos",
+    "hideAnalytics": "Ocultar análisis",
+    "showAnalytics": "Mostrar análisis",
+    "loading": "Cargando datos de reputación...",
+    "searchPeers": "Buscar pares",
+    "searchPlaceholder": "Buscar por ID de par...",
+    "filters": "Filtros",
+    "trustLevel": "Nivel de confianza",
+    "encryption": "Cifrado",
+    "any": "Cualquiera",
+    "supported": "Soportado",
+    "notSupported": "No soportado",
+    "minimumUptime": "Tiempo de actividad mínimo",
+    "clear": "Limpiar",
+    "apply": "Aplicar",
+    "showing": "Mostrando {filtered} de {total} pares",
+    "view": "Vista",
+    "cards": "Tarjetas",
+    "noPeersFound": "No se encontraron pares",
+    "tryAdjusting": "Intenta ajustar tus criterios de búsqueda o filtros.",
+    "sortOptions": {
+      "score": "Puntuación de reputación",
+      "interactions": "Interacciones totales",
+      "lastSeen": "Última vez visto"
+    },
+    "score": "Puntuación de reputación",
+    "history": "Historial de reputación",
+    "events": "Eventos de reputación",
+    "trustScore": "Puntuación de confianza",
+    "penalties": "Penalizaciones",
+    "rewards": "Recompensas",
+    "analytics": {
+      "totalPeers": "Pares totales",
+      "trustedPeers": "Pares de confianza",
+      "avgScore": "Puntuación promedio",
+      "trustRate": "Tasa de confianza",
+      "trustLevelDistribution": "Distribución de nivel de confianza",
+      "total": "Total",
+      "recentEvents": "Eventos recientes",
+      "topPerformers": "Mejores desempeños",
+      "interactions": "{count} interacciones"
+    }
   },
   "upload": {
     "title": "Subir archivos",
@@ -643,6 +860,11 @@
     "addNew": "Agregar nueva descarga",
     "addNewSubtitle": "Introduce un hash de archivo para buscarlo y descargarlo desde la red",
     "placeholder": "Introduce el hash del archivo (p. ej., QmZ4tDuvesekqMD...)",
+    "searchByHash": "Buscar por hash",
+    "searchByName": "Buscar por nombre",
+    "autoClear": "Limpieza automática",
+    "multiSource": "Descarga multifuente",
+    "maxPeers": "Máximo de pares",
     "clearInput": "Limpiar entrada",
     "searchAndDownload": "Buscar y descargar",
     "downloads": "Descargas",
@@ -688,6 +910,7 @@
       "remove": "Eliminar",
       "cancel": "Cancelar",
       "showInFolder": "Mostrar en carpeta",
+      "openFile": "Abrir archivo",
       "retry": "Reintentar"
     },
     "notifications": {
@@ -740,6 +963,11 @@
         }
       },
       "button": "Buscar"
+    },
+    "telemetry": {
+      "retrying": "Reintentando descarga de {hash} (intento {attempt} de {max})",
+      "recovered": "Descarga recuperada para {hash} después de {retries} reintentos ({duration} ms)",
+      "failed": "Descarga falló para {hash} después de {attempts} intentos"
     }
   }
 }
