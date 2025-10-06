@@ -19,6 +19,14 @@
   let connectionTimeouts = new Map<string, NodeJS.Timeout>()
   let reconnectIntervals = new Map<string, NodeJS.Timeout>()
   let autoReconnectEnabled = true
+  let performanceHistory = new Map<string, {
+    totalAttempts: number
+    successfulConnections: number
+    lastSuccessTime?: Date
+    lastFailureTime?: Date
+    averageLatency?: number
+    uptimePercentage: number
+  }>()
   const validAddressRegex = /^[a-zA-Z0-9.-]+:[0-9]{1,5}$/
   const ipv4Regex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):[0-9]{1,5}$/
   const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.([a-zA-Z]{2,}|[a-zA-Z]{2,}\.[a-zA-Z]{2,}):[0-9]{1,5}$/
@@ -100,6 +108,38 @@
       return { valid: true, error: '' }
   }
 
+  function updatePerformanceHistory(address: string, success: boolean, latency?: number) {
+      const current = performanceHistory.get(address) || {
+          totalAttempts: 0,
+          successfulConnections: 0,
+          uptimePercentage: 0
+      }
+
+      current.totalAttempts++
+      if (success) {
+          current.successfulConnections++
+          current.lastSuccessTime = new Date()
+          if (latency !== undefined) {
+              current.averageLatency = current.averageLatency
+                  ? (current.averageLatency + latency) / 2
+                  : latency
+          }
+      } else {
+          current.lastFailureTime = new Date()
+      }
+
+      current.uptimePercentage = Math.round((current.successfulConnections / current.totalAttempts) * 100)
+      performanceHistory.set(address, current)
+  }
+
+  function getPerformanceStats(address: string) {
+      return performanceHistory.get(address) || {
+          totalAttempts: 0,
+          successfulConnections: 0,
+          uptimePercentage: 0
+      }
+  }
+
   function startConnectionTimeout(address: string) {
       // Clear any existing timeout
       const existingTimeout = connectionTimeouts.get(address)
@@ -118,6 +158,9 @@
               )
           })
           connectionTimeouts.delete(address)
+
+          // Track timeout as failure
+          updatePerformanceHistory(address, false)
 
           // Start auto-reconnect for timed out connections
           startAutoReconnect(address)
@@ -237,6 +280,24 @@
       } else {
           addressError = ''
       }
+  }
+
+  // Track successful connections when nodes come online
+  $: {
+      $proxyNodes.forEach(node => {
+          if (node.status === 'online' && node.address) {
+              // Check if this is a new successful connection
+              const stats = getPerformanceStats(node.address)
+              const timeSinceLastSuccess = stats.lastSuccessTime
+                  ? Date.now() - stats.lastSuccessTime.getTime()
+                  : Infinity
+
+              // Only update if it's been more than 5 seconds since last success (prevent spam)
+              if (timeSinceLastSuccess > 5000) {
+                  updatePerformanceHistory(node.address, true, node.latency)
+              }
+          }
+      })
   }
 </script>
 
@@ -473,6 +534,32 @@
               <p class="text-sm font-medium">{node.latency || 'N/A'} ms</p>
             </div>
           </div>
+
+          {#if node.address}
+            {@const stats = getPerformanceStats(node.address)}
+            <div class="grid grid-cols-2 gap-4 mb-3 pt-2 border-t border-border/50">
+              <div>
+                <p class="text-xs text-muted-foreground">Reliability</p>
+                <div class="flex items-center gap-2">
+                  <p class="text-sm font-medium">{stats.uptimePercentage}%</p>
+                  <div class="w-12 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                    <div
+                      class="h-full transition-all duration-300 {
+                        stats.uptimePercentage >= 80 ? 'bg-green-500' :
+                        stats.uptimePercentage >= 60 ? 'bg-yellow-500' :
+                        'bg-red-500'
+                      }"
+                      style="width: {stats.uptimePercentage}%"
+                    ></div>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <p class="text-xs text-muted-foreground">Attempts</p>
+                <p class="text-sm font-medium">{stats.successfulConnections}/{stats.totalAttempts}</p>
+              </div>
+            </div>
+          {/if}
           
           <div class="flex gap-2">
             <Button
