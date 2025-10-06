@@ -83,6 +83,7 @@ struct StreamingUploadSession {
     hasher: sha2::Sha256,
     created_at: std::time::SystemTime,
     chunk_cids: Vec<dht::Cid>, // Collect CIDs of all chunks for root block creation
+    file_data: Vec<u8>, // Accumulate file data for local storage
 }
 
 struct AppState {
@@ -380,20 +381,29 @@ async fn upload_versioned_file(
             .unwrap()
             .as_secs();
 
-        // Use the DHT versioning helper to fill in parent_hash/version
-        let metadata = dht
-            .prepare_versioned_metadata(
-                file_hash.clone(),
-                file_name,
-                file_data.len() as u64, // Use file size directly from data
-                file_data,
-                created_at,
-                mime_type,
-                is_encrypted,
-                encryption_method,
-                key_fingerprint,
-            )
-            .await?;
+// Use the DHT versioning helper to fill in parent_hash/version
+let metadata = dht
+    .prepare_versioned_metadata(
+        file_hash.clone(),
+        file_name.clone(),
+        file_data.len() as u64,  // Use file size directly from data
+        file_data.clone(),
+        created_at,
+        mime_type,
+        is_encrypted,
+        encryption_method,
+        key_fingerprint,
+    )
+    .await?;
+
+        // Store file data locally for seeding
+        let ft = {
+            let ft_guard = state.file_transfer.lock().await;
+            ft_guard.as_ref().cloned()
+        };
+        if let Some(ft) = ft {
+            ft.store_file_data(file_hash.clone(), file_name, file_data).await;
+        }
 
         dht.publish_file(metadata.clone()).await?;
         Ok(metadata)
@@ -1648,9 +1658,9 @@ async fn upload_file_data_to_network(
         // Create metadata
         let metadata = FileMetadata {
             file_hash: file_hash.clone(),
-            file_name,
+            file_name: file_name.clone(),
             file_size: file_data.len() as u64,
-            file_data,
+            file_data: file_data.clone(),
             seeders: vec![],
             created_at,
             mime_type,
@@ -1664,11 +1674,44 @@ async fn upload_file_data_to_network(
             is_root: true,
         };
 
+        // Store file data locally for seeding
+        let ft = {
+            let ft_guard = state.file_transfer.lock().await;
+            ft_guard.as_ref().cloned()
+        };
+        if let Some(ft) = ft {
+            ft.store_file_data(file_hash.clone(), file_name, file_data).await;
+        }
+
         // Publish to DHT
         dht.publish_file(metadata.clone()).await?;
         Ok(metadata)
     } else {
         Err("DHT not running".into())
+    }
+}
+
+#[tauri::command]
+async fn store_file_data_from_path(
+    state: State<'_, AppState>,
+    file_path: String,
+    file_hash: String,
+    file_name: String,
+) -> Result<(), String> {
+    let ft = {
+        let ft_guard = state.file_transfer.lock().await;
+        ft_guard.as_ref().cloned()
+    };
+    if let Some(ft) = ft {
+        // Read file data from path
+        let file_data = tokio::fs::read(&file_path)
+            .await
+            .map_err(|e| format!("Failed to read file: {}", e))?;
+        
+        ft.store_file_data(file_hash, file_name, file_data).await;
+        Ok(())
+    } else {
+        Err("File transfer service not running".to_string())
     }
 }
 
@@ -1724,9 +1767,9 @@ async fn upload_file_to_network(
         // Create metadata
         let metadata = FileMetadata {
             file_hash: file_hash.clone(),
-            file_name,
+            file_name: file_name.clone(),
             file_size: file_data.len() as u64,
-            file_data,
+            file_data: file_data.clone(),
             seeders: vec![],
             created_at,
             mime_type: None,
@@ -1739,6 +1782,15 @@ async fn upload_file_to_network(
             cids: None,
             is_root: true,
         };
+
+        // Store file data locally for seeding
+        let ft = {
+            let ft_guard = state.file_transfer.lock().await;
+            ft_guard.as_ref().cloned()
+        };
+        if let Some(ft) = ft {
+            ft.store_file_data(file_hash.clone(), file_name, file_data).await;
+        }
 
         // Publish to DHT
         dht.publish_file(metadata.clone()).await?;
@@ -1816,7 +1868,8 @@ async fn start_streaming_upload(
             hasher: sha2::Sha256::new(),
             created_at: std::time::SystemTime::now(),
             chunk_cids: Vec::new(),
-        },
+            file_data: Vec::new(),
+    },
     );
 
     Ok(upload_id)
@@ -1835,8 +1888,9 @@ async fn upload_file_chunk(
         .get_mut(&upload_id)
         .ok_or_else(|| format!("Upload session {} not found", upload_id))?;
 
-    // Update hasher with chunk data
+    // Update hasher with chunk data and accumulate file data
     session.hasher.update(&chunk_data);
+    session.file_data.extend_from_slice(&chunk_data);
     session.received_chunks += 1;
 
     // Store chunk directly in Bitswap (if DHT is available)
@@ -1918,16 +1972,32 @@ async fn upload_file_chunk(
             is_root: true,
         };
 
+        // Store complete file data locally for seeding
+        let complete_file_data = session.file_data.clone();
+        let file_name_for_storage = session.file_name.clone();
+        
+        // Clean up session before storing file data
+        let file_hash = root_cid.to_string();
+        upload_sessions.remove(&upload_id);
+        
+        // Release the upload_sessions lock before the async operation
+        drop(upload_sessions);
+
+        // Store file data in FileTransferService
+        let ft = {
+            let ft_guard = state.file_transfer.lock().await;
+            ft_guard.as_ref().cloned()
+        };
+        if let Some(ft) = ft {
+            ft.store_file_data(file_hash.clone(), file_name_for_storage, complete_file_data).await;
+        }
+
         // Publish to DHT
         if let Some(dht) = dht_opt {
             dht.publish_file(metadata.clone()).await?;
         } else {
             return Err("DHT not running".into());
         }
-
-        // Clean up session
-        let file_hash = root_cid.to_string();
-        upload_sessions.remove(&upload_id);
 
         Ok(Some(file_hash))
     } else {
@@ -3193,6 +3263,7 @@ fn main() {
             start_file_transfer_service,
             upload_file_to_network,
             upload_file_data_to_network,
+            store_file_data_from_path,
             download_file_from_network,
             download_blocks_from_network,
             start_multi_source_download,
@@ -3245,6 +3316,8 @@ fn main() {
             encrypt_file_for_self_upload,
             encrypt_file_for_recipient,
             decrypt_and_reassemble_file,
+            get_file_data,
+            store_file_data
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -3576,4 +3649,40 @@ async fn decrypt_and_reassemble_file(
     })
     .await
     .map_err(|e| format!("Decryption task failed: {}", e))?
+}
+
+#[tauri::command]
+async fn get_file_data(
+    state: State<'_, AppState>,
+    file_hash: String,
+) -> Result<String, String> {
+    let ft = {
+        let ft_guard = state.file_transfer.lock().await;
+        ft_guard.as_ref().cloned()
+    };
+    if let Some(ft) = ft {
+        let data = ft.get_file_data(&file_hash).await.ok_or("File not found".to_string())?;
+        Ok(base64::encode(&data))
+    } else {
+        Err("File transfer service not running".to_string())
+    }
+}
+
+#[tauri::command]
+async fn store_file_data(
+    state: State<'_, AppState>,
+    file_hash: String,
+    file_name: String,
+    file_data: Vec<u8>,
+) -> Result<(), String> {
+    let ft = {
+        let ft_guard = state.file_transfer.lock().await;
+        ft_guard.as_ref().cloned()
+    };
+    if let Some(ft) = ft {
+        ft.store_file_data(file_hash, file_name, file_data).await;
+        Ok(())
+    } else {
+        Err("File transfer service not running".to_string())
+    }
 }
