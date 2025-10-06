@@ -54,6 +54,11 @@
     // Privacy settings
     enableProxy: true,
     proxyAddress: "127.0.0.1:9050", // Default Tor SOCKS address
+    enableAutonat: true,
+    autonatProbeInterval: 30,
+    autonatServers: [],
+    enableAutorelay: true,
+    preferredRelays: [],
     anonymousMode: false,
     shareAnalytics: true,
 
@@ -85,6 +90,10 @@
     type: "success" | "error";
   } | null = null;
 
+  // NAT configuration text bindings
+  let autonatServersText = '';
+  let preferredRelaysText = '';
+
   const locations = [
     { value: "US-East", label: "US East" },
     { value: "US-West", label: "US West" },
@@ -99,6 +108,10 @@
     { value: "zh", label: $t("language.chinese") },
     { value: "ko", label: $t("language.korean") },
   ];
+
+  // Initialize NAT configuration text from arrays
+  $: autonatServersText = localSettings.autonatServers?.join('\n') || '';
+  $: preferredRelaysText = localSettings.preferredRelays?.join('\n') || '';
 
   // Check for changes
   $: hasChanges = JSON.stringify(localSettings) !== JSON.stringify(savedSettings);
@@ -253,6 +266,20 @@
 
     // allow re-uploading the same file later
     (event.target as HTMLInputElement).value = "";
+  }
+
+  function updateAutonatServers() {
+    localSettings.autonatServers = autonatServersText
+      .split('\n')
+      .map(s => s.trim())
+      .filter(s => s.length > 0);
+  }
+
+  function updatePreferredRelays() {
+    localSettings.preferredRelays = preferredRelaysText
+      .split('\n')
+      .map(s => s.trim())
+      .filter(s => s.length > 0);
   }
 
     onMount(async () => {
@@ -854,6 +881,86 @@ function sectionMatches(section: string, query: string) {
             <p class="text-xs text-muted-foreground mt-1">{$t("privacy.proxyHint")}</p>
           </div>
         {/if}
+
+        <!-- AutoNAT Configuration -->
+        <div class="space-y-3 border-t pt-3">
+          <h4 class="font-medium">NAT Traversal & Reachability</h4>
+
+          <div class="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="enable-autonat"
+              bind:checked={localSettings.enableAutonat}
+            />
+            <Label for="enable-autonat" class="cursor-pointer">
+              Enable AutoNAT Reachability Detection
+            </Label>
+          </div>
+
+          {#if localSettings.enableAutonat}
+            <div>
+              <Label for="autonat-interval">Probe Interval (seconds)</Label>
+              <Input
+                id="autonat-interval"
+                type="number"
+                bind:value={localSettings.autonatProbeInterval}
+                min="10"
+                max="300"
+                placeholder="30"
+                class="mt-1"
+              />
+              <p class="text-xs text-muted-foreground mt-1">
+                How often to check network reachability (default: 30s)
+              </p>
+            </div>
+
+            <div>
+              <Label for="autonat-servers">Custom AutoNAT Servers (optional)</Label>
+              <textarea
+                id="autonat-servers"
+                bind:value={autonatServersText}
+                on:blur={updateAutonatServers}
+                placeholder="/ip4/1.2.3.4/tcp/4001/p2p/QmPeerId&#10;One multiaddr per line"
+                rows="3"
+                class="w-full px-3 py-2 border rounded-md text-sm"
+              ></textarea>
+              <p class="text-xs text-muted-foreground mt-1">
+                Leave empty to use bootstrap nodes
+              </p>
+            </div>
+          {/if}
+        </div>
+
+        <!-- AutoRelay Configuration -->
+        <div class="space-y-3 border-t pt-3">
+          <div class="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="enable-autorelay"
+              bind:checked={localSettings.enableAutorelay}
+            />
+            <Label for="enable-autorelay" class="cursor-pointer">
+              Enable Circuit Relay v2 (AutoRelay)
+            </Label>
+          </div>
+
+          {#if localSettings.enableAutorelay}
+            <div>
+              <Label for="preferred-relays">Preferred Relay Nodes (optional)</Label>
+              <textarea
+                id="preferred-relays"
+                bind:value={preferredRelaysText}
+                on:blur={updatePreferredRelays}
+                placeholder="/ip4/relay.example.com/tcp/4001/p2p/QmRelayId&#10;One multiaddr per line"
+                rows="3"
+                class="w-full px-3 py-2 border rounded-md text-sm"
+              ></textarea>
+              <p class="text-xs text-muted-foreground mt-1">
+                Leave empty to use bootstrap nodes as relays
+              </p>
+            </div>
+          {/if}
+        </div>
 
         <div class="flex items-center gap-2">
           <input
