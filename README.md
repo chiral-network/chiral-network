@@ -47,12 +47,14 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 
 ### 3. Network Monitoring & Peer Discovery
 
-- ❌ **Real-Time Network Stats**: Monitor peers, bandwidth, and network health (bandwidth and network health uses mock data)
+- ✅ **Real-Time Network Stats**: Monitor peers, bandwidth, and network health with real analytics
 - ✅ **Automatic Peer Discovery**: DHT-based peer finding with manual connect option
-- ✅ **Peer Reputation**: Track and display peer reliability scores
-- ❌ **Geographic Distribution**: View real peer locations and regional statistics (real geolocation not implemented)
+- ✅ **Reputation-Based Peer Selection**: Track peer reliability, latency, and bandwidth for intelligent routing
+- ✅ **Multi-Source Downloads**: Parallel downloads from multiple peers for faster transfers
+- ❌ **Geographic Distribution**: View real peer locations and regional statistics (geolocation not implemented)
 - ✅ **Connection Management**: Direct control over peer connections with disconnect functionality
 - ✅ **Network Health Indicators**: Visual status of network connectivity
+- ✅ **NAT Traversal**: AutoNAT v2 reachability detection and Circuit Relay v2 for NAT'd peers
 
 ### 4. Comprehensive Analytics Dashboard
 
@@ -63,14 +65,21 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 - ✅ **Resource Contribution**: Track your contribution to the network with real bandwidth/storage metrics
 - ✅ **Historical Data**: View bandwidth and contribution trends over time (mining earnings use mock data)
 
-### 5. Proxy Network Support
+### 5. Proxy & NAT Traversal Support
 
+- ✅ **SOCKS5 Proxy Support**: Route P2P traffic through SOCKS5 proxies for privacy
+- ✅ **Circuit Relay v2**: Automatic relay reservation for NAT traversal
+- ✅ **AutoNAT v2**: Automatic reachability detection (Public/Private/Unknown)
+- ✅ **Relay Health Monitoring**: Track relay connection status and performance
+- ✅ **Custom Relay Nodes**: Add trusted relay nodes manually
+- ✅ **Headless Relay Configuration**: CLI flags for --enable-autorelay, --relay, --autonat-server
 - ❌ **Privacy Protection**: Route traffic through proxy nodes (no traffic routing implemented)
 - ❌ **Load Balancing**: Automatic distribution across multiple proxies (no parallel downloads or file segmentation)
 - ❌ **Latency Optimization**: Choose proxies based on performance (no download process uses latency framework)
 - ✅ **Custom Node Addition**: Add trusted proxy nodes manually
 - ❌ **Bandwidth Aggregation**: Combine multiple proxy connections (no actual combining of multiple proxy connections)
 - ✅ **Real Proxy Management**: Backend proxy connection and management
+- ❌ **Public Relay Infrastructure**: Dedicated relay daemon deployment (in progress)
 
 ### 6. Security & Privacy
 
@@ -100,6 +109,87 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 - ✅ **Import/Export**: Backup and restore settings
 - ✅ **Multi-language Support**: English, Spanish, Chinese, Korean
 
+## NAT Traversal & Network Reachability
+
+### Current Implementation Status
+
+#### ✅ Implemented Features
+
+1. **AutoNAT v2 Reachability Detection**
+   - Automatic 30-second probe cycles
+   - Real-time reachability status (Public/Private/Unknown)
+   - Confidence scoring for reachability state
+   - Reachability history tracking
+   - Headless CLI support: `--disable-autonat`, `--autonat-probe-interval`, `--autonat-server`
+
+2. **Circuit Relay v2 with AutoRelay**
+   - Automatic relay candidate detection from bootstrap nodes
+   - Dynamic relay reservation for NAT'd peers
+   - Relay health monitoring and connection tracking
+   - Headless CLI support: `--enable-autorelay`, `--disable-autorelay`, `--relay <multiaddr>`
+   - Configurable preferred relay nodes (GUI + CLI)
+
+3. **Observed Address Tracking**
+   - libp2p identify protocol integration
+   - Persistent tracking of externally observed addresses
+   - Address change detection and logging
+
+4. **SOCKS5 Proxy Integration**
+   - P2P traffic routing through SOCKS5 proxies
+   - CLI flag: `--socks5-proxy <address>`
+
+#### ❌ Not Yet Implemented
+
+1. **Public Relay Infrastructure**
+   - Dedicated Circuit Relay v2 daemon
+   - Relay deployment documentation
+   - Bootstrap/shutdown scripts
+   - Health monitoring endpoints
+
+2. **GUI Relay Configuration**
+   - AutoRelay toggle in Settings UI
+   - Relay address textarea for custom relays
+   - Real-time reachability status display
+
+3. **Advanced Security**
+   - Relay reservation authentication
+   - Rate limiting for AutoNAT probes
+   - Anti-amplification safeguards
+
+4. **Resilience Testing**
+   - End-to-end NAT traversal scenarios
+   - Private↔Public connection tests
+   - Private↔Private relay/hole-punch tests
+   - Failure fallback validation
+
+### Headless Mode NAT Configuration
+
+```bash
+# Enable AutoNAT with custom probe interval
+./chiral-network --autonat-probe-interval 60
+
+# Disable AutoNAT
+./chiral-network --disable-autonat
+
+# Add custom AutoNAT servers
+./chiral-network --autonat-server /ip4/1.2.3.4/tcp/4001/p2p/QmPeerId
+
+# Enable AutoRelay with custom relay nodes
+./chiral-network --relay /ip4/relay.example.com/tcp/4001/p2p/QmRelayId
+
+# Route P2P through SOCKS5 proxy
+./chiral-network --socks5-proxy 127.0.0.1:9050
+```
+
+### NAT Traversal Architecture
+
+The network uses a multi-layered approach to ensure connectivity:
+
+1. **Direct Connection** (fastest): For publicly reachable peers
+2. **Hole Punching** (DCUtR): For symmetric NAT traversal
+3. **Circuit Relay** (fallback): For restrictive NATs
+4. **SOCKS5 Proxy** (privacy): For anonymous routing
+
 ## Technical Implementation
 
 ### Frontend Stack
@@ -119,11 +209,19 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 
 ### P2P Network Infrastructure
 
-- **libp2p v0.54**: Full peer-to-peer networking stack
-- **Kademlia DHT**: Distributed hash table for metadata storage
-- **WebRTC**: Direct peer-to-peer data channels
-- **NAT Traversal**: STUN, relay, and mDNS support
+- **libp2p v0.54**: Full peer-to-peer networking stack with production features
+- **Kademlia DHT**: Distributed hash table for file metadata storage and peer discovery
+- **WebRTC**: Direct peer-to-peer data channels for file transfers
+- **NAT Traversal**:
+  - AutoNAT v2 for reachability detection
+  - Circuit Relay v2 with AutoRelay for NAT'd peers
+  - DCUtR (Direct Connection Upgrade through Relay) for hole punching
+  - mDNS for local peer discovery
 - **Noise Protocol**: Modern cryptographic transport security
+- **Bitswap Protocol**: Efficient block exchange for chunked file transfers
+- **SOCKS5 Proxy**: Privacy-focused P2P traffic routing
+- **Multi-Source Downloads**: Parallel chunk downloading from multiple peers
+- **Reputation System**: Track peer reliability, bandwidth, and latency for intelligent peer selection
 
 ## Architecture Decisions
 
@@ -279,18 +377,30 @@ npm run test:watch
 
 ### Phase 2: P2P Network Infrastructure (Completed)
 
-- ✅ Full libp2p v0.54 integration
+- ✅ Full libp2p v0.54 integration with all production features
 - ✅ Production-ready Kademlia DHT implementation
 - ✅ Real peer discovery with mDNS and libp2p
-- ✅ Complete WebRTC data channel support
-- ✅ NAT traversal (STUN, libp2p relay, mDNS)
+- ✅ Complete WebRTC data channel support for P2P transfers
+- ✅ NAT traversal (AutoNAT v2, Circuit Relay v2, DCUtR, mDNS)
 - ✅ Advanced peer selection and reputation system
+- ✅ Multi-source downloads with parallel chunk transfers
+- ✅ SOCKS5 proxy support for privacy
+- ✅ Bitswap protocol for efficient block exchange
+- ✅ Comprehensive analytics with real-time metrics tracking
 
 ### Phase 3: Core P2P Features (In Progress)
 
 - ✅ **File Upload Encryption**: AES-256-GCM encryption with PBKDF2 key derivation for uploaded files
 - ✅ **File Download Decryption**: Key management and decryption for downloaded files
 - ✅ **WebRTC Encryption**: Encrypted P2P chunk transfers
+- ❌ **Key Exchange UI**: Recipient public key input for encrypted sharing
+- ✅ **Real P2P File Transfer**: Production-ready WebRTC-based transfer protocol
+- ✅ **File Versioning System**: Track and manage multiple versions of files
+- ✅ **Advanced Bandwidth Scheduling**: Time-based bandwidth limits with day-of-week rules
+- ❌ **GUI NAT Configuration**: Settings UI for AutoRelay and relay preferences (headless only)
+- ❌ **Public Relay Infrastructure**: Dedicated relay daemon deployment
+- [ ] **Selective Sync Capabilities**: Choose which files to download
+- [ ] **Mobile Applications**: iOS and Android support
 - ✅ **Key Exchange UI**: Recipient public key input for encrypted sharing
 - ✅ Real P2P file transfer protocol
 - ✅ File versioning system
