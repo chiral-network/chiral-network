@@ -161,6 +161,14 @@ The codebase implements strong encryption practices:
 - **Noise Protocol**: Modern cryptographic transport security
 - **Peer Authentication**: Built-in peer identity verification
 
+### Stream Authentication
+
+- **HMAC-SHA256**: Cryptographic message authentication for file chunks
+- **Sequence Numbers**: Protection against replay attacks
+- **Timestamp Validation**: Prevents stale message acceptance
+- **Session Management**: Secure session creation and cleanup
+- **Data Integrity**: Real-time verification of transferred data
+
 ### Proxy Support
 
 - **SOCKS5**: Proper proxy protocol implementation

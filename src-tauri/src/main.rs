@@ -12,6 +12,7 @@ mod ethereum;
 mod file_transfer;
 mod geth_downloader;
 mod headless;
+mod stream_auth;
 mod keystore;
 mod manager;
 mod multi_source_download;
@@ -60,6 +61,7 @@ use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{error, info, warn};
 use webrtc_service::{WebRTCFileRequest, WebRTCService};
 use multi_source_download::{MultiSourceDownloadService, MultiSourceEvent, MultiSourceProgress};
+use chiral_network::stream_auth::{StreamAuthService, AuthMessage};
 
 use crate::manager::ChunkManager; // Import the ChunkManager
 use base64::{engine::general_purpose, Engine as _}; // For key encoding
@@ -113,6 +115,9 @@ struct AppState {
 
     // New field for streaming upload sessions
     upload_sessions: Arc<Mutex<std::collections::HashMap<String, StreamingUploadSession>>>,
+    
+    // Stream authentication service
+    stream_auth: Arc<Mutex<StreamAuthService>>,
 }
 
 #[tauri::command]
@@ -892,6 +897,38 @@ async fn get_dht_connected_peers(state: State<'_, AppState>) -> Result<Vec<Strin
     } else {
         Ok(Vec::new()) // Return empty vector if DHT is not running
     }
+}
+
+#[tauri::command]
+async fn create_auth_session(
+    state: State<'_, AppState>,
+    session_id: String,
+    hmac_key: Vec<u8>,
+) -> Result<(), String> {
+    let mut auth_service = state.stream_auth.lock().await;
+    auth_service.create_session(session_id, hmac_key)
+}
+
+#[tauri::command]
+async fn verify_stream_auth(
+    state: State<'_, AppState>,
+    session_id: String,
+    auth_message: AuthMessage,
+) -> Result<bool, String> {
+    let mut auth_service = state.stream_auth.lock().await;
+    auth_service.verify_data(&session_id, &auth_message)
+}
+
+#[tauri::command]
+async fn generate_hmac_key() -> Vec<u8> {
+    StreamAuthService::generate_hmac_key()
+}
+
+#[tauri::command]
+async fn cleanup_auth_sessions(state: State<'_, AppState>) -> Result<(), String> {
+    let mut auth_service = state.stream_auth.lock().await;
+    auth_service.cleanup_expired_sessions();
+    Ok(())
 }
 
 #[tauri::command]
@@ -3138,6 +3175,9 @@ fn main() {
 
             // Initialize upload sessions
             upload_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            
+            // Initialize stream authentication
+            stream_auth: Arc::new(Mutex::new(StreamAuthService::new())),
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
