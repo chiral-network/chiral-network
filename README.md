@@ -291,7 +291,7 @@ npm run test:watch
 - ✅ **File Upload Encryption**: AES-256-GCM encryption with PBKDF2 key derivation for uploaded files
 - ✅ **File Download Decryption**: Key management and decryption for downloaded files
 - ✅ **WebRTC Encryption**: Encrypted P2P chunk transfers
-- ❌ **Key Exchange UI**: Recipient public key input for encrypted sharing
+- ✅ **Key Exchange UI**: Recipient public key input for encrypted sharing
 - ✅ Real P2P file transfer protocol
 - ✅ File versioning system
 - ✅ Advanced bandwidth scheduling
@@ -337,12 +337,13 @@ npm run test:watch
 - ECIES key exchange infrastructure
 - File download decryption with key management
 - WebRTC encrypted chunk transfers
+- Key exchange UI for recipient-specific encryption
 - No centralized servers to compromise
 - Fully decentralized architecture prevents single points of failure
 
 ### Planned Security
 
-- Key exchange UI for encrypted sharing
+- ✅ Key exchange UI for encrypted sharing
 - File encryption at rest
 - Signed software updates
 - Two-factor authentication

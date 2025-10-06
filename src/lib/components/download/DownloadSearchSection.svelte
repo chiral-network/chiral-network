@@ -308,13 +308,13 @@
           on:click={() => { searchMode = 'hash'; versionResults = []; }}
           class="px-3 py-1 text-sm rounded-md border transition-colors {searchMode === 'hash' ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/50 hover:bg-muted border-border'}"
         >
-          Search by Hash
+          {tr('download.searchByHash')}
         </button>
         <button
           on:click={() => { searchMode = 'name'; latestMetadata = null; }}
           class="px-3 py-1 text-sm rounded-md border transition-colors {searchMode === 'name' ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/50 hover:bg-muted border-border'}"
         >
-          Search by Name (Versions)
+          {tr('download.searchByName')}
         </button>
       </div>
 

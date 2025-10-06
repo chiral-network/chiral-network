@@ -160,7 +160,13 @@ impl AnalyticsService {
     }
 
     /// Record a transfer completion with performance data
-    pub async fn record_transfer(&self, bytes: u64, duration_ms: u64, is_upload: bool, success: bool) {
+    pub async fn record_transfer(
+        &self,
+        bytes: u64,
+        duration_ms: u64,
+        is_upload: bool,
+        success: bool,
+    ) {
         if duration_ms == 0 {
             return;
         }
@@ -178,7 +184,8 @@ impl AnalyticsService {
                 if perf.avg_upload_speed_kbps == 0.0 {
                     perf.avg_upload_speed_kbps = speed_kbps;
                 } else {
-                    perf.avg_upload_speed_kbps = (perf.avg_upload_speed_kbps * 0.8) + (speed_kbps * 0.2);
+                    perf.avg_upload_speed_kbps =
+                        (perf.avg_upload_speed_kbps * 0.8) + (speed_kbps * 0.2);
                 }
                 perf.peak_upload_speed_kbps = perf.peak_upload_speed_kbps.max(speed_kbps);
             } else {
@@ -186,7 +193,8 @@ impl AnalyticsService {
                 if perf.avg_download_speed_kbps == 0.0 {
                     perf.avg_download_speed_kbps = speed_kbps;
                 } else {
-                    perf.avg_download_speed_kbps = (perf.avg_download_speed_kbps * 0.8) + (speed_kbps * 0.2);
+                    perf.avg_download_speed_kbps =
+                        (perf.avg_download_speed_kbps * 0.8) + (speed_kbps * 0.2);
                 }
                 perf.peak_download_speed_kbps = perf.peak_download_speed_kbps.max(speed_kbps);
             }
@@ -277,10 +285,11 @@ impl AnalyticsService {
             let (upload_rate, download_rate) = if let Some(last) = history.back() {
                 let time_diff = (now - last.timestamp) as f64;
                 let upload_diff = bandwidth.upload_bytes.saturating_sub(last.upload_bytes) as f64;
-                let download_diff = bandwidth.download_bytes.saturating_sub(last.download_bytes) as f64;
+                let download_diff =
+                    bandwidth.download_bytes.saturating_sub(last.download_bytes) as f64;
 
                 (
-                    (upload_diff * 8.0) / (time_diff * 1000.0), // kbps
+                    (upload_diff * 8.0) / (time_diff * 1000.0),   // kbps
                     (download_diff * 8.0) / (time_diff * 1000.0), // kbps
                 )
             } else {
@@ -343,7 +352,10 @@ impl AnalyticsService {
     }
 
     /// Get contribution history
-    pub async fn get_contribution_history(&self, limit: Option<usize>) -> Vec<ContributionDataPoint> {
+    pub async fn get_contribution_history(
+        &self,
+        limit: Option<usize>,
+    ) -> Vec<ContributionDataPoint> {
         let history = self.contribution_history.lock().await;
         let limit = limit.unwrap_or(MAX_HISTORY_SIZE);
         history.iter().rev().take(limit).cloned().collect()
