@@ -804,6 +804,16 @@
       "error": "Unable to check disk space",
       "checking": "Checking...",
       "lowDescription": "Low free space may prevent new uploads."
+    },
+    "encryption": {
+      "title": "Encrypted Sharing",
+      "subtitle": "Share files encrypted for specific recipients",
+      "enableForRecipient": "Enable encrypted sharing for specific recipient",
+      "recipientPublicKey": "Recipient's Public Key",
+      "publicKeyPlaceholder": "Enter recipient's X25519 public key (64 hex characters)",
+      "publicKeyHint": "Enter the recipient's X25519 public key (hex format, 64 characters). The file will be encrypted so only they can decrypt it. Leave empty to encrypt for yourself.",
+      "invalidPublicKey": "⚠️ Invalid public key format. Must be 64 hexadecimal characters.",
+      "encryptedBadge": "Encrypted"
     }
   }
 }
