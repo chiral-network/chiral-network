@@ -3,6 +3,7 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import { File as FileIcon, X, Plus, FolderOpen, FileText, Image, Music, Video, Archive, Code, FileSpreadsheet, Upload, Download, RefreshCw, Lock, Key } from 'lucide-svelte'
   import { files, type FileItem, etcAccount } from '$lib/stores'
+  import { loadSeedList, saveSeedList, type SeedRecord } from '$lib/services/seedPersistence'
   import { t } from 'svelte-i18n';
   import { get } from 'svelte/store'
   import { onMount, onDestroy } from 'svelte';
@@ -151,6 +152,38 @@
   onMount(async () => {
     // Make storage refresh non-blocking on startup to prevent UI hanging
     setTimeout(() => refreshAvailableStorage(), 100)
+
+    // Restore persisted seeding list (if any)
+    try {
+      const persisted: SeedRecord[] = await loadSeedList()
+      if (persisted && persisted.length > 0) {
+        const existing = get(files)
+        const toAdd: FileItem[] = []
+        for (const s of persisted) {
+          if (!existing.some(f => f.hash === s.hash)) {
+            toAdd.push({
+              id: s.id,
+              name: s.name || s.path.split(/[\\/]/).pop() || s.hash,
+              path: s.path,
+              hash: s.hash,
+              size: s.size || 0,
+              status: 'seeding',
+              seeders: 1,
+              leechers: 0,
+              uploadDate: s.addedAt ? new Date(s.addedAt) : new Date(),
+              version: 1,
+              isEncrypted: false,
+              manifest: s.manifest ?? null,
+            })
+          }
+        }
+        if (toAdd.length > 0) {
+          files.update(curr => [...curr, ...toAdd])
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to restore persisted seed list', e)
+    }
 
     // HTML5 Drag and Drop functionality
     const dropZone = document.querySelector('.drop-zone') as HTMLElement
@@ -338,6 +371,26 @@
     if ((window as any).dragDropCleanup) {
       (window as any).dragDropCleanup()
     }
+  })
+
+  // Persist seeding list when files store changes (debounced-ish)
+  let persistTimeout: ReturnType<typeof setTimeout> | null = null
+  const unsubscribeFiles = files.subscribe(($files) => {
+    // Collect seeding entries
+    const seeds: SeedRecord[] = $files
+      .filter(f => f.status === 'seeding')
+      .map(f => ({ id: f.id, path: f.path, hash: f.hash, name: f.name, size: f.size, addedAt: (f.uploadDate ? f.uploadDate.toISOString() : new Date().toISOString()), manifest: f.manifest }))
+
+    if (persistTimeout) clearTimeout(persistTimeout)
+    persistTimeout = setTimeout(() => {
+      saveSeedList(seeds).catch(e => console.warn('Failed to persist seed list', e))
+    }, 400)
+  })
+
+  // Ensure we unsubscribe when leaving the page
+  onDestroy(() => {
+    unsubscribeFiles()
+    if (persistTimeout) clearTimeout(persistTimeout)
   })
 
   async function openFileDialog() {

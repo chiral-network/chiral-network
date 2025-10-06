@@ -7,6 +7,7 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation } from 'lucide-svelte'
   import { files, downloadQueue, activeTransfers } from '$lib/stores'
+  import { dhtService } from '$lib/dht'
   import DownloadSearchSection from '$lib/components/download/DownloadSearchSection.svelte'
   import type { FileMetadata } from '$lib/dht'
   import { onDestroy, onMount } from 'svelte'
@@ -16,6 +17,10 @@
   import { initDownloadTelemetry, disposeDownloadTelemetry } from '$lib/downloadTelemetry'
   import { MultiSourceDownloadService, type MultiSourceProgress } from '$lib/services/multiSourceDownloadService'
   import { listen } from '@tauri-apps/api/event'
+
+ 
+  import { invoke }  from '@tauri-apps/api/core';
+
   
   const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params)
 
@@ -276,8 +281,8 @@
       const { save } = await import('@tauri-apps/plugin-dialog');
       const filePath = await save({ defaultPath: fileName });
       if (filePath) {
-        const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('write_file', { path: filePath, contents: Array.from(data) });
+        const { writeFile } = await import('@tauri-apps/plugin-fs');
+        await writeFile(filePath, new Uint8Array(data));
         showNotification(`Successfully saved "${fileName}"`, 'success');
       }
     } catch (error) {
@@ -292,11 +297,11 @@
   }
 
   async function handleSearchDownload(metadata: FileMetadata) {
-    const allFiles = [...$files, ...$downloadQueue]
+    const allFiles = [...$downloadQueue]
     const existingFile = allFiles.find((file) => file.hash === metadata.fileHash)
     const fileName = metadata.fileName;
     const fileData = new Uint8Array(metadata.fileData ?? []);
-    saveRawData(fileName, fileData); // testing
+    //saveRawData(fileName, fileData); // testing
 
     if (existingFile) {
       let statusMessage = ''
@@ -620,18 +625,72 @@
           return;
         }
 
+
+      // Determine seeders, prefer local seeder when available
+        let seeders = (fileToDownload.seederAddresses || []).slice();
+        try {
+          const localPeerId = dhtService.getPeerId ? dhtService.getPeerId() : null;
+          if ((!seeders || seeders.length === 0) && fileToDownload.status === 'seeding') {
+            if (localPeerId) seeders.unshift(localPeerId)
+            else seeders.unshift('local_peer')
+          }
+        } catch (e) {
+          // ignore
+        }
+
+        // If the local copy is available and we're running in Tauri, copy directly to outputPath
+        const localPeerIdNow = dhtService.getPeerId ? dhtService.getPeerId() : null;
+       
+        if (outputPath && (localPeerIdNow || seeders.includes('local_peer'))) {
+          try {
+            
+            let hash = fileToDownload.hash
+            const base64Data = await invoke('get_file_data', { fileHash: hash }) as string;
+            console.log("Retrieved base64 data length:", base64Data.length);
+            
+            // Convert base64 to Uint8Array
+            let data_ = new Uint8Array(0); // Default empty array
+            if (base64Data && base64Data.length > 0) {
+              const binaryStr = atob(base64Data);
+              data_ = new Uint8Array(binaryStr.length);
+              for (let i = 0; i < binaryStr.length; i++) {
+                data_[i] = binaryStr.charCodeAt(i);
+              }
+              console.log("Converted to Uint8Array with length:", data_.length);
+            } else {
+              console.warn("No file data found for hash:", hash);
+            }
+            
+            console.log("Final data array length:", data_.length);
+
+            // Write the file data to the output path
+            const { writeFile } = await import('@tauri-apps/plugin-fs');
+            await writeFile(outputPath, data_);
+            files.update(f => f.map(file => file.id === fileId ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath } : file));
+            showNotification(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
+            activeSimulations.delete(fileId);
+            console.log("Done with downloading file")
+            return;
+          } catch (e) {
+            console.warn('Local copy fallback failed, continuing with P2P download', e);
+            // fall through to p2p path
+          }
+        }
+
       // Show "automatically started" message now that download is proceeding
       showNotification(tr('download.notifications.autostart'), 'info');
-
+        
        if (fileToDownload.isEncrypted && fileToDownload.manifest) {
         // 1. Download all the required encrypted chunks using the P2P service.
         //    This new function will handle fetching multiple chunks in parallel.
         showNotification(`Downloading encrypted chunks for "${fileToDownload.name}"...`, 'info');
         
         const { p2pFileTransferService } = await import('$lib/services/p2pFileTransfer');
+        
+
         await p2pFileTransferService.downloadEncryptedChunks(
           fileToDownload.manifest,
-          fileToDownload.seederAddresses || [], // Pass the list of seeders
+          seeders, // Pass the list of seeders
           (progress) => { // This is the progress callback
             files.update(f => f.map(file =>
               file.id === fileId ? { ...file, progress: progress.percentage, status: 'downloading', speed: progress.speed, eta: progress.eta } : file
@@ -727,7 +786,8 @@
                 if (transfer.status === 'completed') {
                   showNotification(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
                 } else if (transfer.status === 'failed') {
-                  showNotification(tr('download.notifications.downloadFailed', { values: { name: fileToDownload.name } }), 'error');
+                  //THIS IS WHERE DOWNLOAD IS FAILING
+                  showNotification(tr('download.notifications.downloadFailed', { values: { name: fileToDownload.name } })+"HI", 'error');
                 }
               }
             );
@@ -742,6 +802,7 @@
 
           } catch (error) {
             console.error('P2P download failed:', error);
+            showNotification("BAD","error");
             activeSimulations.delete(fileId);
             files.update(f => f.map(file =>
               file.id === fileId
@@ -753,6 +814,7 @@
       }
     } catch (error) {
       // Download failed
+      showNotification("BADHI", 'error');
       activeSimulations.delete(fileId);
 
       files.update(f => f.map(file =>
@@ -761,8 +823,12 @@
           : file
       ));
 
-      console.error('Download failed:', error);
-      showNotification(tr('download.notifications.downloadFailed', { values: { name: fileToDownload.name } }), 'error');
+      let errorMsg = error && error.message ? error.message : String(error);
+      console.error('Download failed:', error, fileToDownload);
+      showNotification(
+        tr('download.notifications.downloadFailed', { values: { name: fileToDownload.name } }) + (errorMsg ? `: ${errorMsg}` : ''),
+        'error'
+      );
     }
   }
 
