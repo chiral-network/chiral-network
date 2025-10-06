@@ -66,7 +66,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 ### 5. Proxy Network Support
 
 - ❌ **Privacy Protection**: Route traffic through proxy nodes (no traffic routing implemented)
-- ❌ **Load Balancing**: Automatic distribution across multiple proxies (no parallel downloads, file segmentation, or multi-source downloads)
+- ❌ **Load Balancing**: Automatic distribution across multiple proxies (no parallel downloads or file segmentation)
 - ❌ **Latency Optimization**: Choose proxies based on performance (no download process uses latency framework)
 - ✅ **Custom Node Addition**: Add trusted proxy nodes manually
 - ❌ **Bandwidth Aggregation**: Combine multiple proxy connections (no actual combining of multiple proxy connections)
@@ -159,7 +159,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
    - Gradually integrate real P2P networking
    - Maintain backwards compatibility
 
-## Installation & Setup
+## Setup and Testing
 
 ```bash
 # Clone the repository
@@ -176,9 +176,13 @@ npm run tauri dev # Desktop app
 # Build for production
 npm run build       # Web production build
 npm run tauri build # Desktop production build
-```
 
-## Usage Guide
+# Run tests
+npm test
+
+# Run tests in watch mode
+npm run test:watch
+```
 
 ### Getting Started
 
