@@ -195,18 +195,18 @@
   </div>
 
   {#if showDecryptDialog}
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
-      <div class="bg-white dark:bg-zinc-900 rounded-lg shadow-lg p-6 max-w-sm w-full">
-        <h2 class="text-lg font-semibold mb-2">Already Seeding</h2>
-        <p class="mb-4 text-sm text-muted-foreground">
-          You’re already seeding this file{metadata.isEncrypted ? ' (encrypted)' : ''}.<br />
-          Would you like to decrypt and save a local readable copy?
-        </p>
-        <div class="flex justify-end gap-2">
-          <Button variant="outline" on:click={cancelDecryptDialog}>Cancel</Button>
-          <Button on:click={confirmDecryptAndQueue}>Add to queue</Button>
-        </div>
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+    <div class="bg-background rounded-lg shadow-lg p-6 w-full max-w-md border border-border">
+      <h2 class="text-lg font-semibold mb-2">Already Seeding</h2>
+      <p class="mb-4 text-sm text-muted-foreground">
+        You’re already seeding this file{metadata.isEncrypted ? ' (encrypted)' : ''}.<br />
+        Would you like to decrypt and save a local readable copy?
+      </p>
+      <div class="flex justify-end gap-2 mt-4">
+        <Button variant="outline" on:click={cancelDecryptDialog}>Cancel</Button>
+        <Button on:click={confirmDecryptAndQueue}>Add to queue</Button>
       </div>
     </div>
-  {/if}
+  </div>
+{/if}
 </Card>
