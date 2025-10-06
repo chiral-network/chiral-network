@@ -18,6 +18,7 @@ mod multi_source_download;
 pub mod net;
 mod peer_selection;
 mod pool;
+mod proxy_latency;
 mod webrtc_service;
 use std::sync::Mutex as StdMutex;
 
@@ -2126,6 +2127,61 @@ async fn get_multi_source_progress(
     }
 }
 
+// Helper function to ensure multi-source download service is initialized
+async fn ensure_multi_source_service(state: &State<'_, AppState>) -> Result<Arc<MultiSourceDownloadService>, String> {
+    // Check if service already exists
+    {
+        let ms_guard = state.multi_source_download.lock().await;
+        if let Some(service) = ms_guard.as_ref() {
+            return Ok(service.clone());
+        }
+    }
+
+    // Service doesn't exist, create it
+    let dht_arc = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    let webrtc_arc = {
+        let webrtc_guard = state.webrtc.lock().await;
+        webrtc_guard.as_ref().cloned()
+    };
+
+    if let (Some(dht_service), Some(webrtc_service)) = (dht_arc, webrtc_arc) {
+        let multi_source_service = MultiSourceDownloadService::new(dht_service, webrtc_service);
+        let multi_source_arc = Arc::new(multi_source_service);
+        
+        {
+            let mut multi_source_guard = state.multi_source_download.lock().await;
+            *multi_source_guard = Some(multi_source_arc.clone());
+        }
+
+        Ok(multi_source_arc)
+    } else {
+        Err("DHT or WebRTC service not available for multi-source download initialization".to_string())
+    }
+}
+
+#[tauri::command]
+async fn update_proxy_latency(
+    state: State<'_, AppState>,
+    proxy_id: String,
+    latency_ms: Option<u64>,
+) -> Result<(), String> {
+    let multi_source_service = ensure_multi_source_service(&state).await?;
+    multi_source_service.update_proxy_latency(proxy_id, latency_ms).await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_proxy_optimization_status(
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    let multi_source_service = ensure_multi_source_service(&state).await?;
+    Ok(multi_source_service.get_proxy_optimization_status().await)
+}
+
 #[tauri::command]
 async fn download_file_multi_source(
     state: State<'_, AppState>,
@@ -3198,6 +3254,8 @@ fn main() {
             start_multi_source_download,
             cancel_multi_source_download,
             get_multi_source_progress,
+            update_proxy_latency,
+            get_proxy_optimization_status,
             download_file_multi_source,
             get_file_transfer_events,
             get_download_metrics,

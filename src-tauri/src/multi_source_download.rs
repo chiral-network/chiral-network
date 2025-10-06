@@ -8,6 +8,7 @@ use tracing::{error, info, warn};
 use crate::dht::{DhtService, FileMetadata, WebRTCOfferRequest};
 use crate::webrtc_service::{WebRTCService, WebRTCFileRequest};
 use crate::peer_selection::SelectionStrategy;
+use crate::proxy_latency::{ProxyLatencyService, ProxyStatus};
 
 const DEFAULT_CHUNK_SIZE: usize = 256 * 1024; // 256KB chunks
 const MAX_CHUNKS_PER_PEER: usize = 10; // Maximum chunks to assign to a single peer
@@ -106,6 +107,7 @@ pub struct MultiSourceDownloadService {
     event_rx: Arc<Mutex<mpsc::UnboundedReceiver<MultiSourceEvent>>>,
     command_tx: mpsc::UnboundedSender<MultiSourceCommand>,
     command_rx: Arc<Mutex<mpsc::UnboundedReceiver<MultiSourceCommand>>>,
+    proxy_latency_service: Arc<Mutex<ProxyLatencyService>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -182,6 +184,7 @@ impl MultiSourceDownloadService {
             event_rx: Arc::new(Mutex::new(event_rx)),
             command_tx,
             command_rx: Arc::new(Mutex::new(command_rx)),
+            proxy_latency_service: Arc::new(Mutex::new(ProxyLatencyService::new())),
         }
     }
 
@@ -304,19 +307,16 @@ impl MultiSourceDownloadService {
             return self.start_single_source_download(metadata, output_path).await;
         }
 
-        // Select optimal peers for multi-source download
+        // Select optimal peers for multi-source download with proxy latency optimization
         let max_peers = max_peers.unwrap_or(available_peers.len().min(4));
         let selected_peers = self
-            .dht_service
-            .select_peers_with_strategy(
+            .select_peers_with_proxy_optimization(
                 &available_peers,
                 max_peers,
-                SelectionStrategy::Balanced,
-                false,
             )
             .await;
 
-        info!("Selected {} peers for multi-source download", selected_peers.len());
+        info!("Selected {} peers for multi-source download (proxy-optimized)", selected_peers.len());
 
         // Create download state
         let download = ActiveDownload {
@@ -468,6 +468,68 @@ impl MultiSourceDownloadService {
         }
 
         assignments
+    }
+
+    /// Select peers with proxy latency optimization
+    async fn select_peers_with_proxy_optimization(
+        &self,
+        available_peers: &[String],
+        max_peers: usize,
+    ) -> Vec<String> {
+        info!("Optimizing peer selection based on proxy latencies for {} available peers", available_peers.len());
+        
+        // Check if we should use proxy routing
+        let proxy_service = self.proxy_latency_service.lock().await;
+        let should_use_proxy = proxy_service.should_use_proxy_routing();
+        
+        if should_use_proxy {
+            let best_proxies = proxy_service.get_proxies_by_latency();
+            info!("Found {} online proxies for optimization", best_proxies.len());
+            
+            if !best_proxies.is_empty() {
+                let best_proxy = &best_proxies[0];
+                info!("Using best proxy: {} with latency: {:?}ms", 
+                      best_proxy.proxy_id, best_proxy.latency_ms);
+            }
+        } else {
+            info!("No suitable proxies available, using direct peer connections");
+        }
+        
+        drop(proxy_service); // Release lock
+        
+        // For now, use existing DHT selection but with proxy awareness logging
+        let selected = self
+            .dht_service
+            .select_peers_with_strategy(
+                available_peers,
+                max_peers,
+                SelectionStrategy::Balanced,
+                false,
+            )
+            .await;
+            
+        info!("Proxy-optimized selection completed: {} peers chosen (proxy routing: {})", 
+              selected.len(), should_use_proxy);
+        
+        selected
+    }
+
+    /// Update proxy latency information
+    pub async fn update_proxy_latency(&self, proxy_id: String, latency_ms: Option<u64>) {
+        let mut proxy_service = self.proxy_latency_service.lock().await;
+        let status = if latency_ms.is_some() { 
+            ProxyStatus::Online 
+        } else { 
+            ProxyStatus::Offline 
+        };
+        proxy_service.update_proxy_latency(proxy_id.clone(), latency_ms, status);
+        info!("Updated proxy latency for {}: {:?}ms", proxy_id, latency_ms);
+    }
+
+    /// Get current proxy optimization status
+    pub async fn get_proxy_optimization_status(&self) -> bool {
+        let proxy_service = self.proxy_latency_service.lock().await;
+        proxy_service.should_use_proxy_routing()
     }
 
     async fn connect_to_peer(

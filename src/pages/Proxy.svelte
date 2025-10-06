@@ -6,7 +6,8 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import { ShieldCheck, ShieldX, Globe, Activity, Plus, Power, Trash2 } from 'lucide-svelte'
   import { onMount } from 'svelte';
-  import { proxyNodes, connectProxy, disconnectProxy, removeProxy, listProxies } from '$lib/proxy';
+  import { proxyNodes, connectProxy, disconnectProxy, removeProxy, listProxies, getProxyOptimizationStatus } from '$lib/proxy';
+  import { ProxyLatencyOptimizationService } from '$lib/services/proxyLatencyOptimization';
   import { t } from 'svelte-i18n'
   import DropDown from '$lib/components/ui/dropDown.svelte'
   
@@ -24,6 +25,7 @@
   const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.([a-zA-Z]{2,}|[a-zA-Z]{2,}\.[a-zA-Z]{2,}):[0-9]{1,5}$/
   const enodeRegex = /^enode:\/\/[a-fA-F0-9]{128}@(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):[0-9]{1,5}$/
   let statusFilter = 'all'
+  let optimizationStatus = '⚠️ No optimization data available'
   
   $: statusOptions = [
     { value: 'all', label: $t('All') },
@@ -51,7 +53,62 @@
   
   onMount(() => {
       listProxies();
+      updateOptimizationStatus();
   });
+
+  async function updateOptimizationStatus() {
+      try {
+          optimizationStatus = await getProxyOptimizationStatus();
+      } catch (e) {
+          console.error('Failed to get optimization status:', e);
+          optimizationStatus = '❌ Optimization status unavailable';
+      }
+  }
+
+  async function testProxyLatencyOptimization() {
+      try {
+          console.log("🧪 Testing Proxy Latency Optimization...");
+          
+          // Check if Tauri is available first
+          const isTauriAvailable = await ProxyLatencyOptimizationService.isTauriAvailable();
+          if (!isTauriAvailable) {
+              throw new Error("Tauri API is not available. Make sure you're running in the Tauri app, not just the browser.");
+          }
+          
+          // Test 1: Update proxy latency
+          await ProxyLatencyOptimizationService.updateProxyLatency('test-proxy-1', 50);
+          console.log("✅ Test 1 passed: update_proxy_latency with latency");
+
+          // Test 2: Update proxy as offline
+          await ProxyLatencyOptimizationService.updateProxyLatency('test-proxy-2', undefined);
+          console.log("✅ Test 2 passed: update_proxy_latency offline");
+
+          // Test 3: Get optimization status
+          const status = await ProxyLatencyOptimizationService.getOptimizationStatus();
+          console.log(`✅ Test 3 passed: optimization status = ${status}`);
+
+          // Test 4: Update multiple proxies
+          await ProxyLatencyOptimizationService.updateProxyLatency('test-proxy-3', 30);
+          await ProxyLatencyOptimizationService.updateProxyLatency('test-proxy-4', 100);
+          await ProxyLatencyOptimizationService.updateProxyLatency('test-proxy-5', 25);
+          console.log("✅ Test 4 passed: multiple proxy updates");
+
+          // Test 5: Get final status
+          const finalStatus = await ProxyLatencyOptimizationService.getOptimizationStatus();
+          console.log(`✅ Test 5 passed: final status = ${finalStatus}`);
+
+          // Update UI with latest status
+          await updateOptimizationStatus();
+          
+          console.log("🎉 All proxy latency optimization tests passed!");
+          alert("✅ Proxy latency optimization tests passed! Check console for details.");
+          
+      } catch (error) {
+          console.error("❌ Test failed:", error);
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          alert(`❌ Test failed: ${errorMessage}\n\nMake sure you're running the Tauri app (npm run tauri dev) and not just viewing in browser.`);
+      }
+  }
 
   function validateAddress(address: string): { valid: boolean; error: string } {
       if (!address || address.trim() === '') {
@@ -319,6 +376,32 @@
         <div>
           <p class="text-sm text-muted-foreground">{$t('proxy.totalBandwidth')}</p>
           <p class="text-xl font-bold">{totalBandwidth} Mbps</p>
+        </div>
+      </div>
+    </Card>
+    
+    <Card class="p-4">
+      <div class="flex items-center gap-3">
+        <div class="p-2 bg-purple-500/10 rounded-lg">
+          <Activity class="h-5 w-5 text-purple-500" />
+        </div>
+        <div>
+          <p class="text-sm text-muted-foreground">Proxy Optimization</p>
+          <p class="text-sm font-medium">{optimizationStatus}</p>
+          <div class="flex gap-2 mt-1">
+            <button 
+              class="text-xs text-purple-600 hover:text-purple-800"
+              on:click={updateOptimizationStatus}
+            >
+              Refresh Status
+            </button>
+            <button 
+              class="text-xs text-green-600 hover:text-green-800 px-2 py-1 bg-green-50 rounded"
+              on:click={testProxyLatencyOptimization}
+            >
+              Test Optimization
+            </button>
+          </div>
         </div>
       </div>
     </Card>

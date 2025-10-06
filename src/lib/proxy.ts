@@ -1,6 +1,7 @@
 import { writable } from "svelte/store";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { ProxyLatencyOptimizationService } from "./services/proxyLatencyOptimization";
 
 export interface ProxyNode {
   id: string;
@@ -81,6 +82,15 @@ export async function initProxyEvents() {
       const dedup = next.filter((n) =>
         seen.has(n.id) ? false : (seen.add(n.id), true)
       );
+      // Update proxy latency optimization for all nodes
+      for (const node of dedup) {
+        if (node.status === "online" && node.latency !== undefined) {
+          ProxyLatencyOptimizationService.updateProxyLatency(
+            node.id, 
+            node.latency
+          ).catch(console.error);
+        }
+      }
       return sortNodes(dedup);
     });
   });
@@ -114,6 +124,11 @@ export async function initProxyEvents() {
           ...next[i],
           status: "online",
         };
+        // Update proxy latency optimization when status changes
+        ProxyLatencyOptimizationService.updateProxyLatency(
+          next[i].id, 
+          next[i].latency
+        ).catch(console.error);
         return sortNodes(next);
       });
     }
@@ -173,10 +188,21 @@ export async function listProxies() {
       const map = new Map<string, ProxyNode>();
       for (const n of nodes) map.set(n.id, n);
       for (const u of incoming) map.set(u.id, mergeNode(map.get(u.id), u));
-      return sortNodes([...map.values()]);
+      const updatedNodes = [...map.values()];
+      
+      // Update proxy latency optimization
+      ProxyLatencyOptimizationService.startLatencyMonitoring(
+        updatedNodes.filter(n => n.status === "online")
+      ).catch(console.error);
+      
+      return sortNodes(updatedNodes);
     });
   } catch (e) {
     console.error("list_proxies failed:", e);
     proxyNodes.set([]);
   }
+}
+
+export async function getProxyOptimizationStatus(): Promise<string> {
+  return ProxyLatencyOptimizationService.getOptimizationStatusMessage();
 }
