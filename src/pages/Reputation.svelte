@@ -15,6 +15,8 @@
   let searchQuery = '';
   let isLoading = true;
   let showAnalytics = true;
+  let currentPage = 1;
+  const peersPerPage = 8;
 
   // Filter states
   let isFilterOpen = false;
@@ -172,6 +174,18 @@
       }
     });
 
+  // Pagination
+  $: totalPages = Math.ceil(filteredPeers.length / peersPerPage);
+  $: paginatedPeers = filteredPeers.slice((currentPage - 1) * peersPerPage, currentPage * peersPerPage);
+  $: if (currentPage > totalPages && totalPages > 0) {
+    currentPage = totalPages;
+  }
+
+  // Reset to page 1 when filters or search change
+  $: if (searchQuery || selectedTrustLevels || filterEncryptionSupported || minUptime || sortBy) {
+    currentPage = 1;
+  }
+
   onMount(() => {
     // Simulate loading
     setTimeout(() => {
@@ -322,17 +336,6 @@
         </div>
       </div>
 
-      <!-- Results Summary -->
-      <div class="flex items-center justify-between mb-4">
-        <p class="text-sm text-gray-600">
-          {$t('reputation.showing', { values: { filtered: filteredPeers.length, total: peers.length } })}
-        </p>
-        <div class="flex items-center space-x-2">
-          <span class="text-sm text-gray-500">{$t('reputation.view')}:</span>
-          <Badge variant="outline">{$t('reputation.cards')}</Badge>
-        </div>
-      </div>
-
       <!-- Peer Cards Grid -->
       {#if filteredPeers.length === 0}
         <Card class="p-12 text-center">
@@ -342,10 +345,53 @@
         </Card>
       {:else}
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {#each filteredPeers as peer (peer.peerId)}
+          {#each paginatedPeers as peer (peer.peerId)}
             <ReputationCard {peer} />
           {/each}
         </div>
+
+        <!-- Pagination Controls -->
+        {#if totalPages > 1}
+          <div class="flex items-center justify-between mt-6 pt-6 border-t border-gray-200">
+            <div class="text-sm text-gray-600">
+              Showing {(currentPage - 1) * peersPerPage + 1}-{Math.min(currentPage * peersPerPage, filteredPeers.length)} of {filteredPeers.length} peers
+            </div>
+            <div class="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                on:click={() => currentPage = currentPage - 1}
+                disabled={currentPage === 1}
+              >
+                Previous
+              </Button>
+              <div class="flex items-center gap-1">
+                {#each Array(totalPages) as _, i}
+                  {#if totalPages <= 7 || i === 0 || i === totalPages - 1 || (i >= currentPage - 2 && i <= currentPage)}
+                    <Button
+                      variant={currentPage === i + 1 ? 'default' : 'outline'}
+                      size="sm"
+                      class="w-10"
+                      on:click={() => currentPage = i + 1}
+                    >
+                      {i + 1}
+                    </Button>
+                  {:else if i === 1 || i === totalPages - 2}
+                    <span class="px-2">...</span>
+                  {/if}
+                {/each}
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                on:click={() => currentPage = currentPage + 1}
+                disabled={currentPage === totalPages}
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+        {/if}
       {/if}
     {/if}
 </div>
