@@ -215,7 +215,8 @@ impl Keystore {
             .ok_or_else(|| "Account not found".to_string())?;
 
         // Encrypt the file encryption key using the account's password-derived key
-        let (encrypted_key, key_iv) = encrypt_data(&hex::encode(encryption_key), password, &account.salt)?;
+        let (encrypted_key, key_iv) =
+            encrypt_data(&hex::encode(encryption_key), password, &account.salt)?;
 
         let file_key = EncryptedFileKey {
             encrypted_key,
@@ -249,11 +250,17 @@ impl Keystore {
             .ok_or_else(|| "File encryption key not found".to_string())?;
 
         // Decrypt the file encryption key
-        let decrypted_hex = decrypt_data(&file_key.encrypted_key, &account.salt, &file_key.key_iv, password)?;
-        let key_bytes = hex::decode(decrypted_hex)
-            .map_err(|e| format!("Invalid key format: {}", e))?;
+        let decrypted_hex = decrypt_data(
+            &file_key.encrypted_key,
+            &account.salt,
+            &file_key.key_iv,
+            password,
+        )?;
+        let key_bytes =
+            hex::decode(decrypted_hex).map_err(|e| format!("Invalid key format: {}", e))?;
 
-        key_bytes.try_into()
+        key_bytes
+            .try_into()
             .map_err(|_| "Invalid key length".to_string())
     }
 
@@ -283,11 +290,12 @@ impl Keystore {
         // Use the account's salt but derive key from private key instead of password
         let private_key_bytes = hex::decode(private_key.trim_start_matches("0x"))
             .map_err(|e| format!("Invalid private key: {}", e))?;
-        
+
         // Use first 32 bytes of private key as encryption key (or hash it)
-        let key_bytes: [u8; 32] = private_key_bytes[..32].try_into()
+        let key_bytes: [u8; 32] = private_key_bytes[..32]
+            .try_into()
             .map_err(|_| "Private key too short".to_string())?;
-        
+
         let mut iv = [0u8; 16];
         rand::thread_rng().fill_bytes(&mut iv);
 
@@ -329,13 +337,14 @@ impl Keystore {
         // Use private key to decrypt
         let private_key_bytes = hex::decode(private_key.trim_start_matches("0x"))
             .map_err(|e| format!("Invalid private key: {}", e))?;
-        
-        let key_bytes: [u8; 32] = private_key_bytes[..32].try_into()
+
+        let key_bytes: [u8; 32] = private_key_bytes[..32]
+            .try_into()
             .map_err(|_| "Private key too short".to_string())?;
-        
-        let iv_bytes = hex::decode(&file_key.key_iv)
-            .map_err(|e| format!("Invalid IV: {}", e))?;
-        let iv_array: [u8; 16] = iv_bytes.try_into()
+
+        let iv_bytes = hex::decode(&file_key.key_iv).map_err(|e| format!("Invalid IV: {}", e))?;
+        let iv_array: [u8; 16] = iv_bytes
+            .try_into()
             .map_err(|_| "Invalid IV length".to_string())?;
 
         let mut ciphertext = hex::decode(&file_key.encrypted_key)
@@ -344,7 +353,8 @@ impl Keystore {
         let mut cipher = Aes256Ctr::new(&key_bytes.into(), &iv_array.into());
         cipher.apply_keystream(&mut ciphertext);
 
-        ciphertext.try_into()
+        ciphertext
+            .try_into()
             .map_err(|_| "Invalid key length".to_string())
     }
 }

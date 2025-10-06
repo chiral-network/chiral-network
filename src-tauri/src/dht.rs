@@ -48,6 +48,7 @@ use libp2p::{
             TransportEvent,
         },
     },
+    dcutr,
     identify::{self, Event as IdentifyEvent},
     identity,
     kad::{
@@ -152,6 +153,7 @@ struct DhtBehaviour {
     autonat_client: toggle::Toggle<v2::client::Behaviour>,
     autonat_server: toggle::Toggle<v2::server::Behaviour>,
     relay_client: relay::client::Behaviour,
+    dcutr: toggle::Toggle<dcutr::Behaviour>,
 }
 #[derive(Debug)]
 pub enum DhtCommand {
@@ -181,7 +183,10 @@ pub enum DhtCommand {
         target_peer_id: PeerId,
         message: serde_json::Value,
     },
-    StoreBlock { cid: Cid, data: Vec<u8> },
+    StoreBlock {
+        cid: Cid,
+        data: Vec<u8>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -196,6 +201,8 @@ pub enum DhtEvent {
         file_hash: String,
     },
     Error(String),
+    Info(String),
+    Warning(String),
     PublishedFile(FileMetadata),
     ProxyStatus {
         id: String,
@@ -320,6 +327,13 @@ struct DhtMetrics {
     success_streak: u32,
     failure_streak: u32,
     autonat_enabled: bool,
+    // DCUtR metrics
+    dcutr_enabled: bool,
+    dcutr_hole_punch_attempts: u64,
+    dcutr_hole_punch_successes: u64,
+    dcutr_hole_punch_failures: u64,
+    last_dcutr_success: Option<SystemTime>,
+    last_dcutr_failure: Option<SystemTime>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -340,6 +354,13 @@ pub struct DhtMetricsSnapshot {
     pub observed_addrs: Vec<String>,
     pub reachability_history: Vec<NatHistoryItem>,
     pub autonat_enabled: bool,
+    // DCUtR metrics
+    pub dcutr_enabled: bool,
+    pub dcutr_hole_punch_attempts: u64,
+    pub dcutr_hole_punch_successes: u64,
+    pub dcutr_hole_punch_failures: u64,
+    pub last_dcutr_success: Option<u64>,
+    pub last_dcutr_failure: Option<u64>,
 }
 
 // ------Proxy Protocol Implementation------
@@ -698,6 +719,12 @@ impl DhtMetricsSnapshot {
             observed_addrs,
             reachability_history,
             autonat_enabled,
+            dcutr_enabled,
+            dcutr_hole_punch_attempts,
+            dcutr_hole_punch_successes,
+            dcutr_hole_punch_failures,
+            last_dcutr_success,
+            last_dcutr_failure,
             ..
         } = metrics;
 
@@ -732,6 +759,12 @@ impl DhtMetricsSnapshot {
             observed_addrs,
             reachability_history: history,
             autonat_enabled,
+            dcutr_enabled,
+            dcutr_hole_punch_attempts,
+            dcutr_hole_punch_successes,
+            dcutr_hole_punch_failures,
+            last_dcutr_success: last_dcutr_success.and_then(to_secs),
+            last_dcutr_failure: last_dcutr_failure.and_then(to_secs),
         }
     }
 }
@@ -1375,6 +1408,9 @@ async fn run_dht_node(
                     SwarmEvent::Behaviour(DhtBehaviourEvent::AutonatServer(ev)) => {
                         debug!(?ev, "AutoNAT server event");
                     }
+                    SwarmEvent::Behaviour(DhtBehaviourEvent::Dcutr(ev)) => {
+                        handle_dcutr_event(ev, &metrics, &event_tx).await;
+                    }
                     SwarmEvent::ExternalAddrConfirmed { address, .. } => {
                         handle_external_addr_confirmed(&address, &metrics, &event_tx, &proxy_mgr)
                             .await;
@@ -1424,6 +1460,10 @@ async fn run_dht_node(
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
                         info!("📡 Now listening on: {}", address);
+                        if address.iter().any(|component| matches!(component, Protocol::P2pCircuit)) {
+                            swarm.add_external_address(address.clone());
+                            debug!("Advertised relay external address: {}", address);
+                        }
                         if let Ok(mut m) = metrics.try_lock() {
                             m.record_listen_addr(&address);
                         }
@@ -1639,9 +1679,16 @@ async fn handle_kademlia_event(
                 QueryResult::GetRecord(Ok(ok)) => match ok {
                     GetRecordOk::FoundRecord(peer_record) => {
                         // Try to parse DHT record as essential metadata JSON
-                        if let Ok(metadata_json) = serde_json::from_slice::<serde_json::Value>(&peer_record.record.value) {
+                        if let Ok(metadata_json) =
+                            serde_json::from_slice::<serde_json::Value>(&peer_record.record.value)
+                        {
                             // Construct FileMetadata from the JSON
-                            if let (Some(file_hash), Some(file_name), Some(file_size), Some(created_at)) = (
+                            if let (
+                                Some(file_hash),
+                                Some(file_name),
+                                Some(file_size),
+                                Some(created_at),
+                            ) = (
                                 metadata_json.get("file_hash").and_then(|v| v.as_str()),
                                 metadata_json.get("file_name").and_then(|v| v.as_str()),
                                 metadata_json.get("file_size").and_then(|v| v.as_u64()),
@@ -1652,17 +1699,44 @@ async fn handle_kademlia_event(
                                     file_name: file_name.to_string(),
                                     file_size,
                                     file_data: Vec::new(), // Will be populated during download
-                                    seeders: vec![peer_record.peer.map(|p| p.to_string()).unwrap_or_default()],
+                                    seeders: vec![peer_record
+                                        .peer
+                                        .map(|p| p.to_string())
+                                        .unwrap_or_default()],
                                     created_at,
-                                    mime_type: metadata_json.get("mime_type").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                    is_encrypted: metadata_json.get("is_encrypted").and_then(|v| v.as_bool()).unwrap_or(false),
-                                    encryption_method: metadata_json.get("encryption_method").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                    key_fingerprint: metadata_json.get("key_fingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                    merkle_root: metadata_json.get("merkle_root").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                    version: metadata_json.get("version").and_then(|v| v.as_u64()).map(|v| v as u32),
-                                    parent_hash: metadata_json.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                    mime_type: metadata_json
+                                        .get("mime_type")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string()),
+                                    is_encrypted: metadata_json
+                                        .get("is_encrypted")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false),
+                                    encryption_method: metadata_json
+                                        .get("encryption_method")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string()),
+                                    key_fingerprint: metadata_json
+                                        .get("key_fingerprint")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string()),
+                                    merkle_root: metadata_json
+                                        .get("merkle_root")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string()),
+                                    version: metadata_json
+                                        .get("version")
+                                        .and_then(|v| v.as_u64())
+                                        .map(|v| v as u32),
+                                    parent_hash: metadata_json
+                                        .get("parent_hash")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string()),
                                     cids: None, // CIDs are in the root block
-                                    is_root: metadata_json.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
+                                    is_root: metadata_json
+                                        .get("is_root")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(true),
                                 };
 
                                 let notify_metadata = metadata.clone();
@@ -1884,6 +1958,60 @@ async fn handle_autonat_client_event(
             summary,
         })
         .await;
+}
+
+async fn handle_dcutr_event(
+    event: dcutr::Event,
+    metrics: &Arc<Mutex<DhtMetrics>>,
+    event_tx: &mpsc::Sender<DhtEvent>,
+) {
+    let mut metrics_guard = metrics.lock().await;
+    if !metrics_guard.dcutr_enabled {
+        return;
+    }
+
+    let dcutr::Event {
+        remote_peer_id,
+        result,
+    } = event;
+
+    metrics_guard.dcutr_hole_punch_attempts += 1;
+
+    match result {
+        Ok(_connection_id) => {
+            metrics_guard.dcutr_hole_punch_successes += 1;
+            metrics_guard.last_dcutr_success = Some(SystemTime::now());
+            info!(
+                peer = %remote_peer_id,
+                successes = metrics_guard.dcutr_hole_punch_successes,
+                "DCUtR: hole-punch succeeded, upgraded to direct connection"
+            );
+            drop(metrics_guard);
+            let _ = event_tx
+                .send(DhtEvent::Info(format!(
+                    "✓ Direct connection established with peer {} (hole-punch succeeded)",
+                    remote_peer_id
+                )))
+                .await;
+        }
+        Err(error) => {
+            metrics_guard.dcutr_hole_punch_failures += 1;
+            metrics_guard.last_dcutr_failure = Some(SystemTime::now());
+            warn!(
+                peer = %remote_peer_id,
+                error = %error,
+                failures = metrics_guard.dcutr_hole_punch_failures,
+                "DCUtR: hole-punch failed"
+            );
+            drop(metrics_guard);
+            let _ = event_tx
+                .send(DhtEvent::Warning(format!(
+                    "✗ Direct connection upgrade to peer {} failed: {}",
+                    remote_peer_id, error
+                )))
+                .await;
+        }
+    }
 }
 
 async fn handle_external_addr_confirmed(
@@ -2213,6 +2341,17 @@ impl DhtService {
         let (relay_transport, relay_client_behaviour) = relay::client::new(local_peer_id);
         let autonat_client_toggle = toggle::Toggle::from(autonat_client_behaviour);
         let autonat_server_toggle = toggle::Toggle::from(autonat_server_behaviour);
+
+        // DCUtR requires relay to be enabled
+        let dcutr_behaviour = if enable_autonat {
+            info!("DCUtR enabled (requires relay for hole-punching coordination)");
+            Some(dcutr::Behaviour::new(local_peer_id))
+        } else {
+            info!("DCUtR disabled (autonat is disabled)");
+            None
+        };
+        let dcutr_toggle = toggle::Toggle::from(dcutr_behaviour);
+
         let mut behaviour = Some(DhtBehaviour {
             kademlia,
             identify,
@@ -2224,6 +2363,7 @@ impl DhtService {
             autonat_client: autonat_client_toggle,
             autonat_server: autonat_server_toggle,
             relay_client: relay_client_behaviour,
+            dcutr: dcutr_toggle,
         });
 
         let bootstrap_set: HashSet<String> = bootstrap_nodes.iter().cloned().collect();
@@ -2338,6 +2478,7 @@ impl DhtService {
         {
             let mut guard = metrics.lock().await;
             guard.autonat_enabled = enable_autonat;
+            guard.dcutr_enabled = enable_autonat; // DCUtR enabled when AutoNAT is enabled
         }
 
         // Spawn the Dht node task

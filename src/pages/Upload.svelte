@@ -1,7 +1,7 @@
 <script lang="ts">
   import Card from '$lib/components/ui/card.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
-  import { File as FileIcon, X, Plus, FolderOpen, FileText, Image, Music, Video, Archive, Code, FileSpreadsheet, Upload, Download, RefreshCw } from 'lucide-svelte'
+  import { File as FileIcon, X, Plus, FolderOpen, FileText, Image, Music, Video, Archive, Code, FileSpreadsheet, Upload, Download, RefreshCw, Lock, Key } from 'lucide-svelte'
   import { files, type FileItem, etcAccount } from '$lib/stores'
   import { t } from 'svelte-i18n';
   import { get } from 'svelte/store'
@@ -12,7 +12,9 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
   import { dhtService } from '$lib/dht';
-  import { encryptionService } from '$lib/services/encryption'; 
+  import { encryptionService } from '$lib/services/encryption';
+  import Label from '$lib/components/ui/label.svelte';
+  import Input from '$lib/components/ui/input.svelte'; 
 
   const tr = (k: string, params?: Record<string, any>): string => (get(t) as (key: string, params?: any) => string)(k, params)
   // Check if running in Tauri environment
@@ -62,6 +64,11 @@
   let storageError: string | null = null
   let lastChecked: Date | null = null
   let isUploading = false
+  
+  // Encrypted sharing state
+  let useEncryptedSharing = false
+  let recipientPublicKey = ''
+  let showEncryptionOptions = false
 
   $: storageLabel = isRefreshingStorage
     ? tr('upload.storage.checking')
@@ -397,7 +404,9 @@
         const fileName = filePath.split(/[\/\\]/).pop() || '';
         
         // --- ENCRYPTION FLOW ---
-        const manifest = await encryptionService.encryptFile(filePath);
+        // Pass recipient public key if encrypted sharing is enabled and key is provided
+        const recipientKey = useEncryptedSharing && recipientPublicKey.trim() ? recipientPublicKey.trim() : undefined;
+        const manifest = await encryptionService.encryptFile(filePath, recipientKey);
 
         // Check for duplicates using the Merkle Root
         if (get(files).some((f: FileItem) => f.hash === manifest.merkleRoot)) {
@@ -573,6 +582,76 @@
   </Card>
   {/if}
 
+  <!-- Encrypted Sharing Options -->
+  {#if isTauri}
+  <Card class="p-4">
+    <button 
+      class="w-full flex items-center justify-between cursor-pointer hover:opacity-80 transition-opacity"
+      on:click={() => showEncryptionOptions = !showEncryptionOptions}
+    >
+      <div class="flex items-center gap-3">
+        <div class="flex items-center justify-center w-10 h-10 bg-gradient-to-br from-purple-500/10 to-purple-500/5 rounded-lg border border-purple-500/20">
+          <Lock class="h-5 w-5 text-purple-600" />
+        </div>
+        <div class="text-left">
+          <h3 class="text-sm font-semibold text-foreground">{$t('upload.encryption.title')}</h3>
+          <p class="text-xs text-muted-foreground">{$t('upload.encryption.subtitle')}</p>
+        </div>
+      </div>
+      <svg 
+        class="h-5 w-5 text-muted-foreground transition-transform duration-200 {showEncryptionOptions ? 'rotate-180' : ''}" 
+        fill="none" 
+        stroke="currentColor" 
+        viewBox="0 0 24 24"
+      >
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+      </svg>
+    </button>
+    
+    {#if showEncryptionOptions}
+      <div class="mt-4 space-y-4 pt-4 border-t border-border">
+        <div class="flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="use-encrypted-sharing"
+            bind:checked={useEncryptedSharing}
+            class="cursor-pointer"
+          />
+          <Label for="use-encrypted-sharing" class="cursor-pointer text-sm">
+            {$t('upload.encryption.enableForRecipient')}
+          </Label>
+        </div>
+        
+        {#if useEncryptedSharing}
+          <div class="space-y-2 pl-6">
+            <div class="flex items-center gap-2">
+              <Key class="h-4 w-4 text-muted-foreground" />
+              <Label for="recipient-public-key" class="text-sm font-medium">
+                {$t('upload.encryption.recipientPublicKey')}
+              </Label>
+            </div>
+            <Input
+              id="recipient-public-key"
+              bind:value={recipientPublicKey}
+              placeholder={$t('upload.encryption.publicKeyPlaceholder')}
+              class="font-mono text-sm"
+              disabled={isUploading}
+            />
+            <p class="text-xs text-muted-foreground">
+              {$t('upload.encryption.publicKeyHint')}
+            </p>
+            {#if recipientPublicKey && !(/^[0-9a-fA-F]{64}$/.test(recipientPublicKey.trim()))}
+              <p class="text-xs text-destructive">
+                {$t('upload.encryption.invalidPublicKey')}
+              </p>
+            {/if}
+          </div>
+        {/if}
+      </div>
+    {/if}
+  </Card>
+  {/if}
+
   <Card class="drop-zone relative p-6 transition-all duration-200 border-dashed {isDragging ? 'border-primary bg-primary/5 scale-[1.01]' : isUploading ? 'border-orange-500 bg-orange-500/5' : 'border-muted-foreground/25 hover:border-muted-foreground/50'}"
         role="button"
         tabindex="0"
@@ -643,9 +722,9 @@
               <!-- Supported formats hint -->
               <p class="text-xs text-muted-foreground/75 mt-4">
                 {#if isTauri}
-                  Supports images, videos, audio, documents, code files and more
+                  {$t('upload.supportedFormats')}
                 {:else}
-                  Desktop app supports images, videos, audio, documents, code files and more
+                  {$t('upload.supportedFormatsDesktop')}
                 {/if}
               </p>
             {/if}
@@ -707,6 +786,15 @@
                           on:click={() => showVersionHistory(file.name)}
                         >
                           v{file.version}
+                        </Badge>
+                      {/if}
+                      {#if file.isEncrypted}
+                        <Badge
+                          class="bg-purple-100 text-purple-800 text-xs px-2 py-0.5 flex items-center gap-1"
+                          title="This file is encrypted end-to-end"
+                        >
+                          <Lock class="h-3 w-3" />
+                          Encrypted
                         </Badge>
                       {/if}
                       <div class="flex items-center gap-1">

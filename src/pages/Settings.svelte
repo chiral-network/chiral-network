@@ -452,7 +452,7 @@ function sectionMatches(section: string, query: string) {
   <div class="mb-4 flex items-center gap-2">
     <Input
       type="text"
-      placeholder="Search settings..."
+      placeholder={$t('settings.searchPlaceholder')}
       bind:value={search}
       class="w-full"
     />
@@ -668,7 +668,7 @@ function sectionMatches(section: string, query: string) {
     <Expandable>
       <div slot="title" class="flex items-center gap-3">
         <RefreshCw class="h-6 w-6 text-blue-600" />
-        <h2 class="text-xl font-semibold text-black">Bandwidth Scheduling</h2>
+        <h2 class="text-xl font-semibold text-black">{$t('bandwidthScheduling.title')}</h2>
       </div>
       <div class="space-y-4">
         <div class="flex items-center gap-2">
@@ -678,11 +678,11 @@ function sectionMatches(section: string, query: string) {
             bind:checked={localSettings.enableBandwidthScheduling}
           />
           <Label for="enable-bandwidth-scheduling" class="cursor-pointer">
-            Enable Bandwidth Scheduling
+            {$t('bandwidthScheduling.enable')}
           </Label>
         </div>
         <p class="text-xs text-muted-foreground">
-          Schedule different bandwidth limits for specific times and days
+          {$t('bandwidthScheduling.description')}
         </p>
 
         {#if localSettings.enableBandwidthScheduling}
@@ -702,7 +702,7 @@ function sectionMatches(section: string, query: string) {
                     <Input
                       type="text"
                       bind:value={schedule.name}
-                      placeholder="Schedule name"
+                      placeholder={$t('bandwidthScheduling.scheduleName')}
                       class="flex-1"
                       on:input={() => {
                         localSettings.bandwidthSchedules = [...localSettings.bandwidthSchedules];
@@ -716,13 +716,13 @@ function sectionMatches(section: string, query: string) {
                       localSettings.bandwidthSchedules = localSettings.bandwidthSchedules.filter((_, i) => i !== index);
                     }}
                   >
-                    Remove
+                    {$t('bandwidthScheduling.remove')}
                   </Button>
                 </div>
 
                 <div class="grid grid-cols-2 gap-3 mb-3">
                   <div>
-                    <Label for="schedule-start-{index}" class="text-xs">Start Time</Label>
+                    <Label for="schedule-start-{index}" class="text-xs">{$t('bandwidthScheduling.startTime')}</Label>
                     <Input
                       id="schedule-start-{index}"
                       type="time"
@@ -734,7 +734,7 @@ function sectionMatches(section: string, query: string) {
                     />
                   </div>
                   <div>
-                    <Label for="schedule-end-{index}" class="text-xs">End Time</Label>
+                    <Label for="schedule-end-{index}" class="text-xs">{$t('bandwidthScheduling.endTime')}</Label>
                     <Input
                       id="schedule-end-{index}"
                       type="time"
@@ -748,9 +748,9 @@ function sectionMatches(section: string, query: string) {
                 </div>
 
                 <div class="mb-3">
-                  <Label class="text-xs">Days of Week</Label>
+                  <Label class="text-xs">{$t('bandwidthScheduling.daysOfWeek')}</Label>
                   <div class="flex gap-2 mt-1">
-                    {#each [{value: 0, label: 'Sun'}, {value: 1, label: 'Mon'}, {value: 2, label: 'Tue'}, {value: 3, label: 'Wed'}, {value: 4, label: 'Thu'}, {value: 5, label: 'Fri'}, {value: 6, label: 'Sat'}] as day}
+                    {#each [{value: 0, label: $t('bandwidthScheduling.days.sun')}, {value: 1, label: $t('bandwidthScheduling.days.mon')}, {value: 2, label: $t('bandwidthScheduling.days.tue')}, {value: 3, label: $t('bandwidthScheduling.days.wed')}, {value: 4, label: $t('bandwidthScheduling.days.thu')}, {value: 5, label: $t('bandwidthScheduling.days.fri')}, {value: 6, label: $t('bandwidthScheduling.days.sat')}] as day}
                       <button
                         type="button"
                         class="px-2 py-1 text-xs rounded border {schedule.daysOfWeek.includes(day.value) ? 'bg-primary text-primary-foreground' : 'bg-background'}"
@@ -773,7 +773,7 @@ function sectionMatches(section: string, query: string) {
 
                 <div class="grid grid-cols-2 gap-3">
                   <div>
-                    <Label for="schedule-upload-{index}" class="text-xs">Upload Limit (KB/s, 0 = unlimited)</Label>
+                    <Label for="schedule-upload-{index}" class="text-xs">{$t('bandwidthScheduling.uploadLimit')}</Label>
                     <Input
                       id="schedule-upload-{index}"
                       type="number"
@@ -786,7 +786,7 @@ function sectionMatches(section: string, query: string) {
                     />
                   </div>
                   <div>
-                    <Label for="schedule-download-{index}" class="text-xs">Download Limit (KB/s, 0 = unlimited)</Label>
+                    <Label for="schedule-download-{index}" class="text-xs">{$t('bandwidthScheduling.downloadLimit')}</Label>
                     <Input
                       id="schedule-download-{index}"
                       type="number"
@@ -810,7 +810,7 @@ function sectionMatches(section: string, query: string) {
                   ...localSettings.bandwidthSchedules,
                   {
                     id: `schedule-${Date.now()}`,
-                    name: `Schedule ${localSettings.bandwidthSchedules.length + 1}`,
+                    name: $t('bandwidthScheduling.scheduleDefault', { values: { number: localSettings.bandwidthSchedules.length + 1 } }),
                     startTime: '00:00',
                     endTime: '23:59',
                     daysOfWeek: [0, 1, 2, 3, 4, 5, 6],
@@ -821,7 +821,7 @@ function sectionMatches(section: string, query: string) {
                 ];
               }}
             >
-              Add Schedule
+              {$t('bandwidthScheduling.addSchedule')}
             </Button>
           </div>
         {/if}

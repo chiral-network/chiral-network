@@ -13,16 +13,24 @@
   let newNodeAddress = ''
   let proxyEnabled = true
   let isAddressValid = true
+  let addressError = ''
   let showConfirmDialog = false
   let nodeToRemove: any = null
+  let connectionTimeouts = new Map<string, NodeJS.Timeout>()
+  let reconnectIntervals = new Map<string, NodeJS.Timeout>()
+  let autoReconnectEnabled = true
   const validAddressRegex = /^[a-zA-Z0-9.-]+:[0-9]{1,5}$/
+  const ipv4Regex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):[0-9]{1,5}$/
+  const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.([a-zA-Z]{2,}|[a-zA-Z]{2,}\.[a-zA-Z]{2,}):[0-9]{1,5}$/
+  const enodeRegex = /^enode:\/\/[a-fA-F0-9]{128}@(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):[0-9]{1,5}$/
   let statusFilter = 'all'
   
   $: statusOptions = [
     { value: 'all', label: $t('All') },
     { value: 'online', label: $t('Online') },
     { value: 'offline', label: $t('Offline') },
-    { value: 'connecting', label: $t('Connecting') }
+    { value: 'connecting', label: $t('Connecting') },
+    { value: 'timeout', label: 'Timeout' }
   ]
 
   $: filteredNodes = $proxyNodes.filter(node => {
@@ -34,9 +42,9 @@
 
   
   $: sortedNodes = [...filteredNodes].sort((a, b) => {
-      const statusOrder: Record<string, number> = { 'online': 1, 'connecting': 2, 'offline': 3, 'error': 4 };
-      const aOrder = statusOrder[a.status || 'offline'] || 5;
-      const bOrder = statusOrder[b.status || 'offline'] || 5;
+      const statusOrder: Record<string, number> = { 'online': 1, 'connecting': 2, 'offline': 3, 'timeout': 4, 'error': 5 };
+      const aOrder = statusOrder[a.status || 'offline'] || 6;
+      const bOrder = statusOrder[b.status || 'offline'] || 6;
       return aOrder - bOrder;
   });
 
@@ -45,6 +53,124 @@
       listProxies();
   });
 
+  function validateAddress(address: string): { valid: boolean; error: string } {
+      if (!address || address.trim() === '') {
+          return { valid: false, error: 'Address cannot be empty' }
+      }
+
+      const trimmed = address.trim()
+
+      if (trimmed.includes(' ')) {
+          return { valid: false, error: 'Address cannot contain spaces' }
+      }
+
+      // Check for enode format first
+      if (trimmed.startsWith('enode://')) {
+          if (enodeRegex.test(trimmed)) {
+              return { valid: true, error: '' }
+          } else {
+              return { valid: false, error: 'Invalid enode format (enode://[128-char-hex]@ip:port)' }
+          }
+      }
+
+      // Standard host:port validation
+      if (!trimmed.includes(':')) {
+          return { valid: false, error: 'Address must include port (e.g., example.com:8080)' }
+      }
+
+      const [host, portStr] = trimmed.split(':')
+
+      if (!host) {
+          return { valid: false, error: 'Invalid hostname' }
+      }
+
+      const port = parseInt(portStr)
+      if (isNaN(port) || port < 1 || port > 65535) {
+          return { valid: false, error: 'Port must be between 1-65535' }
+      }
+
+      if (port < 1024 && port !== 80 && port !== 443) {
+          return { valid: false, error: 'Avoid system ports (use 1024+)' }
+      }
+
+      if (!ipv4Regex.test(trimmed) && !domainRegex.test(trimmed)) {
+          return { valid: false, error: 'Invalid IP address or domain format' }
+      }
+
+      return { valid: true, error: '' }
+  }
+
+  function startConnectionTimeout(address: string) {
+      // Clear any existing timeout
+      const existingTimeout = connectionTimeouts.get(address)
+      if (existingTimeout) {
+          clearTimeout(existingTimeout)
+      }
+
+      // Set new timeout (15 seconds)
+      const timeout = setTimeout(() => {
+          // Find the node and mark as timeout
+          proxyNodes.update(nodes => {
+              return nodes.map(node =>
+                  node.address === address && node.status === 'connecting'
+                      ? { ...node, status: 'timeout' }
+                      : node
+              )
+          })
+          connectionTimeouts.delete(address)
+
+          // Start auto-reconnect for timed out connections
+          startAutoReconnect(address)
+      }, 15000)
+
+      connectionTimeouts.set(address, timeout)
+  }
+
+  function clearConnectionTimeout(address: string) {
+      const timeout = connectionTimeouts.get(address)
+      if (timeout) {
+          clearTimeout(timeout)
+          connectionTimeouts.delete(address)
+      }
+  }
+
+  function startAutoReconnect(address: string) {
+      if (!autoReconnectEnabled) return
+
+      // Clear any existing reconnect interval
+      const existingInterval = reconnectIntervals.get(address)
+      if (existingInterval) {
+          clearInterval(existingInterval)
+      }
+
+      // Set up reconnect attempts every 30 seconds
+      const interval = setInterval(() => {
+          const node = $proxyNodes.find(n => n.address === address)
+          if (!node || node.status === 'online') {
+              // Stop reconnecting if node is removed or online
+              clearInterval(interval)
+              reconnectIntervals.delete(address)
+              return
+          }
+
+          if (node.status === 'offline' || node.status === 'timeout') {
+              console.log(`Auto-reconnecting to proxy: ${address}`)
+              startConnectionTimeout(address)
+              connectProxy(address, "dummy-token")
+          }
+      }, 30000) // Retry every 30 seconds
+
+      reconnectIntervals.set(address, interval)
+  }
+
+  function stopAutoReconnect(address: string) {
+      const interval = reconnectIntervals.get(address)
+      if (interval) {
+          clearInterval(interval)
+          reconnectIntervals.delete(address)
+      }
+  }
+
   function addNode() {
       const isDuplicate = $proxyNodes.some(node => node.address === newNodeAddress.trim())
       if (isDuplicate) {
@@ -52,14 +178,19 @@
           return
       }
 
-      if (!newNodeAddress || !validAddressRegex.test(newNodeAddress.trim())) {
-          alert($t('proxy.invalidAddress'))
+      const validation = validateAddress(newNodeAddress)
+      if (!validation.valid) {
+          addressError = validation.error
           return
       }
+
+      // Start connection timeout
+      startConnectionTimeout(newNodeAddress.trim())
 
       // For now, we'll use a dummy token.
       connectProxy(newNodeAddress.trim(), "dummy-token");
       newNodeAddress = ''
+      addressError = ''
   }
 
   function requestRemoveNode(node: any) {
@@ -69,6 +200,8 @@
 
   function confirmRemoveNode() {
     if (nodeToRemove && nodeToRemove.address) {
+      clearConnectionTimeout(nodeToRemove.address)
+      stopAutoReconnect(nodeToRemove.address)
       removeProxy(nodeToRemove.address)
     }
     showConfirmDialog = false
@@ -82,8 +215,12 @@
 
   function toggleNode(node: any) {
       if (node.status === 'online') {
+          clearConnectionTimeout(node.address)
+          stopAutoReconnect(node.address)
           disconnectProxy(node.address);
       } else {
+          // Start connection timeout for reconnection attempts
+          startConnectionTimeout(node.address)
           // For now, we'll use a dummy token.
           connectProxy(node.address, "dummy-token");
       }
@@ -92,7 +229,15 @@
   
   $: activeNodes = $proxyNodes.filter(n => n.status === 'online').length
   $: totalBandwidth = $proxyNodes.reduce((sum, n) => sum + (n.status === 'online' ? (n.latency ? Math.round(100 - n.latency) : 50) : 0), 0)
-  $: isAddressValid = validAddressRegex.test(newNodeAddress.trim())
+  $: {
+      const validation = validateAddress(newNodeAddress)
+      isAddressValid = validation.valid
+      if (newNodeAddress.trim() !== '' && !validation.valid) {
+          addressError = validation.error
+      } else {
+          addressError = ''
+      }
+  }
 </script>
 
 <!-- Confirmation Dialog -->
@@ -195,9 +340,36 @@
           </div>
         {/if}
       </div>
-      <div class="flex items-center gap-3">
-        <span class="text-sm font-medium transition-colors duration-300 {proxyEnabled ? 'text-green-600' : 'text-gray-500'}">{$t('proxy.proxy')}</span>
-        <button
+      <div class="flex items-center gap-6">
+        <div class="flex items-center gap-3">
+          <span class="text-sm font-medium transition-colors duration-300 {autoReconnectEnabled ? 'text-blue-600' : 'text-gray-500'}">{$t('proxy.autoReconnect')}</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={autoReconnectEnabled}
+            aria-label="Toggle auto-reconnect {autoReconnectEnabled ? 'off' : 'on'}"
+            on:click={() => (autoReconnectEnabled = !autoReconnectEnabled)}
+            class="group relative inline-flex h-7 w-12 items-center rounded-full transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2
+               {autoReconnectEnabled ? 'bg-blue-500 focus:ring-blue-500 shadow-lg shadow-blue-500/30' : 'bg-gray-300 focus:ring-gray-400'}"
+            >
+            <span
+              class="inline-block h-5 w-5 transform rounded-full bg-white transition-all duration-300 shadow-lg
+                 {autoReconnectEnabled ? 'translate-x-6' : 'translate-x-1'}"
+            >
+              <!-- Mini icon inside toggle -->
+              <div class="flex items-center justify-center w-full h-full">
+                {#if autoReconnectEnabled}
+                  <Activity class="h-2.5 w-2.5 text-blue-500" />
+                {:else}
+                  <Activity class="h-2.5 w-2.5 text-gray-400" />
+                {/if}
+              </div>
+            </span>
+          </button>
+        </div>
+        <div class="flex items-center gap-3">
+          <span class="text-sm font-medium transition-colors duration-300 {proxyEnabled ? 'text-green-600' : 'text-gray-500'}">{$t('proxy.proxy')}</span>
+          <button
           type="button"
           role="switch"
           aria-checked={proxyEnabled}
@@ -220,6 +392,7 @@
             </div>
           </span>
         </button>
+        </div>
       </div>
     </div>
 
@@ -231,7 +404,7 @@
                 <Input
                     id="new-node"
                     bind:value={newNodeAddress}
-                    placeholder={$t('proxy.enterAddress')}
+                    placeholder="example.com:8080 or enode://..."
                     class="flex-1 {isAddressValid || newNodeAddress === '' ? '' : 'border border-red-500 focus:ring-red-500'}"
                 />
                 <Button on:click={addNode} disabled={!isAddressValid || !newNodeAddress}>
@@ -239,8 +412,8 @@
                     {$t('proxy.addNodeButton')}
                 </Button>
             </div>
-            {#if !isAddressValid && newNodeAddress !== ''}
-                <p class="text-sm text-red-500 mt-1">{$t('proxy.invalidAddress')}</p>
+            {#if addressError}
+                <p class="text-sm text-red-500 mt-1">{addressError}</p>
             {/if}
         </div>
 
@@ -263,9 +436,10 @@
            <div class="flex items-center justify-between mb-3">
                       <div class="flex items-center gap-3 min-w-0">
                         <div class="w-2 h-2 rounded-full flex-shrink-0 {
-                          node.status === 'online' ? 'bg-green-500' : 
-                          node.status === 'offline' ? 'bg-red-500' : 
-                          node.status === 'connecting' ? 'bg-yellow-500' :
+                          node.status === 'online' ? 'bg-green-500' :
+                          node.status === 'offline' ? 'bg-red-500' :
+                          node.status === 'connecting' ? 'bg-yellow-500 animate-pulse' :
+                          node.status === 'timeout' ? 'bg-orange-500' :
                           'bg-gray-500'
                         }"></div>
                         <div class="min-w-0">
@@ -274,11 +448,13 @@
                         </div>
                       </div>              <Badge variant={node.status === 'online' ? 'default' :
                    node.status === 'offline' ? 'secondary' :
-                   node.status === 'connecting' ? 'outline' : 'outline'}
+                   node.status === 'connecting' ? 'outline' :
+                   node.status === 'timeout' ? 'outline' : 'outline'}
                       class={
                         node.status === 'online' ? 'bg-green-500 text-white' :
                         node.status === 'offline' ? 'bg-red-500 text-white' :
                         node.status === 'connecting' ? 'bg-yellow-500 text-white' :
+                        node.status === 'timeout' ? 'bg-orange-500 text-white' :
                         'bg-gray-500 text-white'
                       }
                       style="pointer-events: none;"
@@ -303,9 +479,13 @@
               size="sm"
               variant="outline"
               on:click={() => toggleNode(node)}
+              disabled={node.status === 'connecting'}
             >
               <Power class="h-3 w-3 mr-1" />
-              {node.status === 'online' ? $t('proxy.disconnect') : $t('proxy.connect')}
+              {node.status === 'online' ? $t('proxy.disconnect') :
+               node.status === 'connecting' ? 'Connecting...' :
+               node.status === 'timeout' ? 'Retry' :
+               $t('proxy.connect')}
             </Button>
             <Button
               size="sm"

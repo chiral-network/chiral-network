@@ -73,6 +73,11 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 - ✅ **Relay Health Monitoring**: Track relay connection status and performance
 - ✅ **Custom Relay Nodes**: Add trusted relay nodes manually
 - ✅ **Headless Relay Configuration**: CLI flags for --enable-autorelay, --relay, --autonat-server
+- ❌ **Privacy Protection**: Route traffic through proxy nodes (no traffic routing implemented)
+- ❌ **Load Balancing**: Automatic distribution across multiple proxies (no parallel downloads or file segmentation)
+- ❌ **Latency Optimization**: Choose proxies based on performance (no download process uses latency framework)
+- ✅ **Custom Node Addition**: Add trusted proxy nodes manually
+- ❌ **Bandwidth Aggregation**: Combine multiple proxy connections (no actual combining of multiple proxy connections)
 - ✅ **Real Proxy Management**: Backend proxy connection and management
 - ❌ **Public Relay Infrastructure**: Dedicated relay daemon deployment (in progress)
 
@@ -252,7 +257,7 @@ The network uses a multi-layered approach to ensure connectivity:
    - Gradually integrate real P2P networking
    - Maintain backwards compatibility
 
-## Installation & Setup
+## Setup and Testing
 
 ```bash
 # Clone the repository
@@ -269,9 +274,13 @@ npm run tauri dev # Desktop app
 # Build for production
 npm run build       # Web production build
 npm run tauri build # Desktop production build
-```
 
-## Usage Guide
+# Run tests
+npm test
+
+# Run tests in watch mode
+npm run test:watch
+```
 
 ### Getting Started
 
@@ -392,6 +401,12 @@ npm run tauri build # Desktop production build
 - ❌ **Public Relay Infrastructure**: Dedicated relay daemon deployment
 - [ ] **Selective Sync Capabilities**: Choose which files to download
 - [ ] **Mobile Applications**: iOS and Android support
+- ✅ **Key Exchange UI**: Recipient public key input for encrypted sharing
+- ✅ Real P2P file transfer protocol
+- ✅ File versioning system
+- ✅ Advanced bandwidth scheduling
+- [ ] Selective sync capabilities
+- [ ] Mobile applications
 
 ### Phase 4: Enterprise Features
 
@@ -432,12 +447,13 @@ npm run tauri build # Desktop production build
 - ECIES key exchange infrastructure
 - File download decryption with key management
 - WebRTC encrypted chunk transfers
+- Key exchange UI for recipient-specific encryption
 - No centralized servers to compromise
 - Fully decentralized architecture prevents single points of failure
 
 ### Planned Security
 
-- Key exchange UI for encrypted sharing
+- ✅ Key exchange UI for encrypted sharing
 - File encryption at rest
 - Signed software updates
 - Two-factor authentication

@@ -15,12 +15,13 @@ export class FileService {
     await invoke("start_file_transfer_service");
     // Also start the DHT node, as it's closely related to file sharing.
     // The port and bootstrap nodes could be made configurable in the future.
-    // Using a default bootstrap node from your headless.rs for now.
-    const defaultBootstrap =
-      "/ip4/54.198.145.146/tcp/4001/p2p/12D3KooWNHdYWRTe98KMF1cDXXqGXvNjd1SAchDaeP5o4MsoJLu2";
+    // Get bootstrap nodes from the backend instead of hardcoding
+    const bootstrapNodes = await invoke<string[]>(
+      "get_bootstrap_nodes_command"
+    );
     await invoke("start_dht_node", {
       port: 4001,
-      bootstrapNodes: [defaultBootstrap],
+      bootstrapNodes,
     });
 
     // Get the peer ID and set it on the DHT service singleton

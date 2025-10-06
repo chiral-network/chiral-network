@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { t } from 'svelte-i18n';
   import { TrustLevel, type PeerReputation, type ReputationAnalytics, type ReputationEvent, EventType } from '$lib/types/reputation';
   import ReputationCard from '$lib/components/ReputationCard.svelte';
   import ReputationAnalyticsComponent from '$lib/components/ReputationAnalytics.svelte';
@@ -67,11 +68,11 @@
   // Trust level options for filter
   const trustLevelOptions: TrustLevel[] = [TrustLevel.Trusted, TrustLevel.High, TrustLevel.Medium, TrustLevel.Low, TrustLevel.Unknown];
 
-  // Sort options
-  const sortOptions = [
-    { value: 'score', label: 'Reputation Score' },
-    { value: 'interactions', label: 'Total Interactions' },
-    { value: 'lastSeen', label: 'Last Seen' }
+  // Sort options - will use reactive translations
+  $: sortOptions = [
+    { value: 'score', label: $t('reputation.sortOptions.score') },
+    { value: 'interactions', label: $t('reputation.sortOptions.interactions') },
+    { value: 'lastSeen', label: $t('reputation.sortOptions.lastSeen') }
   ];
 
   // Generate mock data
@@ -189,7 +190,7 @@
 </script>
 
 <svelte:head>
-  <title>Reputation System - Chiral Network</title>
+  <title>{$t('reputation.pageTitle')}</title>
 </svelte:head>
 
 <div class="space-y-6">
@@ -197,15 +198,15 @@
     <div class="mb-8">
       <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 class="text-3xl font-bold text-gray-900">Reputation System</h1>
-          <p class="mt-2 text-gray-600">Monitor peer trust levels and network health</p>
+          <h1 class="text-3xl font-bold text-gray-900">{$t('reputation.title')}</h1>
+          <p class="mt-2 text-gray-600">{$t('reputation.subtitle')}</p>
         </div>
         <div class="flex flex-wrap gap-2 sm:justify-end">
           <Button on:click={refreshData} disabled={isLoading} variant="outline" class="w-full sm:w-auto">
-            {isLoading ? 'Refreshing...' : 'Refresh Data'}
+            {isLoading ? $t('reputation.refreshing') : $t('reputation.refreshData')}
           </Button>
           <Button on:click={() => showAnalytics = !showAnalytics} variant="outline" class="w-full sm:w-auto">
-            {showAnalytics ? 'Hide Analytics' : 'Show Analytics'}
+            {showAnalytics ? $t('reputation.hideAnalytics') : $t('reputation.showAnalytics')}
           </Button>
         </div>
       </div>
@@ -216,7 +217,7 @@
       <div class="flex items-center justify-center py-12">
         <div class="text-center">
           <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-          <p class="mt-4 text-gray-600">Loading reputation data...</p>
+          <p class="mt-4 text-gray-600">{$t('reputation.loading')}</p>
         </div>
       </div>
     {:else}
@@ -229,13 +230,13 @@
 
       <!-- Search Box -->
       <Card class="p-6 mb-4">
-        <h3 class="text-lg font-bold text-gray-900 mb-4">Search Peers</h3>
+        <h3 class="text-lg font-bold text-gray-900 mb-4">{$t('reputation.searchPeers')}</h3>
         <div>
           <input
             id="search"
             type="text"
             bind:value={searchQuery}
-            placeholder="Search by peer ID..."
+            placeholder={$t('reputation.searchPlaceholder')}
             class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           />
         </div>
@@ -245,14 +246,14 @@
       <div class="flex items-center justify-between mb-4 gap-2 flex-wrap">
         <!-- Filter Dropdown -->
         <div class="relative">
-          <Button variant="outline" class="sm:w-auto" on:click={openFilters}>Filters</Button>
+          <Button variant="outline" class="sm:w-auto" on:click={openFilters}>{$t('reputation.filters')}</Button>
           {#if isFilterOpen}
             <div use:clickOutside>
               <Card class="absolute top-full mt-2 p-6 w-72 z-10">
                 <div class="space-y-6">
                   <!-- Trust Level Filter -->
                   <div>
-                    <h4 class="font-medium text-gray-800 mb-3">Trust Level</h4>
+                    <h4 class="font-medium text-gray-800 mb-3">{$t('reputation.trustLevel')}</h4>
                     <div class="space-y-2">
                       {#each trustLevelOptions as level}
                         <label class="flex items-center gap-2 text-sm font-normal">
@@ -265,26 +266,26 @@
 
                   <!-- Encryption Filter -->
                   <div>
-                    <h4 class="font-medium text-gray-800 mb-3">Encryption</h4>
+                    <h4 class="font-medium text-gray-800 mb-3">{$t('reputation.encryption')}</h4>
                     <div class="space-y-2">
                       <label class="flex items-center gap-2 text-sm font-normal">
                         <input type="radio" bind:group={pendingFilterEncryptionSupported} value={null} />
-                        Any
+                        {$t('reputation.any')}
                       </label>
                       <label class="flex items-center gap-2 text-sm font-normal">
                         <input type="radio" bind:group={pendingFilterEncryptionSupported} value={true} />
-                        Supported
+                        {$t('reputation.supported')}
                       </label>
                       <label class="flex items-center gap-2 text-sm font-normal">
                         <input type="radio" bind:group={pendingFilterEncryptionSupported} value={false} />
-                        Not Supported
+                        {$t('reputation.notSupported')}
                       </label>
                     </div>
                   </div>
 
                   <!-- Uptime Filter -->
                   <div>
-                    <h4 class="font-medium text-gray-800 mb-3">Minimum Uptime</h4>
+                    <h4 class="font-medium text-gray-800 mb-3">{$t('reputation.minimumUptime')}</h4>
                     <div class="flex items-center gap-3">
                       <input type="range" min="0" max="100" bind:value={pendingMinUptime} class="w-full" />
                       <span class="text-sm font-medium w-12 text-right">{pendingMinUptime}%</span>
@@ -293,8 +294,8 @@
                 </div>
                 <!-- Action Buttons -->
                 <div class="flex justify-between items-center mt-6 pt-4 border-t border-gray-200">
-                  <Button variant="ghost" on:click={clearFilters}>Clear</Button>
-                  <Button on:click={applyFilters}>Apply</Button>
+                  <Button variant="ghost" on:click={clearFilters}>{$t('reputation.clear')}</Button>
+                  <Button on:click={applyFilters}>{$t('reputation.apply')}</Button>
                 </div>
               </Card>
             </div>
@@ -303,7 +304,7 @@
 
         <!-- Sort Dropdown -->
         <div class="flex items-center gap-2">
-          <label for="sortBy" class="text-sm font-medium text-gray-700 sr-only">Sort By</label>
+          <label for="sortBy" class="text-sm font-medium text-gray-700 sr-only">{$t('reputation.sortBy')}</label>
           <div class="relative">
             <select
               id="sortBy"
@@ -324,11 +325,11 @@
       <!-- Results Summary -->
       <div class="flex items-center justify-between mb-4">
         <p class="text-sm text-gray-600">
-          Showing {filteredPeers.length} of {peers.length} peers
+          {$t('reputation.showing', { values: { filtered: filteredPeers.length, total: peers.length } })}
         </p>
         <div class="flex items-center space-x-2">
-          <span class="text-sm text-gray-500">View:</span>
-          <Badge variant="outline">Cards</Badge>
+          <span class="text-sm text-gray-500">{$t('reputation.view')}:</span>
+          <Badge variant="outline">{$t('reputation.cards')}</Badge>
         </div>
       </div>
 
@@ -336,8 +337,8 @@
       {#if filteredPeers.length === 0}
         <Card class="p-12 text-center">
           <div class="text-gray-400 text-6xl mb-4">🔍</div>
-          <h3 class="text-lg font-medium text-gray-900 mb-2">No peers found</h3>
-          <p class="text-gray-500">Try adjusting your search criteria or filters.</p>
+          <h3 class="text-lg font-medium text-gray-900 mb-2">{$t('reputation.noPeersFound')}</h3>
+          <p class="text-gray-500">{$t('reputation.tryAdjusting')}</p>
         </Card>
       {:else}
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
