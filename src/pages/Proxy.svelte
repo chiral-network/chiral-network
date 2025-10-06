@@ -16,6 +16,7 @@
   let addressError = ''
   let showConfirmDialog = false
   let nodeToRemove: any = null
+  let connectionTimeouts = new Map<string, NodeJS.Timeout>()
   const validAddressRegex = /^[a-zA-Z0-9.-]+:[0-9]{1,5}$/
   const ipv4Regex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):[0-9]{1,5}$/
   const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.([a-zA-Z]{2,}|[a-zA-Z]{2,}\.[a-zA-Z]{2,}):[0-9]{1,5}$/
@@ -26,7 +27,8 @@
     { value: 'all', label: $t('All') },
     { value: 'online', label: $t('Online') },
     { value: 'offline', label: $t('Offline') },
-    { value: 'connecting', label: $t('Connecting') }
+    { value: 'connecting', label: $t('Connecting') },
+    { value: 'timeout', label: 'Timeout' }
   ]
 
   $: filteredNodes = $proxyNodes.filter(node => {
@@ -38,9 +40,9 @@
 
   
   $: sortedNodes = [...filteredNodes].sort((a, b) => {
-      const statusOrder: Record<string, number> = { 'online': 1, 'connecting': 2, 'offline': 3, 'error': 4 };
-      const aOrder = statusOrder[a.status || 'offline'] || 5;
-      const bOrder = statusOrder[b.status || 'offline'] || 5;
+      const statusOrder: Record<string, number> = { 'online': 1, 'connecting': 2, 'offline': 3, 'timeout': 4, 'error': 5 };
+      const aOrder = statusOrder[a.status || 'offline'] || 6;
+      const bOrder = statusOrder[b.status || 'offline'] || 6;
       return aOrder - bOrder;
   });
 
@@ -96,6 +98,37 @@
       return { valid: true, error: '' }
   }
 
+  function startConnectionTimeout(address: string) {
+      // Clear any existing timeout
+      const existingTimeout = connectionTimeouts.get(address)
+      if (existingTimeout) {
+          clearTimeout(existingTimeout)
+      }
+
+      // Set new timeout (15 seconds)
+      const timeout = setTimeout(() => {
+          // Find the node and mark as timeout
+          proxyNodes.update(nodes => {
+              return nodes.map(node =>
+                  node.address === address && node.status === 'connecting'
+                      ? { ...node, status: 'timeout' }
+                      : node
+              )
+          })
+          connectionTimeouts.delete(address)
+      }, 15000)
+
+      connectionTimeouts.set(address, timeout)
+  }
+
+  function clearConnectionTimeout(address: string) {
+      const timeout = connectionTimeouts.get(address)
+      if (timeout) {
+          clearTimeout(timeout)
+          connectionTimeouts.delete(address)
+      }
+  }
+
   function addNode() {
       const isDuplicate = $proxyNodes.some(node => node.address === newNodeAddress.trim())
       if (isDuplicate) {
@@ -108,6 +141,9 @@
           addressError = validation.error
           return
       }
+
+      // Start connection timeout
+      startConnectionTimeout(newNodeAddress.trim())
 
       // For now, we'll use a dummy token.
       connectProxy(newNodeAddress.trim(), "dummy-token");
@@ -135,8 +171,11 @@
 
   function toggleNode(node: any) {
       if (node.status === 'online') {
+          clearConnectionTimeout(node.address)
           disconnectProxy(node.address);
       } else {
+          // Start connection timeout for reconnection attempts
+          startConnectionTimeout(node.address)
           // For now, we'll use a dummy token.
           connectProxy(node.address, "dummy-token");
       }
@@ -324,9 +363,10 @@
            <div class="flex items-center justify-between mb-3">
                       <div class="flex items-center gap-3 min-w-0">
                         <div class="w-2 h-2 rounded-full flex-shrink-0 {
-                          node.status === 'online' ? 'bg-green-500' : 
-                          node.status === 'offline' ? 'bg-red-500' : 
-                          node.status === 'connecting' ? 'bg-yellow-500' :
+                          node.status === 'online' ? 'bg-green-500' :
+                          node.status === 'offline' ? 'bg-red-500' :
+                          node.status === 'connecting' ? 'bg-yellow-500 animate-pulse' :
+                          node.status === 'timeout' ? 'bg-orange-500' :
                           'bg-gray-500'
                         }"></div>
                         <div class="min-w-0">
@@ -335,11 +375,13 @@
                         </div>
                       </div>              <Badge variant={node.status === 'online' ? 'default' :
                    node.status === 'offline' ? 'secondary' :
-                   node.status === 'connecting' ? 'outline' : 'outline'}
+                   node.status === 'connecting' ? 'outline' :
+                   node.status === 'timeout' ? 'outline' : 'outline'}
                       class={
                         node.status === 'online' ? 'bg-green-500 text-white' :
                         node.status === 'offline' ? 'bg-red-500 text-white' :
                         node.status === 'connecting' ? 'bg-yellow-500 text-white' :
+                        node.status === 'timeout' ? 'bg-orange-500 text-white' :
                         'bg-gray-500 text-white'
                       }
                       style="pointer-events: none;"
@@ -364,9 +406,13 @@
               size="sm"
               variant="outline"
               on:click={() => toggleNode(node)}
+              disabled={node.status === 'connecting'}
             >
               <Power class="h-3 w-3 mr-1" />
-              {node.status === 'online' ? $t('proxy.disconnect') : $t('proxy.connect')}
+              {node.status === 'online' ? $t('proxy.disconnect') :
+               node.status === 'connecting' ? 'Connecting...' :
+               node.status === 'timeout' ? 'Retry' :
+               $t('proxy.connect')}
             </Button>
             <Button
               size="sm"
