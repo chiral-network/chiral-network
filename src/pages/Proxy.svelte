@@ -17,6 +17,8 @@
   let showConfirmDialog = false
   let nodeToRemove: any = null
   let connectionTimeouts = new Map<string, NodeJS.Timeout>()
+  let reconnectIntervals = new Map<string, NodeJS.Timeout>()
+  let autoReconnectEnabled = true
   const validAddressRegex = /^[a-zA-Z0-9.-]+:[0-9]{1,5}$/
   const ipv4Regex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):[0-9]{1,5}$/
   const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.([a-zA-Z]{2,}|[a-zA-Z]{2,}\.[a-zA-Z]{2,}):[0-9]{1,5}$/
@@ -116,6 +118,9 @@
               )
           })
           connectionTimeouts.delete(address)
+
+          // Start auto-reconnect for timed out connections
+          startAutoReconnect(address)
       }, 15000)
 
       connectionTimeouts.set(address, timeout)
@@ -126,6 +131,43 @@
       if (timeout) {
           clearTimeout(timeout)
           connectionTimeouts.delete(address)
+      }
+  }
+
+  function startAutoReconnect(address: string) {
+      if (!autoReconnectEnabled) return
+
+      // Clear any existing reconnect interval
+      const existingInterval = reconnectIntervals.get(address)
+      if (existingInterval) {
+          clearInterval(existingInterval)
+      }
+
+      // Set up reconnect attempts every 30 seconds
+      const interval = setInterval(() => {
+          const node = $proxyNodes.find(n => n.address === address)
+          if (!node || node.status === 'online') {
+              // Stop reconnecting if node is removed or online
+              clearInterval(interval)
+              reconnectIntervals.delete(address)
+              return
+          }
+
+          if (node.status === 'offline' || node.status === 'timeout') {
+              console.log(`Auto-reconnecting to proxy: ${address}`)
+              startConnectionTimeout(address)
+              connectProxy(address, "dummy-token")
+          }
+      }, 30000) // Retry every 30 seconds
+
+      reconnectIntervals.set(address, interval)
+  }
+
+  function stopAutoReconnect(address: string) {
+      const interval = reconnectIntervals.get(address)
+      if (interval) {
+          clearInterval(interval)
+          reconnectIntervals.delete(address)
       }
   }
 
@@ -158,6 +200,8 @@
 
   function confirmRemoveNode() {
     if (nodeToRemove && nodeToRemove.address) {
+      clearConnectionTimeout(nodeToRemove.address)
+      stopAutoReconnect(nodeToRemove.address)
       removeProxy(nodeToRemove.address)
     }
     showConfirmDialog = false
@@ -172,6 +216,7 @@
   function toggleNode(node: any) {
       if (node.status === 'online') {
           clearConnectionTimeout(node.address)
+          stopAutoReconnect(node.address)
           disconnectProxy(node.address);
       } else {
           // Start connection timeout for reconnection attempts
@@ -295,9 +340,36 @@
           </div>
         {/if}
       </div>
-      <div class="flex items-center gap-3">
-        <span class="text-sm font-medium transition-colors duration-300 {proxyEnabled ? 'text-green-600' : 'text-gray-500'}">{$t('proxy.proxy')}</span>
-        <button
+      <div class="flex items-center gap-6">
+        <div class="flex items-center gap-3">
+          <span class="text-sm font-medium transition-colors duration-300 {autoReconnectEnabled ? 'text-blue-600' : 'text-gray-500'}">Auto-reconnect</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={autoReconnectEnabled}
+            aria-label="Toggle auto-reconnect {autoReconnectEnabled ? 'off' : 'on'}"
+            on:click={() => (autoReconnectEnabled = !autoReconnectEnabled)}
+            class="group relative inline-flex h-7 w-12 items-center rounded-full transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2
+               {autoReconnectEnabled ? 'bg-blue-500 focus:ring-blue-500 shadow-lg shadow-blue-500/30' : 'bg-gray-300 focus:ring-gray-400'}"
+            >
+            <span
+              class="inline-block h-5 w-5 transform rounded-full bg-white transition-all duration-300 shadow-lg
+                 {autoReconnectEnabled ? 'translate-x-6' : 'translate-x-1'}"
+            >
+              <!-- Mini icon inside toggle -->
+              <div class="flex items-center justify-center w-full h-full">
+                {#if autoReconnectEnabled}
+                  <Activity class="h-2.5 w-2.5 text-blue-500" />
+                {:else}
+                  <Activity class="h-2.5 w-2.5 text-gray-400" />
+                {/if}
+              </div>
+            </span>
+          </button>
+        </div>
+        <div class="flex items-center gap-3">
+          <span class="text-sm font-medium transition-colors duration-300 {proxyEnabled ? 'text-green-600' : 'text-gray-500'}">{$t('proxy.proxy')}</span>
+          <button
           type="button"
           role="switch"
           aria-checked={proxyEnabled}
@@ -320,6 +392,7 @@
             </div>
           </span>
         </button>
+        </div>
       </div>
     </div>
 
