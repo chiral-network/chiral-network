@@ -46,7 +46,7 @@ export type WebRTCSession = {
 
 const defaultIceServers: IceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
-  { urls: "stun:global.stun.twilio.com:3478?transport=udp" },
+  { urls: "stun:global.stun.twilio.com:3478" },
 ];
 
 export function createWebRTCSession(opts: WebRTCOptions = {}): WebRTCSession {

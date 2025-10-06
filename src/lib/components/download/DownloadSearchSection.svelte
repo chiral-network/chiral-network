@@ -477,6 +477,7 @@
               <SearchResultCard
                 metadata={latestMetadata}
                 on:copy={handleCopy}
+                on:download={event => dispatch('download', event.detail)}
               />
               <p class="text-xs text-muted-foreground">
                 {tr('download.search.status.completedIn', { values: { seconds: (lastSearchDuration / 1000).toFixed(1) } })}

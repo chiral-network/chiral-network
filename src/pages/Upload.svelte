@@ -254,6 +254,26 @@
                 // Use fileService.uploadFile method for File objects with versioning
                 const metadata = await fileService.uploadFile(file)
 
+
+                // Store file data to disk for seeding
+                    try {
+                      // Read the file data from the File object
+                      const arrayBuffer = await file.arrayBuffer();
+                      const fileData = Array.from(new Uint8Array(arrayBuffer));
+                      
+                      // Store the file data using the Tauri command
+                      await invoke('store_file_data', {
+                        fileHash: metadata.fileHash,
+                        fileName: metadata.fileName,
+                        fileData: fileData
+                      });
+                      console.log('File data stored to disk for seeding:', metadata.fileHash);
+                    } catch (storeError) {
+                      console.warn('Failed to store file data to disk:', storeError);
+                      // Continue with DHT publishing even if local storage fails
+                    }
+
+
                 // Check if this hash is already in our files (duplicate detection)
                 if (get(files).some(f => f.hash === metadata.fileHash)) {
                   duplicateCount++
@@ -277,10 +297,17 @@
                   uploadDate: new Date(metadata.createdAt * 1000),
                   version: metadata.version,
                   isNewVersion: isNewVersion
-                };
+                };  
+
+                 
+
+
+
 
                     files.update((currentFiles) => [...currentFiles, newFile]);
                     addedCount++;
+
+                   
 
                     // Publish file metadata to DHT network for discovery
                     try {
@@ -487,6 +514,20 @@
         
         // Check if DHT is running before attempting to publish
         const isDhtRunning = dhtService.getPeerId() !== null;
+
+        // Store file data to disk for seeding
+        try {
+          // Use our Rust backend command to read and store the file
+          await invoke('store_file_data_from_path', {
+            filePath: filePath,
+            fileHash: newFile.hash,
+            fileName: newFile.name
+          });
+          console.log('File data stored to disk for seeding:', newFile.hash);
+        } catch (storeError) {
+          console.warn('Failed to store file data to disk:', storeError);
+          // Continue with DHT publishing even if local storage fails
+        }
         
         if (isDhtRunning) {
           try {
