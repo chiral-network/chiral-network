@@ -234,6 +234,7 @@
       // Mock DHT connection for web
       dhtStatus = 'connecting'
       setTimeout(() => {
+        
         dhtStatus = 'connected'
         dhtPeerId = '12D3KooWMockPeerIdForWebDemo123456789'
       }, 1000)
@@ -1382,12 +1383,12 @@
             <UserPlus class="h-4 w-4 mr-2" />
             {$t('network.peerDiscovery.connect')}
           </Button>
-          <Button 
-            on:click={sendTestMessage} 
+          <Button
+            on:click={sendTestMessage}
             disabled={!webrtcSession || !webrtcSession.channel || webrtcSession.channel.readyState !== 'open'}
             variant="outline"
           >
-            Send Test
+            {$t('network.sendTest')}
           </Button>
         </div>
       </div>
