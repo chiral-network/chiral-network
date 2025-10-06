@@ -2565,7 +2565,7 @@ impl DhtService {
         let all = self.get_all_file_metadata().await?;
         let mut versions: Vec<FileMetadata> = all
             .into_iter()
-            .filter(|m| m.file_name == file_name && m.is_root)
+            .filter(|m| m.file_name == file_name)  // Remove is_root filter - get all versions
             .collect();
         versions.sort_by(|a, b| b.version.unwrap_or(1).cmp(&a.version.unwrap_or(1)));
 
@@ -2602,6 +2602,7 @@ impl DhtService {
         let latest = self
             .get_latest_version_by_file_name(file_name.clone())
             .await?;
+
         let (version, parent_hash, is_root) = match latest {
             Some(ref prev) => (
                 prev.version.map(|v| v + 1).unwrap_or(2),
@@ -2625,7 +2626,7 @@ impl DhtService {
             version: Some(version),
             parent_hash,
             cids: None,
-            is_root: true,
+            is_root,  // Use computed value, not hardcoded true
         })
     }
 

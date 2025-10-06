@@ -782,46 +782,6 @@ async fn stop_dht_node(app: tauri::AppHandle, state: State<'_, AppState>) -> Res
     Ok(())
 }
 
-#[tauri::command]
-async fn publish_file_metadata(
-    state: State<'_, AppState>,
-    file_hash: String,
-    file_name: String,
-    file_size: u64,
-    mime_type: Option<String>,
-) -> Result<(), String> {
-    let dht = {
-        let dht_guard = state.dht.lock().await;
-        dht_guard.as_ref().cloned()
-    };
-
-    if let Some(dht) = dht {
-        let metadata = FileMetadata {
-            file_hash,
-            file_name,
-            file_size,
-            file_data: vec![],
-            seeders: vec![],
-            created_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-            mime_type,
-            is_encrypted: false,
-            encryption_method: None,
-            key_fingerprint: None,
-            merkle_root: None,
-            parent_hash: None,
-            version: Some(1),
-            cids: None,
-            is_root: false,
-        };
-
-        dht.publish_file(metadata).await
-    } else {
-        Err("DHT node is not running".to_string())
-    }
-}
 
 #[tauri::command]
 async fn stop_publishing_file(state: State<'_, AppState>, file_hash: String) -> Result<(), String> {
@@ -3075,7 +3035,6 @@ fn main() {
             get_cpu_temperature,
             start_dht_node,
             stop_dht_node,
-            publish_file_metadata,
             stop_publishing_file,
             search_file_metadata,
             connect_to_peer,
@@ -3426,6 +3385,7 @@ struct UploadResult {
     file_size: u64,
     is_encrypted: bool,
     peer_id: String,
+    version: u32,
 }
 
 #[tauri::command]
@@ -3466,36 +3426,37 @@ async fn upload_and_publish_file(
         }
     };
 
-    // 4. Publish to DHT
+    // 4. Publish to DHT with versioning support
     let dht = {
         let dht_guard = state.dht.lock().await;
         dht_guard.as_ref().cloned()
     };
 
-    if let Some(dht) = dht {
-        let metadata = FileMetadata {
-            file_hash: manifest.merkle_root.clone(),
-            file_name: file_name.clone(),
-            file_size,
-            file_data: vec![],  // Empty - chunks already stored
-            seeders: vec![],
-            created_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-            mime_type: None,  // TODO: detect from file extension
-            is_encrypted: true,
-            encryption_method: Some("AES-256-GCM".to_string()),
-            key_fingerprint: None,
-            merkle_root: None,  // Redundant - file_hash IS the merkle root
-            parent_hash: None,
-            version: Some(1),
-            cids: None,
-            is_root: false,
-        };
+    let version = if let Some(dht) = dht {
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
+        // Use prepare_versioned_metadata to handle version incrementing and parent_hash
+        let metadata = dht.prepare_versioned_metadata(
+            manifest.merkle_root.clone(),
+            file_name.clone(),
+            file_size,
+            vec![],  // Empty - chunks already stored
+            created_at,
+            None,  // TODO: detect mime type from file extension
+            true,  // is_encrypted
+            Some("AES-256-GCM".to_string()),
+            None,  // key_fingerprint
+        ).await?;
+
+        let version = metadata.version.unwrap_or(1);
         dht.publish_file(metadata).await?;
-    }
+        version
+    } else {
+        1  // Default to v1 if DHT not running
+    };
 
     // 5. Return metadata to frontend
     Ok(UploadResult {
@@ -3504,6 +3465,7 @@ async fn upload_and_publish_file(
         file_size,
         is_encrypted: true,
         peer_id,
+        version,
     })
 }
 

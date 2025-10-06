@@ -236,7 +236,7 @@
                 });
 
                 // Single command: chunk, encrypt, publish to DHT
-                const result = await invoke<{merkleRoot: string, fileName: string, fileSize: number, isEncrypted: boolean, peerId: string}>(
+                const result = await invoke<{merkleRoot: string, fileName: string, fileSize: number, isEncrypted: boolean, peerId: string, version: number}>(
                   "upload_and_publish_file",
                   {
                     filePath: tempFilePath,
@@ -264,7 +264,7 @@
                   seeders: isDhtRunning ? 1 : 0,
                   leechers: 0,
                   uploadDate: new Date(),
-                  version: 1,
+                  version: result.version,  // Use version from backend
                   isNewVersion: isNewVersion,
                   isEncrypted: result.isEncrypted,
                 };
@@ -404,7 +404,7 @@
         const recipientKey = useEncryptedSharing && recipientPublicKey.trim() ? recipientPublicKey.trim() : undefined;
 
         // UNIFIED UPLOAD: Single command chunks, encrypts, and publishes to DHT
-        const result = await invoke<{merkleRoot: string, fileName: string, fileSize: number, isEncrypted: boolean, peerId: string}>(
+        const result = await invoke<{merkleRoot: string, fileName: string, fileSize: number, isEncrypted: boolean, peerId: string, version: number}>(
           "upload_and_publish_file",
           {
             filePath,
@@ -430,7 +430,7 @@
           seeders: isDhtRunning ? 1 : 0,
           leechers: 0,
           uploadDate: new Date(),
-          version: 1,
+          version: result.version,  // Use version from backend
           isEncrypted: result.isEncrypted,
         };
 

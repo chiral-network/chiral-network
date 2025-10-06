@@ -172,24 +172,6 @@ export class DhtService {
     }
   }
 
-  async publishFile(metadata: FileMetadata): Promise<void> {
-    if (!this.peerId) {
-      throw new Error("DHT not started");
-    }
-
-    try {
-      await invoke("publish_file_metadata", {
-        fileHash: metadata.fileHash,
-        fileName: metadata.fileName,
-        fileSize: metadata.fileSize,
-        mimeType: metadata.mimeType,
-      });
-      console.log("Published file metadata:", metadata.fileHash);
-    } catch (error) {
-      console.error("Failed to publish file:", error);
-      throw error;
-    }
-  }
 
 
   async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
