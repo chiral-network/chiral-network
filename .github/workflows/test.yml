@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - cicd/rust-cache
   pull_request:
   workflow_dispatch:
 
@@ -32,6 +33,11 @@ jobs:
         with:
           toolchain: stable
           override: true
+          
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
 
       - name: Install system dependencies
         run: |
