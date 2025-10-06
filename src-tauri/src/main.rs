@@ -25,6 +25,7 @@ use lazy_static::lazy_static;
 use crate::commands::proxy::{
     list_proxies, proxy_connect, proxy_disconnect, proxy_remove, proxy_echo, ProxyNode,
 };
+use crate::commands::bootstrap::get_bootstrap_nodes_command;
 use dht::{DhtEvent, DhtMetricsSnapshot, DhtService, FileMetadata, split_into_blocks, StringBlock};
 use ethereum::{
     create_new_account, get_account_from_private_key, get_balance, get_block_number, get_hashrate,
@@ -3202,6 +3203,7 @@ fn main() {
             proxy_remove,
             proxy_echo,
             list_proxies,
+            get_bootstrap_nodes_command,
             generate_totp_secret,
             is_2fa_enabled,
             verify_and_enable_totp,

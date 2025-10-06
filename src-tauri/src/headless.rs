@@ -2,6 +2,7 @@
 use crate::dht::{DhtMetricsSnapshot, DhtService, FileMetadata};
 use crate::ethereum::GethProcess;
 use crate::file_transfer::FileTransferService;
+use crate::commands::bootstrap::get_bootstrap_nodes;
 use clap::Parser;
 use std::{sync::Arc, time::Duration};
 use tokio::signal;
@@ -86,10 +87,8 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
     let provided_bootstrap = !bootstrap_nodes.is_empty();
     if !provided_bootstrap {
         // Use reliable IP-based bootstrap nodes so fresh nodes can join the mesh
-        bootstrap_nodes.extend([
-            "/ip4/54.198.145.146/tcp/4001/p2p/12D3KooWNHdYWRTe98KMF1cDXXqGXvNjd1SAchDaeP5o4MsoJLu2"
-                .to_string(),
-        ]);
+        // Using the same comprehensive set as the frontend for network consistency
+        bootstrap_nodes.extend(get_bootstrap_nodes());
         info!("Using default bootstrap nodes: {:?}", bootstrap_nodes);
     }
 
