@@ -1,13 +1,13 @@
+use crate::encryption;
+use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
-use std::collections::{VecDeque};
+use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, info_span, warn};
-use directories::ProjectDirs;
-use std::path::PathBuf;
-use crate::encryption;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncryptedFileMetadata {
@@ -202,7 +202,15 @@ impl FileTransferService {
 
             let result = {
                 let _guard = span.enter();
-                Self::handle_download_file(file_hash, output_path, storage_dir, &keystore, active_account, active_private_key).await
+                Self::handle_download_file(
+                    file_hash,
+                    output_path,
+                    storage_dir,
+                    &keystore,
+                    active_account,
+                    active_private_key,
+                )
+                .await
             };
 
             match result {
@@ -353,12 +361,16 @@ impl FileTransferService {
     }
 
     pub async fn new() -> Result<Self, String> {
-        let keystore = Arc::new(Mutex::new(crate::keystore::Keystore::load().unwrap_or_default()));
+        let keystore = Arc::new(Mutex::new(
+            crate::keystore::Keystore::load().unwrap_or_default(),
+        ));
         Self::new_with_encryption_and_keystore(false, keystore).await
     }
 
     pub async fn new_with_encryption(encryption_enabled: bool) -> Result<Self, String> {
-        let keystore = Arc::new(Mutex::new(crate::keystore::Keystore::load().unwrap_or_default()));
+        let keystore = Arc::new(Mutex::new(
+            crate::keystore::Keystore::load().unwrap_or_default(),
+        ));
         Self::new_with_encryption_and_keystore(encryption_enabled, keystore).await
     }
 
@@ -383,7 +395,18 @@ impl FileTransferService {
                     file_name,
                     active_account,
                     active_private_key,
-                } => match Self::handle_upload_file(&file_path, &file_name, &storage_dir, encryption_enabled, None, &keystore, active_account.as_deref(), active_private_key.as_deref()).await {
+                } => match Self::handle_upload_file(
+                    &file_path,
+                    &file_name,
+                    &storage_dir,
+                    encryption_enabled,
+                    None,
+                    &keystore,
+                    active_account.as_deref(),
+                    active_private_key.as_deref(),
+                )
+                .await
+                {
                     Ok((file_hash, _encrypted_metadata)) => {
                         let _ = event_tx
                             .send(FileTransferEvent::FileUploaded {
@@ -475,12 +498,14 @@ impl FileTransferService {
             // Store the encryption key in keystore if we have an active account
             if let (Some(account), Some(private_key)) = (active_account, active_private_key) {
                 let mut keystore_guard = keystore.lock().await;
-                keystore_guard.store_file_encryption_key_with_private_key(
-                    account,
-                    original_file_hash.clone(),
-                    &encryption_key,
-                    private_key,
-                ).map_err(|e| format!("Failed to store encryption key: {}", e))?;
+                keystore_guard
+                    .store_file_encryption_key_with_private_key(
+                        account,
+                        original_file_hash.clone(),
+                        &encryption_key,
+                        private_key,
+                    )
+                    .map_err(|e| format!("Failed to store encryption key: {}", e))?;
             }
 
             // Create temporary encrypted file path
@@ -506,8 +531,10 @@ impl FileTransferService {
             let (encrypted_key_bundle, recipient_pk) = if let Some(pk_hex) = recipient_public_key {
                 let pk_bytes = hex::decode(pk_hex.trim_start_matches("0x"))
                     .map_err(|e| format!("Invalid recipient public key: {}", e))?;
-                let recipient_pk = x25519_dalek::PublicKey::from(<[u8; 32]>::try_from(pk_bytes)
-                    .map_err(|_| "Recipient public key must be 32 bytes".to_string())?);
+                let recipient_pk = x25519_dalek::PublicKey::from(
+                    <[u8; 32]>::try_from(pk_bytes)
+                        .map_err(|_| "Recipient public key must be 32 bytes".to_string())?,
+                );
 
                 let bundle = encryption::encrypt_aes_key(&encryption_key, &recipient_pk)
                     .map_err(|e| format!("Failed to encrypt key for recipient: {}", e))?;
@@ -595,7 +622,8 @@ impl FileTransferService {
             let metadata: serde_json::Value = serde_json::from_str(&metadata_content)
                 .map_err(|e| format!("Failed to parse metadata: {}", e))?;
 
-            metadata.get("is_encrypted")
+            metadata
+                .get("is_encrypted")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false)
         } else {
@@ -613,22 +641,28 @@ impl FileTransferService {
                 .await
                 .map_err(|e| format!("Failed to read encrypted metadata: {}", e))?;
 
-            let encrypted_metadata: EncryptedFileMetadata = serde_json::from_str(&encrypted_meta_content)
-                .map_err(|e| format!("Failed to parse encrypted metadata: {}", e))?;
+            let encrypted_metadata: EncryptedFileMetadata =
+                serde_json::from_str(&encrypted_meta_content)
+                    .map_err(|e| format!("Failed to parse encrypted metadata: {}", e))?;
 
             // Try to get decryption key from keystore
-            let decryption_key = if let (Some(account), Some(private_key)) = (active_account, active_private_key) {
-                let keystore_guard = keystore.lock().await;
-                match keystore_guard.get_file_encryption_key_with_private_key(account, file_hash, private_key) {
-                    Ok(key) => key,
-                    Err(e) => {
-                        warn!("Failed to retrieve decryption key from keystore: {}", e);
-                        return Err("No decryption key available for this file".to_string());
+            let decryption_key =
+                if let (Some(account), Some(private_key)) = (active_account, active_private_key) {
+                    let keystore_guard = keystore.lock().await;
+                    match keystore_guard.get_file_encryption_key_with_private_key(
+                        account,
+                        file_hash,
+                        private_key,
+                    ) {
+                        Ok(key) => key,
+                        Err(e) => {
+                            warn!("Failed to retrieve decryption key from keystore: {}", e);
+                            return Err("No decryption key available for this file".to_string());
+                        }
                     }
-                }
-            } else {
-                return Err("No active account available for file access".to_string());
-            };
+                } else {
+                    return Err("No active account available for file access".to_string());
+                };
 
             // Create temporary decrypted file path
             let temp_decrypted_path = storage_dir.join(format!("{}.dec", file_hash));
@@ -686,8 +720,8 @@ impl FileTransferService {
     }
 
     pub async fn upload_file_with_account(
-        &self, 
-        file_path: String, 
+        &self,
+        file_path: String,
         file_name: String,
         active_account: Option<String>,
         active_private_key: Option<String>,
@@ -729,7 +763,11 @@ impl FileTransferService {
             .await
             .map_err(|e| format!("Failed to read storage directory: {}", e))?;
 
-        while let Some(entry) = entries.next_entry().await.map_err(|e| format!("Failed to read directory entry: {}", e))? {
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| format!("Failed to read directory entry: {}", e))?
+        {
             let path = entry.path();
             if let Some(extension) = path.extension() {
                 if extension == "meta" {
@@ -738,11 +776,16 @@ impl FileTransferService {
                             .await
                             .map_err(|e| format!("Failed to read metadata file: {}", e))?;
 
-                        let metadata: serde_json::Value = serde_json::from_str(&metadata_content)
-                            .map_err(|e| format!("Failed to parse metadata: {}", e))?;
+                        let metadata: serde_json::Value =
+                            serde_json::from_str(&metadata_content)
+                                .map_err(|e| format!("Failed to parse metadata: {}", e))?;
 
-                        if let (Some(file_name), Some(_)) = (metadata.get("file_name"), metadata.get("file_size")) {
-                            if let (Some(name_str), Some(hash_str)) = (file_name.as_str(), file_hash.to_str()) {
+                        if let (Some(file_name), Some(_)) =
+                            (metadata.get("file_name"), metadata.get("file_size"))
+                        {
+                            if let (Some(name_str), Some(hash_str)) =
+                                (file_name.as_str(), file_hash.to_str())
+                            {
                                 files.push((hash_str.to_string(), name_str.to_string()));
                             }
                         }
@@ -785,7 +828,9 @@ impl FileTransferService {
                 .as_secs(),
         });
         let metadata_path = self.storage_dir.join(format!("{}.meta", file_hash));
-        if let Err(e) = tokio::fs::write(&metadata_path, serde_json::to_string(&metadata).unwrap()).await {
+        if let Err(e) =
+            tokio::fs::write(&metadata_path, serde_json::to_string(&metadata).unwrap()).await
+        {
             error!("Failed to store metadata: {}", e);
         }
     }
@@ -821,13 +866,17 @@ mod tests {
         let storage_dir = temp_dir.path().to_path_buf();
 
         // Create storage directory
-        tokio::fs::create_dir_all(&storage_dir).await.expect("create storage dir");
+        tokio::fs::create_dir_all(&storage_dir)
+            .await
+            .expect("create storage dir");
 
         // Store test file
         let test_hash = "test-hash";
         let test_data = b"hello world".to_vec();
         let file_path = storage_dir.join(test_hash);
-        tokio::fs::write(&file_path, &test_data).await.expect("write test file");
+        tokio::fs::write(&file_path, &test_data)
+            .await
+            .expect("write test file");
 
         // Store metadata
         let metadata = serde_json::json!({
@@ -836,7 +885,9 @@ mod tests {
             "uploaded_at": 0
         });
         let metadata_path = storage_dir.join(format!("{}.meta", test_hash));
-        tokio::fs::write(&metadata_path, serde_json::to_string(&metadata).unwrap()).await.expect("write metadata");
+        tokio::fs::write(&metadata_path, serde_json::to_string(&metadata).unwrap())
+            .await
+            .expect("write metadata");
 
         let temp_output_dir = tempdir().expect("temp output dir");
         let output_path = temp_output_dir.path().join("downloaded.txt");
@@ -890,7 +941,9 @@ mod tests {
         let storage_dir = temp_dir.path().to_path_buf();
 
         // Create storage directory
-        tokio::fs::create_dir_all(&storage_dir).await.expect("create storage dir");
+        tokio::fs::create_dir_all(&storage_dir)
+            .await
+            .expect("create storage dir");
 
         let temp_output_dir = tempdir().expect("temp output dir");
         let output_path = temp_output_dir.path().join("missing.txt");

@@ -68,6 +68,10 @@ pub struct CliArgs {
     #[arg(long)]
     pub show_reachability: bool,
 
+    /// Print DCUtR hole-punching metrics at startup
+    #[arg(long)]
+    pub show_dcutr: bool,
+
     // SOCKS5 Proxy address (e.g., 127.0.0.1:9050 for Tor or a private VPN SOCKS endpoint)
     #[arg(long)]
     pub socks5_proxy: Option<String>,
@@ -248,6 +252,29 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         });
     }
 
+    if args.show_dcutr {
+        let snapshot = dht_arc.metrics_snapshot().await;
+        log_dcutr_snapshot(&snapshot);
+
+        let dht_for_logs = dht_arc.clone();
+        tokio::spawn(async move {
+            loop {
+                if Arc::strong_count(&dht_for_logs) <= 1 {
+                    break;
+                }
+
+                tokio::time::sleep(Duration::from_secs(60)).await;
+
+                let snapshot = dht_for_logs.metrics_snapshot().await;
+                log_dcutr_snapshot(&snapshot);
+
+                if !snapshot.dcutr_enabled {
+                    break;
+                }
+            }
+        });
+    }
+
     // Spawn the event pump
     let dht_clone_for_pump = Arc::clone(&dht_arc);
 
@@ -290,6 +317,29 @@ fn log_reachability_snapshot(snapshot: &DhtMetricsSnapshot) {
         info!("   Observed addresses: {:?}", snapshot.observed_addrs);
     }
     info!("   AutoNAT enabled: {}", snapshot.autonat_enabled);
+}
+
+fn log_dcutr_snapshot(snapshot: &DhtMetricsSnapshot) {
+    let success_rate = if snapshot.dcutr_hole_punch_attempts > 0 {
+        (snapshot.dcutr_hole_punch_successes as f64 / snapshot.dcutr_hole_punch_attempts as f64)
+            * 100.0
+    } else {
+        0.0
+    };
+    info!(
+        "🔀 DCUtR Metrics: {} attempts, {} successes, {} failures ({:.1}% success rate)",
+        snapshot.dcutr_hole_punch_attempts,
+        snapshot.dcutr_hole_punch_successes,
+        snapshot.dcutr_hole_punch_failures,
+        success_rate
+    );
+    if let Some(ts) = snapshot.last_dcutr_success {
+        info!("   Last success epoch: {}", ts);
+    }
+    if let Some(ts) = snapshot.last_dcutr_failure {
+        info!("   Last failure epoch: {}", ts);
+    }
+    info!("   DCUtR enabled: {}", snapshot.dcutr_enabled);
 }
 
 fn get_local_ip() -> Option<String> {

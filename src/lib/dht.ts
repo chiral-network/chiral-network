@@ -86,6 +86,13 @@ export interface DhtHealth {
   observedAddrs: string[];
   reachabilityHistory: NatHistoryItem[];
   autonatEnabled: boolean;
+  // DCUtR hole-punching metrics
+  dcutrEnabled: boolean;
+  dcutrHolePunchAttempts: number;
+  dcutrHolePunchSuccesses: number;
+  dcutrHolePunchFailures: number;
+  lastDcutrSuccess: number | null;
+  lastDcutrFailure: number | null;
 }
 
 export class DhtService {
