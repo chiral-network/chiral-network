@@ -13,7 +13,7 @@
   import { onMount, onDestroy } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
-  import { dhtService, DEFAULT_BOOTSTRAP_NODES } from '$lib/dht'
+  import { dhtService } from '$lib/dht'
   import { getStatus as fetchGethStatus, type GethStatus } from '$lib/services/gethService'
   import { resetConnectionAttempts } from '$lib/dhtHelpers'
   import type { DhtHealth, NatConfidence, NatReachabilityState } from '$lib/dht'
@@ -77,7 +77,8 @@
   let dhtStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
   let dhtPeerId: string | null = null
   let dhtPort = 4001
-  let dhtBootstrapNode = DEFAULT_BOOTSTRAP_NODES[0] || 'No bootstrap nodes configured'
+  let dhtBootstrapNodes: string[] = []
+  let dhtBootstrapNode = 'Loading bootstrap nodes...'
   let dhtEvents: string[] = []
   let dhtPeerCount = 0
   let dhtHealth: DhtHealth | null = null
@@ -206,6 +207,22 @@
     showToast(tr(toastKey, { values: { summary: summaryText } }), tone)
   }
 
+  async function fetchBootstrapNodes() {
+    if (!isTauri) {
+      dhtBootstrapNodes = ['/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ']
+      dhtBootstrapNode = dhtBootstrapNodes[0]
+      return
+    }
+    
+    try {
+      dhtBootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command")
+      dhtBootstrapNode = dhtBootstrapNodes[0] || 'No bootstrap nodes configured'
+    } catch (error) {
+      console.error('Failed to fetch bootstrap nodes:', error)
+      dhtBootstrapNodes = []
+      dhtBootstrapNode = 'Failed to load bootstrap nodes'
+    }
+  }
   async function registerNatListener() {
     if (!isTauri || natStatusUnlisten) return
     try {
@@ -293,7 +310,7 @@
         try {
           const peerId = await dhtService.start({
             port: dhtPort,
-            bootstrapNodes: DEFAULT_BOOTSTRAP_NODES,
+            bootstrapNodes: dhtBootstrapNodes,
             chunkSizeKb: $settings.chunkSize,
             cacheSizeMb: $settings.cacheSize
           })
@@ -330,15 +347,15 @@
       
       // Try to connect to bootstrap nodes
       let connectionSuccessful = false
-      if (DEFAULT_BOOTSTRAP_NODES.length > 0) {
-        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to ${DEFAULT_BOOTSTRAP_NODES.length} bootstrap node(s)...`]
+      if (dhtBootstrapNodes.length > 0) {
+        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to ${dhtBootstrapNodes.length} bootstrap node(s)...`]
         
         // Add another small delay to show the connection attempt
         await new Promise(resolve => setTimeout(resolve, 1000))
         
         try {
           // Try connecting to the first available bootstrap node
-          await dhtService.connectPeer(DEFAULT_BOOTSTRAP_NODES[0])
+          await dhtService.connectPeer(dhtBootstrapNodes[0])
           connectionSuccessful = true
           dhtEvents = [...dhtEvents, `✓ Connection initiated to bootstrap nodes (waiting for handshake...)`]
           
@@ -829,6 +846,7 @@
       
       // Initialize async operations
       const initAsync = async () => {
+        await fetchBootstrapNodes()
         await checkGethStatus()
         
         // DHT check will happen in startDht()
