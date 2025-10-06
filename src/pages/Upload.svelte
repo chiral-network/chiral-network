@@ -594,8 +594,8 @@
           <Lock class="h-5 w-5 text-purple-600" />
         </div>
         <div class="text-left">
-          <h3 class="text-sm font-semibold text-foreground">Encrypted Sharing</h3>
-          <p class="text-xs text-muted-foreground">Share files encrypted for specific recipients</p>
+          <h3 class="text-sm font-semibold text-foreground">{$t('upload.encryption.title')}</h3>
+          <p class="text-xs text-muted-foreground">{$t('upload.encryption.subtitle')}</p>
         </div>
       </div>
       <svg 
@@ -618,7 +618,7 @@
             class="cursor-pointer"
           />
           <Label for="use-encrypted-sharing" class="cursor-pointer text-sm">
-            Enable encrypted sharing for specific recipient
+            {$t('upload.encryption.enableForRecipient')}
           </Label>
         </div>
         
@@ -627,24 +627,22 @@
             <div class="flex items-center gap-2">
               <Key class="h-4 w-4 text-muted-foreground" />
               <Label for="recipient-public-key" class="text-sm font-medium">
-                Recipient's Public Key
+                {$t('upload.encryption.recipientPublicKey')}
               </Label>
             </div>
             <Input
               id="recipient-public-key"
               bind:value={recipientPublicKey}
-              placeholder="Enter recipient's X25519 public key (64 hex characters)"
+              placeholder={$t('upload.encryption.publicKeyPlaceholder')}
               class="font-mono text-sm"
               disabled={isUploading}
             />
             <p class="text-xs text-muted-foreground">
-              Enter the recipient's X25519 public key (hex format, 64 characters). 
-              The file will be encrypted so only they can decrypt it. 
-              Leave empty to encrypt for yourself.
+              {$t('upload.encryption.publicKeyHint')}
             </p>
             {#if recipientPublicKey && !(/^[0-9a-fA-F]{64}$/.test(recipientPublicKey.trim()))}
               <p class="text-xs text-destructive">
-                ⚠️ Invalid public key format. Must be 64 hexadecimal characters.
+                {$t('upload.encryption.invalidPublicKey')}
               </p>
             {/if}
           </div>
@@ -724,9 +722,9 @@
               <!-- Supported formats hint -->
               <p class="text-xs text-muted-foreground/75 mt-4">
                 {#if isTauri}
-                  Supports images, videos, audio, documents, code files and more
+                  {$t('upload.supportedFormats')}
                 {:else}
-                  Desktop app supports images, videos, audio, documents, code files and more
+                  {$t('upload.supportedFormatsDesktop')}
                 {/if}
               </p>
             {/if}
