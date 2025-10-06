@@ -13,9 +13,13 @@
   let newNodeAddress = ''
   let proxyEnabled = true
   let isAddressValid = true
+  let addressError = ''
   let showConfirmDialog = false
   let nodeToRemove: any = null
   const validAddressRegex = /^[a-zA-Z0-9.-]+:[0-9]{1,5}$/
+  const ipv4Regex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):[0-9]{1,5}$/
+  const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.([a-zA-Z]{2,}|[a-zA-Z]{2,}\.[a-zA-Z]{2,}):[0-9]{1,5}$/
+  const enodeRegex = /^enode:\/\/[a-fA-F0-9]{128}@(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):[0-9]{1,5}$/
   let statusFilter = 'all'
   
   $: statusOptions = [
@@ -45,6 +49,53 @@
       listProxies();
   });
 
+  function validateAddress(address: string): { valid: boolean; error: string } {
+      if (!address || address.trim() === '') {
+          return { valid: false, error: 'Address cannot be empty' }
+      }
+
+      const trimmed = address.trim()
+
+      if (trimmed.includes(' ')) {
+          return { valid: false, error: 'Address cannot contain spaces' }
+      }
+
+      // Check for enode format first
+      if (trimmed.startsWith('enode://')) {
+          if (enodeRegex.test(trimmed)) {
+              return { valid: true, error: '' }
+          } else {
+              return { valid: false, error: 'Invalid enode format (enode://[128-char-hex]@ip:port)' }
+          }
+      }
+
+      // Standard host:port validation
+      if (!trimmed.includes(':')) {
+          return { valid: false, error: 'Address must include port (e.g., example.com:8080)' }
+      }
+
+      const [host, portStr] = trimmed.split(':')
+
+      if (!host) {
+          return { valid: false, error: 'Invalid hostname' }
+      }
+
+      const port = parseInt(portStr)
+      if (isNaN(port) || port < 1 || port > 65535) {
+          return { valid: false, error: 'Port must be between 1-65535' }
+      }
+
+      if (port < 1024 && port !== 80 && port !== 443) {
+          return { valid: false, error: 'Avoid system ports (use 1024+)' }
+      }
+
+      if (!ipv4Regex.test(trimmed) && !domainRegex.test(trimmed)) {
+          return { valid: false, error: 'Invalid IP address or domain format' }
+      }
+
+      return { valid: true, error: '' }
+  }
+
   function addNode() {
       const isDuplicate = $proxyNodes.some(node => node.address === newNodeAddress.trim())
       if (isDuplicate) {
@@ -52,14 +103,16 @@
           return
       }
 
-      if (!newNodeAddress || !validAddressRegex.test(newNodeAddress.trim())) {
-          alert($t('proxy.invalidAddress'))
+      const validation = validateAddress(newNodeAddress)
+      if (!validation.valid) {
+          addressError = validation.error
           return
       }
 
       // For now, we'll use a dummy token.
       connectProxy(newNodeAddress.trim(), "dummy-token");
       newNodeAddress = ''
+      addressError = ''
   }
 
   function requestRemoveNode(node: any) {
@@ -92,7 +145,15 @@
   
   $: activeNodes = $proxyNodes.filter(n => n.status === 'online').length
   $: totalBandwidth = $proxyNodes.reduce((sum, n) => sum + (n.status === 'online' ? (n.latency ? Math.round(100 - n.latency) : 50) : 0), 0)
-  $: isAddressValid = validAddressRegex.test(newNodeAddress.trim())
+  $: {
+      const validation = validateAddress(newNodeAddress)
+      isAddressValid = validation.valid
+      if (newNodeAddress.trim() !== '' && !validation.valid) {
+          addressError = validation.error
+      } else {
+          addressError = ''
+      }
+  }
 </script>
 
 <!-- Confirmation Dialog -->
@@ -231,7 +292,7 @@
                 <Input
                     id="new-node"
                     bind:value={newNodeAddress}
-                    placeholder={$t('proxy.enterAddress')}
+                    placeholder="example.com:8080 or enode://..."
                     class="flex-1 {isAddressValid || newNodeAddress === '' ? '' : 'border border-red-500 focus:ring-red-500'}"
                 />
                 <Button on:click={addNode} disabled={!isAddressValid || !newNodeAddress}>
@@ -239,8 +300,8 @@
                     {$t('proxy.addNodeButton')}
                 </Button>
             </div>
-            {#if !isAddressValid && newNodeAddress !== ''}
-                <p class="text-sm text-red-500 mt-1">{$t('proxy.invalidAddress')}</p>
+            {#if addressError}
+                <p class="text-sm text-red-500 mt-1">{addressError}</p>
             {/if}
         </div>
 
