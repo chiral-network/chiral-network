@@ -131,6 +131,8 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         args.autonat_server.clone(),
         args.socks5_proxy,
         file_transfer_service.clone(),
+        None, // chunk_size_kb: use default
+        None, // cache_size_mb: use default
     )
     .await?;
     let peer_id = dht_service.get_peer_id().await;
@@ -193,6 +195,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
+            merkle_root: None,
             parent_hash: None,
             version: Some(1),
             cids: None,

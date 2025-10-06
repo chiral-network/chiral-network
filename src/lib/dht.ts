@@ -35,6 +35,8 @@ export interface DhtConfig {
   autonatProbeIntervalSeconds?: number;
   autonatServers?: string[];
   proxyAddress?: string;
+  chunkSizeKb?: number;
+  cacheSizeMb?: number;
 }
 
 export interface FileMetadata {
@@ -136,6 +138,12 @@ export class DhtService {
       ) {
         payload.proxyAddress = config.proxyAddress;
       }
+      if (typeof config?.chunkSizeKb === "number") {
+        payload.chunkSizeKb = config.chunkSizeKb;
+      }
+      if (typeof config?.cacheSizeMb === "number") {
+        payload.cacheSizeMb = config.cacheSizeMb;
+      }
 
       const peerId = await invoke<string>("start_dht_node", payload);
       this.peerId = peerId;
@@ -183,7 +191,7 @@ export class DhtService {
   async publishFileToNetwork(filePath: string): Promise<FileMetadata> {
     try {
       // Start listening for the published_file event
-      const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {
+      const metadataPromise = new Promise<FileMetadata>((resolve) => {
         const unlistenPromise = listen<FileMetadata>(
           "published_file",
           (event) => {
@@ -209,7 +217,7 @@ export class DhtService {
     try {
       console.log("Initiating download for file:", fileMetadata.fileHash);
       // Start listening for the published_file event
-      const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {
+      const metadataPromise = new Promise<FileMetadata>((resolve) => {
         const unlistenPromise = listen<FileMetadata>(
           "file_content",
           async (event) => {

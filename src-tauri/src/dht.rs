@@ -1,15 +1,15 @@
 use async_trait::async_trait;
 use blockstore::{
     block::{Block, CidError},
-    Blockstore, InMemoryBlockstore,
+    InMemoryBlockstore,
 };
-use cid::Cid;
+pub use cid::Cid;
 use futures::future::{BoxFuture, FutureExt};
 use futures::io::{AsyncRead as FAsyncRead, AsyncWrite as FAsyncWrite};
 use futures::{AsyncReadExt as _, AsyncWriteExt as _};
 use futures_util::StreamExt;
 use libp2p::multiaddr::Protocol;
-use multihash_codetable::{Code, MultihashDigest};
+pub use multihash_codetable::{Code, MultihashDigest};
 use relay::client::Event as RelayClientEvent;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -32,8 +32,6 @@ use std::task::{Context, Poll};
 // Import the missing types
 use crate::file_transfer::FileTransferService;
 use std::error::Error;
-
-use std::env::args;
 
 // Trait alias to abstract over async I/O types used by proxy transport
 pub trait AsyncIo: FAsyncRead + FAsyncWrite + Unpin + Send {}
@@ -66,14 +64,15 @@ use libp2p::{
 use rand::rngs::OsRng;
 const EXPECTED_PROTOCOL_VERSION: &str = "/chiral/1.0.0";
 const MAX_MULTIHASH_LENGHT: usize = 64;
-const RAW_CODEC: u64 = 0x55;
+pub const RAW_CODEC: u64 = 0x55;
 const CHUNK_SIZE: usize = 256 * 1024; // 256 KiB (262144 bytes)
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileMetadata {
-    /// The Merkle root of the file's chunks, which serves as its unique identifier.
-    pub file_hash: String, // This is the Merkle Root
+    /// The CID (Content Identifier) used for retrieval from the DHT/Bitswap network.
+    /// This is the root CID that points to a block containing child chunk CIDs.
+    pub file_hash: String, // This is the root CID
     pub file_name: String,
     pub file_size: u64,
     pub file_data: Vec<u8>, // holds the actual file data
@@ -86,6 +85,8 @@ pub struct FileMetadata {
     pub encryption_method: Option<String>,
     /// Fingerprint of the encryption key for identification
     pub key_fingerprint: Option<String>,
+    /// The Merkle root hash for integrity verification (optional, separate from file_hash)
+    pub merkle_root: Option<String>,
     // --- VERSIONING FIELDS ---
     pub version: Option<u32>,
     pub parent_hash: Option<String>,
@@ -867,6 +868,7 @@ async fn run_dht_node(
         >,
     >,
     is_bootstrap: bool,
+    chunk_size: usize,
 ) {
     // Periodic bootstrap interval
     let mut shutdown_ack: Option<oneshot::Sender<()>> = None;
@@ -885,55 +887,75 @@ async fn run_dht_node(
                         break 'outer;
                     }
                     Some(DhtCommand::PublishFile(mut metadata)) => {
-                        let blocks = split_into_blocks(&metadata.file_data);
-                        let mut block_cids = Vec::new();
-                        for (idx, block) in blocks.iter().enumerate() {
-                            let cid = match block.cid() {
-                                Ok(c) => c,
+                        // If file_data is NOT empty (non-encrypted files or inline data),
+                        // create blocks and generate a root CID
+                        if !metadata.file_data.is_empty() {
+                            // Store the Merkle root before processing
+                            let original_merkle_root = metadata.merkle_root.clone();
+
+                            let blocks = split_into_blocks(&metadata.file_data, chunk_size);
+                            let mut block_cids = Vec::new();
+                            for (idx, block) in blocks.iter().enumerate() {
+                                let cid = match block.cid() {
+                                    Ok(c) => c,
+                                    Err(e) => {
+                                        error!("failed to get cid for block: {}", e);
+                                        let _ = event_tx.send(DhtEvent::Error(format!("failed to get cid for block: {}", e))).await;
+                                        return;
+                                    }
+                                };
+                                println!("block {} size={} cid={}", idx, block.data().len(), cid);
+
+                                match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(cid.clone(), block.data().to_vec())                          {
+                                    Ok(_) => {},
+                                    Err(e) => {
+                                        error!("failed to store block {}: {}", cid, e);
+                                        let _ = event_tx.send(DhtEvent::Error(format!("failed to store block {}: {}", cid, e))).await;
+                                        return;
+                                    }
+                                };
+                                block_cids.push(cid);
+                            }
+
+                            // Create root block containing just the CIDs
+                            let root_block_data = match serde_json::to_vec(&block_cids) {
+                                Ok(data) => data,
                                 Err(e) => {
-                                    error!("failed to get cid for block: {}", e);
-                                    let _ = event_tx.send(DhtEvent::Error(format!("failed to get cid for block: {}", e))).await;
+                                    eprintln!("Failed to serialize CIDs: {}", e);
                                     return;
                                 }
                             };
-                            println!("block {} size={} cid={}", idx, block.data().len(), cid);
 
-                            match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(cid.clone(), block.data().to_vec())                          {
+                            // Store root block in Bitswap
+                            let root_cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&root_block_data));
+                            match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(root_cid.clone(), root_block_data) {
                                 Ok(_) => {},
                                 Err(e) => {
-                                    error!("failed to store block {}: {}", cid, e);
-                                    let _ = event_tx.send(DhtEvent::Error(format!("failed to store block {}: {}", cid, e))).await;
+                                    error!("failed to store root block: {}", e);
+                                    let _ = event_tx.send(DhtEvent::Error(format!("failed to store root block: {}", e))).await;
                                     return;
                                 }
-                            };
-                            block_cids.push(cid);
-                        }
-
-                        // Create root block containing just the CIDs
-                        let root_block_data = match serde_json::to_vec(&block_cids) {
-                            Ok(data) => data,
-                            Err(e) => {
-                                eprintln!("Failed to serialize CIDs: {}", e);
-                                return;
                             }
-                        };
 
-                        // Store root block in Bitswap
-                        let root_cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&root_block_data));
-                        match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(root_cid.clone(), root_block_data) {
-                            Ok(_) => {},
-                            Err(e) => {
-                                error!("failed to store root block: {}", e);
-                                let _ = event_tx.send(DhtEvent::Error(format!("failed to store root block: {}", e))).await;
-                                return;
+                            // Clear file data and set file hash to root CID
+                            metadata.file_data.clear();
+                            metadata.file_hash = root_cid.to_string();
+                            // Preserve the Merkle root if it was provided
+                            if original_merkle_root.is_some() {
+                                metadata.merkle_root = original_merkle_root;
                             }
-                        }
+                            // Don't store CIDs in metadata - they're in the root block now
+                            metadata.cids = None;
 
-                        // Clear file data and set file hash to root CID
-                        metadata.file_data.clear();
-                        metadata.file_hash = root_cid.to_string();
-                        // Don't store CIDs in metadata - they're in the root block now
-                        metadata.cids = None;
+                            println!("Publishing file with root CID: {} (merkle_root: {:?})",
+                                metadata.file_hash, metadata.merkle_root);
+                        } else {
+                            // File data is empty - chunks and root block are already in Bitswap
+                            // (from streaming upload or pre-processed encrypted file)
+                            // Use the provided file_hash (which should already be a CID)
+                            println!("Publishing file with pre-computed CID: {} (merkle_root: {:?})",
+                                metadata.file_hash, metadata.merkle_root);
+                        }
 
                         // Store minimal metadata in DHT
                         let dht_metadata = serde_json::json!({
@@ -1636,6 +1658,7 @@ async fn handle_kademlia_event(
                                     is_encrypted: metadata_json.get("is_encrypted").and_then(|v| v.as_bool()).unwrap_or(false),
                                     encryption_method: metadata_json.get("encryption_method").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                     key_fingerprint: metadata_json.get("key_fingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                    merkle_root: metadata_json.get("merkle_root").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                     version: metadata_json.get("version").and_then(|v| v.as_u64()).map(|v| v as u32),
                                     parent_hash: metadata_json.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                     cids: None, // CIDs are in the root block
@@ -2068,6 +2091,7 @@ pub struct DhtService {
             HashMap<rr::OutboundRequestId, oneshot::Sender<Result<WebRTCAnswerResponse, String>>>,
         >,
     >,
+    chunk_size: usize, // Configurable chunk size in bytes
 }
 
 impl DhtService {
@@ -2081,7 +2105,15 @@ impl DhtService {
         autonat_servers: Vec<String>,
         proxy_address: Option<String>,
         file_transfer_service: Option<Arc<FileTransferService>>,
+        chunk_size_kb: Option<usize>, // Chunk size in KB (default 256)
+        cache_size_mb: Option<usize>, // Cache size in MB (default 1024)
     ) -> Result<Self, Box<dyn Error>> {
+        // Convert chunk size from KB to bytes
+        let chunk_size = chunk_size_kb.unwrap_or(256) * 1024; // Default 256 KB
+        let _cache_size = cache_size_mb.unwrap_or(1024); // Default 1024 MB
+        
+        info!("DHT Configuration: chunk_size={} KB, cache_size={} MB", 
+              chunk_size / 1024, _cache_size);
         // Generate a new keypair for this node
         // Generate a keypair either from the secret or randomly
         let local_key = match secret {
@@ -2325,6 +2357,7 @@ impl DhtService {
             file_transfer_service.clone(),
             pending_webrtc_offers.clone(),
             is_bootstrap,
+            chunk_size,
         ));
 
         Ok(DhtService {
@@ -2342,12 +2375,17 @@ impl DhtService {
             received_chunks: received_chunks_clone,
             file_transfer_service,
             pending_webrtc_offers,
+            chunk_size,
         })
     }
 
     pub async fn run(&self) {
         // The node is already running in a spawned task
         info!("DHT node is running");
+    }
+
+    pub fn chunk_size(&self) -> usize {
+        self.chunk_size
     }
 
     pub async fn publish_file(&self, metadata: FileMetadata) -> Result<(), String> {
@@ -2442,6 +2480,7 @@ impl DhtService {
             is_encrypted,
             encryption_method,
             key_fingerprint,
+            merkle_root: None,
             version: Some(version),
             parent_hash,
             cids: None,
@@ -2950,11 +2989,11 @@ impl Block<64> for ByteBlock {
     }
 }
 
-pub fn split_into_blocks(bytes: &[u8]) -> Vec<ByteBlock> {
+pub fn split_into_blocks(bytes: &[u8], chunk_size: usize) -> Vec<ByteBlock> {
     let mut blocks = Vec::new();
     let mut i = 0usize;
     while i < bytes.len() {
-        let end = (i + CHUNK_SIZE).min(bytes.len());
+        let end = (i + chunk_size).min(bytes.len());
         let slice = &bytes[i..end];
         // Store raw bytes - no conversion needed
         blocks.push(ByteBlock(slice.to_vec()));

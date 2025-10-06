@@ -15,6 +15,7 @@ mod headless;
 mod keystore;
 mod pool;
 mod manager;
+mod multi_source_download;
 pub mod net;
 mod peer_selection;
 mod webrtc_service;
@@ -57,6 +58,7 @@ use tokio::{io::AsyncReadExt, sync::Mutex, task::JoinHandle, time::sleep};
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{error, info, warn};
 use webrtc_service::{WebRTCFileRequest, WebRTCService};
+use multi_source_download::{MultiSourceDownloadService, MultiSourceEvent, MultiSourceProgress};
 
 use crate::manager::ChunkManager; // Import the ChunkManager
 use x25519_dalek::{PublicKey, StaticSecret}; // For key handling
@@ -79,6 +81,7 @@ struct StreamingUploadSession {
     total_chunks: u32,
     hasher: sha2::Sha256,
     created_at: std::time::SystemTime,
+    chunk_cids: Vec<dht::Cid>, // Collect CIDs of all chunks for root block creation
 }
 
 struct AppState {
@@ -94,9 +97,11 @@ struct AppState {
     dht: Mutex<Option<Arc<DhtService>>>,
     file_transfer: Mutex<Option<Arc<FileTransferService>>>,
     webrtc: Mutex<Option<Arc<WebRTCService>>>,
+    multi_source_download: Mutex<Option<Arc<MultiSourceDownloadService>>>,
     keystore: Arc<Mutex<Keystore>>,
     proxies: Arc<Mutex<Vec<ProxyNode>>>,
     file_transfer_pump: Mutex<Option<JoinHandle<()>>>,
+    multi_source_pump: Mutex<Option<JoinHandle<()>>>,
     socks5_proxy_cli: Mutex<Option<String>>,
     analytics: Arc<analytics::AnalyticsService>,
 
@@ -200,6 +205,11 @@ async fn load_account_from_keystore(
     {
         let mut active_key = state.active_account_private_key.lock().await;
         *active_key = Some(private_key.clone());
+    }
+
+    // Update WebRTC service with the active private key for decryption
+    if let Some(webrtc_service) = state.webrtc.lock().await.as_ref() {
+        webrtc_service.set_active_private_key(Some(private_key.clone())).await;
     }
 
     // Derive account details from private key
@@ -583,6 +593,8 @@ async fn start_dht_node(
     autonat_servers: Option<Vec<String>>,
     proxy_address: Option<String>,
     is_bootstrap: Option<bool>,
+    chunk_size_kb: Option<usize>,
+    cache_size_mb: Option<usize>,
 ) -> Result<String, String> {
     {
         let dht_guard = state.dht.lock().await;
@@ -618,6 +630,8 @@ async fn start_dht_node(
         autonat_server_list,
         final_proxy_address,
         file_transfer_service,
+        chunk_size_kb,
+        cache_size_mb,
     )
     .await
     .map_err(|e| format!("Failed to start DHT: {}", e))?;
@@ -798,6 +812,7 @@ async fn publish_file_metadata(
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
+            merkle_root: None,
             parent_hash: None,
             version: Some(1),
             cids: None,
@@ -1309,6 +1324,41 @@ async fn start_file_transfer_service(
         *webrtc_guard = Some(webrtc_arc.clone());
     }
 
+    // Initialize multi-source download service
+    let dht_arc = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    if let Some(dht_service) = dht_arc {
+        let multi_source_service = MultiSourceDownloadService::new(dht_service, webrtc_arc.clone());
+        let multi_source_arc = Arc::new(multi_source_service);
+        
+        {
+            let mut multi_source_guard = state.multi_source_download.lock().await;
+            *multi_source_guard = Some(multi_source_arc.clone());
+        }
+
+        // Start multi-source download service
+        {
+            let mut pump_guard = state.multi_source_pump.lock().await;
+            if pump_guard.is_none() {
+                let app_handle = app.clone();
+                let ms_clone = multi_source_arc.clone();
+                let handle = tokio::spawn(async move {
+                    pump_multi_source_events(app_handle, ms_clone).await;
+                });
+                *pump_guard = Some(handle);
+            }
+        }
+
+        // Start the service background task
+        let ms_clone = multi_source_arc.clone();
+        tokio::spawn(async move {
+            ms_clone.run().await;
+        });
+    }
+
     {
         let mut pump_guard = state.file_transfer_pump.lock().await;
         if pump_guard.is_none() {
@@ -1607,10 +1657,11 @@ async fn upload_file_data_to_network(
             is_encrypted,
             encryption_method,
             key_fingerprint,
+            merkle_root: None,
             parent_hash: None,
             version: Some(1),
             cids: None,
-            is_root: true, 
+            is_root: true,
         };
 
         // Publish to DHT
@@ -1681,6 +1732,7 @@ async fn upload_file_to_network(
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
+            merkle_root: None,
             parent_hash: None,
             version: Some(1),
             cids: None,
@@ -1757,6 +1809,7 @@ async fn start_streaming_upload(
         total_chunks: 0, // Will be set when we know chunk count
         hasher: sha2::Sha256::new(),
         created_at: std::time::SystemTime::now(),
+        chunk_cids: Vec::new(),
     });
 
     Ok(upload_id)
@@ -1782,7 +1835,7 @@ async fn upload_file_chunk(
     if let Some(dht) = state.dht.lock().await.as_ref() {
         // Create a block from the chunk data
         use dht::{split_into_blocks, StringBlock};
-        let blocks = split_into_blocks(&chunk_data);
+        let blocks = split_into_blocks(&chunk_data, dht.chunk_size());
 
         for block in blocks.iter() {
             let cid = match block.cid() {
@@ -1793,6 +1846,9 @@ async fn upload_file_chunk(
                 }
             };
 
+            // Collect CID for root block creation
+            session.chunk_cids.push(cid.clone());
+
             // Store block in Bitswap via DHT command
             if let Err(e) = dht.store_block(cid.clone(), block.data().to_vec()).await {
                 error!("failed to store chunk block {}: {}", cid, e);
@@ -1802,9 +1858,33 @@ async fn upload_file_chunk(
     }
 
     if is_last_chunk {
-        // Calculate final hash - take ownership of the hasher
+        // Calculate Merkle root for integrity verification
         let hasher = std::mem::replace(&mut session.hasher, sha2::Sha256::new());
-        let file_hash = format!("{:x}", hasher.finalize());
+        let merkle_root = format!("{:x}", hasher.finalize());
+
+        // Create root block containing the list of chunk CIDs
+        let chunk_cids = std::mem::take(&mut session.chunk_cids);
+        let root_block_data = match serde_json::to_vec(&chunk_cids) {
+            Ok(data) => data,
+            Err(e) => {
+                return Err(format!("Failed to serialize chunk CIDs: {}", e));
+            }
+        };
+
+        // Generate CID for the root block
+        use dht::{Cid, Code, MultihashDigest, RAW_CODEC};
+        let root_cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&root_block_data));
+
+        // Store root block in Bitswap
+        let dht_opt = { state.dht.lock().await.as_ref().cloned() };
+        if let Some(dht) = &dht_opt {
+            if let Err(e) = dht.store_block(root_cid.clone(), root_block_data).await {
+                error!("failed to store root block: {}", e);
+                return Err(format!("failed to store root block: {}", e));
+            }
+        } else {
+            return Err("DHT not running".into());
+        }
 
         // Create minimal metadata (without file_data to avoid DHT size limits)
         let created_at = std::time::SystemTime::now()
@@ -1813,7 +1893,7 @@ async fn upload_file_chunk(
             .as_secs();
 
         let metadata = dht::FileMetadata {
-            file_hash: file_hash.clone(),
+            file_hash: root_cid.to_string(), // Use root CID for retrieval
             file_name: session.file_name.clone(),
             file_size: session.file_size,
             file_data: vec![], // Empty - data is stored in Bitswap blocks
@@ -1823,6 +1903,7 @@ async fn upload_file_chunk(
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
+            merkle_root: Some(merkle_root), // Store Merkle root for verification
             parent_hash: None,
             version: Some(1),
             cids: None, // CIDs are stored in the root block, not in metadata
@@ -1830,7 +1911,6 @@ async fn upload_file_chunk(
         };
 
         // Publish to DHT
-        let dht_opt = { state.dht.lock().await.as_ref().cloned() };
         if let Some(dht) = dht_opt {
             dht.publish_file(metadata.clone()).await?;
         } else {
@@ -1838,6 +1918,7 @@ async fn upload_file_chunk(
         }
 
         // Clean up session
+        let file_hash = root_cid.to_string();
         upload_sessions.remove(&upload_id);
 
         Ok(Some(file_hash))
@@ -1939,6 +2020,133 @@ async fn pump_file_transfer_events(app: tauri::AppHandle, ft: Arc<FileTransferSe
             }
         }
     }
+}
+
+async fn pump_multi_source_events(app: tauri::AppHandle, ms: Arc<MultiSourceDownloadService>) {
+    loop {
+        let events = ms.drain_events(64).await;
+        if events.is_empty() {
+            if Arc::strong_count(&ms) <= 1 {
+                break;
+            }
+            sleep(Duration::from_millis(250)).await;
+            continue;
+        }
+
+        for event in events {
+            match &event {
+                MultiSourceEvent::DownloadStarted { file_hash, total_peers } => {
+                    if let Err(err) = app.emit("multi_source_download_started", &event) {
+                        warn!("Failed to emit multi_source_download_started event: {}", err);
+                    }
+                }
+                MultiSourceEvent::ProgressUpdate { file_hash, progress } => {
+                    if let Err(err) = app.emit("multi_source_progress_update", progress) {
+                        warn!("Failed to emit multi_source_progress_update event: {}", err);
+                    }
+                }
+                MultiSourceEvent::DownloadCompleted { file_hash, output_path, duration_secs, average_speed_bps } => {
+                    if let Err(err) = app.emit("multi_source_download_completed", &event) {
+                        warn!("Failed to emit multi_source_download_completed event: {}", err);
+                    }
+                }
+                _ => {
+                    if let Err(err) = app.emit("multi_source_event", &event) {
+                        warn!("Failed to emit multi_source_event: {}", err);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[tauri::command]
+async fn start_multi_source_download(
+    state: State<'_, AppState>,
+    file_hash: String,
+    output_path: String,
+    max_peers: Option<usize>,
+    chunk_size: Option<usize>,
+) -> Result<String, String> {
+    let ms = {
+        let ms_guard = state.multi_source_download.lock().await;
+        ms_guard.as_ref().cloned()
+    };
+
+    if let Some(multi_source_service) = ms {
+        multi_source_service
+            .start_download(file_hash.clone(), output_path, max_peers, chunk_size)
+            .await?;
+        
+        Ok(format!("Multi-source download started for: {}", file_hash))
+    } else {
+        Err("Multi-source download service not available".to_string())
+    }
+}
+
+#[tauri::command]
+async fn cancel_multi_source_download(
+    state: State<'_, AppState>,
+    file_hash: String,
+) -> Result<(), String> {
+    let ms = {
+        let ms_guard = state.multi_source_download.lock().await;
+        ms_guard.as_ref().cloned()
+    };
+
+    if let Some(multi_source_service) = ms {
+        multi_source_service.cancel_download(file_hash).await
+    } else {
+        Err("Multi-source download service not available".to_string())
+    }
+}
+
+#[tauri::command]
+async fn get_multi_source_progress(
+    state: State<'_, AppState>,
+    file_hash: String,
+) -> Result<Option<MultiSourceProgress>, String> {
+    let ms = {
+        let ms_guard = state.multi_source_download.lock().await;
+        ms_guard.as_ref().cloned()
+    };
+
+    if let Some(multi_source_service) = ms {
+        Ok(multi_source_service.get_download_progress(&file_hash).await)
+    } else {
+        Err("Multi-source download service not available".to_string())
+    }
+}
+
+#[tauri::command]
+async fn download_file_multi_source(
+    state: State<'_, AppState>,
+    file_hash: String,
+    output_path: String,
+    prefer_multi_source: Option<bool>,
+    max_peers: Option<usize>,
+) -> Result<String, String> {
+    let prefer_multi_source = prefer_multi_source.unwrap_or(true);
+    
+    // If multi-source is preferred and available, use it
+    if prefer_multi_source {
+        let ms = {
+            let ms_guard = state.multi_source_download.lock().await;
+            ms_guard.as_ref().cloned()
+        };
+
+        if let Some(multi_source_service) = ms {
+            info!("Using multi-source download for file: {}", file_hash);
+            return multi_source_service
+                .start_download(file_hash.clone(), output_path, max_peers, None)
+                .await
+                .map(|_| format!("Multi-source download initiated for: {}", file_hash));
+        }
+    }
+
+    // Fallback to original single-source download
+    info!("Falling back to single-source download for file: {}", file_hash);
+    download_file_from_network(state, file_hash, output_path).await
 }
 
 #[tauri::command]
@@ -2298,6 +2506,11 @@ async fn logout(state: State<'_, AppState>) -> Result<(), ()> {
     // Clear private key from memory
     let mut active_key = state.active_account_private_key.lock().await;
     *active_key = None;
+
+    // Clear private key from WebRTC service
+    if let Some(webrtc_service) = state.webrtc.lock().await.as_ref() {
+        webrtc_service.set_active_private_key(None).await;
+    }
 
     Ok(())
 }
@@ -2901,9 +3114,11 @@ fn main() {
             dht: Mutex::new(None),
             file_transfer: Mutex::new(None),
             webrtc: Mutex::new(None),
+            multi_source_download: Mutex::new(None),
             keystore: Arc::new(Mutex::new(Keystore::load().unwrap_or_else(|_| Keystore::new()))),
             proxies: Arc::new(Mutex::new(Vec::new())),
             file_transfer_pump: Mutex::new(None),
+            multi_source_pump: Mutex::new(None),
             socks5_proxy_cli: Mutex::new(args.socks5_proxy),
             analytics: Arc::new(analytics::AnalyticsService::new()),
 
@@ -2971,6 +3186,10 @@ fn main() {
             upload_file_data_to_network,
             download_file_from_network,
             download_blocks_from_network,
+            start_multi_source_download,
+            cancel_multi_source_download,
+            get_multi_source_progress,
+            download_file_multi_source,
             get_file_transfer_events,
             get_download_metrics,
             encrypt_file_with_password,
