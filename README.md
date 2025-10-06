@@ -138,6 +138,23 @@ This implementation synthesizes concepts from multiple design teams, focusing on
    - P2P traffic routing through SOCKS5 proxies
    - CLI flag: `--socks5-proxy <address>`
 
+#### ✅ GUI Configuration (Recently Implemented)
+
+1. **Settings UI for NAT Traversal**
+   - AutoNAT toggle with configurable probe interval (10-300s)
+   - Custom AutoNAT servers textarea (multiaddr format)
+   - AutoRelay toggle for Circuit Relay v2
+   - Preferred relay nodes textarea (multiaddr format)
+   - All settings persist to localStorage
+
+2. **Real-Time Reachability Display**
+   - Live NAT status badge (Public/Private/Unknown)
+   - Confidence scoring display (High/Medium/Low)
+   - Observed addresses from libp2p identify
+   - Reachability history table with timestamps
+   - Last probe time and state change tracking
+   - AutoNAT enabled/disabled indicator
+
 #### ❌ Not Yet Implemented
 
 1. **Public Relay Infrastructure**
@@ -146,17 +163,12 @@ This implementation synthesizes concepts from multiple design teams, focusing on
    - Bootstrap/shutdown scripts
    - Health monitoring endpoints
 
-2. **GUI Relay Configuration**
-   - AutoRelay toggle in Settings UI
-   - Relay address textarea for custom relays
-   - Real-time reachability status display
-
-3. **Advanced Security**
+2. **Advanced Security**
    - Relay reservation authentication
    - Rate limiting for AutoNAT probes
    - Anti-amplification safeguards
 
-4. **Resilience Testing**
+3. **Resilience Testing**
    - End-to-end NAT traversal scenarios
    - Private↔Public connection tests
    - Private↔Private relay/hole-punch tests
