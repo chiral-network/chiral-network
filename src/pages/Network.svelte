@@ -295,7 +295,12 @@
             port: dhtPort,
             bootstrapNodes: DEFAULT_BOOTSTRAP_NODES,
             chunkSizeKb: $settings.chunkSize,
-            cacheSizeMb: $settings.cacheSize
+            cacheSizeMb: $settings.cacheSize,
+            enableAutonat: $settings.enableAutonat,
+            autonatProbeIntervalSeconds: $settings.autonatProbeInterval,
+            autonatServers: $settings.autonatServers,
+            // Note: AutoRelay is always enabled via relay_client in the backend
+            // preferredRelays would need backend support to be configurable
           })
           dhtPeerId = peerId
           // Also ensure the service knows its own peer ID

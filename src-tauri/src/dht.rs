@@ -3018,6 +3018,8 @@ mod tests {
             Vec::new(),
             None,
             None,
+            Some(256), // chunk_size_kb
+            Some(1024), // cache_size_mb
         )
         .await
         {
