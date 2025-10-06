@@ -342,7 +342,7 @@
       </div>
       <div class="flex items-center gap-6">
         <div class="flex items-center gap-3">
-          <span class="text-sm font-medium transition-colors duration-300 {autoReconnectEnabled ? 'text-blue-600' : 'text-gray-500'}">Auto-reconnect</span>
+          <span class="text-sm font-medium transition-colors duration-300 {autoReconnectEnabled ? 'text-blue-600' : 'text-gray-500'}">{$t('proxy.autoReconnect')}</span>
           <button
             type="button"
             role="switch"

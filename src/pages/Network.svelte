@@ -588,7 +588,7 @@
     }
     
     // discoveredPeers will update automatically
-    showToast('Discovery started. Found peers: ' + discoveredPeers.length, 'info');
+    showToast(tr('network.peerDiscovery.discoveryStarted', { values: { count: discoveredPeers.length } }), 'info');
   }
   
   async function connectToPeer() {
@@ -1512,14 +1512,14 @@
         </div>
         {#if discoveredPeers && discoveredPeers.length > 0}
           <div class="mt-4">
-            <p class="text-sm text-muted-foreground">Found peers: {discoveredPeers.length}</p>
+            <p class="text-sm text-muted-foreground">{$t('network.peerDiscovery.foundPeers', { values: { count: discoveredPeers.length } })}</p>
             <ul class="mt-2 space-y-2">
               {#each discoveredPeers as p}
                 <li class="flex items-center justify-between p-2 border rounded">
                   <div class="truncate mr-4">{p}</div>
                       <div class="flex items-center gap-2">
-                        <Button size="sm" variant="outline" on:click={() => { newPeerAddress = p; showToast('Peer added to input', 'success'); }}>
-                          Add
+                        <Button size="sm" variant="outline" on:click={() => { newPeerAddress = p; showToast($t('network.peerDiscovery.peerAddedToInput'), 'success'); }}>
+                          {$t('network.peerDiscovery.add')}
                         </Button>
                       </div>
                 </li>
