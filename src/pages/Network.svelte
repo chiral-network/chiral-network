@@ -13,7 +13,7 @@
   import { onMount, onDestroy } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
-  import { dhtService, DEFAULT_BOOTSTRAP_NODES } from '$lib/dht'
+  import { dhtService } from '$lib/dht'
   import { getStatus as fetchGethStatus, type GethStatus } from '$lib/services/gethService'
   import { resetConnectionAttempts } from '$lib/dhtHelpers'
   import type { DhtHealth, NatConfidence, NatReachabilityState } from '$lib/dht'
@@ -77,7 +77,8 @@
   let dhtStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
   let dhtPeerId: string | null = null
   let dhtPort = 4001
-  let dhtBootstrapNode = DEFAULT_BOOTSTRAP_NODES[0] || 'No bootstrap nodes configured'
+  let dhtBootstrapNodes: string[] = []
+  let dhtBootstrapNode = 'Loading bootstrap nodes...'
   let dhtEvents: string[] = []
   let dhtPeerCount = 0
   let dhtHealth: DhtHealth | null = null
@@ -245,6 +246,22 @@
     showToast(tr(toastKey, { values: { summary: summaryText } }), tone)
   }
 
+  async function fetchBootstrapNodes() {
+    if (!isTauri) {
+      dhtBootstrapNodes = ['/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ']
+      dhtBootstrapNode = dhtBootstrapNodes[0]
+      return
+    }
+    
+    try {
+      dhtBootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command")
+      dhtBootstrapNode = dhtBootstrapNodes[0] || 'No bootstrap nodes configured'
+    } catch (error) {
+      console.error('Failed to fetch bootstrap nodes:', error)
+      dhtBootstrapNodes = []
+      dhtBootstrapNode = 'Failed to load bootstrap nodes'
+    }
+  }
   async function registerNatListener() {
     if (!isTauri || natStatusUnlisten) return
     try {
@@ -333,7 +350,7 @@
         try {
           const peerId = await dhtService.start({
             port: dhtPort,
-            bootstrapNodes: DEFAULT_BOOTSTRAP_NODES,
+            bootstrapNodes: dhtBootstrapNodes,
             enableAutonat: true,  // Enable AutoNAT to activate DCUtR
             chunkSizeKb: $settings.chunkSize,
             cacheSizeMb: $settings.cacheSize
@@ -371,8 +388,8 @@
       
       // Try to connect to bootstrap nodes
       let connectionSuccessful = false
+
       if (DEFAULT_BOOTSTRAP_NODES.length > 0) {
-        console.log('Attempting to connect to bootstrap nodes:', DEFAULT_BOOTSTRAP_NODES)
         dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to ${DEFAULT_BOOTSTRAP_NODES.length} bootstrap node(s)...`]
         
         // Add another small delay to show the connection attempt
@@ -380,8 +397,7 @@
         
         try {
           // Try connecting to the first available bootstrap node
-          await dhtService.connectPeer(DEFAULT_BOOTSTRAP_NODES[0])
-          console.log('Connection initiated to bootstrap nodes')
+          await dhtService.connectPeer(dhtBootstrapNodes[0])
           connectionSuccessful = true
           dhtEvents = [...dhtEvents, `✓ Connection initiated to bootstrap nodes (waiting for handshake...)`]
           
@@ -605,7 +621,7 @@
     }
     
     // discoveredPeers will update automatically
-    showToast('Discovery started. Found peers: ' + discoveredPeers.length, 'info');
+    showToast(tr('network.peerDiscovery.discoveryStarted', { values: { count: discoveredPeers.length } }), 'info');
   }
   
   async function connectToPeer() {
@@ -934,6 +950,7 @@
       
       // Initialize async operations
       const initAsync = async () => {
+        await fetchBootstrapNodes()
         await checkGethStatus()
         
         // DHT check will happen in startDht()
@@ -1546,14 +1563,14 @@
         </div>
         {#if discoveredPeers && discoveredPeers.length > 0}
           <div class="mt-4">
-            <p class="text-sm text-muted-foreground">Found peers: {discoveredPeers.length}</p>
+            <p class="text-sm text-muted-foreground">{$t('network.peerDiscovery.foundPeers', { values: { count: discoveredPeers.length } })}</p>
             <ul class="mt-2 space-y-2">
               {#each discoveredPeers as p}
                 <li class="flex items-center justify-between p-2 border rounded">
                   <div class="truncate mr-4">{p}</div>
                       <div class="flex items-center gap-2">
-                        <Button size="sm" variant="outline" on:click={() => { newPeerAddress = p; showToast('Peer added to input', 'success'); }}>
-                          Add
+                        <Button size="sm" variant="outline" on:click={() => { newPeerAddress = p; showToast($t('network.peerDiscovery.peerAddedToInput'), 'success'); }}>
+                          {$t('network.peerDiscovery.add')}
                         </Button>
                       </div>
                 </li>

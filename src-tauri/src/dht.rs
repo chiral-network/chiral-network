@@ -1460,6 +1460,10 @@ async fn run_dht_node(
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
                         info!("📡 Now listening on: {}", address);
+                        if address.iter().any(|component| matches!(component, Protocol::P2pCircuit)) {
+                            swarm.add_external_address(address.clone());
+                            debug!("Advertised relay external address: {}", address);
+                        }
                         if let Ok(mut m) = metrics.try_lock() {
                             m.record_listen_addr(&address);
                         }

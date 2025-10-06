@@ -119,6 +119,19 @@
           "private": "可达性已降级。{summary}",
           "unknown": "可达性状态已更新。{summary}"
         }
+      },
+      "dcutr": {
+        "title": "DCUtR 打洞",
+        "enabled": "DCUtR 已启用",
+        "disabled": "DCUtR 已禁用",
+        "attempts": "打洞尝试次数",
+        "successes": "成功",
+        "failures": "失败",
+        "successRate": "成功率",
+        "lastSuccess": "最后成功",
+        "lastFailure": "最后失败",
+        "never": "从未",
+        "description": "通过中继的直接连接升级（DCUtR）启用 NAT 打洞以建立直接的对等连接。"
       }
     },
     "networkStatus": "网络状态",
@@ -131,7 +144,11 @@
       "run": "运行发现",
       "directConnect": "直接连接",
       "placeholder": "输入节点地址 (IP:端口 或 节点ID)",
-      "connect": "连接"
+      "connect": "连接",
+      "foundPeers": "已发现节点: {count}",
+      "discoveryStarted": "发现已开始。已发现节点: {count}",
+      "peerAddedToInput": "节点已添加到输入框",
+      "add": "添加"
     },
     "connectedPeers": {
       "title": "已连接节点 ({count})",
@@ -247,6 +264,8 @@
   },
   "privacy.title": "隐私与安全",
   "privacy.enableProxy": "启用代理路由以保持匿名",
+  "privacy.proxyAddress": "代理地址",
+  "privacy.proxyHint": "输入 SOCKS5 代理地址（例如 Tor 的 127.0.0.1:9050）",
   "privacy.anonymousMode": "匿名模式（隐藏所有身份信息）",
   "privacy.shareAnalytics": "共享匿名使用分析",
   "notifications.title": "通知",
@@ -646,7 +665,8 @@
     "disconnect": "断开连接",
     "connect": "连接",
     "remove": "移除",
-    "alreadyAdded": "该代理地址已添加！"
+    "alreadyAdded": "该代理地址已添加！",
+    "autoReconnect": "自动重连"
   },
   "mining": {
     "title": "挖矿",
@@ -849,6 +869,8 @@
     "total": "总计",
     "tip": "提示：你也可以将文件拖到此处添加",
     "addMoreFiles": "添加更多文件",
+    "supportedFormats": "支持图片、视频、音频、文档、代码文件等",
+    "supportedFormatsDesktop": "桌面应用支持图片、视频、音频、文档、代码文件等",
     "hash": "哈希",
     "seeder": "做种者{count, plural, =1 {} other {们}}",
     "leecher": "下载者{count, plural, =1 {} other {们}}",

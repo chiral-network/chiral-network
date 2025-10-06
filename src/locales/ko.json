@@ -6,6 +6,8 @@
   "storage.title": "스토리지",
   "storage.location": "저장 위치",
   "privacy.enableProxy": "익명성을 위한 프록시 라우팅 활성화",
+  "privacy.proxyAddress": "프록시 주소",
+  "privacy.proxyHint": "SOCKS5 프록시 주소를 입력하세요 (예: Tor의 경우 127.0.0.1:9050)",
   "privacy.anonymousMode": "익명 모드 (모든 식별 정보 숨기기)",
   "privacy.shareAnalytics": "익명 사용 분석 공유",
   "storage.locationPick": "저장 위치 선택",
@@ -122,6 +124,19 @@
           "private": "접근성이 저하되었습니다. {summary}",
           "unknown": "접근성 상태가 업데이트되었습니다. {summary}"
         }
+      },
+      "dcutr": {
+        "title": "DCUtR 홀 펀칭",
+        "enabled": "DCUtR 활성화됨",
+        "disabled": "DCUtR 비활성화됨",
+        "attempts": "홀 펀치 시도",
+        "successes": "성공",
+        "failures": "실패",
+        "successRate": "성공률",
+        "lastSuccess": "마지막 성공",
+        "lastFailure": "마지막 실패",
+        "never": "없음",
+        "description": "릴레이를 통한 직접 연결 업그레이드(DCUtR)는 NAT 홀 펀칭을 활성화하여 직접 피어 연결을 설정합니다."
       }
     },
     "networkStatus": "네트워크 상태",
@@ -134,7 +149,11 @@
       "run": "검색 실행",
       "directConnect": "직접 연결",
       "placeholder": "피어 주소 입력 (IP:Port 또는 피어 ID)",
-      "connect": "연결"
+      "connect": "연결",
+      "foundPeers": "발견된 피어: {count}",
+      "discoveryStarted": "검색이 시작되었습니다. 발견된 피어: {count}",
+      "peerAddedToInput": "피어가 입력창에 추가되었습니다",
+      "add": "추가"
     },
     "connectedPeers": {
       "title": "연결된 피어 ({count})",
@@ -622,7 +641,8 @@
     "disconnect": "연결 끊기",
     "connect": "연결",
     "remove": "제거",
-    "alreadyAdded": "이 프록시 주소는 이미 추가되었습니다!"
+    "alreadyAdded": "이 프록시 주소는 이미 추가되었습니다!",
+    "autoReconnect": "자동 재연결"
   },
   "mining": {
     "title": "채굴",
@@ -825,6 +845,8 @@
     "total": "총",
     "tip": "팁: 파일을 여기에 드래그 앤 드롭하여 추가할 수도 있습니다",
     "addMoreFiles": "파일 더 추가",
+    "supportedFormats": "이미지, 비디오, 오디오, 문서, 코드 파일 등 지원",
+    "supportedFormatsDesktop": "데스크톱 앱은 이미지, 비디오, 오디오, 문서, 코드 파일 등을 지원합니다",
     "hash": "해시",
     "seeder": "시더",
     "leecher": "리처",
