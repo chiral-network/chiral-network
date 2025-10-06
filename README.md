@@ -76,7 +76,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 
 - ✅ **End-to-End Encryption**: AES-256-GCM encryption with PBKDF2 key derivation (can be enabled in Settings)
 - ✅ **Wallet Security**: Secure credential management with HD wallets
-- ❌ **Stream Authentication**: Cryptographic verification of data integrity (no actual stream authentication occurs during file transfers)
+- ✅ **Stream Authentication**: HMAC-based cryptographic verification of data integrity during file transfers
 - ❌ **Anonymous Routing**: Hide your IP from other peers (no IP hiding or anonymization implemented)
 - ✅ **No Commercial Tracking**: No marketplace means no transaction tracking
 
