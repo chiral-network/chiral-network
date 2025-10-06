@@ -1051,7 +1051,7 @@
             </button>
           </div>
           <div class="flex items-center gap-2">
-            <Label class="font-medium">Auto-clear:</Label>
+            <Label class="font-medium">{$t('download.autoClear')}:</Label>
             <button
               type="button"
               aria-label="Toggle auto-clear completed downloads"
@@ -1066,9 +1066,9 @@
               ></span>
             </button>
           </div>
-          
+
           <div class="flex items-center gap-2">
-            <Label class="font-medium">Multi-source:</Label>
+            <Label class="font-medium">{$t('download.multiSource')}:</Label>
             <button
               type="button"
               aria-label="Toggle multi-source downloads"
@@ -1083,10 +1083,10 @@
               ></span>
             </button>
           </div>
-          
+
           {#if multiSourceEnabled}
           <div class="flex items-center gap-2">
-            <Label class="font-medium">Max peers:</Label>
+            <Label class="font-medium">{$t('download.maxPeers')}:</Label>
             <input
               type="number"
               bind:value={maxPeersPerDownload}

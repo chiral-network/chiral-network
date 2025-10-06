@@ -1,6 +1,10 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { t } from 'svelte-i18n';
+  import { get } from 'svelte/store';
   import PeerSelectionService, { type PeerMetrics } from '$lib/services/peerSelectionService';
+
+  const tr = (key: string, params?: Record<string, any>) => (get(t) as any)(key, params);
 
   let peers: PeerMetrics[] = [];
   let loading = true;
@@ -83,50 +87,50 @@
 
 <div class="peer-metrics-panel">
   <div class="header">
-    <h2>Smart Peer Selection</h2>
+    <h2>{$t('network.smartPeerSelection')}</h2>
     <div class="actions">
-      <button 
-        on:click={loadPeerMetrics} 
+      <button
+        on:click={loadPeerMetrics}
         disabled={loading}
         class="btn btn-secondary"
       >
-        {loading ? 'Refreshing...' : 'Refresh'}
+        {loading ? $t('network.peerMetrics.refreshing') : $t('network.peerMetrics.refresh')}
       </button>
-      <button 
+      <button
         on:click={cleanupInactivePeers}
         class="btn btn-warning"
       >
-        Cleanup Inactive
+        {$t('network.peerMetrics.cleanupInactive')}
       </button>
     </div>
   </div>
 
   {#if error}
     <div class="error">
-      <p>❌ Error: {error}</p>
+      <p>❌ {$t('network.peerMetrics.error')}: {error}</p>
     </div>
   {/if}
 
   {#if loading && peers.length === 0}
     <div class="loading">
-      <p>Loading peer metrics...</p>
+      <p>{$t('network.peerMetrics.loading')}</p>
     </div>
   {:else if peers.length === 0}
     <div class="empty-state">
-      <p>No peer metrics available. Start the DHT service and connect to peers.</p>
+      <p>{$t('network.peerMetrics.noPeers')}</p>
     </div>
   {:else}
     <div class="peer-stats">
       <div class="stat">
-        <span class="label">Total Peers:</span>
+        <span class="label">{$t('network.peerMetrics.totalPeers')}:</span>
         <span class="value">{peers.length}</span>
       </div>
       <div class="stat">
-        <span class="label">Encryption-capable:</span>
+        <span class="label">{$t('network.peerMetrics.encryptionCapable')}:</span>
         <span class="value">{peers.filter(p => p.encryption_support).length}</span>
       </div>
       <div class="stat">
-        <span class="label">Average Reliability:</span>
+        <span class="label">{$t('network.peerMetrics.avgReliability')}:</span>
         <span class="value">
           {Math.round(peers.reduce((sum, p) => sum + p.reliability_score, 0) / peers.length * 100)}%
         </span>
@@ -138,33 +142,33 @@
         <thead>
           <tr>
             <th on:click={() => toggleSort('peer_id')}>
-              Peer ID {getSortIcon('peer_id')}
+              {$t('network.peerMetrics.peerId')} {getSortIcon('peer_id')}
             </th>
             <th on:click={() => toggleSort('address')}>
-              Address {getSortIcon('address')}
+              {$t('network.peerMetrics.address')} {getSortIcon('address')}
             </th>
             <th on:click={() => toggleSort('latency_ms')}>
-              Latency {getSortIcon('latency_ms')}
+              {$t('network.peerMetrics.latency')} {getSortIcon('latency_ms')}
             </th>
             <th on:click={() => toggleSort('bandwidth_kbps')}>
-              Bandwidth {getSortIcon('bandwidth_kbps')}
+              {$t('network.peerMetrics.bandwidth')} {getSortIcon('bandwidth_kbps')}
             </th>
             <th on:click={() => toggleSort('reliability_score')}>
-              Reliability {getSortIcon('reliability_score')}
+              {$t('network.peerMetrics.reliability')} {getSortIcon('reliability_score')}
             </th>
             <th on:click={() => toggleSort('success_rate')}>
-              Success Rate {getSortIcon('success_rate')}
+              {$t('network.peerMetrics.successRate')} {getSortIcon('success_rate')}
             </th>
             <th on:click={() => toggleSort('transfer_count')}>
-              Transfers {getSortIcon('transfer_count')}
+              {$t('network.peerMetrics.transfers')} {getSortIcon('transfer_count')}
             </th>
             <th on:click={() => toggleSort('total_bytes_transferred')}>
-              Data Transfer {getSortIcon('total_bytes_transferred')}
+              {$t('network.peerMetrics.dataTransfer')} {getSortIcon('total_bytes_transferred')}
             </th>
             <th on:click={() => toggleSort('encryption_support')}>
-              Encryption {getSortIcon('encryption_support')}
+              {$t('network.peerMetrics.encryption')} {getSortIcon('encryption_support')}
             </th>
-            <th>Health</th>
+            <th>{$t('network.peerMetrics.health')}</th>
           </tr>
         </thead>
         <tbody>

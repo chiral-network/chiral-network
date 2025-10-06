@@ -13,7 +13,7 @@
   import { onMount, onDestroy } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
-  import { dhtService, DEFAULT_BOOTSTRAP_NODES } from '$lib/dht'
+  import { dhtService } from '$lib/dht'
   import { getStatus as fetchGethStatus, type GethStatus } from '$lib/services/gethService'
   import { resetConnectionAttempts } from '$lib/dhtHelpers'
   import type { DhtHealth, NatConfidence, NatReachabilityState } from '$lib/dht'
@@ -77,7 +77,8 @@
   let dhtStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
   let dhtPeerId: string | null = null
   let dhtPort = 4001
-  let dhtBootstrapNode = DEFAULT_BOOTSTRAP_NODES[0] || 'No bootstrap nodes configured'
+  let dhtBootstrapNodes: string[] = []
+  let dhtBootstrapNode = 'Loading bootstrap nodes...'
   let dhtEvents: string[] = []
   let dhtPeerCount = 0
   let dhtHealth: DhtHealth | null = null
@@ -93,6 +94,45 @@
   let webrtcSession: ReturnType<typeof createWebRTCSession> | null = null;
   let discoveredPeers: string[] = [];
   let signalingConnected = false;
+
+  // Helper: add a connected peer to the central peers store (if not present)
+  function addConnectedPeer(address: string) {
+    peers.update(list => {
+      const exists = list.find(p => p.address === address || p.id === address)
+      if (exists) {
+        // mark online
+        exists.status = 'online'
+        exists.lastSeen = new Date()
+        return [...list]
+      }
+
+      // Minimal PeerInfo; other fields will be filled by DHT metadata when available
+      const newPeer = {
+        id: address,
+        address,
+        nickname: undefined,
+        status: 'online',
+        reputation: 0,
+        sharedFiles: 0,
+        totalSize: 0,
+        joinDate: new Date(),
+        lastSeen: new Date(),
+        location: undefined,
+      }
+      return [newPeer, ...list]
+    })
+  }
+
+  // Helper: mark a peer disconnected (set status offline) or remove
+  function markPeerDisconnected(address: string) {
+    peers.update(list => {
+      const idx = list.findIndex(p => p.address === address || p.id === address)
+      if (idx === -1) return list
+      const copy = [...list]
+      copy[idx] = { ...copy[idx], status: 'offline', lastSeen: new Date() }
+      return copy
+    })
+  }
   
   // UI variables
   const nodeAddress = "enode://277ac35977fc0a230e3ca4ccbf6df6da486fd2af9c129925b1193b25da6f013a301788fceed458f03c6c0d289dfcbf7a7ca5c0aef34b680fcbbc8c2ef79c0f71@127.0.0.1:30303"
@@ -206,6 +246,22 @@
     showToast(tr(toastKey, { values: { summary: summaryText } }), tone)
   }
 
+  async function fetchBootstrapNodes() {
+    if (!isTauri) {
+      dhtBootstrapNodes = ['/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ']
+      dhtBootstrapNode = dhtBootstrapNodes[0]
+      return
+    }
+    
+    try {
+      dhtBootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command")
+      dhtBootstrapNode = dhtBootstrapNodes[0] || 'No bootstrap nodes configured'
+    } catch (error) {
+      console.error('Failed to fetch bootstrap nodes:', error)
+      dhtBootstrapNodes = []
+      dhtBootstrapNode = 'Failed to load bootstrap nodes'
+    }
+  }
   async function registerNatListener() {
     if (!isTauri || natStatusUnlisten) return
     try {
@@ -234,6 +290,7 @@
       // Mock DHT connection for web
       dhtStatus = 'connecting'
       setTimeout(() => {
+        
         dhtStatus = 'connected'
         dhtPeerId = '12D3KooWMockPeerIdForWebDemo123456789'
       }, 1000)
@@ -293,7 +350,8 @@
         try {
           const peerId = await dhtService.start({
             port: dhtPort,
-            bootstrapNodes: DEFAULT_BOOTSTRAP_NODES,
+            bootstrapNodes: dhtBootstrapNodes,
+            enableAutonat: true,  // Enable AutoNAT to activate DCUtR
             chunkSizeKb: $settings.chunkSize,
             cacheSizeMb: $settings.cacheSize
           })
@@ -330,15 +388,15 @@
       
       // Try to connect to bootstrap nodes
       let connectionSuccessful = false
-      if (DEFAULT_BOOTSTRAP_NODES.length > 0) {
-        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to ${DEFAULT_BOOTSTRAP_NODES.length} bootstrap node(s)...`]
+      if (dhtBootstrapNodes.length > 0) {
+        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to ${dhtBootstrapNodes.length} bootstrap node(s)...`]
         
         // Add another small delay to show the connection attempt
         await new Promise(resolve => setTimeout(resolve, 1000))
         
         try {
           // Try connecting to the first available bootstrap node
-          await dhtService.connectPeer(DEFAULT_BOOTSTRAP_NODES[0])
+          await dhtService.connectPeer(dhtBootstrapNodes[0])
           connectionSuccessful = true
           dhtEvents = [...dhtEvents, `✓ Connection initiated to bootstrap nodes (waiting for handshake...)`]
           
@@ -547,10 +605,10 @@
     }
     
     // discoveredPeers will update automatically
-    showToast('Discovery started. Found peers: ' + discoveredPeers.length, 'info');
+    showToast(tr('network.peerDiscovery.discoveryStarted', { values: { count: discoveredPeers.length } }), 'info');
   }
   
-  function connectToPeer() {
+  async function connectToPeer() {
     if (!newPeerAddress.trim()) {
       showToast('Please enter a peer ID', 'error');
       return;
@@ -579,27 +637,57 @@
         },
         onConnectionStateChange: (state) => {
           showToast('WebRTC state: ' + state, 'info');
-          
+
+          // When the data channel/peer connection becomes connected, add to connected peers
           if (state === 'connected') {
             showToast('Successfully connected to peer!', 'success');
-          } else if (state === 'failed' || state === 'disconnected') {
+            // Add minimal PeerInfo to peers store if not present
+            addConnectedPeer(peerId);
+          } else if (state === 'failed' || state === 'disconnected' || state === 'closed') {
             showToast('Connection to peer failed or disconnected', 'error');
+            // Mark peer as offline / remove from peers list
+            markPeerDisconnected(peerId);
           }
         },
         onDataChannelOpen: () => {
           showToast('Data channel open - you can now send messages!', 'success');
+          // Ensure peer is listed as connected when data channel opens
+          addConnectedPeer(peerId);
         },
         onDataChannelClose: () => {
           showToast('Data channel closed', 'warning');
+          markPeerDisconnected(peerId);
         },
         onError: (e) => {
           showToast('WebRTC error: ' + e, 'error');
           console.error('WebRTC error:', e);
         }
       });
-      
-      webrtcSession.createOffer();
-      showToast('Connecting to peer: ' + peerId, 'info');
+      // Optimistically add the peer as 'connecting' so it appears in UI while the handshake occurs
+      peers.update(list => {
+        const exists = list.find(p => p.address === peerId || p.id === peerId)
+        if (exists) {
+          exists.status = 'away'
+          exists.lastSeen = new Date()
+          return [...list]
+        }
+        const pending = {
+          id: peerId,
+          address: peerId,
+          nickname: undefined,
+          status: 'away', // using 'away' to indicate in-progress
+          reputation: 0,
+          sharedFiles: 0,
+          totalSize: 0,
+          joinDate: new Date(),
+          lastSeen: new Date(),
+          location: undefined,
+        }
+        return [pending, ...list]
+      })
+
+  await webrtcSession.createOffer();
+  showToast('Connecting to peer: ' + peerId, 'success');
       
       // Clear input on successful connection attempt
       newPeerAddress = '';
@@ -829,6 +917,7 @@
       
       // Initialize async operations
       const initAsync = async () => {
+        await fetchBootstrapNodes()
         await checkGethStatus()
         
         // DHT check will happen in startDht()
@@ -1290,6 +1379,55 @@
     </div>
   </Card>
 
+  <!-- DCUtR Hole-Punching Card -->
+  {#if dhtStatus === 'connected' && dhtHealth}
+    <Card class="p-6">
+      <h3 class="text-lg font-semibold mb-4">{$t('network.dht.dcutr.title')}</h3>
+      <p class="text-sm text-muted-foreground mb-4">{$t('network.dht.dcutr.description')}</p>
+
+      <div class="grid gap-4 md:grid-cols-3">
+        <div>
+          <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.dcutr.attempts')}</p>
+          <p class="mt-1 text-2xl font-bold">{dhtHealth.dcutrHolePunchAttempts ?? 0}</p>
+        </div>
+        <div>
+          <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.dcutr.successes')}</p>
+          <p class="mt-1 text-2xl font-bold text-emerald-600 dark:text-emerald-400">{dhtHealth.dcutrHolePunchSuccesses ?? 0}</p>
+        </div>
+        <div>
+          <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.dcutr.failures')}</p>
+          <p class="mt-1 text-2xl font-bold text-rose-600 dark:text-rose-400">{dhtHealth.dcutrHolePunchFailures ?? 0}</p>
+        </div>
+      </div>
+
+      <div class="mt-4 pt-4 border-t border-muted/40">
+        <div class="grid gap-4 md:grid-cols-2">
+          <div>
+            <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.dcutr.successRate')}</p>
+            <p class="mt-1 text-lg font-semibold">
+              {#if dhtHealth.dcutrHolePunchAttempts > 0}
+                {((dhtHealth.dcutrHolePunchSuccesses / dhtHealth.dcutrHolePunchAttempts) * 100).toFixed(1)}%
+              {:else}
+                —
+              {/if}
+            </p>
+          </div>
+          <div>
+            <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.dcutr.enabled')}</p>
+            <Badge class={dhtHealth.dcutrEnabled ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-300' : 'bg-muted text-muted-foreground'}>
+              {dhtHealth.dcutrEnabled ? $t('network.dht.dcutr.enabled') : $t('network.dht.dcutr.disabled')}
+            </Badge>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-4 text-sm text-muted-foreground space-y-1">
+        <p>{$t('network.dht.dcutr.lastSuccess')}: {formatNatTimestamp(dhtHealth.lastDcutrSuccess ?? null)}</p>
+        <p>{$t('network.dht.dcutr.lastFailure')}: {formatNatTimestamp(dhtHealth.lastDcutrFailure ?? null)}</p>
+      </div>
+    </Card>
+  {/if}
+
   <!-- Smart Peer Selection Metrics -->
   {#if dhtStatus === 'connected'}
     <PeerMetrics />
@@ -1382,14 +1520,31 @@
             <UserPlus class="h-4 w-4 mr-2" />
             {$t('network.peerDiscovery.connect')}
           </Button>
-          <Button 
-            on:click={sendTestMessage} 
+          <Button
+            on:click={sendTestMessage}
             disabled={!webrtcSession || !webrtcSession.channel || webrtcSession.channel.readyState !== 'open'}
             variant="outline"
           >
-            Send Test
+            {$t('network.sendTest')}
           </Button>
         </div>
+        {#if discoveredPeers && discoveredPeers.length > 0}
+          <div class="mt-4">
+            <p class="text-sm text-muted-foreground">{$t('network.peerDiscovery.foundPeers', { values: { count: discoveredPeers.length } })}</p>
+            <ul class="mt-2 space-y-2">
+              {#each discoveredPeers as p}
+                <li class="flex items-center justify-between p-2 border rounded">
+                  <div class="truncate mr-4">{p}</div>
+                      <div class="flex items-center gap-2">
+                        <Button size="sm" variant="outline" on:click={() => { newPeerAddress = p; showToast($t('network.peerDiscovery.peerAddedToInput'), 'success'); }}>
+                          {$t('network.peerDiscovery.add')}
+                        </Button>
+                      </div>
+                </li>
+              {/each}
+            </ul>
+          </div>
+        {/if}
       </div>
     </div>
   </Card>

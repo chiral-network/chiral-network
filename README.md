@@ -66,7 +66,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 ### 5. Proxy Network Support
 
 - ❌ **Privacy Protection**: Route traffic through proxy nodes (no traffic routing implemented)
-- ❌ **Load Balancing**: Automatic distribution across multiple proxies (no parallel downloads, file segmentation, or multi-source downloads)
+- ❌ **Load Balancing**: Automatic distribution across multiple proxies (no parallel downloads or file segmentation)
 - ❌ **Latency Optimization**: Choose proxies based on performance (no download process uses latency framework)
 - ✅ **Custom Node Addition**: Add trusted proxy nodes manually
 - ❌ **Bandwidth Aggregation**: Combine multiple proxy connections (no actual combining of multiple proxy connections)
@@ -159,7 +159,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
    - Gradually integrate real P2P networking
    - Maintain backwards compatibility
 
-## Installation & Setup
+## Setup and Testing
 
 ```bash
 # Clone the repository
@@ -176,9 +176,13 @@ npm run tauri dev # Desktop app
 # Build for production
 npm run build       # Web production build
 npm run tauri build # Desktop production build
-```
 
-## Usage Guide
+# Run tests
+npm test
+
+# Run tests in watch mode
+npm run test:watch
+```
 
 ### Getting Started
 
@@ -287,7 +291,7 @@ npm run tauri build # Desktop production build
 - ✅ **File Upload Encryption**: AES-256-GCM encryption with PBKDF2 key derivation for uploaded files
 - ✅ **File Download Decryption**: Key management and decryption for downloaded files
 - ✅ **WebRTC Encryption**: Encrypted P2P chunk transfers
-- ❌ **Key Exchange UI**: Recipient public key input for encrypted sharing
+- ✅ **Key Exchange UI**: Recipient public key input for encrypted sharing
 - ✅ Real P2P file transfer protocol
 - ✅ File versioning system
 - ✅ Advanced bandwidth scheduling
@@ -333,12 +337,13 @@ npm run tauri build # Desktop production build
 - ECIES key exchange infrastructure
 - File download decryption with key management
 - WebRTC encrypted chunk transfers
+- Key exchange UI for recipient-specific encryption
 - No centralized servers to compromise
 - Fully decentralized architecture prevents single points of failure
 
 ### Planned Security
 
-- Key exchange UI for encrypted sharing
+- ✅ Key exchange UI for encrypted sharing
 - File encryption at rest
 - Signed software updates
 - Two-factor authentication
