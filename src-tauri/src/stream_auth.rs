@@ -38,7 +38,7 @@ pub struct AuthMessage {
     pub timestamp: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AuthMessageType {
     /// Initial handshake
     Handshake,

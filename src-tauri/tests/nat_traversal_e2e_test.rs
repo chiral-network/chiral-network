@@ -57,6 +57,8 @@ async fn test_autonat_detection() {
         None,                         // No file transfer service
         Some(256),                    // chunk_size_kb
         Some(1024),                   // cache_size_mb
+        false,                        // enable_autorelay
+        Vec::new(),                   // preferred_relays
     )
     .await;
 
@@ -103,6 +105,8 @@ async fn test_dht_peer_discovery() {
         None,
         Some(256),
         Some(1024),
+        false, // enable_autorelay
+        Vec::new(), // preferred_relays
     )
     .await
     .expect("Failed to create service1");
@@ -139,6 +143,8 @@ async fn test_dht_peer_discovery() {
         None,
         Some(256),
         Some(1024),
+        false, // enable_autorelay
+        Vec::new(), // preferred_relays
     )
     .await
     .expect("Failed to create service2");
@@ -187,6 +193,8 @@ async fn test_file_publish_and_search() {
         None,
         Some(256),
         Some(1024),
+        false, // enable_autorelay
+        Vec::new(), // preferred_relays
     )
     .await
     .expect("Failed to create service1");
@@ -215,6 +223,8 @@ async fn test_file_publish_and_search() {
         None,
         Some(256),
         Some(1024),
+        false, // enable_autorelay
+        Vec::new(), // preferred_relays
     )
     .await
     .expect("Failed to create service2");
@@ -270,6 +280,8 @@ async fn test_dcutr_enabled() {
         None,
         Some(256),
         Some(1024),
+        false, // enable_autorelay
+        Vec::new(), // preferred_relays
     )
     .await
     .expect("Failed to create service");
@@ -320,6 +332,8 @@ async fn test_multiple_autonat_servers() {
         None,
         Some(256),
         Some(1024),
+        false, // enable_autorelay
+        Vec::new(), // preferred_relays
     )
     .await
     .expect("Failed to create service");
@@ -353,6 +367,8 @@ async fn test_reachability_history_tracking() {
         None,
         Some(256),
         Some(1024),
+        false, // enable_autorelay
+        Vec::new(), // preferred_relays
     )
     .await
     .expect("Failed to create service");
@@ -398,6 +414,8 @@ async fn test_connection_metrics_tracking() {
         None,
         Some(256),
         Some(1024),
+        false, // enable_autorelay
+        Vec::new(), // preferred_relays
     )
     .await
     .expect("Failed to create service1");
@@ -426,6 +444,8 @@ async fn test_connection_metrics_tracking() {
         None,
         Some(256),
         Some(1024),
+        false, // enable_autorelay
+        Vec::new(), // preferred_relays
     )
     .await
     .expect("Failed to create service2");
@@ -475,6 +495,8 @@ async fn test_nat_resilience_private_to_public() {
         None,
         Some(256),
         Some(1024),
+        false, // enable_autorelay
+        Vec::new(), // preferred_relays
     )
     .await
     .expect("Failed to create public peer");
@@ -512,6 +534,8 @@ async fn test_nat_resilience_private_to_public() {
         None,
         Some(256),
         Some(1024),
+        false, // enable_autorelay
+        Vec::new(), // preferred_relays
     )
     .await
     .expect("Failed to create private peer");
@@ -571,6 +595,8 @@ async fn test_nat_resilience_connection_fallback() {
         None,
         Some(256),
         Some(1024),
+        false, // enable_autorelay
+        Vec::new(), // preferred_relays
     )
     .await;
 
