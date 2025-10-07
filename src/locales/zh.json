@@ -415,9 +415,13 @@
       "success": "账户加载成功",
       "successSimulated": "账户已加载（演示模式）",
       "error": "加载账户时出错: {error}",
+      "savePasswordDisabled": "为安全起见，'保存密码'功能当前已禁用。请在每次解锁账户时输入您的密码。",
       "savePassword": "在这台电脑上保存密码（30天后过期）",
       "savePasswordWarning": "警告：在本地保存密码虽然方便，但安全性较低。请谨慎使用。",
       "addressMismatch": "解密错误：地址不匹配。"
+    },
+    "password": {
+      "password": "密码"
     }
   },
   "security": {

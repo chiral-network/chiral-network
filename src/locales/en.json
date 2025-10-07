@@ -493,6 +493,7 @@
       "successSimulated": "Account loaded (demo mode)",
       "error": "Failed to load account: {error}",
       "savePassword": "Save password on this computer (expires in 30 days)",
+      "savePasswordDisabled": "For security, the 'Save Password' feature is currently disabled. Please enter your password each time you unlock your account.",
       "savePasswordWarning": "Warning: Saving your password locally is convenient but less secure. Use with caution.",
       "addressMismatch": "Decryption error: address does not match."
     }

@@ -409,6 +409,7 @@
       "success": "Cuenta cargada correctamente",
       "successSimulated": "Cuenta cargada (modo demo)",
       "error": "Error al cargar la cuenta: {error}",
+      "savePasswordDisabled": "Por seguridad, la función 'Guardar contraseña' está actualmente deshabilitada. Por favor, introduce tu contraseña cada vez que desbloquees tu cuenta.",
       "savePassword": "Guardar contraseña en este equipo (caduca en 30 días)",
       "savePasswordWarning": "Advertencia: Guardar tu contraseña localmente es conveniente pero menos seguro. Úsalo con precaución.",
       "addressMismatch": "Error de descifrado: la dirección no coincide."
