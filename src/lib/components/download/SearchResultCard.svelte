@@ -6,6 +6,8 @@
   import { createEventDispatcher } from 'svelte';
   import { dhtService, type FileMetadata } from '$lib/dht';
   import { formatRelativeTime, toHumanReadableSize } from '$lib/utils';
+  import { files } from '$lib/stores';
+  import { get } from 'svelte/store';
 
   const dispatch = createEventDispatcher<{ download: FileMetadata; copy: string }>();
 
@@ -14,6 +16,8 @@
 
   let hashCopied = false;
   let seederCopiedIndex: number | null = null;
+  let showSeedingNotice = false;
+  let showDecryptDialog = false;
 
   function formatFileSize(bytes: number): string {
     return toHumanReadableSize(bytes);
@@ -23,6 +27,9 @@
   $: createdLabel = metadata?.createdAt
     ? formatRelativeTime(new Date(metadata.createdAt * 1000))
     : null;
+
+  // Check if user is already seeding this file
+  $: isSeeding = !!get(files).find(f => f.hash === metadata.fileHash && f.status === 'seeding');
 
   function copyHash() {
     navigator.clipboard.writeText(metadata.fileHash).then(() => {
@@ -44,9 +51,21 @@
     });
   }
 
-  async function handleDownload() {
-    await dhtService.downloadFile(metadata);
-    // dispatch('download', data);
+  function handleDownload() {
+    if (isSeeding) {
+      showDecryptDialog = true;
+    } else {
+      dispatch('download', metadata);
+    }
+  }
+
+  function confirmDecryptAndQueue() {
+    showDecryptDialog = false;
+    dispatch('download', metadata);
+  }
+
+  function cancelDecryptDialog() {
+    showDecryptDialog = false;
   }
 
   const seederIds = metadata.seeders?.map((address, index) => ({
@@ -156,7 +175,12 @@
 
   <div class="flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
     <div class="text-xs text-muted-foreground">
-      {#if metadata.seeders?.length}
+      {#if isSeeding}
+        <span class="text-emerald-600 font-semibold">You are seeding this file</span>
+        {#if metadata.isEncrypted}
+          <span class="ml-2 text-xs text-amber-600">(encrypted)</span>
+        {/if}
+      {:else if metadata.seeders?.length}
         {metadata.seeders.length > 1 ? 'Choose any seeder to initiate a download.' : 'Single seeder available for download.'}
       {:else}
         Waiting for peers to announce this file.
@@ -169,4 +193,20 @@
       </Button>
     </div>
   </div>
+
+  {#if showDecryptDialog}
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+    <div class="bg-background rounded-lg shadow-lg p-6 w-full max-w-md border border-border">
+      <h2 class="text-lg font-semibold mb-2">Already Seeding</h2>
+      <p class="mb-4 text-sm text-muted-foreground">
+        You’re already seeding this file{metadata.isEncrypted ? ' (encrypted)' : ''}.<br />
+        Would you like to decrypt and save a local readable copy?
+      </p>
+      <div class="flex justify-end gap-2 mt-4">
+        <Button variant="outline" on:click={cancelDecryptDialog}>Cancel</Button>
+        <Button on:click={confirmDecryptAndQueue}>Add to queue</Button>
+      </div>
+    </div>
+  </div>
+{/if}
 </Card>

@@ -138,25 +138,56 @@ This implementation synthesizes concepts from multiple design teams, focusing on
    - P2P traffic routing through SOCKS5 proxies
    - CLI flag: `--socks5-proxy <address>`
 
+#### ✅ GUI Configuration (Recently Implemented)
+
+1. **Settings UI for NAT Traversal**
+   - AutoNAT toggle with configurable probe interval (10-300s)
+   - Custom AutoNAT servers textarea (multiaddr format)
+   - AutoRelay toggle for Circuit Relay v2
+   - Preferred relay nodes textarea (multiaddr format)
+   - All settings persist to localStorage
+
+2. **Real-Time Reachability Display**
+   - Live NAT status badge (Public/Private/Unknown)
+   - Confidence scoring display (High/Medium/Low)
+   - Observed addresses from libp2p identify
+   - Reachability history table with timestamps
+   - Last probe time and state change tracking
+   - AutoNAT enabled/disabled indicator
+
+#### ✅ Public Relay Infrastructure (Recently Implemented)
+
+1. **Dedicated Circuit Relay v2 Daemon**
+   - Standalone relay node binary (`chiral-relay`)
+   - Configurable reservation/circuit limits
+   - Persistent peer identity across restarts
+   - JSON metrics export for monitoring
+   - Production-ready with systemd/Docker support
+   - Location: `relay-infrastructure/`
+
+2. **Deployment Scripts**
+   - `start-relay.sh` - Bootstrap script with auto IP detection
+   - `stop-relay.sh` - Graceful shutdown with fallback force kill
+   - `status-relay.sh` - Comprehensive status and metrics display
+   - Environment variable configuration
+   - PID file management
+
+3. **Documentation**
+   - `relay-infrastructure/README.md` - Quick start guide
+   - `relay-infrastructure/DEPLOYMENT.md` - Production deployment
+   - systemd service examples
+   - Docker/docker-compose configs
+   - Cloud deployment guides (AWS, GCP, DigitalOcean)
+   - Prometheus metrics integration
+
 #### ❌ Not Yet Implemented
 
-1. **Public Relay Infrastructure**
-   - Dedicated Circuit Relay v2 daemon
-   - Relay deployment documentation
-   - Bootstrap/shutdown scripts
-   - Health monitoring endpoints
-
-2. **GUI Relay Configuration**
-   - AutoRelay toggle in Settings UI
-   - Relay address textarea for custom relays
-   - Real-time reachability status display
-
-3. **Advanced Security**
+1. **Advanced Security**
    - Relay reservation authentication
    - Rate limiting for AutoNAT probes
    - Anti-amplification safeguards
 
-4. **Resilience Testing**
+3. **Resilience Testing**
    - End-to-end NAT traversal scenarios
    - Private↔Public connection tests
    - Private↔Private relay/hole-punch tests
@@ -393,20 +424,14 @@ npm run test:watch
 - ✅ **File Upload Encryption**: AES-256-GCM encryption with PBKDF2 key derivation for uploaded files
 - ✅ **File Download Decryption**: Key management and decryption for downloaded files
 - ✅ **WebRTC Encryption**: Encrypted P2P chunk transfers
-- ❌ **Key Exchange UI**: Recipient public key input for encrypted sharing
+- ✅ **Key Exchange UI**: Recipient public key input for encrypted sharing
 - ✅ **Real P2P File Transfer**: Production-ready WebRTC-based transfer protocol
 - ✅ **File Versioning System**: Track and manage multiple versions of files
 - ✅ **Advanced Bandwidth Scheduling**: Time-based bandwidth limits with day-of-week rules
-- ❌ **GUI NAT Configuration**: Settings UI for AutoRelay and relay preferences (headless only)
-- ❌ **Public Relay Infrastructure**: Dedicated relay daemon deployment
+- ✅ **GUI NAT Configuration**: Settings UI for AutoNAT, AutoRelay, and relay preferences
+- ✅ **Public Relay Infrastructure**: Dedicated relay daemon with deployment scripts
 - [ ] **Selective Sync Capabilities**: Choose which files to download
 - [ ] **Mobile Applications**: iOS and Android support
-- ✅ **Key Exchange UI**: Recipient public key input for encrypted sharing
-- ✅ Real P2P file transfer protocol
-- ✅ File versioning system
-- ✅ Advanced bandwidth scheduling
-- [ ] Selective sync capabilities
-- [ ] Mobile applications
 
 ### Phase 4: Enterprise Features
 
