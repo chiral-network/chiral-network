@@ -21,9 +21,12 @@ export interface ReputationEvent {
   id: string;
   type: EventType;
   peerId: string;
+  raterPeerId: string; // Node that created this event
   timestamp: Date;
   data: Record<string, any>;
   impact: number; // -1 to 1, negative for bad events, positive for good events
+  signature: string; // Ed25519 signature for verification
+  epoch?: number; // Epoch this event belongs to
 }
 
 export enum EventType {
@@ -55,4 +58,30 @@ export interface ReputationAnalytics {
   topPerformers: PeerReputation[];
   recentEvents: ReputationEvent[];
   trustLevelDistribution: Record<TrustLevel, number>;
+}
+
+// New types for Merkle tree and epoch management
+export interface ReputationEpoch {
+  epochId: number;
+  merkleRoot: string;
+  timestamp: number;
+  blockNumber?: number;
+  eventCount: number;
+  submitter: string;
+}
+
+export interface MerkleProof {
+  leafIndex: number;
+  proofHashes: string[];
+  totalLeaves: number;
+}
+
+export interface ReputationEventData {
+  id: string;
+  peerId: string;
+  raterPeerId: string;
+  type: EventType;
+  timestamp: number;
+  data: Record<string, any>;
+  impact: number;
 }

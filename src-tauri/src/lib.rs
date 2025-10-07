@@ -14,3 +14,5 @@ pub mod keystore;
 
 // Stream authentication module
 pub mod stream_auth;
+// Reputation system
+pub mod reputation;
