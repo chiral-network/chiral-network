@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::collections::HashMap;
 use rs_merkle::{Hasher, MerkleTree};
 use sha2::{Digest, Sha256};
+use ed25519_dalek::{SigningKey, VerifyingKey, Signer, Verifier, Signature};
+use rand::rngs::OsRng;
 
 // ============================================================================
 // REPUTATION TYPES
@@ -154,6 +157,99 @@ impl ReputationMerkleTree {
     }
 }
 
+// ============================================================================
+// ED25519 SIGNING AND VERIFICATION
+// ============================================================================
+
+pub struct NodeKeyManager {
+    signing_key: SigningKey,
+    peer_id: String,
+}
+
+impl NodeKeyManager {
+    pub fn new() -> Self {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let peer_id = hex::encode(signing_key.verifying_key().to_bytes());
+        
+        Self { signing_key, peer_id }
+    }
+
+    pub fn get_peer_id(&self) -> &str {
+        &self.peer_id
+    }
+
+    pub fn get_verifying_key(&self) -> VerifyingKey {
+        self.signing_key.verifying_key()
+    }
+
+    pub fn sign_reputation_event(&self, mut event: ReputationEvent) -> Result<ReputationEvent, String> {
+        event.rater_peer_id = self.peer_id.clone();
+        
+        let signable_data = serde_json::json!({
+            "id": event.id,
+            "peer_id": event.peer_id,
+            "rater_peer_id": event.rater_peer_id,
+            "event_type": event.event_type,
+            "timestamp": event.timestamp,
+            "data": event.data,
+            "impact": event.impact,
+        });
+
+        let serialized = serde_json::to_vec(&signable_data)
+            .map_err(|e| format!("Serialization error: {}", e))?;
+        
+        let signature = self.signing_key.sign(&serialized);
+        event.signature = hex::encode(signature.to_bytes());
+        
+        Ok(event)
+    }
+
+    pub fn verify_reputation_event(&self, event: &ReputationEvent, verifying_key: &VerifyingKey) -> Result<bool, String> {
+        let signable_data = serde_json::json!({
+            "id": event.id,
+            "peer_id": event.peer_id,
+            "rater_peer_id": event.rater_peer_id,
+            "event_type": event.event_type,
+            "timestamp": event.timestamp,
+            "data": event.data,
+            "impact": event.impact,
+        });
+
+        let serialized = serde_json::to_vec(&signable_data)
+            .map_err(|e| format!("Serialization error: {}", e))?;
+        
+        let signature_bytes = hex::decode(&event.signature)
+            .map_err(|e| format!("Invalid signature format: {}", e))?;
+        
+        let signature_bytes_array: [u8; 64] = signature_bytes.try_into()
+            .map_err(|_| "Invalid signature length")?;
+        
+        let signature = Signature::from_bytes(&signature_bytes_array);
+        
+        Ok(verifying_key.verify(&serialized, &signature).is_ok())
+    }
+}
+
+pub struct PublicKeyCache {
+    cache: HashMap<String, VerifyingKey>,
+}
+
+impl PublicKeyCache {
+    pub fn new() -> Self {
+        Self {
+            cache: HashMap::new(),
+        }
+    }
+
+    pub fn add_peer_key(&mut self, peer_id: String, verifying_key: VerifyingKey) {
+        self.cache.insert(peer_id, verifying_key);
+    }
+
+    pub fn get_peer_key(&self, peer_id: &str) -> Option<&VerifyingKey> {
+        self.cache.get(peer_id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,5 +316,49 @@ mod tests {
 
         assert_eq!(event_type1, event_type2);
         assert_ne!(event_type1, event_type3);
+    }
+
+    #[test]
+    fn test_ed25519_signing_and_verification() {
+        let key_manager = NodeKeyManager::new();
+        let peer_id = key_manager.get_peer_id().to_string();
+        
+        let event = ReputationEvent::new(
+            "test-event".to_string(),
+            "target-peer".to_string(),
+            "rater-peer".to_string(),
+            EventType::FileTransferSuccess,
+            serde_json::json!({"test": "data"}),
+            0.5,
+        );
+
+        // Sign the event
+        let signed_event = key_manager.sign_reputation_event(event).unwrap();
+        assert!(!signed_event.signature.is_empty());
+        assert_eq!(signed_event.rater_peer_id, peer_id);
+
+        // Verify the event
+        let verifying_key = key_manager.get_verifying_key();
+        let is_valid = key_manager.verify_reputation_event(&signed_event, &verifying_key).unwrap();
+        assert!(is_valid);
+    }
+
+    #[test]
+    fn test_public_key_cache() {
+        let mut cache = PublicKeyCache::new();
+        let key_manager = NodeKeyManager::new();
+        let peer_id = key_manager.get_peer_id().to_string();
+        let verifying_key = key_manager.get_verifying_key();
+
+        // Add peer key
+        cache.add_peer_key(peer_id.clone(), verifying_key);
+        
+        // Retrieve peer key
+        let retrieved_key = cache.get_peer_key(&peer_id);
+        assert!(retrieved_key.is_some());
+        
+        // Test with non-existent peer
+        let non_existent = cache.get_peer_key("non-existent");
+        assert!(non_existent.is_none());
     }
 }
