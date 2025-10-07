@@ -909,7 +909,7 @@ impl WebRTCService {
 
         // Store the assembled file
         let file_name = format!("downloaded_{}", file_hash);
-        file_transfer_service.store_file_data(file_hash.to_string(), file_name, file_data);
+        file_transfer_service.store_file_data(file_hash.to_string(), file_name, file_data).await;
 
         let _ = event_tx
             .send(WebRTCEvent::TransferCompleted {

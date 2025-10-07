@@ -1460,6 +1460,10 @@ async fn run_dht_node(
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
                         info!("📡 Now listening on: {}", address);
+                        if address.iter().any(|component| matches!(component, Protocol::P2pCircuit)) {
+                            swarm.add_external_address(address.clone());
+                            debug!("Advertised relay external address: {}", address);
+                        }
                         if let Ok(mut m) = metrics.try_lock() {
                             m.record_listen_addr(&address);
                         }
@@ -3080,7 +3084,7 @@ async fn assemble_file_from_chunks(
 
         // Store the assembled file
         let file_name = format!("downloaded_{}", file_hash);
-        file_transfer_service.store_file_data(file_hash.to_string(), file_name, file_data);
+        file_transfer_service.store_file_data(file_hash.to_string(), file_name, file_data).await;
 
         info!(
             "Successfully assembled file {} from {} chunks",
@@ -3155,8 +3159,8 @@ mod tests {
             Vec::new(),
             None,
             None,
-            None,  // chunk_size_kb
-            None,  // cache_size_mb
+            Some(256), // chunk_size_kb
+            Some(1024), // cache_size_mb
         )
         .await
         {

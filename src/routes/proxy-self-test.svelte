@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import DropDown from '$lib/components/ui/dropDown.svelte';
   import {
     proxyNodes,
     echoInbox,              
@@ -24,6 +25,16 @@
 
   // Synchronize selectedPeerId to peerId
   $: if (selectedPeerId) peerId = selectedPeerId;
+
+  $: peerOptions = [
+    { value: '', label: '— Select from connected proxies —' },
+    ...$proxyNodes
+      .filter(node => !!node.id)
+      .map(node => ({
+        value: node.id,
+        label: `${node.id}${node.latency !== undefined ? ` (${node.latency}ms)` : ''}`
+      }))
+  ];
 
   async function doEcho() {
     if (!peerId) {
@@ -140,16 +151,11 @@
 
     <div class="flex gap-2 items-center">
       <label class="text-sm" for="target-peer-select">Target Peer</label>
-      <select id="target-peer-select" class="input" bind:value={selectedPeerId}>
-        <option value="">— Select from connected proxies —</option>
-        {#each $proxyNodes as node}
-          {#if node.id}
-            <option value={node.id}>
-              {node.id} {#if node.latency !== undefined} ({node.latency}ms){/if}
-            </option>
-          {/if}
-        {/each}
-      </select>
+      <DropDown
+        id="target-peer-select"
+        options={peerOptions}
+        bind:value={selectedPeerId}
+      />
     </div>
 
     <input class="input" placeholder="Or paste PeerId" bind:value={peerId} />

@@ -119,6 +119,19 @@
           "private": "Accesibilidad degradada. {summary}",
           "unknown": "Estado de accesibilidad actualizado. {summary}"
         }
+      },
+      "dcutr": {
+        "title": "Perforación de NAT DCUtR",
+        "enabled": "DCUtR habilitado",
+        "disabled": "DCUtR deshabilitado",
+        "attempts": "Intentos de perforación",
+        "successes": "Éxitos",
+        "failures": "Fallos",
+        "successRate": "Tasa de éxito",
+        "lastSuccess": "Último éxito",
+        "lastFailure": "Último fallo",
+        "never": "Nunca",
+        "description": "La actualización de conexión directa a través de relé (DCUtR) habilita la perforación de NAT para establecer conexiones directas entre pares."
       }
     },
     "networkStatus": "Estado de la red",
@@ -131,7 +144,11 @@
       "run": "Ejecutar descubrimiento",
       "directConnect": "Conexión directa",
       "placeholder": "Introduce dirección de par (IP:Puerto o ID de par)",
-      "connect": "Conectar"
+      "connect": "Conectar",
+      "foundPeers": "Pares encontrados: {count}",
+      "discoveryStarted": "Descubrimiento iniciado. Pares encontrados: {count}",
+      "peerAddedToInput": "Par agregado a la entrada",
+      "add": "Agregar"
     },
     "connectedPeers": {
       "title": "Pares conectados ({count})",
@@ -247,6 +264,8 @@
   },
   "privacy.title": "Privacidad y seguridad",
   "privacy.enableProxy": "Habilitar enrutamiento por proxy para anonimato",
+  "privacy.proxyAddress": "Dirección del proxy",
+  "privacy.proxyHint": "Ingresa la dirección del proxy SOCKS5 (ej. Tor en 127.0.0.1:9050)",
   "privacy.anonymousMode": "Modo anónimo (ocultar toda información identificativa)",
   "privacy.shareAnalytics": "Compartir analíticas de uso anónimas",
   "notifications.title": "Notificaciones",
@@ -640,7 +659,8 @@
     "disconnect": "Desconectar",
     "connect": "Conectar",
     "remove": "Eliminar",
-    "alreadyAdded": "¡Esta dirección de proxy ya se ha agregado!"
+    "alreadyAdded": "¡Esta dirección de proxy ya se ha agregado!",
+    "autoReconnect": "Reconexión automática"
   },
   "mining": {
     "title": "Minería",
@@ -818,6 +838,8 @@
     "total": "total",
     "tip": "Consejo: También puedes arrastrar y soltar archivos aquí para agregarlos",
     "addMoreFiles": "Agregar más archivos",
+    "supportedFormats": "Admite imágenes, videos, audio, documentos, archivos de código y más",
+    "supportedFormatsDesktop": "La aplicación de escritorio admite imágenes, videos, audio, documentos, archivos de código y más",
     "hash": "Hash",
     "seeder": "semilla{count, plural, =1 {} other {s}}",
     "leecher": "descargador{count, plural, =1 {} other {es}}",

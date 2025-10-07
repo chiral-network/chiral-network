@@ -144,7 +144,11 @@
       "run": "Run Discovery",
       "directConnect": "Direct Connect",
       "placeholder": "Enter peer address (IP:Port or peer ID)",
-      "connect": "Connect"
+      "connect": "Connect",
+      "foundPeers": "Found peers: {count}",
+      "discoveryStarted": "Discovery started. Found peers: {count}",
+      "peerAddedToInput": "Peer added to input",
+      "add": "Add"
     },
     "connectedPeers": {
       "title": "Connected Peers ({count})",
@@ -238,6 +242,8 @@
     "placeholder": "Enter file hash or magnet link",
     "clearInput": "Clear input",
     "searchAndDownload": "Search & Download",
+    "searchByHash": "Search by Hash",
+    "searchByName": "Search by Name",
     "downloads": "Downloads",
     "searchPlaceholder": "Search your downloads...",
     "clearSearch": "Clear search",
@@ -256,6 +262,9 @@
       "autoStart": "Auto-start",
       "toggleAutoStart": "Toggle auto-start {status}"
     },
+    "autoClear": "Auto-clear",
+    "multiSource": "Multi-source",
+    "maxPeers": "Max Peers",
     "status": {
       "noDownloads": "You haven't started any downloads yet.",
       "noActive": "No active downloads.",
@@ -365,6 +374,8 @@
   },
   "privacy.title": "Privacy & Security",
   "privacy.enableProxy": "Enable proxy routing for anonymity",
+  "privacy.proxyAddress": "Proxy Address",
+  "privacy.proxyHint": "Enter SOCKS5 proxy address (e.g., Tor at 127.0.0.1:9050)",
   "privacy.anonymousMode": "Anonymous mode (hide all identifying information)",
   "privacy.shareAnalytics": "Share anonymous usage analytics",
   "notifications.title": "Notifications",
@@ -722,7 +733,8 @@
     "disconnect": "Disconnect",
     "connect": "Connect",
     "remove": "Remove",
-    "alreadyAdded": "This proxy address is already added!"
+    "alreadyAdded": "This proxy address is already added!",
+    "autoReconnect": "Auto-reconnect"
   },
   "mining": {
     "title": "Mining",
@@ -924,6 +936,8 @@
     "total": "total",
     "tip": "💡 Tip: You can also drag and drop files here to add them",
     "addMoreFiles": "Add More Files",
+    "supportedFormats": "Supports images, videos, audio, documents, code files and more",
+    "supportedFormatsDesktop": "Desktop app supports images, videos, audio, documents, code files and more",
     "hash": "Hash",
     "seeder": "seeder{count, plural, =1 {} other {s}}",
     "leecher": "leecher{count, plural, =1 {} other {s}}",
