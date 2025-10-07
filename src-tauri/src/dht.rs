@@ -48,6 +48,7 @@ use libp2p::{
             TransportEvent,
         },
     },
+    dcutr,
     identify::{self, Event as IdentifyEvent},
     identity,
     kad::{
@@ -152,6 +153,7 @@ struct DhtBehaviour {
     autonat_client: toggle::Toggle<v2::client::Behaviour>,
     autonat_server: toggle::Toggle<v2::server::Behaviour>,
     relay_client: relay::client::Behaviour,
+    dcutr: toggle::Toggle<dcutr::Behaviour>,
 }
 #[derive(Debug)]
 pub enum DhtCommand {
@@ -199,6 +201,8 @@ pub enum DhtEvent {
         file_hash: String,
     },
     Error(String),
+    Info(String),
+    Warning(String),
     PublishedFile(FileMetadata),
     ProxyStatus {
         id: String,
@@ -230,7 +234,6 @@ pub enum DhtEvent {
         query_id: String,
         error: String,
     },
-    Info(String),
 }
 
 // ------------ Proxy Manager Structs and Enums ------------
@@ -332,6 +335,13 @@ struct DhtMetrics {
     last_reservation_failure: Option<SystemTime>,
     reservation_renewals: u64,
     reservation_evictions: u64,
+    // DCUtR metrics
+    dcutr_enabled: bool,
+    dcutr_hole_punch_attempts: u64,
+    dcutr_hole_punch_successes: u64,
+    dcutr_hole_punch_failures: u64,
+    last_dcutr_success: Option<SystemTime>,
+    last_dcutr_failure: Option<SystemTime>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -360,6 +370,13 @@ pub struct DhtMetricsSnapshot {
     pub last_reservation_failure: Option<u64>,
     pub reservation_renewals: u64,
     pub reservation_evictions: u64,
+    // DCUtR metrics
+    pub dcutr_enabled: bool,
+    pub dcutr_hole_punch_attempts: u64,
+    pub dcutr_hole_punch_successes: u64,
+    pub dcutr_hole_punch_failures: u64,
+    pub last_dcutr_success: Option<u64>,
+    pub last_dcutr_failure: Option<u64>,
 }
 
 // ------Proxy Protocol Implementation------
@@ -737,6 +754,12 @@ impl DhtMetricsSnapshot {
             last_reservation_failure,
             reservation_renewals,
             reservation_evictions,
+            dcutr_enabled,
+            dcutr_hole_punch_attempts,
+            dcutr_hole_punch_successes,
+            dcutr_hole_punch_failures,
+            last_dcutr_success,
+            last_dcutr_failure,
             ..
         } = metrics;
 
@@ -778,6 +801,12 @@ impl DhtMetricsSnapshot {
             last_reservation_failure: last_reservation_failure.and_then(to_secs),
             reservation_renewals,
             reservation_evictions,
+            dcutr_enabled,
+            dcutr_hole_punch_attempts,
+            dcutr_hole_punch_successes,
+            dcutr_hole_punch_failures,
+            last_dcutr_success: last_dcutr_success.and_then(to_secs),
+            last_dcutr_failure: last_dcutr_failure.and_then(to_secs),
         }
     }
 }
@@ -1441,6 +1470,9 @@ async fn run_dht_node(
                     SwarmEvent::Behaviour(DhtBehaviourEvent::AutonatServer(ev)) => {
                         debug!(?ev, "AutoNAT server event");
                     }
+                    SwarmEvent::Behaviour(DhtBehaviourEvent::Dcutr(ev)) => {
+                        handle_dcutr_event(ev, &metrics, &event_tx).await;
+                    }
                     SwarmEvent::ExternalAddrConfirmed { address, .. } => {
                         handle_external_addr_confirmed(&address, &metrics, &event_tx, &proxy_mgr)
                             .await;
@@ -1490,6 +1522,10 @@ async fn run_dht_node(
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
                         info!("📡 Now listening on: {}", address);
+                        if address.iter().any(|component| matches!(component, Protocol::P2pCircuit)) {
+                            swarm.add_external_address(address.clone());
+                            debug!("Advertised relay external address: {}", address);
+                        }
                         if let Ok(mut m) = metrics.try_lock() {
                             m.record_listen_addr(&address);
                         }
@@ -2035,6 +2071,60 @@ async fn handle_autonat_client_event(
         .await;
 }
 
+async fn handle_dcutr_event(
+    event: dcutr::Event,
+    metrics: &Arc<Mutex<DhtMetrics>>,
+    event_tx: &mpsc::Sender<DhtEvent>,
+) {
+    let mut metrics_guard = metrics.lock().await;
+    if !metrics_guard.dcutr_enabled {
+        return;
+    }
+
+    let dcutr::Event {
+        remote_peer_id,
+        result,
+    } = event;
+
+    metrics_guard.dcutr_hole_punch_attempts += 1;
+
+    match result {
+        Ok(_connection_id) => {
+            metrics_guard.dcutr_hole_punch_successes += 1;
+            metrics_guard.last_dcutr_success = Some(SystemTime::now());
+            info!(
+                peer = %remote_peer_id,
+                successes = metrics_guard.dcutr_hole_punch_successes,
+                "DCUtR: hole-punch succeeded, upgraded to direct connection"
+            );
+            drop(metrics_guard);
+            let _ = event_tx
+                .send(DhtEvent::Info(format!(
+                    "✓ Direct connection established with peer {} (hole-punch succeeded)",
+                    remote_peer_id
+                )))
+                .await;
+        }
+        Err(error) => {
+            metrics_guard.dcutr_hole_punch_failures += 1;
+            metrics_guard.last_dcutr_failure = Some(SystemTime::now());
+            warn!(
+                peer = %remote_peer_id,
+                error = %error,
+                failures = metrics_guard.dcutr_hole_punch_failures,
+                "DCUtR: hole-punch failed"
+            );
+            drop(metrics_guard);
+            let _ = event_tx
+                .send(DhtEvent::Warning(format!(
+                    "✗ Direct connection upgrade to peer {} failed: {}",
+                    remote_peer_id, error
+                )))
+                .await;
+        }
+    }
+}
+
 async fn handle_external_addr_confirmed(
     addr: &Multiaddr,
     metrics: &Arc<Mutex<DhtMetrics>>,
@@ -2262,9 +2352,12 @@ impl DhtService {
         // Convert chunk size from KB to bytes
         let chunk_size = chunk_size_kb.unwrap_or(256) * 1024; // Default 256 KB
         let _cache_size = cache_size_mb.unwrap_or(1024); // Default 1024 MB
-        
-        info!("DHT Configuration: chunk_size={} KB, cache_size={} MB", 
-              chunk_size / 1024, _cache_size);
+
+        info!(
+            "DHT Configuration: chunk_size={} KB, cache_size={} MB",
+            chunk_size / 1024,
+            _cache_size
+        );
         // Generate a new keypair for this node
         // Generate a keypair either from the secret or randomly
         let local_key = match secret {
@@ -2364,6 +2457,17 @@ impl DhtService {
         let (relay_transport, relay_client_behaviour) = relay::client::new(local_peer_id);
         let autonat_client_toggle = toggle::Toggle::from(autonat_client_behaviour);
         let autonat_server_toggle = toggle::Toggle::from(autonat_server_behaviour);
+
+        // DCUtR requires relay to be enabled
+        let dcutr_behaviour = if enable_autonat {
+            info!("DCUtR enabled (requires relay for hole-punching coordination)");
+            Some(dcutr::Behaviour::new(local_peer_id))
+        } else {
+            info!("DCUtR disabled (autonat is disabled)");
+            None
+        };
+        let dcutr_toggle = toggle::Toggle::from(dcutr_behaviour);
+
         let mut behaviour = Some(DhtBehaviour {
             kademlia,
             identify,
@@ -2375,6 +2479,7 @@ impl DhtService {
             autonat_client: autonat_client_toggle,
             autonat_server: autonat_server_toggle,
             relay_client: relay_client_behaviour,
+            dcutr: dcutr_toggle,
         });
 
         let bootstrap_set: HashSet<String> = bootstrap_nodes.iter().cloned().collect();
@@ -2516,6 +2621,7 @@ impl DhtService {
             let mut guard = metrics.lock().await;
             guard.autonat_enabled = enable_autonat;
             guard.autorelay_enabled = enable_autorelay;
+            guard.dcutr_enabled = enable_autonat; // DCUtR enabled when AutoNAT is enabled
         }
 
         // Spawn the Dht node task
@@ -2604,7 +2710,7 @@ impl DhtService {
         let all = self.get_all_file_metadata().await?;
         let mut versions: Vec<FileMetadata> = all
             .into_iter()
-            .filter(|m| m.file_name == file_name && m.is_root)
+            .filter(|m| m.file_name == file_name) // Remove is_root filter - get all versions
             .collect();
         versions.sort_by(|a, b| b.version.unwrap_or(1).cmp(&a.version.unwrap_or(1)));
 
@@ -2641,6 +2747,7 @@ impl DhtService {
         let latest = self
             .get_latest_version_by_file_name(file_name.clone())
             .await?;
+
         let (version, parent_hash, is_root) = match latest {
             Some(ref prev) => (
                 prev.version.map(|v| v + 1).unwrap_or(2),
@@ -2664,7 +2771,7 @@ impl DhtService {
             version: Some(version),
             parent_hash,
             cids: None,
-            is_root: true,
+            is_root, // Use computed value, not hardcoded true
         })
     }
 
@@ -3123,7 +3230,9 @@ async fn assemble_file_from_chunks(
 
         // Store the assembled file
         let file_name = format!("downloaded_{}", file_hash);
-        file_transfer_service.store_file_data(file_hash.to_string(), file_name, file_data);
+        file_transfer_service
+            .store_file_data(file_hash.to_string(), file_name, file_data)
+            .await;
 
         info!(
             "Successfully assembled file {} from {} chunks",
@@ -3198,8 +3307,8 @@ mod tests {
             Vec::new(),
             None,
             None,
-            None,       // chunk_size_kb
-            None,       // cache_size_mb
+            Some(256),  // chunk_size_kb
+            Some(1024), // cache_size_mb
             false,      // enable_autorelay
             Vec::new(), // preferred_relays
         )

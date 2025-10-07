@@ -472,6 +472,19 @@ pub async fn download_file(
 - Info-level log messages emit when relay reservations are accepted or circuits
   are established, including relay peer IDs for debugging.
 
+### DCUtR hole-punching
+
+- DCUtR (Direct Connection Upgrade through Relay) behavior is automatically
+  enabled when AutoNAT is active, allowing peers behind NATs to coordinate
+  simultaneous hole-punching attempts via relay servers.
+- The `--show-dcutr` flag prints periodic DCUtR metrics in headless mode,
+  including hole-punch attempts, successes, failures, and success rate.
+- The Network → DHT page displays a "DCUtR Hole-Punching" card showing real-time
+  metrics: total attempts, successes (green), failures (red), success rate
+  percentage, enabled/disabled badge, and timestamps for last success/failure.
+- DCUtR events are logged at the `info` level with peer IDs and relay addresses,
+  and emit `DhtEvent::Info` or `DhtEvent::Warning` messages for UI feedback.
+
 ### Local download resilience & tracing
 
 The desktop runtime now performs up to three local download attempts with an

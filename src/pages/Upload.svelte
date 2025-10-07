@@ -1,8 +1,9 @@
 <script lang="ts">
   import Card from '$lib/components/ui/card.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
-  import { File as FileIcon, X, Plus, FolderOpen, FileText, Image, Music, Video, Archive, Code, FileSpreadsheet, Upload, Download, RefreshCw } from 'lucide-svelte'
+  import { File as FileIcon, X, Plus, FolderOpen, FileText, Image, Music, Video, Archive, Code, FileSpreadsheet, Upload, Download, RefreshCw, Lock, Key } from 'lucide-svelte'
   import { files, type FileItem, etcAccount } from '$lib/stores'
+  import { loadSeedList, saveSeedList, type SeedRecord } from '$lib/services/seedPersistence'
   import { t } from 'svelte-i18n';
   import { get } from 'svelte/store'
   import { onMount, onDestroy } from 'svelte';
@@ -12,7 +13,8 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
   import { dhtService } from '$lib/dht';
-  import { encryptionService } from '$lib/services/encryption'; 
+  import Label from '$lib/components/ui/label.svelte';
+  import Input from '$lib/components/ui/input.svelte'; 
 
   const tr = (k: string, params?: Record<string, any>): string => (get(t) as (key: string, params?: any) => string)(k, params)
   // Check if running in Tauri environment
@@ -62,6 +64,11 @@
   let storageError: string | null = null
   let lastChecked: Date | null = null
   let isUploading = false
+  
+  // Encrypted sharing state
+  let useEncryptedSharing = false
+  let recipientPublicKey = ''
+  let showEncryptionOptions = false
 
   $: storageLabel = isRefreshingStorage
     ? tr('upload.storage.checking')
@@ -146,6 +153,38 @@
     // Make storage refresh non-blocking on startup to prevent UI hanging
     setTimeout(() => refreshAvailableStorage(), 100)
 
+    // Restore persisted seeding list (if any)
+    try {
+      const persisted: SeedRecord[] = await loadSeedList()
+      if (persisted && persisted.length > 0) {
+        const existing = get(files)
+        const toAdd: FileItem[] = []
+        for (const s of persisted) {
+          if (!existing.some(f => f.hash === s.hash)) {
+            toAdd.push({
+              id: s.id,
+              name: s.name || s.path.split(/[\\/]/).pop() || s.hash,
+              path: s.path,
+              hash: s.hash,
+              size: s.size || 0,
+              status: 'seeding',
+              seeders: 1,
+              leechers: 0,
+              uploadDate: s.addedAt ? new Date(s.addedAt) : new Date(),
+              version: 1,
+              isEncrypted: false,
+              manifest: s.manifest ?? null,
+            })
+          }
+        }
+        if (toAdd.length > 0) {
+          files.update(curr => [...curr, ...toAdd])
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to restore persisted seed list', e)
+    }
+
     // HTML5 Drag and Drop functionality
     const dropZone = document.querySelector('.drop-zone') as HTMLElement
 
@@ -218,52 +257,53 @@
                   console.log('No existing versions found for', file.name);
                 }
 
-                // Use fileService.uploadFile method for File objects with versioning
-                const metadata = await fileService.uploadFile(file)
+                // Get recipient key if encrypted sharing is enabled
+                const recipientKey = useEncryptedSharing && recipientPublicKey.trim() ? recipientPublicKey.trim() : undefined;
 
-                // Check if this hash is already in our files (duplicate detection)
-                if (get(files).some(f => f.hash === metadata.fileHash)) {
+                // UNIFIED UPLOAD: Save to temp file, then use single backend command
+                const buffer = await file.arrayBuffer();
+                const fileData = Array.from(new Uint8Array(buffer));
+                const tempFilePath = await invoke<string>("save_temp_file_for_upload", {
+                  fileName: file.name,
+                  fileData,
+                });
+
+                // Single command: chunk, encrypt, publish to DHT
+                const result = await invoke<{merkleRoot: string, fileName: string, fileSize: number, isEncrypted: boolean, peerId: string, version: number}>(
+                  "upload_and_publish_file",
+                  {
+                    filePath: tempFilePath,
+                    fileName: file.name,  // Pass original filename for DHT
+                    recipientPublicKey: recipientKey
+                  }
+                );
+
+                // Check for duplicates
+                if (get(files).some(f => f.hash === result.merkleRoot)) {
                   duplicateCount++
                   continue;
                 }
 
                 const isNewVersion = existingVersions.length > 0;
-
-                // Check if DHT is running to determine initial status
                 const isDhtRunning = dhtService.getPeerId() !== null;
 
                 const newFile = {
                   id: `file-${Date.now()}-${Math.random()}`,
-                  name: metadata.fileName,
-                  path: file.name, // Use file name as path for display
-                  hash: metadata.fileHash,
-                  size: metadata.fileSize, // Use backend-calculated size for consistency
+                  name: file.name,  // Use original file name from drag-drop
+                  path: file.name,  // Use original file name as path for display
+                  hash: result.merkleRoot,
+                  size: result.fileSize,
                   status: isDhtRunning ? ('seeding' as const) : ('uploaded' as const),
                   seeders: isDhtRunning ? 1 : 0,
                   leechers: 0,
-                  uploadDate: new Date(metadata.createdAt * 1000),
-                  version: metadata.version,
-                  isNewVersion: isNewVersion
+                  uploadDate: new Date(),
+                  version: result.version,  // Use version from backend
+                  isNewVersion: isNewVersion,
+                  isEncrypted: result.isEncrypted,
                 };
 
-                    files.update((currentFiles) => [...currentFiles, newFile]);
-                    addedCount++;
-
-                    // Publish file metadata to DHT network for discovery
-                    try {
-                      await dhtService.publishFile(metadata);
-                      console.log('Dropped file published to DHT:', metadata.fileHash);
-                    } catch (publishError) {
-                      console.warn('Failed to publish dropped file to DHT:', publishError);
-                      // Update status to 'uploaded' since publishing failed
-                      files.update((currentFiles) => 
-                        currentFiles.map(f => 
-                          f.hash === metadata.fileHash 
-                            ? { ...f, status: 'uploaded', seeders: 0 }
-                            : f
-                        )
-                      );
-                    }
+                files.update((currentFiles) => [...currentFiles, newFile]);
+                addedCount++;
               } catch (error) {
                 console.error('Error uploading dropped file:', file.name, error);
                 const fileName = file.name || 'unknown file';
@@ -333,6 +373,26 @@
     }
   })
 
+  // Persist seeding list when files store changes (debounced-ish)
+  let persistTimeout: ReturnType<typeof setTimeout> | null = null
+  const unsubscribeFiles = files.subscribe(($files) => {
+    // Collect seeding entries
+    const seeds: SeedRecord[] = $files
+      .filter(f => f.status === 'seeding')
+      .map(f => ({ id: f.id, path: f.path, hash: f.hash, name: f.name, size: f.size, addedAt: (f.uploadDate ? f.uploadDate.toISOString() : new Date().toISOString()), manifest: f.manifest }))
+
+    if (persistTimeout) clearTimeout(persistTimeout)
+    persistTimeout = setTimeout(() => {
+      saveSeedList(seeds).catch(e => console.warn('Failed to persist seed list', e))
+    }, 400)
+  })
+
+  // Ensure we unsubscribe when leaving the page
+  onDestroy(() => {
+    unsubscribeFiles()
+    if (persistTimeout) clearTimeout(persistTimeout)
+  })
+
   async function openFileDialog() {
     if (!$etcAccount) {
       showToast('Please create or import an account to upload files', 'warning')
@@ -393,70 +453,42 @@
     // Process all files concurrently to avoid blocking the UI
     const filePromises = paths.map(async (filePath) => {
       try {
-        // Get just the filename from the path
         const fileName = filePath.split(/[\/\\]/).pop() || '';
-        
-        // --- ENCRYPTION FLOW ---
-        const manifest = await encryptionService.encryptFile(filePath);
+        const recipientKey = useEncryptedSharing && recipientPublicKey.trim() ? recipientPublicKey.trim() : undefined;
 
-        // Check for duplicates using the Merkle Root
-        if (get(files).some((f: FileItem) => f.hash === manifest.merkleRoot)) {
+        // UNIFIED UPLOAD: Single command chunks, encrypts, and publishes to DHT
+        const result = await invoke<{merkleRoot: string, fileName: string, fileSize: number, isEncrypted: boolean, peerId: string, version: number}>(
+          "upload_and_publish_file",
+          {
+            filePath,
+            fileName: null,  // File path already contains correct name
+            recipientPublicKey: recipientKey
+          }
+        );
+
+        // Check for duplicates
+        if (get(files).some((f: FileItem) => f.hash === result.merkleRoot)) {
           return { type: 'duplicate', fileName };
         }
 
-        const fileMetadataForDht = {
-          fileHash: manifest.merkleRoot,
-          fileName: fileName,
-          fileSize: manifest.chunks.reduce((sum, chunk) => sum + chunk.size, 0),
-          isEncrypted: true,
-          manifest: JSON.stringify(manifest),
-          createdAt: Date.now(),
-          seeders: [], // Will be populated by the network
-          version: 1, // Versioning for encrypted files can be a future enhancement
-        };
+        const isDhtRunning = dhtService.getPeerId() !== null;
 
         const newFile: FileItem = {
           id: `file-${Date.now()}-${Math.random()}`,
-          name: fileMetadataForDht.fileName,
+          name: result.fileName,
           path: filePath,
-          hash: fileMetadataForDht.fileHash,
-          size: fileMetadataForDht.fileSize,
-          status: 'seeding',
-          seeders: 1,
+          hash: result.merkleRoot,
+          size: result.fileSize,
+          status: isDhtRunning ? 'seeding' : 'uploaded',
+          seeders: isDhtRunning ? 1 : 0,
           leechers: 0,
           uploadDate: new Date(),
-          version: fileMetadataForDht.version,
-          isEncrypted: true,
-          manifest: manifest, // Store the object here for the UI
+          version: result.version,  // Use version from backend
+          isEncrypted: result.isEncrypted,
         };
-        
+
         files.update(f => [...f, newFile]);
-        
-        // Check if DHT is running before attempting to publish
-        const isDhtRunning = dhtService.getPeerId() !== null;
-        
-        if (isDhtRunning) {
-          try {
-            await dhtService.publishFile(fileMetadataForDht);
-            // Success - status remains 'seeding'
-          } catch (publishError) {
-            console.warn('Failed to publish file to DHT:', publishError);
-            // Failed to publish - update status to 'uploaded'
-            files.update(f => f.map(file => 
-              file.hash === fileMetadataForDht.fileHash 
-                ? { ...file, status: 'uploaded', seeders: 0 }
-                : file
-            ));
-          }
-        } else {
-          // DHT not running - update status to 'uploaded'
-          files.update(f => f.map(file => 
-            file.hash === fileMetadataForDht.fileHash 
-              ? { ...file, status: 'uploaded', seeders: 0 }
-              : file
-          ));
-        }
-        
+
         return { type: 'success', fileName };
       } catch (error) {
         console.error(error);
@@ -573,6 +605,76 @@
   </Card>
   {/if}
 
+  <!-- Encrypted Sharing Options -->
+  {#if isTauri}
+  <Card class="p-4">
+    <button 
+      class="w-full flex items-center justify-between cursor-pointer hover:opacity-80 transition-opacity"
+      on:click={() => showEncryptionOptions = !showEncryptionOptions}
+    >
+      <div class="flex items-center gap-3">
+        <div class="flex items-center justify-center w-10 h-10 bg-gradient-to-br from-purple-500/10 to-purple-500/5 rounded-lg border border-purple-500/20">
+          <Lock class="h-5 w-5 text-purple-600" />
+        </div>
+        <div class="text-left">
+          <h3 class="text-sm font-semibold text-foreground">{$t('upload.encryption.title')}</h3>
+          <p class="text-xs text-muted-foreground">{$t('upload.encryption.subtitle')}</p>
+        </div>
+      </div>
+      <svg 
+        class="h-5 w-5 text-muted-foreground transition-transform duration-200 {showEncryptionOptions ? 'rotate-180' : ''}" 
+        fill="none" 
+        stroke="currentColor" 
+        viewBox="0 0 24 24"
+      >
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+      </svg>
+    </button>
+    
+    {#if showEncryptionOptions}
+      <div class="mt-4 space-y-4 pt-4 border-t border-border">
+        <div class="flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="use-encrypted-sharing"
+            bind:checked={useEncryptedSharing}
+            class="cursor-pointer"
+          />
+          <Label for="use-encrypted-sharing" class="cursor-pointer text-sm">
+            {$t('upload.encryption.enableForRecipient')}
+          </Label>
+        </div>
+        
+        {#if useEncryptedSharing}
+          <div class="space-y-2 pl-6">
+            <div class="flex items-center gap-2">
+              <Key class="h-4 w-4 text-muted-foreground" />
+              <Label for="recipient-public-key" class="text-sm font-medium">
+                {$t('upload.encryption.recipientPublicKey')}
+              </Label>
+            </div>
+            <Input
+              id="recipient-public-key"
+              bind:value={recipientPublicKey}
+              placeholder={$t('upload.encryption.publicKeyPlaceholder')}
+              class="font-mono text-sm"
+              disabled={isUploading}
+            />
+            <p class="text-xs text-muted-foreground">
+              {$t('upload.encryption.publicKeyHint')}
+            </p>
+            {#if recipientPublicKey && !(/^[0-9a-fA-F]{64}$/.test(recipientPublicKey.trim()))}
+              <p class="text-xs text-destructive">
+                {$t('upload.encryption.invalidPublicKey')}
+              </p>
+            {/if}
+          </div>
+        {/if}
+      </div>
+    {/if}
+  </Card>
+  {/if}
+
   <Card class="drop-zone relative p-6 transition-all duration-200 border-dashed {isDragging ? 'border-primary bg-primary/5 scale-[1.01]' : isUploading ? 'border-orange-500 bg-orange-500/5' : 'border-muted-foreground/25 hover:border-muted-foreground/50'}"
         role="button"
         tabindex="0"
@@ -643,9 +745,9 @@
               <!-- Supported formats hint -->
               <p class="text-xs text-muted-foreground/75 mt-4">
                 {#if isTauri}
-                  Supports images, videos, audio, documents, code files and more
+                  {$t('upload.supportedFormats')}
                 {:else}
-                  Desktop app supports images, videos, audio, documents, code files and more
+                  {$t('upload.supportedFormatsDesktop')}
                 {/if}
               </p>
             {/if}
@@ -707,6 +809,15 @@
                           on:click={() => showVersionHistory(file.name)}
                         >
                           v{file.version}
+                        </Badge>
+                      {/if}
+                      {#if file.isEncrypted}
+                        <Badge
+                          class="bg-purple-100 text-purple-800 text-xs px-2 py-0.5 flex items-center gap-1"
+                          title="This file is encrypted end-to-end"
+                        >
+                          <Lock class="h-3 w-3" />
+                          Encrypted
                         </Badge>
                       {/if}
                       <div class="flex items-center gap-1">

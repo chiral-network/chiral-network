@@ -418,7 +418,27 @@ fn decrypt_data(
     iv_hex: &str,
     password: &str,
 ) -> Result<String, String> {
-    decrypt_private_key(encrypted_hex, salt_hex, iv_hex, password)
+    // First, try with the current (higher) iteration count and new hash algorithm
+    let result = try_decrypt(encrypted_hex, salt_hex, iv_hex, password, |p, s| {
+        derive_key(p, s)
+    });
+
+    if result.is_ok() {
+        return result;
+    }
+
+    // If that fails, fall back to the legacy (lower) iteration count and old hash algorithm
+    let legacy_derive = |password: &str, salt: &[u8]| -> [u8; 32] {
+        use hmac::Hmac;
+        use pbkdf2::pbkdf2;
+        use sha3::Sha3_256; // The old "new" standard was Sha3
+        let mut key = [0u8; 32];
+        pbkdf2::<Hmac<Sha3_256>>(password.as_bytes(), salt, 4096, &mut key)
+            .expect("PBKDF2 legacy derivation should not fail with Sha3");
+        key
+    };
+
+    try_decrypt(encrypted_hex, salt_hex, iv_hex, password, legacy_derive)
 }
 
 fn decrypt_private_key(
@@ -427,20 +447,31 @@ fn decrypt_private_key(
     iv: &str,
     password: &str,
 ) -> Result<String, String> {
-    // Decode hex
-    let salt_bytes = hex::decode(salt).map_err(|e| format!("Invalid salt: {}", e))?;
-    let iv_bytes = hex::decode(iv).map_err(|e| format!("Invalid IV: {}", e))?;
+    // This function now simply wraps decrypt_data to ensure consistent decryption logic.
+    decrypt_data(encrypted, salt, iv, password)
+}
+
+/// Helper function to perform decryption with a given key derivation function.
+fn try_decrypt<F>(
+    encrypted_hex: &str,
+    salt_hex: &str,
+    iv_hex: &str,
+    password: &str,
+    derive_fn: F,
+) -> Result<String, String>
+where
+    F: Fn(&str, &[u8]) -> [u8; 32],
+{
+    let salt_bytes = hex::decode(salt_hex).map_err(|_| "Invalid salt format".to_string())?;
+    let iv_bytes = hex::decode(iv_hex).map_err(|_| "Invalid IV format".to_string())?;
     let mut ciphertext =
-        hex::decode(encrypted).map_err(|e| format!("Invalid ciphertext: {}", e))?;
+        hex::decode(encrypted_hex).map_err(|_| "Invalid ciphertext".to_string())?;
 
-    // Derive key from password
-    let key = derive_key(password, &salt_bytes);
+    let key = derive_fn(password, &salt_bytes);
 
-    // Decrypt
     let iv_array: [u8; 16] = iv_bytes
         .try_into()
         .map_err(|_| "Invalid IV length".to_string())?;
-
     let mut cipher = Aes256Ctr::new(&key.into(), &iv_array.into());
     cipher.apply_keystream(&mut ciphertext);
 

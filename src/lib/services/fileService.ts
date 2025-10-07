@@ -15,12 +15,13 @@ export class FileService {
     await invoke("start_file_transfer_service");
     // Also start the DHT node, as it's closely related to file sharing.
     // The port and bootstrap nodes could be made configurable in the future.
-    // Using a default bootstrap node from your headless.rs for now.
-    const defaultBootstrap =
-      "/ip4/54.198.145.146/tcp/4001/p2p/12D3KooWNHdYWRTe98KMF1cDXXqGXvNjd1SAchDaeP5o4MsoJLu2";
+    // Get bootstrap nodes from the backend instead of hardcoding
+    const bootstrapNodes = await invoke<string[]>(
+      "get_bootstrap_nodes_command"
+    );
     await invoke("start_dht_node", {
       port: 4001,
-      bootstrapNodes: [defaultBootstrap],
+      bootstrapNodes,
     });
 
     // Get the peer ID and set it on the DHT service singleton
@@ -32,87 +33,39 @@ export class FileService {
   }
 
   /**
-   * Uploads a file to the network using streaming upload for unlimited file sizes.
-   * This reads the file in chunks and streams them to the backend without temp files.
+   * Uploads a file to the network (for drag-and-drop via Web File API).
+   * Saves file to temp location then uses ChunkManager for encryption/chunking.
    * @param file The file object to upload.
-   * @returns The metadata of the uploaded file.
+   * @param recipientPublicKey Optional recipient public key for encrypted sharing.
+   * @returns The file manifest from ChunkManager.
    */
-  async uploadFile(file: File): Promise<any> {
-    const chunkSize = 64 * 1024; // 64KB chunks for efficient streaming
-    const totalChunks = Math.ceil(file.size / chunkSize);
-
+  async uploadFile(file: File, recipientPublicKey?: string): Promise<any> {
     try {
-      // Start the streaming upload session
-      const uploadId = await invoke<string>("start_streaming_upload", {
+      // Read file into memory
+      const buffer = await file.arrayBuffer();
+      const fileData = Array.from(new Uint8Array(buffer));
+
+      // Save to temp file (backend will use ChunkManager on this)
+      const tempFilePath = await invoke<string>("save_temp_file_for_upload", {
         fileName: file.name,
-        fileSize: file.size,
+        fileData,
       });
 
-      let fileHash: string | null = null;
+      console.log(`Saved drag-and-drop file to temp: ${tempFilePath}`);
 
-      // Stream the file in chunks
-      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-        const start = chunkIndex * chunkSize;
-        const end = Math.min(start + chunkSize, file.size);
-        const chunk = file.slice(start, end);
-        const buffer = await chunk.arrayBuffer();
-        const chunkData = Array.from(new Uint8Array(buffer));
+      // Import encryptionService to use same flow as file path selection
+      const { encryptionService } = await import("./encryption");
 
-        const isLastChunk = chunkIndex === totalChunks - 1;
+      // Use ChunkManager via encryptionService (same as file path upload)
+      const manifest = await encryptionService.encryptFile(tempFilePath, recipientPublicKey);
 
-        // Upload this chunk
-        const result = await invoke<string | null>("upload_file_chunk", {
-          uploadId,
-          chunkData,
-          chunkIndex,
-          isLastChunk,
-        });
-
-        // If this was the last chunk, we get the file hash back
-        if (isLastChunk && result) {
-          fileHash = result;
-        }
-      }
-
-      if (!fileHash) {
-        throw new Error("Upload completed but no file hash received");
-      }
-
-      // Return metadata similar to what the backend would provide
-      return {
-        fileHash,
-        fileName: file.name,
-        fileSize: file.size,
-        seeders: [],
-        createdAt: Date.now(),
-        mimeType: file.type || undefined,
-        isEncrypted: false,
-        version: 1,
-      };
+      return manifest;
     } catch (error: any) {
-      console.error("Streaming upload failed:", error);
+      console.error("Upload failed:", error);
       throw new Error(`Upload failed: ${error}`);
     }
   }
 
-  /**
-   * Uploads a file to the network from a given file path.
-   * This is suitable for files already on the user's disk, referenced by path.
-   * @param filePath The absolute path to the file.
-   * @param fileName The name of the file.
-   * @returns The hash of the uploaded file.
-   */
-  async uploadFileFromPath(
-    filePath: string,
-    fileName: string
-  ): Promise<string> {
-    // Calls 'upload_file_to_network' on the backend.
-    const hash = await invoke<string>("upload_file_to_network", {
-      filePath,
-      fileName,
-    });
-    return hash;
-  }
 
   /**
    * Downloads a file from the network given its hash.
