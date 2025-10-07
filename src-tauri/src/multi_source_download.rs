@@ -101,6 +101,7 @@ pub struct ActiveDownload {
 pub struct MultiSourceDownloadService {
     dht_service: Arc<DhtService>,
     webrtc_service: Arc<WebRTCService>,
+    proxy_latency_service: Option<Arc<Mutex<crate::proxy_latency::ProxyLatencyService>>>,
     active_downloads: Arc<RwLock<HashMap<String, ActiveDownload>>>,
     event_tx: mpsc::UnboundedSender<MultiSourceEvent>,
     event_rx: Arc<Mutex<mpsc::UnboundedReceiver<MultiSourceEvent>>>,
@@ -177,6 +178,7 @@ impl MultiSourceDownloadService {
         Self {
             dht_service,
             webrtc_service,
+            proxy_latency_service: Some(Arc::new(Mutex::new(crate::proxy_latency::ProxyLatencyService::new()))),
             active_downloads: Arc::new(RwLock::new(HashMap::new())),
             event_tx,
             event_rx: Arc::new(Mutex::new(event_rx)),
@@ -950,6 +952,41 @@ impl MultiSourceDownloadService {
         }
         
         events
+    }
+
+    /// Update proxy latency information for optimization
+    pub async fn update_proxy_latency(&self, proxy_id: String, latency_ms: Option<u64>) {
+        if let Some(proxy_service) = &self.proxy_latency_service {
+            let mut service = proxy_service.lock().await;
+            service.update_proxy_latency(
+                proxy_id.clone(),
+                latency_ms,
+                crate::proxy_latency::ProxyStatus::Online,
+            );
+            info!("Updated proxy latency for proxy: {}", proxy_id);
+        } else {
+            warn!("Proxy latency service not available for update");
+        }
+    }
+
+    /// Get current proxy optimization status
+    pub async fn get_proxy_optimization_status(&self) -> serde_json::Value {
+        if let Some(proxy_service) = &self.proxy_latency_service {
+            let service = proxy_service.lock().await;
+            let enabled = service.should_use_proxy_routing();
+            let best_proxy = service.get_best_proxy();
+            
+            serde_json::json!({
+                "enabled": enabled,
+                "best_proxy": best_proxy,
+                "status": "Proxy latency tracking active"
+            })
+        } else {
+            serde_json::json!({
+                "enabled": false,
+                "status": "Proxy latency service not available"
+            })
+        }
     }
 }
 
