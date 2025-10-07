@@ -647,12 +647,12 @@ async fn start_dht_node(
         auto_enabled,
         probe_interval,
         autonat_server_list,
-        false, // enable_autorelay - hardcoded to false for CLI start
-        Vec::new(), // preferred_relays
         final_proxy_address,
         file_transfer_service,
         chunk_size_kb,
         cache_size_mb,
+        false, // enable_autorelay - hardcoded to false for CLI start
+        Vec::new(), // preferred_relays
     )
     .await
     .map_err(|e| format!("Failed to start DHT: {}", e))?;
