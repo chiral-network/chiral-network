@@ -14,18 +14,18 @@ mod geth_downloader;
 mod headless;
 mod stream_auth;
 mod keystore;
-mod pool;
 mod manager;
 mod multi_source_download;
 pub mod net;
 mod peer_selection;
+mod pool;
 mod webrtc_service;
 use std::sync::Mutex as StdMutex;
 
-use lazy_static::lazy_static;
 use crate::commands::proxy::{
-    list_proxies, proxy_connect, proxy_disconnect, proxy_remove, proxy_echo, ProxyNode,
+    list_proxies, proxy_connect, proxy_disconnect, proxy_echo, proxy_remove, ProxyNode,
 };
+use crate::commands::bootstrap::get_bootstrap_nodes_command;
 use dht::{DhtEvent, DhtMetricsSnapshot, DhtService, FileMetadata, split_into_blocks, StringBlock};
 use ethereum::{
     create_new_account, get_account_from_private_key, get_balance, get_block_number, get_hashrate,
@@ -37,7 +37,9 @@ use file_transfer::{DownloadMetricsSnapshot, FileTransferEvent, FileTransferServ
 use fs2::available_space;
 use geth_downloader::GethDownloader;
 use keystore::Keystore;
+use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -54,18 +56,20 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State,
 };
-use sha2::{Digest, Sha256};
 use tokio::{io::AsyncReadExt, sync::Mutex, task::JoinHandle, time::sleep};
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{error, info, warn};
 use webrtc_service::{WebRTCFileRequest, WebRTCService};
 use multi_source_download::{MultiSourceDownloadService, MultiSourceEvent, MultiSourceProgress};
-use chiral_network::stream_auth::{StreamAuthService, AuthMessage};
+use chiral_network::stream_auth::{
+    StreamAuthService, AuthMessage, 
+    HmacKeyExchangeRequest, HmacKeyExchangeResponse, HmacKeyExchangeConfirmation
+};
 
 use crate::manager::ChunkManager; // Import the ChunkManager
-use x25519_dalek::{PublicKey, StaticSecret}; // For key handling
 use base64::{engine::general_purpose, Engine as _}; // For key encoding
 use blockstore::block::Block;
+use x25519_dalek::{PublicKey, StaticSecret}; // For key handling
 
 #[derive(Clone)]
 struct QueuedTransaction {
@@ -351,10 +355,7 @@ async fn get_webrtc_connection_status(
 }
 
 #[tauri::command]
-async fn disconnect_from_peer(
-    state: State<'_, AppState>,
-    peer_id: String,
-) -> Result<(), String> {
+async fn disconnect_from_peer(state: State<'_, AppState>, peer_id: String) -> Result<(), String> {
     let webrtc = { state.webrtc.lock().await.as_ref().cloned() };
     if let Some(webrtc) = webrtc {
         webrtc.close_connection(peer_id).await
@@ -387,20 +388,20 @@ async fn upload_versioned_file(
             .unwrap()
             .as_secs();
 
-// Use the DHT versioning helper to fill in parent_hash/version
-let metadata = dht
-    .prepare_versioned_metadata(
-        file_hash.clone(),
-        file_name,
-        file_data.len() as u64,  // Use file size directly from data
-        file_data,
-        created_at,
-        mime_type,
-        is_encrypted,
-        encryption_method,
-        key_fingerprint,
-    )
-    .await?;
+        // Use the DHT versioning helper to fill in parent_hash/version
+        let metadata = dht
+            .prepare_versioned_metadata(
+                file_hash.clone(),
+                file_name,
+                file_data.len() as u64, // Use file size directly from data
+                file_data,
+                created_at,
+                mime_type,
+                is_encrypted,
+                encryption_method,
+                key_fingerprint,
+            )
+            .await?;
 
         dht.publish_file(metadata.clone()).await?;
         Ok(metadata)
@@ -567,16 +568,16 @@ async fn get_blocks_mined(address: String) -> Result<u64, String> {
             }
         }
     }
-    
+
     // Invoke existing logic (slow query)
     let blocks = get_mined_blocks_count(&address).await?;
-    
+
     // Update Cache
     {
         let mut cache = BLOCKS_CACHE.lock().unwrap();
         *cache = Some((address, blocks, Instant::now()));
     }
-    
+
     Ok(blocks)
 }
 #[tauri::command]
@@ -682,7 +683,6 @@ async fn start_dht_node(
                             let mut proxies = proxies_arc.lock().await;
 
                             if let Some(i) = proxies.iter().position(|p| p.id == id) {
-
                                 let p = &mut proxies[i];
                                 if p.id != id {
                                     p.id = id.clone();
@@ -774,7 +774,8 @@ async fn stop_dht_node(app: tauri::AppHandle, state: State<'_, AppState>) -> Res
     };
 
     if let Some(dht) = dht {
-        (*dht).shutdown()
+        (*dht)
+            .shutdown()
             .await
             .map_err(|e| format!("Failed to stop DHT: {}", e))?;
     }
@@ -930,7 +931,66 @@ async fn generate_hmac_key() -> Vec<u8> {
 async fn cleanup_auth_sessions(state: State<'_, AppState>) -> Result<(), String> {
     let mut auth_service = state.stream_auth.lock().await;
     auth_service.cleanup_expired_sessions();
+    auth_service.cleanup_expired_exchanges();
     Ok(())
+}
+
+#[tauri::command]
+async fn initiate_hmac_key_exchange(
+    state: State<'_, AppState>,
+    initiator_peer_id: String,
+    target_peer_id: String,
+    session_id: String,
+) -> Result<HmacKeyExchangeRequest, String> {
+    let mut auth_service = state.stream_auth.lock().await;
+    auth_service.initiate_key_exchange(initiator_peer_id, target_peer_id, session_id)
+}
+
+#[tauri::command]
+async fn respond_to_hmac_key_exchange(
+    state: State<'_, AppState>,
+    request: HmacKeyExchangeRequest,
+    responder_peer_id: String,
+) -> Result<HmacKeyExchangeResponse, String> {
+    let mut auth_service = state.stream_auth.lock().await;
+    auth_service.respond_to_key_exchange(request, responder_peer_id)
+}
+
+#[tauri::command]
+async fn confirm_hmac_key_exchange(
+    state: State<'_, AppState>,
+    response: HmacKeyExchangeResponse,
+    initiator_peer_id: String,
+) -> Result<HmacKeyExchangeConfirmation, String> {
+    let mut auth_service = state.stream_auth.lock().await;
+    auth_service.confirm_key_exchange(response, initiator_peer_id)
+}
+
+#[tauri::command]
+async fn finalize_hmac_key_exchange(
+    state: State<'_, AppState>,
+    confirmation: HmacKeyExchangeConfirmation,
+    responder_peer_id: String,
+) -> Result<(), String> {
+    let mut auth_service = state.stream_auth.lock().await;
+    auth_service.finalize_key_exchange(confirmation, responder_peer_id)
+}
+
+#[tauri::command]
+async fn get_hmac_exchange_status(
+    state: State<'_, AppState>,
+    exchange_id: String,
+) -> Result<Option<String>, String> {
+    let auth_service = state.stream_auth.lock().await;
+    Ok(auth_service.get_exchange_status(&exchange_id).map(|s| format!("{:?}", s)))
+}
+
+#[tauri::command]
+async fn get_active_hmac_exchanges(
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    let auth_service = state.stream_auth.lock().await;
+    Ok(auth_service.get_active_exchanges())
 }
 
 #[tauri::command]
@@ -995,6 +1055,8 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                 ),
                 DhtEvent::FileNotFound(hash) => format!("file_not_found:{}", hash),
                 DhtEvent::Error(err) => format!("error:{}", err),
+                DhtEvent::Info(msg) => format!("info:{}", msg),
+                DhtEvent::Warning(msg) => format!("warning:{}", msg),
                 DhtEvent::ProxyStatus {
                     id,
                     address,
@@ -1058,9 +1120,9 @@ fn get_cpu_temperature() -> Option<f32> {
     use std::sync::OnceLock;
 
     static LAST_UPDATE: OnceLock<std::sync::Mutex<Option<Instant>>> = OnceLock::new();
-    
+
     let last_update_mutex = LAST_UPDATE.get_or_init(|| std::sync::Mutex::new(None));
-    
+
     {
         let mut last_update = last_update_mutex.lock().unwrap();
         if let Some(last) = *last_update {
@@ -1730,7 +1792,8 @@ async fn upload_file_to_network(
         let mut buffer = [0u8; 8192]; // 8KB buffer
 
         loop {
-            let bytes_read = file.read(&mut buffer)
+            let bytes_read = file
+                .read(&mut buffer)
                 .await
                 .map_err(|e| format!("Failed to read file: {}", e))?;
 
@@ -1783,7 +1846,7 @@ async fn upload_file_to_network(
         state.analytics.record_upload(metadata.file_size).await;
         state.analytics.record_upload_completed().await;
 
-      Ok(metadata)
+        Ok(metadata)
     } else {
         Err("DHT not running".into())
     }
@@ -1832,22 +1895,28 @@ async fn start_streaming_upload(
     }
 
     // Generate a unique upload session ID
-    let upload_id = format!("upload_{}", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos());
+    let upload_id = format!(
+        "upload_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
 
     // Store upload session in app state
     let mut upload_sessions = state.upload_sessions.lock().await;
-    upload_sessions.insert(upload_id.clone(), StreamingUploadSession {
-        file_name,
-        file_size,
-        received_chunks: 0,
-        total_chunks: 0, // Will be set when we know chunk count
-        hasher: sha2::Sha256::new(),
-        created_at: std::time::SystemTime::now(),
-        chunk_cids: Vec::new(),
-    });
+    upload_sessions.insert(
+        upload_id.clone(),
+        StreamingUploadSession {
+            file_name,
+            file_size,
+            received_chunks: 0,
+            total_chunks: 0, // Will be set when we know chunk count
+            hasher: sha2::Sha256::new(),
+            created_at: std::time::SystemTime::now(),
+            chunk_cids: Vec::new(),
+        },
+    );
 
     Ok(upload_id)
 }
@@ -1861,7 +1930,8 @@ async fn upload_file_chunk(
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
     let mut upload_sessions = state.upload_sessions.lock().await;
-    let session = upload_sessions.get_mut(&upload_id)
+    let session = upload_sessions
+        .get_mut(&upload_id)
         .ok_or_else(|| format!("Upload session {} not found", upload_id))?;
 
     // Update hasher with chunk data
@@ -2293,31 +2363,34 @@ async fn get_available_storage() -> f64 {
     };
 
     // Add timeout to prevent hanging - run in a blocking task with timeout
-    let result = timeout(Duration::from_secs(5), tokio::task::spawn_blocking(move || {
-        available_space(path).map(|space| space as f64 / 1024.0 / 1024.0 / 1024.0) // Convert to GB
-    })).await;
+    let result = timeout(
+        Duration::from_secs(5),
+        tokio::task::spawn_blocking(move || {
+            available_space(path).map(|space| space as f64 / 1024.0 / 1024.0 / 1024.0)
+            // Convert to GB
+        }),
+    )
+    .await;
 
     match result {
-        Ok(Ok(storage_result)) => {
-            match storage_result {
-                Ok(storage_gb) => {
-                    if storage_gb > 0.0 && storage_gb.is_finite() {
-                        storage_gb.floor()
-                    } else {
-                        warn!("Invalid storage value: {:.2}, using fallback", storage_gb);
-                        100.0
-                    }
-                },
-                Err(e) => {
-                    warn!("Disk space check failed: {}, using fallback", e);
+        Ok(Ok(storage_result)) => match storage_result {
+            Ok(storage_gb) => {
+                if storage_gb > 0.0 && storage_gb.is_finite() {
+                    storage_gb.floor()
+                } else {
+                    warn!("Invalid storage value: {:.2}, using fallback", storage_gb);
                     100.0
                 }
+            }
+            Err(e) => {
+                warn!("Disk space check failed: {}, using fallback", e);
+                100.0
             }
         },
         Ok(Err(e)) => {
             warn!("Task failed: {}, using fallback", e);
             100.0
-        },
+        }
         Err(_) => {
             warn!("Failed to get available storage (timeout or error), using fallback");
             100.0
@@ -2364,11 +2437,7 @@ fn get_disk_space_robust(path: &std::path::Path) -> Result<f64, String> {
 
     #[cfg(unix)]
     {
-        match Command::new("df")
-            .arg(path)
-            .arg("-k")
-            .output()
-        {
+        match Command::new("df").arg(path).arg("-k").output() {
             Ok(output) => {
                 if output.status.success() {
                     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -2411,7 +2480,7 @@ struct GethStatusPayload {
     log_path: Option<String>,
     log_available: bool,
     log_lines: usize,
-    version: Option<String>,    
+    version: Option<String>,
     last_logs: Vec<String>,
     last_updated: u64,
 }
@@ -3152,7 +3221,9 @@ fn main() {
             file_transfer: Mutex::new(None),
             webrtc: Mutex::new(None),
             multi_source_download: Mutex::new(None),
-            keystore: Arc::new(Mutex::new(Keystore::load().unwrap_or_else(|_| Keystore::new()))),
+            keystore: Arc::new(Mutex::new(
+                Keystore::load().unwrap_or_else(|_| Keystore::new()),
+            )),
             proxies: Arc::new(Mutex::new(Vec::new())),
             file_transfer_pump: Mutex::new(None),
             multi_source_pump: Mutex::new(None),
@@ -3242,6 +3313,7 @@ fn main() {
             proxy_remove,
             proxy_echo,
             list_proxies,
+            get_bootstrap_nodes_command,
             generate_totp_secret,
             is_2fa_enabled,
             verify_and_enable_totp,
@@ -3273,7 +3345,18 @@ fn main() {
             get_contribution_history,
             reset_analytics,
             encrypt_file_for_self_upload,
+            encrypt_file_for_recipient,
             decrypt_and_reassemble_file,
+            create_auth_session,
+            verify_stream_auth,
+            generate_hmac_key,
+            cleanup_auth_sessions,
+            initiate_hmac_key_exchange,
+            respond_to_hmac_key_exchange,
+            confirm_hmac_key_exchange,
+            finalize_hmac_key_exchange,
+            get_hmac_exchange_status,
+            get_active_hmac_exchanges,
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -3471,10 +3554,71 @@ async fn encrypt_file_for_self_upload(
         let manager = ChunkManager::new(chunk_storage_path);
 
         // 3. Call the existing backend function to perform the encryption.
-        let manifest = manager
-            .chunk_and_encrypt_file(Path::new(&file_path), &public_key)?;
+        let manifest = manager.chunk_and_encrypt_file(Path::new(&file_path), &public_key)?;
 
         // 4. Serialize the key bundle to a JSON string so it can be sent to the frontend easily.
+        let bundle_json =
+            serde_json::to_string(&manifest.encrypted_key_bundle).map_err(|e| e.to_string())?;
+
+        Ok(FileManifestForJs {
+            merkle_root: manifest.merkle_root,
+            chunks: manifest.chunks,
+            encrypted_key_bundle: bundle_json,
+        })
+    })
+    .await
+    .map_err(|e| format!("Encryption task failed: {}", e))?
+}
+
+/// Encrypt a file for upload with optional recipient public key
+#[tauri::command]
+async fn encrypt_file_for_recipient(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    file_path: String,
+    recipient_public_key: Option<String>,
+) -> Result<FileManifestForJs, String> {
+    // Get the app data directory for chunk storage
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Could not get app data directory: {}", e))?;
+    let chunk_storage_path = app_data_dir.join("chunk_storage");
+
+    // Determine the public key to use for encryption
+    let recipient_pk = if let Some(pk_hex) = recipient_public_key {
+        // Use the provided recipient public key
+        let pk_bytes = hex::decode(pk_hex.trim_start_matches("0x"))
+            .map_err(|_| "Invalid recipient public key format".to_string())?;
+        PublicKey::from(
+            <[u8; 32]>::try_from(pk_bytes).map_err(|_| "Recipient public key is not 32 bytes")?,
+        )
+    } else {
+        // Use the active user's own public key
+        let private_key_hex = state
+            .active_account_private_key
+            .lock()
+            .await
+            .clone()
+            .ok_or("No account is currently active. Please log in.")?;
+        let pk_bytes = hex::decode(private_key_hex.trim_start_matches("0x"))
+            .map_err(|_| "Invalid private key format".to_string())?;
+        let secret_key = StaticSecret::from(
+            <[u8; 32]>::try_from(pk_bytes).map_err(|_| "Private key is not 32 bytes")?,
+        );
+        PublicKey::from(&secret_key)
+    };
+
+    // Run the encryption in a blocking task to avoid blocking the async runtime
+    tokio::task::spawn_blocking(move || {
+        // Initialize ChunkManager with proper app data directory
+        let manager = ChunkManager::new(chunk_storage_path);
+
+        // Call the existing backend function to perform the encryption with recipient's public key
+        let manifest = manager
+            .chunk_and_encrypt_file(Path::new(&file_path), &recipient_pk)?;
+
+        // Serialize the key bundle to a JSON string so it can be sent to the frontend easily.
         let bundle_json = serde_json::to_string(&manifest.encrypted_key_bundle)
             .map_err(|e| e.to_string())?;
 
