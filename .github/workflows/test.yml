@@ -56,3 +56,17 @@ jobs:
 
       - name: Build backend
         run: cd src-tauri && cargo build --release
+
+      - name: Run NAT traversal settings tests
+        run: cd src-tauri && cargo test --test nat_traversal_test --release
+        continue-on-error: false
+
+      - name: Run NAT traversal E2E tests
+        run: cd src-tauri && cargo test --test nat_traversal_e2e_test --release -- --test-threads=1
+        continue-on-error: true
+        timeout-minutes: 10
+
+      - name: Run relay infrastructure tests
+        run: cd relay-infrastructure && cargo test --release
+        continue-on-error: true
+        timeout-minutes: 5
