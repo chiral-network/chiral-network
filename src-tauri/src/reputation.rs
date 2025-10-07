@@ -153,3 +153,72 @@ impl ReputationMerkleTree {
         Ok(Sha256Hasher::hash(&serialized))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_reputation_event_creation() {
+        let event = ReputationEvent::new(
+            "test-event-1".to_string(),
+            "target-peer".to_string(),
+            "rater-peer".to_string(),
+            EventType::FileTransferSuccess,
+            serde_json::json!({"test": "data"}),
+            0.5,
+        );
+
+        assert_eq!(event.peer_id, "target-peer");
+        assert_eq!(event.rater_peer_id, "rater-peer");
+        assert_eq!(event.event_type, EventType::FileTransferSuccess);
+        assert_eq!(event.impact, 0.5);
+        assert!(event.signature.is_empty()); // Should be empty initially
+    }
+
+    #[test]
+    fn test_merkle_tree_operations() {
+        let mut tree = ReputationMerkleTree::new();
+        
+        let event1 = ReputationEvent::new(
+            "event-1".to_string(),
+            "peer-1".to_string(),
+            "rater-1".to_string(),
+            EventType::FileTransferSuccess,
+            serde_json::json!({"test": "data1"}),
+            0.5,
+        );
+
+        let event2 = ReputationEvent::new(
+            "event-2".to_string(),
+            "peer-2".to_string(),
+            "rater-2".to_string(),
+            EventType::FileTransferFailure,
+            serde_json::json!({"test": "data2"}),
+            -0.3,
+        );
+
+        // Add events
+        tree.add_event(event1.clone()).unwrap();
+        tree.add_event(event2.clone()).unwrap();
+
+        // Check root exists
+        assert!(tree.get_root().is_some());
+        assert!(tree.get_root_hex().is_some());
+
+        // Check events are stored
+        assert_eq!(tree.get_events().len(), 2);
+        assert_eq!(tree.get_events()[0].id, "event-1");
+        assert_eq!(tree.get_events()[1].id, "event-2");
+    }
+
+    #[test]
+    fn test_event_type_equality() {
+        let event_type1 = EventType::FileTransferSuccess;
+        let event_type2 = EventType::FileTransferSuccess;
+        let event_type3 = EventType::FileTransferFailure;
+
+        assert_eq!(event_type1, event_type2);
+        assert_ne!(event_type1, event_type3);
+    }
+}
