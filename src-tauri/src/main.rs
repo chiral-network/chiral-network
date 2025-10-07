@@ -61,7 +61,10 @@ use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{error, info, warn};
 use webrtc_service::{WebRTCFileRequest, WebRTCService};
 use multi_source_download::{MultiSourceDownloadService, MultiSourceEvent, MultiSourceProgress};
-use chiral_network::stream_auth::{StreamAuthService, AuthMessage};
+use chiral_network::stream_auth::{
+    StreamAuthService, AuthMessage, 
+    HmacKeyExchangeRequest, HmacKeyExchangeResponse, HmacKeyExchangeConfirmation
+};
 
 use crate::manager::ChunkManager; // Import the ChunkManager
 use base64::{engine::general_purpose, Engine as _}; // For key encoding
@@ -938,7 +941,66 @@ async fn generate_hmac_key() -> Vec<u8> {
 async fn cleanup_auth_sessions(state: State<'_, AppState>) -> Result<(), String> {
     let mut auth_service = state.stream_auth.lock().await;
     auth_service.cleanup_expired_sessions();
+    auth_service.cleanup_expired_exchanges();
     Ok(())
+}
+
+#[tauri::command]
+async fn initiate_hmac_key_exchange(
+    state: State<'_, AppState>,
+    initiator_peer_id: String,
+    target_peer_id: String,
+    session_id: String,
+) -> Result<HmacKeyExchangeRequest, String> {
+    let mut auth_service = state.stream_auth.lock().await;
+    auth_service.initiate_key_exchange(initiator_peer_id, target_peer_id, session_id)
+}
+
+#[tauri::command]
+async fn respond_to_hmac_key_exchange(
+    state: State<'_, AppState>,
+    request: HmacKeyExchangeRequest,
+    responder_peer_id: String,
+) -> Result<HmacKeyExchangeResponse, String> {
+    let mut auth_service = state.stream_auth.lock().await;
+    auth_service.respond_to_key_exchange(request, responder_peer_id)
+}
+
+#[tauri::command]
+async fn confirm_hmac_key_exchange(
+    state: State<'_, AppState>,
+    response: HmacKeyExchangeResponse,
+    initiator_peer_id: String,
+) -> Result<HmacKeyExchangeConfirmation, String> {
+    let mut auth_service = state.stream_auth.lock().await;
+    auth_service.confirm_key_exchange(response, initiator_peer_id)
+}
+
+#[tauri::command]
+async fn finalize_hmac_key_exchange(
+    state: State<'_, AppState>,
+    confirmation: HmacKeyExchangeConfirmation,
+    responder_peer_id: String,
+) -> Result<(), String> {
+    let mut auth_service = state.stream_auth.lock().await;
+    auth_service.finalize_key_exchange(confirmation, responder_peer_id)
+}
+
+#[tauri::command]
+async fn get_hmac_exchange_status(
+    state: State<'_, AppState>,
+    exchange_id: String,
+) -> Result<Option<String>, String> {
+    let auth_service = state.stream_auth.lock().await;
+    Ok(auth_service.get_exchange_status(&exchange_id).map(|s| format!("{:?}", s)))
+}
+
+#[tauri::command]
+async fn get_active_hmac_exchanges(
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    let auth_service = state.stream_auth.lock().await;
+    Ok(auth_service.get_active_exchanges())
 }
 
 #[tauri::command]
@@ -3356,8 +3418,16 @@ fn main() {
             encrypt_file_for_self_upload,
             encrypt_file_for_recipient,
             decrypt_and_reassemble_file,
-            get_file_data,
-            store_file_data
+            create_auth_session,
+            verify_stream_auth,
+            generate_hmac_key,
+            cleanup_auth_sessions,
+            initiate_hmac_key_exchange,
+            respond_to_hmac_key_exchange,
+            confirm_hmac_key_exchange,
+            finalize_hmac_key_exchange,
+            get_hmac_exchange_status,
+            get_active_hmac_exchanges,
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())

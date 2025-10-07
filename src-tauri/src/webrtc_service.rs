@@ -236,6 +236,7 @@ impl WebRTCService {
                         &file_transfer_service,
                         &connections,
                         &keystore,
+                        &stream_auth,
                     )
                     .await;
                 }
@@ -522,6 +523,7 @@ impl WebRTCService {
         file_transfer_service: &Arc<FileTransferService>,
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
         keystore: &Arc<Mutex<Keystore>>,
+        stream_auth: &Arc<Mutex<StreamAuthService>>,
     ) {
         info!(
             "Handling file request from peer {}: {}",
@@ -546,6 +548,7 @@ impl WebRTCService {
                 file_transfer_service,
                 connections,
                 keystore,
+                stream_auth,
             )
             .await;
         } else {
@@ -647,6 +650,7 @@ impl WebRTCService {
                     file_transfer_service,
                     connections,
                     keystore,
+                    stream_auth,
                 )
                 .await;
             }
@@ -660,6 +664,7 @@ impl WebRTCService {
         file_transfer_service: &Arc<FileTransferService>,
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
         keystore: &Arc<Mutex<Keystore>>,
+        stream_auth: &Arc<Mutex<StreamAuthService>>,
     ) -> Result<(), String> {
         // Get file data from local storage
         let file_data = match file_transfer_service
@@ -689,6 +694,26 @@ impl WebRTCService {
         // Calculate total chunks
         let total_chunks = ((file_data.len() as f64) / CHUNK_SIZE as f64).ceil() as u32;
 
+        // For unencrypted transfers, establish HMAC session
+        if request.recipient_public_key.is_none() {
+            let session_id = format!("{}-{}", peer_id, request.file_hash);
+            let mut auth_service = stream_auth.lock().await;
+            
+            // Generate HMAC key for this session
+            let hmac_key = StreamAuthService::generate_hmac_key();
+            
+            // Create session with HMAC key (will be replaced by key exchange)
+            match auth_service.create_session(session_id.clone(), hmac_key) {
+                Ok(_) => {
+                    info!("Created HMAC session for unencrypted transfer: {}", session_id);
+                }
+                Err(e) => {
+                    warn!("Failed to create HMAC session: {}", e);
+                    // Continue without authentication as fallback
+                }
+            }
+        }
+
         // Initialize transfer tracking in connections
         {
             let mut conns = connections.lock().await;
@@ -714,10 +739,11 @@ impl WebRTCService {
             let end = (start + CHUNK_SIZE).min(file_data.len());
             let chunk_data: Vec<u8> = file_data[start..end].to_vec();
 
-            let (final_chunk_data, encrypted_key_bundle) =
+            let (final_chunk_data, encrypted_key_bundle, auth_message) =
                 if let Some(ref recipient_key) = request.recipient_public_key {
+                    // Encrypted transfer - no HMAC authentication needed (AES-256-GCM provides AEAD)
                     match Self::encrypt_chunk_for_peer(&chunk_data, recipient_key, keystore).await {
-                        Ok((encrypted_data, key_bundle)) => (encrypted_data, Some(key_bundle)),
+                        Ok((encrypted_data, key_bundle)) => (encrypted_data, Some(key_bundle), None),
                         Err(e) => {
                             let _ = event_tx
                                 .send(WebRTCEvent::TransferFailed {
@@ -730,7 +756,24 @@ impl WebRTCService {
                         }
                     }
                 } else {
-                    (chunk_data, None)
+                    // Unencrypted transfer - use HMAC authentication
+                    let session_id = format!("{}-{}", peer_id, request.file_hash);
+                    let mut auth_service = stream_auth.lock().await;
+                    
+                    // Create authenticated chunk
+                    match auth_service.create_authenticated_chunk(
+                        &session_id,
+                        &chunk_data,
+                        chunk_index,
+                        &request.file_hash,
+                    ) {
+                        Ok(auth_msg) => (chunk_data, None, Some(auth_msg)),
+                        Err(e) => {
+                            warn!("Failed to create authenticated chunk: {}", e);
+                            // Fallback to unauthenticated chunk
+                            (chunk_data, None, None)
+                        }
+                    }
                 };
 
             // Calculate checksum for the final data (encrypted or not)
@@ -743,7 +786,7 @@ impl WebRTCService {
                 data: final_chunk_data,
                 checksum,
                 encrypted_key_bundle,
-                auth_message: None, // No authentication for this chunk type
+                auth_message, // HMAC authentication for unencrypted transfers only
             };
 
             // Send chunk via WebRTC data channel
