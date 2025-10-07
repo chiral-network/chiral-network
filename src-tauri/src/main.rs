@@ -19,6 +19,7 @@ pub mod net;
 mod peer_selection;
 mod pool;
 mod proxy_latency;
+
 mod webrtc_service;
 use std::sync::Mutex as StdMutex;
 
@@ -2182,6 +2183,8 @@ async fn get_proxy_optimization_status(
     Ok(multi_source_service.get_proxy_optimization_status().await)
 }
 
+
+
 #[tauri::command]
 async fn download_file_multi_source(
     state: State<'_, AppState>,
@@ -3256,6 +3259,7 @@ fn main() {
             get_multi_source_progress,
             update_proxy_latency,
             get_proxy_optimization_status,
+
             download_file_multi_source,
             get_file_transfer_events,
             get_download_metrics,

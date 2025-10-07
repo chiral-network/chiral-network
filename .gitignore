@@ -79,3 +79,7 @@ src-tauri/bin/
 src-tauri/geth-data/
 src-tauri/bin/
 src-tauri/geth-data/
+
+# Personal testing files
+test_optimization_manual.sh
+test_optimization_proof.md
