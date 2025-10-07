@@ -290,7 +290,6 @@
       // Mock DHT connection for web
       dhtStatus = 'connecting'
       setTimeout(() => {
-        
         dhtStatus = 'connected'
         dhtPeerId = '12D3KooWMockPeerIdForWebDemo123456789'
       }, 1000)
@@ -305,11 +304,12 @@
       try {
         backendPeerId = await invoke<string | null>('get_dht_peer_id')
       } catch (error) {
-        // Failed to check backend DHT status
+        console.log('Failed to check backend DHT status:', error)
       }
       
       if (backendPeerId) {
         // DHT is already running in backend, sync the frontend state immediately
+        console.log('DHT already running in backend with peer ID:', backendPeerId)
         dhtPeerId = backendPeerId
         dhtService.setPeerId(backendPeerId) // Update frontend service state
         dhtEvents = [...dhtEvents, `✓ DHT already running with peer ID: ${backendPeerId.slice(0, 16)}...`]
@@ -393,8 +393,9 @@
       
       // Try to connect to bootstrap nodes
       let connectionSuccessful = false
-      if (dhtBootstrapNodes.length > 0) {
-        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to ${dhtBootstrapNodes.length} bootstrap node(s)...`]
+
+      if (DEFAULT_BOOTSTRAP_NODES.length > 0) {
+        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to ${DEFAULT_BOOTSTRAP_NODES.length} bootstrap node(s)...`]
         
         // Add another small delay to show the connection attempt
         await new Promise(resolve => setTimeout(resolve, 1000))
@@ -600,6 +601,21 @@
         signaling.peers.subscribe(peers => {
           discoveredPeers = peers;
           console.log('Updated discovered peers:', peers);
+        });
+
+        // Register signaling message handler for WebRTC
+        signaling.setOnMessage((msg) => {
+          if (webrtcSession && msg.from === webrtcSession.peerId) {
+            if (msg.type === "offer") {
+              webrtcSession.acceptOfferCreateAnswer(msg.sdp).then(answer => {
+                signaling.send({ type: "answer", sdp: answer, to: msg.from });
+              });
+            } else if (msg.type === "answer") {
+              webrtcSession.acceptAnswer(msg.sdp);
+            } else if (msg.type === "candidate") {
+              webrtcSession.addRemoteIceCandidate(msg.candidate);
+            }
+          }
         });
         showToast('Connected to signaling server', 'success');
       } catch (error) {
@@ -831,6 +847,7 @@
 
   async function startGethNode() {
     if (!isTauri) {
+      console.log('Cannot start Chiral Node in web mode - desktop app required')
       return
     }
     
@@ -856,6 +873,7 @@
 
   async function stopGethNode() {
     if (!isTauri) {
+      console.log('Cannot stop Chiral Node in web mode - desktop app required')
       return
     }
     
@@ -914,6 +932,21 @@
         signalingConnected = true;
         signaling.peers.subscribe(peers => {
           discoveredPeers = peers;
+        });
+
+        // Register signaling message handler for WebRTC
+        signaling.setOnMessage((msg) => {
+          if (webrtcSession && msg.from === webrtcSession.peerId) {
+            if (msg.type === "offer") {
+              webrtcSession.acceptOfferCreateAnswer(msg.sdp).then(answer => {
+                signaling.send({ type: "answer", sdp: answer, to: msg.from });
+              });
+            } else if (msg.type === "answer") {
+              webrtcSession.acceptAnswer(msg.sdp);
+            } else if (msg.type === "candidate") {
+              webrtcSession.addRemoteIceCandidate(msg.candidate);
+            }
+          }
         });
       } catch (error) {
         // Signaling service not available (DHT not running) - this is normal
