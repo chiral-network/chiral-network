@@ -19,6 +19,14 @@
   let connectionTimeouts = new Map<string, NodeJS.Timeout>()
   let reconnectIntervals = new Map<string, NodeJS.Timeout>()
   let autoReconnectEnabled = true
+  let performanceHistory = new Map<string, {
+    totalAttempts: number
+    successfulConnections: number
+    lastSuccessTime?: Date
+    lastFailureTime?: Date
+    averageLatency?: number
+    uptimePercentage: number
+  }>()
   const validAddressRegex = /^[a-zA-Z0-9.-]+:[0-9]{1,5}$/
   const ipv4Regex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):[0-9]{1,5}$/
   const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.([a-zA-Z]{2,}|[a-zA-Z]{2,}\.[a-zA-Z]{2,}):[0-9]{1,5}$/
@@ -100,6 +108,38 @@
       return { valid: true, error: '' }
   }
 
+  function updatePerformanceHistory(address: string, success: boolean, latency?: number) {
+      const current = performanceHistory.get(address) || {
+          totalAttempts: 0,
+          successfulConnections: 0,
+          uptimePercentage: 0
+      }
+
+      current.totalAttempts++
+      if (success) {
+          current.successfulConnections++
+          current.lastSuccessTime = new Date()
+          if (latency !== undefined) {
+              current.averageLatency = current.averageLatency
+                  ? (current.averageLatency + latency) / 2
+                  : latency
+          }
+      } else {
+          current.lastFailureTime = new Date()
+      }
+
+      current.uptimePercentage = Math.round((current.successfulConnections / current.totalAttempts) * 100)
+      performanceHistory.set(address, current)
+  }
+
+  function getPerformanceStats(address: string) {
+      return performanceHistory.get(address) || {
+          totalAttempts: 0,
+          successfulConnections: 0,
+          uptimePercentage: 0
+      }
+  }
+
   function startConnectionTimeout(address: string) {
       // Clear any existing timeout
       const existingTimeout = connectionTimeouts.get(address)
@@ -118,6 +158,9 @@
               )
           })
           connectionTimeouts.delete(address)
+
+          // Track timeout as failure
+          updatePerformanceHistory(address, false)
 
           // Start auto-reconnect for timed out connections
           startAutoReconnect(address)
@@ -237,6 +280,24 @@
       } else {
           addressError = ''
       }
+  }
+
+  // Track successful connections when nodes come online
+  $: {
+      $proxyNodes.forEach(node => {
+          if (node.status === 'online' && node.address) {
+              // Check if this is a new successful connection
+              const stats = getPerformanceStats(node.address)
+              const timeSinceLastSuccess = stats.lastSuccessTime
+                  ? Date.now() - stats.lastSuccessTime.getTime()
+                  : Infinity
+
+              // Only update if it's been more than 5 seconds since last success (prevent spam)
+              if (timeSinceLastSuccess > 5000) {
+                  updatePerformanceHistory(node.address, true, node.latency)
+              }
+          }
+      })
   }
 </script>
 
@@ -432,49 +493,79 @@
     </div>
     <div class="space-y-3">
       {#each sortedNodes as node}
-        <div class="p-4 bg-secondary rounded-lg">
-           <div class="flex items-center justify-between mb-3">
-                      <div class="flex items-center gap-3 min-w-0">
-                        <div class="w-2 h-2 rounded-full flex-shrink-0 {
-                          node.status === 'online' ? 'bg-green-500' :
-                          node.status === 'offline' ? 'bg-red-500' :
-                          node.status === 'connecting' ? 'bg-yellow-500 animate-pulse' :
-                          node.status === 'timeout' ? 'bg-orange-500' :
-                          'bg-gray-500'
-                        }"></div>
-                        <div class="min-w-0">
-                          <p class="font-medium break-words" title={node.address || node.id}>{node.address || node.id}</p>
-                          <p class="text-xs text-muted-foreground">{node.address ? 'Proxy Node' : 'DHT Peer'}</p>
+        <div class="p-4 bg-secondary rounded-lg border border-border/50 hover:border-border transition-colors">
+           <div class="flex justify-between items-start mb-3">
+                      <div class="min-w-0 flex-1">
+                        <div class="mb-1">
+                          <p class="text-xs text-muted-foreground">
+                            {node.address ? 'Proxy Node Address' : 'DHT Peer ID'}
+                          </p>
                         </div>
-                      </div>              <Badge variant={node.status === 'online' ? 'default' :
-                   node.status === 'offline' ? 'secondary' :
-                   node.status === 'connecting' ? 'outline' :
-                   node.status === 'timeout' ? 'outline' : 'outline'}
-                      class={
-                        node.status === 'online' ? 'bg-green-500 text-white' :
-                        node.status === 'offline' ? 'bg-red-500 text-white' :
-                        node.status === 'connecting' ? 'bg-yellow-500 text-white' :
-                        node.status === 'timeout' ? 'bg-orange-500 text-white' :
-                        'bg-gray-500 text-white'
-                      }
-                      style="pointer-events: none;"
-              >
-              {node.status}
-            </Badge>
+                        <p class="font-mono text-sm font-medium text-foreground break-all" title={node.address || node.id}>
+                          {node.address || node.id}
+                        </p>
+                      </div>
+                      <div class="flex-shrink-0 ml-3">
+                        <Badge variant={node.status === 'online' ? 'default' :
+                       node.status === 'offline' ? 'secondary' :
+                       node.status === 'connecting' ? 'outline' :
+                       node.status === 'timeout' ? 'outline' : 'outline'}
+                          class="transition-all duration-300 {
+                            node.status === 'online' ? 'bg-green-500 text-white animate-pulse' :
+                            node.status === 'offline' ? 'bg-red-500 text-white' :
+                            node.status === 'connecting' ? 'bg-yellow-500 text-white animate-pulse' :
+                            node.status === 'timeout' ? 'bg-orange-500 text-white' :
+                            'bg-gray-500 text-white'
+                          }"
+                          style="pointer-events: none;"
+                        >
+                          {node.status}
+                        </Badge>
+                      </div>
           </div>
           
-          <div class="grid grid-cols-2 gap-4 mb-3">
-            <div>
+          <div class="grid grid-cols-4 gap-3 mb-3">
+            <div class="text-center p-2 rounded bg-background border border-border/30">
               <p class="text-xs text-muted-foreground">{$t('proxy.bandwidth')}</p>
-              <p class="text-sm font-medium">{node.latency ? Math.round(100 - node.latency) : 'N/A'} Mbps</p>
+              <p class="text-sm font-bold text-blue-600">{node.latency ? Math.round(100 - node.latency) : 'N/A'}</p>
+              <p class="text-xs text-muted-foreground">Mbps</p>
             </div>
-            <div>
+            <div class="text-center p-2 rounded bg-background border border-border/30">
               <p class="text-xs text-muted-foreground">{$t('proxy.latency')}</p>
-              <p class="text-sm font-medium">{node.latency || 'N/A'} ms</p>
+              <p class="text-sm font-bold text-purple-600">{node.latency || 'N/A'}</p>
+              <p class="text-xs text-muted-foreground">ms</p>
             </div>
+            {#if node.address}
+              {@const stats = getPerformanceStats(node.address)}
+              <div class="text-center p-2 rounded bg-background border border-border/30">
+                <p class="text-xs text-muted-foreground">Reliability</p>
+                <p class="text-sm font-bold {
+                  stats.uptimePercentage >= 80 ? 'text-green-600' :
+                  stats.uptimePercentage >= 60 ? 'text-yellow-600' :
+                  'text-red-600'
+                }">{stats.uptimePercentage}%</p>
+                <div class="w-8 h-1 bg-muted rounded-full overflow-hidden mx-auto mt-1">
+                  <div
+                    class="h-full transition-all duration-300 {
+                      stats.uptimePercentage >= 80 ? 'bg-green-500' :
+                      stats.uptimePercentage >= 60 ? 'bg-yellow-500' :
+                      'bg-red-500'
+                    }"
+                    style="width: {stats.uptimePercentage}%"
+                  ></div>
+                </div>
+              </div>
+              <div class="text-center p-2 rounded bg-background border border-border/30">
+                <p class="text-xs text-muted-foreground">Success</p>
+                <p class="text-sm font-bold text-gray-600">{stats.successfulConnections}/{stats.totalAttempts}</p>
+                <p class="text-xs text-muted-foreground">attempts</p>
+              </div>
+            {:else}
+              <div class="col-span-2"></div>
+            {/if}
           </div>
-          
-          <div class="flex gap-2">
+
+          <div class="flex justify-end gap-2">
             <Button
               size="sm"
               variant="outline"
