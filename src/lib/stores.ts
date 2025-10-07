@@ -434,15 +434,13 @@ export interface AppSettings {
   port: number;
   enableUPnP: boolean;
   enableNAT: boolean;
-  enableAutoRelay: boolean; // Circuit Relay v2 for NAT traversal
-  preferredRelays: string; // Newline-separated relay multiaddrs
   userLocation: string;
   enableProxy: boolean; // For SOCKS5 feature
   proxyAddress: string; // For SOCKS5 feature
   enableAutonat: boolean; // AutoNAT reachability detection
   autonatProbeInterval: number; // Seconds between AutoNAT probes
   autonatServers: string[]; // Custom AutoNAT server multiaddrs
-  enableAutorelay: boolean; // Circuit Relay v2 with AutoRelay
+  enableAutorelay: boolean; // Circuit Relay v2 with AutoRelay (renamed from enableAutoRelay)
   preferredRelays: string[]; // Preferred relay node multiaddrs
   anonymousMode: boolean;
   shareAnalytics: boolean;
@@ -473,15 +471,13 @@ export const settings = writable<AppSettings>({
   port: 30303,
   enableUPnP: true,
   enableNAT: true,
-  enableAutoRelay: true, // Enabled by default
-  preferredRelays: "", // Empty by default, will use bootstrap nodes
   userLocation: "US-East",
   enableProxy: true, // Defaulting to enabled for SOCKS5 feature
   proxyAddress: "127.0.0.1:9050", // Default Tor SOCKS address
   enableAutonat: true, // Enable AutoNAT by default
   autonatProbeInterval: 30, // 30 seconds default
   autonatServers: [], // Use bootstrap nodes by default
-  enableAutorelay: true, // Enable AutoRelay by default
+  enableAutorelay: false, // Enable AutoRelay by default (disabled until configured)
   preferredRelays: [], // Use bootstrap nodes as relays by default
   anonymousMode: false,
   shareAnalytics: true,
