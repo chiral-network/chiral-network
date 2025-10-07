@@ -792,46 +792,6 @@ async fn stop_dht_node(app: tauri::AppHandle, state: State<'_, AppState>) -> Res
     Ok(())
 }
 
-#[tauri::command]
-async fn publish_file_metadata(
-    state: State<'_, AppState>,
-    file_hash: String,
-    file_name: String,
-    file_size: u64,
-    mime_type: Option<String>,
-) -> Result<(), String> {
-    let dht = {
-        let dht_guard = state.dht.lock().await;
-        dht_guard.as_ref().cloned()
-    };
-
-    if let Some(dht) = dht {
-        let metadata = FileMetadata {
-            file_hash,
-            file_name,
-            file_size,
-            file_data: vec![],
-            seeders: vec![],
-            created_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-            mime_type,
-            is_encrypted: false,
-            encryption_method: None,
-            key_fingerprint: None,
-            merkle_root: None,
-            parent_hash: None,
-            version: Some(1),
-            cids: None,
-            is_root: false,
-        };
-
-        dht.publish_file(metadata).await
-    } else {
-        Err("DHT node is not running".to_string())
-    }
-}
 
 #[tauri::command]
 async fn stop_publishing_file(state: State<'_, AppState>, file_hash: String) -> Result<(), String> {
@@ -1632,178 +1592,7 @@ async fn download_file_from_network(
     }
 }
 
-#[tauri::command]
-async fn upload_file_data_to_network(
-    state: State<'_, AppState>,
-    file_name: String,
-    file_data: Vec<u8>,
-    mime_type: Option<String>,
-    is_encrypted: bool,
-    encryption_method: Option<String>,
-    key_fingerprint: Option<String>,
-) -> Result<FileMetadata, String> {
-    // Check for active account - require login for all uploads
-    let _account = get_active_account(&state).await?;
 
-    let dht_opt = { state.dht.lock().await.as_ref().cloned() };
-    if let Some(dht) = dht_opt {
-        // Calculate file hash from the provided data
-        let file_hash = FileTransferService::calculate_file_hash(&file_data);
-
-        let created_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        // Create metadata
-        let metadata = FileMetadata {
-            file_hash: file_hash.clone(),
-            file_name: file_name.clone(),
-            file_size: file_data.len() as u64,
-            file_data: file_data.clone(),
-            seeders: vec![],
-            created_at,
-            mime_type,
-            is_encrypted,
-            encryption_method,
-            key_fingerprint,
-            merkle_root: None,
-            parent_hash: None,
-            version: Some(1),
-            cids: None,
-            is_root: true,
-        };
-
-        // Store file data locally for seeding
-        let ft = {
-            let ft_guard = state.file_transfer.lock().await;
-            ft_guard.as_ref().cloned()
-        };
-        if let Some(ft) = ft {
-            ft.store_file_data(file_hash.clone(), file_name, file_data).await;
-        }
-
-        // Publish to DHT
-        dht.publish_file(metadata.clone()).await?;
-        Ok(metadata)
-    } else {
-        Err("DHT not running".into())
-    }
-}
-
-#[tauri::command]
-async fn store_file_data_from_path(
-    state: State<'_, AppState>,
-    file_path: String,
-    file_hash: String,
-    file_name: String,
-) -> Result<(), String> {
-    let ft = {
-        let ft_guard = state.file_transfer.lock().await;
-        ft_guard.as_ref().cloned()
-    };
-    if let Some(ft) = ft {
-        // Read file data from path
-        let file_data = tokio::fs::read(&file_path)
-            .await
-            .map_err(|e| format!("Failed to read file: {}", e))?;
-        
-        ft.store_file_data(file_hash, file_name, file_data).await;
-        Ok(())
-    } else {
-        Err("File transfer service not running".to_string())
-    }
-}
-
-#[tauri::command]
-async fn upload_file_to_network(
-    state: State<'_, AppState>,
-    file_path: String,
-) -> Result<FileMetadata, String> {
-    // Check for active account - require login for all uploads
-    let _account = get_active_account(&state).await?;
-
-    let dht_opt = { state.dht.lock().await.as_ref().cloned() };
-    if let Some(dht) = dht_opt {
-        // Stream the file data instead of loading it all into memory
-        let mut file = tokio::fs::File::open(&file_path)
-            .await
-            .map_err(|e| format!("Failed to open file: {}", e))?;
-
-        // Calculate file hash incrementally while reading
-        let mut hasher = sha2::Sha256::new();
-        let mut file_data = Vec::new();
-        let mut buffer = [0u8; 8192]; // 8KB buffer
-
-        loop {
-            let bytes_read = file
-                .read(&mut buffer)
-                .await
-                .map_err(|e| format!("Failed to read file: {}", e))?;
-
-            if bytes_read == 0 {
-                break;
-            }
-
-            let chunk = &buffer[..bytes_read];
-            hasher.update(chunk);
-            file_data.extend_from_slice(chunk);
-        }
-
-        let file_hash = format!("{:x}", hasher.finalize());
-
-        // Get file name from path
-        let file_name = std::path::Path::new(&file_path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown")
-            .to_string();
-
-        let created_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        // Create metadata
-        let metadata = FileMetadata {
-            file_hash: file_hash.clone(),
-            file_name: file_name.clone(),
-            file_size: file_data.len() as u64,
-            file_data: file_data.clone(),
-            seeders: vec![],
-            created_at,
-            mime_type: None,
-            is_encrypted: false,
-            encryption_method: None,
-            key_fingerprint: None,
-            merkle_root: None,
-            parent_hash: None,
-            version: Some(1),
-            cids: None,
-            is_root: true,
-        };
-
-        // Store file data locally for seeding
-        let ft = {
-            let ft_guard = state.file_transfer.lock().await;
-            ft_guard.as_ref().cloned()
-        };
-        if let Some(ft) = ft {
-            ft.store_file_data(file_hash.clone(), file_name, file_data).await;
-        }
-
-        // Publish to DHT
-        dht.publish_file(metadata.clone()).await?;
-
-        // Track upload in analytics
-        state.analytics.record_upload(metadata.file_size).await;
-        state.analytics.record_upload_completed().await;
-
-        Ok(metadata)
-    } else {
-        Err("DHT not running".into())
-    }
-}
 
 #[tauri::command]
 async fn show_in_folder(path: String) -> Result<(), String> {
@@ -1831,6 +1620,31 @@ async fn show_in_folder(path: String) -> Result<(), String> {
             .map_err(|e| format!("Failed to open file manager: {}", e))?;
     }
     Ok(())
+}
+
+/// Save a file blob to a temporary file (for drag-and-drop uploads)
+/// Returns the path to the temp file
+#[tauri::command]
+async fn save_temp_file_for_upload(
+    file_name: String,
+    file_data: Vec<u8>,
+) -> Result<String, String> {
+    let temp_dir = std::env::temp_dir().join("chiral_uploads");
+    fs::create_dir_all(&temp_dir)
+        .map_err(|e| format!("Failed to create temp directory: {}", e))?;
+
+    // Create unique temp file path
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_file_path = temp_dir.join(format!("{}_{}", timestamp, file_name));
+
+    // Write file data
+    fs::write(&temp_file_path, file_data)
+        .map_err(|e| format!("Failed to write temp file: {}", e))?;
+
+    Ok(temp_file_path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -3249,7 +3063,6 @@ fn main() {
             get_cpu_temperature,
             start_dht_node,
             stop_dht_node,
-            publish_file_metadata,
             stop_publishing_file,
             search_file_metadata,
             connect_to_peer,
@@ -3261,9 +3074,6 @@ fn main() {
             get_dht_connected_peers,
             send_dht_message,
             start_file_transfer_service,
-            upload_file_to_network,
-            upload_file_data_to_network,
-            store_file_data_from_path,
             download_file_from_network,
             download_blocks_from_network,
             start_multi_source_download,
@@ -3313,8 +3123,10 @@ fn main() {
             get_resource_contribution,
             get_contribution_history,
             reset_analytics,
+            save_temp_file_for_upload,
             encrypt_file_for_self_upload,
             encrypt_file_for_recipient,
+            upload_and_publish_file,
             decrypt_and_reassemble_file,
             get_file_data,
             store_file_data
@@ -3591,6 +3403,100 @@ async fn encrypt_file_for_recipient(
     })
     .await
     .map_err(|e| format!("Encryption task failed: {}", e))?
+}
+
+/// Unified upload command: processes file with ChunkManager and auto-publishes to DHT
+/// Returns file metadata for frontend use
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadResult {
+    merkle_root: String,
+    file_name: String,
+    file_size: u64,
+    is_encrypted: bool,
+    peer_id: String,
+    version: u32,
+}
+
+#[tauri::command]
+async fn upload_and_publish_file(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    file_path: String,
+    file_name: Option<String>,
+    recipient_public_key: Option<String>,
+) -> Result<UploadResult, String> {
+    // 1. Process file with ChunkManager (encrypt, chunk, build Merkle tree)
+    let manifest = encrypt_file_for_recipient(
+        app.clone(),
+        state.clone(),
+        file_path.clone(),
+        recipient_public_key.clone(),
+    )
+    .await?;
+
+    // 2. Get file name (use provided name or extract from path)
+    let file_name = file_name.unwrap_or_else(|| {
+        std::path::Path::new(&file_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown")
+            .to_string()
+    });
+
+    let file_size: u64 = manifest.chunks.iter().map(|c| c.size as u64).sum();
+
+    // 3. Get peer ID from DHT
+    let peer_id = {
+        let dht_guard = state.dht.lock().await;
+        if let Some(dht) = dht_guard.as_ref() {
+            dht.get_peer_id().await
+        } else {
+            "unknown".to_string()
+        }
+    };
+
+    // 4. Publish to DHT with versioning support
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    let version = if let Some(dht) = dht {
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // Use prepare_versioned_metadata to handle version incrementing and parent_hash
+        let metadata = dht.prepare_versioned_metadata(
+            manifest.merkle_root.clone(),
+            file_name.clone(),
+            file_size,
+            vec![],  // Empty - chunks already stored
+            created_at,
+            None,  // TODO: detect mime type from file extension
+            true,  // is_encrypted
+            Some("AES-256-GCM".to_string()),
+            None,  // key_fingerprint
+        ).await?;
+
+        let version = metadata.version.unwrap_or(1);
+        dht.publish_file(metadata).await?;
+        version
+    } else {
+        1  // Default to v1 if DHT not running
+    };
+
+    // 5. Return metadata to frontend
+    Ok(UploadResult {
+        merkle_root: manifest.merkle_root,
+        file_name,
+        file_size,
+        is_encrypted: true,
+        peer_id,
+        version,
+    })
 }
 
 #[tauri::command]
