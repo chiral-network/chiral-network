@@ -9,6 +9,7 @@
   import { get } from 'svelte/store';
   import { t } from 'svelte-i18n';
   import { dhtService } from '$lib/dht';
+  import { files } from '$lib/stores';
   import type { FileMetadata } from '$lib/dht';
   import SearchResultCard from './SearchResultCard.svelte';
   import { dhtSearchHistory, type SearchHistoryEntry, type SearchStatus } from '$lib/stores/searchHistory';
@@ -147,6 +148,29 @@
           pushMessage(`No versions found for "${trimmed}"`, 'warning', 6000);
         }
       } else {
+        // First, check local files for the hash (immediate local seed)
+        const localMatch = get(files).find(f => f.hash === trimmed || f.name === trimmed);
+        if (localMatch) {
+          const metadata: FileMetadata = {
+            fileHash: localMatch.hash,
+            fileName: localMatch.name,
+            fileSize: localMatch.size || 0,
+            seeders: [ 'local_peer' ],
+            createdAt: localMatch.uploadDate ? localMatch.uploadDate.getTime() : Date.now(),
+            isEncrypted: !!localMatch.isEncrypted,
+            manifest: localMatch.manifest ? JSON.stringify(localMatch.manifest) : undefined,
+          };
+
+          latestMetadata = metadata;
+          latestStatus = 'found';
+          const entry = dhtSearchHistory.addPending(trimmed);
+          activeHistoryId = entry.id;
+          dhtSearchHistory.updateEntry(entry.id, { status: 'found', metadata, elapsedMs: Math.round(performance.now() - startedAt) });
+          pushMessage(tr('download.search.status.foundNotification', { values: { name: metadata.fileName } }), 'success');
+          isSearching = false;
+          return;
+        }
+
         // Original hash search
         const entry = dhtSearchHistory.addPending(trimmed);
         activeHistoryId = entry.id;
@@ -308,13 +332,13 @@
           on:click={() => { searchMode = 'hash'; versionResults = []; }}
           class="px-3 py-1 text-sm rounded-md border transition-colors {searchMode === 'hash' ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/50 hover:bg-muted border-border'}"
         >
-          Search by Hash
+          {tr('download.searchByHash')}
         </button>
         <button
           on:click={() => { searchMode = 'name'; latestMetadata = null; }}
           class="px-3 py-1 text-sm rounded-md border transition-colors {searchMode === 'name' ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/50 hover:bg-muted border-border'}"
         >
-          Search by Name (Versions)
+          {tr('download.searchByName')}
         </button>
       </div>
 
@@ -453,6 +477,7 @@
               <SearchResultCard
                 metadata={latestMetadata}
                 on:copy={handleCopy}
+                on:download={event => dispatch('download', event.detail)}
               />
               <p class="text-xs text-muted-foreground">
                 {tr('download.search.status.completedIn', { values: { seconds: (lastSearchDuration / 1000).toFixed(1) } })}

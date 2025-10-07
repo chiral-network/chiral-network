@@ -2,20 +2,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { AppSettings } from "./stores";
-import { homeDir, join } from "@tauri-apps/api/path";
+import { homeDir } from "@tauri-apps/api/path";
 //importing reputation store for the reputation based peer discovery
 import ReputationStore from "$lib/reputationStore";
 const __rep = ReputationStore.getInstance();
-
-// Default bootstrap nodes for network connectivity
-export const DEFAULT_BOOTSTRAP_NODES = [
-  "/ip4/145.40.118.135/tcp/4001/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
-  "/ip4/139.178.91.71/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
-  "/ip4/147.75.87.27/tcp/4001/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
-  "/ip4/139.178.65.157/tcp/4001/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
-  "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
-  "/ip4/54.198.145.146/tcp/4001/p2p/12D3KooWNHdYWRTe98KMF1cDXXqGXvNjd1SAchDaeP5o4MsoJLu2",
-];
 
 export type NatReachabilityState = "unknown" | "public" | "private";
 export type NatConfidence = "low" | "medium" | "high";
@@ -62,12 +52,18 @@ export interface FileManifestForJs {
 
 export const encryptionService = {
   async encryptFile(filePath: string): Promise<FileManifestForJs> {
-    return await invoke('encrypt_file_for_upload', { filePath });
+    return await invoke("encrypt_file_for_upload", { filePath });
   },
 
-  async decryptFile(manifest: FileManifestForJs, outputPath: string): Promise<void> {
-    await invoke('decrypt_and_reassemble_file', { manifestJs: manifest, outputPath });
-  }
+  async decryptFile(
+    manifest: FileManifestForJs,
+    outputPath: string
+  ): Promise<void> {
+    await invoke("decrypt_and_reassemble_file", {
+      manifestJs: manifest,
+      outputPath,
+    });
+  },
 };
 
 export interface DhtHealth {
@@ -86,6 +82,13 @@ export interface DhtHealth {
   observedAddrs: string[];
   reachabilityHistory: NatHistoryItem[];
   autonatEnabled: boolean;
+  // DCUtR hole-punching metrics
+  dcutrEnabled: boolean;
+  dcutrHolePunchAttempts: number;
+  dcutrHolePunchSuccesses: number;
+  dcutrHolePunchFailures: number;
+  lastDcutrSuccess: number | null;
+  lastDcutrFailure: number | null;
 }
 
 export class DhtService {
@@ -112,7 +115,7 @@ export class DhtService {
 
     // Use default bootstrap nodes if none provided
     if (bootstrapNodes.length === 0) {
-      bootstrapNodes = DEFAULT_BOOTSTRAP_NODES;
+      bootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command");
       console.log("Using default bootstrap nodes for network connectivity");
     } else {
       console.log(`Using ${bootstrapNodes.length} custom bootstrap nodes`);
@@ -252,7 +255,10 @@ export class DhtService {
               // Write file to disk
               console.log(`File saved to: ${resolvedStoragePath}`);
 
-              await invoke("write_file", { path: resolvedStoragePath, contents: Array.from(fileData) });
+              await invoke("write_file", {
+                path: resolvedStoragePath,
+                contents: Array.from(fileData),
+              });
               console.log(`File saved to: ${resolvedStoragePath}`);
             }
 
@@ -302,7 +308,9 @@ export class DhtService {
     const __pid = (peerAddress?.split("/p2p/")[1] ?? peerAddress)?.trim();
     if (__pid) {
       // Mark we’ve seen this peer (freshness)
-      try { __rep.noteSeen(__pid); } catch {}
+      try {
+        __rep.noteSeen(__pid);
+      } catch {}
     }
 
     try {
@@ -311,14 +319,18 @@ export class DhtService {
 
       // ADD: count a success (no RTT here, the backend doesn’t expose it)
       if (__pid) {
-        try { __rep.success(__pid); } catch {}
+        try {
+          __rep.success(__pid);
+        } catch {}
       }
     } catch (error) {
       console.error("Failed to connect to peer:", error);
 
       // ADD: count a failure so low-quality peers drift down
       if (__pid) {
-        try { __rep.failure(__pid); } catch {}
+        try {
+          __rep.failure(__pid);
+        } catch {}
       }
       throw error;
     }

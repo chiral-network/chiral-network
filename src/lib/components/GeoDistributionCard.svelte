@@ -151,7 +151,7 @@
           {tr('network.geoDistribution.emptyState')}
         </div>
       {:else}
-        {#each distribution.regions as region (region.regionId)}
+        {#each distribution.regions.sort((a, b) => b.count - a.count).slice(0, 3) as region (region.regionId)}
           <div class="p-3 rounded-lg border border-border/60 bg-background/70 shadow-sm">
             <div class="flex items-center justify-between gap-3">
               <div class="flex items-center gap-2 min-w-0">
