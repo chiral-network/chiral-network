@@ -12,6 +12,7 @@ mod ethereum;
 mod file_transfer;
 mod geth_downloader;
 mod headless;
+mod stream_auth;
 mod keystore;
 mod manager;
 mod multi_source_download;
@@ -60,6 +61,10 @@ use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{error, info, warn};
 use webrtc_service::{WebRTCFileRequest, WebRTCService};
 use multi_source_download::{MultiSourceDownloadService, MultiSourceEvent, MultiSourceProgress};
+use chiral_network::stream_auth::{
+    StreamAuthService, AuthMessage, 
+    HmacKeyExchangeRequest, HmacKeyExchangeResponse, HmacKeyExchangeConfirmation
+};
 
 use crate::manager::ChunkManager; // Import the ChunkManager
 use base64::{engine::general_purpose, Engine as _}; // For key encoding
@@ -114,6 +119,9 @@ struct AppState {
 
     // New field for streaming upload sessions
     upload_sessions: Arc<Mutex<std::collections::HashMap<String, StreamingUploadSession>>>,
+    
+    // Stream authentication service
+    stream_auth: Arc<Mutex<StreamAuthService>>,
 }
 
 #[tauri::command]
@@ -862,6 +870,97 @@ async fn get_dht_connected_peers(state: State<'_, AppState>) -> Result<Vec<Strin
     } else {
         Ok(Vec::new()) // Return empty vector if DHT is not running
     }
+}
+
+#[tauri::command]
+async fn create_auth_session(
+    state: State<'_, AppState>,
+    session_id: String,
+    hmac_key: Vec<u8>,
+) -> Result<(), String> {
+    let mut auth_service = state.stream_auth.lock().await;
+    auth_service.create_session(session_id, hmac_key)
+}
+
+#[tauri::command]
+async fn verify_stream_auth(
+    state: State<'_, AppState>,
+    session_id: String,
+    auth_message: AuthMessage,
+) -> Result<bool, String> {
+    let mut auth_service = state.stream_auth.lock().await;
+    auth_service.verify_data(&session_id, &auth_message)
+}
+
+#[tauri::command]
+async fn generate_hmac_key() -> Vec<u8> {
+    StreamAuthService::generate_hmac_key()
+}
+
+#[tauri::command]
+async fn cleanup_auth_sessions(state: State<'_, AppState>) -> Result<(), String> {
+    let mut auth_service = state.stream_auth.lock().await;
+    auth_service.cleanup_expired_sessions();
+    auth_service.cleanup_expired_exchanges();
+    Ok(())
+}
+
+#[tauri::command]
+async fn initiate_hmac_key_exchange(
+    state: State<'_, AppState>,
+    initiator_peer_id: String,
+    target_peer_id: String,
+    session_id: String,
+) -> Result<HmacKeyExchangeRequest, String> {
+    let mut auth_service = state.stream_auth.lock().await;
+    auth_service.initiate_key_exchange(initiator_peer_id, target_peer_id, session_id)
+}
+
+#[tauri::command]
+async fn respond_to_hmac_key_exchange(
+    state: State<'_, AppState>,
+    request: HmacKeyExchangeRequest,
+    responder_peer_id: String,
+) -> Result<HmacKeyExchangeResponse, String> {
+    let mut auth_service = state.stream_auth.lock().await;
+    auth_service.respond_to_key_exchange(request, responder_peer_id)
+}
+
+#[tauri::command]
+async fn confirm_hmac_key_exchange(
+    state: State<'_, AppState>,
+    response: HmacKeyExchangeResponse,
+    initiator_peer_id: String,
+) -> Result<HmacKeyExchangeConfirmation, String> {
+    let mut auth_service = state.stream_auth.lock().await;
+    auth_service.confirm_key_exchange(response, initiator_peer_id)
+}
+
+#[tauri::command]
+async fn finalize_hmac_key_exchange(
+    state: State<'_, AppState>,
+    confirmation: HmacKeyExchangeConfirmation,
+    responder_peer_id: String,
+) -> Result<(), String> {
+    let mut auth_service = state.stream_auth.lock().await;
+    auth_service.finalize_key_exchange(confirmation, responder_peer_id)
+}
+
+#[tauri::command]
+async fn get_hmac_exchange_status(
+    state: State<'_, AppState>,
+    exchange_id: String,
+) -> Result<Option<String>, String> {
+    let auth_service = state.stream_auth.lock().await;
+    Ok(auth_service.get_exchange_status(&exchange_id).map(|s| format!("{:?}", s)))
+}
+
+#[tauri::command]
+async fn get_active_hmac_exchanges(
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    let auth_service = state.stream_auth.lock().await;
+    Ok(auth_service.get_active_exchanges())
 }
 
 #[tauri::command]
@@ -3022,6 +3121,9 @@ fn main() {
 
             // Initialize upload sessions
             upload_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            
+            // Initialize stream authentication
+            stream_auth: Arc::new(Mutex::new(StreamAuthService::new())),
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
@@ -3128,6 +3230,16 @@ fn main() {
             encrypt_file_for_recipient,
             upload_and_publish_file,
             decrypt_and_reassemble_file,
+            create_auth_session,
+            verify_stream_auth,
+            generate_hmac_key,
+            cleanup_auth_sessions,
+            initiate_hmac_key_exchange,
+            respond_to_hmac_key_exchange,
+            confirm_hmac_key_exchange,
+            finalize_hmac_key_exchange,
+            get_hmac_exchange_status,
+            get_active_hmac_exchanges,
             get_file_data,
             store_file_data
         ])
