@@ -464,11 +464,14 @@ where
 {
     let salt_bytes = hex::decode(salt_hex).map_err(|_| "Invalid salt format".to_string())?;
     let iv_bytes = hex::decode(iv_hex).map_err(|_| "Invalid IV format".to_string())?;
-    let mut ciphertext = hex::decode(encrypted_hex).map_err(|_| "Invalid ciphertext".to_string())?;
+    let mut ciphertext =
+        hex::decode(encrypted_hex).map_err(|_| "Invalid ciphertext".to_string())?;
 
     let key = derive_fn(password, &salt_bytes);
 
-    let iv_array: [u8; 16] = iv_bytes.try_into().map_err(|_| "Invalid IV length".to_string())?;
+    let iv_array: [u8; 16] = iv_bytes
+        .try_into()
+        .map_err(|_| "Invalid IV length".to_string())?;
     let mut cipher = Aes256Ctr::new(&key.into(), &iv_array.into());
     cipher.apply_keystream(&mut ciphertext);
 

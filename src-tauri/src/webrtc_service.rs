@@ -1,7 +1,7 @@
 use crate::encryption::{decrypt_aes_key, encrypt_aes_key, EncryptedAesKeyBundle, FileEncryption};
 use crate::file_transfer::FileTransferService;
 use crate::keystore::Keystore;
-use crate::stream_auth::{StreamAuthService, AuthMessage};
+use crate::stream_auth::{AuthMessage, StreamAuthService};
 use aes_gcm::aead::{Aead, OsRng};
 use aes_gcm::{AeadCore, Aes256Gcm, KeyInit};
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,6 @@ use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
-
 
 const CHUNK_SIZE: usize = 16384; // 16KB chunks
 
@@ -41,7 +40,7 @@ pub struct FileChunk {
     pub data: Vec<u8>,
     pub checksum: String,
     pub encrypted_key_bundle: Option<EncryptedAesKeyBundle>, // For encrypted transfers
-    pub auth_message: Option<AuthMessage>, // Stream authentication
+    pub auth_message: Option<AuthMessage>,                   // Stream authentication
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -220,7 +219,17 @@ impl WebRTCService {
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
                 WebRTCCommand::EstablishConnection { peer_id, offer } => {
-                    Self::handle_establish_connection(&peer_id, &offer, &event_tx, &connections, &file_transfer_service, &keystore, &active_private_key, &stream_auth).await;
+                    Self::handle_establish_connection(
+                        &peer_id,
+                        &offer,
+                        &event_tx,
+                        &connections,
+                        &file_transfer_service,
+                        &keystore,
+                        &active_private_key,
+                        &stream_auth,
+                    )
+                    .await;
                 }
                 WebRTCCommand::HandleAnswer { peer_id, answer } => {
                     Self::handle_answer(&peer_id, &answer, &connections).await;
@@ -332,7 +341,17 @@ impl WebRTCService {
             let stream_auth = stream_auth_clone.clone();
 
             Box::pin(async move {
-                Self::handle_data_channel_message(&peer_id, &msg, &event_tx, &file_transfer_service, &connections, &keystore, &active_private_key, &stream_auth).await;
+                Self::handle_data_channel_message(
+                    &peer_id,
+                    &msg,
+                    &event_tx,
+                    &file_transfer_service,
+                    &connections,
+                    &keystore,
+                    &active_private_key,
+                    &stream_auth,
+                )
+                .await;
             })
         }));
 
@@ -628,11 +647,23 @@ impl WebRTCService {
             // Try to parse as FileChunk
             if let Ok(chunk) = serde_json::from_str::<FileChunk>(text) {
                 // Handle received chunk
-                Self::process_incoming_chunk(&chunk, file_transfer_service, connections, event_tx, peer_id, keystore, &active_private_key, stream_auth).await;
-                let _ = event_tx.send(WebRTCEvent::FileChunkReceived {
-                    peer_id: peer_id.to_string(),
-                    chunk,
-                }).await;
+                Self::process_incoming_chunk(
+                    &chunk,
+                    file_transfer_service,
+                    connections,
+                    event_tx,
+                    peer_id,
+                    keystore,
+                    &active_private_key,
+                    stream_auth,
+                )
+                .await;
+                let _ = event_tx
+                    .send(WebRTCEvent::FileChunkReceived {
+                        peer_id: peer_id.to_string(),
+                        chunk,
+                    })
+                    .await;
             }
             // Try to parse as WebRTCFileRequest
             else if let Ok(request) = serde_json::from_str::<WebRTCFileRequest>(text) {
@@ -698,14 +729,17 @@ impl WebRTCService {
         if request.recipient_public_key.is_none() {
             let session_id = format!("{}-{}", peer_id, request.file_hash);
             let mut auth_service = stream_auth.lock().await;
-            
+
             // Generate HMAC key for this session
             let hmac_key = StreamAuthService::generate_hmac_key();
-            
+
             // Create session with HMAC key (will be replaced by key exchange)
             match auth_service.create_session(session_id.clone(), hmac_key) {
                 Ok(_) => {
-                    info!("Created HMAC session for unencrypted transfer: {}", session_id);
+                    info!(
+                        "Created HMAC session for unencrypted transfer: {}",
+                        session_id
+                    );
                 }
                 Err(e) => {
                     warn!("Failed to create HMAC session: {}", e);
@@ -743,7 +777,9 @@ impl WebRTCService {
                 if let Some(ref recipient_key) = request.recipient_public_key {
                     // Encrypted transfer - no HMAC authentication needed (AES-256-GCM provides AEAD)
                     match Self::encrypt_chunk_for_peer(&chunk_data, recipient_key, keystore).await {
-                        Ok((encrypted_data, key_bundle)) => (encrypted_data, Some(key_bundle), None),
+                        Ok((encrypted_data, key_bundle)) => {
+                            (encrypted_data, Some(key_bundle), None)
+                        }
                         Err(e) => {
                             let _ = event_tx
                                 .send(WebRTCEvent::TransferFailed {
@@ -759,7 +795,7 @@ impl WebRTCService {
                     // Unencrypted transfer - use HMAC authentication
                     let session_id = format!("{}-{}", peer_id, request.file_hash);
                     let mut auth_service = stream_auth.lock().await;
-                    
+
                     // Create authenticated chunk
                     match auth_service.create_authenticated_chunk(
                         &session_id,
@@ -861,9 +897,15 @@ impl WebRTCService {
         if let Some(ref auth_msg) = chunk.auth_message {
             let mut auth_service = stream_auth.lock().await;
             let session_id = format!("{}-{}", peer_id, chunk.file_hash);
-            
-            if !auth_service.verify_data(&session_id, auth_msg).unwrap_or(false) {
-                warn!("Stream authentication failed for chunk from peer {}", peer_id);
+
+            if !auth_service
+                .verify_data(&session_id, auth_msg)
+                .unwrap_or(false)
+            {
+                warn!(
+                    "Stream authentication failed for chunk from peer {}",
+                    peer_id
+                );
                 return;
             }
         }
@@ -877,11 +919,9 @@ impl WebRTCService {
             };
 
             if let Some(private_key) = private_key_opt {
-                match Self::decrypt_chunk_from_peer(
-                    &chunk.data,
-                    encrypted_key_bundle,
-                    &private_key,
-                ).await {
+                match Self::decrypt_chunk_from_peer(&chunk.data, encrypted_key_bundle, &private_key)
+                    .await
+                {
                     Ok(decrypted_data) => decrypted_data,
                     Err(e) => {
                         warn!("Failed to decrypt chunk from peer {}: {}", peer_id, e);
@@ -889,7 +929,10 @@ impl WebRTCService {
                     }
                 }
             } else {
-                warn!("Encrypted chunk received but no active private key available for peer: {}", peer_id);
+                warn!(
+                    "Encrypted chunk received but no active private key available for peer: {}",
+                    peer_id
+                );
                 chunk.data.clone() // Return encrypted data as fallback
             }
         } else {
@@ -948,7 +991,9 @@ impl WebRTCService {
 
         // Store the assembled file
         let file_name = format!("downloaded_{}", file_hash);
-        file_transfer_service.store_file_data(file_hash.to_string(), file_name, file_data).await;
+        file_transfer_service
+            .store_file_data(file_hash.to_string(), file_name, file_data)
+            .await;
 
         let _ = event_tx
             .send(WebRTCEvent::TransferCompleted {
@@ -1011,7 +1056,17 @@ impl WebRTCService {
             let stream_auth = stream_auth_clone.clone();
 
             Box::pin(async move {
-                Self::handle_data_channel_message(&peer_id, &msg, &event_tx, &file_transfer_service, &connections, &keystore, &active_private_key, &stream_auth).await;
+                Self::handle_data_channel_message(
+                    &peer_id,
+                    &msg,
+                    &event_tx,
+                    &file_transfer_service,
+                    &connections,
+                    &keystore,
+                    &active_private_key,
+                    &stream_auth,
+                )
+                .await;
             })
         }));
 
@@ -1168,7 +1223,17 @@ impl WebRTCService {
             let stream_auth = stream_auth_clone.clone();
 
             Box::pin(async move {
-                Self::handle_data_channel_message(&peer_id, &msg, &event_tx, &file_transfer_service, &connections, &keystore, &active_private_key, &stream_auth).await;
+                Self::handle_data_channel_message(
+                    &peer_id,
+                    &msg,
+                    &event_tx,
+                    &file_transfer_service,
+                    &connections,
+                    &keystore,
+                    &active_private_key,
+                    &stream_auth,
+                )
+                .await;
             })
         }));
 

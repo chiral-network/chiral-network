@@ -1,11 +1,11 @@
+use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
-use sha2::{Sha256, Digest};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, warn};
-use hkdf::Hkdf;
-use rand::RngCore;
 use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -38,7 +38,7 @@ pub struct AuthMessage {
     pub timestamp: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AuthMessageType {
     /// Initial handshake
     Handshake,
@@ -176,8 +176,15 @@ impl StreamAuthService {
     }
 
     /// Generate HMAC signature for data
-    pub fn sign_data(&mut self, session_id: &str, data: &[u8], message_type: AuthMessageType) -> Result<AuthMessage, String> {
-        let session = self.sessions.get_mut(session_id)
+    pub fn sign_data(
+        &mut self,
+        session_id: &str,
+        data: &[u8],
+        message_type: AuthMessageType,
+    ) -> Result<AuthMessage, String> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
             .ok_or("Session not found")?;
 
         // Update sequence and timestamp
@@ -190,7 +197,7 @@ impl StreamAuthService {
         // Create message to sign
         let timestamp = session.last_activity;
         let sequence = session.sequence;
-        
+
         // Combine all data for signing: type + data + sequence + timestamp
         let mut sign_data = Vec::new();
         sign_data.extend_from_slice(&[message_type.clone() as u8]);
@@ -214,13 +221,23 @@ impl StreamAuthService {
     }
 
     /// Verify HMAC signature for received data
-    pub fn verify_data(&mut self, session_id: &str, auth_msg: &AuthMessage) -> Result<bool, String> {
-        let session = self.sessions.get_mut(session_id)
+    pub fn verify_data(
+        &mut self,
+        session_id: &str,
+        auth_msg: &AuthMessage,
+    ) -> Result<bool, String> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
             .ok_or("Session not found")?;
 
         // Check sequence number (should be next expected)
         if auth_msg.sequence != session.sequence + 1 {
-            warn!("Sequence mismatch: expected {}, got {}", session.sequence + 1, auth_msg.sequence);
+            warn!(
+                "Sequence mismatch: expected {}, got {}",
+                session.sequence + 1,
+                auth_msg.sequence
+            );
             return Ok(false);
         }
 
@@ -230,7 +247,10 @@ impl StreamAuthService {
             .unwrap()
             .as_secs();
         if now.saturating_sub(auth_msg.timestamp) > self.session_timeout {
-            warn!("Message too old: {} seconds", now.saturating_sub(auth_msg.timestamp));
+            warn!(
+                "Message too old: {} seconds",
+                now.saturating_sub(auth_msg.timestamp)
+            );
             return Ok(false);
         }
 
@@ -275,7 +295,8 @@ impl StreamAuthService {
             .unwrap()
             .as_secs();
 
-        let expired: Vec<String> = self.sessions
+        let expired: Vec<String> = self
+            .sessions
             .iter()
             .filter(|(_, session)| now.saturating_sub(session.last_activity) > self.session_timeout)
             .map(|(id, _)| id.clone())
@@ -329,13 +350,13 @@ impl StreamAuthService {
             if auth_msg.data.len() < 4 {
                 return Err("Invalid chunk data".to_string());
             }
-            
+
             // Skip chunk_index (4 bytes) and file_hash (32 bytes for SHA-256)
             let data_start = 4 + 32; // chunk_index + file_hash
             if auth_msg.data.len() <= data_start {
                 return Err("No chunk data found".to_string());
             }
-            
+
             Ok(Some(auth_msg.data[data_start..].to_vec()))
         } else {
             Err("Expected DataChunk message type".to_string())
@@ -343,13 +364,25 @@ impl StreamAuthService {
     }
 
     /// Create handshake message
-    pub fn create_handshake(&mut self, session_id: &str, peer_id: &str) -> Result<AuthMessage, String> {
+    pub fn create_handshake(
+        &mut self,
+        session_id: &str,
+        peer_id: &str,
+    ) -> Result<AuthMessage, String> {
         let handshake_data = format!("handshake:{}:{}", session_id, peer_id);
-        self.sign_data(session_id, handshake_data.as_bytes(), AuthMessageType::Handshake)
+        self.sign_data(
+            session_id,
+            handshake_data.as_bytes(),
+            AuthMessageType::Handshake,
+        )
     }
 
     /// Verify handshake message
-    pub fn verify_handshake(&mut self, session_id: &str, auth_msg: &AuthMessage) -> Result<bool, String> {
+    pub fn verify_handshake(
+        &mut self,
+        session_id: &str,
+        auth_msg: &AuthMessage,
+    ) -> Result<bool, String> {
         if !self.verify_data(session_id, auth_msg)? {
             return Ok(false);
         }
@@ -370,13 +403,25 @@ impl StreamAuthService {
     }
 
     /// Create completion message
-    pub fn create_completion(&mut self, session_id: &str, file_hash: &str) -> Result<AuthMessage, String> {
+    pub fn create_completion(
+        &mut self,
+        session_id: &str,
+        file_hash: &str,
+    ) -> Result<AuthMessage, String> {
         let completion_data = format!("complete:{}", file_hash);
-        self.sign_data(session_id, completion_data.as_bytes(), AuthMessageType::Complete)
+        self.sign_data(
+            session_id,
+            completion_data.as_bytes(),
+            AuthMessageType::Complete,
+        )
     }
 
     /// Create error message
-    pub fn create_error(&mut self, session_id: &str, error_msg: &str) -> Result<AuthMessage, String> {
+    pub fn create_error(
+        &mut self,
+        session_id: &str,
+        error_msg: &str,
+    ) -> Result<AuthMessage, String> {
         let error_data = format!("error:{}", error_msg);
         self.sign_data(session_id, error_data.as_bytes(), AuthMessageType::Error)
     }
@@ -392,7 +437,7 @@ impl StreamAuthService {
     ) -> Result<HmacKeyExchangeRequest, String> {
         // Generate unique exchange ID
         let exchange_id = format!("{}-{}-{}", initiator_peer_id, target_peer_id, session_id);
-        
+
         // Check if exchange already exists
         if self.key_exchanges.contains_key(&exchange_id) {
             return Err("Key exchange already in progress".to_string());
@@ -422,7 +467,8 @@ impl StreamAuthService {
             expires_at: now + self.exchange_timeout,
         };
 
-        self.key_exchanges.insert(exchange_id.clone(), exchange_state);
+        self.key_exchanges
+            .insert(exchange_id.clone(), exchange_state);
 
         // Generate nonce for freshness
         let mut nonce_bytes = [0u8; 16];
@@ -493,14 +539,15 @@ impl StreamAuthService {
             expires_at: now + self.exchange_timeout,
         };
 
-        self.key_exchanges.insert(request.exchange_id.clone(), exchange_state);
+        self.key_exchanges
+            .insert(request.exchange_id.clone(), exchange_state);
 
         // Generate confirmation hash
         let mut confirmation_data = Vec::new();
         confirmation_data.extend_from_slice(&hmac_key);
         confirmation_data.extend_from_slice(request.exchange_id.as_bytes());
         confirmation_data.extend_from_slice(&now.to_be_bytes());
-        
+
         let confirmation_hash = sha2::Sha256::digest(&confirmation_data);
         let hmac_key_confirmation = hex::encode(confirmation_hash);
 
@@ -530,17 +577,21 @@ impl StreamAuthService {
     ) -> Result<HmacKeyExchangeConfirmation, String> {
         // Extract necessary data from exchange state
         let (initiator_secret, session_id) = {
-            let exchange_state = self.key_exchanges.get_mut(&response.exchange_id)
+            let exchange_state = self
+                .key_exchanges
+                .get_mut(&response.exchange_id)
                 .ok_or("Key exchange not found")?;
 
             if exchange_state.state != ExchangeState::Initiated {
                 return Err("Invalid exchange state".to_string());
             }
 
-            let secret = exchange_state.initiator_secret.take()
+            let secret = exchange_state
+                .initiator_secret
+                .take()
                 .ok_or("Initiator secret not found")?;
             let session_id = exchange_state.session_id.clone();
-            
+
             (secret, session_id)
         };
 
@@ -563,7 +614,7 @@ impl StreamAuthService {
         expected_confirmation_data.extend_from_slice(&hmac_key);
         expected_confirmation_data.extend_from_slice(response.exchange_id.as_bytes());
         expected_confirmation_data.extend_from_slice(&response.timestamp.to_be_bytes());
-        
+
         let expected_confirmation_hash = sha2::Sha256::digest(&expected_confirmation_data);
         let expected_confirmation = hex::encode(expected_confirmation_hash);
 
@@ -577,7 +628,7 @@ impl StreamAuthService {
         initiator_confirmation_data.extend_from_slice(response.exchange_id.as_bytes());
         initiator_confirmation_data.extend_from_slice(&response.timestamp.to_be_bytes());
         initiator_confirmation_data.extend_from_slice(b"initiator-confirmed");
-        
+
         let initiator_confirmation_hash = sha2::Sha256::digest(&initiator_confirmation_data);
         let initiator_confirmation = hex::encode(initiator_confirmation_hash);
 
@@ -591,7 +642,9 @@ impl StreamAuthService {
 
         // Update exchange state
         {
-            let exchange_state = self.key_exchanges.get_mut(&response.exchange_id)
+            let exchange_state = self
+                .key_exchanges
+                .get_mut(&response.exchange_id)
                 .ok_or("Key exchange not found")?;
             exchange_state.responder_public_key = Some(responder_public_key);
             exchange_state.derived_hmac_key = Some(hmac_key);
@@ -616,14 +669,18 @@ impl StreamAuthService {
     ) -> Result<(), String> {
         // Extract necessary data from exchange state
         let (hmac_key, session_id) = {
-            let exchange_state = self.key_exchanges.get(&confirmation.exchange_id)
+            let exchange_state = self
+                .key_exchanges
+                .get(&confirmation.exchange_id)
                 .ok_or("Key exchange not found")?;
 
             if exchange_state.state != ExchangeState::Responded {
                 return Err("Invalid exchange state".to_string());
             }
 
-            let hmac_key = exchange_state.derived_hmac_key.clone()
+            let hmac_key = exchange_state
+                .derived_hmac_key
+                .clone()
                 .ok_or("Missing derived HMAC key")?;
             let session_id = exchange_state.session_id.clone();
 
@@ -636,7 +693,7 @@ impl StreamAuthService {
         expected_confirmation_data.extend_from_slice(confirmation.exchange_id.as_bytes());
         expected_confirmation_data.extend_from_slice(&confirmation.timestamp.to_be_bytes());
         expected_confirmation_data.extend_from_slice(b"initiator-confirmed");
-        
+
         let expected_confirmation_hash = sha2::Sha256::digest(&expected_confirmation_data);
         let expected_confirmation = hex::encode(expected_confirmation_hash);
 
@@ -649,7 +706,9 @@ impl StreamAuthService {
 
         // Update state
         {
-            let exchange_state = self.key_exchanges.get_mut(&confirmation.exchange_id)
+            let exchange_state = self
+                .key_exchanges
+                .get_mut(&confirmation.exchange_id)
                 .ok_or("Key exchange not found")?;
             exchange_state.state = ExchangeState::Completed;
         }
@@ -659,12 +718,12 @@ impl StreamAuthService {
     }
 
     /// Derive HMAC key from shared secret using HKDF (static version)
-    fn derive_hmac_key_static(shared_secret: &SharedSecret, exchange_id: &str) -> Result<Vec<u8>, String> {
-        let hk = Hkdf::<Sha256>::new(
-            Some(exchange_id.as_bytes()),
-            shared_secret.as_bytes(),
-        );
-        
+    fn derive_hmac_key_static(
+        shared_secret: &SharedSecret,
+        exchange_id: &str,
+    ) -> Result<Vec<u8>, String> {
+        let hk = Hkdf::<Sha256>::new(Some(exchange_id.as_bytes()), shared_secret.as_bytes());
+
         let mut hmac_key = [0u8; 32]; // 256-bit key
         hk.expand(b"chiral-hmac-key", &mut hmac_key)
             .map_err(|e| format!("HKDF expansion failed: {}", e))?;
@@ -673,7 +732,11 @@ impl StreamAuthService {
     }
 
     /// Derive HMAC key from shared secret using HKDF
-    fn derive_hmac_key(&self, shared_secret: &SharedSecret, exchange_id: &str) -> Result<Vec<u8>, String> {
+    fn derive_hmac_key(
+        &self,
+        shared_secret: &SharedSecret,
+        exchange_id: &str,
+    ) -> Result<Vec<u8>, String> {
         Self::derive_hmac_key_static(shared_secret, exchange_id)
     }
 
@@ -684,7 +747,8 @@ impl StreamAuthService {
             .unwrap()
             .as_secs();
 
-        let expired: Vec<String> = self.key_exchanges
+        let expired: Vec<String> = self
+            .key_exchanges
             .iter()
             .filter(|(_, exchange)| now > exchange.expires_at)
             .map(|(id, _)| id.clone())
@@ -746,7 +810,9 @@ mod tests {
         let session_id = "test-session".to_string();
         let hmac_key = StreamAuthService::generate_hmac_key();
 
-        assert!(service.create_session(session_id.clone(), hmac_key.clone()).is_ok());
+        assert!(service
+            .create_session(session_id.clone(), hmac_key.clone())
+            .is_ok());
         assert!(service.create_session(session_id, hmac_key).is_err());
     }
 
@@ -756,10 +822,14 @@ mod tests {
         let session_id = "test-session".to_string();
         let hmac_key = StreamAuthService::generate_hmac_key();
 
-        service.create_session(session_id.clone(), hmac_key).unwrap();
+        service
+            .create_session(session_id.clone(), hmac_key)
+            .unwrap();
 
         let data = b"test data";
-        let auth_msg = service.sign_data(&session_id, data, AuthMessageType::DataChunk).unwrap();
+        let auth_msg = service
+            .sign_data(&session_id, data, AuthMessageType::DataChunk)
+            .unwrap();
 
         assert!(service.verify_data(&session_id, &auth_msg).unwrap());
     }
@@ -770,16 +840,22 @@ mod tests {
         let session_id = "test-session".to_string();
         let hmac_key = StreamAuthService::generate_hmac_key();
 
-        service.create_session(session_id.clone(), hmac_key).unwrap();
+        service
+            .create_session(session_id.clone(), hmac_key)
+            .unwrap();
 
         // First message
         let data1 = b"first message";
-        let auth_msg1 = service.sign_data(&session_id, data1, AuthMessageType::DataChunk).unwrap();
+        let auth_msg1 = service
+            .sign_data(&session_id, data1, AuthMessageType::DataChunk)
+            .unwrap();
         assert!(service.verify_data(&session_id, &auth_msg1).unwrap());
 
         // Second message
         let data2 = b"second message";
-        let auth_msg2 = service.sign_data(&session_id, data2, AuthMessageType::DataChunk).unwrap();
+        let auth_msg2 = service
+            .sign_data(&session_id, data2, AuthMessageType::DataChunk)
+            .unwrap();
         assert!(service.verify_data(&session_id, &auth_msg2).unwrap());
     }
 
@@ -789,10 +865,14 @@ mod tests {
         let session_id = "test-session".to_string();
         let hmac_key = StreamAuthService::generate_hmac_key();
 
-        service.create_session(session_id.clone(), hmac_key).unwrap();
+        service
+            .create_session(session_id.clone(), hmac_key)
+            .unwrap();
 
         let data = b"test data";
-        let mut auth_msg = service.sign_data(&session_id, data, AuthMessageType::DataChunk).unwrap();
+        let mut auth_msg = service
+            .sign_data(&session_id, data, AuthMessageType::DataChunk)
+            .unwrap();
 
         // Tamper with the data
         auth_msg.data[0] = b'X';
@@ -806,12 +886,18 @@ mod tests {
         let session_id = "test-session".to_string();
         let hmac_key = StreamAuthService::generate_hmac_key();
 
-        service.create_session(session_id.clone(), hmac_key).unwrap();
+        service
+            .create_session(session_id.clone(), hmac_key)
+            .unwrap();
 
         let chunk_data = b"chunk data";
-        let auth_msg = service.create_authenticated_chunk(&session_id, chunk_data, 0, "file123").unwrap();
+        let auth_msg = service
+            .create_authenticated_chunk(&session_id, chunk_data, 0, "file123")
+            .unwrap();
 
-        let verified_data = service.verify_authenticated_chunk(&session_id, &auth_msg).unwrap();
+        let verified_data = service
+            .verify_authenticated_chunk(&session_id, &auth_msg)
+            .unwrap();
         assert!(verified_data.is_some());
         assert_eq!(verified_data.unwrap(), chunk_data);
     }

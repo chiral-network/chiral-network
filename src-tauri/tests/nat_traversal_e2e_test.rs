@@ -12,7 +12,6 @@
 /// - Private peer ↔ Private peer via relay (circuit relay)
 /// - Private peer ↔ Private peer direct (DCUtR hole-punching)
 /// - Relay failure → fallback behavior
-
 use chiral_network::dht::{DhtService, FileMetadata};
 use std::time::Duration;
 use tokio::time::sleep;
@@ -47,17 +46,19 @@ async fn test_autonat_detection() {
 
     // Create DHT service with AutoNAT enabled
     let service = DhtService::new(
-        0, // Random port
-        vec![], // No bootstrap nodes for this test
-        None, // No identity secret
-        false, // Not bootstrap node
-        true, // Enable AutoNAT
+        0,                            // Random port
+        vec![],                       // No bootstrap nodes for this test
+        None,                         // No identity secret
+        false,                        // Not bootstrap node
+        true,                         // Enable AutoNAT
         Some(Duration::from_secs(5)), // Short probe interval for testing
-        vec![], // No custom AutoNAT servers
-        None, // No proxy
-        None, // No file transfer service
-        Some(256), // chunk_size_kb
-        Some(1024), // cache_size_mb
+        vec![],                       // No custom AutoNAT servers
+        None,                         // No proxy
+        None,                         // No file transfer service
+        Some(256),                    // chunk_size_kb
+        Some(1024),                   // cache_size_mb
+        false,                        // enable_autorelay
+        Vec::new(),                   // preferred_relays
     )
     .await;
 
@@ -104,6 +105,8 @@ async fn test_dht_peer_discovery() {
         None,
         Some(256),
         Some(1024),
+        false, // enable_autorelay
+        Vec::new(), // preferred_relays
     )
     .await
     .expect("Failed to create service1");
@@ -140,6 +143,8 @@ async fn test_dht_peer_discovery() {
         None,
         Some(256),
         Some(1024),
+        false, // enable_autorelay
+        Vec::new(), // preferred_relays
     )
     .await
     .expect("Failed to create service2");
@@ -188,6 +193,8 @@ async fn test_file_publish_and_search() {
         None,
         Some(256),
         Some(1024),
+        false, // enable_autorelay
+        Vec::new(), // preferred_relays
     )
     .await
     .expect("Failed to create service1");
@@ -216,6 +223,8 @@ async fn test_file_publish_and_search() {
         None,
         Some(256),
         Some(1024),
+        false, // enable_autorelay
+        Vec::new(), // preferred_relays
     )
     .await
     .expect("Failed to create service2");
@@ -271,6 +280,8 @@ async fn test_dcutr_enabled() {
         None,
         Some(256),
         Some(1024),
+        false, // enable_autorelay
+        Vec::new(), // preferred_relays
     )
     .await
     .expect("Failed to create service");
@@ -282,7 +293,10 @@ async fn test_dcutr_enabled() {
     // Get metrics to verify DCUtR is enabled
     let metrics = service.metrics_snapshot().await;
     println!("✅ DCUtR enabled: {}", metrics.dcutr_enabled);
-    assert!(metrics.dcutr_enabled, "DCUtR should be enabled when AutoNAT is enabled");
+    assert!(
+        metrics.dcutr_enabled,
+        "DCUtR should be enabled when AutoNAT is enabled"
+    );
 
     println!(
         "✅ DCUtR metrics: attempts={}, successes={}, failures={}",
@@ -318,13 +332,18 @@ async fn test_multiple_autonat_servers() {
         None,
         Some(256),
         Some(1024),
+        false, // enable_autorelay
+        Vec::new(), // preferred_relays
     )
     .await
     .expect("Failed to create service");
 
     service.run().await;
 
-    println!("✅ Service started with {} AutoNAT servers", autonat_servers.len());
+    println!(
+        "✅ Service started with {} AutoNAT servers",
+        autonat_servers.len()
+    );
 
     // Cleanup
     let _ = service.shutdown().await;
@@ -348,6 +367,8 @@ async fn test_reachability_history_tracking() {
         None,
         Some(256),
         Some(1024),
+        false, // enable_autorelay
+        Vec::new(), // preferred_relays
     )
     .await
     .expect("Failed to create service");
@@ -358,7 +379,10 @@ async fn test_reachability_history_tracking() {
     sleep(Duration::from_secs(3)).await;
 
     let metrics = service.metrics_snapshot().await;
-    println!("✅ Reachability history entries: {}", metrics.reachability_history.len());
+    println!(
+        "✅ Reachability history entries: {}",
+        metrics.reachability_history.len()
+    );
     println!("✅ Current reachability: {:?}", metrics.reachability);
 
     // History tracking exists
@@ -390,6 +414,8 @@ async fn test_connection_metrics_tracking() {
         None,
         Some(256),
         Some(1024),
+        false, // enable_autorelay
+        Vec::new(), // preferred_relays
     )
     .await
     .expect("Failed to create service1");
@@ -418,6 +444,8 @@ async fn test_connection_metrics_tracking() {
         None,
         Some(256),
         Some(1024),
+        false, // enable_autorelay
+        Vec::new(), // preferred_relays
     )
     .await
     .expect("Failed to create service2");
@@ -467,6 +495,8 @@ async fn test_nat_resilience_private_to_public() {
         None,
         Some(256),
         Some(1024),
+        false, // enable_autorelay
+        Vec::new(), // preferred_relays
     )
     .await
     .expect("Failed to create public peer");
@@ -477,11 +507,17 @@ async fn test_nat_resilience_private_to_public() {
 
     sleep(Duration::from_secs(1)).await;
     let public_metrics = public_peer.metrics_snapshot().await;
-    println!("✅ Public peer reachability: {:?}", public_metrics.reachability);
+    println!(
+        "✅ Public peer reachability: {:?}",
+        public_metrics.reachability
+    );
 
     // Create "private" peer that bootstraps via public peer
     let bootstrap_addr = if !public_metrics.listen_addrs.is_empty() {
-        vec![format!("{}/p2p/{}", public_metrics.listen_addrs[0], public_peer_id)]
+        vec![format!(
+            "{}/p2p/{}",
+            public_metrics.listen_addrs[0], public_peer_id
+        )]
     } else {
         vec![format!("/ip4/127.0.0.1/tcp/14201/p2p/{}", public_peer_id)]
     };
@@ -498,6 +534,8 @@ async fn test_nat_resilience_private_to_public() {
         None,
         Some(256),
         Some(1024),
+        false, // enable_autorelay
+        Vec::new(), // preferred_relays
     )
     .await
     .expect("Failed to create private peer");
@@ -510,9 +548,18 @@ async fn test_nat_resilience_private_to_public() {
     sleep(Duration::from_secs(4)).await;
 
     let private_metrics = private_peer.metrics_snapshot().await;
-    println!("✅ Private peer reachability: {:?}", private_metrics.reachability);
-    println!("✅ Private peer connected peers: {}", private_metrics.peer_count);
-    println!("✅ Public peer connected peers: {}", public_peer.get_peer_count().await);
+    println!(
+        "✅ Private peer reachability: {:?}",
+        private_metrics.reachability
+    );
+    println!(
+        "✅ Private peer connected peers: {}",
+        private_metrics.peer_count
+    );
+    println!(
+        "✅ Public peer connected peers: {}",
+        public_peer.get_peer_count().await
+    );
 
     // Verify connection was established
     assert!(
@@ -533,9 +580,8 @@ async fn test_nat_resilience_connection_fallback() {
     println!("🧪 Testing NAT resilience: Connection fallback behavior...");
 
     // Create a peer with invalid bootstrap node (simulates connection failure)
-    let invalid_bootstrap = vec![
-        "/ip4/192.0.2.1/tcp/99999/p2p/12D3KooWInvalidPeerIdThatDoesNotExist".to_string()
-    ];
+    let invalid_bootstrap =
+        vec!["/ip4/192.0.2.1/tcp/99999/p2p/12D3KooWInvalidPeerIdThatDoesNotExist".to_string()];
 
     let service = DhtService::new(
         0,
@@ -549,11 +595,16 @@ async fn test_nat_resilience_connection_fallback() {
         None,
         Some(256),
         Some(1024),
+        false, // enable_autorelay
+        Vec::new(), // preferred_relays
     )
     .await;
 
     // Should still create successfully even with invalid bootstrap
-    assert!(service.is_ok(), "Service should handle invalid bootstrap gracefully");
+    assert!(
+        service.is_ok(),
+        "Service should handle invalid bootstrap gracefully"
+    );
 
     let service = service.unwrap();
     service.run().await;
@@ -563,7 +614,10 @@ async fn test_nat_resilience_connection_fallback() {
     let metrics = service.metrics_snapshot().await;
 
     // Should have recorded the bootstrap failure
-    println!("✅ Bootstrap failures recorded: {}", metrics.bootstrap_failures);
+    println!(
+        "✅ Bootstrap failures recorded: {}",
+        metrics.bootstrap_failures
+    );
     println!("✅ Last error: {:?}", metrics.last_error);
 
     // Service should still be running despite bootstrap failure

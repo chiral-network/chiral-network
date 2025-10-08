@@ -447,6 +447,31 @@ pub async fn download_file(
   emitted when reachability changes (restored, degraded, reset) to give desktop
   operators immediate feedback.
 
+### AutoRelay & reservation management
+
+- AutoRelay behavior is enabled by default in GUI mode to automatically discover
+  and use relay servers for NAT traversal.
+- The relay client listens for Circuit Relay v2 reservations from discovered
+  relay candidates (bootstrap nodes by default, or custom relays via `--relay`).
+- When a peer is identified as a relay candidate (via `identify` protocol), the
+  node attempts to listen on a relay circuit address to enable inbound connections
+  from NAT-restricted peers.
+- Relay reservation events (accepted, renewed, evicted) are tracked in metrics:
+  - `active_relay_peer_id`: PeerId of the current relay server
+  - `relay_reservation_status`: Current reservation state (accepted/pending/failed)
+  - `reservation_renewals`: Counter for successful reservation renewals
+  - `reservation_evictions`: Counter for reservations lost/evicted
+- The Network → DHT page displays a "Relay Status" card showing:
+  - AutoRelay enabled/disabled badge
+  - Active relay peer ID (truncated for display)
+  - Reservation status and renewal counters
+  - Last successful reservation and eviction timestamps
+- Headless mode supports:
+  - `--disable-autorelay` to turn off AutoRelay behavior
+  - `--relay <multiaddr>` to specify preferred relay servers (repeatable)
+- Info-level log messages emit when relay reservations are accepted or circuits
+  are established, including relay peer IDs for debugging.
+
 ### DCUtR hole-punching
 
 - DCUtR (Direct Connection Upgrade through Relay) behavior is automatically
