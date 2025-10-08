@@ -440,7 +440,7 @@ export interface AppSettings {
   enableAutonat: boolean; // AutoNAT reachability detection
   autonatProbeInterval: number; // Seconds between AutoNAT probes
   autonatServers: string[]; // Custom AutoNAT server multiaddrs
-  enableAutorelay: boolean; // Circuit Relay v2 with AutoRelay
+  enableAutorelay: boolean; // Circuit Relay v2 with AutoRelay (renamed from enableAutoRelay)
   preferredRelays: string[]; // Preferred relay node multiaddrs
   anonymousMode: boolean;
   shareAnalytics: boolean;
@@ -477,7 +477,7 @@ export const settings = writable<AppSettings>({
   enableAutonat: true, // Enable AutoNAT by default
   autonatProbeInterval: 30, // 30 seconds default
   autonatServers: [], // Use bootstrap nodes by default
-  enableAutorelay: true, // Enable AutoRelay by default
+  enableAutorelay: false, // Enable AutoRelay by default (disabled until configured)
   preferredRelays: [], // Use bootstrap nodes as relays by default
   anonymousMode: false,
   shareAnalytics: true,

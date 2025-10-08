@@ -4,8 +4,8 @@ use tauri::Emitter;
 use tauri::State;
 // use tracing::info;
 use libp2p::PeerId;
-use std::str::FromStr;
 use std::net::Ipv4Addr;
+use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{info, warn};
 
@@ -46,12 +46,16 @@ pub fn normalize_to_multiaddr(input: &str) -> Result<String, String> {
         .unwrap_or(base);
 
     // Expect host:port
-    let (host, port) = base.split_once(':').ok_or_else(|| {
-        format!("invalid address; expected host:port (got: {input})")
-    })?;
+    let (host, port) = base
+        .split_once(':')
+        .ok_or_else(|| format!("invalid address; expected host:port (got: {input})"))?;
 
     // Decide ip4 vs dns4
-    let proto = if Ipv4Addr::from_str(host).is_ok() { "ip4" } else { "dns4" };
+    let proto = if Ipv4Addr::from_str(host).is_ok() {
+        "ip4"
+    } else {
+        "dns4"
+    };
 
     let mut m = format!("/{proto}/{host}/tcp/{port}");
     if let Some(pid) = p2p_suffix {
@@ -61,8 +65,6 @@ pub fn normalize_to_multiaddr(input: &str) -> Result<String, String> {
     }
     Ok(m)
 }
-
-
 
 #[tauri::command]
 pub(crate) async fn proxy_connect(

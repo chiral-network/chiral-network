@@ -49,6 +49,8 @@
     port: 30303,
     enableUPnP: true,
     enableNAT: true,
+    enableAutoRelay: true, // Enabled by default
+    preferredRelays: "", // Empty by default
     userLocation: "US-East", // Geographic region for peer sorting
 
     // Privacy settings
@@ -658,6 +660,33 @@ function sectionMatches(section: string, query: string) {
               {$t("network.enableDht")}
             </Label>
           </div>
+
+          <div class="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="enable-autorelay"
+              bind:checked={localSettings.enableAutoRelay}
+            />
+            <Label for="enable-autorelay" class="cursor-pointer">
+              {$t("settings.autorelay.enable")}
+            </Label>
+          </div>
+
+          {#if localSettings.enableAutoRelay}
+            <div class="space-y-2 ml-6">
+              <Label for="preferred-relays">{$t("settings.autorelay.relays")}</Label>
+              <textarea
+                id="preferred-relays"
+                bind:value={localSettings.preferredRelays}
+                placeholder="/ip4/147.75.80.110/tcp/4001/p2p/QmNnooDu..."
+                rows="3"
+                class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
+              />
+              <p class="text-xs text-muted-foreground">
+                {$t("settings.autorelay.description")}
+              </p>
+            </div>
+          {/if}
         </div>
       </div>
     </Expandable>
