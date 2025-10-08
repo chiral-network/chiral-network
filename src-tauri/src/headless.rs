@@ -1,8 +1,8 @@
 // Headless mode for running as a bootstrap node on servers
+use crate::commands::bootstrap::get_bootstrap_nodes;
 use crate::dht::{DhtMetricsSnapshot, DhtService, FileMetadata};
 use crate::ethereum::GethProcess;
 use crate::file_transfer::FileTransferService;
-use crate::commands::bootstrap::get_bootstrap_nodes;
 use clap::Parser;
 use std::{sync::Arc, time::Duration};
 use tokio::signal;
@@ -80,6 +80,14 @@ pub struct CliArgs {
     /// Print local download metrics snapshot at startup
     #[arg(long)]
     pub show_downloads: bool,
+
+    /// Disable AutoRelay behavior
+    #[arg(long)]
+    pub disable_autorelay: bool,
+
+    /// Preferred relay nodes (multiaddr form, can be specified multiple times)
+    #[arg(long)]
+    pub relay: Vec<String>,
 }
 
 pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error>> {
@@ -123,6 +131,20 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
     } else {
         None
     };
+    let enable_autorelay = !args.disable_autorelay;
+    if enable_autorelay {
+        if !args.relay.is_empty() {
+            info!(
+                "AutoRelay enabled with {} preferred relays",
+                args.relay.len()
+            );
+        } else {
+            info!("AutoRelay enabled, will discover relays from bootstrap nodes");
+        }
+    } else {
+        info!("AutoRelay disabled via CLI");
+    }
+
     // Start DHT node
     let dht_service = DhtService::new(
         args.dht_port,
@@ -136,6 +158,8 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         file_transfer_service.clone(),
         None, // chunk_size_kb: use default
         None, // cache_size_mb: use default
+        enable_autorelay,
+        args.relay.clone(),
     )
     .await?;
     let peer_id = dht_service.get_peer_id().await;

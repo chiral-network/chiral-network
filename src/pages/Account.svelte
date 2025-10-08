@@ -750,11 +750,19 @@
     try {
       const savedPasswordsRaw = localStorage.getItem('chiral_keystore_passwords');
       if (savedPasswordsRaw) {
-        const savedPasswords = JSON.parse(savedPasswordsRaw);
-        if (savedPasswords[address]) {
-          loadKeystorePassword = savedPasswords[address];
-          rememberKeystorePassword = true;
-        } else {
+        const savedPasswords: Record<string, { pass: string, expires: number }> = JSON.parse(savedPasswordsRaw);
+        const saved = savedPasswords[address];
+        if (saved) {
+          const now = new Date().getTime();
+          if (now < saved.expires) {
+            loadKeystorePassword = saved.pass;
+            rememberKeystorePassword = true;
+          } else {
+            // Password expired, remove it
+            saveOrClearPassword(address, ''); // This will clear it if checkbox is unchecked
+          }
+        }
+        else {
           // Clear if no password is saved for this account
           loadKeystorePassword = '';
           rememberKeystorePassword = false;
@@ -819,9 +827,10 @@
     try {
       const savedPasswordsRaw = localStorage.getItem('chiral_keystore_passwords');
       let savedPasswords = savedPasswordsRaw ? JSON.parse(savedPasswordsRaw) : {};
-
+  
       if (rememberKeystorePassword) {
-        savedPasswords[address] = password;
+        const expires = new Date().getTime() + 30 * 24 * 60 * 60 * 1000; // 30 days from now
+        savedPasswords[address] = { pass: password, expires };
       } else {
         delete savedPasswords[address];
       }
@@ -1374,15 +1383,17 @@
                       autocomplete="current-password"
                     />
                   </div>
-                  <div class="flex items-center space-x-2">
-                    <input type="checkbox" id="remember-password" bind:checked={rememberKeystorePassword} disabled />
-                    <label for="remember-password" class="text-sm font-medium leading-none text-muted-foreground">
-                      {$t('keystore.load.savePassword')} (Disabled for security)
+                  <div class="flex items-center space-x-2 mt-2">
+                    <input type="checkbox" id="remember-password" bind:checked={rememberKeystorePassword} />
+                    <label for="remember-password" class="text-sm font-medium leading-none text-muted-foreground cursor-pointer">
+                      {$t('keystore.load.savePassword')}
                     </label>
                   </div>
-                  <div class="text-xs text-red-600 p-2 bg-red-50 border border-red-200 rounded-md">
-                    {$t('keystore.load.savePasswordDisabled')}
-                  </div>
+                  {#if rememberKeystorePassword}
+                    <div class="text-xs text-orange-600 p-2 bg-orange-50 border border-orange-200 rounded-md mt-2">
+                      {$t('keystore.load.savePasswordWarning')}
+                    </div>
+                  {/if}
                   <Button
                     class="w-full"
                     variant="outline"

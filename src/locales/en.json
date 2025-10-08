@@ -1,6 +1,9 @@
 {
   "settings.title": "Settings",
   "settings.subtitle": "Configure your Chiral Network preferences",
+  "settings.autorelay.enable": "Enable AutoRelay (Circuit Relay v2)",
+  "settings.autorelay.relays": "Preferred Relay Nodes",
+  "settings.autorelay.description": "Enter relay node addresses (one per line). Leave empty to use bootstrap nodes.",
   "settings.searchPlaceholder": "Search settings...",
   "badges.unsaved": "Unsaved changes",
   "storage.title": "Storage",
@@ -119,6 +122,23 @@
           "private": "Reachability degraded. {summary}",
           "unknown": "Reachability status updated. {summary}"
         }
+      },
+      "relay": {
+        "title": "Relay Status",
+        "enabled": "AutoRelay Enabled",
+        "disabled": "AutoRelay Disabled",
+        "noPeer": "Not connected to relay",
+        "activePeer": "Active Relay",
+        "status": "Status",
+        "lastSuccess": "Last successful reservation",
+        "lastFailure": "Last reservation failure",
+        "renewals": "Reservations renewed",
+        "evictions": "Reservations evicted",
+        "never": "Never",
+        "noEvictions": "No evictions",
+        "accepted": "Reservation accepted",
+        "pending": "Pending",
+        "failed": "Failed"
       },
       "dcutr": {
         "title": "DCUtR Hole-Punching",
@@ -493,6 +513,7 @@
       "successSimulated": "Account loaded (demo mode)",
       "error": "Failed to load account: {error}",
       "savePassword": "Save password on this computer (expires in 30 days)",
+      "savePasswordDisabled": "For security, the 'Save Password' feature is currently disabled. Please enter your password each time you unlock your account.",
       "savePasswordWarning": "Warning: Saving your password locally is convenient but less secure. Use with caution.",
       "addressMismatch": "Decryption error: address does not match."
     }

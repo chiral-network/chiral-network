@@ -13,7 +13,6 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
   import { dhtService } from '$lib/dht';
-  import { encryptionService } from '$lib/services/encryption';
   import Label from '$lib/components/ui/label.svelte';
   import Input from '$lib/components/ui/input.svelte'; 
 
@@ -258,79 +257,53 @@
                   console.log('No existing versions found for', file.name);
                 }
 
-                // Use fileService.uploadFile method for File objects with versioning
-                const metadata = await fileService.uploadFile(file)
+                // Get recipient key if encrypted sharing is enabled
+                const recipientKey = useEncryptedSharing && recipientPublicKey.trim() ? recipientPublicKey.trim() : undefined;
 
+                // UNIFIED UPLOAD: Save to temp file, then use single backend command
+                const buffer = await file.arrayBuffer();
+                const fileData = Array.from(new Uint8Array(buffer));
+                const tempFilePath = await invoke<string>("save_temp_file_for_upload", {
+                  fileName: file.name,
+                  fileData,
+                });
 
-                // Store file data to disk for seeding
-                    try {
-                      // Read the file data from the File object
-                      const arrayBuffer = await file.arrayBuffer();
-                      const fileData = Array.from(new Uint8Array(arrayBuffer));
-                      
-                      // Store the file data using the Tauri command
-                      await invoke('store_file_data', {
-                        fileHash: metadata.fileHash,
-                        fileName: metadata.fileName,
-                        fileData: fileData
-                      });
-                      console.log('File data stored to disk for seeding:', metadata.fileHash);
-                    } catch (storeError) {
-                      console.warn('Failed to store file data to disk:', storeError);
-                      // Continue with DHT publishing even if local storage fails
-                    }
+                // Single command: chunk, encrypt, publish to DHT
+                const result = await invoke<{merkleRoot: string, fileName: string, fileSize: number, isEncrypted: boolean, peerId: string, version: number}>(
+                  "upload_and_publish_file",
+                  {
+                    filePath: tempFilePath,
+                    fileName: file.name,  // Pass original filename for DHT
+                    recipientPublicKey: recipientKey
+                  }
+                );
 
-
-                // Check if this hash is already in our files (duplicate detection)
-                if (get(files).some(f => f.hash === metadata.fileHash)) {
+                // Check for duplicates
+                if (get(files).some(f => f.hash === result.merkleRoot)) {
                   duplicateCount++
                   continue;
                 }
 
                 const isNewVersion = existingVersions.length > 0;
-
-                // Check if DHT is running to determine initial status
                 const isDhtRunning = dhtService.getPeerId() !== null;
 
                 const newFile = {
                   id: `file-${Date.now()}-${Math.random()}`,
-                  name: metadata.fileName,
-                  path: file.name, // Use file name as path for display
-                  hash: metadata.fileHash,
-                  size: metadata.fileSize, // Use backend-calculated size for consistency
+                  name: file.name,  // Use original file name from drag-drop
+                  path: file.name,  // Use original file name as path for display
+                  hash: result.merkleRoot,
+                  size: result.fileSize,
                   status: isDhtRunning ? ('seeding' as const) : ('uploaded' as const),
                   seeders: isDhtRunning ? 1 : 0,
                   leechers: 0,
-                  uploadDate: new Date(metadata.createdAt * 1000),
-                  version: metadata.version,
-                  isNewVersion: isNewVersion
-                };  
+                  uploadDate: new Date(),
+                  version: result.version,  // Use version from backend
+                  isNewVersion: isNewVersion,
+                  isEncrypted: result.isEncrypted,
+                };
 
-                 
-
-
-
-
-                    files.update((currentFiles) => [...currentFiles, newFile]);
-                    addedCount++;
-
-                   
-
-                    // Publish file metadata to DHT network for discovery
-                    try {
-                      await dhtService.publishFile(metadata);
-                      console.log('Dropped file published to DHT:', metadata.fileHash);
-                    } catch (publishError) {
-                      console.warn('Failed to publish dropped file to DHT:', publishError);
-                      // Update status to 'uploaded' since publishing failed
-                      files.update((currentFiles) => 
-                        currentFiles.map(f => 
-                          f.hash === metadata.fileHash 
-                            ? { ...f, status: 'uploaded', seeders: 0 }
-                            : f
-                        )
-                      );
-                    }
+                files.update((currentFiles) => [...currentFiles, newFile]);
+                addedCount++;
               } catch (error) {
                 console.error('Error uploading dropped file:', file.name, error);
                 const fileName = file.name || 'unknown file';
@@ -480,86 +453,42 @@
     // Process all files concurrently to avoid blocking the UI
     const filePromises = paths.map(async (filePath) => {
       try {
-        // Get just the filename from the path
         const fileName = filePath.split(/[\/\\]/).pop() || '';
-        
-        // --- ENCRYPTION FLOW ---
-        // Pass recipient public key if encrypted sharing is enabled and key is provided
         const recipientKey = useEncryptedSharing && recipientPublicKey.trim() ? recipientPublicKey.trim() : undefined;
-        const manifest = await encryptionService.encryptFile(filePath, recipientKey);
 
-        // Check for duplicates using the Merkle Root
-        if (get(files).some((f: FileItem) => f.hash === manifest.merkleRoot)) {
+        // UNIFIED UPLOAD: Single command chunks, encrypts, and publishes to DHT
+        const result = await invoke<{merkleRoot: string, fileName: string, fileSize: number, isEncrypted: boolean, peerId: string, version: number}>(
+          "upload_and_publish_file",
+          {
+            filePath,
+            fileName: null,  // File path already contains correct name
+            recipientPublicKey: recipientKey
+          }
+        );
+
+        // Check for duplicates
+        if (get(files).some((f: FileItem) => f.hash === result.merkleRoot)) {
           return { type: 'duplicate', fileName };
         }
 
-        const fileMetadataForDht = {
-          fileHash: manifest.merkleRoot,
-          fileName: fileName,
-          fileSize: manifest.chunks.reduce((sum, chunk) => sum + chunk.size, 0),
-          isEncrypted: true,
-          manifest: JSON.stringify(manifest),
-          createdAt: Date.now(),
-          seeders: [], // Will be populated by the network
-          version: 1, // Versioning for encrypted files can be a future enhancement
-        };
+        const isDhtRunning = dhtService.getPeerId() !== null;
 
         const newFile: FileItem = {
           id: `file-${Date.now()}-${Math.random()}`,
-          name: fileMetadataForDht.fileName,
+          name: result.fileName,
           path: filePath,
-          hash: fileMetadataForDht.fileHash,
-          size: fileMetadataForDht.fileSize,
-          status: 'seeding',
-          seeders: 1,
+          hash: result.merkleRoot,
+          size: result.fileSize,
+          status: isDhtRunning ? 'seeding' : 'uploaded',
+          seeders: isDhtRunning ? 1 : 0,
           leechers: 0,
           uploadDate: new Date(),
-          version: fileMetadataForDht.version,
-          isEncrypted: true,
-          manifest: manifest, // Store the object here for the UI
+          version: result.version,  // Use version from backend
+          isEncrypted: result.isEncrypted,
         };
-        
-        files.update(f => [...f, newFile]);
-        
-        // Check if DHT is running before attempting to publish
-        const isDhtRunning = dhtService.getPeerId() !== null;
 
-        // Store file data to disk for seeding
-        try {
-          // Use our Rust backend command to read and store the file
-          await invoke('store_file_data_from_path', {
-            filePath: filePath,
-            fileHash: newFile.hash,
-            fileName: newFile.name
-          });
-          console.log('File data stored to disk for seeding:', newFile.hash);
-        } catch (storeError) {
-          console.warn('Failed to store file data to disk:', storeError);
-          // Continue with DHT publishing even if local storage fails
-        }
-        
-        if (isDhtRunning) {
-          try {
-            await dhtService.publishFile(fileMetadataForDht);
-            // Success - status remains 'seeding'
-          } catch (publishError) {
-            console.warn('Failed to publish file to DHT:', publishError);
-            // Failed to publish - update status to 'uploaded'
-            files.update(f => f.map(file => 
-              file.hash === fileMetadataForDht.fileHash 
-                ? { ...file, status: 'uploaded', seeders: 0 }
-                : file
-            ));
-          }
-        } else {
-          // DHT not running - update status to 'uploaded'
-          files.update(f => f.map(file => 
-            file.hash === fileMetadataForDht.fileHash 
-              ? { ...file, status: 'uploaded', seeders: 0 }
-              : file
-          ));
-        }
-        
+        files.update(f => [...f, newFile]);
+
         return { type: 'success', fileName };
       } catch (error) {
         console.error(error);

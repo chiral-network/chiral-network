@@ -290,7 +290,6 @@
       // Mock DHT connection for web
       dhtStatus = 'connecting'
       setTimeout(() => {
-        
         dhtStatus = 'connected'
         dhtPeerId = '12D3KooWMockPeerIdForWebDemo123456789'
       }, 1000)
@@ -305,11 +304,12 @@
       try {
         backendPeerId = await invoke<string | null>('get_dht_peer_id')
       } catch (error) {
-        // Failed to check backend DHT status
+        console.log('Failed to check backend DHT status:', error)
       }
       
       if (backendPeerId) {
         // DHT is already running in backend, sync the frontend state immediately
+        console.log('DHT already running in backend with peer ID:', backendPeerId)
         dhtPeerId = backendPeerId
         dhtService.setPeerId(backendPeerId) // Update frontend service state
         dhtEvents = [...dhtEvents, `✓ DHT already running with peer ID: ${backendPeerId.slice(0, 16)}...`]
@@ -351,14 +351,13 @@
           const peerId = await dhtService.start({
             port: dhtPort,
             bootstrapNodes: dhtBootstrapNodes,
-            enableAutonat: true,  // Enable AutoNAT to activate DCUtR
-            chunkSizeKb: $settings.chunkSize,
-            cacheSizeMb: $settings.cacheSize,
             enableAutonat: $settings.enableAutonat,
             autonatProbeIntervalSeconds: $settings.autonatProbeInterval,
             autonatServers: $settings.autonatServers,
-            // Note: AutoRelay is always enabled via relay_client in the backend
-            // preferredRelays would need backend support to be configurable
+            enableAutorelay: $settings.enableAutorelay,
+            preferredRelays: $settings.preferredRelays || [],
+            chunkSizeKb: $settings.chunkSize,
+            cacheSizeMb: $settings.cacheSize,
           })
           dhtPeerId = peerId
           // Also ensure the service knows its own peer ID
@@ -393,8 +392,9 @@
       
       // Try to connect to bootstrap nodes
       let connectionSuccessful = false
-      if (dhtBootstrapNodes.length > 0) {
-        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to ${dhtBootstrapNodes.length} bootstrap node(s)...`]
+
+      if (DEFAULT_BOOTSTRAP_NODES.length > 0) {
+        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to ${DEFAULT_BOOTSTRAP_NODES.length} bootstrap node(s)...`]
         
         // Add another small delay to show the connection attempt
         await new Promise(resolve => setTimeout(resolve, 1000))
@@ -600,6 +600,21 @@
         signaling.peers.subscribe(peers => {
           discoveredPeers = peers;
           console.log('Updated discovered peers:', peers);
+        });
+
+        // Register signaling message handler for WebRTC
+        signaling.setOnMessage((msg) => {
+          if (webrtcSession && msg.from === webrtcSession.peerId) {
+            if (msg.type === "offer") {
+              webrtcSession.acceptOfferCreateAnswer(msg.sdp).then(answer => {
+                signaling.send({ type: "answer", sdp: answer, to: msg.from });
+              });
+            } else if (msg.type === "answer") {
+              webrtcSession.acceptAnswer(msg.sdp);
+            } else if (msg.type === "candidate") {
+              webrtcSession.addRemoteIceCandidate(msg.candidate);
+            }
+          }
         });
         showToast('Connected to signaling server', 'success');
       } catch (error) {
@@ -831,6 +846,7 @@
 
   async function startGethNode() {
     if (!isTauri) {
+      console.log('Cannot start Chiral Node in web mode - desktop app required')
       return
     }
     
@@ -856,6 +872,7 @@
 
   async function stopGethNode() {
     if (!isTauri) {
+      console.log('Cannot stop Chiral Node in web mode - desktop app required')
       return
     }
     
@@ -914,6 +931,21 @@
         signalingConnected = true;
         signaling.peers.subscribe(peers => {
           discoveredPeers = peers;
+        });
+
+        // Register signaling message handler for WebRTC
+        signaling.setOnMessage((msg) => {
+          if (webrtcSession && msg.from === webrtcSession.peerId) {
+            if (msg.type === "offer") {
+              webrtcSession.acceptOfferCreateAnswer(msg.sdp).then(answer => {
+                signaling.send({ type: "answer", sdp: answer, to: msg.from });
+              });
+            } else if (msg.type === "answer") {
+              webrtcSession.acceptAnswer(msg.sdp);
+            } else if (msg.type === "candidate") {
+              webrtcSession.addRemoteIceCandidate(msg.candidate);
+            }
+          }
         });
       } catch (error) {
         // Signaling service not available (DHT not running) - this is normal
@@ -1338,6 +1370,55 @@
                 <p class="mt-2 text-sm text-muted-foreground">{$t('network.dht.reachability.historyEmpty')}</p>
               {/if}
             </div>
+          </div>
+
+          <!-- AutoRelay Status -->
+          <div class="pt-4 space-y-4 border-t border-muted/40">
+            <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.title')}</p>
+                <div class="mt-2 flex items-center gap-2">
+                  {#if dhtHealth?.autorelayEnabled}
+                    <Badge class="bg-green-600">{$t('network.dht.relay.enabled')}</Badge>
+                  {:else}
+                    <Badge class="bg-gray-500">{$t('network.dht.relay.disabled')}</Badge>
+                  {/if}
+                  {#if dhtHealth?.activeRelayPeerId}
+                    <span class="text-xs font-mono text-muted-foreground">{dhtHealth.activeRelayPeerId.slice(0, 12)}...</span>
+                  {/if}
+                </div>
+              </div>
+              {#if dhtHealth?.autorelayEnabled}
+                <div class="text-sm text-muted-foreground space-y-1 text-right">
+                  {#if dhtHealth?.activeRelayPeerId}
+                    <p class="text-green-600">{$t('network.dht.relay.status')}: {dhtHealth.relayReservationStatus ?? $t('network.dht.relay.pending')}</p>
+                  {:else}
+                    <p class="text-yellow-600">{$t('network.dht.relay.noPeer')}</p>
+                  {/if}
+                </div>
+              {/if}
+            </div>
+
+            {#if dhtHealth?.autorelayEnabled}
+              <div class="grid gap-3 md:grid-cols-2">
+                <div class="bg-muted/40 rounded-lg p-3">
+                  <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.activePeer')}</p>
+                  <p class="text-sm font-mono mt-1">{dhtHealth?.activeRelayPeerId ?? $t('network.dht.relay.noPeer')}</p>
+                </div>
+                <div class="bg-muted/40 rounded-lg p-3">
+                  <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.renewals')}</p>
+                  <p class="text-sm font-medium mt-1">{dhtHealth?.reservationRenewals ?? 0}</p>
+                </div>
+                <div class="bg-muted/40 rounded-lg p-3">
+                  <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.lastSuccess')}</p>
+                  <p class="text-sm font-medium mt-1">{formatNatTimestamp(dhtHealth?.lastReservationSuccess ?? null)}</p>
+                </div>
+                <div class="bg-muted/40 rounded-lg p-3">
+                  <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.evictions')}</p>
+                  <p class="text-sm font-medium mt-1">{dhtHealth?.reservationEvictions ?? 0}</p>
+                </div>
+              </div>
+            {/if}
           </div>
 
           {#if dhtHealth}

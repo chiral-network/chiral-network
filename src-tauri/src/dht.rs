@@ -327,6 +327,14 @@ struct DhtMetrics {
     success_streak: u32,
     failure_streak: u32,
     autonat_enabled: bool,
+    // AutoRelay metrics
+    autorelay_enabled: bool,
+    active_relay_peer_id: Option<String>,
+    relay_reservation_status: Option<String>,
+    last_reservation_success: Option<SystemTime>,
+    last_reservation_failure: Option<SystemTime>,
+    reservation_renewals: u64,
+    reservation_evictions: u64,
     // DCUtR metrics
     dcutr_enabled: bool,
     dcutr_hole_punch_attempts: u64,
@@ -354,6 +362,14 @@ pub struct DhtMetricsSnapshot {
     pub observed_addrs: Vec<String>,
     pub reachability_history: Vec<NatHistoryItem>,
     pub autonat_enabled: bool,
+    // AutoRelay metrics
+    pub autorelay_enabled: bool,
+    pub active_relay_peer_id: Option<String>,
+    pub relay_reservation_status: Option<String>,
+    pub last_reservation_success: Option<u64>,
+    pub last_reservation_failure: Option<u64>,
+    pub reservation_renewals: u64,
+    pub reservation_evictions: u64,
     // DCUtR metrics
     pub dcutr_enabled: bool,
     pub dcutr_hole_punch_attempts: u64,
@@ -615,6 +631,18 @@ fn build_relay_listen_addr(base: &Multiaddr) -> Option<Multiaddr> {
     }
 }
 
+fn is_relay_candidate(peer_id: &PeerId, relay_candidates: &HashSet<String>) -> bool {
+    if relay_candidates.is_empty() {
+        return false;
+    }
+
+    let peer_str = peer_id.to_string();
+    relay_candidates.iter().any(|candidate| {
+        // Check if the candidate multiaddr contains this peer ID
+        candidate.contains(&peer_str)
+    })
+}
+
 fn extract_relay_peer(address: &Multiaddr) -> Option<PeerId> {
     use libp2p::multiaddr::Protocol;
 
@@ -719,6 +747,13 @@ impl DhtMetricsSnapshot {
             observed_addrs,
             reachability_history,
             autonat_enabled,
+            autorelay_enabled,
+            active_relay_peer_id,
+            relay_reservation_status,
+            last_reservation_success,
+            last_reservation_failure,
+            reservation_renewals,
+            reservation_evictions,
             dcutr_enabled,
             dcutr_hole_punch_attempts,
             dcutr_hole_punch_successes,
@@ -759,6 +794,13 @@ impl DhtMetricsSnapshot {
             observed_addrs,
             reachability_history: history,
             autonat_enabled,
+            autorelay_enabled,
+            active_relay_peer_id,
+            relay_reservation_status,
+            last_reservation_success: last_reservation_success.and_then(to_secs),
+            last_reservation_failure: last_reservation_failure.and_then(to_secs),
+            reservation_renewals,
+            reservation_evictions,
             dcutr_enabled,
             dcutr_hole_punch_attempts,
             dcutr_hole_punch_successes,
@@ -901,6 +943,8 @@ async fn run_dht_node(
         >,
     >,
     is_bootstrap: bool,
+    enable_autorelay: bool,
+    relay_candidates: HashSet<String>,
     chunk_size: usize,
 ) {
     // Periodic bootstrap interval
@@ -1236,7 +1280,7 @@ async fn run_dht_node(
                         .await;
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Identify(identify_event)) => {
-                        handle_identify_event(identify_event, &mut swarm, &event_tx, metrics.clone()).await;
+                        handle_identify_event(identify_event, &mut swarm, &event_tx, metrics.clone(), enable_autorelay, &relay_candidates).await;
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Mdns(mdns_event)) => {
                         if !is_bootstrap{
@@ -1246,9 +1290,20 @@ async fn run_dht_node(
                     SwarmEvent::Behaviour(DhtBehaviourEvent::RelayClient(relay_event)) => {
                         match relay_event {
                             RelayClientEvent::ReservationReqAccepted { relay_peer_id, .. } => {
+                                info!("✅ Relay reservation accepted from {}", relay_peer_id);
                                 let mut mgr = proxy_mgr.lock().await;
                                 let newly_ready = mgr.mark_relay_ready(relay_peer_id);
                                 drop(mgr);
+
+                                // Update AutoRelay metrics
+                                {
+                                    let mut m = metrics.lock().await;
+                                    m.active_relay_peer_id = Some(relay_peer_id.to_string());
+                                    m.relay_reservation_status = Some("accepted".to_string());
+                                    m.last_reservation_success = Some(SystemTime::now());
+                                    m.reservation_renewals += 1;
+                                }
+
                                 if newly_ready {
                                     let _ = event_tx
                                         .send(DhtEvent::ProxyStatus {
@@ -1259,9 +1314,16 @@ async fn run_dht_node(
                                             error: None,
                                         })
                                         .await;
+                                    let _ = event_tx
+                                        .send(DhtEvent::Info(format!(
+                                            "Connected to relay: {}",
+                                            relay_peer_id
+                                        )))
+                                        .await;
                                 }
                             }
                             RelayClientEvent::OutboundCircuitEstablished { relay_peer_id, .. } => {
+                                info!("🔗 Outbound relay circuit established via {}", relay_peer_id);
                                 proxy_mgr.lock().await.set_online(relay_peer_id);
                                 let _ = event_tx
                                     .send(DhtEvent::ProxyStatus {
@@ -1805,10 +1867,34 @@ async fn handle_identify_event(
     swarm: &mut Swarm<DhtBehaviour>,
     event_tx: &mpsc::Sender<DhtEvent>,
     metrics: Arc<Mutex<DhtMetrics>>,
+    enable_autorelay: bool,
+    relay_candidates: &HashSet<String>,
 ) {
     match event {
         IdentifyEvent::Received { peer_id, info, .. } => {
-            info!("Identified peer {}: {:?}", peer_id, info.protocol_version);
+            info!(
+                "🔍 Identified peer {}: {:?} (listen_addrs: {})",
+                peer_id,
+                info.protocol_version,
+                info.listen_addrs.len()
+            );
+
+            // Log AutoRelay debug info
+            if enable_autorelay {
+                let is_candidate = is_relay_candidate(&peer_id, relay_candidates);
+                info!(
+                    "  AutoRelay check: is_relay_candidate={}, total_candidates={}",
+                    is_candidate,
+                    relay_candidates.len()
+                );
+                if !relay_candidates.is_empty() {
+                    info!(
+                        "  Relay candidates: {:?}",
+                        relay_candidates.iter().take(3).collect::<Vec<_>>()
+                    );
+                }
+            }
+
             if info.protocol_version != EXPECTED_PROTOCOL_VERSION {
                 warn!(
                     "Peer {} has a mismatched protocol version: '{}'. Expected: '{}'. Removing peer.",
@@ -1822,8 +1908,33 @@ async fn handle_identify_event(
                     metrics_guard.record_observed_addr(&info.observed_addr);
                 }
                 for addr in info.listen_addrs {
+                    info!("  📍 Peer {} listen addr: {}", peer_id, addr);
                     if not_loopback(&addr) {
-                        swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
+                        swarm
+                            .behaviour_mut()
+                            .kademlia
+                            .add_address(&peer_id, addr.clone());
+
+                        // AutoRelay: Check if this peer is a relay candidate
+                        if enable_autorelay && is_relay_candidate(&peer_id, relay_candidates) {
+                            info!("  🎯 Relay candidate matched! Attempting relay setup...");
+
+                            // Listen on relay address for incoming connections
+                            if let Some(relay_addr) = build_relay_listen_addr(&addr) {
+                                info!(
+                                    "📡 Attempting to listen via relay {} at {}",
+                                    peer_id, relay_addr
+                                );
+                                if let Err(e) = swarm.listen_on(relay_addr.clone()) {
+                                    warn!(
+                                        "Failed to listen on relay address {}: {}",
+                                        relay_addr, e
+                                    );
+                                } else {
+                                    info!("✅ Listening via relay peer {}", peer_id);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2235,13 +2346,18 @@ impl DhtService {
         file_transfer_service: Option<Arc<FileTransferService>>,
         chunk_size_kb: Option<usize>, // Chunk size in KB (default 256)
         cache_size_mb: Option<usize>, // Cache size in MB (default 1024)
+        enable_autorelay: bool,
+        preferred_relays: Vec<String>,
     ) -> Result<Self, Box<dyn Error>> {
         // Convert chunk size from KB to bytes
         let chunk_size = chunk_size_kb.unwrap_or(256) * 1024; // Default 256 KB
         let _cache_size = cache_size_mb.unwrap_or(1024); // Default 1024 MB
-        
-        info!("DHT Configuration: chunk_size={} KB, cache_size={} MB", 
-              chunk_size / 1024, _cache_size);
+
+        info!(
+            "DHT Configuration: chunk_size={} KB, cache_size={} MB",
+            chunk_size / 1024,
+            _cache_size
+        );
         // Generate a new keypair for this node
         // Generate a keypair either from the secret or randomly
         let local_key = match secret {
@@ -2377,6 +2493,32 @@ impl DhtService {
             autonat_targets.extend(bootstrap_set.iter().cloned());
         }
 
+        // Configure AutoRelay relay candidate discovery
+        let relay_candidates: HashSet<String> = if enable_autorelay {
+            if !preferred_relays.is_empty() {
+                info!(
+                    "🔗 AutoRelay enabled with {} preferred relays",
+                    preferred_relays.len()
+                );
+                for (i, relay) in preferred_relays.iter().enumerate().take(5) {
+                    info!("   Relay {}: {}", i + 1, relay);
+                }
+                preferred_relays.into_iter().collect()
+            } else {
+                info!(
+                    "🔗 AutoRelay enabled, using {} bootstrap nodes as relay candidates",
+                    bootstrap_set.len()
+                );
+                for (i, node) in bootstrap_set.iter().enumerate().take(5) {
+                    info!("   Candidate {}: {}", i + 1, node);
+                }
+                bootstrap_set.iter().cloned().collect()
+            }
+        } else {
+            info!("AutoRelay disabled");
+            HashSet::new()
+        };
+
         // Use the new relay-aware transport builder
         let transport = build_transport_with_relay(&local_key, relay_transport, proxy_address)?;
 
@@ -2478,6 +2620,7 @@ impl DhtService {
         {
             let mut guard = metrics.lock().await;
             guard.autonat_enabled = enable_autonat;
+            guard.autorelay_enabled = enable_autorelay;
             guard.dcutr_enabled = enable_autonat; // DCUtR enabled when AutoNAT is enabled
         }
 
@@ -2498,6 +2641,8 @@ impl DhtService {
             file_transfer_service.clone(),
             pending_webrtc_offers.clone(),
             is_bootstrap,
+            enable_autorelay,
+            relay_candidates,
             chunk_size,
         ));
 
@@ -2565,7 +2710,7 @@ impl DhtService {
         let all = self.get_all_file_metadata().await?;
         let mut versions: Vec<FileMetadata> = all
             .into_iter()
-            .filter(|m| m.file_name == file_name && m.is_root)
+            .filter(|m| m.file_name == file_name) // Remove is_root filter - get all versions
             .collect();
         versions.sort_by(|a, b| b.version.unwrap_or(1).cmp(&a.version.unwrap_or(1)));
 
@@ -2602,6 +2747,7 @@ impl DhtService {
         let latest = self
             .get_latest_version_by_file_name(file_name.clone())
             .await?;
+
         let (version, parent_hash, is_root) = match latest {
             Some(ref prev) => (
                 prev.version.map(|v| v + 1).unwrap_or(2),
@@ -2625,7 +2771,7 @@ impl DhtService {
             version: Some(version),
             parent_hash,
             cids: None,
-            is_root: true,
+            is_root, // Use computed value, not hardcoded true
         })
     }
 
@@ -3084,7 +3230,9 @@ async fn assemble_file_from_chunks(
 
         // Store the assembled file
         let file_name = format!("downloaded_{}", file_hash);
-        file_transfer_service.store_file_data(file_hash.to_string(), file_name, file_data).await;
+        file_transfer_service
+            .store_file_data(file_hash.to_string(), file_name, file_data)
+            .await;
 
         info!(
             "Successfully assembled file {} from {} chunks",
@@ -3159,8 +3307,10 @@ mod tests {
             Vec::new(),
             None,
             None,
-            Some(256), // chunk_size_kb
+            Some(256),  // chunk_size_kb
             Some(1024), // cache_size_mb
+            false,      // enable_autorelay
+            Vec::new(), // preferred_relays
         )
         .await
         {
