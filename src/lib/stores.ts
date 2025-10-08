@@ -137,7 +137,16 @@ export interface Transaction {
   from?: string;
   date: Date;
   description: string;
-  status: "pending" | "completed";
+  status: 'submitted' | 'pending' | 'success' | 'failed'; // Match API statuses
+  transaction_hash?: string;
+  gas_used?: number;
+  gas_price?: number; // in Wei
+  confirmations?: number;
+  block_number?: number;
+  nonce?: number;
+  fee?: number; // Total fee in Wei
+  timestamp?: number;
+  error_message?: string;
 }
 
 export interface BlacklistEntry {
@@ -203,7 +212,7 @@ const dummyTransactions: Transaction[] = [
     from: "0x8765...4321",
     date: new Date("2024-03-15"),
     description: "Storage reward",
-    status: "completed",
+    status: "success",
   },
   {
     id: 2,
@@ -212,7 +221,7 @@ const dummyTransactions: Transaction[] = [
     to: "0x1234...5678",
     date: new Date("2024-03-14"),
     description: "Proxy service",
-    status: "completed",
+    status: "success",
   },
   {
     id: 3,
@@ -221,7 +230,7 @@ const dummyTransactions: Transaction[] = [
     from: "0xabcd...ef12",
     date: new Date("2024-03-13"),
     description: "Upload reward",
-    status: "completed",
+    status: "success",
   },
   {
     id: 4,
@@ -230,7 +239,7 @@ const dummyTransactions: Transaction[] = [
     to: "0x9876...5432",
     date: new Date("2024-03-12"),
     description: "File download",
-    status: "completed",
+    status: "success",
   },
 ];
 
@@ -473,3 +482,98 @@ export const settings = writable<AppSettings>({
   enableBandwidthScheduling: false,
   bandwidthSchedules: [],
 });
+
+// Transaction polling functionality
+import { pollTransactionStatus, type TransactionStatus as ApiTransactionStatus } from './services/transactionService';
+
+// Active polling tracker
+const activePollingTasks = new Map<string, boolean>();
+
+/**
+ * Add a transaction and start polling for status updates
+ */
+export async function addTransactionWithPolling(
+  transaction: Transaction
+): Promise<void> {
+  if (!transaction.transaction_hash) {
+    throw new Error('Transaction must have a hash for polling');
+  }
+
+  const txHash = transaction.transaction_hash;
+
+  // Prevent duplicate polling
+  if (activePollingTasks.has(txHash)) {
+    console.warn(`Already polling transaction ${txHash}`);
+    return;
+  }
+
+  // Add to store immediately with 'submitted' status
+  transactions.update(txs => [transaction, ...txs]);
+
+  // Mark as actively polling
+  activePollingTasks.set(txHash, true);
+
+  try {
+    // Start polling with status updates
+    await pollTransactionStatus(
+      txHash,
+      (status: ApiTransactionStatus) => {
+        // Update transaction in store on each status change
+        transactions.update(txs =>
+          txs.map(tx => {
+            if (tx.transaction_hash === txHash) {
+              return {
+                ...tx,
+                status: status.status === 'success' ? 'success' : 
+                        status.status === 'failed' ? 'failed' :
+                        status.status === 'pending' ? 'pending' :
+                        'submitted',
+                confirmations: status.confirmations || 0,
+                block_number: status.block_number || undefined,
+                gas_used: status.gas_used || undefined,
+                error_message: status.error_message || undefined,
+              };
+            }
+            return tx;
+          })
+        );
+      },
+      120, // 2 minutes max polling
+      2000  // 2 second intervals
+    );
+  } catch (error) {
+    console.error(`Failed to poll transaction ${txHash}:`, error);
+
+    // Mark as failed on error
+    transactions.update(txs =>
+      txs.map(tx => {
+        if (tx.transaction_hash === txHash) {
+          return {
+            ...tx,
+            status: 'failed',
+            error_message: error instanceof Error ? error.message : 'Polling failed',
+          };
+        }
+        return tx;
+      })
+    );
+  } finally {
+    activePollingTasks.delete(txHash);
+  }
+}
+
+/**
+ * Helper to update transaction status manually
+ */
+export function updateTransactionStatus(
+  txHash: string,
+  updates: Partial<Transaction>
+): void {
+  transactions.update(txs =>
+    txs.map(tx =>
+      tx.transaction_hash === txHash
+        ? { ...tx, ...updates }
+        : tx
+    )
+  );
+}

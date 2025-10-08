@@ -233,7 +233,7 @@ export class WalletService {
           transactions.update((txs) =>
             txs.map((tx) =>
               tx.status === 'pending' && tx.type === 'sent'
-                ? { ...tx, status: 'completed' as const }
+                ? { ...tx, status: 'success' as const }
                 : tx
             )
           );
@@ -489,7 +489,7 @@ export class WalletService {
         from: 'Mining reward',
         date: block.timestamp ?? new Date(),
         description: `Block Reward (…${last4})`,
-        status: 'completed',
+        status: 'success',
       };
       transactions.update((list) => [tx, ...list]);
     }

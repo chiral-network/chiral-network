@@ -32,6 +32,8 @@
 
   // Transaction components
   import TransactionReceipt from '$lib/components/TransactionReceipt.svelte'
+  import TransactionForm from '$lib/components/transactions/TransactionForm.svelte'
+  import TransactionList from '$lib/components/TransactionList.svelte'
 
   // Validation utilities
   import { validatePrivateKeyFormat, RateLimiter } from '$lib/utils/validation'
@@ -1710,6 +1712,18 @@
           />
         </Card>
     {/if}
+
+  <!-- Send Transaction Section -->
+  {#if $etcAccount}
+    <div class="mt-4">
+      <h2 class="text-xl font-bold mb-4 flex items-center">
+        <Send class="w-5 h-5 mr-2 text-blue-600" />
+        Send Transaction
+      </h2>
+      <TransactionForm />
+    </div>
+  {/if}
+
   <!-- Transaction History Section - Full Width -->
   <Card class="p-6 mt-4">
     <div class="flex items-center justify-between mb-4">
