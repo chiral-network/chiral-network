@@ -16,7 +16,6 @@ SECRET=""
 DISABLE_AUTONAT=false
 AUTONAT_PROBE_INTERVAL=""
 AUTONAT_SERVER=""
-SOCKS5_PROXY=""
 SHOW_MULTIADDR=false
 SHOW_REACHABILITY=false
 SHOW_DOWNLOADS=false
@@ -64,10 +63,6 @@ while [[ $# -gt 0 ]]; do
             AUTONAT_SERVER="$2"
             shift 2
             ;;
-        --socks5-proxy)
-            SOCKS5_PROXY="$2"
-            shift 2
-            ;;
         --show-multiaddr)
             SHOW_MULTIADDR=true
             shift
@@ -94,7 +89,6 @@ while [[ $# -gt 0 ]]; do
             echo "  --disable-autonat                Disable AutoNAT"
             echo "  --autonat-probe-interval SECS    AutoNAT probe interval in seconds"
             echo "  --autonat-server MULTIADDR       AutoNAT server multiaddr"
-            echo "  --socks5-proxy HOST:PORT         SOCKS5 proxy address"
             echo "  --show-multiaddr                 Show multiaddr information"
             echo "  --show-reachability              Show reachability status"
             echo "  --show-downloads                 Show download information"
@@ -168,10 +162,6 @@ fi
 
 if [ -n "$AUTONAT_SERVER" ]; then
     CMD="$CMD --autonat-server $AUTONAT_SERVER"
-fi
-
-if [ -n "$SOCKS5_PROXY" ]; then
-    CMD="$CMD --socks5-proxy $SOCKS5_PROXY"
 fi
 
 if [ "$SHOW_MULTIADDR" = true ]; then

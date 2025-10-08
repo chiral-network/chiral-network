@@ -327,15 +327,6 @@
     );
   }
 
-  // No-op helpers retained for backwards compatibility with saved passwords.
-  function obfuscate(value: string): string {
-    return value;
-  }
-
-  function deobfuscate(value: string): string {
-    return value;
-  }
-
   function copyAddress() {
     const addressToCopy = $etcAccount ? $etcAccount.address : $wallet.address;
     navigator.clipboard.writeText(addressToCopy);
@@ -456,7 +447,7 @@
     try {
       showToast('Sending transaction...', 'info')
       
-      const txHash = await walletService.sendTransaction(recipientAddress, sendAmount)
+      await walletService.sendTransaction(recipientAddress, sendAmount)
       
       // Clear form
       recipientAddress = ''
@@ -509,22 +500,6 @@
       await walletService.refreshTransactions();
     }
   })
-
-  async function checkGethStatus() {
-    if (!isTauri) {
-      isGethRunning = false
-      return
-    }
-
-    try {
-      isGethRunning = await walletService.ensureGethRunning()
-      if ($etcAccount && isGethRunning) {
-        await walletService.refreshBalance()
-      }
-    } catch (error) {
-      console.error('Failed to check geth status:', error)
-    }
-  }
 
   async function fetchBalance() {
     if (!isTauri || !isGethRunning || !$etcAccount) return

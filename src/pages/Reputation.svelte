@@ -5,7 +5,6 @@
   import ReputationCard from '$lib/components/ReputationCard.svelte';
   import ReputationAnalyticsComponent from '$lib/components/ReputationAnalytics.svelte';
   import Card from '$lib/components/ui/card.svelte';
-  import Badge from '$lib/components/ui/badge.svelte';
   import Button from '$lib/components/ui/button.svelte';
 
   // State

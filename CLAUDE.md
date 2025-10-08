@@ -10,7 +10,7 @@ Chiral Network is a BitTorrent-like P2P file sharing application built with Svel
 
 1. **BitTorrent-Style Sharing**: Files immediately start seeding when added (no "upload" step)
 2. **Non-Commercial**: No marketplace, pricing, or trading features
-3. **Privacy-First**: Proxy support, optional encryption, anonymous mode
+3. **Privacy-First**: Encryption, anonymous mode, NAT traversal via relays
 4. **Legitimate Use Only**: Designed for personal, educational, and organizational file sharing
 
 ### Technology Stack
@@ -38,10 +38,9 @@ Chiral Network is a BitTorrent-like P2P file sharing application built with Svel
 2. **Upload** - Actually "Shared Files" - instant seeding interface
 3. **Network** - Peer discovery and network statistics
 4. **Mining** - CPU mining for network security (proof-of-work)
-5. **Proxy** - Privacy routing configuration
-6. **Analytics** - Usage statistics and performance metrics
-7. **Account** - Wallet management (for mining rewards only)
-8. **Settings** - Comprehensive configuration options
+5. **Analytics** - Usage statistics and performance metrics
+6. **Account** - Wallet management (for mining rewards only)
+7. **Settings** - Comprehensive configuration options
 
 ### State Management (`src/lib/stores.ts`)
 
@@ -49,7 +48,6 @@ Chiral Network is a BitTorrent-like P2P file sharing application built with Svel
 - files: All files (downloading, seeding, completed)
 - downloadQueue: Files waiting to download
 - peers: Connected network peers
-- proxyNodes: Available proxy servers
 - networkStats: Global network statistics
 - wallet: User wallet for mining rewards
 ```

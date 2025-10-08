@@ -285,7 +285,7 @@ GET /api/v1/peers/discover
       "reputation": 4.5,
       "uptime": 0.99,
       "last_seen": 1234567890,
-      "capabilities": ["provider", "relay", "proxy"]
+      "capabilities": ["provider", "relay"]
     }
   ]
 }
@@ -572,7 +572,7 @@ ws.onopen = () => {
     JSON.stringify({
       type: "subscribe",
       channels: ["blocks", "transactions", "peers", "files"],
-    }),
+    })
   );
 };
 ```
@@ -764,19 +764,19 @@ ws.onopen = () => {
 
 ### Application Error Codes
 
-| Code | Name               | Description                   |
-| ---- | ------------------ | ----------------------------- |
-| 1000 | NETWORK_ERROR      | Network connectivity issue    |
-| 1001 | TIMEOUT            | Operation timed out           |
-| 1002 | INVALID_HASH       | Invalid file hash format      |
-| 1003 | FILE_NOT_FOUND     | File not in network           |
-| 1004 | INSUFFICIENT_FUNDS | Not enough balance            |
-| 1005 | PERMISSION_DENIED  | Access not authorized         |
+| Code | Name               | Description                    |
+| ---- | ------------------ | ------------------------------ |
+| 1000 | NETWORK_ERROR      | Network connectivity issue     |
+| 1001 | TIMEOUT            | Operation timed out            |
+| 1002 | INVALID_HASH       | Invalid file hash format       |
+| 1003 | FILE_NOT_FOUND     | File not in network            |
+| 1004 | INSUFFICIENT_FUNDS | Not enough balance             |
+| 1005 | PERMISSION_DENIED  | Access not authorized          |
 | 1006 | STORAGE_FULL       | Node provider capacity reached |
-| 1007 | INVALID_CHUNK      | Chunk verification failed     |
-| 1008 | PEER_UNREACHABLE   | Cannot connect to peer        |
-| 1009 | INVALID_SIGNATURE  | Transaction signature invalid |
-| 1010 | NONCE_TOO_LOW      | Transaction nonce too low     |
+| 1007 | INVALID_CHUNK      | Chunk verification failed      |
+| 1008 | PEER_UNREACHABLE   | Cannot connect to peer         |
+| 1009 | INVALID_SIGNATURE  | Transaction signature invalid  |
+| 1010 | NONCE_TOO_LOW      | Transaction nonce too low      |
 
 ## Rate Limiting
 
@@ -908,4 +908,5 @@ func main() {
 ```
 
 ## Testing
+
 Testing API documentation to be added here later.

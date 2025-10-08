@@ -378,8 +378,8 @@
   const unsubscribeFiles = files.subscribe(($files) => {
     // Collect seeding entries
     const seeds: SeedRecord[] = $files
-      .filter(f => f.status === 'seeding')
-      .map(f => ({ id: f.id, path: f.path, hash: f.hash, name: f.name, size: f.size, addedAt: (f.uploadDate ? f.uploadDate.toISOString() : new Date().toISOString()), manifest: f.manifest }))
+      .filter(f => f.status === 'seeding' && f.path) // Only include files with a path
+      .map(f => ({ id: f.id, path: f.path!, hash: f.hash, name: f.name, size: f.size, addedAt: (f.uploadDate ? f.uploadDate.toISOString() : new Date().toISOString()), manifest: f.manifest }))
 
     if (persistTimeout) clearTimeout(persistTimeout)
     persistTimeout = setTimeout(() => {

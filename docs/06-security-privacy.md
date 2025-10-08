@@ -64,8 +64,6 @@ The network ensures both confidentiality and availability using encryption and r
 6. Store the individually encrypted chunks across the network
 ```
 
-
-
 ### File Integrity and Retrieval
 
 A Merkle Tree is constructed from the hashes of the **original, unencrypted** chunks. This tree's root hash serves as the file's primary identifier and ensures top-level integrity.
@@ -231,29 +229,27 @@ Validation Steps:
 
 ## Privacy Features
 
-### Anonymous Routing
+### Network Privacy
 
-#### Onion Routing
+#### NAT Traversal and Relay Nodes
 
-```
-Client → Proxy 1 → Proxy 2 → Proxy 3 → Destination
-  ↓         ↓         ↓         ↓
-Encrypted Encrypted Encrypted Plain
-  (3x)      (2x)      (1x)     text
-```
+- Circuit relay protocol for firewall traversal
+- Direct connection establishment when possible
+- Encrypted connections via libp2p transport security
+- No intermediate nodes see plaintext data
 
-#### Mix Networks
+#### DHT Privacy
 
-- Random delays (0-5 seconds)
-- Packet padding to fixed size
-- Traffic mixing at nodes
-- Cover traffic generation
+- Kad-DHT with random peer selection
+- Content routing without revealing file content
+- Peer discovery through distributed hash table
+- No central servers tracking requests
 
 ### Metadata Protection
 
 #### What's Hidden
 
-- Real IP addresses (via proxies)
+- File content (via encryption)
 - Download patterns (via caching)
 - File associations (via encryption)
 - Transaction linkability (via mixing)
@@ -341,7 +337,7 @@ Sign transaction with group:
 - Random delays
 - Cover traffic
 - Batch processing
-- Proxy rotation
+- Multiple peer connections
 
 ## Security Best Practices
 

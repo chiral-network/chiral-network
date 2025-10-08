@@ -3,8 +3,7 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
   import { TrendingUp, Upload, DollarSign, HardDrive, Award, BarChart3, TrendingUp as LineChart } from 'lucide-svelte'
-  import { files, wallet, networkStats } from '$lib/stores';
-  import { proxyNodes } from '$lib/proxy';
+  import { files, wallet } from '$lib/stores';
   import { onMount, onDestroy } from 'svelte'
   import { t } from 'svelte-i18n'
   import { suspiciousActivity } from '$lib/stores'; // only import
@@ -12,7 +11,7 @@
   import { miningState } from '$lib/stores';
   import { miningProgress } from '$lib/stores';
   import { analyticsService } from '$lib/services/analyticsService';
-  import type { BandwidthStats, PerformanceMetrics, NetworkActivity, ResourceContribution } from '$lib/services/analyticsService';
+  import type { BandwidthStats, NetworkActivity } from '$lib/services/analyticsService';
   
   let uploadedFiles: FileItem[] = []
   let downloadedFiles: FileItem[] = []
@@ -24,38 +23,7 @@
 
   // Real analytics data
   let realBandwidthStats: BandwidthStats | null = null
-  let realPerformanceMetrics: PerformanceMetrics | null = null
   let realNetworkActivity: NetworkActivity | null = null
-  let realResourceContribution: ResourceContribution | null = null
-  
-  // Latency analytics (derived from proxy nodes)
-  let avgLatency = 0
-  let p95Latency = 0
-  let bestLatency = 0
-  let latencyHistory: { date: string; latency: number }[] = []
-  let hoveredLatency: { date: string; latency: number } | null = null
-  let hoveredLatencyIndex: number | null = null
-
-  function computeLatencyStats() {
-    // Use the live values from $proxyNodes
-    const latencies = $proxyNodes
-            .map(n => n.latency)
-            .filter((l): l is number => typeof l === 'number' && isFinite(l))
-
-    if (latencies.length === 0) {
-      avgLatency = 0
-      p95Latency = 0
-      bestLatency = 0
-      return
-    }
-
-    latencies.sort((a, b) => a - b)
-    const sum = latencies.reduce((s, v) => s + v, 0)
-    avgLatency = sum / latencies.length
-    const idx = Math.floor(0.95 * (latencies.length - 1))
-    p95Latency = latencies[idx] || 0
-    bestLatency = latencies[0] || 0
-  }
 
   type Earning = {
     date: string;
@@ -266,9 +234,7 @@
   // Fetch real analytics data
   async function fetchAnalyticsData() {
     realBandwidthStats = await analyticsService.getBandwidthStats();
-    realPerformanceMetrics = await analyticsService.getPerformanceMetrics();
     realNetworkActivity = await analyticsService.getNetworkActivity();
-    realResourceContribution = await analyticsService.getResourceContribution();
 
     // Update bandwidth used with real data
     if (realBandwidthStats) {
@@ -293,29 +259,13 @@
         { type: 'Failed Downloads', description: 'Several failed download attempts detected', date: now.toLocaleString(undefined, dateOptions), severity: 'low' },
       ]);
 
-    // Initialize latency stats and history
-    computeLatencyStats()
-    latencyHistory = Array(30).fill({
-      date: new Date().toLocaleTimeString(undefined, { timeStyle: 'long' }),
-      latency: avgLatency
-    });
-
     // Fetch initial analytics data
     fetchAnalyticsData();
 
-    // Update bandwidth & latency periodically
+    // Update analytics periodically
     const interval = setInterval(() => {
       // Fetch real analytics data
       fetchAnalyticsData();
-
-      // First, re-calculate the current latency statistics
-      computeLatencyStats();
-
-      // Then, add the new *real* average latency to the history
-      latencyHistory = [
-        ...latencyHistory.slice(1),
-        { date: new Date().toLocaleTimeString(undefined, { timeStyle: 'long' }), latency: avgLatency }
-      ]
     }, 3000)
 
 
@@ -571,119 +521,7 @@
     </Card>
   </div>
 
-  <!-- ADDING THIS -->
-  <!-- Network Latency -->
-  <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-    <Card class="p-6">
-      <h2 class="text-lg font-semibold mb-4">{$t('analytics.networkLatency')}</h2>
-      <div class="grid grid-cols-1 sm:grid-cols-3 gap-6 mb-6">
-        <div>
-          <p class="text-xs text-muted-foreground mb-1">{$t('analytics.average')}</p>
-          <p class="text-2xl font-bold">{avgLatency.toFixed(0)} ms</p>
-        </div>
-        <div>
-          <p class="text-xs text-muted-foreground mb-1">{$t('analytics.p95')}</p>
-          <p class="text-2xl font-bold">{p95Latency.toFixed(0)} ms</p>
-        </div>
-        <div>
-          <p class="text-xs text-muted-foreground mb-1">{$t('analytics.best')}</p>
-          <p class="text-2xl font-bold">{bestLatency.toFixed(0)} ms</p>
-        </div>
-      </div>
 
-      <div class="space-y-4">
-        <div>
-          <div class="flex justify-between mb-2">
-            <span class="text-sm">{$t('analytics.currentAvg')}</span>
-            <span class="text-sm font-medium">{avgLatency.toFixed(0)} ms</span>
-          </div>
-          <Progress
-            value={Math.min(avgLatency, 300)}
-            max={300}
-            indicatorClass="bg-gradient-to-r from-emerald-400 via-yellow-400 to-red-500"
-          />
-          <p class="text-xs text-muted-foreground mt-1">
-            {$t('analytics.latencyHint')}
-          </p>
-        </div>
-
-        <div class="pt-2 border-t text-sm grid grid-cols-2 gap-2">
-          <div class="flex justify-between items-center">
-            <span class="text-sm">{$t('analytics.nodesReporting')}</span>
-            <Badge variant="outline">{$proxyNodes.length}</Badge>
-          </div>
-          <div class="flex justify-between items-center">
-            <span class="text-sm">{$t('analytics.sampleSize')}</span>
-            <Badge variant="outline">{latencyHistory.length}</Badge>
-          </div>
-        </div>
-      </div>
-    </Card>
-
-    <Card class="p-6">
-      <h3 class="text-lg font-semibold mb-4">{$t('analytics.latencyRecent')}</h3> 
-      <div class="flex h-48 gap-2">
-        <!-- Y-axis labels -->
-        <div class="flex flex-col justify-between text-xs text-muted-foreground pr-2">
-          <span>300 ms</span>
-          <span>150 ms</span>
-          <span>0</span>
-        </div>
-
-        <!-- Bars + gridlines -->
-        <div class="relative flex-1 flex items-end gap-1">
-          <!-- Gridlines -->
-          <div class="absolute inset-0 flex flex-col justify-between">
-            <div class="border-t border-muted-foreground/20"></div>
-            <div class="border-t border-muted-foreground/20"></div>
-            <div class="border-t border-muted-foreground/20"></div>
-          </div>
-
-          <!-- Bars -->
-          {#if $proxyNodes.length > 0}
-            {#each latencyHistory as p, i}
-              <div
-                      role="button"
-                      tabindex="0"
-                      class="flex-1 bg-gradient-to-t from-blue-400/40 to-blue-500/80 hover:from-blue-500/60 hover:to-blue-600/90 transition-all rounded-t-md shadow-sm relative"
-                      style="height: {(Math.min(p.latency, 300) / 300) * 100}%"
-                      aria-label="{p.date}: {p.latency.toFixed(0)} ms"
-                      on:mouseenter={() => { hoveredLatency = p; hoveredLatencyIndex = i; }}
-                      on:mouseleave={() => { hoveredLatency = null; hoveredLatencyIndex = null; }}
-              >
-                {#if hoveredLatencyIndex === i && hoveredLatency}
-                  <div
-                          class="absolute left-1/2 -translate-x-1/2 -top-8 z-10 px-2 py-1 rounded bg-primary text-white text-xs shadow-lg pointer-events-none"
-                          style="white-space:nowrap;"
-                  >
-                    {hoveredLatency.date}: {hoveredLatency.latency.toFixed(0)} ms
-                    <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0
-                  border-l-6 border-l-transparent border-r-6 border-r-transparent
-                  border-t-6 border-t-primary"></span>
-                  </div>
-                {/if}
-              </div>
-            {/each}
-          {:else}
-            <div class="absolute inset-0 flex items-center justify-center">
-              <p class="text-sm text-muted-foreground text-center px-4">{$t('analytics.latencyNoNodes')}</p>
-            </div>
-          {/if}
-        </div>
-      </div>
-
-      {#if $proxyNodes.length > 0}
-        <div class="flex justify-between mt-2 text-xs text-muted-foreground">
-          <span>{latencyHistory[0]?.date.split(' ')[0]}</span>
-          <span>{latencyHistory[latencyHistory.length - 1]?.date}</span>
-        </div>
-        <div class="flex gap-4 mt-2 text-xs text-muted-foreground">
-          <span>Min: {Math.min(...latencyHistory.map(p => p.latency)).toFixed(0)} ms</span>
-          <span>Max: {Math.max(...latencyHistory.map(p => p.latency)).toFixed(0)} ms</span>
-        </div>
-      {/if}
-    </Card>
-  </div>
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
     <Card class="p-6">
       <h2 class="text-lg font-semibold mb-4">{$t('analytics.topEarningFiles')}</h2>

@@ -38,19 +38,6 @@ export interface FileItem {
   path?: string;
 }
 
-export interface ProxyNode {
-  id: string;
-  address: string;
-  status: "online" | "offline" | "connecting";
-  bandwidth: number;
-  latency: number;
-  region: string;
-  reputation?: number;
-  uptime?: number;
-  price?: number;
-  totalProxied?: number;
-}
-
 export interface WalletInfo {
   address: string;
   balance: number;
@@ -244,7 +231,7 @@ const dummyTransactions: Transaction[] = [
     amount: 10.25,
     to: "0x1234...5678",
     date: new Date("2024-03-14"),
-    description: "Proxy service",
+    description: "Network service",
     status: "completed",
   },
   {
@@ -435,8 +422,6 @@ export interface AppSettings {
   enableUPnP: boolean;
   enableNAT: boolean;
   userLocation: string;
-  enableProxy: boolean; // For SOCKS5 feature
-  proxyAddress: string; // For SOCKS5 feature
   enableAutonat: boolean; // AutoNAT reachability detection
   autonatProbeInterval: number; // Seconds between AutoNAT probes
   autonatServers: string[]; // Custom AutoNAT server multiaddrs
@@ -472,8 +457,6 @@ export const settings = writable<AppSettings>({
   enableUPnP: true,
   enableNAT: true,
   userLocation: "US-East",
-  enableProxy: true, // Defaulting to enabled for SOCKS5 feature
-  proxyAddress: "127.0.0.1:9050", // Default Tor SOCKS address
   enableAutonat: true, // Enable AutoNAT by default
   autonatProbeInterval: 30, // 30 seconds default
   autonatServers: [], // Use bootstrap nodes by default

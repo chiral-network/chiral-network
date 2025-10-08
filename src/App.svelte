@@ -1,9 +1,8 @@
 <script lang="ts">
     import './styles/globals.css'
-    import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star } from 'lucide-svelte'
+    import { Upload, Download, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star } from 'lucide-svelte'
     import UploadPage from './pages/Upload.svelte'
     import DownloadPage from './pages/Download.svelte'
-    import ProxyPage from './pages/Proxy.svelte'
     import AccountPage from './pages/Account.svelte'
     import NetworkPage from './pages/Network.svelte'
     import AnalyticsPage from './pages/Analytics.svelte'
@@ -11,7 +10,6 @@
     import MiningPage from './pages/Mining.svelte'
     import ReputationPage from './pages/Reputation.svelte'
     import NotFound from './pages/NotFound.svelte'
-    import ProxySelfTest from './routes/proxy-self-test.svelte'
     import { networkStatus } from './lib/stores'
     import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
     import {onMount, setContext} from 'svelte';
@@ -111,14 +109,10 @@
         { id: 'upload', label: $t('nav.upload'), icon: Upload },
         { id: 'network', label: $t('nav.network'), icon: Globe },
         { id: 'mining', label: $t('nav.mining'), icon: Cpu },
-        { id: 'proxy', label: $t('nav.proxy'), icon: Shield },
         { id: 'analytics', label: $t('nav.analytics'), icon: BarChart3 },
         { id: 'reputation', label: $t('nav.reputation'), icon: Star },
         { id: 'account', label: $t('nav.account'), icon: Wallet },
         { id: 'settings', label: $t('nav.settings'), icon: Settings },
-
-        ...(import.meta.env.DEV ? [{ id: 'proxy-self-test', label: 'Proxy Self-Test', icon: Shield }] : [])
-
       ]
     }
 
@@ -144,10 +138,6 @@
         component: MiningPage
       },
       {
-        path: "proxy",
-        component: ProxyPage
-      },
-      {
         path: "analytics",
         component: AnalyticsPage
       },
@@ -162,10 +152,6 @@
       {
         path: "settings",
         component: SettingsPage
-      },
-      {
-        path: "proxy-self-test",
-        component: ProxySelfTest
       },
     ]
 

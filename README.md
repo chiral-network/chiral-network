@@ -13,14 +13,14 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 - **DHT-based P2P Network**: Utilizing distributed hash tables for decentralized file discovery and routing
 - **Content-Addressed Storage**: Files identified by cryptographic hashes ensuring integrity
 - **libp2p Protocol Stack**: Industry-standard P2P networking with NAT traversal and peer discovery
-- **Hybrid Node Architecture**: Supporting provider, consumer, proxy, and relay node types
+- **Hybrid Node Architecture**: Supporting provider, consumer, and relay node types
 - **Proof-of-Storage Consensus**: Nodes validate storage claims through periodic challenges
 
 ### Network Model
 
 - **Non-Commercial Focus**: No marketplace or trading features to prevent misuse
 - **Community-Driven**: Focus on collaborative storage and sharing
-- **Privacy-First**: Anonymous routing through proxy nodes
+- **Privacy-First**: End-to-end encryption and secure peer connections
 - **Resource Sharing**: Contribute storage and bandwidth to the network
 
 ## Key Features
@@ -65,20 +65,14 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 - ✅ **Resource Contribution**: Track your contribution to the network with real bandwidth/storage metrics
 - ✅ **Historical Data**: View bandwidth and contribution trends over time (mining earnings use mock data)
 
-### 5. Proxy & NAT Traversal Support
+### 5. NAT Traversal Support
 
-- ✅ **SOCKS5 Proxy Support**: Route P2P traffic through SOCKS5 proxies for privacy
 - ✅ **Circuit Relay v2**: Automatic relay reservation for NAT traversal
 - ✅ **AutoNAT v2**: Automatic reachability detection (Public/Private/Unknown)
 - ✅ **Relay Health Monitoring**: Track relay connection status and performance
 - ✅ **Custom Relay Nodes**: Add trusted relay nodes manually
 - ✅ **Headless Relay Configuration**: CLI flags for --enable-autorelay, --relay, --autonat-server
-- ❌ **Privacy Protection**: Route traffic through proxy nodes (no traffic routing implemented)
-- ❌ **Load Balancing**: Automatic distribution across multiple proxies (no parallel downloads or file segmentation)
-- ❌ **Latency Optimization**: Choose proxies based on performance (no download process uses latency framework)
-- ✅ **Custom Node Addition**: Add trusted proxy nodes manually
-- ❌ **Bandwidth Aggregation**: Combine multiple proxy connections (no actual combining of multiple proxy connections)
-- ✅ **Real Proxy Management**: Backend proxy connection and management
+- ✅ **DCUtR (Direct Connection Upgrade)**: Hole punching for direct peer connections
 - ❌ **Public Relay Infrastructure**: Dedicated relay daemon deployment (in progress)
 
 ### 6. Security & Privacy
@@ -86,7 +80,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 - ✅ **End-to-End Encryption**: AES-256-GCM encryption with PBKDF2 key derivation (can be enabled in Settings)
 - ✅ **Wallet Security**: Secure credential management with HD wallets
 - ✅ **Stream Authentication**: HMAC-based cryptographic verification of data integrity during file transfers
-- ❌ **Anonymous Routing**: Hide your IP from other peers (no IP hiding or anonymization implemented)
+- ✅ **Transport Security**: Noise protocol for encrypted libp2p connections
 - ✅ **No Commercial Tracking**: No marketplace means no transaction tracking
 
 ### 7. Mining & Network Security
@@ -103,7 +97,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 - ✅ **Storage Management**: Configure storage location and limits
 - ✅ **Network Configuration**: Set bandwidth limits and connection parameters
 - ✅ **Advanced Bandwidth Scheduling**: Set different bandwidth limits for specific times and days
-- ✅ **Privacy Controls**: Mandatory encryption, proxy support, and anonymous mode (anonymous mode not implemented)
+- ✅ **Privacy Controls**: Mandatory encryption and transport security
 - ✅ **Notification Preferences**: Customize alerts and notifications
 - ✅ **Advanced Options**: Fine-tune DHT, chunk size, and cache settings (configurable through UI)
 - ✅ **Import/Export**: Backup and restore settings
@@ -134,9 +128,10 @@ This implementation synthesizes concepts from multiple design teams, focusing on
    - Persistent tracking of externally observed addresses
    - Address change detection and logging
 
-4. **SOCKS5 Proxy Integration**
-   - P2P traffic routing through SOCKS5 proxies
-   - CLI flag: `--socks5-proxy <address>`
+4. **DCUtR (Direct Connection Upgrade through Relay)**
+   - Hole punching for establishing direct connections
+   - Automatic upgrade from relayed to direct connections
+   - Improved performance and reduced relay dependency
 
 #### ✅ GUI Configuration (Recently Implemented)
 
@@ -187,7 +182,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
    - Rate limiting for AutoNAT probes
    - Anti-amplification safeguards
 
-3. **Resilience Testing**
+2. **Resilience Testing**
    - End-to-end NAT traversal scenarios
    - Private↔Public connection tests
    - Private↔Private relay/hole-punch tests
@@ -207,9 +202,6 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 
 # Enable AutoRelay with custom relay nodes
 ./chiral-network --relay /ip4/relay.example.com/tcp/4001/p2p/QmRelayId
-
-# Route P2P through SOCKS5 proxy
-./chiral-network --socks5-proxy 127.0.0.1:9050
 ```
 
 ### NAT Traversal Architecture
@@ -218,8 +210,7 @@ The network uses a multi-layered approach to ensure connectivity:
 
 1. **Direct Connection** (fastest): For publicly reachable peers
 2. **Hole Punching** (DCUtR): For symmetric NAT traversal
-3. **Circuit Relay** (fallback): For restrictive NATs
-4. **SOCKS5 Proxy** (privacy): For anonymous routing
+3. **Circuit Relay** (fallback): For restrictive NATs behind firewalls
 
 ## Technical Implementation
 
@@ -250,7 +241,6 @@ The network uses a multi-layered approach to ensure connectivity:
   - mDNS for local peer discovery
 - **Noise Protocol**: Modern cryptographic transport security
 - **Bitswap Protocol**: Efficient block exchange for chunked file transfers
-- **SOCKS5 Proxy**: Privacy-focused P2P traffic routing
 - **Multi-Source Downloads**: Parallel chunk downloading from multiple peers
 - **Reputation System**: Track peer reliability, bandwidth, and latency for intelligent peer selection
 
@@ -267,7 +257,7 @@ The network uses a multi-layered approach to ensure connectivity:
 
 2. **Privacy-Focused Architecture**
    - No centralized servers to track users
-   - Anonymous routing options through proxy nodes
+   - Encrypted transport security (Noise protocol)
    - Local-first data storage
    - Decentralized peer discovery prevents tracking
 
@@ -343,7 +333,7 @@ npm run test:watch
 ### Network Participation
 
 1. Keep application running to support network
-2. Configure proxy nodes for privacy
+2. Enable relay services to help peers behind firewalls
 3. Enable mining to earn rewards
 4. Monitor your contributions in Analytics
 5. Maintain good peer reputation
@@ -400,7 +390,7 @@ npm run test:watch
 - ✅ Modern desktop interface (Svelte + Tauri)
 - ✅ Real-time file management dashboard
 - ✅ Network monitoring & peer discovery
-- ✅ Proxy support for anonymity
+- ✅ Transport security with Noise protocol
 - ✅ Analytics dashboard with real metrics
 - ✅ CPU mining with pool support
 - ✅ Comprehensive settings management
@@ -415,7 +405,6 @@ npm run test:watch
 - ✅ NAT traversal (AutoNAT v2, Circuit Relay v2, DCUtR, mDNS)
 - ✅ Advanced peer selection and reputation system
 - ✅ Multi-source downloads with parallel chunk transfers
-- ✅ SOCKS5 proxy support for privacy
 - ✅ Bitswap protocol for efficient block exchange
 - ✅ Comprehensive analytics with real-time metrics tracking
 

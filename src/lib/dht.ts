@@ -24,7 +24,6 @@ export interface DhtConfig {
   enableAutonat?: boolean;
   autonatProbeIntervalSeconds?: number;
   autonatServers?: string[];
-  proxyAddress?: string;
   chunkSizeKb?: number;
   cacheSizeMb?: number;
   enableAutorelay?: boolean;
@@ -145,12 +144,6 @@ export class DhtService {
       if (config?.autonatServers && config.autonatServers.length > 0) {
         payload.autonatServers = config.autonatServers;
       }
-      if (
-        typeof config?.proxyAddress === "string" &&
-        config.proxyAddress.trim().length > 0
-      ) {
-        payload.proxyAddress = config.proxyAddress;
-      }
       if (typeof config?.chunkSizeKb === "number") {
         payload.chunkSizeKb = config.chunkSizeKb;
       }
@@ -187,8 +180,6 @@ export class DhtService {
       throw error;
     }
   }
-
-
 
   async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
     try {

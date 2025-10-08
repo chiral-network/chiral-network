@@ -49,18 +49,14 @@
     port: 30303,
     enableUPnP: true,
     enableNAT: true,
-    enableAutoRelay: true, // Enabled by default
-    preferredRelays: "", // Empty by default
     userLocation: "US-East", // Geographic region for peer sorting
 
     // Privacy settings
-    enableProxy: true,
-    proxyAddress: "127.0.0.1:9050", // Default Tor SOCKS address
     enableAutonat: true,
     autonatProbeInterval: 30,
     autonatServers: [],
-    enableAutorelay: true,
-    preferredRelays: [],
+    enableAutorelay: true, // Enabled by default
+    preferredRelays: [], // Empty by default
     anonymousMode: false,
     shareAnalytics: true,
 
@@ -404,7 +400,6 @@ const sectionLabels: Record<string, string[]> = {
   ],
   privacy: [
     $t("privacy.title"),
-    $t("privacy.enableProxy"),
     $t("privacy.anonymousMode"),
     $t("privacy.shareAnalytics"),
   ],
@@ -665,14 +660,14 @@ function sectionMatches(section: string, query: string) {
             <input
               type="checkbox"
               id="enable-autorelay"
-              bind:checked={localSettings.enableAutoRelay}
+              bind:checked={localSettings.enableAutorelay}
             />
             <Label for="enable-autorelay" class="cursor-pointer">
               {$t("settings.autorelay.enable")}
             </Label>
           </div>
 
-          {#if localSettings.enableAutoRelay}
+          {#if localSettings.enableAutorelay}
             <div class="space-y-2 ml-6">
               <Label for="preferred-relays">{$t("settings.autorelay.relays")}</Label>
               <textarea
@@ -681,7 +676,7 @@ function sectionMatches(section: string, query: string) {
                 placeholder="/ip4/147.75.80.110/tcp/4001/p2p/QmNnooDu..."
                 rows="3"
                 class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
-              />
+              ></textarea>
               <p class="text-xs text-muted-foreground">
                 {$t("settings.autorelay.description")}
               </p>
@@ -887,30 +882,6 @@ function sectionMatches(section: string, query: string) {
         <h2 class="text-xl font-semibold text-black">{$t("privacy.title")}</h2>
       </div>
       <div class="space-y-2">
-        <div class="flex items-center gap-2">
-          <input
-            type="checkbox"
-            id="enable-proxy"
-            bind:checked={localSettings.enableProxy}
-          />
-          <Label for="enable-proxy" class="cursor-pointer">
-            {$t("privacy.enableProxy")}
-          </Label>
-        </div>
-
-        {#if localSettings.enableProxy}
-          <div>
-            <Label for="proxy-address">{$t("privacy.proxyAddress")}</Label>
-            <Input
-              id="proxy-address"
-              bind:value={localSettings.proxyAddress}
-              placeholder="127.0.0.1:9050 (SOCKS5)"
-              class="mt-1"
-            />
-            <p class="text-xs text-muted-foreground mt-1">{$t("privacy.proxyHint")}</p>
-          </div>
-        {/if}
-
         <!-- AutoNAT Configuration -->
         <div class="space-y-3 border-t pt-3">
           <h4 class="font-medium">NAT Traversal & Reachability</h4>
