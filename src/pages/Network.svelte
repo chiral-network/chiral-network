@@ -351,14 +351,13 @@
           const peerId = await dhtService.start({
             port: dhtPort,
             bootstrapNodes: dhtBootstrapNodes,
-            enableAutonat: true,  // Enable AutoNAT to activate DCUtR
-            chunkSizeKb: $settings.chunkSize,
-            cacheSizeMb: $settings.cacheSize,
             enableAutonat: $settings.enableAutonat,
             autonatProbeIntervalSeconds: $settings.autonatProbeInterval,
             autonatServers: $settings.autonatServers,
-            // Note: AutoRelay is always enabled via relay_client in the backend
-            // preferredRelays would need backend support to be configurable
+            enableAutorelay: $settings.enableAutorelay,
+            preferredRelays: $settings.preferredRelays || [],
+            chunkSizeKb: $settings.chunkSize,
+            cacheSizeMb: $settings.cacheSize,
           })
           dhtPeerId = peerId
           // Also ensure the service knows its own peer ID
@@ -1371,6 +1370,55 @@
                 <p class="mt-2 text-sm text-muted-foreground">{$t('network.dht.reachability.historyEmpty')}</p>
               {/if}
             </div>
+          </div>
+
+          <!-- AutoRelay Status -->
+          <div class="pt-4 space-y-4 border-t border-muted/40">
+            <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.title')}</p>
+                <div class="mt-2 flex items-center gap-2">
+                  {#if dhtHealth?.autorelayEnabled}
+                    <Badge class="bg-green-600">{$t('network.dht.relay.enabled')}</Badge>
+                  {:else}
+                    <Badge class="bg-gray-500">{$t('network.dht.relay.disabled')}</Badge>
+                  {/if}
+                  {#if dhtHealth?.activeRelayPeerId}
+                    <span class="text-xs font-mono text-muted-foreground">{dhtHealth.activeRelayPeerId.slice(0, 12)}...</span>
+                  {/if}
+                </div>
+              </div>
+              {#if dhtHealth?.autorelayEnabled}
+                <div class="text-sm text-muted-foreground space-y-1 text-right">
+                  {#if dhtHealth?.activeRelayPeerId}
+                    <p class="text-green-600">{$t('network.dht.relay.status')}: {dhtHealth.relayReservationStatus ?? $t('network.dht.relay.pending')}</p>
+                  {:else}
+                    <p class="text-yellow-600">{$t('network.dht.relay.noPeer')}</p>
+                  {/if}
+                </div>
+              {/if}
+            </div>
+
+            {#if dhtHealth?.autorelayEnabled}
+              <div class="grid gap-3 md:grid-cols-2">
+                <div class="bg-muted/40 rounded-lg p-3">
+                  <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.activePeer')}</p>
+                  <p class="text-sm font-mono mt-1">{dhtHealth?.activeRelayPeerId ?? $t('network.dht.relay.noPeer')}</p>
+                </div>
+                <div class="bg-muted/40 rounded-lg p-3">
+                  <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.renewals')}</p>
+                  <p class="text-sm font-medium mt-1">{dhtHealth?.reservationRenewals ?? 0}</p>
+                </div>
+                <div class="bg-muted/40 rounded-lg p-3">
+                  <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.lastSuccess')}</p>
+                  <p class="text-sm font-medium mt-1">{formatNatTimestamp(dhtHealth?.lastReservationSuccess ?? null)}</p>
+                </div>
+                <div class="bg-muted/40 rounded-lg p-3">
+                  <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.evictions')}</p>
+                  <p class="text-sm font-medium mt-1">{dhtHealth?.reservationEvictions ?? 0}</p>
+                </div>
+              </div>
+            {/if}
           </div>
 
           {#if dhtHealth}

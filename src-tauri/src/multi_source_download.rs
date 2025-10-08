@@ -1,3 +1,6 @@
+use crate::dht::{DhtService, FileMetadata, WebRTCOfferRequest};
+use crate::peer_selection::SelectionStrategy;
+use crate::webrtc_service::{WebRTCFileRequest, WebRTCService};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -5,9 +8,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::time::timeout;
 use tracing::{error, info, warn};
-use crate::dht::{DhtService, FileMetadata, WebRTCOfferRequest};
-use crate::webrtc_service::{WebRTCService, WebRTCFileRequest};
-use crate::peer_selection::SelectionStrategy;
 
 const DEFAULT_CHUNK_SIZE: usize = 256 * 1024; // 256KB chunks
 const MAX_CHUNKS_PER_PEER: usize = 10; // Maximum chunks to assign to a single peer
@@ -167,10 +167,7 @@ pub enum MultiSourceEvent {
 }
 
 impl MultiSourceDownloadService {
-    pub fn new(
-        dht_service: Arc<DhtService>,
-        webrtc_service: Arc<WebRTCService>,
-    ) -> Self {
+    pub fn new(dht_service: Arc<DhtService>, webrtc_service: Arc<WebRTCService>) -> Self {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (command_tx, command_rx) = mpsc::unbounded_channel();
 
@@ -219,9 +216,9 @@ impl MultiSourceDownloadService {
 
     pub async fn run(&self) {
         info!("Starting MultiSourceDownloadService");
-        
+
         let mut command_rx = self.command_rx.lock().await;
-        
+
         while let Some(command) = command_rx.recv().await {
             match command {
                 MultiSourceCommand::StartDownload {
@@ -296,12 +293,14 @@ impl MultiSourceDownloadService {
         let chunks = self.calculate_chunks(&metadata, chunk_size);
 
         // Determine if we should use multi-source download
-        let use_multi_source = total_chunks >= MIN_CHUNKS_FOR_PARALLEL as u32 
-            && available_peers.len() > 1;
+        let use_multi_source =
+            total_chunks >= MIN_CHUNKS_FOR_PARALLEL as u32 && available_peers.len() > 1;
 
         if !use_multi_source {
             info!("Using single-source download (not enough chunks or peers)");
-            return self.start_single_source_download(metadata, output_path).await;
+            return self
+                .start_single_source_download(metadata, output_path)
+                .await;
         }
 
         // Select optimal peers for multi-source download
@@ -316,7 +315,10 @@ impl MultiSourceDownloadService {
             )
             .await;
 
-        info!("Selected {} peers for multi-source download", selected_peers.len());
+        info!(
+            "Selected {} peers for multi-source download",
+            selected_peers.len()
+        );
 
         // Create download state
         let download = ActiveDownload {
@@ -338,7 +340,8 @@ impl MultiSourceDownloadService {
         }
 
         // Start peer connections and assign chunks
-        self.start_peer_connections(&file_hash, selected_peers.clone()).await?;
+        self.start_peer_connections(&file_hash, selected_peers.clone())
+            .await?;
 
         // Emit download started event
         let _ = self.event_tx.send(MultiSourceEvent::DownloadStarted {
@@ -371,10 +374,10 @@ impl MultiSourceDownloadService {
         while offset < metadata.file_size {
             let remaining = (metadata.file_size - offset) as usize;
             let size = remaining.min(chunk_size);
-            
+
             // Calculate chunk hash (simplified - in real implementation this would be pre-calculated)
             let hash = format!("{}_{}", metadata.file_hash, chunk_id);
-            
+
             chunks.push(ChunkInfo {
                 chunk_id,
                 offset,
@@ -395,9 +398,7 @@ impl MultiSourceDownloadService {
         peer_ids: Vec<String>,
     ) -> Result<(), String> {
         let downloads = self.active_downloads.read().await;
-        let download = downloads
-            .get(file_hash)
-            .ok_or("Download not found")?;
+        let download = downloads.get(file_hash).ok_or("Download not found")?;
 
         // Assign chunks to peers using round-robin strategy
         let chunk_assignments = self.assign_chunks_to_peers(&download.chunks, &peer_ids);
@@ -417,7 +418,7 @@ impl MultiSourceDownloadService {
         peer_ids: &[String],
     ) -> HashMap<String, Vec<u32>> {
         let mut assignments: HashMap<String, Vec<u32>> = HashMap::new();
-        
+
         // Initialize assignments
         for peer_id in peer_ids {
             assignments.insert(peer_id.clone(), Vec::new());
@@ -427,7 +428,7 @@ impl MultiSourceDownloadService {
         for (index, chunk) in chunks.iter().enumerate() {
             let peer_index = index % peer_ids.len();
             let peer_id = &peer_ids[peer_index];
-            
+
             if let Some(chunks) = assignments.get_mut(peer_id) {
                 if chunks.len() < MAX_CHUNKS_PER_PEER {
                     chunks.push(chunk.chunk_id);
@@ -476,7 +477,11 @@ impl MultiSourceDownloadService {
         peer_id: String,
         chunk_ids: Vec<u32>,
     ) -> Result<(), String> {
-        info!("Connecting to peer {} for {} chunks", peer_id, chunk_ids.len());
+        info!(
+            "Connecting to peer {} for {} chunks",
+            peer_id,
+            chunk_ids.len()
+        );
 
         // Update peer assignment status
         {
@@ -507,7 +512,8 @@ impl MultiSourceDownloadService {
 
                 match timeout(
                     Duration::from_secs(CONNECTION_TIMEOUT_SECS),
-                    self.dht_service.send_webrtc_offer(peer_id.clone(), offer_request),
+                    self.dht_service
+                        .send_webrtc_offer(peer_id.clone(), offer_request),
                 )
                 .await
                 {
@@ -530,32 +536,41 @@ impl MultiSourceDownloadService {
                                     .await
                                 {
                                     Ok(_) => {
-                                        self.on_peer_connected(file_hash, &peer_id, chunk_ids).await;
+                                        self.on_peer_connected(file_hash, &peer_id, chunk_ids)
+                                            .await;
                                         Ok(())
                                     }
                                     Err(e) => {
-                                        self.on_peer_failed(file_hash, &peer_id, format!("Connection failed: {}", e)).await;
+                                        self.on_peer_failed(
+                                            file_hash,
+                                            &peer_id,
+                                            format!("Connection failed: {}", e),
+                                        )
+                                        .await;
                                         Err(e)
                                     }
                                 }
                             }
                             _ => {
                                 let error = "Answer timeout".to_string();
-                                self.on_peer_failed(file_hash, &peer_id, error.clone()).await;
+                                self.on_peer_failed(file_hash, &peer_id, error.clone())
+                                    .await;
                                 Err(error)
                             }
                         }
                     }
                     _ => {
                         let error = "Offer timeout".to_string();
-                        self.on_peer_failed(file_hash, &peer_id, error.clone()).await;
+                        self.on_peer_failed(file_hash, &peer_id, error.clone())
+                            .await;
                         Err(error)
                     }
                 }
             }
             Err(e) => {
                 let error = format!("Failed to create offer: {}", e);
-                self.on_peer_failed(file_hash, &peer_id, error.clone()).await;
+                self.on_peer_failed(file_hash, &peer_id, error.clone())
+                    .await;
                 Err(error)
             }
         }
@@ -588,7 +603,8 @@ impl MultiSourceDownloadService {
         });
 
         // Start requesting chunks from this peer
-        self.start_chunk_requests(file_hash, peer_id, chunk_ids).await;
+        self.start_chunk_requests(file_hash, peer_id, chunk_ids)
+            .await;
     }
 
     async fn on_peer_failed(&self, file_hash: &str, peer_id: &str, error: String) {
@@ -601,12 +617,12 @@ impl MultiSourceDownloadService {
                 if let Some(assignment) = download.peer_assignments.get_mut(peer_id) {
                     assignment.status = PeerStatus::Failed;
                     let chunks = assignment.chunks.clone();
-                    
+
                     // Add failed chunks back to retry queue
                     for chunk_id in &chunks {
                         download.failed_chunks.push_back(*chunk_id);
                     }
-                    
+
                     chunks
                 } else {
                     Vec::new()
@@ -632,7 +648,11 @@ impl MultiSourceDownloadService {
     }
 
     async fn start_chunk_requests(&self, file_hash: &str, peer_id: &str, chunk_ids: Vec<u32>) {
-        info!("Starting chunk requests from peer {} for {} chunks", peer_id, chunk_ids.len());
+        info!(
+            "Starting chunk requests from peer {} for {} chunks",
+            peer_id,
+            chunk_ids.len()
+        );
 
         // Send file request first
         let metadata = {
@@ -655,7 +675,8 @@ impl MultiSourceDownloadService {
                 .await
             {
                 warn!("Failed to send file request to peer {}: {}", peer_id, e);
-                self.on_peer_failed(file_hash, peer_id, format!("File request failed: {}", e)).await;
+                self.on_peer_failed(file_hash, peer_id, format!("File request failed: {}", e))
+                    .await;
                 return;
             }
 
@@ -721,7 +742,10 @@ impl MultiSourceDownloadService {
                     .peer_assignments
                     .iter()
                     .filter(|(_, assignment)| {
-                        matches!(assignment.status, PeerStatus::Connected | PeerStatus::Downloading)
+                        matches!(
+                            assignment.status,
+                            PeerStatus::Connected | PeerStatus::Downloading
+                        )
                     })
                     .map(|(peer_id, _)| peer_id.clone())
                     .collect::<Vec<_>>()
@@ -739,7 +763,7 @@ impl MultiSourceDownloadService {
         for (index, chunk_id) in failed_chunks.iter().enumerate() {
             let peer_index = index % available_peers.len();
             let peer_id = &available_peers[peer_index];
-            
+
             // Add chunk to peer's assignment
             {
                 let mut downloads = self.active_downloads.write().await;
@@ -805,13 +829,13 @@ impl MultiSourceDownloadService {
     async fn spawn_download_monitor(&self, file_hash: String) {
         let downloads = self.active_downloads.clone();
         let event_tx = self.event_tx.clone();
-        
+
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(2));
-            
+
             loop {
                 interval.tick().await;
-                
+
                 let progress = {
                     let downloads = downloads.read().await;
                     if let Some(download) = downloads.get(&file_hash) {
@@ -825,7 +849,8 @@ impl MultiSourceDownloadService {
                     // Check if download is complete
                     if progress.completed_chunks >= progress.total_chunks {
                         // Finalize download
-                        if let Err(e) = Self::finalize_download_static(&downloads, &file_hash).await {
+                        if let Err(e) = Self::finalize_download_static(&downloads, &file_hash).await
+                        {
                             let _ = event_tx.send(MultiSourceEvent::DownloadFailed {
                                 file_hash: file_hash.clone(),
                                 error: format!("Failed to finalize download: {}", e),
@@ -907,7 +932,7 @@ impl MultiSourceDownloadService {
         if let Some(download) = download {
             // Assemble file from chunks
             let mut file_data = vec![0u8; download.file_metadata.file_size as usize];
-            
+
             for chunk_info in &download.chunks {
                 if let Some(completed_chunk) = download.completed_chunks.get(&chunk_info.chunk_id) {
                     let start = chunk_info.offset as usize;
@@ -941,14 +966,14 @@ impl MultiSourceDownloadService {
     pub async fn drain_events(&self, max_events: usize) -> Vec<MultiSourceEvent> {
         let mut events = Vec::new();
         let mut event_rx = self.event_rx.lock().await;
-        
+
         for _ in 0..max_events {
             match event_rx.try_recv() {
                 Ok(event) => events.push(event),
                 Err(_) => break,
             }
         }
-        
+
         events
     }
 }
@@ -975,7 +1000,7 @@ mod tests {
             size: 256 * 1024,
             hash: "test_hash".to_string(),
         };
-        
+
         assert_eq!(chunk.chunk_id, 0);
         assert_eq!(chunk.offset, 0);
         assert_eq!(chunk.size, 256 * 1024);
@@ -998,13 +1023,13 @@ mod tests {
             requested_at: Instant::now(),
             retry_count: 0,
         };
-        
+
         assert_eq!(request.chunk_id, 1);
         assert_eq!(request.peer_id, "peer123");
         assert_eq!(request.retry_count, 0);
     }
 
-    #[test] 
+    #[test]
     fn test_completed_chunk_creation() {
         let data = vec![1, 2, 3, 4, 5];
         let chunk = CompletedChunk {
@@ -1013,7 +1038,7 @@ mod tests {
             peer_id: "peer456".to_string(),
             completed_at: Instant::now(),
         };
-        
+
         assert_eq!(chunk.chunk_id, 2);
         assert_eq!(chunk.data, data);
         assert_eq!(chunk.peer_id, "peer456");
@@ -1024,7 +1049,7 @@ mod tests {
         // Test the constants used for multi-source decisions
         let small_file = 500 * 1024; // 500KB
         let large_file = 2 * 1024 * 1024; // 2MB
-        
+
         assert!(small_file < 1024 * 1024); // Less than 1MB
         assert!(large_file > 1024 * 1024); // Greater than 1MB
     }
@@ -1035,7 +1060,7 @@ mod tests {
             file_hash: "test_hash".to_string(),
             total_peers: 3,
         };
-        
+
         // Test that event can be serialized (required for Tauri events)
         let serialized = serde_json::to_string(&event);
         assert!(serialized.is_ok());

@@ -27,6 +27,8 @@ export interface DhtConfig {
   proxyAddress?: string;
   chunkSizeKb?: number;
   cacheSizeMb?: number;
+  enableAutorelay?: boolean;
+  preferredRelays?: string[];
 }
 
 export interface FileMetadata {
@@ -82,6 +84,14 @@ export interface DhtHealth {
   observedAddrs: string[];
   reachabilityHistory: NatHistoryItem[];
   autonatEnabled: boolean;
+  // AutoRelay metrics
+  autorelayEnabled: boolean;
+  activeRelayPeerId: string | null;
+  relayReservationStatus: string | null;
+  lastReservationSuccess: number | null;
+  lastReservationFailure: number | null;
+  reservationRenewals: number;
+  reservationEvictions: number;
   // DCUtR hole-punching metrics
   dcutrEnabled: boolean;
   dcutrHolePunchAttempts: number;
@@ -146,6 +156,12 @@ export class DhtService {
       }
       if (typeof config?.cacheSizeMb === "number") {
         payload.cacheSizeMb = config.cacheSizeMb;
+      }
+      if (typeof config?.enableAutorelay === "boolean") {
+        payload.enableAutorelay = config.enableAutorelay;
+      }
+      if (config?.preferredRelays && config.preferredRelays.length > 0) {
+        payload.preferredRelays = config.preferredRelays;
       }
 
       const peerId = await invoke<string>("start_dht_node", payload);
