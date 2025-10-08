@@ -242,6 +242,8 @@ Encrypted Encrypted Encrypted Plain
   (3x)      (2x)      (1x)     text
 ```
 
+**Implementation status:** Anonymous mode now enforces SOCKS5 proxy routing for every libp2p dial, binds listeners to loopback-only interfaces, and disables AutoNAT/DCUtR features that would otherwise reveal reachability details. Relay candidates are auto-selected from bootstrap nodes when custom relays are unavailable, ensuring all external peers see only proxy or relay addresses.
+
 #### Mix Networks
 
 - Random delays (0-5 seconds)

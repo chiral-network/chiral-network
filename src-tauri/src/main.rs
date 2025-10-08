@@ -611,6 +611,9 @@ async fn start_dht_node(
     autonat_probe_interval_secs: Option<u64>,
     autonat_servers: Option<Vec<String>>,
     proxy_address: Option<String>,
+    enable_autorelay: Option<bool>,
+    preferred_relays: Option<Vec<String>>,
+    anonymous_mode: Option<bool>,
     is_bootstrap: Option<bool>,
     chunk_size_kb: Option<usize>,
     cache_size_mb: Option<usize>,
@@ -622,16 +625,48 @@ async fn start_dht_node(
         }
     }
 
+    let anonymous_mode_enabled = anonymous_mode.unwrap_or(false);
+
     // Disable autonat by default to prevent warnings when no servers are available
-    // Users can explicitly enable it when needed
-    let auto_enabled = enable_autonat.unwrap_or(false);
+    // Users can explicitly enable it when needed, unless anonymous mode forces it off
+    let auto_enabled = if anonymous_mode_enabled {
+        if enable_autonat.unwrap_or(false) {
+            info!("Anonymous mode requested - overriding AutoNAT to disabled");
+        }
+        false
+    } else {
+        enable_autonat.unwrap_or(false)
+    };
     let probe_interval = autonat_probe_interval_secs.map(Duration::from_secs);
     let autonat_server_list = autonat_servers.unwrap_or_default();
+
+    let mut relay_list = preferred_relays.unwrap_or_default();
+    let enable_autorelay_flag = if anonymous_mode_enabled {
+        if let Some(requested) = enable_autorelay {
+            if !requested {
+                info!(
+                    "Anonymous mode requested - forcing Circuit Relay v2 to stay enabled"
+                );
+            }
+        }
+        true
+    } else {
+        enable_autorelay.unwrap_or(false)
+    };
+
+    if anonymous_mode_enabled && relay_list.is_empty() {
+        // When anonymous mode is enabled we prefer to reuse bootstrap nodes as relays
+        relay_list = bootstrap_nodes.clone();
+    }
 
     // Get the proxy from the command line, if it was provided at launch
     let cli_proxy = state.socks5_proxy_cli.lock().await.clone();
     // Prioritize the command-line argument. Fall back to the one from the UI.
     let final_proxy_address = cli_proxy.or(proxy_address.clone());
+
+    if anonymous_mode_enabled && final_proxy_address.is_none() {
+        return Err("Anonymous mode requires a SOCKS5 proxy address".to_string());
+    }
 
     // Get the file transfer service for DHT integration
     let file_transfer_service = {
@@ -647,12 +682,13 @@ async fn start_dht_node(
         auto_enabled,
         probe_interval,
         autonat_server_list,
-        final_proxy_address,
+        final_proxy_address.clone(),
         file_transfer_service,
         chunk_size_kb,
         cache_size_mb,
-        false, // enable_autorelay - hardcoded to false for CLI start
-        Vec::new(), // preferred_relays
+        enable_autorelay_flag,
+        relay_list,
+        anonymous_mode_enabled,
     )
     .await
     .map_err(|e| format!("Failed to start DHT: {}", e))?;

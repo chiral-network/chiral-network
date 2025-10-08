@@ -2348,6 +2348,7 @@ impl DhtService {
         cache_size_mb: Option<usize>, // Cache size in MB (default 1024)
         enable_autorelay: bool,
         preferred_relays: Vec<String>,
+        anonymous_mode: bool,
     ) -> Result<Self, Box<dyn Error>> {
         // Convert chunk size from KB to bytes
         let chunk_size = chunk_size_kb.unwrap_or(256) * 1024; // Default 256 KB
@@ -2358,6 +2359,12 @@ impl DhtService {
             chunk_size / 1024,
             _cache_size
         );
+
+        if anonymous_mode {
+            info!(
+                "Anonymous routing enabled: enforcing proxy-only egress and loopback listener"
+            );
+        }
         // Generate a new keypair for this node
         // Generate a keypair either from the secret or randomly
         let local_key = match secret {
@@ -2407,8 +2414,12 @@ impl DhtService {
         }
         let mut kademlia = Kademlia::with_config(local_peer_id, store, kad_cfg);
 
-        // Set Kademlia to server mode to accept incoming connections
-        kademlia.set_mode(Some(Mode::Server));
+        if anonymous_mode {
+            kademlia.set_mode(Some(Mode::Client));
+        } else {
+            // Set Kademlia to server mode to accept incoming connections
+            kademlia.set_mode(Some(Mode::Server));
+        }
 
         // Create identify behaviour with proactive push updates
         let identify_config =
@@ -2431,6 +2442,13 @@ impl DhtService {
             rr::ProtocolSupport::Full,
         ));
         let webrtc_signaling_rr = rr::Behaviour::new(webrtc_protocols, rr_cfg);
+
+        let enable_autonat = if anonymous_mode {
+            info!("Anonymous mode: disabling AutoNAT probes");
+            false
+        } else {
+            enable_autonat
+        };
 
         let probe_interval = autonat_probe_interval.unwrap_or(Duration::from_secs(30));
         let autonat_client_behaviour = if enable_autonat {
@@ -2458,12 +2476,16 @@ impl DhtService {
         let autonat_client_toggle = toggle::Toggle::from(autonat_client_behaviour);
         let autonat_server_toggle = toggle::Toggle::from(autonat_server_behaviour);
 
-        // DCUtR requires relay to be enabled
-        let dcutr_behaviour = if enable_autonat {
+        // DCUtR requires relay to be enabled and leaks reachability, so skip in anonymous mode
+        let dcutr_behaviour = if enable_autonat && !anonymous_mode {
             info!("DCUtR enabled (requires relay for hole-punching coordination)");
             Some(dcutr::Behaviour::new(local_peer_id))
         } else {
-            info!("DCUtR disabled (autonat is disabled)");
+            if anonymous_mode {
+                info!("Anonymous mode: DCUtR disabled to avoid direct hole-punch attempts");
+            } else {
+                info!("DCUtR disabled (autonat is disabled)");
+            }
             None
         };
         let dcutr_toggle = toggle::Toggle::from(dcutr_behaviour);
@@ -2533,10 +2555,19 @@ impl DhtService {
             )
             .build();
 
-        // Listen on the specified port
-        let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", port).parse()?;
-        swarm.listen_on(listen_addr)?;
-        info!("DHT listening on port: {}", port);
+        // Listen on the specified port (loopback-only for anonymous routing)
+        if anonymous_mode {
+            let listen_addr: Multiaddr = "/ip4/127.0.0.1/tcp/0".parse()?;
+            swarm.listen_on(listen_addr.clone())?;
+            info!(
+                "Anonymous mode active - libp2p listening on {} (no public interfaces)",
+                listen_addr
+            );
+        } else {
+            let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", port).parse()?;
+            swarm.listen_on(listen_addr.clone())?;
+            info!("DHT listening on port: {}", port);
+        }
 
         // Connect to bootstrap nodes
         info!("Bootstrap nodes to connect: {:?}", bootstrap_nodes);
@@ -3311,6 +3342,7 @@ mod tests {
             Some(1024), // cache_size_mb
             false,      // enable_autorelay
             Vec::new(), // preferred_relays
+            false,
         )
         .await
         {

@@ -348,16 +348,33 @@
         await new Promise(resolve => setTimeout(resolve, 500))
         // DHT not running, start it
         try {
+          const anonymousModeEnabled = $settings.anonymousMode
+          const proxyEnabled = $settings.enableProxy || anonymousModeEnabled
+          const proxyAddress = proxyEnabled
+            ? ($settings.proxyAddress || "").trim()
+            : ""
+          const enableAutonat = anonymousModeEnabled
+            ? false
+            : $settings.enableAutonat
+          const enableAutorelay = anonymousModeEnabled
+            ? true
+            : $settings.enableAutorelay
+
           const peerId = await dhtService.start({
             port: dhtPort,
             bootstrapNodes: dhtBootstrapNodes,
-            enableAutonat: $settings.enableAutonat,
+            enableAutonat,
             autonatProbeIntervalSeconds: $settings.autonatProbeInterval,
             autonatServers: $settings.autonatServers,
-            enableAutorelay: $settings.enableAutorelay,
-            preferredRelays: $settings.preferredRelays || [],
+            enableAutorelay,
+            preferredRelays:
+              enableAutorelay && $settings.preferredRelays
+                ? $settings.preferredRelays
+                : [],
             chunkSizeKb: $settings.chunkSize,
             cacheSizeMb: $settings.cacheSize,
+            proxyAddress: proxyEnabled && proxyAddress.length > 0 ? proxyAddress : undefined,
+            anonymousMode: anonymousModeEnabled,
           })
           dhtPeerId = peerId
           // Also ensure the service knows its own peer ID
