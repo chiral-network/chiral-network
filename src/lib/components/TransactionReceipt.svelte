@@ -19,7 +19,7 @@
   import { get } from 'svelte/store'
   import { showToast } from '$lib/toast'
 
-  const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
+  const tr = (k: string, params?: Record<string, any>): string => (get(t) as (key: string, params?: any) => string)(k, params)
 
   export let transaction: any = null
   export let isOpen = false

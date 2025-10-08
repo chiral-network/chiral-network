@@ -14,7 +14,7 @@
   export let refreshIntervalMs = 10000;
 
   const dispatch = createEventDispatcher<{ status: GethStatus }>();
-  const tr = (k: string, params?: Record<string, any>) => get(t)(k, params);
+  const tr = (k: string, params?: Record<string, any>): string => (get(t) as (key: string, params?: any) => string)(k, params);
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
   let status: GethStatus | null = null;

@@ -43,7 +43,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 - ✅ **Auto-Start Queue**: Automatic processing of queued downloads
 - ✅ **Pause/Resume Support**: Full control over individual downloads
 - ✅ **Progress Tracking**: Real-time download progress with ETA
-- ❌ **P2P File Transfer**: Actual network downloads from peers (currently local-only storage)
+- ✅ **P2P File Transfer**: Real peer-to-peer file transfer via WebRTC data channels
 
 ### 3. Network Monitoring & Peer Discovery
 
@@ -269,8 +269,8 @@ npm run tauri build # Desktop production build
 ### Phase 3: Core P2P Features (In Progress)
 
 - ✅ End-to-end encryption (AES-256-GCM with PBKDF2)
-- [ ] Real P2P file transfer protocol
-- [ ] File versioning system
+- ✅ Real P2P file transfer protocol
+- ✅ File versioning system
 - [ ] Selective sync capabilities
 - [ ] Advanced bandwidth scheduling
 - [ ] Mobile applications

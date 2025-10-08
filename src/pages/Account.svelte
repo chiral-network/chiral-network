@@ -17,9 +17,10 @@
   import { t, locale } from 'svelte-i18n'
   import { showToast } from '$lib/toast'
   import { get } from 'svelte/store'
-  import { totalEarned, totalSpent } from '$lib/stores';
+  import { totalEarned, totalSpent, miningState } from '$lib/stores';
+  import { walletService } from '$lib/wallet'; 
 
-  const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
+  const tr = (k: string, params?: Record<string, any>): string => (get(t) as (key: string, params?: any) => string)(k, params)
   
   // Basic obfuscation for locally stored passwords. NOT for cryptographic security.
   const OBFUSCATION_KEY = 'chiral-network-p@ssw0rd-key'; // A simple key
@@ -175,6 +176,19 @@
   $: if ($etcAccount && isGethRunning) {
     fetchBalance()
   }
+  // Add this reactive statement after your other reactive statements (around line 170)
+  $: if ($etcAccount) {
+    const accountTransactions = $transactions.filter(tx => 
+      tx.from === 'Mining reward' || 
+      tx.description?.toLowerCase().includes('block reward') ||
+      tx.description === tr('transactions.manual') ||
+      tx.to?.toLowerCase() === $etcAccount.address.toLowerCase() ||
+      tx.from?.toLowerCase() === $etcAccount.address.toLowerCase()
+    );
+    if (accountTransactions.length !== $transactions.length) {
+      transactions.set(accountTransactions);
+    }
+}
 
   // Derived filtered transactions
   $: filteredTransactions = $transactions
@@ -496,52 +510,94 @@
     showToast('Transaction cancelled', 'warning')
   }
 
-  function sendTransaction() {
-    if (!isAddressValid || !isAmountValid || !isAddressValid || sendAmount <= 0) return
+  async function sendTransaction() {
+    if (!isAddressValid || !isAmountValid || sendAmount <= 0) return
     
-    // Notify submission (mocked)
-    showToast('Transaction submitted', 'info')
-
-    // Simulate transaction
-    wallet.update(w => ({
-      ...w,
-      balance: w.balance - sendAmount,
-      pendingTransactions: w.pendingTransactions + 1,
-    }))
-
-    transactions.update(txs => [
-    {
-      id: Date.now(),
-      type: 'sent',
-      amount: sendAmount,
-      to: recipientAddress,
-      date: new Date(),
-      description: tr('transactions.manual'),
-      status: 'pending'
-    },
-    ...txs // prepend so latest is first
-  ])
-    
-    // Clear form
-    recipientAddress = ''
-    sendAmount = 0
-    rawAmountInput = ''
-    
-    // Simulate transaction completion
-    setTimeout(() => {
-      wallet.update(w => ({
+    try {
+      showToast('Sending transaction...', 'info')
+      
+      // Call backend to send real transaction
+      const txHash = await invoke('send_chiral_transaction', {
+        toAddress: recipientAddress,
+        amount: sendAmount
+      }) as string
+      
+      // Update local state immediately (optimistic update)
+      wallet.update((w: typeof $wallet) => ({
         ...w,
-        pendingTransactions: Math.max(0, w.pendingTransactions - 1)
+        balance: w.balance - sendAmount,
+        pendingTransactions: w.pendingTransactions + 1,
       }))
-      transactions.update(txs => txs.map(tx => tx.status === 'pending' ? { ...tx, status: 'completed' } : tx))
-      // Notify success (mocked)
-      showToast('Transaction confirmed', 'success')
-    }, 3000)
+
+      transactions.update(txs => [{
+        id: Date.now(),
+        type: 'sent',
+        amount: sendAmount,
+        to: recipientAddress,
+        date: new Date(),
+        description: tr('transactions.manual'),
+        status: 'pending',
+        txHash: txHash // Store transaction hash
+      }, ...txs])
+      
+      // Clear form
+      recipientAddress = ''
+      sendAmount = 0
+      rawAmountInput = ''
+      
+      showToast('Transaction submitted!', 'success')
+      
+      // Poll for transaction confirmation
+      pollTransactionStatus(txHash)
+      
+    } catch (error) {
+      console.error('Transaction failed:', error)
+      showToast('Transaction failed: ' + String(error), 'error')
+      
+      // Refresh balance to get accurate state
+      await fetchBalance()
+    }
+  }
+
+  async function pollTransactionStatus(txHash: string) {
+    const maxAttempts = 60 // 5 minutes
+    let attempts = 0
+    
+    const interval = setInterval(async () => {
+      attempts++
+      
+      try {
+        // Check if transaction is mined
+        const receipt = await invoke('get_transaction_receipt', { txHash })
+        
+        if (receipt) {
+          // Transaction confirmed
+          clearInterval(interval)
+          
+          // Update transaction status
+          transactions.update(txs => txs.map(tx => 
+            tx.txHash === txHash ? { ...tx, status: 'completed' } : tx
+          ))
+          
+          // Refresh balance
+          await fetchBalance()
+          
+          showToast('Transaction confirmed!', 'success')
+        }
+      } catch (error) {
+        console.error('Error checking transaction status:', error)
+      }
+      
+      if (attempts >= maxAttempts) {
+        clearInterval(interval)
+        showToast('Transaction confirmation timeout', 'warning')
+      }
+    }, 5000) // Check every 5 seconds
   }
   
   function formatDate(date: Date): string {
     const loc = get(locale) || 'en-US'
-    return new Intl.DateTimeFormat(loc, { month: 'short', day: 'numeric', year: 'numeric' }).format(date)
+    return new Intl.DateTimeFormat(typeof loc === 'string' ? loc : 'en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(date)
   }
 
   function handleTransactionClick(tx: any) {
@@ -590,7 +646,6 @@
       } else {
         // Fallback for web environment - assume geth is not running
         isGethRunning = false
-        console.log('Running in web mode - geth not available')
       }
     } catch (error) {
       console.error('Failed to check geth status:', error)
@@ -598,24 +653,38 @@
   }
 
   async function fetchBalance() {
-    if (!$etcAccount) return
+    if (!$etcAccount) return;
     
     try {
       if (isTauri && isGethRunning) {
-        // Desktop app with local geth node - get real blockchain balance
-        const balance = await invoke('get_account_balance', { address: $etcAccount.address }) as string
-        wallet.update(w => ({ ...w, balance: parseFloat(balance) }))
-      } else if (isTauri && !isGethRunning) {
-        // Desktop app but geth not running - use stored balance
-        console.log('Geth not running - using stored balance')
-      } else {
-        // Web environment - For now, simulate balance updates for demo purposes
-        const simulatedBalance = $wallet.balance + Math.random() * 10 // Small random changes
-        wallet.update(w => ({ ...w, balance: Math.max(0, simulatedBalance) }))
+        // Get real blockchain balance
+        const balanceStr = await invoke('get_account_balance', { 
+          address: $etcAccount.address 
+        }) as string
+        const realBalance = parseFloat(balanceStr);
+
+        // Calculate pending transaction total
+        const pendingAmount = $transactions
+          .filter(tx => tx.status === 'pending' && tx.type === 'sent')
+          .reduce((sum, tx) => sum + tx.amount, 0)
+        
+        // Display balance minus pending transactions
+        wallet.update(w => ({ 
+          ...w, 
+          balance: Math.max(0, realBalance - pendingAmount),
+          actualBalance: realBalance // Store actual on-chain balance
+        }));
+        
+        // Update mining state
+        if (!isNaN(realBalance)) {
+          miningState.update(state => ({
+            ...state,
+            totalRewards: realBalance
+          }));
+        }
       }
     } catch (error) {
-      console.error('Failed to fetch balance:', error)
-      // Fallback to stored balance on error
+      console.error('Failed to fetch balance:', error);
     }
   }
 
@@ -636,7 +705,6 @@
         private_key: demoPrivateKey,
         blacklist: []
       }
-      console.log('Running in web mode - using demo account')
     }
 
     etcAccount.set(account)
@@ -686,7 +754,6 @@
             keystoreSaveMessage = tr('keystore.success');
         } else {
             // Simulate for web
-            console.log('Simulating save to keystore with password:', keystorePassword);
             await new Promise(resolve => setTimeout(resolve, 1000));
             keystoreSaveMessage = tr('keystore.successSimulated');
         }
@@ -710,8 +777,6 @@
     // 3. This function runs when a QR code is successfully scanned
     function onScanSuccess(decodedText: string, decodedResult: any) {
       // Handle the scanned code
-      console.log(`Code matched = ${decodedText}`, decodedResult);
-      
       // Paste the address into the input field
       recipientAddress = decodedText;
       
@@ -759,7 +824,6 @@
           address: demoAddress,
           private_key: importPrivateKey
         }
-        console.log('Running in web mode - using provided private key')
       }
       
       etcAccount.set(account)
@@ -943,7 +1007,6 @@
 
         } else {
             // Web demo mode simulation
-            console.log('Simulating keystore load in web mode');
             // Save or clear the password from local storage based on the checkbox
             saveOrClearPassword(selectedKeystoreAccount, loadKeystorePassword);
             await new Promise(resolve => setTimeout(resolve, 1000));
@@ -1288,43 +1351,66 @@
     rawAmountInput = $wallet.balance.toFixed(2);
   }
 
+  // async function handleLogout() {
+  //   if (isTauri) await invoke('logout');
+  //   logout();
+  // }
+  
+  // Update your handleLogout function
   async function handleLogout() {
-    if (isTauri) await invoke('logout');
-    logout();
-  }
-
-  function logout() {
-    // Clear the account details from memory, effectively logging out
-    etcAccount.set(null);
-
-    // Reset wallet state to defaults
-    wallet.update(w => ({
-      ...w,
-      address: '',
-      balance: 0,
-      totalEarned: 0,
-      totalSpent: 0,
-      pendingTransactions: 0,
-    }));
-
-    // Explicitly nullify sensitive component state variables to assist garbage collection.
-    privateKeyVisible = false;
-    keystorePassword = '';
-    loadKeystorePassword = '';
-    importPrivateKey = '';
-
-    // For enhanced security, clear any session-related data from browser storage.
-    // This helps ensure no sensitive information like private keys persists in localStorage.
-    // Note: This will clear ALL data for this domain (e.g., settings, blacklist).
-    if (typeof window !== 'undefined') {
-      window.sessionStorage?.clear();
+    try {
+      // Stop mining if it's currently running
+      if ($miningState.isMining) {
+        await invoke('stop_miner');
+      }
+      
+      // Call backend logout to clear active account from app state
+      if (isTauri) {
+        await invoke('logout');
+      }
+      
+      // Clear the account store
+      etcAccount.set(null);
+      
+      // Clear wallet data - reset to 0 balance, not a default value
+      wallet.update((w: any) => ({
+        ...w,
+        address: "",
+        balance: 0, // Reset to 0 for logout
+        totalEarned: 0,
+        totalSpent: 0,
+        pendingTransactions: 0
+      }));
+      
+      // Clear mining state completely
+      miningState.update((state: any) => ({
+        ...state,
+        isMining: false,
+        hashRate: "0 H/s",
+        totalRewards: 0,
+        blocksFound: 0,
+        activeThreads: 0,
+        recentBlocks: [],
+        sessionStartTime: undefined
+      }));
+      
+      // Clear any stored session data from both localStorage and sessionStorage
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem('lastAccount');
+        localStorage.removeItem('miningSession');
+        // Clear all sessionStorage data for security
+        sessionStorage.clear();
+      }
+      
+      privateKeyVisible = false;
+      
+      // Show success message
+      showToast('Wallet locked and session cleared', 'success');
+      
+    } catch (error) {
+      console.error('Error during logout:', error);
+      showToast('Error during logout: ' + String(error), 'error');
     }
-
-    console.log('Session cleared, wallet locked.');
-    showToast('Wallet locked and session data cleared', 'success');
-    
-    // Refresh the list of keystore accounts for the login view
-    loadKeystoreAccountsList();
   }
 
   async function generateAndShowQrCode(){
@@ -1661,6 +1747,7 @@
               class="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8 p-0"
               on:click={scanQrCode}
               aria-label={$t('transfer.recipient.scanQr')}
+              title={$t('transfer.recipient.scanQr')}
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect><line x1="14" x2="14" y1="14" y2="21"></line><line x1="21" x2="21" y1="14" y2="21"></line><line x1="21" x2="14" y1="21" y2="21"></line></svg>
             </Button>
@@ -1852,7 +1939,7 @@
         <option value="received">{$t('filters.typeReceived')}</option>
       </select>
       <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4-4 4 4m0 6l-4 4-4-4"></path></svg>
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4-4 4 4-4m0 6l-4 4-4-4"></path></svg>
       </div>
     </div>
   </div>
@@ -2401,7 +2488,7 @@
         role="dialog"
         aria-modal="true"
         tabindex="-1"
-        on:keydown={(e) => { if (e.key === 'Escape') { show2faPromptModal = false; actionToConfirm = null; } }}
+        on:keydown={(e) => { if (e.key === 'Escape' ) { show2faPromptModal = false; actionToConfirm = null; } }}
       >
         <h3 class="text-xl font-semibold mb-2">{$t('security.2fa.prompt.title')}</h3>
         <p class="text-sm text-muted-foreground mb-4">{$t('security.2fa.prompt.enter_code')}</p>

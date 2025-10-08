@@ -1,4 +1,5 @@
 import { writable, derived } from "svelte/store";
+import { normalizeRegion, GEO_REGIONS, UNKNOWN_REGION_ID } from "$lib/geo";
 
 export interface FileItem {
   id: string;
@@ -19,6 +20,7 @@ export interface FileItem {
   owner?: string;
   description?: string;
   seeders?: number;
+  seederAddresses?: string[];
   leechers?: number;
   encrypted?: boolean;
   priority?: "low" | "normal" | "high";
@@ -27,6 +29,10 @@ export interface FileItem {
   timeRemaining?: number;
   visualOrder?: number; // For maintaining user's intended visual order
   downloadPath?: string; // Path where the file was downloaded
+  version?: number; // File version number for versioning system
+  isNewVersion?: boolean; // Whether this is a new version of an existing file
+  speed?: string; // Download/upload speed display
+  eta?: string; // Estimated time remaining display
 }
 
 export interface ProxyNode {
@@ -68,6 +74,22 @@ export interface PeerInfo {
   joinDate: Date;
   lastSeen: Date;
   location?: string;
+}
+
+export interface PeerGeoRegionStat {
+  regionId: string;
+  label: string;
+  count: number;
+  percentage: number;
+  color: string;
+  peers: PeerInfo[];
+}
+
+export interface PeerGeoDistribution {
+  totalPeers: number;
+  regions: PeerGeoRegionStat[];
+  dominantRegionId: string | null;
+  generatedAt: number;
 }
 
 export const suspiciousActivity = writable<
@@ -270,6 +292,67 @@ import { networkStatus } from "./services/networkService";
 export { networkStatus };
 
 export const peers = writable<PeerInfo[]>(dummyPeers);
+
+export const peerGeoDistribution = derived(
+  peers,
+  ($peers): PeerGeoDistribution => {
+    const totals = new Map<string, PeerGeoRegionStat>();
+
+    for (const region of GEO_REGIONS) {
+      totals.set(region.id, {
+        regionId: region.id,
+        label: region.label,
+        count: 0,
+        percentage: 0,
+        color: region.color,
+        peers: [],
+      });
+    }
+
+    for (const peer of $peers) {
+      const region = normalizeRegion(peer.location);
+      const bucket = totals.get(region.id);
+      if (!bucket) {
+        continue;
+      }
+
+      bucket.count += 1;
+      bucket.peers.push(peer);
+    }
+
+    const totalPeers = $peers.length;
+    for (const bucket of totals.values()) {
+      bucket.percentage =
+        totalPeers === 0
+          ? 0
+          : Math.round((bucket.count / totalPeers) * 1000) / 10;
+    }
+
+    const buckets = Array.from(totals.values());
+    buckets.sort((a, b) => {
+      if (a.regionId === UNKNOWN_REGION_ID && b.regionId !== UNKNOWN_REGION_ID)
+        return 1;
+      if (b.regionId === UNKNOWN_REGION_ID && a.regionId !== UNKNOWN_REGION_ID)
+        return -1;
+      if (b.count === a.count) {
+        return a.label.localeCompare(b.label);
+      }
+      return b.count - a.count;
+    });
+
+    const dominantRegion = buckets.find(
+      (bucket) => bucket.regionId !== UNKNOWN_REGION_ID && bucket.count > 0
+    );
+
+    return {
+      totalPeers,
+      regions: buckets,
+      dominantRegionId: dominantRegion ? dominantRegion.regionId : null,
+      generatedAt: Date.now(),
+    };
+  }
+);
+
 export const chatMessages = writable<ChatMessage[]>([]);
 export const networkStats = writable<NetworkStats>(dummyNetworkStats);
 export const downloadQueue = writable<FileItem[]>([]);
@@ -319,10 +402,9 @@ export const miningState = writable<MiningState>({
   miningHistory: [],
 });
 
-export const totalEarned = derived(transactions, ($txs) =>
-  $txs
-    .filter((tx) => tx.type === "received")
-    .reduce((sum, tx) => sum + tx.amount, 0)
+export const totalEarned = derived(
+  miningState,
+  ($miningState) => $miningState.totalRewards
 );
 
 export const totalSpent = derived(transactions, ($txs) =>
@@ -330,6 +412,15 @@ export const totalSpent = derived(transactions, ($txs) =>
     .filter((tx) => tx.type === "sent")
     .reduce((sum, tx) => sum + tx.amount, 0)
 );
+
+// Store for active P2P transfers and WebRTC sessions
+export interface ActiveTransfer {
+  fileId: string;
+  transferId: string;
+  type: "p2p" | "webrtc";
+}
+
+export const activeTransfers = writable<Map<string, ActiveTransfer>>(new Map());
 
 // Interface for Application Settings
 export interface AppSettings {
@@ -433,7 +524,7 @@ export async function addTransactionWithPolling(
             if (tx.transaction_hash === txHash) {
               return {
                 ...tx,
-                status: status.status === 'success' ? 'success' : 
+                status: status.status === 'success' ? 'success' :
                         status.status === 'failed' ? 'failed' :
                         status.status === 'pending' ? 'pending' :
                         'submitted',
@@ -480,7 +571,7 @@ export function updateTransactionStatus(
 ): void {
   transactions.update(txs =>
     txs.map(tx =>
-      tx.transaction_hash === txHash 
+      tx.transaction_hash === txHash
         ? { ...tx, ...updates }
         : tx
     )

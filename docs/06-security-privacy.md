@@ -41,43 +41,52 @@ Master Seed (BIP39 Mnemonic)
 
 ## File Security
 
-### Encryption Process
+### Encryption and Sharding Process
+
+The network ensures both confidentiality and availability using a combination of encryption and erasure coding.
 
 ```
 1. File Input
     ↓
-2. Generate Random AES-256 Key
+2. Generate Random AES-256 Key for the file
     ↓
-3. Chunk File (256KB pieces)
+3. Chunk File (e.g., into 256KB pieces)
     ↓
-4. For Each Chunk:
-   - Generate unique IV
-   - Encrypt with AES-256-GCM
-   - Generate authentication tag
+4. For Each Original Chunk:
+   a. Hash the original chunk to get its unique identifier (used for the Merkle tree)
+   b. Apply Reed-Solomon erasure coding to create N data shards and K parity shards (e.g., 10 data, 4 parity)
+   c. For Each Shard (data and parity):
+      - Encrypt the shard with AES-256-GCM using a unique nonce
+      - Hash the *encrypted* shard to get its storage hash (used for retrieval)
     ↓
-5. Encrypt AES Key with Recipient's Public Key
+5. Encrypt the file's AES Key with the Recipient's Public Key
     ↓
-6. Store Encrypted Chunks + Encrypted Key
+6. Store the individually encrypted shards across the network
 ```
 
-### File Integrity Verification
+### File Integrity and Retrieval
+
+A Merkle Tree is constructed from the hashes of the **original, unencrypted** chunks. This tree's root hash serves as the file's primary identifier and ensures top-level integrity.
 
 ```
-Merkle Tree Structure:
+Merkle Tree Structure (built from original chunk hashes):
                 Root Hash
                /         \
          Branch A       Branch B
          /     \        /      \
-    Chunk 1  Chunk 2  Chunk 3  Chunk 4
+  Hash(Chunk 1) ... Hash(Chunk N)
 ```
 
-**Verification Steps:**
+**Verification and Decryption Steps:**
 
-1. Download chunk and Merkle proof
-2. Verify chunk hash
-3. Verify Merkle path to root
-4. Compare with trusted root hash
-5. Decrypt if verification passes
+The process of retrieving and verifying a file is the reverse of the encryption process. Verification against the Merkle root can only happen *after* the original chunk has been reconstructed.
+
+1.  **Fetch Shards**: Download a sufficient number of encrypted shards (e.g., any 10 of the 14 total shards) from the network. Each shard is requested by the hash of its encrypted content.
+2.  **Decrypt Shards**: Decrypt the main file AES key, then use it to decrypt each downloaded shard individually.
+3.  **Reconstruct Chunk**: Use the Reed-Solomon algorithm to reconstruct the original chunk from the decrypted shards. This step corrects for any missing or unavailable shards.
+4.  **Verify Chunk Integrity**: Hash the fully reconstructed (plaintext) chunk.
+5.  **Verify Merkle Proof**: Compare the new hash against the original chunk hash stored in the file's manifest. Then, use the provided Merkle proof to verify this hash against the file's trusted root hash.
+6.  If all verifications pass, the chunk is valid and can be written to the output file. If verification fails, the data is considered corrupt or tampered with.
 
 ### Access Control
 

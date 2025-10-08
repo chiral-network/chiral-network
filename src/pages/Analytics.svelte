@@ -8,9 +8,10 @@
   import { onMount } from 'svelte'
   import { t } from 'svelte-i18n'
   import { suspiciousActivity } from '$lib/stores'; // only import
+  import type { FileItem } from '$lib/stores';
   
-  let uploadedFiles: any[] = []
-  let downloadedFiles: any[] = []
+  let uploadedFiles: FileItem[] = []
+  let downloadedFiles: FileItem[] = []
   let totalUploaded = 0
   let totalDownloaded = 0
   // let earningsHistory: any[] = []

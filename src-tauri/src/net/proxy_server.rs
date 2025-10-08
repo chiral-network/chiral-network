@@ -1,6 +1,5 @@
 use libp2p::futures::StreamExt;
 use libp2p::relay::client::Behaviour as RelayClientBehaviour;
-use libp2p::relay::Behaviour as Relay;
 use libp2p::swarm::{Swarm, SwarmEvent};
 use libp2p::SwarmBuilder;
 use libp2p::{identity, noise, tcp, yamux, Multiaddr, PeerId};

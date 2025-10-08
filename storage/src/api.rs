@@ -105,9 +105,6 @@ impl StorageNodeServer {
 
         let api = self.create_api();
 
-        println!("Starting storage node server on port {}", self.port);
-        println!("Storage path: {}", self.storage_path.display());
-
         warp::serve(api).run(([0, 0, 0, 0], self.port)).await;
 
         Ok(())

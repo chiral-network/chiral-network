@@ -1,10 +1,12 @@
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, info_span, warn};
+use directories::ProjectDirs;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileRequest {
@@ -134,7 +136,7 @@ static FAIL_WRITE_BEFORE_SUCCESS: AtomicU32 = AtomicU32::new(0);
 pub struct FileTransferService {
     cmd_tx: mpsc::Sender<FileTransferCommand>,
     event_rx: Arc<Mutex<mpsc::Receiver<FileTransferEvent>>>,
-    stored_files: Arc<Mutex<HashMap<String, (String, Vec<u8>)>>>, // hash -> (name, data)
+    storage_dir: PathBuf,
     download_metrics: Arc<Mutex<DownloadMetrics>>,
 }
 
@@ -153,7 +155,7 @@ impl FileTransferService {
     async fn download_with_retries(
         file_hash: &str,
         output_path: &str,
-        stored_files: &Arc<Mutex<HashMap<String, (String, Vec<u8>)>>>,
+        storage_dir: &PathBuf,
         event_tx: mpsc::Sender<FileTransferEvent>,
         download_metrics: Arc<Mutex<DownloadMetrics>>,
     ) -> Result<(), String> {
@@ -181,7 +183,7 @@ impl FileTransferService {
 
             let result = {
                 let _guard = span.enter();
-                Self::handle_download_file(file_hash, output_path, stored_files).await
+                Self::handle_download_file(file_hash, output_path, storage_dir).await
             };
 
             match result {
@@ -294,31 +296,46 @@ impl FileTransferService {
     }
 
     pub async fn new() -> Result<Self, String> {
+        // Initialize storage directory
+        let storage_dir = Self::get_storage_dir()?;
+
+        // Create storage directory if it doesn't exist
+        if !storage_dir.exists() {
+            tokio::fs::create_dir_all(&storage_dir)
+                .await
+                .map_err(|e| format!("Failed to create storage directory: {}", e))?;
+        }
+
         let (cmd_tx, cmd_rx) = mpsc::channel(100);
         let (event_tx, event_rx) = mpsc::channel(100);
-        let stored_files = Arc::new(Mutex::new(HashMap::new()));
         let download_metrics = Arc::new(Mutex::new(DownloadMetrics::default()));
 
         // Spawn the file transfer service task
         tokio::spawn(Self::run_file_transfer_service(
             cmd_rx,
             event_tx,
-            stored_files.clone(),
+            storage_dir.clone(),
             download_metrics.clone(),
         ));
 
         Ok(FileTransferService {
             cmd_tx,
             event_rx: Arc::new(Mutex::new(event_rx)),
-            stored_files,
+            storage_dir,
             download_metrics,
         })
+    }
+
+    fn get_storage_dir() -> Result<PathBuf, String> {
+        let proj_dirs = ProjectDirs::from("com", "chiral-network", "chiral-network")
+            .ok_or("Failed to get project directories")?;
+        Ok(proj_dirs.data_dir().join("files"))
     }
 
     async fn run_file_transfer_service(
         mut cmd_rx: mpsc::Receiver<FileTransferCommand>,
         event_tx: mpsc::Sender<FileTransferEvent>,
-        stored_files: Arc<Mutex<HashMap<String, (String, Vec<u8>)>>>,
+        storage_dir: PathBuf,
         download_metrics: Arc<Mutex<DownloadMetrics>>,
     ) {
         while let Some(cmd) = cmd_rx.recv().await {
@@ -326,7 +343,7 @@ impl FileTransferService {
                 FileTransferCommand::UploadFile {
                     file_path,
                     file_name,
-                } => match Self::handle_upload_file(&file_path, &file_name, &stored_files).await {
+                } => match Self::handle_upload_file(&file_path, &file_name, &storage_dir).await {
                     Ok(file_hash) => {
                         let _ = event_tx
                             .send(FileTransferEvent::FileUploaded {
@@ -353,7 +370,7 @@ impl FileTransferService {
                     match Self::download_with_retries(
                         &file_hash,
                         &output_path,
-                        &stored_files,
+                        &storage_dir,
                         event_tx.clone(),
                         download_metrics.clone(),
                     )
@@ -392,7 +409,7 @@ impl FileTransferService {
     async fn handle_upload_file(
         file_path: &str,
         file_name: &str,
-        stored_files: &Arc<Mutex<HashMap<String, (String, Vec<u8>)>>>,
+        storage_dir: &PathBuf,
     ) -> Result<String, String> {
         // Read the file
         let file_data = tokio::fs::read(file_path)
@@ -402,11 +419,25 @@ impl FileTransferService {
         // Calculate file hash
         let file_hash = Self::calculate_file_hash(&file_data);
 
-        // Store the file in memory (in a real implementation, this would be persistent storage)
-        {
-            let mut files = stored_files.lock().await;
-            files.insert(file_hash.clone(), (file_name.to_string(), file_data));
-        }
+        // Store the file persistently
+        let file_path_in_storage = storage_dir.join(&file_hash);
+        tokio::fs::write(&file_path_in_storage, &file_data)
+            .await
+            .map_err(|e| format!("Failed to write file to storage: {}", e))?;
+
+        // Store metadata
+        let metadata = serde_json::json!({
+            "file_name": file_name,
+            "file_size": file_data.len(),
+            "uploaded_at": SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        });
+        let metadata_path = storage_dir.join(format!("{}.meta", file_hash));
+        tokio::fs::write(&metadata_path, serde_json::to_string(&metadata).unwrap())
+            .await
+            .map_err(|e| format!("Failed to write metadata: {}", e))?;
 
         Ok(file_hash)
     }
@@ -414,21 +445,23 @@ impl FileTransferService {
     async fn handle_download_file(
         file_hash: &str,
         output_path: &str,
-        stored_files: &Arc<Mutex<HashMap<String, (String, Vec<u8>)>>>,
+        storage_dir: &PathBuf,
     ) -> Result<(), String> {
-        // Check if we have the file locally
-        let (file_name, file_data) = {
-            let files = stored_files.lock().await;
-            files
-                .get(file_hash)
-                .ok_or_else(|| "File not found locally".to_string())?
-                .clone()
-        };
+        // Check if we have the file in storage
+        let file_path_in_storage = storage_dir.join(file_hash);
+        if !file_path_in_storage.exists() {
+            return Err("File not found in storage".to_string());
+        }
+
+        // Read the file from storage
+        let file_data = tokio::fs::read(&file_path_in_storage)
+            .await
+            .map_err(|e| format!("Failed to read file from storage: {}", e))?;
 
         // Write the file to the output path
         Self::write_output(output_path, &file_data).await?;
 
-        info!("File downloaded: {} -> {}", file_name, output_path);
+        info!("File downloaded: {} -> {}", file_hash, output_path);
         Ok(())
     }
 
@@ -464,11 +497,36 @@ impl FileTransferService {
     }
 
     pub async fn get_stored_files(&self) -> Result<Vec<(String, String)>, String> {
-        let files = self.stored_files.lock().await;
-        Ok(files
-            .iter()
-            .map(|(hash, (name, _))| (hash.clone(), name.clone()))
-            .collect())
+        let mut files = Vec::new();
+
+        // Read all .meta files in storage directory
+        let mut entries = tokio::fs::read_dir(&self.storage_dir)
+            .await
+            .map_err(|e| format!("Failed to read storage directory: {}", e))?;
+
+        while let Some(entry) = entries.next_entry().await.map_err(|e| format!("Failed to read directory entry: {}", e))? {
+            let path = entry.path();
+            if let Some(extension) = path.extension() {
+                if extension == "meta" {
+                    if let Some(file_hash) = path.file_stem() {
+                        let metadata_content = tokio::fs::read_to_string(&path)
+                            .await
+                            .map_err(|e| format!("Failed to read metadata file: {}", e))?;
+
+                        let metadata: serde_json::Value = serde_json::from_str(&metadata_content)
+                            .map_err(|e| format!("Failed to parse metadata: {}", e))?;
+
+                        if let (Some(file_name), Some(_)) = (metadata.get("file_name"), metadata.get("file_size")) {
+                            if let (Some(name_str), Some(hash_str)) = (file_name.as_str(), file_hash.to_str()) {
+                                files.push((hash_str.to_string(), name_str.to_string()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(files)
     }
 
     pub async fn drain_events(&self, max: usize) -> Vec<FileTransferEvent> {
@@ -486,8 +544,33 @@ impl FileTransferService {
     }
 
     pub async fn store_file_data(&self, file_hash: String, file_name: String, file_data: Vec<u8>) {
-        let mut stored_files = self.stored_files.lock().await;
-        stored_files.insert(file_hash, (file_name, file_data));
+        let file_path = self.storage_dir.join(&file_hash);
+        if let Err(e) = tokio::fs::write(&file_path, &file_data).await {
+            error!("Failed to store file data: {}", e);
+            return;
+        }
+
+        // Store metadata
+        let metadata = serde_json::json!({
+            "file_name": file_name,
+            "file_size": file_data.len(),
+            "uploaded_at": SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        });
+        let metadata_path = self.storage_dir.join(format!("{}.meta", file_hash));
+        if let Err(e) = tokio::fs::write(&metadata_path, serde_json::to_string(&metadata).unwrap()).await {
+            error!("Failed to store metadata: {}", e);
+        }
+    }
+
+    pub async fn get_file_data(&self, file_hash: &str) -> Option<Vec<u8>> {
+        let file_path = self.storage_dir.join(file_hash);
+        match tokio::fs::read(&file_path).await {
+            Ok(data) => Some(data),
+            Err(_) => None,
+        }
     }
 
     pub async fn download_metrics_snapshot(&self) -> DownloadMetricsSnapshot {
@@ -508,26 +591,39 @@ mod tests {
         FileTransferService::reset_retry_counters();
         FileTransferService::set_fail_write_attempts(2);
 
-        let stored_files = Arc::new(Mutex::new(HashMap::new()));
-        {
-            let mut guard = stored_files.lock().await;
-            guard.insert(
-                "test-hash".to_string(),
-                ("example.txt".to_string(), b"hello world".to_vec()),
-            );
-        }
-
+        // Create a temporary storage directory
         let temp_dir = tempdir().expect("temp dir");
-        let output_path = temp_dir.path().join("downloaded.txt");
+        let storage_dir = temp_dir.path().to_path_buf();
+
+        // Create storage directory
+        tokio::fs::create_dir_all(&storage_dir).await.expect("create storage dir");
+
+        // Store test file
+        let test_hash = "test-hash";
+        let test_data = b"hello world".to_vec();
+        let file_path = storage_dir.join(test_hash);
+        tokio::fs::write(&file_path, &test_data).await.expect("write test file");
+
+        // Store metadata
+        let metadata = serde_json::json!({
+            "file_name": "example.txt",
+            "file_size": test_data.len(),
+            "uploaded_at": 0
+        });
+        let metadata_path = storage_dir.join(format!("{}.meta", test_hash));
+        tokio::fs::write(&metadata_path, serde_json::to_string(&metadata).unwrap()).await.expect("write metadata");
+
+        let temp_output_dir = tempdir().expect("temp output dir");
+        let output_path = temp_output_dir.path().join("downloaded.txt");
         let output_str = output_path.to_string_lossy().to_string();
 
         let (event_tx, mut event_rx) = mpsc::channel(16);
         let metrics = Arc::new(Mutex::new(DownloadMetrics::default()));
 
         let result = FileTransferService::download_with_retries(
-            "test-hash",
+            test_hash,
             &output_str,
-            &stored_files,
+            &storage_dir,
             event_tx.clone(),
             metrics.clone(),
         )
@@ -560,10 +656,15 @@ mod tests {
         FileTransferService::reset_retry_counters();
         FileTransferService::set_fail_write_attempts(0);
 
-        let stored_files = Arc::new(Mutex::new(HashMap::new()));
-
+        // Create a temporary storage directory (empty)
         let temp_dir = tempdir().expect("temp dir");
-        let output_path = temp_dir.path().join("missing.txt");
+        let storage_dir = temp_dir.path().to_path_buf();
+
+        // Create storage directory
+        tokio::fs::create_dir_all(&storage_dir).await.expect("create storage dir");
+
+        let temp_output_dir = tempdir().expect("temp output dir");
+        let output_path = temp_output_dir.path().join("missing.txt");
         let output_str = output_path.to_string_lossy().to_string();
 
         let (event_tx, mut event_rx) = mpsc::channel(16);
@@ -572,7 +673,7 @@ mod tests {
         let result = FileTransferService::download_with_retries(
             "missing-hash",
             &output_str,
-            &stored_files,
+            &storage_dir,
             event_tx.clone(),
             metrics.clone(),
         )

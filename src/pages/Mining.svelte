@@ -9,10 +9,11 @@
   import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw } from 'lucide-svelte'
   import { onDestroy, onMount, getContext } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
-  import { etcAccount, miningState, transactions, type Transaction } from '$lib/stores'
+  import { etcAccount, miningState, transactions } from '$lib/stores'
   import { getVersion } from "@tauri-apps/api/app";
   import { t } from 'svelte-i18n';
   import { goto } from '@mateothegreat/svelte5-router';
+  import { walletService } from '$lib/wallet'; 
 
   // Interfaces - MiningHistoryPoint is now defined in stores.ts
   
@@ -30,7 +31,6 @@
   let isGethRunning = false
   let currentBlock = 0
   let totalHashes = 0
-  let currentDifficulty = 4
   let lastHashUpdate = Date.now()
   let cpuThreads = navigator.hardwareConcurrency || 4
   let selectedThreads = Math.floor(cpuThreads / 2)
@@ -310,6 +310,17 @@
             : '';
   }
 
+  $: if (!$etcAccount) {
+    // Clear mining state when no account is present
+    if ($miningState.isMining) {
+      stopMining(); // Stop mining if running
+    }
+    // Reset mining display state
+    $miningState.totalRewards = 0;
+    $miningState.blocksFound = 0;
+    $miningState.recentBlocks = [];
+  }
+
   // Button disabled if either warning exists
   $: isInvalid = !!threadsWarning || !!intensityWarning;
 
@@ -328,9 +339,6 @@
 
     await checkGethStatus()
     await updateNetworkStats()
-    try {
-      seenHashes = new Set(($miningState.recentBlocks ?? []).map((b: any) => b.hash))
-    } catch{} 
     // If mining is already active from before, restore session and update stats
     if ($miningState.isMining) {
       // Restore session start time if it exists
@@ -357,15 +365,15 @@
     
     // Start polling for mining stats
     statsInterval = setInterval(async () => {
-      if ($miningState.isMining) {
-        await updateMiningStats() 
-        await appendNewBlocksFromBackend()
-      }
-      await updateNetworkStats()
-      if (isTauri) {
-        await updateCpuTemperature()
-      }
-    }, 1000) as unknown as number
+    if ($miningState.isMining) {
+       await updateMiningStats();
+       await walletService.refreshTransactions();
+    }
+    await updateNetworkStats();
+    if (isTauri) {
+      await updateCpuTemperature();
+    }
+  }, 1000) as unknown as number;
   })
   
   async function checkGethStatus() {
@@ -411,13 +419,7 @@
           if (hashRateFromLogs > 0) {
             // Use actual hash rate from logs
             $miningState.hashRate = formatHashRate(hashRateFromLogs)
-            
-            console.log('From mining stats - blocks:', blocksFound);
-            console.log('Current blocksFound before:', $miningState.blocksFound);
-            
             $miningState.blocksFound = blocksFound;
-            
-            console.log('blocksFound after:', $miningState.blocksFound);
           
             
           } else if ($miningState.activeThreads > 0) {
@@ -515,13 +517,8 @@
       
       if (results[4] !== undefined) {
         const blocksMined = results[4] as number;
-        
-        console.log('Backend returned blocks:', blocksMined);
-        console.log('Current blocksFound before update:', $miningState.blocksFound);
-        
+
         $miningState.blocksFound = blocksMined;
-        
-        console.log('blocksFound after update:', $miningState.blocksFound);
       }
     }
   } catch (e) {
@@ -645,11 +642,14 @@
     poolError = '';
     
     try {
+      console.log('🔍 Invoking discover_mining_pools command...');
       const pools = await invoke('discover_mining_pools') as MiningPool[];
+      console.log('✅ Received pools:', pools);
       availablePools = pools;
       showPoolList = true;
       await invoke('update_pool_discovery'); // Update pool stats
     } catch (e) {
+      console.error('❌ Pool discovery error:', e);
       poolError = String(e);
     } finally {
       isDiscovering = false;
@@ -671,7 +671,7 @@
     
     try {
       const joinedInfo = await invoke('join_mining_pool', { 
-        pool_id: pool.id, 
+        poolId: pool.id, 
         address: $etcAccount.address 
       }) as JoinedPoolInfo;
       
@@ -911,80 +911,80 @@
 
   $: displayedBlocks = ($miningState.recentBlocks || []).slice((currentPage - 1) * pageSize, currentPage * pageSize)
 
-function pushRecentBlock(b: {
-  hash: string;
-  nonce?: number;
-  difficulty?: number;
-  timestamp?: Date;
-  number?: number;
-  reward?: number;
-}) {
+// function pushRecentBlock(b: {
+//   hash: string;
+//   nonce?: number;
+//   difficulty?: number;
+//   timestamp?: Date;
+//   number?: number;
+//   reward?: number;
+// }) {
 
-  const reward = typeof b.reward === "number" ? b.reward : 0;
+//   const reward = typeof b.reward === "number" ? b.reward : 0;
 
-  const item = {
-    id: `block-${b.hash}-${b.timestamp?.getTime() ?? Date.now()}`,
-    hash: b.hash,
-    reward,
-    timestamp: b.timestamp ?? new Date(),
-    difficulty: b.difficulty ?? currentDifficulty,
-    nonce: b.nonce ?? 0,
-    number: b.number ?? 0,
-  };
+//   const item = {
+//     id: `block-${b.hash}-${b.timestamp?.getTime() ?? Date.now()}`,
+//     hash: b.hash,
+//     reward,
+//     timestamp: b.timestamp ?? new Date(),
+//     difficulty: b.difficulty ?? currentDifficulty,
+//     nonce: b.nonce ?? 0,
+//     number: b.number ?? 0,
+//   };
 
-  // Add block to recentBlocks
-  $miningState.recentBlocks = [item, ...($miningState.recentBlocks ?? [])].slice(0, 50);
+//   // Add block to recentBlocks
+//   $miningState.recentBlocks = [item, ...($miningState.recentBlocks ?? [])].slice(0, 50);
 
-  // Reset pagination so newest block is visible
-  currentPage = 1;
+//   // Reset pagination so newest block is visible
+//   currentPage = 1;
 
-  if (reward > 0) {
-    const last4 = b.hash.slice(-4); // grab last 4 chars of hash
-    const tx: Transaction = {
-      id: Date.now(),
-      type: 'received',
-      amount: 2,
-      from: 'Mining reward',
-      date: new Date(),
-      description: `Block Reward (…${last4})`,
-      status: 'pending' // will flip to 'completed' when backend confirms
-    };
-    transactions.update(list => [tx, ...list]);
-  }
-}
+//   if (reward > 0) {
+//     const last4 = b.hash.slice(-4); // grab last 4 chars of hash
+//     const tx: Transaction = {
+//       id: Date.now(),
+//       type: 'received',
+//       amount: 2,
+//       from: 'Mining reward',
+//       date: new Date(),
+//       description: `Block Reward (…${last4})`,
+//       status: 'pending' // will flip to 'completed' when backend confirms
+//     };
+//     transactions.update(list => [tx, ...list]);
+//   }
+// }
 
-  async function appendNewBlocksFromBackend() {
-    try {
-      if (!($etcAccount && $miningState.isMining)) return;
-      const lookback = 2000;
-      const limit = 50;
-      const blocks = await invoke('get_recent_mined_blocks_pub', {
-        address: $etcAccount.address,
-        lookback,
-        limit
-      }) as Array<{ hash: string, nonce?: string, difficulty?: string, timestamp: number, number: number, reward?: number }>;
-      for (const b of blocks) {
-        if (seenHashes.has(b.hash)) continue;
-        seenHashes.add(b.hash);
-        pushRecentBlock({
-          hash: b.hash,
-          nonce: b.nonce ? parseInt(b.nonce, 16) : undefined,
-          difficulty: b.difficulty ? parseInt(b.difficulty, 16) : undefined,
-          timestamp: new Date((b.timestamp || 0) * 1000),
-          number: b.number,
-          reward: 2
-        });
-      }
-      // Hard de-duplication by hash as a safety net
-      const uniq = new Map<string, any>();
-      for (const it of ($miningState.recentBlocks ?? [])) {
-        if (!uniq.has(it.hash)) uniq.set(it.hash, it);
-      }
-  $miningState.recentBlocks = Array.from(uniq.values()).slice(0, 50);
-    } catch (e) {
-      console.error('Failed to append recent blocks:', e);
-    } 
-  } 
+  // async function appendNewBlocksFromBackend() {
+  //   try {
+  //     if (!($etcAccount && $miningState.isMining)) return;
+  //     const lookback = 2000;
+  //     const limit = 50;
+  //     const blocks = await invoke('get_recent_mined_blocks_pub', {
+  //       address: $etcAccount.address,
+  //       lookback,
+  //       limit
+  //     }) as Array<{ hash: string, nonce?: string, difficulty?: string, timestamp: number, number: number, reward?: number }>;
+  //     for (const b of blocks) {
+  //       if (seenHashes.has(b.hash)) continue;
+  //       seenHashes.add(b.hash);
+  //       pushRecentBlock({
+  //         hash: b.hash,
+  //         nonce: b.nonce ? parseInt(b.nonce, 16) : undefined,
+  //         difficulty: b.difficulty ? parseInt(b.difficulty, 16) : undefined,
+  //         timestamp: new Date((b.timestamp || 0) * 1000),
+  //         number: b.number,
+  //         reward: 2
+  //       });
+  //     }
+  //     // Hard de-duplication by hash as a safety net
+  //     const uniq = new Map<string, any>();
+  //     for (const it of ($miningState.recentBlocks ?? [])) {
+  //       if (!uniq.has(it.hash)) uniq.set(it.hash, it);
+  //     }
+  // $miningState.recentBlocks = Array.from(uniq.values()).slice(0, 50);
+  //   } catch (e) {
+  //     console.error('Failed to append recent blocks:', e);
+  //   } 
+  // } 
   
   function formatUptime(now: number = Date.now()) {
     const uptime = now - sessionStartTime
@@ -1405,7 +1405,7 @@ function pushRecentBlock(b: {
           <div class="flex items-center gap-2">
             <AlertCircle class="h-4 w-4 text-blue-500 flex-shrink-0" />
             <p class="text-sm text-blue-600">
-              {$t('mining.errors.noAccountLink')} <button on:click={() => { navigation.setCurrentPage('account'); goto('/account'); }} class="underline font-medium">{$t('mining.accountPage')}</button>
+              Please create a Chiral Network account from the <a href="/account" class="underline font-medium">Account page</a> to start mining
             </p>
           </div>
         </div>

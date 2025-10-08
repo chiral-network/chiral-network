@@ -144,7 +144,17 @@
     "locationHint": "더 나은 성능을 위해 가까운 피어에 연결하는 데 도움이 됩니다.",
     "enableUpnp": "UPnP 활성화",
     "enableNat": "NAT 포트 매핑 활성화",
-    "enableDht": "DHT 활성화"
+    "enableDht": "DHT 활성화",
+    "geoDistribution": {
+      "title": "지리 분포",
+      "subtitle": "{peers}개의 피어 위치를 추적 중",
+      "topRegion": "최다 지역: {region}",
+      "noData": "위치 데이터 대기 중",
+      "tooltip": "{region}: {count}개 피어",
+      "peersShort": "{count}개 피어",
+      "emptyState": "DHT에 연결해 피어 위치를 확인하세요.",
+      "unknownNotice": "{count}개의 피어가 아직 위치를 제공하지 않았습니다."
+    }
   },
   "regions.usEast": "미국 동부",
   "regions.usWest": "미국 서부",
@@ -638,6 +648,7 @@
     "downloads": "다운로드",
     "searchPlaceholder": "다운로드 검색...",
     "clearSearch": "검색 지우기",
+    "clearFinished": "완료된 항목 지우기",
     "filters": {
       "all": "전체",
       "active": "활성",
@@ -676,7 +687,8 @@
       "resume": "재개",
       "remove": "제거",
       "cancel": "취소",
-      "openFile": "파일 열기"
+      "openFile": "파일 열기",
+      "showInFolder": "폴더에 표시"
     },
     "notifications": {
       "enterHash": "파일 해시를 입력하세요",
