@@ -15,7 +15,6 @@ mod headless;
 mod keystore;
 mod manager;
 mod multi_source_download;
-pub mod net;
 mod peer_selection;
 mod pool;
 mod stream_auth;
@@ -23,9 +22,6 @@ mod webrtc_service;
 use std::sync::Mutex as StdMutex;
 
 use crate::commands::bootstrap::get_bootstrap_nodes_command;
-use crate::commands::proxy::{
-    list_proxies, proxy_connect, proxy_disconnect, proxy_echo, proxy_remove, ProxyNode,
-};
 use chiral_network::stream_auth::{
     AuthMessage, HmacKeyExchangeConfirmation, HmacKeyExchangeRequest, HmacKeyExchangeResponse,
     StreamAuthService,
@@ -106,10 +102,8 @@ struct AppState {
     webrtc: Mutex<Option<Arc<WebRTCService>>>,
     multi_source_download: Mutex<Option<Arc<MultiSourceDownloadService>>>,
     keystore: Arc<Mutex<Keystore>>,
-    proxies: Arc<Mutex<Vec<ProxyNode>>>,
     file_transfer_pump: Mutex<Option<JoinHandle<()>>>,
     multi_source_pump: Mutex<Option<JoinHandle<()>>>,
-    socks5_proxy_cli: Mutex<Option<String>>,
     analytics: Arc<analytics::AnalyticsService>,
 
     // New fields for transaction queue
@@ -610,7 +604,6 @@ async fn start_dht_node(
     enable_autonat: Option<bool>,
     autonat_probe_interval_secs: Option<u64>,
     autonat_servers: Option<Vec<String>>,
-    proxy_address: Option<String>,
     is_bootstrap: Option<bool>,
     chunk_size_kb: Option<usize>,
     cache_size_mb: Option<usize>,
@@ -628,11 +621,6 @@ async fn start_dht_node(
     let probe_interval = autonat_probe_interval_secs.map(Duration::from_secs);
     let autonat_server_list = autonat_servers.unwrap_or_default();
 
-    // Get the proxy from the command line, if it was provided at launch
-    let cli_proxy = state.socks5_proxy_cli.lock().await.clone();
-    // Prioritize the command-line argument. Fall back to the one from the UI.
-    let final_proxy_address = cli_proxy.or(proxy_address.clone());
-
     // Get the file transfer service for DHT integration
     let file_transfer_service = {
         let ft_guard = state.file_transfer.lock().await;
@@ -647,7 +635,6 @@ async fn start_dht_node(
         auto_enabled,
         probe_interval,
         autonat_server_list,
-        final_proxy_address,
         file_transfer_service,
         chunk_size_kb,
         cache_size_mb,
@@ -665,7 +652,6 @@ async fn start_dht_node(
 
     // Spawn the event pump
     let app_handle = app.clone();
-    let proxies_arc = state.proxies.clone();
     let dht_clone_for_pump = dht_arc.clone();
 
     tokio::spawn(async move {
@@ -687,45 +673,6 @@ async fn start_dht_node(
 
             for ev in events {
                 match ev {
-                    DhtEvent::ProxyStatus {
-                        id,
-                        address,
-                        status,
-                        latency_ms,
-                        error,
-                    } => {
-                        let to_emit: ProxyNode = {
-                            let mut proxies = proxies_arc.lock().await;
-
-                            if let Some(i) = proxies.iter().position(|p| p.id == id) {
-                                let p = &mut proxies[i];
-                                if p.id != id {
-                                    p.id = id.clone();
-                                }
-                                if !address.is_empty() {
-                                    p.address = address.clone();
-                                }
-                                p.status = status.clone();
-                                if let Some(ms) = latency_ms {
-                                    p.latency = ms as u32;
-                                }
-                                p.error = error.clone();
-                                p.clone()
-                            } else {
-                                let node = ProxyNode {
-                                    id: id.clone(),
-                                    address: address.clone(),
-                                    status,
-                                    latency: latency_ms.unwrap_or(0) as u32,
-                                    error,
-                                };
-                                proxies.push(node.clone());
-                                node
-                            }
-                        };
-
-                        let _ = app_handle.emit("proxy_status_update", to_emit);
-                    }
                     DhtEvent::NatStatus {
                         state,
                         confidence,
@@ -744,16 +691,11 @@ async fn start_dht_node(
                         // Sending inbox event to frontend
                         let payload =
                             serde_json::json!({ "from": from, "text": utf8, "bytes": bytes });
-                        let _ = app_handle.emit("proxy_echo_rx", payload);
+                        let _ = app_handle.emit("echo_received", payload);
                     }
                     DhtEvent::PeerRtt { peer, rtt_ms } => {
-                        // NOTE: if from dht.rs only sends rtt for known proxies, then this is fine.
-                        // If it can send rtt for any peer, we need to first check if it's generated from ProxyStatus
-                        let mut proxies = proxies_arc.lock().await;
-                        if let Some(p) = proxies.iter_mut().find(|p| p.id == peer) {
-                            p.latency = rtt_ms as u32;
-                            let _ = app_handle.emit("proxy_status_update", p.clone());
-                        }
+                        // Log peer RTT for network monitoring
+                        info!("Peer {} RTT: {}ms", peer, rtt_ms);
                     }
                     DhtEvent::DownloadedFile(metadata) => {
                         let payload = serde_json::json!(metadata);
@@ -794,13 +736,6 @@ async fn stop_dht_node(app: tauri::AppHandle, state: State<'_, AppState>) -> Res
             .await
             .map_err(|e| format!("Failed to stop DHT: {}", e))?;
     }
-
-    // Proxy reset
-    {
-        let mut proxies = state.proxies.lock().await;
-        proxies.clear();
-    }
-    let _ = app.emit("proxy_reset", ());
 
     Ok(())
 }
@@ -1031,26 +966,6 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                 DhtEvent::Error(err) => format!("error:{}", err),
                 DhtEvent::Info(msg) => format!("info:{}", msg),
                 DhtEvent::Warning(msg) => format!("warning:{}", msg),
-                DhtEvent::ProxyStatus {
-                    id,
-                    address,
-                    status,
-                    latency_ms,
-                    error,
-                } => {
-                    let lat = latency_ms
-                        .map(|ms| format!("{ms}"))
-                        .unwrap_or_else(|| "-".into());
-                    let err = error.unwrap_or_default();
-                    format!(
-                        "proxy_status:{id}:{address}:{status}:{lat}{}",
-                        if err.is_empty() {
-                            "".into()
-                        } else {
-                            format!(":{err}")
-                        }
-                    )
-                }
                 DhtEvent::NatStatus {
                     state,
                     confidence,
@@ -3130,10 +3045,8 @@ fn main() {
             keystore: Arc::new(Mutex::new(
                 Keystore::load().unwrap_or_else(|_| Keystore::new()),
             )),
-            proxies: Arc::new(Mutex::new(Vec::new())),
             file_transfer_pump: Mutex::new(None),
             multi_source_pump: Mutex::new(None),
-            socks5_proxy_cli: Mutex::new(args.socks5_proxy),
             analytics: Arc::new(analytics::AnalyticsService::new()),
 
             // Initialize transaction queue
@@ -3211,11 +3124,6 @@ fn main() {
             encrypt_file_for_upload,
             show_in_folder,
             get_available_storage,
-            proxy_connect,
-            proxy_disconnect,
-            proxy_remove,
-            proxy_echo,
-            list_proxies,
             get_bootstrap_nodes_command,
             generate_totp_secret,
             is_2fa_enabled,

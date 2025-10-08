@@ -53,7 +53,6 @@ async fn test_autonat_detection() {
         true,                         // Enable AutoNAT
         Some(Duration::from_secs(5)), // Short probe interval for testing
         vec![],                       // No custom AutoNAT servers
-        None,                         // No proxy
         None,                         // No file transfer service
         Some(256),                    // chunk_size_kb
         Some(1024),                   // cache_size_mb
@@ -102,7 +101,6 @@ async fn test_dht_peer_discovery() {
         Some(Duration::from_secs(30)),
         vec![],
         None,
-        None,
         Some(256),
         Some(1024),
         false, // enable_autorelay
@@ -139,7 +137,6 @@ async fn test_dht_peer_discovery() {
         true,
         Some(Duration::from_secs(30)),
         vec![],
-        None,
         None,
         Some(256),
         Some(1024),
@@ -190,7 +187,6 @@ async fn test_file_publish_and_search() {
         Some(Duration::from_secs(30)),
         vec![],
         None,
-        None,
         Some(256),
         Some(1024),
         false, // enable_autorelay
@@ -219,7 +215,6 @@ async fn test_file_publish_and_search() {
         true,
         Some(Duration::from_secs(30)),
         vec![],
-        None,
         None,
         Some(256),
         Some(1024),
@@ -277,7 +272,6 @@ async fn test_dcutr_enabled() {
         Some(Duration::from_secs(30)),
         vec![],
         None,
-        None,
         Some(256),
         Some(1024),
         false, // enable_autorelay
@@ -329,7 +323,6 @@ async fn test_multiple_autonat_servers() {
         Some(Duration::from_secs(30)),
         autonat_servers.clone(),
         None,
-        None,
         Some(256),
         Some(1024),
         false, // enable_autorelay
@@ -363,7 +356,6 @@ async fn test_reachability_history_tracking() {
         true,
         Some(Duration::from_secs(5)), // Short interval
         vec![],
-        None,
         None,
         Some(256),
         Some(1024),
@@ -411,7 +403,6 @@ async fn test_connection_metrics_tracking() {
         Some(Duration::from_secs(30)),
         vec![],
         None,
-        None,
         Some(256),
         Some(1024),
         false, // enable_autorelay
@@ -440,7 +431,6 @@ async fn test_connection_metrics_tracking() {
         true,
         Some(Duration::from_secs(30)),
         vec![],
-        None,
         None,
         Some(256),
         Some(1024),
@@ -492,7 +482,6 @@ async fn test_nat_resilience_private_to_public() {
         Some(Duration::from_secs(30)),
         vec![],
         None,
-        None,
         Some(256),
         Some(1024),
         false, // enable_autorelay
@@ -530,7 +519,6 @@ async fn test_nat_resilience_private_to_public() {
         true,
         Some(Duration::from_secs(30)),
         vec![],
-        None,
         None,
         Some(256),
         Some(1024),
@@ -591,7 +579,6 @@ async fn test_nat_resilience_connection_fallback() {
         true,
         Some(Duration::from_secs(30)),
         vec![],
-        None,
         None,
         Some(256),
         Some(1024),

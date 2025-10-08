@@ -4,7 +4,7 @@ use blockstore::{
     InMemoryBlockstore,
 };
 pub use cid::Cid;
-use futures::future::{BoxFuture, FutureExt};
+use futures::future::BoxFuture;
 use futures::io::{AsyncRead as FAsyncRead, AsyncWrite as FAsyncWrite};
 use futures::{AsyncReadExt as _, AsyncWriteExt as _};
 use futures_util::StreamExt;
@@ -24,7 +24,6 @@ use tracing::{debug, error, info, warn};
 use crate::peer_selection::{PeerMetrics, PeerSelectionService, SelectionStrategy};
 use crate::webrtc_service::{get_webrtc_service, FileChunk};
 use std::io::{self};
-use tokio_socks::tcp::Socks5Stream;
 
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -33,7 +32,7 @@ use std::task::{Context, Poll};
 use crate::file_transfer::FileTransferService;
 use std::error::Error;
 
-// Trait alias to abstract over async I/O types used by proxy transport
+// Trait alias to abstract over async I/O types used by transport
 pub trait AsyncIo: FAsyncRead + FAsyncWrite + Unpin + Send {}
 impl<T: FAsyncRead + FAsyncWrite + Unpin + Send> AsyncIo for T {}
 
@@ -42,12 +41,11 @@ use libp2p::{
     autonat::v2,
     core::{
         muxing::StreamMuxerBox,
-        // FIXED E0432: ListenerEvent is removed, only import what is available.
         transport::{
-            choice::OrTransport, Boxed, DialOpts, ListenerId, Transport, TransportError,
-            TransportEvent,
+            choice::OrTransport, Boxed,
         },
     },
+    Transport,
     dcutr,
     identify::{self, Event as IdentifyEvent},
     identity,
@@ -148,7 +146,7 @@ struct DhtBehaviour {
     mdns: Mdns,
     bitswap: beetswap::Behaviour<MAX_MULTIHASH_LENGHT, InMemoryBlockstore<MAX_MULTIHASH_LENGHT>>,
     ping: ping::Behaviour,
-    proxy_rr: rr::Behaviour<ProxyCodec>,
+    echo_rr: rr::Behaviour<EchoCodec>,
     webrtc_signaling_rr: rr::Behaviour<WebRTCSignalingCodec>,
     autonat_client: toggle::Toggle<v2::client::Behaviour>,
     autonat_server: toggle::Toggle<v2::server::Behaviour>,
@@ -204,13 +202,6 @@ pub enum DhtEvent {
     Info(String),
     Warning(String),
     PublishedFile(FileMetadata),
-    ProxyStatus {
-        id: String,
-        address: String,
-        status: String,
-        latency_ms: Option<u64>,
-        error: Option<String>,
-    },
     PeerRtt {
         peer: String,
         rtt_ms: u64,
@@ -236,64 +227,10 @@ pub enum DhtEvent {
     },
 }
 
-// ------------ Proxy Manager Structs and Enums ------------
-#[derive(Debug, Clone, Default)]
-struct ProxyManager {
-    targets: std::collections::HashSet<PeerId>,
-    capable: std::collections::HashSet<PeerId>,
-    online: std::collections::HashSet<PeerId>,
-    relay_pending: std::collections::HashSet<PeerId>,
-    relay_ready: std::collections::HashSet<PeerId>,
-}
-
-impl ProxyManager {
-    fn set_target(&mut self, id: PeerId) {
-        self.targets.insert(id);
-    }
-    fn clear_target(&mut self, id: &PeerId) {
-        self.targets.remove(id);
-    }
-    fn set_capable(&mut self, id: PeerId) {
-        self.capable.insert(id);
-    }
-    fn set_online(&mut self, id: PeerId) {
-        self.online.insert(id);
-    }
-    fn set_offline(&mut self, id: &PeerId) {
-        self.online.remove(id);
-    }
-    fn remove_all(&mut self, id: &PeerId) {
-        self.targets.remove(id);
-        self.capable.remove(id);
-        self.online.remove(id);
-        self.relay_pending.remove(id);
-        self.relay_ready.remove(id);
-    }
-    fn is_proxy(&self, id: &PeerId) -> bool {
-        self.targets.contains(id) || self.capable.contains(id)
-    }
-    fn mark_relay_pending(&mut self, id: PeerId) -> bool {
-        if self.relay_ready.contains(&id) {
-            return false;
-        }
-        self.relay_pending.insert(id)
-    }
-    fn mark_relay_ready(&mut self, id: PeerId) -> bool {
-        self.relay_pending.remove(&id);
-        self.relay_ready.insert(id)
-    }
-    fn has_relay_request(&self, id: &PeerId) -> bool {
-        self.relay_pending.contains(id) || self.relay_ready.contains(id)
-    }
-}
-
 struct PendingEcho {
     peer: PeerId,
     tx: oneshot::Sender<Result<Vec<u8>, String>>,
 }
-
-// Runtime type for ProxyManager
-type ProxyMgr = Arc<Mutex<ProxyManager>>;
 
 // ----------------------------------------------------------
 
@@ -379,9 +316,9 @@ pub struct DhtMetricsSnapshot {
     pub last_dcutr_failure: Option<u64>,
 }
 
-// ------Proxy Protocol Implementation------
+// ------Echo Protocol Implementation------
 #[derive(Clone, Debug, Default)]
-struct ProxyCodec;
+struct EchoCodec;
 
 #[derive(Clone, Debug, Default)]
 struct WebRTCSignalingCodec;
@@ -423,7 +360,7 @@ async fn write_framed<T: FAsyncWrite + Unpin + Send>(
 }
 
 #[async_trait::async_trait]
-impl rr::Codec for ProxyCodec {
+impl rr::Codec for EchoCodec {
     type Protocol = String;
     type Request = EchoRequest;
     type Response = EchoResponse;
@@ -534,73 +471,6 @@ impl rr::Codec for WebRTCSignalingCodec {
         let data = serde_json::to_vec(&response)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         write_framed(io, data).await
-    }
-}
-#[derive(Clone)]
-struct Socks5Transport {
-    proxy: SocketAddr,
-}
-
-#[async_trait]
-impl Transport for Socks5Transport {
-    type Output = Box<dyn AsyncIo>;
-    type Error = io::Error;
-    type ListenerUpgrade = futures::future::Pending<Result<Self::Output, Self::Error>>;
-    // FIXED E0412: Use imported BoxFuture
-    type Dial = BoxFuture<'static, Result<Self::Output, Self::Error>>;
-
-    // FIXED E0050, E0046: Corrected implementation
-    fn listen_on(
-        &mut self,
-        _id: ListenerId,
-        _addr: libp2p::Multiaddr,
-    ) -> Result<(), TransportError<Self::Error>> {
-        Err(TransportError::Other(io::Error::new(
-            io::ErrorKind::Other,
-            "SOCKS5 transport does not support listening",
-        )))
-    }
-
-    fn remove_listener(&mut self, _id: ListenerId) -> bool {
-        false
-    }
-
-    fn poll(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<TransportEvent<Self::ListenerUpgrade, Self::Error>> {
-        Poll::Pending
-    }
-
-    fn dial(
-        &mut self,
-        addr: libp2p::Multiaddr,
-        _opts: DialOpts,
-    ) -> Result<Self::Dial, TransportError<Self::Error>> {
-        let proxy = self.proxy;
-
-        // Convert Multiaddr to string for SOCKS5 connection
-        let target = match addr_to_socket_addr(&addr) {
-            Some(socket_addr) => socket_addr.to_string(),
-            None => {
-                return Err(TransportError::Other(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "Invalid address for SOCKS5",
-                )))
-            }
-        };
-
-        Ok(async move {
-            let stream = Socks5Stream::connect(proxy, target)
-                .await
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-
-            // CORRECT: Convert tokio stream to futures stream via .compat().
-            let compat = stream.compat();
-            // The compat stream correctly implements FAsyncRead/FAsyncWrite required by AsyncIo.
-            Ok(Box::new(compat) as Box<dyn AsyncIo>)
-        }
-        .boxed())
     }
 }
 
@@ -933,7 +803,6 @@ async fn run_dht_node(
     metrics: Arc<Mutex<DhtMetrics>>,
     pending_echo: Arc<Mutex<HashMap<rr::OutboundRequestId, PendingEcho>>>,
     pending_searches: Arc<Mutex<HashMap<String, Vec<PendingSearch>>>>,
-    proxy_mgr: ProxyMgr,
     peer_selection: Arc<Mutex<PeerSelectionService>>,
     received_chunks: Arc<Mutex<HashMap<String, HashMap<u32, FileChunk>>>>,
     file_transfer_service: Option<Arc<FileTransferService>>,
@@ -1132,57 +1001,28 @@ async fn run_dht_node(
                                 }
                             });
 
-                            if let Some(peer_id) = maybe_peer_id.clone() {
-                                let mut mgr = proxy_mgr.lock().await;
-                                mgr.set_target(peer_id);
-                                let should_request = !mgr.has_relay_request(&peer_id);
-                                if should_request {
-                                    mgr.mark_relay_pending(peer_id);
-                                }
-                                drop(mgr);
-
-                                if should_request {
-                                    if let Some(relay_addr) = build_relay_listen_addr(&multiaddr) {
-                                        match swarm.listen_on(relay_addr.clone()) {
-                                            Ok(_) => {
-                                                info!(
-                                                    "Requested relay reservation via {}",
-                                                    relay_addr
-                                                );
-                                                let _ = event_tx
-                                                    .send(DhtEvent::ProxyStatus {
-                                                        id: peer_id.to_string(),
-                                                        address: relay_addr.to_string(),
-                                                        status: "relay_pending".into(),
-                                                        latency_ms: None,
-                                                        error: None,
-                                                    })
-                                                    .await;
-                                            }
-                                            Err(err) => {
-                                                warn!(
-                                                    "Failed to request relay reservation via {}: {}",
-                                                    relay_addr, err
-                                                );
-                                                let mut mgr = proxy_mgr.lock().await;
-                                                mgr.relay_pending.remove(&peer_id);
-                                                let _ = event_tx
-                                                    .send(DhtEvent::ProxyStatus {
-                                                        id: peer_id.to_string(),
-                                                        address: relay_addr.to_string(),
-                                                        status: "relay_error".into(),
-                                                        latency_ms: None,
-                                                        error: Some(err.to_string()),
-                                                    })
-                                                    .await;
-                                            }
+                            if let Some(_peer_id) = maybe_peer_id.clone() {
+                                // Request relay reservation for NAT traversal
+                                if let Some(relay_addr) = build_relay_listen_addr(&multiaddr) {
+                                    match swarm.listen_on(relay_addr.clone()) {
+                                        Ok(_) => {
+                                            info!(
+                                                "Requested relay reservation via {}",
+                                                relay_addr
+                                            );
                                         }
-                                    } else {
-                                        warn!(
-                                            "Cannot derive relay listen address from {}",
-                                            multiaddr
-                                        );
+                                        Err(err) => {
+                                            warn!(
+                                                "Failed to request relay reservation via {}: {}",
+                                                relay_addr, err
+                                            );
+                                        }
                                     }
+                                } else {
+                                    warn!(
+                                        "Cannot derive relay listen address from {}",
+                                        multiaddr
+                                    );
                                 }
                             }
 
@@ -1208,7 +1048,6 @@ async fn run_dht_node(
                     }
                     Some(DhtCommand::DisconnectPeer(peer_id)) => {
                         let _ = swarm.disconnect_peer_id(peer_id.clone());
-                        proxy_mgr.lock().await.remove_all(&peer_id);
                     }
 
 
@@ -1217,7 +1056,7 @@ async fn run_dht_node(
                         let _ = tx.send(count);
                     }
                     Some(DhtCommand::Echo { peer, payload, tx }) => {
-                        let id = swarm.behaviour_mut().proxy_rr.send_request(&peer, EchoRequest(payload));
+                        let id = swarm.behaviour_mut().echo_rr.send_request(&peer, EchoRequest(payload));
                         pending_echo.lock().await.insert(id, PendingEcho { peer, tx });
                     }
                     Some(DhtCommand::GetProviders { file_hash, sender }) => {
@@ -1239,12 +1078,12 @@ async fn run_dht_node(
                         pending_webrtc_offers.lock().await.insert(id, sender);
                     }
                     Some(DhtCommand::SendMessageToPeer { target_peer_id, message }) => {
-                        // For now, we'll use the proxy protocol to send messages
+                        // For now, we'll use the echo protocol to send messages
                         // In a real implementation, this could use a dedicated messaging protocol
                         match serde_json::to_vec(&message) {
                             Ok(message_data) => {
-                                // Send the message directly using the proxy protocol
-                                let request_id = swarm.behaviour_mut().proxy_rr.send_request(&target_peer_id, EchoRequest(message_data));
+                                // Send the message directly using the echo protocol
+                                let request_id = swarm.behaviour_mut().echo_rr.send_request(&target_peer_id, EchoRequest(message_data));
                                 info!("Sent message to peer {} with request ID {:?}", target_peer_id, request_id);
                             }
                             Err(e) => {
@@ -1291,9 +1130,6 @@ async fn run_dht_node(
                         match relay_event {
                             RelayClientEvent::ReservationReqAccepted { relay_peer_id, .. } => {
                                 info!("✅ Relay reservation accepted from {}", relay_peer_id);
-                                let mut mgr = proxy_mgr.lock().await;
-                                let newly_ready = mgr.mark_relay_ready(relay_peer_id);
-                                drop(mgr);
 
                                 // Update AutoRelay metrics
                                 {
@@ -1303,48 +1139,19 @@ async fn run_dht_node(
                                     m.last_reservation_success = Some(SystemTime::now());
                                     m.reservation_renewals += 1;
                                 }
-
-                                if newly_ready {
-                                    let _ = event_tx
-                                        .send(DhtEvent::ProxyStatus {
-                                            id: relay_peer_id.to_string(),
-                                            address: String::new(),
-                                            status: "relay_ready".into(),
-                                            latency_ms: None,
-                                            error: None,
-                                        })
-                                        .await;
-                                    let _ = event_tx
-                                        .send(DhtEvent::Info(format!(
-                                            "Connected to relay: {}",
-                                            relay_peer_id
-                                        )))
-                                        .await;
-                                }
+                                
+                                let _ = event_tx
+                                    .send(DhtEvent::Info(format!(
+                                        "Connected to relay: {}",
+                                        relay_peer_id
+                                    )))
+                                    .await;
                             }
                             RelayClientEvent::OutboundCircuitEstablished { relay_peer_id, .. } => {
                                 info!("🔗 Outbound relay circuit established via {}", relay_peer_id);
-                                proxy_mgr.lock().await.set_online(relay_peer_id);
-                                let _ = event_tx
-                                    .send(DhtEvent::ProxyStatus {
-                                        id: relay_peer_id.to_string(),
-                                        address: String::new(),
-                                        status: "relay_circuit".into(),
-                                        latency_ms: None,
-                                        error: None,
-                                    })
-                                    .await;
                             }
-                            RelayClientEvent::InboundCircuitEstablished { src_peer_id, .. } => {
-                                let _ = event_tx
-                                    .send(DhtEvent::ProxyStatus {
-                                        id: src_peer_id.to_string(),
-                                        address: String::new(),
-                                        status: "relay_inbound".into(),
-                                        latency_ms: None,
-                                        error: None,
-                                    })
-                                    .await;
+                            RelayClientEvent::InboundCircuitEstablished { src_peer_id: _, .. } => {
+                                // Inbound relay circuit established
                             }
                         }
                     }
@@ -1421,20 +1228,14 @@ async fn run_dht_node(
                                     selection.update_peer_latency(&peer.to_string(), rtt_ms);
                                 }
 
-                                let show = proxy_mgr.lock().await.is_proxy(&peer);
+                                let _ = event_tx
+                                    .send(DhtEvent::PeerRtt {
+                                        peer: peer.to_string(),
+                                        rtt_ms,
+                                    })
+                                    .await;
 
-                                if show {
-                                    let _ = event_tx
-                                        .send(DhtEvent::PeerRtt {
-                                            peer: peer.to_string(),
-                                            rtt_ms,
-                                        })
-                                        .await;
-
-                                        ping_failures.remove(&peer);
-                                } else {
-                                    // Ignore
-                                }
+                                ping_failures.remove(&peer);
                             }
                             libp2p::ping::Event { peer, result: Err(libp2p::ping::Failure::Timeout), .. } => {
                                 let _ = event_tx
@@ -1474,11 +1275,11 @@ async fn run_dht_node(
                         handle_dcutr_event(ev, &metrics, &event_tx).await;
                     }
                     SwarmEvent::ExternalAddrConfirmed { address, .. } => {
-                        handle_external_addr_confirmed(&address, &metrics, &event_tx, &proxy_mgr)
+                        handle_external_addr_confirmed(&address, &metrics, &event_tx)
                             .await;
                     }
                     SwarmEvent::ExternalAddrExpired { address, .. } => {
-                        handle_external_addr_expired(&address, &metrics, &event_tx, &proxy_mgr)
+                        handle_external_addr_expired(&address, &metrics, &event_tx)
                             .await;
                     }
                     SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
@@ -1517,7 +1318,6 @@ async fn run_dht_node(
                             peers.remove(&peer_id);
                             peers.len()
                         };
-                        proxy_mgr.lock().await.remove_all(&peer_id);
                         info!("   Remaining connected peers: {}", peers_count);
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
@@ -1554,21 +1354,12 @@ async fn run_dht_node(
                         }
                         let _ = event_tx.send(DhtEvent::Error(format!("Connection failed: {}", error))).await;
                     }
-                    SwarmEvent::Behaviour(DhtBehaviourEvent::ProxyRr(ev)) => {
+                    SwarmEvent::Behaviour(DhtBehaviourEvent::EchoRr(ev)) => {
                         use libp2p::request_response::{Event as RREvent, Message};
                         match ev {
                             RREvent::Message { peer, message } => match message {
                                 // Echo server
                                 Message::Request { request, channel, .. } => {
-                                    proxy_mgr.lock().await.set_capable(peer);
-                                    proxy_mgr.lock().await.set_online(peer);
-                                    let _ = event_tx.send(DhtEvent::ProxyStatus {
-                                        id: peer.to_string(),
-                                        address: String::new(),
-                                        status: "online".into(),
-                                        latency_ms: None,
-                                        error: None,
-                                    }).await;
                                     let EchoRequest(data) = request;
 
                                     // 2) Showing received data to UI
@@ -1580,22 +1371,12 @@ async fn run_dht_node(
                                     }).await;
 
                                     // 3) Echo response
-                                    swarm.behaviour_mut().proxy_rr
+                                    swarm.behaviour_mut().echo_rr
                                         .send_response(channel, EchoResponse(data))
                                         .unwrap_or_else(|e| error!("send_response failed: {e:?}"));
                                 }
                                 // Client response
                                 Message::Response { request_id, response } => {
-                                    proxy_mgr.lock().await.set_capable(peer);
-                                    proxy_mgr.lock().await.set_online(peer);
-                                    let _ = event_tx.send(DhtEvent::ProxyStatus {
-                                        id: peer.to_string(),
-                                        address: String::new(),
-                                        status: "online".into(),
-                                        latency_ms: None,
-                                        error: None,
-                                    }).await;
-
                                     if let Some(PendingEcho { tx, .. }) = pending_echo.lock().await.remove(&request_id) {
                                         let EchoResponse(data) = response;
                                         let _ = tx.send(Ok(data));
@@ -1604,37 +1385,15 @@ async fn run_dht_node(
                             },
 
                             RREvent::OutboundFailure { request_id, error, .. } => {
-                                if let Some(PendingEcho { peer, tx }) = pending_echo.lock().await.remove(&request_id) {
+                                if let Some(PendingEcho { peer: _, tx }) = pending_echo.lock().await.remove(&request_id) {
                                     let _ = tx.send(Err(format!("outbound failure: {error:?}")));
-
-                                    {
-                                        let mut pm = proxy_mgr.lock().await;
-                                        pm.set_offline(&peer);
-                                    }
-                                    let _ = event_tx.send(DhtEvent::ProxyStatus {
-                                        id: peer.to_string(),
-                                        address: String::new(),
-                                        status: "offline".into(),
-                                        latency_ms: None,
-                                        error: Some(error.to_string()),
-                                    }).await;
                                 } else {
                                     warn!("OutboundFailure for unknown request_id {:?}: {:?}", request_id, error);
                                 }
                             }
 
-                            RREvent::InboundFailure { peer, error, .. } => {
-                                {
-                                    let mut pm = proxy_mgr.lock().await;
-                                    pm.set_offline(&peer);
-                                }
-                                let _ = event_tx.send(DhtEvent::ProxyStatus {
-                                    id: peer.to_string(),
-                                    address: String::new(),
-                                    status: "offline".into(),
-                                    latency_ms: None,
-                                    error: Some(error.to_string()),
-                                }).await;
+                            RREvent::InboundFailure { peer: _, error, .. } => {
+                                debug!("Echo inbound failure: {:?}", error);
                             }
 
                             RREvent::ResponseSent { .. } => {}
@@ -2129,7 +1888,6 @@ async fn handle_external_addr_confirmed(
     addr: &Multiaddr,
     metrics: &Arc<Mutex<DhtMetrics>>,
     event_tx: &mpsc::Sender<DhtEvent>,
-    proxy_mgr: &ProxyMgr,
 ) {
     let mut metrics_guard = metrics.lock().await;
     let nat_enabled = metrics_guard.autonat_enabled;
@@ -2157,23 +1915,7 @@ async fn handle_external_addr_confirmed(
     }
 
     if let Some(relay_peer_id) = extract_relay_peer(addr) {
-        let mut mgr = proxy_mgr.lock().await;
-        let newly_ready = mgr.mark_relay_ready(relay_peer_id.clone());
-        drop(mgr);
-        let status = if newly_ready {
-            "relay_ready"
-        } else {
-            "relay_address"
-        };
-        let _ = event_tx
-            .send(DhtEvent::ProxyStatus {
-                id: relay_peer_id.to_string(),
-                address: addr.to_string(),
-                status: status.into(),
-                latency_ms: None,
-                error: None,
-            })
-            .await;
+        debug!("Relay address confirmed for peer: {}", relay_peer_id);
     }
 }
 
@@ -2181,7 +1923,6 @@ async fn handle_external_addr_expired(
     addr: &Multiaddr,
     metrics: &Arc<Mutex<DhtMetrics>>,
     event_tx: &mpsc::Sender<DhtEvent>,
-    proxy_mgr: &ProxyMgr,
 ) {
     let summary_text = format!("External address expired: {}", addr);
     let mut metrics_guard = metrics.lock().await;
@@ -2211,79 +1952,32 @@ async fn handle_external_addr_expired(
     }
 
     if let Some(relay_peer_id) = extract_relay_peer(addr) {
-        let mut mgr = proxy_mgr.lock().await;
-        mgr.relay_ready.remove(&relay_peer_id);
-        mgr.relay_pending.remove(&relay_peer_id);
-        drop(mgr);
-        let _ = event_tx
-            .send(DhtEvent::ProxyStatus {
-                id: relay_peer_id.to_string(),
-                address: addr.to_string(),
-                status: "relay_expired".into(),
-                latency_ms: None,
-                error: None,
-            })
-            .await;
+        debug!("Relay address expired for peer: {}", relay_peer_id);
     }
 }
 
-impl Socks5Transport {
-    pub fn new(proxy: SocketAddr) -> Self {
-        Self { proxy }
-    }
-}
-
-/// Build a libp2p transport, optionally tunneling through a SOCKS5 proxy.
+/// Build a libp2p transport with relay support.
 pub fn build_transport_with_relay(
     keypair: &identity::Keypair,
     relay_transport: relay::client::Transport,
-    proxy_address: Option<String>,
 ) -> Result<Boxed<(PeerId, StreamMuxerBox)>, Box<dyn Error>> {
     let noise_keys = noise::Config::new(keypair)?;
     let yamux_config = libp2p::yamux::Config::default();
 
-    let transport = match (proxy_address, relay_transport) {
-        (Some(proxy), relay_transport) => {
-            info!(
-                "SOCKS5 enabled. Routing all P2P dialing traffic via {}",
-                proxy
-            );
-            let proxy_addr = proxy.parse::<SocketAddr>().map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("Invalid proxy address: {}", e),
-                )
-            })?;
-            let socks5_transport = Socks5Transport::new(proxy_addr);
+    info!("Building P2P transport with relay support");
+    let direct_tcp = tcp::tokio::Transport::new(tcp::Config::default())
+        .map(|s, _| Box::new(s.0.compat()) as Box<dyn AsyncIo>);
 
-            OrTransport::new(relay_transport, socks5_transport)
-                .map(|either, _| match either {
-                    futures::future::Either::Left(conn) => RelayTransportOutput::Relay(conn),
-                    futures::future::Either::Right(stream) => RelayTransportOutput::Direct(stream),
-                })
-                .upgrade(Version::V1)
-                .authenticate(noise_keys)
-                .multiplex(yamux_config)
-                .timeout(Duration::from_secs(30))
-                .boxed()
-        }
-        (None, relay_transport) => {
-            info!("Direct P2P connection mode.");
-            let direct_tcp = tcp::tokio::Transport::new(tcp::Config::default())
-                .map(|s, _| Box::new(s.0.compat()) as Box<dyn AsyncIo>);
-
-            OrTransport::new(relay_transport, direct_tcp)
-                .map(|either, _| match either {
-                    futures::future::Either::Left(conn) => RelayTransportOutput::Relay(conn),
-                    futures::future::Either::Right(stream) => RelayTransportOutput::Direct(stream),
-                })
-                .upgrade(Version::V1)
-                .authenticate(noise_keys)
-                .multiplex(yamux_config)
-                .timeout(Duration::from_secs(30))
-                .boxed()
-        }
-    };
+    let transport = OrTransport::new(relay_transport, direct_tcp)
+        .map(|either, _| match either {
+            futures::future::Either::Left(conn) => RelayTransportOutput::Relay(conn),
+            futures::future::Either::Right(stream) => RelayTransportOutput::Direct(stream),
+        })
+        .upgrade(Version::V1)
+        .authenticate(noise_keys)
+        .multiplex(yamux_config)
+        .timeout(Duration::from_secs(30))
+        .boxed();
 
     Ok(transport)
 }
@@ -2320,7 +2014,6 @@ pub struct DhtService {
     pending_echo: Arc<Mutex<HashMap<rr::OutboundRequestId, PendingEcho>>>,
     pending_searches: Arc<Mutex<HashMap<String, Vec<PendingSearch>>>>,
     search_counter: Arc<AtomicU64>,
-    proxy_mgr: ProxyMgr,
     peer_selection: Arc<Mutex<PeerSelectionService>>,
     file_metadata_cache: Arc<Mutex<HashMap<String, FileMetadata>>>,
     received_chunks: Arc<Mutex<HashMap<String, HashMap<u32, FileChunk>>>>,
@@ -2342,7 +2035,6 @@ impl DhtService {
         enable_autonat: bool,
         autonat_probe_interval: Option<Duration>,
         autonat_servers: Vec<String>,
-        proxy_address: Option<String>,
         file_transfer_service: Option<Arc<FileTransferService>>,
         chunk_size_kb: Option<usize>, // Chunk size in KB (default 256)
         cache_size_mb: Option<usize>, // Cache size in MB (default 1024)
@@ -2422,9 +2114,9 @@ impl DhtService {
 
         // Request-Response behaviours
         let rr_cfg = rr::Config::default();
-        let proxy_protocols =
-            std::iter::once(("/chiral/proxy/1.0.0".to_string(), rr::ProtocolSupport::Full));
-        let proxy_rr = rr::Behaviour::new(proxy_protocols, rr_cfg.clone());
+        let echo_protocols =
+            std::iter::once(("/chiral/echo/1.0.0".to_string(), rr::ProtocolSupport::Full));
+        let echo_rr = rr::Behaviour::new(echo_protocols, rr_cfg.clone());
 
         let webrtc_protocols = std::iter::once((
             "/chiral/webrtc-signaling/1.0.0".to_string(),
@@ -2474,7 +2166,7 @@ impl DhtService {
             mdns,
             bitswap,
             ping: Ping::new(ping::Config::new()),
-            proxy_rr,
+            echo_rr,
             webrtc_signaling_rr,
             autonat_client: autonat_client_toggle,
             autonat_server: autonat_server_toggle,
@@ -2519,8 +2211,8 @@ impl DhtService {
             HashSet::new()
         };
 
-        // Use the new relay-aware transport builder
-        let transport = build_transport_with_relay(&local_key, relay_transport, proxy_address)?;
+        // Use the relay-aware transport builder
+        let transport = build_transport_with_relay(&local_key, relay_transport)?;
 
         // Create the swarm
         let mut swarm = SwarmBuilder::with_existing_identity(local_key)
@@ -2613,7 +2305,6 @@ impl DhtService {
         let pending_echo = Arc::new(Mutex::new(HashMap::new()));
         let pending_searches = Arc::new(Mutex::new(HashMap::new()));
         let search_counter = Arc::new(AtomicU64::new(1));
-        let proxy_mgr: ProxyMgr = Arc::new(Mutex::new(ProxyManager::default()));
         let peer_selection = Arc::new(Mutex::new(PeerSelectionService::new()));
         let pending_webrtc_offers = Arc::new(Mutex::new(HashMap::new()));
 
@@ -2635,7 +2326,6 @@ impl DhtService {
             metrics.clone(),
             pending_echo.clone(),
             pending_searches.clone(),
-            proxy_mgr.clone(),
             peer_selection.clone(),
             received_chunks_clone.clone(),
             file_transfer_service.clone(),
@@ -2655,7 +2345,6 @@ impl DhtService {
             pending_echo,
             pending_searches,
             search_counter,
-            proxy_mgr,
             peer_selection,
             file_metadata_cache: Arc::new(Mutex::new(HashMap::new())),
             received_chunks: received_chunks_clone,
@@ -3305,7 +2994,6 @@ mod tests {
             false,
             None,
             Vec::new(),
-            None,
             None,
             Some(256),  // chunk_size_kb
             Some(1024), // cache_size_mb

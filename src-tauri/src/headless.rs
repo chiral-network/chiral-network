@@ -73,10 +73,6 @@ pub struct CliArgs {
     #[arg(long)]
     pub show_dcutr: bool,
 
-    // SOCKS5 Proxy address (e.g., 127.0.0.1:9050 for Tor or a private VPN SOCKS endpoint)
-    #[arg(long)]
-    pub socks5_proxy: Option<String>,
-
     /// Print local download metrics snapshot at startup
     #[arg(long)]
     pub show_downloads: bool,
@@ -154,7 +150,6 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         enable_autonat,
         probe_interval,
         args.autonat_server.clone(),
-        args.socks5_proxy,
         file_transfer_service.clone(),
         None, // chunk_size_kb: use default
         None, // cache_size_mb: use default
