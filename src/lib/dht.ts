@@ -29,6 +29,7 @@ export interface DhtConfig {
   cacheSizeMb?: number;
   enableAutorelay?: boolean;
   preferredRelays?: string[];
+  anonymousMode?: boolean;
 }
 
 export interface FileMetadata {
@@ -150,6 +151,9 @@ export class DhtService {
         config.proxyAddress.trim().length > 0
       ) {
         payload.proxyAddress = config.proxyAddress;
+      }
+      if (typeof config?.anonymousMode === "boolean") {
+        payload.anonymousMode = config.anonymousMode;
       }
       if (typeof config?.chunkSizeKb === "number") {
         payload.chunkSizeKb = config.chunkSizeKb;

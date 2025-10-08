@@ -115,6 +115,12 @@
   $: autonatServersText = localSettings.autonatServers?.join('\n') || '';
   $: preferredRelaysText = localSettings.preferredRelays?.join('\n') || '';
 
+  $: if (localSettings.anonymousMode) {
+    localSettings.enableProxy = true;
+    localSettings.enableAutonat = false;
+    localSettings.enableAutorelay = true;
+  }
+
   // Check for changes
   $: hasChanges = JSON.stringify(localSettings) !== JSON.stringify(savedSettings);
 

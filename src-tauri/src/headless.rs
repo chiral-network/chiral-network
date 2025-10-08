@@ -160,6 +160,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         None, // cache_size_mb: use default
         enable_autorelay,
         args.relay.clone(),
+        false,
     )
     .await?;
     let peer_id = dht_service.get_peer_id().await;
