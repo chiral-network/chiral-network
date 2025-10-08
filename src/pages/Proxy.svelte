@@ -6,6 +6,7 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import { ShieldCheck, ShieldX, Globe, Activity, Plus, Power, Trash2 } from 'lucide-svelte'
   import { onMount } from 'svelte';
+  import { invoke } from '@tauri-apps/api/core';
   import { proxyNodes, connectProxy, disconnectProxy, removeProxy, listProxies } from '$lib/proxy';
   import { t } from 'svelte-i18n'
   import DropDown from '$lib/components/ui/dropDown.svelte'
@@ -19,6 +20,7 @@
   let connectionTimeouts = new Map<string, NodeJS.Timeout>()
   let reconnectIntervals = new Map<string, NodeJS.Timeout>()
   let autoReconnectEnabled = true
+  let privacyRoutingEnabled = false
   let performanceHistory = new Map<string, {
     totalAttempts: number
     successfulConnections: number
@@ -106,6 +108,43 @@
       }
 
       return { valid: true, error: '' }
+  }
+
+  async function enablePrivacyRouting() {
+      if (!privacyRoutingEnabled) return
+
+      const onlineProxies = $proxyNodes.filter(node => node.status === 'online' && node.address)
+      if (onlineProxies.length === 0) {
+          console.warn('No online proxy nodes available for routing')
+          return
+      }
+
+      try {
+          // Call backend to enable privacy routing through available proxies
+          const proxyAddresses = onlineProxies.map(node => node.address)
+          await invoke('enable_privacy_routing', { proxyAddresses })
+          console.log('Privacy routing enabled through proxies:', proxyAddresses)
+      } catch (error) {
+          console.error('Failed to enable privacy routing:', error)
+      }
+  }
+
+  async function disablePrivacyRouting() {
+      try {
+          await invoke('disable_privacy_routing')
+          console.log('Privacy routing disabled')
+      } catch (error) {
+          console.error('Failed to disable privacy routing:', error)
+      }
+  }
+
+  // React to privacy routing toggle changes
+  $: {
+      if (privacyRoutingEnabled) {
+          enablePrivacyRouting()
+      } else {
+          disablePrivacyRouting()
+      }
   }
 
   function updatePerformanceHistory(address: string, success: boolean, latency?: number) {
@@ -350,6 +389,12 @@
               <div class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
               <span class="text-xs text-green-600 font-medium">Protected</span>
             </div>
+            {#if privacyRoutingEnabled}
+              <div class="flex items-center gap-1 mt-1">
+                <div class="w-2 h-2 bg-purple-500 rounded-full animate-pulse"></div>
+                <span class="text-xs text-purple-600 font-medium">Traffic Routed</span>
+              </div>
+            {/if}
           {:else}
             <div class="flex items-center gap-1 mt-1">
               <div class="w-2 h-2 bg-red-500 rounded-full"></div>
@@ -386,8 +431,8 @@
   </div>
   
   <Card class="p-6">
-    <div class="flex items-center justify-between mb-4">
-      <div class="flex items-center gap-3">
+    <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-4">
+      <div class="flex items-center gap-4">
         <h2 class="text-lg font-semibold">{$t('proxy.settings')}</h2>
         {#if proxyEnabled}
           <div class="flex items-center gap-1 px-2 py-1 bg-green-100 rounded-full">
@@ -401,8 +446,34 @@
           </div>
         {/if}
       </div>
-      <div class="flex items-center gap-6">
-        <div class="flex items-center gap-3">
+      <div class="flex flex-col md:flex-row md:items-center gap-3 md:gap-4">
+        <div class="flex items-center justify-between gap-3">
+          <span class="text-sm font-medium transition-colors duration-300 {privacyRoutingEnabled ? 'text-purple-600' : 'text-gray-500'}">Privacy Routing</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={privacyRoutingEnabled}
+            aria-label="Toggle privacy routing {privacyRoutingEnabled ? 'off' : 'on'}"
+            on:click={() => (privacyRoutingEnabled = !privacyRoutingEnabled)}
+            class="group relative inline-flex h-6 w-11 items-center rounded-full transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 flex-shrink-0
+               {privacyRoutingEnabled ? 'bg-purple-500 focus:ring-purple-500 shadow-lg shadow-purple-500/30' : 'bg-gray-300 focus:ring-gray-400'}"
+            >
+            <span
+              class="inline-block h-4 w-4 transform rounded-full bg-white transition-all duration-300 shadow-lg
+                 {privacyRoutingEnabled ? 'translate-x-6' : 'translate-x-1'}"
+            >
+              <!-- Mini icon inside toggle -->
+              <div class="flex items-center justify-center w-full h-full">
+                {#if privacyRoutingEnabled}
+                  <ShieldCheck class="h-2 w-2 text-purple-500" />
+                {:else}
+                  <ShieldX class="h-2 w-2 text-gray-400" />
+                {/if}
+              </div>
+            </span>
+          </button>
+        </div>
+        <div class="flex items-center justify-between gap-3">
           <span class="text-sm font-medium transition-colors duration-300 {autoReconnectEnabled ? 'text-blue-600' : 'text-gray-500'}">{$t('proxy.autoReconnect')}</span>
           <button
             type="button"
@@ -410,25 +481,25 @@
             aria-checked={autoReconnectEnabled}
             aria-label="Toggle auto-reconnect {autoReconnectEnabled ? 'off' : 'on'}"
             on:click={() => (autoReconnectEnabled = !autoReconnectEnabled)}
-            class="group relative inline-flex h-7 w-12 items-center rounded-full transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2
+            class="group relative inline-flex h-6 w-11 items-center rounded-full transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 flex-shrink-0
                {autoReconnectEnabled ? 'bg-blue-500 focus:ring-blue-500 shadow-lg shadow-blue-500/30' : 'bg-gray-300 focus:ring-gray-400'}"
             >
             <span
-              class="inline-block h-5 w-5 transform rounded-full bg-white transition-all duration-300 shadow-lg
+              class="inline-block h-4 w-4 transform rounded-full bg-white transition-all duration-300 shadow-lg
                  {autoReconnectEnabled ? 'translate-x-6' : 'translate-x-1'}"
             >
               <!-- Mini icon inside toggle -->
               <div class="flex items-center justify-center w-full h-full">
                 {#if autoReconnectEnabled}
-                  <Activity class="h-2.5 w-2.5 text-blue-500" />
+                  <Activity class="h-2 w-2 text-blue-500" />
                 {:else}
-                  <Activity class="h-2.5 w-2.5 text-gray-400" />
+                  <Activity class="h-2 w-2 text-gray-400" />
                 {/if}
               </div>
             </span>
           </button>
         </div>
-        <div class="flex items-center gap-3">
+        <div class="flex items-center justify-between gap-3">
           <span class="text-sm font-medium transition-colors duration-300 {proxyEnabled ? 'text-green-600' : 'text-gray-500'}">{$t('proxy.proxy')}</span>
           <button
           type="button"
@@ -436,19 +507,19 @@
           aria-checked={proxyEnabled}
           aria-label="Toggle proxy {proxyEnabled ? 'off' : 'on'}"
           on:click={() => (proxyEnabled = !proxyEnabled)}
-          class="group relative inline-flex h-7 w-12 items-center rounded-full transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2
+          class="group relative inline-flex h-6 w-11 items-center rounded-full transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 flex-shrink-0
              {proxyEnabled ? 'bg-green-500 focus:ring-green-500 shadow-lg shadow-green-500/30' : 'bg-gray-300 focus:ring-gray-400'}"
           >
           <span
-            class="inline-block h-5 w-5 transform rounded-full bg-white transition-all duration-300 shadow-lg
+            class="inline-block h-4 w-4 transform rounded-full bg-white transition-all duration-300 shadow-lg
                {proxyEnabled ? 'translate-x-6' : 'translate-x-1'}"
           >
             <!-- Mini icon inside toggle -->
             <div class="flex items-center justify-center w-full h-full">
               {#if proxyEnabled}
-                <ShieldCheck class="h-2.5 w-2.5 text-green-500" />
+                <ShieldCheck class="h-2 w-2 text-green-500" />
               {:else}
-                <ShieldX class="h-2.5 w-2.5 text-gray-400" />
+                <ShieldX class="h-2 w-2 text-gray-400" />
               {/if}
             </div>
           </span>
