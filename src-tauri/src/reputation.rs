@@ -347,6 +347,153 @@ impl ReputationDhtService {
     }
 }
 
+// ============================================================================
+// SMART CONTRACT INTEGRATION
+// ============================================================================
+
+pub struct ReputationContract {
+    contract_address: Option<String>,
+    network_id: u64,
+}
+
+impl ReputationContract {
+    pub fn new(network_id: u64) -> Self {
+        Self {
+            contract_address: None,
+            network_id,
+        }
+    }
+
+    pub fn set_contract_address(&mut self, address: String) {
+        self.contract_address = Some(address);
+    }
+
+    pub async fn submit_epoch(
+        &self,
+        epoch: &ReputationEpoch,
+        private_key: &str,
+    ) -> Result<String, String> {
+        // In a real implementation, this would:
+        // 1. Connect to Ethereum network
+        // 2. Create transaction to submitEpoch function
+        // 3. Sign transaction with private key
+        // 4. Send transaction and wait for confirmation
+        // 5. Return transaction hash
+        
+        // For now, return a mock transaction hash
+        Ok(format!("0x{:x}", epoch.epoch_id))
+    }
+
+    pub async fn get_epoch(&self, epoch_id: u64) -> Result<Option<ReputationEpoch>, String> {
+        // In a real implementation, this would:
+        // 1. Connect to Ethereum network
+        // 2. Call getEpoch function on contract
+        // 3. Parse returned data into ReputationEpoch
+        // 4. Return epoch data
+        
+        // For now, return None as placeholder
+        Ok(None)
+    }
+
+    pub async fn verify_event_proof(
+        &self,
+        event_hash: &str,
+        proof: Vec<String>,
+        epoch_id: u64,
+    ) -> Result<bool, String> {
+        // In a real implementation, this would:
+        // 1. Connect to Ethereum network
+        // 2. Call verifyEvent function on contract
+        // 3. Return verification result
+        
+        // For now, return true as placeholder
+        Ok(true)
+    }
+
+    pub fn get_contract_address(&self) -> Option<&String> {
+        self.contract_address.as_ref()
+    }
+
+    pub fn get_network_id(&self) -> u64 {
+        self.network_id
+    }
+}
+
+pub struct ReputationSystem {
+    merkle_tree: ReputationMerkleTree,
+    dht_service: ReputationDhtService,
+    contract: ReputationContract,
+    key_manager: NodeKeyManager,
+    key_cache: PublicKeyCache,
+    current_epoch: u64,
+}
+
+impl ReputationSystem {
+    pub fn new(network_id: u64) -> Self {
+        Self {
+            merkle_tree: ReputationMerkleTree::new(),
+            dht_service: ReputationDhtService::new(),
+            contract: ReputationContract::new(network_id),
+            key_manager: NodeKeyManager::new(),
+            key_cache: PublicKeyCache::new(),
+            current_epoch: 0,
+        }
+    }
+
+    pub fn set_dht_service(&mut self, dht_service: Arc<crate::dht::DhtService>) {
+        self.dht_service.set_dht_service(dht_service);
+    }
+
+    pub fn set_contract_address(&mut self, address: String) {
+        self.contract.set_contract_address(address);
+    }
+
+    pub async fn add_reputation_event(&mut self, mut event: ReputationEvent) -> Result<(), String> {
+        // Sign the event
+        event = self.key_manager.sign_reputation_event(event)?;
+        
+        // Add to Merkle tree
+        self.merkle_tree.add_event(event.clone())?;
+        
+        // Store in DHT
+        self.dht_service.store_reputation_event(&event).await?;
+        
+        Ok(())
+    }
+
+    pub async fn finalize_epoch(&mut self) -> Result<String, String> {
+        let epoch_id = self.current_epoch;
+        let merkle_root = self.merkle_tree.get_root_hex()
+            .ok_or("No events in current epoch")?;
+        let event_count = self.merkle_tree.get_events().len();
+        
+        let epoch = ReputationEpoch {
+            epoch_id,
+            merkle_root,
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            block_number: None,
+            event_count,
+            submitter: self.key_manager.get_peer_id().to_string(),
+        };
+
+        // Store epoch in DHT
+        self.dht_service.store_merkle_root(&epoch).await?;
+        
+        // Submit to smart contract
+        let private_key = "mock_private_key"; // In real implementation, get from secure storage
+        let tx_hash = self.contract.submit_epoch(&epoch, private_key).await?;
+        
+        // Reset for next epoch
+        self.merkle_tree = ReputationMerkleTree::new();
+        self.current_epoch += 1;
+        
+        Ok(tx_hash)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -482,5 +629,33 @@ mod tests {
         let result = rt.block_on(dht_service.store_reputation_event(&event));
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("DHT service not initialized"));
+    }
+
+    #[test]
+    fn test_reputation_contract_creation() {
+        let contract = ReputationContract::new(98765);
+        assert_eq!(contract.get_network_id(), 98765);
+        assert!(contract.get_contract_address().is_none());
+    }
+
+    #[test]
+    fn test_reputation_contract_address() {
+        let mut contract = ReputationContract::new(98765);
+        contract.set_contract_address("0x1234567890abcdef".to_string());
+        assert_eq!(contract.get_contract_address().unwrap(), "0x1234567890abcdef");
+    }
+
+    #[test]
+    fn test_reputation_system_creation() {
+        let system = ReputationSystem::new(98765);
+        assert_eq!(system.contract.get_network_id(), 98765);
+        assert_eq!(system.current_epoch, 0);
+    }
+
+    #[test]
+    fn test_reputation_system_contract_address() {
+        let mut system = ReputationSystem::new(98765);
+        system.set_contract_address("0xabcdef1234567890".to_string());
+        assert_eq!(system.contract.get_contract_address().unwrap(), "0xabcdef1234567890");
     }
 }
