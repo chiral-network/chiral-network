@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::collections::HashMap;
+use std::sync::Arc;
 use rs_merkle::{Hasher, MerkleTree};
 use sha2::{Digest, Sha256};
 use ed25519_dalek::{SigningKey, VerifyingKey, Signer, Verifier, Signature};
@@ -250,6 +251,102 @@ impl PublicKeyCache {
     }
 }
 
+// ============================================================================
+// DHT STORAGE FOR REPUTATION DATA
+// ============================================================================
+
+pub struct ReputationDhtService {
+    dht_service: Option<Arc<crate::dht::DhtService>>,
+}
+
+impl ReputationDhtService {
+    pub fn new() -> Self {
+        Self {
+            dht_service: None,
+        }
+    }
+
+    pub fn set_dht_service(&mut self, dht_service: Arc<crate::dht::DhtService>) {
+        self.dht_service = Some(dht_service);
+    }
+
+    pub async fn store_reputation_event(&self, event: &ReputationEvent) -> Result<(), String> {
+        let dht_service = self.dht_service.as_ref()
+            .ok_or("DHT service not initialized")?;
+
+        // Create a unique key for this reputation event
+        let key = format!("reputation:{}:{}", event.peer_id, event.id);
+        
+        // Serialize the event
+        let serialized = serde_json::to_vec(event)
+            .map_err(|e| format!("Serialization error: {}", e))?;
+
+        // Store in DHT (using existing file metadata structure as template)
+        let metadata = crate::dht::FileMetadata {
+            file_hash: key.clone(),
+            file_name: format!("reputation_{}.json", event.id),
+            file_size: serialized.len() as u64,
+            file_data: serialized,
+            seeders: vec![event.rater_peer_id.clone()],
+            created_at: event.timestamp,
+            mime_type: Some("application/json".to_string()),
+            is_encrypted: false,
+            encryption_method: None,
+            key_fingerprint: None,
+            merkle_root: None,
+            version: Some(1),
+            parent_hash: None,
+            cids: None, // Not needed for reputation events
+            is_root: true,
+        };
+
+        dht_service.publish_file(metadata).await
+    }
+
+    pub async fn retrieve_reputation_events(&self, peer_id: &str) -> Result<Vec<ReputationEvent>, String> {
+        let dht_service = self.dht_service.as_ref()
+            .ok_or("DHT service not initialized")?;
+
+        // Search for reputation events for this peer
+        let search_key = format!("reputation:{}", peer_id);
+        dht_service.search_file(search_key).await?;
+
+        // Note: In a real implementation, we would need to handle the search results
+        // and deserialize the events. For now, return empty vector as placeholder.
+        Ok(vec![])
+    }
+
+    pub async fn store_merkle_root(&self, epoch: &ReputationEpoch) -> Result<(), String> {
+        let dht_service = self.dht_service.as_ref()
+            .ok_or("DHT service not initialized")?;
+
+        let key = format!("merkle_root:{}", epoch.epoch_id);
+        
+        let serialized = serde_json::to_vec(epoch)
+            .map_err(|e| format!("Serialization error: {}", e))?;
+
+        let metadata = crate::dht::FileMetadata {
+            file_hash: key.clone(),
+            file_name: format!("merkle_root_{}.json", epoch.epoch_id),
+            file_size: serialized.len() as u64,
+            file_data: serialized,
+            seeders: vec![epoch.submitter.clone()],
+            created_at: epoch.timestamp,
+            mime_type: Some("application/json".to_string()),
+            is_encrypted: false,
+            encryption_method: None,
+            key_fingerprint: None,
+            merkle_root: Some(epoch.merkle_root.clone()),
+            version: Some(1),
+            parent_hash: None,
+            cids: None, // Not needed for merkle roots
+            is_root: true,
+        };
+
+        dht_service.publish_file(metadata).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,5 +457,30 @@ mod tests {
         // Test with non-existent peer
         let non_existent = cache.get_peer_key("non-existent");
         assert!(non_existent.is_none());
+    }
+
+    #[test]
+    fn test_reputation_dht_service_creation() {
+        let dht_service = ReputationDhtService::new();
+        assert!(dht_service.dht_service.is_none());
+    }
+
+    #[test]
+    fn test_reputation_dht_service_without_dht() {
+        let dht_service = ReputationDhtService::new();
+        let event = ReputationEvent::new(
+            "test-event".to_string(),
+            "target-peer".to_string(),
+            "rater-peer".to_string(),
+            EventType::FileTransferSuccess,
+            serde_json::json!({"test": "data"}),
+            0.5,
+        );
+
+        // This should fail because DHT service is not initialized
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(dht_service.store_reputation_event(&event));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("DHT service not initialized"));
     }
 }
