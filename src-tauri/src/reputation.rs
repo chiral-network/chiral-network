@@ -494,6 +494,209 @@ impl ReputationSystem {
     }
 }
 
+// ============================================================================
+// EPOCH MANAGEMENT AND ANCHORING
+// ============================================================================
+
+pub struct EpochManager {
+    current_epoch: u64,
+    epoch_duration_seconds: u64,
+    max_events_per_epoch: usize,
+    last_epoch_time: u64,
+    auto_anchor_enabled: bool,
+}
+
+impl EpochManager {
+    pub fn new(epoch_duration_seconds: u64, max_events_per_epoch: usize) -> Self {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+            
+        Self {
+            current_epoch: 0,
+            epoch_duration_seconds,
+            max_events_per_epoch,
+            last_epoch_time: now,
+            auto_anchor_enabled: true,
+        }
+    }
+
+    pub fn should_finalize_epoch(&self, event_count: usize) -> bool {
+        if !self.auto_anchor_enabled {
+            return false;
+        }
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // Finalize if time limit reached
+        let time_elapsed = now - self.last_epoch_time;
+        if time_elapsed >= self.epoch_duration_seconds {
+            return true;
+        }
+
+        // Finalize if event count limit reached
+        if event_count >= self.max_events_per_epoch {
+            return true;
+        }
+
+        false
+    }
+
+    pub fn get_current_epoch(&self) -> u64 {
+        self.current_epoch
+    }
+
+    pub fn advance_epoch(&mut self) {
+        self.current_epoch += 1;
+        self.last_epoch_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+    }
+
+    pub fn set_auto_anchor(&mut self, enabled: bool) {
+        self.auto_anchor_enabled = enabled;
+    }
+
+    pub fn get_epoch_info(&self) -> (u64, u64, usize, bool) {
+        (
+            self.current_epoch,
+            self.epoch_duration_seconds,
+            self.max_events_per_epoch,
+            self.auto_anchor_enabled,
+        )
+    }
+
+    pub fn get_time_until_next_epoch(&self) -> u64 {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        
+        let elapsed = now - self.last_epoch_time;
+        if elapsed >= self.epoch_duration_seconds {
+            0
+        } else {
+            self.epoch_duration_seconds - elapsed
+        }
+    }
+}
+
+pub struct ReputationSystemWithEpochs {
+    merkle_tree: ReputationMerkleTree,
+    dht_service: ReputationDhtService,
+    contract: ReputationContract,
+    key_manager: NodeKeyManager,
+    key_cache: PublicKeyCache,
+    epoch_manager: EpochManager,
+    pending_events: Vec<ReputationEvent>,
+}
+
+impl ReputationSystemWithEpochs {
+    pub fn new(network_id: u64, epoch_duration_seconds: u64, max_events_per_epoch: usize) -> Self {
+        Self {
+            merkle_tree: ReputationMerkleTree::new(),
+            dht_service: ReputationDhtService::new(),
+            contract: ReputationContract::new(network_id),
+            key_manager: NodeKeyManager::new(),
+            key_cache: PublicKeyCache::new(),
+            epoch_manager: EpochManager::new(epoch_duration_seconds, max_events_per_epoch),
+            pending_events: Vec::new(),
+        }
+    }
+
+    pub fn set_dht_service(&mut self, dht_service: Arc<crate::dht::DhtService>) {
+        self.dht_service.set_dht_service(dht_service);
+    }
+
+    pub fn set_contract_address(&mut self, address: String) {
+        self.contract.set_contract_address(address);
+    }
+
+    pub async fn add_reputation_event(&mut self, mut event: ReputationEvent) -> Result<Option<String>, String> {
+        // Set epoch for the event
+        event.epoch = Some(self.epoch_manager.get_current_epoch());
+        
+        // Sign the event
+        event = self.key_manager.sign_reputation_event(event)?;
+        
+        // Add to pending events
+        self.pending_events.push(event.clone());
+        
+        // Add to Merkle tree
+        self.merkle_tree.add_event(event.clone())?;
+        
+        // Store in DHT
+        self.dht_service.store_reputation_event(&event).await?;
+        
+        // Check if epoch should be finalized
+        if self.epoch_manager.should_finalize_epoch(self.pending_events.len()) {
+            let tx_hash = self.finalize_current_epoch().await?;
+            return Ok(Some(tx_hash));
+        }
+        
+        Ok(None)
+    }
+
+    pub async fn finalize_current_epoch(&mut self) -> Result<String, String> {
+        if self.pending_events.is_empty() {
+            return Err("No events to finalize".to_string());
+        }
+
+        let epoch_id = self.epoch_manager.get_current_epoch();
+        let merkle_root = self.merkle_tree.get_root_hex()
+            .ok_or("Failed to get Merkle root")?;
+        let event_count = self.pending_events.len();
+        
+        let epoch = ReputationEpoch {
+            epoch_id,
+            merkle_root,
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            block_number: None,
+            event_count,
+            submitter: self.key_manager.get_peer_id().to_string(),
+        };
+
+        // Store epoch in DHT
+        self.dht_service.store_merkle_root(&epoch).await?;
+        
+        // Submit to smart contract
+        let private_key = "mock_private_key";
+        let tx_hash = self.contract.submit_epoch(&epoch, private_key).await?;
+        
+        // Reset for next epoch
+        self.merkle_tree = ReputationMerkleTree::new();
+        self.pending_events.clear();
+        self.epoch_manager.advance_epoch();
+        
+        Ok(tx_hash)
+    }
+
+    pub fn get_epoch_status(&self) -> (u64, usize, u64, bool) {
+        (
+            self.epoch_manager.get_current_epoch(),
+            self.pending_events.len(),
+            self.epoch_manager.get_time_until_next_epoch(),
+            self.epoch_manager.auto_anchor_enabled,
+        )
+    }
+
+    pub fn set_auto_anchor(&mut self, enabled: bool) {
+        self.epoch_manager.set_auto_anchor(enabled);
+    }
+
+    pub fn get_pending_events(&self) -> &[ReputationEvent] {
+        &self.pending_events
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -657,5 +860,83 @@ mod tests {
         let mut system = ReputationSystem::new(98765);
         system.set_contract_address("0xabcdef1234567890".to_string());
         assert_eq!(system.contract.get_contract_address().unwrap(), "0xabcdef1234567890");
+    }
+
+    #[test]
+    fn test_epoch_manager_creation() {
+        let manager = EpochManager::new(3600, 100); // 1 hour, 100 events max
+        let (current_epoch, duration, max_events, auto_anchor) = manager.get_epoch_info();
+        
+        assert_eq!(current_epoch, 0);
+        assert_eq!(duration, 3600);
+        assert_eq!(max_events, 100);
+        assert!(auto_anchor);
+    }
+
+    #[test]
+    fn test_epoch_manager_should_finalize() {
+        let manager = EpochManager::new(1, 5); // 1 second, 5 events max
+        
+        // Should not finalize with few events
+        assert!(!manager.should_finalize_epoch(3));
+        
+        // Should finalize when event count limit reached
+        assert!(manager.should_finalize_epoch(5));
+        assert!(manager.should_finalize_epoch(10));
+    }
+
+    #[test]
+    fn test_epoch_manager_advance() {
+        let mut manager = EpochManager::new(3600, 100);
+        assert_eq!(manager.get_current_epoch(), 0);
+        
+        manager.advance_epoch();
+        assert_eq!(manager.get_current_epoch(), 1);
+        
+        manager.advance_epoch();
+        assert_eq!(manager.get_current_epoch(), 2);
+    }
+
+    #[test]
+    fn test_epoch_manager_auto_anchor() {
+        let mut manager = EpochManager::new(3600, 100);
+        assert!(manager.auto_anchor_enabled);
+        
+        manager.set_auto_anchor(false);
+        assert!(!manager.auto_anchor_enabled);
+        
+        // Should not finalize when auto-anchor is disabled
+        assert!(!manager.should_finalize_epoch(1000));
+    }
+
+    #[test]
+    fn test_reputation_system_with_epochs_creation() {
+        let system = ReputationSystemWithEpochs::new(98765, 3600, 100);
+        let (epoch, pending, time_left, auto_anchor) = system.get_epoch_status();
+        
+        assert_eq!(epoch, 0);
+        assert_eq!(pending, 0);
+        assert!(time_left <= 3600);
+        assert!(auto_anchor);
+    }
+
+    #[test]
+    fn test_reputation_system_with_epochs_auto_anchor() {
+        let mut system = ReputationSystemWithEpochs::new(98765, 1, 2); // 1 second, 2 events max
+        
+        system.set_auto_anchor(false);
+        let (_, _, _, auto_anchor) = system.get_epoch_status();
+        assert!(!auto_anchor);
+        
+        system.set_auto_anchor(true);
+        let (_, _, _, auto_anchor) = system.get_epoch_status();
+        assert!(auto_anchor);
+    }
+
+    #[test]
+    fn test_reputation_system_with_epochs_pending_events() {
+        let system = ReputationSystemWithEpochs::new(98765, 3600, 100);
+        let pending_events = system.get_pending_events();
+        assert_eq!(pending_events.len(), 0);
     }
 }
