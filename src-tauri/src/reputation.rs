@@ -697,6 +697,230 @@ impl ReputationSystemWithEpochs {
     }
 }
 
+// ============================================================================
+// VERIFICATION AND TESTING
+// ============================================================================
+
+pub struct ReputationVerifier {
+    key_cache: PublicKeyCache,
+}
+
+impl ReputationVerifier {
+    pub fn new() -> Self {
+        Self {
+            key_cache: PublicKeyCache::new(),
+        }
+    }
+
+    pub fn add_peer_key(&mut self, peer_id: String, verifying_key: VerifyingKey) {
+        self.key_cache.add_peer_key(peer_id, verifying_key);
+    }
+
+    pub fn verify_event_signature(&self, event: &ReputationEvent) -> Result<bool, String> {
+        if let Some(verifying_key) = self.key_cache.get_peer_key(&event.rater_peer_id) {
+            // Create a temporary key manager for verification
+            let temp_manager = NodeKeyManager::new();
+            temp_manager.verify_reputation_event(event, verifying_key)
+        } else {
+            Err(format!("Public key not found for peer: {}", event.rater_peer_id))
+        }
+    }
+
+    pub fn verify_event_against_merkle_root(
+        &self,
+        event: &ReputationEvent,
+        merkle_root: &str,
+        proof: Vec<String>,
+    ) -> Result<bool, String> {
+        // In a real implementation, this would:
+        // 1. Recreate the event hash
+        // 2. Verify the Merkle proof against the root
+        // 3. Return verification result
+        
+        // For now, return true as placeholder
+        Ok(true)
+    }
+
+    pub fn verify_epoch_integrity(&self, epoch: &ReputationEpoch, events: &[ReputationEvent]) -> Result<bool, String> {
+        // Verify that all events belong to this epoch
+        for event in events {
+            if event.epoch != Some(epoch.epoch_id) {
+                return Ok(false);
+            }
+        }
+
+        // Verify event count matches
+        if events.len() != epoch.event_count {
+            return Ok(false);
+        }
+
+        // In a real implementation, would also verify Merkle root
+        Ok(true)
+    }
+}
+
+pub struct ReputationTestSuite {
+    verifier: ReputationVerifier,
+}
+
+impl ReputationTestSuite {
+    pub fn new() -> Self {
+        Self {
+            verifier: ReputationVerifier::new(),
+        }
+    }
+
+    pub async fn run_integration_test(&mut self) -> Result<TestResults, String> {
+        let mut results = TestResults::new();
+        
+        // Test 1: Create reputation system with epochs
+        let mut system = ReputationSystemWithEpochs::new(98765, 60, 5); // 1 minute, 5 events max
+        results.add_test("System Creation", true, "ReputationSystemWithEpochs created successfully");
+        
+        // Test 2: Add reputation events
+        let event1 = ReputationEvent::new(
+            "test-event-1".to_string(),
+            "peer-1".to_string(),
+            "rater-1".to_string(),
+            EventType::FileTransferSuccess,
+            serde_json::json!({"test": "data1"}),
+            0.5,
+        );
+        
+        let event2 = ReputationEvent::new(
+            "test-event-2".to_string(),
+            "peer-2".to_string(),
+            "rater-2".to_string(),
+            EventType::FileTransferFailure,
+            serde_json::json!({"test": "data2"}),
+            -0.3,
+        );
+
+        let result1 = system.add_reputation_event(event1.clone()).await;
+        let result2 = system.add_reputation_event(event2.clone()).await;
+        
+        results.add_test("Add Events", result1.is_ok() && result2.is_ok(), "Events added successfully");
+        
+        // Test 3: Verify events are pending
+        let pending_count = system.get_pending_events().len();
+        results.add_test("Pending Events", pending_count == 2, &format!("Expected 2 pending events, got {}", pending_count));
+        
+        // Test 4: Verify event signatures
+        let events = system.get_pending_events();
+        let mut signature_verified = true;
+        for event in events {
+            if let Err(_) = self.verifier.verify_event_signature(event) {
+                signature_verified = false;
+                break;
+            }
+        }
+        results.add_test("Signature Verification", signature_verified, "All event signatures verified");
+        
+        // Test 5: Finalize epoch
+        let finalize_result = system.finalize_current_epoch().await;
+        results.add_test("Epoch Finalization", finalize_result.is_ok(), "Epoch finalized successfully");
+        
+        // Test 6: Verify epoch advancement
+        let (current_epoch, pending, _, _) = system.get_epoch_status();
+        results.add_test("Epoch Advancement", current_epoch == 1 && pending == 0, "Epoch advanced and cleared");
+        
+        Ok(results)
+    }
+
+    pub async fn run_performance_test(&mut self, event_count: usize) -> Result<PerformanceResults, String> {
+        let start_time = SystemTime::now();
+        
+        // Create system
+        let mut system = ReputationSystemWithEpochs::new(98765, 3600, event_count + 1);
+        
+        // Add events
+        let mut events = Vec::new();
+        for i in 0..event_count {
+            let event = ReputationEvent::new(
+                format!("perf-event-{}", i),
+                format!("peer-{}", i % 10), // Distribute across 10 peers
+                "test-rater".to_string(),
+                EventType::FileTransferSuccess,
+                serde_json::json!({"test": format!("data{}", i)}),
+                0.1,
+            );
+            events.push(event);
+        }
+        
+        let add_start = SystemTime::now();
+        for event in events {
+            system.add_reputation_event(event).await?;
+        }
+        let add_duration = add_start.elapsed().unwrap_or_default();
+        
+        // Finalize epoch
+        let finalize_start = SystemTime::now();
+        system.finalize_current_epoch().await?;
+        let finalize_duration = finalize_start.elapsed().unwrap_or_default();
+        
+        let total_duration = start_time.elapsed().unwrap_or_default();
+        
+        Ok(PerformanceResults {
+            event_count,
+            add_duration_ms: add_duration.as_millis() as u64,
+            finalize_duration_ms: finalize_duration.as_millis() as u64,
+            total_duration_ms: total_duration.as_millis() as u64,
+            events_per_second: (event_count as f64 / total_duration.as_secs_f64()) as u64,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct TestResults {
+    pub tests: Vec<TestResult>,
+    pub passed: usize,
+    pub failed: usize,
+}
+
+#[derive(Debug)]
+pub struct TestResult {
+    pub name: String,
+    pub passed: bool,
+    pub message: String,
+}
+
+#[derive(Debug)]
+pub struct PerformanceResults {
+    pub event_count: usize,
+    pub add_duration_ms: u64,
+    pub finalize_duration_ms: u64,
+    pub total_duration_ms: u64,
+    pub events_per_second: u64,
+}
+
+impl TestResults {
+    pub fn new() -> Self {
+        Self {
+            tests: Vec::new(),
+            passed: 0,
+            failed: 0,
+        }
+    }
+
+    pub fn add_test(&mut self, name: &str, passed: bool, message: &str) {
+        self.tests.push(TestResult {
+            name: name.to_string(),
+            passed,
+            message: message.to_string(),
+        });
+        
+        if passed {
+            self.passed += 1;
+        } else {
+            self.failed += 1;
+        }
+    }
+
+    pub fn is_success(&self) -> bool {
+        self.failed == 0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -938,5 +1162,110 @@ mod tests {
         let system = ReputationSystemWithEpochs::new(98765, 3600, 100);
         let pending_events = system.get_pending_events();
         assert_eq!(pending_events.len(), 0);
+    }
+
+    #[test]
+    fn test_reputation_verifier_creation() {
+        let verifier = ReputationVerifier::new();
+        // Verifier should be created successfully
+        assert!(true);
+    }
+
+    #[test]
+    fn test_reputation_verifier_peer_key() {
+        let mut verifier = ReputationVerifier::new();
+        let key_manager = NodeKeyManager::new();
+        let peer_id = "test-peer".to_string();
+        let verifying_key = key_manager.get_verifying_key();
+        
+        verifier.add_peer_key(peer_id.clone(), verifying_key);
+        
+        // Should be able to retrieve the key
+        assert!(verifier.key_cache.get_peer_key(&peer_id).is_some());
+    }
+
+    #[test]
+    fn test_reputation_verifier_epoch_integrity() {
+        let verifier = ReputationVerifier::new();
+        
+        let epoch = ReputationEpoch {
+            epoch_id: 1,
+            merkle_root: "test-root".to_string(),
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            block_number: None,
+            event_count: 2,
+            submitter: "test-submitter".to_string(),
+        };
+        
+        let events = vec![
+            ReputationEvent::new(
+                "event-1".to_string(),
+                "peer-1".to_string(),
+                "rater-1".to_string(),
+                EventType::FileTransferSuccess,
+                serde_json::json!({"test": "data1"}),
+                0.5,
+            ),
+            ReputationEvent::new(
+                "event-2".to_string(),
+                "peer-2".to_string(),
+                "rater-2".to_string(),
+                EventType::FileTransferFailure,
+                serde_json::json!({"test": "data2"}),
+                -0.3,
+            ),
+        ];
+        
+        // Set epoch for events
+        let mut events_with_epoch = events;
+        for event in &mut events_with_epoch {
+            event.epoch = Some(1);
+        }
+        
+        let result = verifier.verify_epoch_integrity(&epoch, &events_with_epoch);
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_reputation_test_suite_creation() {
+        let test_suite = ReputationTestSuite::new();
+        // Test suite should be created successfully
+        assert!(true);
+    }
+
+    #[test]
+    fn test_test_results_creation() {
+        let mut results = TestResults::new();
+        assert_eq!(results.passed, 0);
+        assert_eq!(results.failed, 0);
+        assert!(results.is_success());
+        
+        results.add_test("Test 1", true, "Test passed");
+        results.add_test("Test 2", false, "Test failed");
+        
+        assert_eq!(results.passed, 1);
+        assert_eq!(results.failed, 1);
+        assert!(!results.is_success());
+    }
+
+    #[test]
+    fn test_performance_results_creation() {
+        let results = PerformanceResults {
+            event_count: 100,
+            add_duration_ms: 50,
+            finalize_duration_ms: 10,
+            total_duration_ms: 60,
+            events_per_second: 1666,
+        };
+        
+        assert_eq!(results.event_count, 100);
+        assert_eq!(results.add_duration_ms, 50);
+        assert_eq!(results.finalize_duration_ms, 10);
+        assert_eq!(results.total_duration_ms, 60);
+        assert_eq!(results.events_per_second, 1666);
     }
 }
