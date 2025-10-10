@@ -144,19 +144,32 @@ export class WalletService {
     await Promise.allSettled([this.refreshBalance(), this.refreshTransactions()]);
   }
 
+  
   async refreshTransactions(): Promise<void> {
     const account = get(etcAccount);
     if (!account || !this.isTauri) {
       return;
     }
-
+  
     try {
-      const blocks = (await invoke('get_recent_mined_blocks_pub', {
-        address: account.address,
-        lookback: 2000,
-        limit: 50,
-      })) as Array<{ hash: string; timestamp: number; reward?: number }>;
-
+      // Get data in parallel
+      const [blocks, totalBlockCount] = await Promise.all([
+        invoke('get_recent_mined_blocks_pub', {
+          address: account.address,
+          lookback: 2000,
+          limit: 50,
+        }) as Promise<Array<{ hash: string; timestamp: number; reward?: number }>>,
+        invoke('get_blocks_mined', {
+          address: account.address,
+        }) as Promise<number>
+      ]);
+  
+      // Update total count FIRST, before adding blocks
+      miningState.update((state) => ({
+        ...state,
+        blocksFound: totalBlockCount,
+      }));
+  
       for (const block of blocks) {
         if (this.seenHashes.has(block.hash)) {
           continue;
@@ -178,28 +191,42 @@ export class WalletService {
     if (!account || !this.isTauri) {
       return;
     }
-
+  
     try {
-      const [balanceStr, blocksMined] = await Promise.all([
-        invoke('get_account_balance', { address: account.address }) as Promise<string>,
-        invoke('get_blocks_mined', { address: account.address }) as Promise<number>,
-      ]);
-
-      const realBalance = parseFloat(balanceStr);
+      // Get mining state which now has the real total block count
+      const currentMiningState = get(miningState);
+      const blocksMined = currentMiningState.blocksFound ?? 0;
+      
+      // Calculate total rewards using REAL block count
+      const totalEarned = blocksMined * 2;
+      
+      // Try to get balance from geth
+      let realBalance = 0;
+      try {
+        const balanceStr = await invoke('get_account_balance', { 
+          address: account.address 
+        }) as string;
+        realBalance = parseFloat(balanceStr);
+      } catch (e) {
+        console.warn('Could not get balance from geth:', e);
+      }
+  
+      // Calculate pending sent transactions
       const pendingSent = get(transactions)
         .filter((tx) => tx.status === 'pending' && tx.type === 'sent')
         .reduce((sum, tx) => sum + tx.amount, 0);
-
-      const actualBalance = Number.isFinite(realBalance) ? realBalance : 0;
+  
+      // If geth balance is 0 but we have mined blocks, use calculated balance
+      const actualBalance = realBalance > 0 ? realBalance : totalEarned;
       const availableBalance = Math.max(0, actualBalance - pendingSent);
-      const totalEarned = (blocksMined ?? 0) * 2;
-
+  
       wallet.update((current) => ({
         ...current,
         balance: availableBalance,
         actualBalance,
       }));
-
+  
+      // Update pending transaction status
       if (pendingSent > 0) {
         const expectedBalance = actualBalance - pendingSent;
         if (Math.abs(actualBalance - expectedBalance) < 0.01) {
@@ -212,16 +239,18 @@ export class WalletService {
           );
         }
       }
-
+  
+      // Update mining state
       miningState.update((state) => ({
         ...state,
         totalRewards: totalEarned,
-        blocksFound: blocksMined ?? state.blocksFound,
+        blocksFound: blocksMined,
       }));
     } catch (error) {
       console.error('Failed to refresh balance:', error);
     }
   }
+
 
   async ensureGethRunning(): Promise<boolean> {
     if (!this.isTauri) {
@@ -435,7 +464,7 @@ export class WalletService {
 
   private pushRecentBlock(block: { hash: string; reward?: number; timestamp?: Date }): void {
     const reward = typeof block.reward === 'number' ? block.reward : 0;
-
+  
     const newBlock = {
       id: `block-${block.hash}-${block.timestamp?.getTime() ?? Date.now()}`,
       hash: block.hash,
@@ -444,12 +473,13 @@ export class WalletService {
       difficulty: 0,
       nonce: 0,
     };
-
+  
     miningState.update((state) => ({
       ...state,
       recentBlocks: [newBlock, ...(state.recentBlocks ?? [])].slice(0, 50),
+      blocksFound: state.blocksFound ?? (state.recentBlocks?.length ?? 0) + 1,
     }));
-
+  
     if (reward > 0) {
       const last4 = block.hash.slice(-4);
       const tx: Transaction = {
