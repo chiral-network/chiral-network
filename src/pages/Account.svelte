@@ -640,6 +640,7 @@
       wallet.update(w => ({
         ...w,
         address: account.address,
+        
         pendingTransactions: 0
       }))
       importPrivateKey = ''

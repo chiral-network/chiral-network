@@ -178,28 +178,42 @@ export class WalletService {
     if (!account || !this.isTauri) {
       return;
     }
-
+  
     try {
-      const [balanceStr, blocksMined] = await Promise.all([
-        invoke('get_account_balance', { address: account.address }) as Promise<string>,
-        invoke('get_blocks_mined', { address: account.address }) as Promise<number>,
-      ]);
-
-      const realBalance = parseFloat(balanceStr);
+      // Get block data that was already loaded from miningState
+      const currentMiningState = get(miningState);
+      const blocksMined = currentMiningState.recentBlocks?.length ?? 0;
+      
+      // Calculate total rewards (real block data was already fetched in refreshTransactions)
+      const totalEarned = blocksMined * 2;
+      
+      // Try to get balance from geth
+      let realBalance = 0;
+      try {
+        const balanceStr = await invoke('get_account_balance', { 
+          address: account.address 
+        }) as string;
+        realBalance = parseFloat(balanceStr);
+      } catch (e) {
+        console.warn('Could not get balance from geth:', e);
+      }
+  
+      // Calculate pending sent transactions
       const pendingSent = get(transactions)
         .filter((tx) => tx.status === 'pending' && tx.type === 'sent')
         .reduce((sum, tx) => sum + tx.amount, 0);
-
-      const actualBalance = Number.isFinite(realBalance) ? realBalance : 0;
+  
+      // If geth balance is 0 but we have mined blocks, use calculated balance
+      const actualBalance = realBalance > 0 ? realBalance : totalEarned;
       const availableBalance = Math.max(0, actualBalance - pendingSent);
-      const totalEarned = (blocksMined ?? 0) * 2;
-
+  
       wallet.update((current) => ({
         ...current,
         balance: availableBalance,
         actualBalance,
       }));
-
+  
+      // Update pending transaction status
       if (pendingSent > 0) {
         const expectedBalance = actualBalance - pendingSent;
         if (Math.abs(actualBalance - expectedBalance) < 0.01) {
@@ -212,11 +226,12 @@ export class WalletService {
           );
         }
       }
-
+  
+      // Update mining state with real block data
       miningState.update((state) => ({
         ...state,
         totalRewards: totalEarned,
-        blocksFound: blocksMined ?? state.blocksFound,
+        blocksFound: blocksMined,
       }));
     } catch (error) {
       console.error('Failed to refresh balance:', error);
