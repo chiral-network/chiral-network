@@ -9,6 +9,7 @@
   import { get } from 'svelte/store';
   import { t } from 'svelte-i18n';
   import { dhtService } from '$lib/dht';
+  import { files } from '$lib/stores';
   import type { FileMetadata } from '$lib/dht';
   import SearchResultCard from './SearchResultCard.svelte';
   import { dhtSearchHistory, type SearchHistoryEntry, type SearchStatus } from '$lib/stores/searchHistory';
@@ -36,12 +37,44 @@
 
   const unsubscribe = dhtSearchHistory.subscribe((entries) => {
     historyEntries = entries;
-    if (!activeHistoryId && entries.length > 0) {
-      activeHistoryId = entries[0].id;
-      latestStatus = entries[0].status;
-      latestMetadata = entries[0].metadata ?? null;
-      searchError = entries[0].errorMessage ?? null;
-      hasSearched = entries.length > 0;
+    // if (!activeHistoryId && entries.length > 0) {
+    //   activeHistoryId = entries[0].id;
+    //   latestStatus = entries[0].status;
+    //   latestMetadata = entries[0].metadata ?? null;
+    //   searchError = entries[0].errorMessage ?? null;
+    //   hasSearched = entries.length > 0;
+    // }
+    if (entries.length > 0) {
+      // 1. Always set the active ID from the most recent entry for the history dropdown.
+      activeHistoryId = entries[0].id; 
+
+      // 2. Control the main UI state based on whether a search has been initiated in this session.
+      if (!hasSearched) {
+        // If it's a fresh load (hasSearched is false):
+        // Keep the input clear, and the result panel empty.
+        searchHash = ''; 
+        latestStatus = 'pending'; 
+        latestMetadata = null;
+        searchError = null;
+      } else {
+        // If the user has searched in this session, ensure the current search results are displayed.
+        const entry = entries.find(e => e.id === activeHistoryId) || entries[0];
+        if (entry) {
+          latestStatus = entry.status;
+          latestMetadata = entry.metadata ?? null;
+          searchError = entry.errorMessage ?? null;
+          searchHash = entry.hash;
+        }
+      }
+    } else {
+      activeHistoryId = null;
+      // On empty history, ensure the main state is also reset.
+      if (!hasSearched) {
+        searchHash = '';
+        latestStatus = 'pending';
+        latestMetadata = null;
+        searchError = null;
+      }
     }
   });
 
@@ -98,10 +131,10 @@
       if (searchMode === 'name') {
         // Search for file versions by name
         pushMessage('Searching for file versions...', 'info', 2000);
-        
+
         // Import invoke function for backend calls
         const { invoke } = await import("@tauri-apps/api/core");
-        
+
         const versions = await invoke('get_file_versions_by_name', { fileName: trimmed }) as any[];
         const elapsed = Math.round(performance.now() - startedAt);
         lastSearchDuration = elapsed;
@@ -115,10 +148,33 @@
           pushMessage(`No versions found for "${trimmed}"`, 'warning', 6000);
         }
       } else {
+        // First, check local files for the hash (immediate local seed)
+        const localMatch = get(files).find(f => f.hash === trimmed || f.name === trimmed);
+        if (localMatch) {
+          const metadata: FileMetadata = {
+            fileHash: localMatch.hash,
+            fileName: localMatch.name,
+            fileSize: localMatch.size || 0,
+            seeders: [ 'local_peer' ],
+            createdAt: localMatch.uploadDate ? localMatch.uploadDate.getTime() : Date.now(),
+            isEncrypted: !!localMatch.isEncrypted,
+            manifest: localMatch.manifest ? JSON.stringify(localMatch.manifest) : undefined,
+          };
+
+          latestMetadata = metadata;
+          latestStatus = 'found';
+          const entry = dhtSearchHistory.addPending(trimmed);
+          activeHistoryId = entry.id;
+          dhtSearchHistory.updateEntry(entry.id, { status: 'found', metadata, elapsedMs: Math.round(performance.now() - startedAt) });
+          pushMessage(tr('download.search.status.foundNotification', { values: { name: metadata.fileName } }), 'success');
+          isSearching = false;
+          return;
+        }
+
         // Original hash search
         const entry = dhtSearchHistory.addPending(trimmed);
         activeHistoryId = entry.id;
-        
+
         pushMessage(tr('download.search.status.started'), 'info', 2000);
         const metadata = await dhtService.searchFileMetadata(trimmed, SEARCH_TIMEOUT_MS);
         const elapsed = Math.round(performance.now() - startedAt);
@@ -153,7 +209,7 @@
       lastSearchDuration = elapsed;
       latestStatus = 'error';
       searchError = message;
-      
+
       if (searchMode === 'hash' && activeHistoryId) {
         dhtSearchHistory.updateEntry(activeHistoryId, {
           status: 'error',
@@ -161,7 +217,7 @@
           elapsedMs: elapsed,
         });
       }
-      
+
       console.error('Search failed:', error);
       pushMessage(`${tr('download.search.status.errorNotification')}: ${message}`, 'error', 6000);
     } finally {
@@ -179,10 +235,6 @@
     hasSearched = false;
   }
 
-  function handleDownload(event: CustomEvent<FileMetadata>) {
-    dispatch('download', event.detail);
-  }
-
   function handleCopy(event: CustomEvent<string>) {
     pushMessage(
       tr('download.search.notifications.copied', { values: { value: event.detail } }),
@@ -194,18 +246,18 @@
   async function downloadVersion(version: any) {
     // Convert version data to FileMetadata format for download
     const metadata: FileMetadata = {
-      fileHash: version.file_hash,
-      fileName: version.file_name,
-      fileSize: version.file_size,
+      fileHash: version.fileHash,
+      fileName: version.fileName,
+      fileSize: version.fileSize,
       seeders: version.seeders || [],
-      createdAt: version.created_at * 1000, // Convert to milliseconds
+      createdAt: version.createdAt * 1000, // Convert to milliseconds
       isEncrypted: version.is_encrypted || false,
       mimeType: version.mime_type,
       encryptionMethod: version.encryption_method,
       keyFingerprint: version.key_fingerprint,
       version: version.version
     };
-    
+
     dispatch('download', metadata);
     pushMessage(`Starting download of ${version.file_name} v${version.version}`, 'info', 3000);
   }
@@ -273,23 +325,23 @@
       <p class="text-sm text-muted-foreground mt-1 mb-3">
         {tr('download.addNewSubtitle')}
       </p>
-      
+
       <!-- Search Mode Switcher -->
       <div class="flex gap-2 mb-3">
         <button
           on:click={() => { searchMode = 'hash'; versionResults = []; }}
           class="px-3 py-1 text-sm rounded-md border transition-colors {searchMode === 'hash' ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/50 hover:bg-muted border-border'}"
         >
-          Search by Hash
+          {tr('download.searchByHash')}
         </button>
         <button
           on:click={() => { searchMode = 'name'; latestMetadata = null; }}
           class="px-3 py-1 text-sm rounded-md border transition-colors {searchMode === 'name' ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/50 hover:bg-muted border-border'}"
         >
-          Search by Name (Versions)
+          {tr('download.searchByName')}
         </button>
       </div>
-      
+
       <div class="flex flex-col sm:flex-row gap-3">
         <div class="relative flex-1 search-input-container">
           <Input
@@ -391,7 +443,7 @@
                     Search completed in {(lastSearchDuration / 1000).toFixed(1)}s
                   </p>
                 </div>
-                
+
                 <div class="space-y-2 max-h-80 overflow-y-auto">
                   {#each versionResults as version}
                     <div class="flex items-center justify-between p-3 bg-muted/50 rounded-lg hover:bg-muted/70 transition-colors">
@@ -400,13 +452,13 @@
                           v{version.version}
                         </Badge>
                         <div class="flex-1 min-w-0">
-                          <div class="font-medium text-sm truncate">{version.file_name}</div>
+                          <div class="font-medium text-sm truncate">{version.fileName}</div>
                           <div class="flex items-center gap-2 text-xs text-muted-foreground">
-                            <span>Hash: {version.file_hash.slice(0, 8)}...</span>
+                            <span>Hash: {version.fileHash.slice(0, 8)}...</span>
                             <span>•</span>
-                            <span>{(version.file_size / 1048576).toFixed(2)} MB</span>
+                            <span>{(version.fileSize / 1048576).toFixed(2)} MB</span>
                             <span>•</span>
-                            <span>{new Date(version.created_at * 1000).toLocaleDateString()}</span>
+                            <span>{new Date(version.createdAt * 1000).toLocaleDateString()}</span>
                           </div>
                         </div>
                       </div>
@@ -424,8 +476,8 @@
             {:else if latestStatus === 'found' && latestMetadata}
               <SearchResultCard
                 metadata={latestMetadata}
-                on:download={handleDownload}
                 on:copy={handleCopy}
+                on:download={event => dispatch('download', event.detail)}
               />
               <p class="text-xs text-muted-foreground">
                 {tr('download.search.status.completedIn', { values: { seconds: (lastSearchDuration / 1000).toFixed(1) } })}
@@ -446,7 +498,6 @@
                 {searchMode === 'name' ? 'Enter a file name to search for versions' : tr('download.search.status.placeholder')}
               </div>
             {/if}
-
         </div>
       </div>
     {/if}

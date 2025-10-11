@@ -57,7 +57,6 @@ The system uses a Kademlia-based DHT for distributed file indexing:
 DHT Structure:
 - Node ID: 160-bit identifier
 - Routing Table: K-buckets (k=20)
-- Replication Factor: 3
 - Lookup Complexity: O(log n)
 ```
 
@@ -68,13 +67,15 @@ File Processing Pipeline:
 1. File Input → SHA-256 Hash Generation
 2. File Chunking → 256KB chunks
 3. Chunk Encryption → AES-256
-4. Erasure Coding → 10 data, 4 parity shards
+4. Chunking → 256 KB encrypted chunks
 5. Chunk Distribution → Multiple storage nodes
 6. DHT Registration → Hash-to-location mapping
 ```
 
 #### Storage Node Structure
-
+All nodes in the network are equal peers. 
+Any node that stores a file becomes a seeder 
+and can earn rewards when others download from them.
 ```
 Storage Node:
 {
@@ -83,9 +84,9 @@ Storage Node:
   port: 8080,
   capacity: 1099511627776, // 1TB in bytes
   used: 549755813888, // 512GB in bytes
-  rewardRate: 0.001, // algorithmic reward rate
   uptime: 0.99,
-  reputation: 4.5
+  reputation: 4.5,
+  seeding: ["file_hash_1", "file_hash_2", ...] // Files being shared
 }
 ```
 
@@ -108,6 +109,7 @@ File Metadata Structure:
   created_at: 1640995200,
   mime_type: "application/pdf",
   total_chunks: 16
+  price_per_mb: 0.001           // Chiral per MB (initially fixed, configurable)
 }
 ```
 
@@ -128,9 +130,9 @@ providers = dht.get_providers(file_hash);
 connect(providers[0]);  // Connect to seeders directly
 ```
 
-#### Decentralized Incentives
+#### Peer-to-Peer Compensation
 
-Rewards distributed via blockchain without centralized markets:
+When a user downloads a file, they pay the seeders who provide the chunks. Rewards are distributed via blockchain:
 
 ```rust
 // Proof-of-Storage validation
@@ -140,6 +142,16 @@ struct StorageProof {
     merkle_proof: MerkleProof,
     timestamp: u64,
 }
+
+// Payment transaction for chunk delivery
+struct ChunkPayment {
+    from: Address,           // Downloader
+    to: Address,             // Seeder
+    file_hash: Hash,
+    chunks_delivered: Vec<u32>,
+    amount: u64,             // Chiral amount
+}
+
 ```
 
 ### 4. Network Communication
@@ -175,16 +187,6 @@ message FileResponse {
   string next_chunk_hash = 3;
 }
 
-message StorageRequest {
-  string file_hash = 1;
-  uint64 duration = 2; // storage duration in seconds
-}
-
-message StorageResponse {
-  uint64 reward_amount = 1; // algorithmic reward
-  uint64 gas_cost = 2;
-  bool accepted = 3;
-}
 ```
 
 ### 5. Client Architecture
@@ -211,21 +213,41 @@ Backend Services:
 File Upload:
 1. Select File → Generate Hash
 2. Create Chunks → Encrypt
-3. Erasure Code Chunks → 10 data, 4 parity shards
-4. Query DHT → Find Storage Nodes
+3. Chunking → 256 KB encrypted chunks
+4. Query DHT → Find Nodes
 5. Calculate Rewards → Create Transaction
-6. Upload Shards → Verify Storage
+6. Verify Chunks → Verify Storage
 7. Register in DHT → Complete
+8. Set Price → Configure per-MB rate
 
 File Download:
 1. Input Hash → Query DHT
 2. Discover Storage Nodes → Select Available
 3. Connect to Nodes → Initiate Transfer
-4. Download Shards → Verify Hashes
-5. Reassemble Chunks from Shards → Decrypt
+4. Download Chunks → Verify Hashes
+5. Reassemble File from Chunks → Decrypt
 6. Reassemble File from Chunks
 7. Distribute Rewards → Complete
+
+File Download (BitTorrent-style):
+1. Input Hash → Query DHT
+2. Get Seeder List → Display list of available providers to user
+3. User Selects Provider(s) → Choose which seeder(s) to download from
+4. Establish Connections → Handshake with selected seeder(s)
+5. Request Chunks → Request specific chunks from chosen seeder(s)
+6. Receive Chunks → Download chunks from selected provider(s)
+7. Track & Blacklist → Monitor performance, blacklist poor seeders
+8. Verify Chunks → Check hashes against manifest
+9. Reassemble & Decrypt → Rebuild original file
+10. Distribute Payments → Send Chiral to seeders per chunk delivered
+
+
 ```
+##### Seeder and Leecher Roles
+
+##### Seeder: A peer who has the complete file and shares it with others. Earns Chiral when others download from them.
+#### Leecher: A peer actively downloading a file but only has partial chunks. Once download completes, automatically becomes a seeder.
+#### All nodes are peers: No distinction between "storage nodes" and "regular nodes" - anyone can seed and earn.
 
 ### 6. Security Architecture
 
@@ -253,7 +275,7 @@ Transaction Security:
 ```
 Permission Model:
 - File Owner: Full control (read, write, delete, share)
-- Storage Node: Read-only access to encrypted shards
+- Storage Node: Read-only access to encrypted chunks
 - Network Peer: No direct file access
 - DHT Network: Metadata only (no file content)
 ```
@@ -266,21 +288,13 @@ Permission Model:
 sequenceDiagram
     participant Client
     participant FileService
-    participant StorageNode
     participant DHT
-    participant Blockchain
 
     Client->>+FileService: Upload File
+    FileService->>FileService: Chunk and/or Encrypt chunk file into 256 KB pieces
     FileService->>FileService: Generate Merkle Root from original chunk hashes
-    FileService->>FileService: Chunk file into 256KB pieces
-    FileService->>FileService: Apply 10+4 Reed-Solomon erasure coding to each chunk
-    FileService->>FileService: Encrypt each of the 14 shards
-    FileService->>+StorageNode: Upload encrypted shards
-    StorageNode-->>-FileService: Confirm shard storage
-    FileService->>+DHT: Register File Manifest (Merkle Root, Shard Hashes)
+    FileService->>+DHT: Register File Manifest (Merkle Root, Chunk Hashes)
     DHT-->>-FileService: Confirm Registration
-    FileService->>+Blockchain: Create Payment TX
-    Blockchain-->>-FileService: TX Confirmed
     FileService-->>-Client: Upload Complete
 ```
 
@@ -291,18 +305,17 @@ sequenceDiagram
     participant Client
     participant FileService
     participant DHT
-    participant StorageNode
+    participant ProviderNode
     participant Blockchain
 
     Client->>+FileService: Request File (Merkle Root)
     FileService->>+DHT: Lookup File Manifest
-    DHT-->>-FileService: Return Manifest (includes shard hashes)
-    FileService->>+StorageNode: Request encrypted shards (needs 10 of 14)
-    StorageNode-->>-FileService: Send available encrypted shards
-    FileService->>FileService: Decrypt individual shards
-    FileService->>FileService: Reconstruct original chunk via erasure coding
+    DHT-->>-FileService: Return Manifest (includes chunk hashes)
+    FileService->>+ProviderNode: Request encrypted chunks
+    ProviderNode-->>-FileService: Send available encrypted chunks
+    FileService->>FileService: Decrypt individual chunks
     FileService->>FileService: Verify chunk hash against original hash in manifest
-    FileService->>FileService: Assemble file from verified chunks
+    FileService->>FileService: Assemble original file from verified chunks
     FileService->>+Blockchain: Send Payment
     Blockchain-->>-FileService: Payment Confirmed
     FileService-->>-Client: File Ready
@@ -340,24 +353,15 @@ Load Balancing:
 
 ### 9. Fault Tolerance
 
-#### Redundancy Mechanisms
 
-```
-File Redundancy:
-- Replication Factor: 3 (minimum)
-- Reed-Solomon Erasure Coding: The 10+4 configuration provides built-in fault tolerance.
-- Geographic Distribution: Different regions
-- Automatic Repair: Self-healing on node failure
-```
 
-#### Failure Recovery
+#### Node Recovery
 
 ```
 Node Failure:
 1. Detection: Heartbeat timeout (30 seconds)
 2. Mark Offline: Update DHT records
-3. Redirect: Route requests to replicas
-4. Repair: Re-replicate to maintain redundancy
+3. Redirect: Route requests to alternative providers
 5. Cleanup: Remove after grace period
 
 Network Partition:

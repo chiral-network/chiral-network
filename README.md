@@ -31,7 +31,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 - ✅ **Drag & Drop Interface**: Simple, compact file addition with real-time feedback
 - ✅ **Content Hashing**: SHA-256 hash generation for unique file identifiers
 - ✅ **DHT Metadata Distribution**: File information shared via distributed hash table
-- ❌ **Network Integration**: Files registered with P2P network for discovery (currently local-only storage)
+- ✅ **Network Integration**: Files registered with P2P network for discovery
 - ✅ **No Size Limits**: Share files of any size efficiently
 
 ### 2. Intelligent Download Management
@@ -47,45 +47,54 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 
 ### 3. Network Monitoring & Peer Discovery
 
-- ❌ **Real-Time Network Stats**: Monitor peers, bandwidth, and network health (bandwidth and network health uses mock data)
+- ✅ **Real-Time Network Stats**: Monitor peers, bandwidth, and network health with real analytics
 - ✅ **Automatic Peer Discovery**: DHT-based peer finding with manual connect option
-- ✅ **Peer Reputation**: Track and display peer reliability scores
-- ❌ **Geographic Distribution**: View real peer locations and regional statistics (real geolocation not implemented)
-- ❌ **Connection Management**: Direct control over peer connections (not implemented)
+- ✅ **Reputation-Based Peer Selection**: Track peer reliability, latency, and bandwidth for intelligent routing
+- ✅ **Multi-Source Downloads**: Parallel downloads from multiple peers for faster transfers
+- ❌ **Geographic Distribution**: View real peer locations and regional statistics (geolocation not implemented)
+- ✅ **Connection Management**: Direct control over peer connections with disconnect functionality
 - ✅ **Network Health Indicators**: Visual status of network connectivity
+- ✅ **NAT Traversal**: AutoNAT v2 reachability detection and Circuit Relay v2 for NAT'd peers
 
 ### 4. Comprehensive Analytics Dashboard
 
 - ✅ **Storage Metrics**: Track used space and file distribution
-- ❌ **Bandwidth Usage**: Real-time upload/download statistics (uses mock data)
-- ❌ **Performance Analytics**: Monitor network efficiency (no real network performance measurements)
-- ❌ **Network Activity**: Connection history and network-wide statistics (uses mock data)
-- ❌ **Resource Contribution**: Track your contribution to the network (rewards use mock data)
-- ❌ **Historical Data**: View trends over time (earnings history uses mock data)
+- ✅ **Bandwidth Usage**: Real-time upload/download statistics with persistent tracking
+- ✅ **Performance Analytics**: Monitor network efficiency with transfer speed metrics
+- ✅ **Network Activity**: Connection history and network-wide statistics
+- ✅ **Resource Contribution**: Track your contribution to the network with real bandwidth/storage metrics
+- ✅ **Historical Data**: View bandwidth and contribution trends over time (mining earnings use mock data)
 
-### 5. Proxy Network Support
+### 5. Proxy & NAT Traversal Support
 
+- ✅ **SOCKS5 Proxy Support**: Route P2P traffic through SOCKS5 proxies for privacy
+- ✅ **Circuit Relay v2**: Automatic relay reservation for NAT traversal
+- ✅ **AutoNAT v2**: Automatic reachability detection (Public/Private/Unknown)
+- ✅ **Relay Health Monitoring**: Track relay connection status and performance
+- ✅ **Custom Relay Nodes**: Add trusted relay nodes manually
+- ✅ **Headless Relay Configuration**: CLI flags for --enable-autorelay, --relay, --autonat-server
 - ❌ **Privacy Protection**: Route traffic through proxy nodes (no traffic routing implemented)
-- ❌ **Load Balancing**: Automatic distribution across multiple proxies (no parallel downloads, file segmentation, or multi-source downloads)
+- ❌ **Load Balancing**: Automatic distribution across multiple proxies (no parallel downloads or file segmentation)
 - ❌ **Latency Optimization**: Choose proxies based on performance (no download process uses latency framework)
 - ✅ **Custom Node Addition**: Add trusted proxy nodes manually
 - ❌ **Bandwidth Aggregation**: Combine multiple proxy connections (no actual combining of multiple proxy connections)
 - ✅ **Real Proxy Management**: Backend proxy connection and management
+- ❌ **Public Relay Infrastructure**: Dedicated relay daemon deployment (in progress)
 
 ### 6. Security & Privacy
 
-- ❌ **End-to-End Encryption**: AES-256-GCM encryption with PBKDF2 key derivation (there is encryption infrastructure, but it is not applied to uploads and downloads)
+- ✅ **End-to-End Encryption**: AES-256-GCM encryption with PBKDF2 key derivation (can be enabled in Settings)
 - ✅ **Wallet Security**: Secure credential management with HD wallets
-- ❌ **Stream Authentication**: Cryptographic verification of data integrity (no actual stream authentication occurs during file transfers)
+- ✅ **Stream Authentication**: HMAC-based cryptographic verification of data integrity during file transfers
 - ❌ **Anonymous Routing**: Hide your IP from other peers (no IP hiding or anonymization implemented)
 - ✅ **No Commercial Tracking**: No marketplace means no transaction tracking
 
 ### 7. Mining & Network Security
 
 - ✅ **CPU Mining**: Real blockchain mining with Geth integration
-- ❌ **Mining Pool Support**: Solo or pool mining with real hashrate monitoring (no mining pool protocol implemented)
+- ❌ **Mining Pool Support**: Pool selection UI with mock data (actual pool mining not implemented)
 - ❌ **Real-Time Statistics**: Monitor hash rate, power usage, and efficiency (power and efficiency are mock data)
-- ❌ **Reward Tracking**: Track blocks found and actual earnings (rewards not calculated from actual block data)
+- ❌ **Reward Tracking**: Block counting works but rewards use hardcoded values (not actual earnings)
 - ✅ **Adjustable Intensity**: Control CPU usage and thread allocation
 - ✅ **Temperature Monitoring**: Keep track of system thermals
 
@@ -93,11 +102,124 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 
 - ✅ **Storage Management**: Configure storage location and limits
 - ✅ **Network Configuration**: Set bandwidth limits and connection parameters
-- ❌ **Privacy Controls**: Enable encryption, proxy, and anonymous mode (anonymous mode not implemented)
+- ✅ **Advanced Bandwidth Scheduling**: Set different bandwidth limits for specific times and days
+- ✅ **Privacy Controls**: Mandatory encryption, proxy support, and anonymous mode (anonymous mode not implemented)
 - ✅ **Notification Preferences**: Customize alerts and notifications
-- ❌ **Advanced Options**: Fine-tune DHT, chunk size, and cache settings (backend uses hardcoded values)
+- ✅ **Advanced Options**: Fine-tune DHT, chunk size, and cache settings (configurable through UI)
 - ✅ **Import/Export**: Backup and restore settings
 - ✅ **Multi-language Support**: English, Spanish, Chinese, Korean
+
+## NAT Traversal & Network Reachability
+
+### Current Implementation Status
+
+#### ✅ Implemented Features
+
+1. **AutoNAT v2 Reachability Detection**
+   - Automatic 30-second probe cycles
+   - Real-time reachability status (Public/Private/Unknown)
+   - Confidence scoring for reachability state
+   - Reachability history tracking
+   - Headless CLI support: `--disable-autonat`, `--autonat-probe-interval`, `--autonat-server`
+
+2. **Circuit Relay v2 with AutoRelay**
+   - Automatic relay candidate detection from bootstrap nodes
+   - Dynamic relay reservation for NAT'd peers
+   - Relay health monitoring and connection tracking
+   - Headless CLI support: `--enable-autorelay`, `--disable-autorelay`, `--relay <multiaddr>`
+   - Configurable preferred relay nodes (GUI + CLI)
+
+3. **Observed Address Tracking**
+   - libp2p identify protocol integration
+   - Persistent tracking of externally observed addresses
+   - Address change detection and logging
+
+4. **SOCKS5 Proxy Integration**
+   - P2P traffic routing through SOCKS5 proxies
+   - CLI flag: `--socks5-proxy <address>`
+
+#### ✅ GUI Configuration (Recently Implemented)
+
+1. **Settings UI for NAT Traversal**
+   - AutoNAT toggle with configurable probe interval (10-300s)
+   - Custom AutoNAT servers textarea (multiaddr format)
+   - AutoRelay toggle for Circuit Relay v2
+   - Preferred relay nodes textarea (multiaddr format)
+   - All settings persist to localStorage
+
+2. **Real-Time Reachability Display**
+   - Live NAT status badge (Public/Private/Unknown)
+   - Confidence scoring display (High/Medium/Low)
+   - Observed addresses from libp2p identify
+   - Reachability history table with timestamps
+   - Last probe time and state change tracking
+   - AutoNAT enabled/disabled indicator
+
+#### ✅ Public Relay Infrastructure (Recently Implemented)
+
+1. **Dedicated Circuit Relay v2 Daemon**
+   - Standalone relay node binary (`chiral-relay`)
+   - Configurable reservation/circuit limits
+   - Persistent peer identity across restarts
+   - JSON metrics export for monitoring
+   - Production-ready with systemd/Docker support
+   - Location: `relay-infrastructure/`
+
+2. **Deployment Scripts**
+   - `start-relay.sh` - Bootstrap script with auto IP detection
+   - `stop-relay.sh` - Graceful shutdown with fallback force kill
+   - `status-relay.sh` - Comprehensive status and metrics display
+   - Environment variable configuration
+   - PID file management
+
+3. **Documentation**
+   - `relay-infrastructure/README.md` - Quick start guide
+   - `relay-infrastructure/DEPLOYMENT.md` - Production deployment
+   - systemd service examples
+   - Docker/docker-compose configs
+   - Cloud deployment guides (AWS, GCP, DigitalOcean)
+   - Prometheus metrics integration
+
+#### ❌ Not Yet Implemented
+
+1. **Advanced Security**
+   - Relay reservation authentication
+   - Rate limiting for AutoNAT probes
+   - Anti-amplification safeguards
+
+3. **Resilience Testing**
+   - End-to-end NAT traversal scenarios
+   - Private↔Public connection tests
+   - Private↔Private relay/hole-punch tests
+   - Failure fallback validation
+
+### Headless Mode NAT Configuration
+
+```bash
+# Enable AutoNAT with custom probe interval
+./chiral-network --autonat-probe-interval 60
+
+# Disable AutoNAT
+./chiral-network --disable-autonat
+
+# Add custom AutoNAT servers
+./chiral-network --autonat-server /ip4/1.2.3.4/tcp/4001/p2p/QmPeerId
+
+# Enable AutoRelay with custom relay nodes
+./chiral-network --relay /ip4/relay.example.com/tcp/4001/p2p/QmRelayId
+
+# Route P2P through SOCKS5 proxy
+./chiral-network --socks5-proxy 127.0.0.1:9050
+```
+
+### NAT Traversal Architecture
+
+The network uses a multi-layered approach to ensure connectivity:
+
+1. **Direct Connection** (fastest): For publicly reachable peers
+2. **Hole Punching** (DCUtR): For symmetric NAT traversal
+3. **Circuit Relay** (fallback): For restrictive NATs
+4. **SOCKS5 Proxy** (privacy): For anonymous routing
 
 ## Technical Implementation
 
@@ -118,11 +240,19 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 
 ### P2P Network Infrastructure
 
-- **libp2p v0.54**: Full peer-to-peer networking stack
-- **Kademlia DHT**: Distributed hash table for metadata storage
-- **WebRTC**: Direct peer-to-peer data channels
-- **NAT Traversal**: STUN, relay, and mDNS support
+- **libp2p v0.54**: Full peer-to-peer networking stack with production features
+- **Kademlia DHT**: Distributed hash table for file metadata storage and peer discovery
+- **WebRTC**: Direct peer-to-peer data channels for file transfers
+- **NAT Traversal**:
+  - AutoNAT v2 for reachability detection
+  - Circuit Relay v2 with AutoRelay for NAT'd peers
+  - DCUtR (Direct Connection Upgrade through Relay) for hole punching
+  - mDNS for local peer discovery
 - **Noise Protocol**: Modern cryptographic transport security
+- **Bitswap Protocol**: Efficient block exchange for chunked file transfers
+- **SOCKS5 Proxy**: Privacy-focused P2P traffic routing
+- **Multi-Source Downloads**: Parallel chunk downloading from multiple peers
+- **Reputation System**: Track peer reliability, bandwidth, and latency for intelligent peer selection
 
 ## Architecture Decisions
 
@@ -158,7 +288,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
    - Gradually integrate real P2P networking
    - Maintain backwards compatibility
 
-## Installation & Setup
+## Setup and Testing
 
 ```bash
 # Clone the repository
@@ -175,9 +305,13 @@ npm run tauri dev # Desktop app
 # Build for production
 npm run build       # Web production build
 npm run tauri build # Desktop production build
-```
 
-## Usage Guide
+# Run tests
+npm test
+
+# Run tests in watch mode
+npm run test:watch
+```
 
 ### Getting Started
 
@@ -224,6 +358,21 @@ npm run tauri build # Desktop production build
 6. Monitor hash rate and rewards
 7. Track found blocks in history
 
+### Bandwidth Scheduling
+
+1. Navigate to Settings page
+2. Scroll to Bandwidth Scheduling section
+3. Enable "Enable Bandwidth Scheduling" toggle
+4. Click "Add Schedule" to create a new schedule
+5. Configure schedule:
+   - Set schedule name
+   - Select start and end times (24-hour format)
+   - Choose days of week when schedule applies
+   - Set upload and download limits (KB/s, 0 = unlimited)
+6. Toggle schedule on/off with checkbox
+7. Create multiple schedules for different time periods
+8. Scheduler automatically applies appropriate limits based on current time
+
 ## Legitimate Use Cases
 
 ### Personal Use
@@ -259,21 +408,30 @@ npm run tauri build # Desktop production build
 
 ### Phase 2: P2P Network Infrastructure (Completed)
 
-- ✅ Full libp2p v0.54 integration
+- ✅ Full libp2p v0.54 integration with all production features
 - ✅ Production-ready Kademlia DHT implementation
 - ✅ Real peer discovery with mDNS and libp2p
-- ✅ Complete WebRTC data channel support
-- ✅ NAT traversal (STUN, libp2p relay, mDNS)
+- ✅ Complete WebRTC data channel support for P2P transfers
+- ✅ NAT traversal (AutoNAT v2, Circuit Relay v2, DCUtR, mDNS)
 - ✅ Advanced peer selection and reputation system
+- ✅ Multi-source downloads with parallel chunk transfers
+- ✅ SOCKS5 proxy support for privacy
+- ✅ Bitswap protocol for efficient block exchange
+- ✅ Comprehensive analytics with real-time metrics tracking
 
 ### Phase 3: Core P2P Features (In Progress)
 
-- ✅ End-to-end encryption (AES-256-GCM with PBKDF2)
-- ✅ Real P2P file transfer protocol
-- ✅ File versioning system
-- [ ] Selective sync capabilities
-- [ ] Advanced bandwidth scheduling
-- [ ] Mobile applications
+- ✅ **File Upload Encryption**: AES-256-GCM encryption with PBKDF2 key derivation for uploaded files
+- ✅ **File Download Decryption**: Key management and decryption for downloaded files
+- ✅ **WebRTC Encryption**: Encrypted P2P chunk transfers
+- ✅ **Key Exchange UI**: Recipient public key input for encrypted sharing
+- ✅ **Real P2P File Transfer**: Production-ready WebRTC-based transfer protocol
+- ✅ **File Versioning System**: Track and manage multiple versions of files
+- ✅ **Advanced Bandwidth Scheduling**: Time-based bandwidth limits with day-of-week rules
+- ✅ **GUI NAT Configuration**: Settings UI for AutoNAT, AutoRelay, and relay preferences
+- ✅ **Public Relay Infrastructure**: Dedicated relay daemon with deployment scripts
+- [ ] **Selective Sync Capabilities**: Choose which files to download
+- [ ] **Mobile Applications**: iOS and Android support
 
 ### Phase 4: Enterprise Features
 
@@ -309,11 +467,18 @@ npm run tauri build # Desktop production build
 - XSS protection in user content
 - CORS configuration for API calls
 - Secure random for IDs
+- AES-256-GCM file encryption for uploads
+- PBKDF2 key derivation for encryption
+- ECIES key exchange infrastructure
+- File download decryption with key management
+- WebRTC encrypted chunk transfers
+- Key exchange UI for recipient-specific encryption
 - No centralized servers to compromise
 - Fully decentralized architecture prevents single points of failure
 
 ### Planned Security
 
+- ✅ Key exchange UI for encrypted sharing
 - File encryption at rest
 - Signed software updates
 - Two-factor authentication
@@ -345,7 +510,7 @@ MIT License - See LICENSE file for details
 
 ### BitTorrent-Like Architecture
 
-- **Instant Seeding**: Files immediately available when added (no upload step)
+- **Instant Seeding**: Files immediately available when added
 - **Continuous Availability**: Files remain accessible while in your list
 - **Peer Statistics**: Track seeders and leechers for each file
 - **No Pending State**: Eliminates confusion between "uploading" and "shared"

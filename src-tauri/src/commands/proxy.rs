@@ -3,10 +3,11 @@ use crate::AppState;
 use tauri::Emitter;
 use tauri::State;
 // use tracing::info;
-use tracing::{info, warn};
 use libp2p::PeerId;
+use std::net::Ipv4Addr;
 use std::str::FromStr;
 use std::sync::Arc;
+use tracing::{info, warn};
 
 #[derive(Clone, serde::Serialize)]
 pub struct ProxyNode {
@@ -17,30 +18,52 @@ pub struct ProxyNode {
     pub error: Option<String>,
 }
 
-fn normalize_to_multiaddr(input: &str) -> Result<String, String> {
-    if input.trim().starts_with("/") {
-        return Ok(input.to_string());
+/// Normalize user input into a TCP libp2p multiaddr (no WebSocket).
+/// - Keeps `/p2p/<peerid>` suffix if present
+/// - For numeric IPs -> `/ip4/...`
+/// - For hostnames  -> `/dns4/...`
+/// - Treats ws:// and wss:// as plain TCP (drops `/ws`)
+pub fn normalize_to_multiaddr(input: &str) -> Result<String, String> {
+    let s = input.trim();
+
+    // If it's already a multiaddr, accept as-is.
+    if s.starts_with('/') {
+        return Ok(s.to_string());
     }
-    // Very simple mapper; improve as needed
-    if let Some(stripped) = input.strip_prefix("ws://") {
-        // ws://host:port -> /dns4/host/tcp/port/ws
-        let (host, port) = stripped.split_once(':').ok_or("invalid ws addr")?;
-        Ok(format!("/dns4/{host}/tcp/{port}/ws"))
-    } else if let Some(stripped) = input.strip_prefix("tcp://") {
-        // tcp://host:port -> /dns4/host/tcp/port
-        let (host, port) = stripped.split_once(':').ok_or("invalid tcp addr")?;
-        Ok(format!("/dns4/{host}/tcp/{port}"))
-    } else if input.contains(':') {
-        // host:port or 127.0.0.1:4001
-        let (host, port) = input.split_once(':').ok_or("invalid host:port")?;
-        if host.chars().all(|c| c.is_ascii_digit() || c == '.') {
-            Ok(format!("/ip4/{host}/tcp/{port}"))
-        } else {
-            Ok(format!("/dns4/{host}/tcp/{port}"))
-        }
+
+    // Extract optional /p2p/<peer-id> suffix if user pasted it after the url/host:port
+    let (base, p2p_suffix) = if let Some((left, right)) = s.split_once("/p2p/") {
+        (left, Some(right))
     } else {
-        Err(format!("unsupported address format: {}", input))
+        (s, None)
+    };
+
+    // Strip known schemes;
+    let base = base
+        .strip_prefix("ws://")
+        .or_else(|| base.strip_prefix("wss://"))
+        .or_else(|| base.strip_prefix("tcp://"))
+        .unwrap_or(base);
+
+    // Expect host:port
+    let (host, port) = base
+        .split_once(':')
+        .ok_or_else(|| format!("invalid address; expected host:port (got: {input})"))?;
+
+    // Decide ip4 vs dns4
+    let proto = if Ipv4Addr::from_str(host).is_ok() {
+        "ip4"
+    } else {
+        "dns4"
+    };
+
+    let mut m = format!("/{proto}/{host}/tcp/{port}");
+    if let Some(pid) = p2p_suffix {
+        // keep any additional path after /p2p/<peerid> (rare, but harmless)
+        m.push_str("/p2p/");
+        m.push_str(pid);
     }
+    Ok(m)
 }
 
 #[tauri::command]
@@ -92,16 +115,6 @@ pub(crate) async fn proxy_disconnect(
     url: String,
 ) -> Result<(), String> {
     info!("Disconnecting from proxy: {}", url);
-    // // For proto v1: mark offline locally (no full teardown API yet)
-    // let mut proxies = state.proxies.lock().await;
-    // if let Some(p) = proxies.iter_mut().find(|p| p.address == url || p.id == url) {
-    //     p.status = "offline".into();
-    //     let _ = app.emit("proxy_status_update", p.clone());
-    // }
-    // // Note: This doesn't actually disconnect the peer in libp2p in this version.
-    // Ok(())
-    
-    // Update local cache optimistically and capture the peer ID if known
     let maybe_peer_id = {
         let mut proxies = state.proxies.lock().await;
         proxies
@@ -114,22 +127,46 @@ pub(crate) async fn proxy_disconnect(
             })
     };
 
-    let dht: Arc<DhtService> = {
-        let guard = state.dht.lock().await;
-        guard
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| "DHT not initialized".to_string())?
+    if let Some(peer_id_str) = maybe_peer_id {
+        if let Ok(peer_id) = PeerId::from_str(&peer_id_str) {
+            if let Some(dht) = state.dht.lock().await.as_ref() {
+                return dht.disconnect_peer(peer_id).await;
+            }
+        }
+    }
+
+    Err("Could not disconnect peer".into())
+}
+
+#[tauri::command]
+pub(crate) async fn proxy_remove(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    url: String,
+) -> Result<(), String> {
+    info!("Removing proxy: {}", url);
+
+    let maybe_peer_id = {
+        let mut proxies = state.proxies.lock().await;
+        let maybe_idx = proxies.iter().position(|p| p.address == url || p.id == url);
+        if let Some(idx) = maybe_idx {
+            let p = proxies.remove(idx);
+            Some(p.id)
+        } else {
+            None
+        }
     };
 
-    let peer_id_str = maybe_peer_id.unwrap_or_else(|| url.clone());
-    let peer_id = PeerId::from_str(&peer_id_str).map_err(|_| {
-        warn!("Could not parse peer id for disconnect: {}", peer_id_str);
-        format!("Invalid peer id: {}", peer_id_str)
-    })?;
+    if let Some(peer_id_str) = maybe_peer_id {
+        if let Ok(peer_id) = PeerId::from_str(&peer_id_str) {
+            if let Some(dht) = state.dht.lock().await.as_ref() {
+                let _ = dht.disconnect_peer(peer_id).await;
+            }
+        }
+    }
 
-    dht.disconnect_peer(peer_id).await
-
+    let _ = app.emit("proxy_reset", ());
+    Ok(())
 }
 
 #[tauri::command]

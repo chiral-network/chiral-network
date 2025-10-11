@@ -45,9 +45,33 @@ export type WebRTCSession = {
 };
 
 const defaultIceServers: IceServer[] = [
+  // Keep simple/stable STUN servers (avoid query params which some browsers reject)
   { urls: "stun:stun.l.google.com:19302" },
-  { urls: "stun:global.stun.twilio.com:3478?transport=udp" },
+  { urls: "stun:global.stun.twilio.com:3478" },
 ];
+
+function sanitizeIceServers(servers: IceServer[]): IceServer[] {
+  return servers.map((s) => {
+    try {
+      if (!s || !s.urls) return s;
+      // urls may be string or string[]
+      const normalize = (u: any) => {
+        if (!u || typeof u !== 'string') return u;
+        // Remove query string from URL (e.g., ?transport=udp) because some browsers reject it
+        const idx = u.indexOf('?');
+        if (idx > -1) return u.substring(0, idx);
+        return u;
+      };
+
+      if (Array.isArray(s.urls)) {
+        return { ...s, urls: s.urls.map(normalize) } as IceServer;
+      }
+      return { ...s, urls: normalize(s.urls as string) } as IceServer;
+    } catch (e) {
+      return s;
+    }
+  });
+}
 
 export function createWebRTCSession(opts: WebRTCOptions = {}): WebRTCSession {
   const {
@@ -67,7 +91,27 @@ export function createWebRTCSession(opts: WebRTCOptions = {}): WebRTCSession {
     onError,
   } = opts;
 
-  const pc = new RTCPeerConnection({ iceServers });
+  const effectiveIceServers = sanitizeIceServers(iceServers);
+  const pc = new RTCPeerConnection({ iceServers: effectiveIceServers });
+  // Ensure iceServers urls are compatible across browsers
+  try {
+    const sanitized = sanitizeIceServers(iceServers);
+    // Unfortunately RTCPeerConnection takes the config only at construction; recreate if changed
+    // We'll only recreate if sanitize changed anything
+    const changed = JSON.stringify(sanitized) !== JSON.stringify(iceServers);
+    if (changed) {
+      // Close the initial one and make a new one with sanitized servers
+      try { pc.close(); } catch (e) {}
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      // Recreate PC with sanitized servers
+      // Note: This is safe here because no handlers are attached yet
+      // and will be set up below on the new pc variable
+      // We shadow const pc by declaring a new variable
+    }
+  } catch (e) {
+    // ignore
+  }
   const connectionState = writable<RTCPeerConnectionState>(pc.connectionState);
   const channelState = writable<RTCDataChannelState>("closed");
 

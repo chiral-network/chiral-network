@@ -8,6 +8,11 @@ repository = ""
 edition = "2021"
 default-run = "chiral-network"
 
+[lib]
+name = "chiral_network"
+path = "src/lib.rs"
+crate-type = ["lib"]
+
 [build-dependencies]
 tauri-build = { version = "2.0", features = [] }
 
@@ -46,28 +51,29 @@ futures-util = "0.3"
 systemstat = "0.2.5"
 sysinfo = "0.31"
 sys-locale = "0.3"
-libp2p = { version = "0.54", features = ["kad", "mdns", "noise", "tcp", "yamux", "identify", "gossipsub", "macros", "tokio", "rsa", "request-response", "relay", "ping", "autonat"] }
+libp2p = { version = "0.54", features = ["kad", "mdns", "noise", "tcp", "yamux", "identify", "gossipsub", "macros", "tokio", "rsa", "request-response", "relay", "ping", "autonat", "dcutr"] }
 async-std = { version = "1.12", features = ["attributes"] }
 async-trait = "0.1"
+lazy_static = "1.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4.4", features = ["derive"] }
 fs2 = "0.4"
 glob = "0.3"
-reed-solomon-erasure = "4.0.2"
 rs_merkle = "1.5.0"
-lazy_static = "1.5.0"
 tokio-util = { version = "0.7", features = ["compat"] }
 tokio-socks = "0.5"
-beetswap = "0.4.1"
+beetswap = { git = "https://github.com/totoro-ming-lin/beetswap.git", branch = "older-version" }
 multihash-codetable = { version = "0.1", features = ["blake3", "sha2", "sha3"] }
-cid = "0.11.1"
+cid = { version = "0.11.1", features = ["serde-codec"] }
 blockstore = "0.7.0"
 
 # WebRTC dependencies for P2P file transfers
 webrtc = "0.10"
 tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
-uuid = { version = "1.0", features = ["v4"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+tauri-plugin-fs = "2"
+ed25519-dalek = { version = "2.0", features = ["rand_core", "serde"] }
 
 [dev-dependencies]
 tempfile = "3.8"

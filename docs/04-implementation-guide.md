@@ -79,6 +79,7 @@ Create `genesis.json` (Geth-compatible format):
   "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
   "timestamp": "0x68b3b2ca"
 }
+
 ```
 
 ### Step 3: Initialize Blockchain
@@ -138,7 +139,6 @@ impl DhtService {
         let store = MemoryStore::new(local_peer_id);
         let mut kad_cfg = KademliaConfig::new(StreamProtocol::new("/chiral/kad/1.0.0"));
         kad_cfg.set_query_timeout(Duration::from_secs(10));
-        kad_cfg.set_replication_factor(20);
 
         let mut kademlia = Kademlia::with_config(local_peer_id, store, kad_cfg);
         kademlia.set_mode(Some(Mode::Server));
@@ -195,6 +195,7 @@ impl DhtService {
         self.peer_id.clone()
     }
 }
+
 ```
 
 ### Step 2: Chunk Manager
@@ -445,6 +446,44 @@ pub async fn download_file(
   addresses with copy affordances, and the last few probe summaries. Toasts are
   emitted when reachability changes (restored, degraded, reset) to give desktop
   operators immediate feedback.
+
+### AutoRelay & reservation management
+
+- AutoRelay behavior is enabled by default in GUI mode to automatically discover
+  and use relay servers for NAT traversal.
+- The relay client listens for Circuit Relay v2 reservations from discovered
+  relay candidates (bootstrap nodes by default, or custom relays via `--relay`).
+- When a peer is identified as a relay candidate (via `identify` protocol), the
+  node attempts to listen on a relay circuit address to enable inbound connections
+  from NAT-restricted peers.
+- Relay reservation events (accepted, renewed, evicted) are tracked in metrics:
+  - `active_relay_peer_id`: PeerId of the current relay server
+  - `relay_reservation_status`: Current reservation state (accepted/pending/failed)
+  - `reservation_renewals`: Counter for successful reservation renewals
+  - `reservation_evictions`: Counter for reservations lost/evicted
+- The Network → DHT page displays a "Relay Status" card showing:
+  - AutoRelay enabled/disabled badge
+  - Active relay peer ID (truncated for display)
+  - Reservation status and renewal counters
+  - Last successful reservation and eviction timestamps
+- Headless mode supports:
+  - `--disable-autorelay` to turn off AutoRelay behavior
+  - `--relay <multiaddr>` to specify preferred relay servers (repeatable)
+- Info-level log messages emit when relay reservations are accepted or circuits
+  are established, including relay peer IDs for debugging.
+
+### DCUtR hole-punching
+
+- DCUtR (Direct Connection Upgrade through Relay) behavior is automatically
+  enabled when AutoNAT is active, allowing peers behind NATs to coordinate
+  simultaneous hole-punching attempts via relay servers.
+- The `--show-dcutr` flag prints periodic DCUtR metrics in headless mode,
+  including hole-punch attempts, successes, failures, and success rate.
+- The Network → DHT page displays a "DCUtR Hole-Punching" card showing real-time
+  metrics: total attempts, successes (green), failures (red), success rate
+  percentage, enabled/disabled badge, and timestamps for last success/failure.
+- DCUtR events are logged at the `info` level with peer IDs and relay addresses,
+  and emit `DhtEvent::Info` or `DhtEvent::Warning` messages for UI feedback.
 
 ### Local download resilience & tracing
 

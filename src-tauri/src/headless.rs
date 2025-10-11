@@ -1,4 +1,5 @@
 // Headless mode for running as a bootstrap node on servers
+use crate::commands::bootstrap::get_bootstrap_nodes;
 use crate::dht::{DhtMetricsSnapshot, DhtService, FileMetadata};
 use crate::ethereum::GethProcess;
 use crate::file_transfer::FileTransferService;
@@ -68,6 +69,10 @@ pub struct CliArgs {
     #[arg(long)]
     pub show_reachability: bool,
 
+    /// Print DCUtR hole-punching metrics at startup
+    #[arg(long)]
+    pub show_dcutr: bool,
+
     // SOCKS5 Proxy address (e.g., 127.0.0.1:9050 for Tor or a private VPN SOCKS endpoint)
     #[arg(long)]
     pub socks5_proxy: Option<String>,
@@ -75,6 +80,14 @@ pub struct CliArgs {
     /// Print local download metrics snapshot at startup
     #[arg(long)]
     pub show_downloads: bool,
+
+    /// Disable AutoRelay behavior
+    #[arg(long)]
+    pub disable_autorelay: bool,
+
+    /// Preferred relay nodes (multiaddr form, can be specified multiple times)
+    #[arg(long)]
+    pub relay: Vec<String>,
 }
 
 pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error>> {
@@ -86,10 +99,8 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
     let provided_bootstrap = !bootstrap_nodes.is_empty();
     if !provided_bootstrap {
         // Use reliable IP-based bootstrap nodes so fresh nodes can join the mesh
-        bootstrap_nodes.extend([
-            "/ip4/54.198.145.146/tcp/4001/p2p/12D3KooWNHdYWRTe98KMF1cDXXqGXvNjd1SAchDaeP5o4MsoJLu2"
-                .to_string(),
-        ]);
+        // Using the same comprehensive set as the frontend for network consistency
+        bootstrap_nodes.extend(get_bootstrap_nodes());
         info!("Using default bootstrap nodes: {:?}", bootstrap_nodes);
     }
 
@@ -120,6 +131,20 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
     } else {
         None
     };
+    let enable_autorelay = !args.disable_autorelay;
+    if enable_autorelay {
+        if !args.relay.is_empty() {
+            info!(
+                "AutoRelay enabled with {} preferred relays",
+                args.relay.len()
+            );
+        } else {
+            info!("AutoRelay enabled, will discover relays from bootstrap nodes");
+        }
+    } else {
+        info!("AutoRelay disabled via CLI");
+    }
+
     // Start DHT node
     let dht_service = DhtService::new(
         args.dht_port,
@@ -131,6 +156,10 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         args.autonat_server.clone(),
         args.socks5_proxy,
         file_transfer_service.clone(),
+        None, // chunk_size_kb: use default
+        None, // cache_size_mb: use default
+        enable_autorelay,
+        args.relay.clone(),
     )
     .await?;
     let peer_id = dht_service.get_peer_id().await;
@@ -183,6 +212,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             file_hash: "QmBootstrap123Example".to_string(),
             file_name: "welcome.txt".to_string(),
             file_size: 1024,
+            file_data: b"Hello, world!".to_vec(),
             seeders: vec![peer_id.clone()],
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -192,8 +222,11 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
+            merkle_root: None,
             parent_hash: None,
             version: Some(1),
+            cids: None,
+            is_root: true,
         };
 
         dht_service.publish_file(example_metadata).await?;
@@ -242,6 +275,29 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         });
     }
 
+    if args.show_dcutr {
+        let snapshot = dht_arc.metrics_snapshot().await;
+        log_dcutr_snapshot(&snapshot);
+
+        let dht_for_logs = dht_arc.clone();
+        tokio::spawn(async move {
+            loop {
+                if Arc::strong_count(&dht_for_logs) <= 1 {
+                    break;
+                }
+
+                tokio::time::sleep(Duration::from_secs(60)).await;
+
+                let snapshot = dht_for_logs.metrics_snapshot().await;
+                log_dcutr_snapshot(&snapshot);
+
+                if !snapshot.dcutr_enabled {
+                    break;
+                }
+            }
+        });
+    }
+
     // Spawn the event pump
     let dht_clone_for_pump = Arc::clone(&dht_arc);
 
@@ -284,6 +340,29 @@ fn log_reachability_snapshot(snapshot: &DhtMetricsSnapshot) {
         info!("   Observed addresses: {:?}", snapshot.observed_addrs);
     }
     info!("   AutoNAT enabled: {}", snapshot.autonat_enabled);
+}
+
+fn log_dcutr_snapshot(snapshot: &DhtMetricsSnapshot) {
+    let success_rate = if snapshot.dcutr_hole_punch_attempts > 0 {
+        (snapshot.dcutr_hole_punch_successes as f64 / snapshot.dcutr_hole_punch_attempts as f64)
+            * 100.0
+    } else {
+        0.0
+    };
+    info!(
+        "🔀 DCUtR Metrics: {} attempts, {} successes, {} failures ({:.1}% success rate)",
+        snapshot.dcutr_hole_punch_attempts,
+        snapshot.dcutr_hole_punch_successes,
+        snapshot.dcutr_hole_punch_failures,
+        success_rate
+    );
+    if let Some(ts) = snapshot.last_dcutr_success {
+        info!("   Last success epoch: {}", ts);
+    }
+    if let Some(ts) = snapshot.last_dcutr_failure {
+        info!("   Last failure epoch: {}", ts);
+    }
+    info!("   DCUtR enabled: {}", snapshot.dcutr_enabled);
 }
 
 fn get_local_ip() -> Option<String> {

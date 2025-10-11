@@ -1,12 +1,22 @@
+use crate::encryption;
+use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, info_span, warn};
-use directories::ProjectDirs;
-use std::path::PathBuf;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EncryptedFileMetadata {
+    pub original_file_hash: String,
+    pub encrypted_file_hash: String,
+    pub encryption_info: encryption::EncryptionInfo,
+    pub encrypted_key_bundle: Option<encryption::EncryptedAesKeyBundle>,
+    pub recipient_public_key: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileRequest {
@@ -28,10 +38,14 @@ pub enum FileTransferCommand {
     UploadFile {
         file_path: String,
         file_name: String,
+        active_account: Option<String>,
+        active_private_key: Option<String>,
     },
     DownloadFile {
         file_hash: String,
         output_path: String,
+        active_account: Option<String>,
+        active_private_key: Option<String>,
     },
     GetStoredFiles,
 }
@@ -138,6 +152,8 @@ pub struct FileTransferService {
     event_rx: Arc<Mutex<mpsc::Receiver<FileTransferEvent>>>,
     storage_dir: PathBuf,
     download_metrics: Arc<Mutex<DownloadMetrics>>,
+    encryption_enabled: bool,
+    keystore: Arc<Mutex<crate::keystore::Keystore>>,
 }
 
 impl FileTransferService {
@@ -158,6 +174,9 @@ impl FileTransferService {
         storage_dir: &PathBuf,
         event_tx: mpsc::Sender<FileTransferEvent>,
         download_metrics: Arc<Mutex<DownloadMetrics>>,
+        keystore: Arc<Mutex<crate::keystore::Keystore>>,
+        active_account: Option<&str>,
+        active_private_key: Option<&str>,
     ) -> Result<(), String> {
         let mut attempt = 0u32;
         let mut last_error: Option<String> = None;
@@ -183,7 +202,15 @@ impl FileTransferService {
 
             let result = {
                 let _guard = span.enter();
-                Self::handle_download_file(file_hash, output_path, storage_dir).await
+                Self::handle_download_file(
+                    file_hash,
+                    output_path,
+                    storage_dir,
+                    &keystore,
+                    active_account,
+                    active_private_key,
+                )
+                .await
             };
 
             match result {
@@ -295,7 +322,10 @@ impl FileTransferService {
         LAST_DOWNLOAD_ATTEMPTS.load(Ordering::SeqCst)
     }
 
-    pub async fn new() -> Result<Self, String> {
+    pub async fn new_with_encryption_and_keystore(
+        encryption_enabled: bool,
+        keystore: Arc<Mutex<crate::keystore::Keystore>>,
+    ) -> Result<Self, String> {
         // Initialize storage directory
         let storage_dir = Self::get_storage_dir()?;
 
@@ -316,6 +346,8 @@ impl FileTransferService {
             event_tx,
             storage_dir.clone(),
             download_metrics.clone(),
+            encryption_enabled,
+            keystore.clone(),
         ));
 
         Ok(FileTransferService {
@@ -323,7 +355,23 @@ impl FileTransferService {
             event_rx: Arc::new(Mutex::new(event_rx)),
             storage_dir,
             download_metrics,
+            encryption_enabled,
+            keystore,
         })
+    }
+
+    pub async fn new() -> Result<Self, String> {
+        let keystore = Arc::new(Mutex::new(
+            crate::keystore::Keystore::load().unwrap_or_default(),
+        ));
+        Self::new_with_encryption_and_keystore(false, keystore).await
+    }
+
+    pub async fn new_with_encryption(encryption_enabled: bool) -> Result<Self, String> {
+        let keystore = Arc::new(Mutex::new(
+            crate::keystore::Keystore::load().unwrap_or_default(),
+        ));
+        Self::new_with_encryption_and_keystore(encryption_enabled, keystore).await
     }
 
     fn get_storage_dir() -> Result<PathBuf, String> {
@@ -337,14 +385,29 @@ impl FileTransferService {
         event_tx: mpsc::Sender<FileTransferEvent>,
         storage_dir: PathBuf,
         download_metrics: Arc<Mutex<DownloadMetrics>>,
+        encryption_enabled: bool,
+        keystore: Arc<Mutex<crate::keystore::Keystore>>,
     ) {
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
                 FileTransferCommand::UploadFile {
                     file_path,
                     file_name,
-                } => match Self::handle_upload_file(&file_path, &file_name, &storage_dir).await {
-                    Ok(file_hash) => {
+                    active_account,
+                    active_private_key,
+                } => match Self::handle_upload_file(
+                    &file_path,
+                    &file_name,
+                    &storage_dir,
+                    encryption_enabled,
+                    None,
+                    &keystore,
+                    active_account.as_deref(),
+                    active_private_key.as_deref(),
+                )
+                .await
+                {
+                    Ok((file_hash, _encrypted_metadata)) => {
                         let _ = event_tx
                             .send(FileTransferEvent::FileUploaded {
                                 file_hash: file_hash.clone(),
@@ -366,6 +429,8 @@ impl FileTransferService {
                 FileTransferCommand::DownloadFile {
                     file_hash,
                     output_path,
+                    active_account,
+                    active_private_key,
                 } => {
                     match Self::download_with_retries(
                         &file_hash,
@@ -373,6 +438,9 @@ impl FileTransferService {
                         &storage_dir,
                         event_tx.clone(),
                         download_metrics.clone(),
+                        keystore.clone(),
+                        active_account.as_deref(),
+                        active_private_key.as_deref(),
                     )
                     .await
                     {
@@ -410,22 +478,109 @@ impl FileTransferService {
         file_path: &str,
         file_name: &str,
         storage_dir: &PathBuf,
-    ) -> Result<String, String> {
+        encryption_enabled: bool,
+        recipient_public_key: Option<&str>,
+        keystore: &Arc<Mutex<crate::keystore::Keystore>>,
+        active_account: Option<&str>,
+        active_private_key: Option<&str>,
+    ) -> Result<(String, Option<EncryptedFileMetadata>), String> {
         // Read the file
         let file_data = tokio::fs::read(file_path)
             .await
             .map_err(|e| format!("Failed to read file: {}", e))?;
 
-        // Calculate file hash
-        let file_hash = Self::calculate_file_hash(&file_data);
+        let original_file_hash = Self::calculate_file_hash(&file_data);
 
-        // Store the file persistently
-        let file_path_in_storage = storage_dir.join(&file_hash);
-        tokio::fs::write(&file_path_in_storage, &file_data)
+        let (final_file_hash, encrypted_metadata) = if encryption_enabled {
+            // Generate random encryption key
+            let encryption_key = encryption::FileEncryption::generate_random_key();
+
+            // Store the encryption key in keystore if we have an active account
+            if let (Some(account), Some(private_key)) = (active_account, active_private_key) {
+                let mut keystore_guard = keystore.lock().await;
+                keystore_guard
+                    .store_file_encryption_key_with_private_key(
+                        account,
+                        original_file_hash.clone(),
+                        &encryption_key,
+                        private_key,
+                    )
+                    .map_err(|e| format!("Failed to store encryption key: {}", e))?;
+            }
+
+            // Create temporary encrypted file path
+            let temp_encrypted_path = storage_dir.join(format!("{}.enc", original_file_hash));
+
+            // Encrypt the file
+            let encryption_result = encryption::FileEncryption::encrypt_file(
+                std::path::Path::new(file_path),
+                &temp_encrypted_path,
+                &encryption_key,
+            )
             .await
-            .map_err(|e| format!("Failed to write file to storage: {}", e))?;
+            .map_err(|e| format!("Failed to encrypt file: {}", e))?;
 
-        // Store metadata
+            // Read encrypted data
+            let encrypted_data = tokio::fs::read(&temp_encrypted_path)
+                .await
+                .map_err(|e| format!("Failed to read encrypted file: {}", e))?;
+
+            let encrypted_file_hash = Self::calculate_file_hash(&encrypted_data);
+
+            // Handle key exchange if recipient public key is provided
+            let (encrypted_key_bundle, recipient_pk) = if let Some(pk_hex) = recipient_public_key {
+                let pk_bytes = hex::decode(pk_hex.trim_start_matches("0x"))
+                    .map_err(|e| format!("Invalid recipient public key: {}", e))?;
+                let recipient_pk = x25519_dalek::PublicKey::from(
+                    <[u8; 32]>::try_from(pk_bytes)
+                        .map_err(|_| "Recipient public key must be 32 bytes".to_string())?,
+                );
+
+                let bundle = encryption::encrypt_aes_key(&encryption_key, &recipient_pk)
+                    .map_err(|e| format!("Failed to encrypt key for recipient: {}", e))?;
+
+                (Some(bundle), Some(pk_hex.to_string()))
+            } else {
+                (None, None)
+            };
+
+            let metadata = EncryptedFileMetadata {
+                original_file_hash: original_file_hash.clone(),
+                encrypted_file_hash: encrypted_file_hash.clone(),
+                encryption_info: encryption_result.encryption_info,
+                encrypted_key_bundle,
+                recipient_public_key: recipient_pk,
+            };
+
+            // Store encrypted metadata
+            let encrypted_meta_path = storage_dir.join(format!("{}.encmeta", encrypted_file_hash));
+            let encrypted_meta_json = serde_json::to_string(&metadata)
+                .map_err(|e| format!("Failed to serialize encrypted metadata: {}", e))?;
+            tokio::fs::write(&encrypted_meta_path, encrypted_meta_json)
+                .await
+                .map_err(|e| format!("Failed to write encrypted metadata: {}", e))?;
+
+            // Store encrypted data
+            let encrypted_file_path = storage_dir.join(&encrypted_file_hash);
+            tokio::fs::write(&encrypted_file_path, &encrypted_data)
+                .await
+                .map_err(|e| format!("Failed to write encrypted file to storage: {}", e))?;
+
+            // Clean up temp file
+            let _ = tokio::fs::remove_file(&temp_encrypted_path).await;
+
+            (encrypted_file_hash, Some(metadata))
+        } else {
+            // Store unencrypted file
+            let file_path_in_storage = storage_dir.join(&original_file_hash);
+            tokio::fs::write(&file_path_in_storage, &file_data)
+                .await
+                .map_err(|e| format!("Failed to write file to storage: {}", e))?;
+
+            (original_file_hash, None)
+        };
+
+        // Store metadata (always for original file info)
         let metadata = serde_json::json!({
             "file_name": file_name,
             "file_size": file_data.len(),
@@ -433,19 +588,23 @@ impl FileTransferService {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
+            "is_encrypted": encryption_enabled,
         });
-        let metadata_path = storage_dir.join(format!("{}.meta", file_hash));
+        let metadata_path = storage_dir.join(format!("{}.meta", final_file_hash));
         tokio::fs::write(&metadata_path, serde_json::to_string(&metadata).unwrap())
             .await
             .map_err(|e| format!("Failed to write metadata: {}", e))?;
 
-        Ok(file_hash)
+        Ok((final_file_hash, encrypted_metadata))
     }
 
     async fn handle_download_file(
         file_hash: &str,
         output_path: &str,
         storage_dir: &PathBuf,
+        keystore: &Arc<Mutex<crate::keystore::Keystore>>,
+        active_account: Option<&str>,
+        active_private_key: Option<&str>,
     ) -> Result<(), String> {
         // Check if we have the file in storage
         let file_path_in_storage = storage_dir.join(file_hash);
@@ -453,16 +612,104 @@ impl FileTransferService {
             return Err("File not found in storage".to_string());
         }
 
-        // Read the file from storage
-        let file_data = tokio::fs::read(&file_path_in_storage)
+        // Check metadata to see if file is encrypted
+        let metadata_path = storage_dir.join(format!("{}.meta", file_hash));
+        let is_encrypted = if metadata_path.exists() {
+            let metadata_content = tokio::fs::read_to_string(&metadata_path)
+                .await
+                .map_err(|e| format!("Failed to read metadata: {}", e))?;
+
+            let metadata: serde_json::Value = serde_json::from_str(&metadata_content)
+                .map_err(|e| format!("Failed to parse metadata: {}", e))?;
+
+            metadata
+                .get("is_encrypted")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+        } else {
+            false
+        };
+
+        let final_data = if is_encrypted {
+            // Try to find encrypted metadata
+            let encrypted_meta_path = storage_dir.join(format!("{}.encmeta", file_hash));
+            if !encrypted_meta_path.exists() {
+                return Err("Encrypted file found but no encryption metadata available".to_string());
+            }
+
+            let encrypted_meta_content = tokio::fs::read_to_string(&encrypted_meta_path)
+                .await
+                .map_err(|e| format!("Failed to read encrypted metadata: {}", e))?;
+
+            let encrypted_metadata: EncryptedFileMetadata =
+                serde_json::from_str(&encrypted_meta_content)
+                    .map_err(|e| format!("Failed to parse encrypted metadata: {}", e))?;
+
+            // Try to get decryption key from keystore
+            let decryption_key =
+                if let (Some(account), Some(private_key)) = (active_account, active_private_key) {
+                    let keystore_guard = keystore.lock().await;
+                    match keystore_guard.get_file_encryption_key_with_private_key(
+                        account,
+                        file_hash,
+                        private_key,
+                    ) {
+                        Ok(key) => key,
+                        Err(e) => {
+                            warn!("Failed to retrieve decryption key from keystore: {}", e);
+                            return Err("No decryption key available for this file".to_string());
+                        }
+                    }
+                } else {
+                    return Err("No active account available for file access".to_string());
+                };
+
+            // Create temporary decrypted file path
+            let temp_decrypted_path = storage_dir.join(format!("{}.dec", file_hash));
+
+            // Decrypt the file
+            encryption::FileEncryption::decrypt_file(
+                &file_path_in_storage,
+                &temp_decrypted_path,
+                &decryption_key,
+                &encrypted_metadata.encryption_info,
+            )
             .await
-            .map_err(|e| format!("Failed to read file from storage: {}", e))?;
+            .map_err(|e| format!("Failed to decrypt file: {}", e))?;
+
+            // Read decrypted data
+            let decrypted_data = tokio::fs::read(&temp_decrypted_path)
+                .await
+                .map_err(|e| format!("Failed to read decrypted file: {}", e))?;
+
+            // Clean up temp file
+            let _ = tokio::fs::remove_file(&temp_decrypted_path).await;
+
+            decrypted_data
+        } else {
+            // Read the unencrypted file from storage
+            tokio::fs::read(&file_path_in_storage)
+                .await
+                .map_err(|e| format!("Failed to read file from storage: {}", e))?
+        };
 
         // Write the file to the output path
-        Self::write_output(output_path, &file_data).await?;
+        Self::write_output(output_path, &final_data).await?;
 
         info!("File downloaded: {} -> {}", file_hash, output_path);
         Ok(())
+    }
+
+    async fn get_decryption_key_for_file(metadata: &EncryptedFileMetadata) -> Option<[u8; 32]> {
+        // This is a placeholder implementation
+        // In a real system, this would:
+        // 1. Check if the user is the original uploader (key stored in keystore)
+        // 2. Check if there's an encrypted key bundle for this user
+        // 3. Decrypt the key bundle using the user's private key
+
+        // For now, return None to indicate no key available
+        // This would need to be implemented with proper key management
+        None
     }
 
     pub fn calculate_file_hash(data: &[u8]) -> String {
@@ -472,25 +719,37 @@ impl FileTransferService {
         format!("{:x}", hasher.finalize())
     }
 
-    pub async fn upload_file(&self, file_path: String, file_name: String) -> Result<(), String> {
+    pub async fn upload_file_with_account(
+        &self,
+        file_path: String,
+        file_name: String,
+        active_account: Option<String>,
+        active_private_key: Option<String>,
+    ) -> Result<(), String> {
         self.cmd_tx
             .send(FileTransferCommand::UploadFile {
                 file_path,
                 file_name,
+                active_account,
+                active_private_key,
             })
             .await
             .map_err(|e| e.to_string())
     }
 
-    pub async fn download_file(
+    pub async fn download_file_with_account(
         &self,
         file_hash: String,
         output_path: String,
+        active_account: Option<String>,
+        active_private_key: Option<String>,
     ) -> Result<(), String> {
         self.cmd_tx
             .send(FileTransferCommand::DownloadFile {
                 file_hash,
                 output_path,
+                active_account,
+                active_private_key,
             })
             .await
             .map_err(|e| e.to_string())
@@ -504,7 +763,11 @@ impl FileTransferService {
             .await
             .map_err(|e| format!("Failed to read storage directory: {}", e))?;
 
-        while let Some(entry) = entries.next_entry().await.map_err(|e| format!("Failed to read directory entry: {}", e))? {
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| format!("Failed to read directory entry: {}", e))?
+        {
             let path = entry.path();
             if let Some(extension) = path.extension() {
                 if extension == "meta" {
@@ -513,11 +776,16 @@ impl FileTransferService {
                             .await
                             .map_err(|e| format!("Failed to read metadata file: {}", e))?;
 
-                        let metadata: serde_json::Value = serde_json::from_str(&metadata_content)
-                            .map_err(|e| format!("Failed to parse metadata: {}", e))?;
+                        let metadata: serde_json::Value =
+                            serde_json::from_str(&metadata_content)
+                                .map_err(|e| format!("Failed to parse metadata: {}", e))?;
 
-                        if let (Some(file_name), Some(_)) = (metadata.get("file_name"), metadata.get("file_size")) {
-                            if let (Some(name_str), Some(hash_str)) = (file_name.as_str(), file_hash.to_str()) {
+                        if let (Some(file_name), Some(_)) =
+                            (metadata.get("file_name"), metadata.get("file_size"))
+                        {
+                            if let (Some(name_str), Some(hash_str)) =
+                                (file_name.as_str(), file_hash.to_str())
+                            {
                                 files.push((hash_str.to_string(), name_str.to_string()));
                             }
                         }
@@ -560,7 +828,9 @@ impl FileTransferService {
                 .as_secs(),
         });
         let metadata_path = self.storage_dir.join(format!("{}.meta", file_hash));
-        if let Err(e) = tokio::fs::write(&metadata_path, serde_json::to_string(&metadata).unwrap()).await {
+        if let Err(e) =
+            tokio::fs::write(&metadata_path, serde_json::to_string(&metadata).unwrap()).await
+        {
             error!("Failed to store metadata: {}", e);
         }
     }
@@ -596,13 +866,17 @@ mod tests {
         let storage_dir = temp_dir.path().to_path_buf();
 
         // Create storage directory
-        tokio::fs::create_dir_all(&storage_dir).await.expect("create storage dir");
+        tokio::fs::create_dir_all(&storage_dir)
+            .await
+            .expect("create storage dir");
 
         // Store test file
         let test_hash = "test-hash";
         let test_data = b"hello world".to_vec();
         let file_path = storage_dir.join(test_hash);
-        tokio::fs::write(&file_path, &test_data).await.expect("write test file");
+        tokio::fs::write(&file_path, &test_data)
+            .await
+            .expect("write test file");
 
         // Store metadata
         let metadata = serde_json::json!({
@@ -611,7 +885,9 @@ mod tests {
             "uploaded_at": 0
         });
         let metadata_path = storage_dir.join(format!("{}.meta", test_hash));
-        tokio::fs::write(&metadata_path, serde_json::to_string(&metadata).unwrap()).await.expect("write metadata");
+        tokio::fs::write(&metadata_path, serde_json::to_string(&metadata).unwrap())
+            .await
+            .expect("write metadata");
 
         let temp_output_dir = tempdir().expect("temp output dir");
         let output_path = temp_output_dir.path().join("downloaded.txt");
@@ -620,12 +896,16 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::channel(16);
         let metrics = Arc::new(Mutex::new(DownloadMetrics::default()));
 
+        let keystore = Arc::new(Mutex::new(crate::keystore::Keystore::new()));
         let result = FileTransferService::download_with_retries(
             test_hash,
             &output_str,
             &storage_dir,
             event_tx.clone(),
             metrics.clone(),
+            keystore,
+            None,
+            None,
         )
         .await;
 
@@ -661,7 +941,9 @@ mod tests {
         let storage_dir = temp_dir.path().to_path_buf();
 
         // Create storage directory
-        tokio::fs::create_dir_all(&storage_dir).await.expect("create storage dir");
+        tokio::fs::create_dir_all(&storage_dir)
+            .await
+            .expect("create storage dir");
 
         let temp_output_dir = tempdir().expect("temp output dir");
         let output_path = temp_output_dir.path().join("missing.txt");
@@ -670,12 +952,16 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::channel(16);
         let metrics = Arc::new(Mutex::new(DownloadMetrics::default()));
 
+        let keystore = Arc::new(Mutex::new(crate::keystore::Keystore::new()));
         let result = FileTransferService::download_with_retries(
             "missing-hash",
             &output_str,
             &storage_dir,
             event_tx.clone(),
             metrics.clone(),
+            keystore,
+            None,
+            None,
         )
         .await;
 

@@ -3,6 +3,14 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Manager, State};
 use totp_rs::{Algorithm, Secret, TOTP};
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
+use pbkdf2::pbkdf2_hmac;
+use sha2::Sha256;
+use rand::RngCore;
+use serde_json;
 
 // This struct will hold the address of the currently logged-in account.
 // It needs to be added to Tauri's state management in `main.rs`.
@@ -37,7 +45,58 @@ fn get_active_address(active_account: &State<'_, ActiveAccount>) -> Result<Strin
     address_lock
         .as_deref()
         .map(String::from)
-        .ok_or_else(|| "No active account. Please log in.".to_string())
+        .ok_or_else(|| "No account is currently active. Please log in.".to_string())
+}
+
+/// Generate a random salt for encryption
+fn generate_random_salt() -> [u8; 32] {
+    let mut salt = [0u8; 32];
+    OsRng.fill_bytes(&mut salt);
+    salt
+}
+
+/// Derive encryption key from password and salt
+fn derive_encryption_key(password: &str, salt: &[u8]) -> [u8; 32] {
+    let mut key = [0u8; 32];
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, 100_000, &mut key);
+    key
+}
+
+/// Encrypt 2FA secret using AES-256-GCM
+fn encrypt_2fa_secret(secret: &str, password: &str, salt: &[u8]) -> Result<String, String> {
+    let key = derive_encryption_key(password, salt);
+    let key = Key::<Aes256Gcm>::from_slice(&key);
+    let cipher = Aes256Gcm::new(key);
+
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    let ciphertext = cipher
+        .encrypt(&nonce, secret.as_bytes())
+        .map_err(|e| format!("Encryption failed: {}", e))?;
+
+    let combined = [nonce.as_slice(), &ciphertext].concat();
+    Ok(hex::encode(combined))
+}
+
+/// Decrypt 2FA secret using AES-256-GCM
+fn decrypt_2fa_secret(encrypted_hex: &str, password: &str, salt: &[u8]) -> Result<String, String> {
+    let combined = hex::decode(encrypted_hex).map_err(|e| format!("Invalid hex: {}", e))?;
+
+    if combined.len() < 12 {
+        return Err("Invalid encrypted data length".to_string());
+    }
+
+    let (nonce_bytes, ciphertext) = combined.split_at(12);
+    let nonce = Nonce::from_slice(nonce_bytes);
+
+    let key = derive_encryption_key(password, salt);
+    let key = Key::<Aes256Gcm>::from_slice(&key);
+    let cipher = Aes256Gcm::new(key);
+
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|e| format!("Decryption failed: {}", e))?;
+
+    String::from_utf8(plaintext).map_err(|e| format!("Invalid UTF-8: {}", e))
 }
 
 /// Checks if 2FA is enabled for the currently active account.
@@ -83,6 +142,7 @@ pub fn generate_totp_secret(active_account: State<'_, ActiveAccount>) -> Result<
 pub fn verify_and_enable_totp(
     secret: String,
     code: String,
+    password: String,
     app_handle: tauri::AppHandle,
     active_account: State<'_, ActiveAccount>,
 ) -> Result<bool, String> {
@@ -97,9 +157,14 @@ pub fn verify_and_enable_totp(
 
     if totp.check_current(&code).unwrap_or(false) {
         let path = get_2fa_file_path(&app_handle, &address)?;
-        // NOTE: The secret is stored in plaintext. For higher security,
-        // this file should be encrypted using a key derived from the user's password.
-        fs::write(&path, secret).map_err(|e| format!("Failed to save 2FA secret: {}", e))?;
+        // SECURITY: Encrypt the 2FA secret using AES-256-GCM with password-derived key
+        let salt = generate_random_salt();
+        let encrypted_secret = encrypt_2fa_secret(&secret, password, &salt)?;
+        let data_to_store = serde_json::json!({
+            "encrypted_secret": encrypted_secret,
+            "salt": hex::encode(&salt)
+        });
+        fs::write(&path, data_to_store.to_string()).map_err(|e| format!("Failed to save 2FA secret: {}", e))?;
         Ok(true)
     } else {
         Ok(false)
@@ -110,6 +175,7 @@ pub fn verify_and_enable_totp(
 #[tauri::command]
 pub fn verify_totp_code(
     code: String,
+    password: String,
     app_handle: tauri::AppHandle,
     active_account: State<'_, ActiveAccount>,
 ) -> Result<bool, String> {
@@ -120,8 +186,20 @@ pub fn verify_totp_code(
         return Err("2FA is not enabled for this account.".to_string());
     }
 
-    let secret_b32 = fs::read_to_string(&path)
+    let stored_data = fs::read_to_string(&path)
         .map_err(|e| format!("Failed to read stored 2FA secret: {}", e))?;
+
+    let json_data: serde_json::Value = serde_json::from_str(&stored_data)
+        .map_err(|e| format!("Failed to parse 2FA data: {}", e))?;
+
+    let encrypted_secret = json_data["encrypted_secret"].as_str()
+        .ok_or("Missing encrypted_secret field")?;
+    let salt_hex = json_data["salt"].as_str()
+        .ok_or("Missing salt field")?;
+
+    let salt = hex::decode(salt_hex).map_err(|e| format!("Invalid salt: {}", e))?;
+    let secret_b32 = decrypt_2fa_secret(encrypted_secret, &password, &salt)?;
+
     let secret_bytes = Secret::from_b32(&secret_b32)
         .map_err(|e| format!("Invalid stored secret: {}", e))?
         .to_bytes()

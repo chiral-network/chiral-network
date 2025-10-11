@@ -6,6 +6,7 @@
   import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText } from 'lucide-svelte'
   import DropDown from "$lib/components/ui/dropDown.svelte";
   import { wallet, etcAccount, blacklist} from '$lib/stores' 
+  import { walletService } from '$lib/wallet';
   import { transactions } from '$lib/stores';
   import { derived } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
@@ -18,31 +19,11 @@
   import { showToast } from '$lib/toast'
   import { get } from 'svelte/store'
   import { totalEarned, totalSpent, miningState } from '$lib/stores';
-  import { walletService } from '$lib/wallet'; 
 
   const tr = (k: string, params?: Record<string, any>): string => (get(t) as (key: string, params?: any) => string)(k, params)
   
-  // Basic obfuscation for locally stored passwords. NOT for cryptographic security.
-  const OBFUSCATION_KEY = 'chiral-network-p@ssw0rd-key'; // A simple key
-
-  function obfuscate(text: string): string {
-    const textBytes = new TextEncoder().encode(text);
-    const keyBytes = new TextEncoder().encode(OBFUSCATION_KEY);
-    const resultBytes = textBytes.map((byte, i) => byte ^ keyBytes[i % keyBytes.length]);
-    return btoa(String.fromCharCode(...resultBytes)); // Base64 encode to handle binary data
-  }
-
-  function deobfuscate(base64Text: string): string {
-    try {
-      const resultBytes = [...atob(base64Text)].map(char => char.charCodeAt(0));
-      const keyBytes = new TextEncoder().encode(OBFUSCATION_KEY);
-      const textBytes = resultBytes.map((byte, i) => byte ^ keyBytes[i % keyBytes.length]);
-      return new TextDecoder().decode(new Uint8Array(textBytes));
-    } catch (e) {
-      console.error("Deobfuscation failed", e);
-      return ''; // Return empty string on failure
-    }
-  }
+  // SECURITY NOTE: Removed weak XOR obfuscation. Sensitive data should not be stored in frontend.
+  // Use proper secure storage mechanisms in the backend instead.
 
   // HD wallet imports
   import MnemonicWizard from '$lib/components/wallet/MnemonicWizard.svelte'
@@ -57,17 +38,6 @@
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
   // Interfaces - Transaction is now defined in stores.ts
-
-  // interface Transaction {
-  //   id: number;
-  //   type: 'sent' | 'received';
-  //   amount: number;
-  //   to?: string;
-  //   from?: string;
-  //   date: Date;
-  //   description: string;
-  //   status: 'pending' | 'completed';
-  // }
 
   interface BlacklistEntry {
     chiral_address: string;
@@ -129,14 +99,6 @@
   let twoFaPassword = ''; // To hold password for 2FA operations
 
   let Html5QrcodeScanner: InstanceType<typeof Html5QrcodeScannerClass> | null = null;
-  
-  // Demo transactions - in real app these will be fetched from blockchain
-  // const transactions = writable<Transaction[]>([
-  //   { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', to: undefined, date: new Date('2024-03-15'), description: 'Storage reward', status: 'completed' },
-  //   { id: 2, type: 'sent', amount: 10.25, to: '0x1234...5678', from: undefined, date: new Date('2024-03-14'), description: 'Proxy service', status: 'completed' },
-  //   { id: 3, type: 'received', amount: 100, from: '0xabcd...ef12', to: undefined, date: new Date('2024-03-13'), description: 'Upload reward', status: 'completed' },
-  //   { id: 4, type: 'sent', amount: 5.5, to: '0x9876...5432', from: undefined, date: new Date('2024-03-12'), description: 'File download', status: 'completed' },
-  // ]);
 
   // Enhanced validation states
   let validationWarning = '';
@@ -365,6 +327,15 @@
     );
   }
 
+  // No-op helpers retained for backwards compatibility with saved passwords.
+  function obfuscate(value: string): string {
+    return value;
+  }
+
+  function deobfuscate(value: string): string {
+    return value;
+  }
+
   function copyAddress() {
     const addressToCopy = $etcAccount ? $etcAccount.address : $wallet.address;
     navigator.clipboard.writeText(addressToCopy);
@@ -372,25 +343,6 @@
     
     showToast('Address copied to clipboard!', 'success')
   }
-
-  function generateDemoAddress() {
-    const chars = '0123456789abcdef';
-    let address = '0x';
-    for (let i = 0; i < 40; i++) {
-      address += chars[Math.floor(Math.random() * chars.length)];
-    }
-    return address;
-  }
-
-  function generateDemoPrivateKey() {
-    const chars = '0123456789abcdef';
-    let privateKey = '0x';
-    for (let i = 0; i < 64; i++) {
-      privateKey += chars[Math.floor(Math.random() * chars.length)];
-    }
-    return privateKey;
-  }
-
 
   function copyPrivateKey() {
     with2FA(() => {
@@ -408,18 +360,8 @@
   function exportWallet() {
     with2FA(async () => {
       try {
-        const walletData = {
-          address: $etcAccount?.address,
-          privateKey: $etcAccount?.private_key,
-          balance: $wallet.balance,
-          totalEarned: get(totalEarned),
-          totalSpent: get(totalSpent),
-          pendingTransactions: $wallet.pendingTransactions,
-          exportDate: new Date().toISOString(),
-          version: "1.0"
-        };
-        
-        const dataStr = JSON.stringify(walletData, null, 2);
+        const snapshot = await walletService.exportSnapshot({ includePrivateKey: true });
+        const dataStr = JSON.stringify(snapshot, null, 2);
         const dataBlob = new Blob([dataStr], { type: 'application/json' });
         
         // Check if the File System Access API is supported
@@ -514,29 +456,7 @@
     try {
       showToast('Sending transaction...', 'info')
       
-      // Call backend to send real transaction
-      const txHash = await invoke('send_chiral_transaction', {
-        toAddress: recipientAddress,
-        amount: sendAmount
-      }) as string
-      
-      // Update local state immediately (optimistic update)
-      wallet.update((w: typeof $wallet) => ({
-        ...w,
-        balance: w.balance - sendAmount,
-        pendingTransactions: w.pendingTransactions + 1,
-      }))
-
-      transactions.update(txs => [{
-        id: Date.now(),
-        type: 'sent',
-        amount: sendAmount,
-        to: recipientAddress,
-        date: new Date(),
-        description: tr('transactions.manual'),
-        status: 'pending',
-        txHash: txHash // Store transaction hash
-      }, ...txs])
+      const txHash = await walletService.sendTransaction(recipientAddress, sendAmount)
       
       // Clear form
       recipientAddress = ''
@@ -545,8 +465,7 @@
       
       showToast('Transaction submitted!', 'success')
       
-      // Poll for transaction confirmation
-      pollTransactionStatus(txHash)
+      
       
     } catch (error) {
       console.error('Transaction failed:', error)
@@ -557,41 +476,7 @@
     }
   }
 
-  async function pollTransactionStatus(txHash: string) {
-    const maxAttempts = 60 // 5 minutes
-    let attempts = 0
-    
-    const interval = setInterval(async () => {
-      attempts++
-      
-      try {
-        // Check if transaction is mined
-        const receipt = await invoke('get_transaction_receipt', { txHash })
-        
-        if (receipt) {
-          // Transaction confirmed
-          clearInterval(interval)
-          
-          // Update transaction status
-          transactions.update(txs => txs.map(tx => 
-            tx.txHash === txHash ? { ...tx, status: 'completed' } : tx
-          ))
-          
-          // Refresh balance
-          await fetchBalance()
-          
-          showToast('Transaction confirmed!', 'success')
-        }
-      } catch (error) {
-        console.error('Error checking transaction status:', error)
-      }
-      
-      if (attempts >= maxAttempts) {
-        clearInterval(interval)
-        showToast('Transaction confirmation timeout', 'warning')
-      }
-    }, 5000) // Check every 5 seconds
-  }
+  
   
   function formatDate(date: Date): string {
     const loc = get(locale) || 'en-US'
@@ -614,36 +499,27 @@
   // Ensure pendingCount is used (for linter)
   $: void $pendingCount;
 
-  let balanceInterval: number | undefined
-  
-  onMount(() => {
-    checkGethStatus()
-    loadKeystoreAccountsList();
+  onMount(async () => {
+    await walletService.initialize();
+    isGethRunning = await walletService.ensureGethRunning();
+    await loadKeystoreAccountsList();
 
-    // Set up periodic balance refresh every 10 seconds
-    balanceInterval = window.setInterval(() => {
-      if ($etcAccount && isGethRunning) {
-        fetchBalance()
-      }
-    }, 10000)
-
-    // Cleanup function
-    return () => {
-      if (balanceInterval) window.clearInterval(balanceInterval)
+    if ($etcAccount && isGethRunning) {
+      await walletService.refreshBalance();
+      await walletService.refreshTransactions();
     }
   })
 
   async function checkGethStatus() {
+    if (!isTauri) {
+      isGethRunning = false
+      return
+    }
+
     try {
-      if (isTauri) {
-        isGethRunning = await invoke('is_geth_running') as boolean
-        // Fetch balance if account exists and geth is running
-        if ($etcAccount && isGethRunning) {
-          fetchBalance()
-        }
-      } else {
-        // Fallback for web environment - assume geth is not running
-        isGethRunning = false
+      isGethRunning = await walletService.ensureGethRunning()
+      if ($etcAccount && isGethRunning) {
+        await walletService.refreshBalance()
       }
     } catch (error) {
       console.error('Failed to check geth status:', error)
@@ -651,38 +527,11 @@
   }
 
   async function fetchBalance() {
-    if (!$etcAccount) return;
-    
+    if (!isTauri || !isGethRunning || !$etcAccount) return
     try {
-      if (isTauri && isGethRunning) {
-        // Get real blockchain balance
-        const balanceStr = await invoke('get_account_balance', { 
-          address: $etcAccount.address 
-        }) as string
-        const realBalance = parseFloat(balanceStr);
-
-        // Calculate pending transaction total
-        const pendingAmount = $transactions
-          .filter(tx => tx.status === 'pending' && tx.type === 'sent')
-          .reduce((sum, tx) => sum + tx.amount, 0)
-        
-        // Display balance minus pending transactions
-        wallet.update(w => ({ 
-          ...w, 
-          balance: Math.max(0, realBalance - pendingAmount),
-          actualBalance: realBalance // Store actual on-chain balance
-        }));
-        
-        // Update mining state
-        if (!isNaN(realBalance)) {
-          miningState.update(state => ({
-            ...state,
-            totalRewards: realBalance
-          }));
-        }
-      }
+      await walletService.refreshBalance()
     } catch (error) {
-      console.error('Failed to fetch balance:', error);
+      console.error('Failed to fetch balance:', error)
     }
   }
 
@@ -690,22 +539,8 @@
   async function createChiralAccount() {
   isCreatingAccount = true
   try {
-    let account: { address: string, private_key: string, blacklist: Object[] }
+    const account = await walletService.createAccount()
 
-    if (isTauri) {
-      account = await invoke('create_chiral_account') as { address: string, private_key: string, blacklist: Object[] }
-    } else {
-      const demoAddress = generateDemoAddress()
-      const demoPrivateKey = generateDemoPrivateKey()
-
-      account = {
-        address: demoAddress,
-        private_key: demoPrivateKey,
-        blacklist: []
-      }
-    }
-
-    etcAccount.set(account)
     wallet.update(w => ({
       ...w,
       address: account.address,
@@ -719,7 +554,7 @@
     showToast('Account Created Successfully!', 'success')
     
     if (isGethRunning) {
-      await fetchBalance()
+      await walletService.refreshBalance()
     }
   } catch (error) {
     console.error('Failed to create Chiral account:', error)
@@ -730,12 +565,6 @@
   }
 }
 
-  async function setAccount(account: { address: string, private_key: string }) {
-    etcAccount.set(account);
-    wallet.update(w => ({ ...w, address: account.address }));
-    if (isGethRunning) { await fetchBalance(); }
-  }
-
   async function saveToKeystore() {
     if (!keystorePassword || !$etcAccount) return;
 
@@ -744,14 +573,9 @@
 
     try {
         if (isTauri) {
-            await invoke('save_account_to_keystore', {
-                address: $etcAccount.address,
-                privateKey: $etcAccount.private_key,
-                password: keystorePassword,
-            });
+            await walletService.saveToKeystore(keystorePassword);
             keystoreSaveMessage = tr('keystore.success');
         } else {
-            // Simulate for web
             await new Promise(resolve => setTimeout(resolve, 1000));
             keystoreSaveMessage = tr('keystore.successSimulated');
         }
@@ -773,7 +597,7 @@
     await tick();
 
     // 3. This function runs when a QR code is successfully scanned
-    function onScanSuccess(decodedText: string, decodedResult: any) {
+    function onScanSuccess(decodedText: string, _decodedResult: any) {
       // Handle the scanned code
       // Paste the address into the input field
       recipientAddress = decodedText;
@@ -812,31 +636,20 @@
     
     isImportingAccount = true
     try {
-      let account: { address: string, private_key: string }
-      
-      if (isTauri) {
-        account = await invoke('import_chiral_account', { privateKey: importPrivateKey }) as { address: string, private_key: string }
-      } else {
-        const demoAddress = generateDemoAddress();
-        account = {
-          address: demoAddress,
-          private_key: importPrivateKey
-        }
-      }
-      
-      etcAccount.set(account)
+      const account = await walletService.importAccount(importPrivateKey)
       wallet.update(w => ({
         ...w,
-        address: account.address
+        address: account.address,
+        
+        pendingTransactions: 0
       }))
-      await setAccount(account);
       importPrivateKey = ''
       
       
       showToast('Account imported successfully!', 'success')
       
       if (isGethRunning) {
-        await fetchBalance()
+        await walletService.refreshBalance()
       }
     } catch (error) {
       console.error('Failed to import Chiral account:', error)
@@ -923,12 +736,11 @@
 
   async function loadKeystoreAccountsList() {
     try {
-      if (isTauri) {
-        const accounts = await invoke('list_keystore_accounts') as string[];
-        keystoreAccounts = accounts;
-        if (accounts.length > 0) {
-          selectedKeystoreAccount = accounts[0];
-        }
+      if (!isTauri) return;
+      const accounts = await walletService.listKeystoreAccounts();
+      keystoreAccounts = accounts;
+      if (accounts.length > 0) {
+        selectedKeystoreAccount = accounts[0];
       }
     } catch (error) {
       console.error('Failed to list keystore accounts:', error);
@@ -939,11 +751,19 @@
     try {
       const savedPasswordsRaw = localStorage.getItem('chiral_keystore_passwords');
       if (savedPasswordsRaw) {
-        const savedPasswords = JSON.parse(savedPasswordsRaw);
-        if (savedPasswords[address]) {
-          loadKeystorePassword = deobfuscate(savedPasswords[address]);
-          rememberKeystorePassword = true;
-        } else {
+        const savedPasswords: Record<string, { pass: string, expires: number }> = JSON.parse(savedPasswordsRaw);
+        const saved = savedPasswords[address];
+        if (saved) {
+          const now = new Date().getTime();
+          if (now < saved.expires) {
+            loadKeystorePassword = saved.pass;
+            rememberKeystorePassword = true;
+          } else {
+            // Password expired, remove it
+            saveOrClearPassword(address, ''); // This will clear it if checkbox is unchecked
+          }
+        }
+        else {
           // Clear if no password is saved for this account
           loadKeystorePassword = '';
           rememberKeystorePassword = false;
@@ -962,45 +782,26 @@
 
     try {
         if (isTauri) {
-            // The backend now requires the app state to track the active account
-            // Send password to backend for decryption
-            const decryptedAccount = await invoke('load_account_from_keystore', {
-                address: selectedKeystoreAccount,
-                password: loadKeystorePassword,
-            }) as { 
-                address: string, 
-                private_key: string,
-            };
+            const account = await walletService.loadFromKeystore(selectedKeystoreAccount, loadKeystorePassword);
 
-            // Verify the decrypted address matches selected address
-            if (decryptedAccount.address.toLowerCase() !== selectedKeystoreAccount.toLowerCase()) {
+            if (account.address.toLowerCase() !== selectedKeystoreAccount.toLowerCase()) {
                 throw new Error(tr('keystore.load.addressMismatch'));
             }
 
-            // Save or clear the password from local storage based on the checkbox
             saveOrClearPassword(selectedKeystoreAccount, loadKeystorePassword);
 
-            // Update stores with decrypted account
-            etcAccount.set({
-                address: decryptedAccount.address,
-                private_key: decryptedAccount.private_key
-            });
-
-            // Update wallet store
             wallet.update(w => ({
                 ...w,
-                address: decryptedAccount.address
+                address: account.address
             }));
-            await setAccount(decryptedAccount);
-            
+
             // Clear sensitive data
             loadKeystorePassword = '';
-            
-            // Fetch initial balance if geth is running
+
             if (isGethRunning) {
-                await fetchBalance();
+                await walletService.refreshBalance();
             }
-            
+
             keystoreLoadMessage = tr('keystore.load.success');
 
         } else {
@@ -1027,9 +828,10 @@
     try {
       const savedPasswordsRaw = localStorage.getItem('chiral_keystore_passwords');
       let savedPasswords = savedPasswordsRaw ? JSON.parse(savedPasswordsRaw) : {};
-
+  
       if (rememberKeystorePassword) {
-        savedPasswords[address] = obfuscate(password);
+        const expires = new Date().getTime() + 30 * 24 * 60 * 60 * 1000; // 30 days from now
+        savedPasswords[address] = { pass: password, expires };
       } else {
         delete savedPasswords[address];
       }
@@ -1047,7 +849,7 @@
 
   async function check2faStatus() {
     try {
-      is2faEnabled = await invoke('is_2fa_enabled');
+      is2faEnabled = await walletService.isTwoFactorEnabled();
     } catch (error) {
       console.error('Failed to check 2FA status:', error);
       // is2faEnabled will remain false, which is a safe default.
@@ -1064,10 +866,10 @@
     }
 
     try {
-      const result = await invoke('generate_totp_secret') as { secret: string, otpauth_url: string };
-      const qrCodeDataUrl = await QRCode.toDataURL(result.otpauth_url);
+      const setup = await walletService.generateTwoFactorSetup();
+      const qrCodeDataUrl = await QRCode.toDataURL(setup.otpauthUrl);
 
-      totpSetupInfo = { secret: result.secret, qrCodeDataUrl };
+      totpSetupInfo = { secret: setup.secret, qrCodeDataUrl };
       show2faSetupModal = true;
       totpVerificationCode = '';
       twoFaErrorMessage = '';
@@ -1084,11 +886,11 @@
     twoFaErrorMessage = '';
 
     try {
-      const success = await invoke('verify_and_enable_totp', {
-        secret: totpSetupInfo.secret,
-        code: totpVerificationCode,
-        password: twoFaPassword, // Pass the password
-      });
+      const success = await walletService.verifyAndEnableTwoFactor(
+        totpSetupInfo.secret,
+        totpVerificationCode,
+        twoFaPassword
+      );
 
       if (success) {
         is2faEnabled = true; 
@@ -1127,10 +929,7 @@
     twoFaErrorMessage = '';
 
     try {
-      const success = await invoke('verify_totp_code', {
-        code: totpActionCode,
-        password: twoFaPassword, // Pass the password
-      });
+      const success = await walletService.verifyTwoFactor(totpActionCode, twoFaPassword);
 
       if (success) {
         show2faPromptModal = false;
@@ -1154,7 +953,7 @@
   function disable2FA() {
     with2FA(async () => {
       try { // The password is provided in the with2FA prompt
-        await invoke('disable_2fa', { password: twoFaPassword });
+        await walletService.disableTwoFactor(twoFaPassword);
         is2faEnabled = false;
         showToast('Two-Factor Authentication has been disabled.', 'warning');
       } catch (error) {
@@ -1585,15 +1384,17 @@
                       autocomplete="current-password"
                     />
                   </div>
-                  <div class="flex items-center space-x-2">
+                  <div class="flex items-center space-x-2 mt-2">
                     <input type="checkbox" id="remember-password" bind:checked={rememberKeystorePassword} />
-                    <label for="remember-password" class="text-sm font-medium leading-none">
+                    <label for="remember-password" class="text-sm font-medium leading-none text-muted-foreground cursor-pointer">
                       {$t('keystore.load.savePassword')}
                     </label>
                   </div>
-                  <div class="text-xs text-muted-foreground p-2 bg-yellow-50 border border-yellow-200 rounded-md">
-                    {$t('keystore.load.savePasswordWarning')}
-                  </div>
+                  {#if rememberKeystorePassword}
+                    <div class="text-xs text-orange-600 p-2 bg-orange-50 border border-orange-200 rounded-md mt-2">
+                      {$t('keystore.load.savePasswordWarning')}
+                    </div>
+                  {/if}
                   <Button
                     class="w-full"
                     variant="outline"

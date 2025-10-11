@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { toHumanReadableSize } from "$lib/utils";
+import {ReputationStore} from "$lib/reputationStore";
 
 /**
  * Peer metrics interface matching the Rust struct
@@ -160,6 +161,8 @@ export class PeerSelectionService {
     }
   }
 
+  private static rep = ReputationStore.getInstance();
+
   /**
    * Get the best peer for a specific use case
    */
@@ -172,13 +175,21 @@ export class PeerSelectionService {
       return null;
     }
 
-    // For small files, prioritize low latency
-    // For large files, prioritize high bandwidth
+    // ✨ Pre-rank by local reputation composite (no external metrics needed)
+    availablePeers.sort((a, b) => {
+      const cb = this.rep.composite(b);
+      const ca = this.rep.composite(a);
+      // Higher composite first; stable if equal
+      return cb - ca;
+    });
+
+    // Keep your original strategy selection (unchanged)
     const strategy: PeerSelectionStrategy =
       fileSize > 100 * 1024 * 1024
-        ? "bandwidth" // >100MB use bandwidth
-        : "fastest"; // <100MB use fastest
+        ? "bandwidth"
+        : "fastest";
 
+    // Keep your original selection call (unchanged)
     const selectedPeers = await this.selectPeersWithStrategy(
       availablePeers,
       1,
@@ -187,7 +198,9 @@ export class PeerSelectionService {
     );
 
     return selectedPeers.length > 0 ? selectedPeers[0] : null;
+
   }
+  //END OF GET BEST PEER 
 
   /**
    * Get multiple peers for parallel downloading
@@ -285,6 +298,54 @@ export class PeerSelectionService {
 
     // Return cleanup function
     return () => clearInterval(intervalId);
+  }
+
+
+  /**
+   * Composite score in [0,1], combining:
+   *  - local reputation (Beta) 60%
+   *  - freshness (last_seen)   25%
+   *  - performance (latency)   15%
+   */
+  static compositeScoreFromMetrics(p: PeerMetrics): number {
+    // keep the store updated with what we see
+    this.rep.noteSeen(p.peer_id);
+    if (typeof p.latency_ms === "number") {
+      // don't mark success here; RTT success will be recorded where you actually connect/transfer
+      // but we can gently update EMA if we want to reflect recent latency probes
+      // (optional, comment out if you prefer only connection-based updates)
+      // this.rep.success(p.peer_id, p.latency_ms);
+    }
+
+    // local rep components
+    const repScore = this.rep.repScore(p.peer_id);
+    const freshScore = (() => {
+      const nowSec = Date.now() / 1000;
+      const ageSec = Math.max(0, nowSec - (p.last_seen || 0));
+      if (ageSec <= 60) return 1;
+      if (ageSec >= 86400) return 0;
+      return 1 - (ageSec - 60) / (86400 - 60);
+    })();
+    const perfScore = (() => {
+      if (typeof p.latency_ms !== "number") return 0.5;
+      const clamped = Math.max(100, Math.min(2000, p.latency_ms));
+      return 1 - (clamped - 100) / (2000 - 100);
+    })();
+
+    return 0.6 * repScore + 0.25 * freshScore + 0.15 * perfScore;
+  }
+
+  //Adding so transfers can update reputation
+  static notePeerSeen(peerId: string) {
+    this.rep.noteSeen(peerId);
+  }
+
+  static notePeerSuccess(peerId: string, rttMs?: number) {
+    this.rep.success(peerId, rttMs);
+  }
+
+  static notePeerFailure(peerId: string) {
+    this.rep.failure(peerId);
   }
 }
 

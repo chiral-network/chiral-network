@@ -15,12 +15,13 @@ export class FileService {
     await invoke("start_file_transfer_service");
     // Also start the DHT node, as it's closely related to file sharing.
     // The port and bootstrap nodes could be made configurable in the future.
-    // Using a default bootstrap node from your headless.rs for now.
-    const defaultBootstrap =
-      "/ip4/54.198.145.146/tcp/4001/p2p/12D3KooWNHdYWRTe98KMF1cDXXqGXvNjd1SAchDaeP5o4MsoJLu2";
+    // Get bootstrap nodes from the backend instead of hardcoding
+    const bootstrapNodes = await invoke<string[]>(
+      "get_bootstrap_nodes_command"
+    );
     await invoke("start_dht_node", {
       port: 4001,
-      bootstrapNodes: [defaultBootstrap],
+      bootstrapNodes,
     });
 
     // Get the peer ID and set it on the DHT service singleton
@@ -32,47 +33,39 @@ export class FileService {
   }
 
   /**
-   * Uploads a file to the network by sending its data to the backend.
-   * This is suitable for files selected via a file input in the browser.
+   * Uploads a file to the network (for drag-and-drop via Web File API).
+   * Saves file to temp location then uses ChunkManager for encryption/chunking.
    * @param file The file object to upload.
-   * @returns The metadata of the uploaded file.
+   * @param recipientPublicKey Optional recipient public key for encrypted sharing.
+   * @returns The file manifest from ChunkManager.
    */
-  async uploadFile(file: File): Promise<any> {
-    const buffer = await file.arrayBuffer();
-    const bytes = new Uint8Array(buffer);
+  async uploadFile(file: File, recipientPublicKey?: string): Promise<any> {
+    try {
+      // Read file into memory
+      const buffer = await file.arrayBuffer();
+      const fileData = Array.from(new Uint8Array(buffer));
 
-    // Calls 'upload_file_data_to_network' on the backend.
-    // Tauri automatically converts camelCase JS arguments to snake_case Rust arguments.
-    const metadata = await invoke("upload_file_data_to_network", {
-      fileName: file.name,
-      fileData: Array.from(bytes), // Convert Uint8Array to number[] for serialization
-      mimeType: file.type || null,
-      isEncrypted: false,
-      encryptionMethod: null,
-      keyFingerprint: null,
-    });
+      // Save to temp file (backend will use ChunkManager on this)
+      const tempFilePath = await invoke<string>("save_temp_file_for_upload", {
+        fileName: file.name,
+        fileData,
+      });
 
-    return metadata;
+      console.log(`Saved drag-and-drop file to temp: ${tempFilePath}`);
+
+      // Import encryptionService to use same flow as file path selection
+      const { encryptionService } = await import("./encryption");
+
+      // Use ChunkManager via encryptionService (same as file path upload)
+      const manifest = await encryptionService.encryptFile(tempFilePath, recipientPublicKey);
+
+      return manifest;
+    } catch (error: any) {
+      console.error("Upload failed:", error);
+      throw new Error(`Upload failed: ${error}`);
+    }
   }
 
-  /**
-   * Uploads a file to the network from a given file path.
-   * This is suitable for files already on the user's disk, referenced by path.
-   * @param filePath The absolute path to the file.
-   * @param fileName The name of the file.
-   * @returns The hash of the uploaded file.
-   */
-  async uploadFileFromPath(
-    filePath: string,
-    fileName: string
-  ): Promise<string> {
-    // Calls 'upload_file_to_network' on the backend.
-    const hash = await invoke<string>("upload_file_to_network", {
-      filePath,
-      fileName,
-    });
-    return hash;
-  }
 
   /**
    * Downloads a file from the network given its hash.

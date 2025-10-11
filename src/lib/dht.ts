@@ -1,15 +1,11 @@
 // DHT configuration and utilities
 import { invoke } from "@tauri-apps/api/core";
-
-// Default bootstrap nodes for network connectivity
-export const DEFAULT_BOOTSTRAP_NODES = [
-  "/ip4/145.40.118.135/tcp/4001/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
-  "/ip4/139.178.91.71/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
-  "/ip4/147.75.87.27/tcp/4001/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
-  "/ip4/139.178.65.157/tcp/4001/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
-  "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
-  "/ip4/54.198.145.146/tcp/4001/p2p/12D3KooWNHdYWRTe98KMF1cDXXqGXvNjd1SAchDaeP5o4MsoJLu2",
-];
+import { listen } from "@tauri-apps/api/event";
+import type { AppSettings } from "./stores";
+import { homeDir } from "@tauri-apps/api/path";
+//importing reputation store for the reputation based peer discovery
+import ReputationStore from "$lib/reputationStore";
+const __rep = ReputationStore.getInstance();
 
 export type NatReachabilityState = "unknown" | "public" | "private";
 export type NatConfidence = "low" | "medium" | "high";
@@ -29,12 +25,17 @@ export interface DhtConfig {
   autonatProbeIntervalSeconds?: number;
   autonatServers?: string[];
   proxyAddress?: string;
+  chunkSizeKb?: number;
+  cacheSizeMb?: number;
+  enableAutorelay?: boolean;
+  preferredRelays?: string[];
 }
 
 export interface FileMetadata {
   fileHash: string;
   fileName: string;
   fileSize: number;
+  fileData?: Uint8Array | number[];
   seeders: string[];
   createdAt: number;
   mimeType?: string;
@@ -42,7 +43,30 @@ export interface FileMetadata {
   encryptionMethod?: string;
   keyFingerprint?: string;
   version?: number;
+  manifest?: string;
 }
+
+export interface FileManifestForJs {
+  merkleRoot: string;
+  chunks: any[]; // Define a proper type for ChunkInfo if you can
+  encryptedKeyBundle: string; // This is the JSON string
+}
+
+export const encryptionService = {
+  async encryptFile(filePath: string): Promise<FileManifestForJs> {
+    return await invoke("encrypt_file_for_upload", { filePath });
+  },
+
+  async decryptFile(
+    manifest: FileManifestForJs,
+    outputPath: string
+  ): Promise<void> {
+    await invoke("decrypt_and_reassemble_file", {
+      manifestJs: manifest,
+      outputPath,
+    });
+  },
+};
 
 export interface DhtHealth {
   peerCount: number;
@@ -60,6 +84,21 @@ export interface DhtHealth {
   observedAddrs: string[];
   reachabilityHistory: NatHistoryItem[];
   autonatEnabled: boolean;
+  // AutoRelay metrics
+  autorelayEnabled: boolean;
+  activeRelayPeerId: string | null;
+  relayReservationStatus: string | null;
+  lastReservationSuccess: number | null;
+  lastReservationFailure: number | null;
+  reservationRenewals: number;
+  reservationEvictions: number;
+  // DCUtR hole-punching metrics
+  dcutrEnabled: boolean;
+  dcutrHolePunchAttempts: number;
+  dcutrHolePunchSuccesses: number;
+  dcutrHolePunchFailures: number;
+  lastDcutrSuccess: number | null;
+  lastDcutrFailure: number | null;
 }
 
 export class DhtService {
@@ -86,7 +125,10 @@ export class DhtService {
 
     // Use default bootstrap nodes if none provided
     if (bootstrapNodes.length === 0) {
-      bootstrapNodes = DEFAULT_BOOTSTRAP_NODES;
+      bootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command");
+      console.log("Using default bootstrap nodes for network connectivity");
+    } else {
+      console.log(`Using ${bootstrapNodes.length} custom bootstrap nodes`);
     }
 
     try {
@@ -109,10 +151,24 @@ export class DhtService {
       ) {
         payload.proxyAddress = config.proxyAddress;
       }
+      if (typeof config?.chunkSizeKb === "number") {
+        payload.chunkSizeKb = config.chunkSizeKb;
+      }
+      if (typeof config?.cacheSizeMb === "number") {
+        payload.cacheSizeMb = config.cacheSizeMb;
+      }
+      if (typeof config?.enableAutorelay === "boolean") {
+        payload.enableAutorelay = config.enableAutorelay;
+      }
+      if (config?.preferredRelays && config.preferredRelays.length > 0) {
+        payload.preferredRelays = config.preferredRelays;
+      }
 
       const peerId = await invoke<string>("start_dht_node", payload);
       this.peerId = peerId;
       this.port = port;
+      console.log("DHT started with peer ID:", this.peerId);
+      console.log("Your multiaddr for others to connect:", this.getMultiaddr());
       return this.peerId;
     } catch (error) {
       console.error("Failed to start DHT:", error);
@@ -125,24 +181,73 @@ export class DhtService {
     try {
       await invoke("stop_dht_node");
       this.peerId = null;
+      console.log("DHT stopped");
     } catch (error) {
       console.error("Failed to stop DHT:", error);
       throw error;
     }
   }
 
-  async publishFile(metadata: FileMetadata): Promise<void> {
-    if (!this.peerId) {
-      throw new Error("DHT not started");
-    }
 
+
+  async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
     try {
-      await invoke("publish_file_metadata", {
-        fileHash: metadata.fileHash,
-        fileName: metadata.fileName,
-        fileSize: metadata.fileSize,
-        mimeType: metadata.mimeType,
+      console.log("Initiating download for file:", fileMetadata.fileHash);
+      // Start listening for the published_file event
+      const metadataPromise = new Promise<FileMetadata>((resolve) => {
+        const unlistenPromise = listen<FileMetadata>(
+          "file_content",
+          async (event) => {
+            console.log("Received file content event:", event.payload);
+            const stored = localStorage.getItem("chiralSettings");
+            let storagePath = "."; // Default fallback
+
+            if (stored) {
+              try {
+                const loadedSettings: AppSettings = JSON.parse(stored);
+                storagePath = loadedSettings.storagePath;
+              } catch (e) {
+                console.error("Failed to load settings:", e);
+              }
+            }
+            if (event.payload.fileData) {
+              //
+              // Construct full file path
+              let resolvedStoragePath = storagePath;
+
+              if (storagePath.startsWith("~")) {
+                const home = await homeDir();
+                resolvedStoragePath = storagePath.replace("~", home);
+              }
+              resolvedStoragePath += "/" + event.payload.fileName;
+              // Convert to Uint8Array if needed
+              const fileData =
+                event.payload.fileData instanceof Uint8Array
+                  ? event.payload.fileData
+                  : new Uint8Array(event.payload.fileData);
+
+              // Write file to disk
+              console.log(`File saved to: ${resolvedStoragePath}`);
+
+              await invoke("write_file", {
+                path: resolvedStoragePath,
+                contents: Array.from(fileData),
+              });
+              console.log(`File saved to: ${resolvedStoragePath}`);
+            }
+
+            resolve(event.payload);
+            // Unsubscribe once we got the event
+            unlistenPromise.then((unlistenFn) => unlistenFn());
+          }
+        );
       });
+
+      // Trigger the backend upload
+      await invoke("download_blocks_from_network", { fileMetadata });
+
+      // Wait until the event arrives
+      return await metadataPromise;
     } catch (error) {
       console.error("Failed to publish file:", error);
       throw error;
@@ -156,6 +261,7 @@ export class DhtService {
 
     try {
       await invoke("search_file_metadata", { fileHash, timeoutMs: 0 });
+      console.log("Searching for file:", fileHash);
     } catch (error) {
       console.error("Failed to search file:", error);
       throw error;
@@ -172,25 +278,35 @@ export class DhtService {
       throw new Error("DHT service not initialized properly");
     }
 
+    // ADD: parse a peerId from /p2p/<id> if present; if not, use addr
+    const __pid = (peerAddress?.split("/p2p/")[1] ?? peerAddress)?.trim();
+    if (__pid) {
+      // Mark we’ve seen this peer (freshness)
+      try {
+        __rep.noteSeen(__pid);
+      } catch {}
+    }
+
     try {
       await invoke("connect_to_peer", { peerAddress });
+      console.log("Connecting to peer:", peerAddress);
+
+      // ADD: count a success (no RTT here, the backend doesn’t expose it)
+      if (__pid) {
+        try {
+          __rep.success(__pid);
+        } catch {}
+      }
     } catch (error) {
       console.error("Failed to connect to peer:", error);
+
+      // ADD: count a failure so low-quality peers drift down
+      if (__pid) {
+        try {
+          __rep.failure(__pid);
+        } catch {}
+      }
       throw error;
-    }
-  }
-
-  async getEvents(): Promise<string[]> {
-    if (!this.peerId) {
-      return [];
-    }
-
-    try {
-      const events = await invoke<string[]>("get_dht_events");
-      return events;
-    } catch (error) {
-      console.error("Failed to get DHT events:", error);
-      return [];
     }
   }
 
@@ -237,19 +353,55 @@ export class DhtService {
     }
 
     try {
-      const result = await invoke<FileMetadata | null>("search_file_metadata", {
+      // Start listening for the search_result event
+      const metadataPromise = new Promise<FileMetadata | null>(
+        (resolve, reject) => {
+          const timeoutId = setTimeout(() => {
+            reject(new Error(`Search timeout after ${timeoutMs}ms`));
+          }, timeoutMs);
+
+          const unlistenPromise = listen<FileMetadata | null>(
+            "found_file",
+            (event) => {
+              clearTimeout(timeoutId);
+              const result = event.payload;
+              // ADDING FOR REPUTATION BASED PEER DISCOVERY: mark discovered providers as "seen" for freshness
+              try {
+                if (result && Array.isArray(result.seeders)) {
+                  for (const addr of result.seeders) {
+                    // Extract peer ID from multiaddr if present
+                    const pid = (addr?.split("/p2p/")[1] ?? addr)?.trim();
+                    if (pid) __rep.noteSeen(pid);
+                  }
+                }
+              } catch (e) {
+                console.warn("reputation noteSeen failed:", e);
+              }
+              resolve(
+                result
+                  ? {
+                      ...result,
+                      seeders: Array.isArray(result.seeders)
+                        ? result.seeders
+                        : [],
+                    }
+                  : null
+              );
+              // Unsubscribe once we got the event
+              unlistenPromise.then((unlistenFn) => unlistenFn());
+            }
+          );
+        }
+      );
+
+      // Trigger the backend search
+      await invoke("search_file_metadata", {
         fileHash: trimmed,
         timeoutMs,
       });
 
-      if (!result) {
-        return null;
-      }
-
-      return {
-        ...result,
-        seeders: Array.isArray(result.seeders) ? result.seeders : [],
-      };
+      // Wait until the event arrives
+      return await metadataPromise;
     } catch (error) {
       console.error("Failed to search file metadata:", error);
       throw error;

@@ -51,7 +51,7 @@
 | **Network** | 100 Mbps symmetric    |
 | **OS**      | Latest stable version |
 
-#### Storage Node Requirements
+#### Recommended Requirements for Providers Who Want to Serve Files
 
 | Component   | Specification      |
 | ----------- | ------------------ |
@@ -65,26 +65,17 @@
 
 ### File Processing
 
-| Aspect                 | Specification    |
-| ---------------------- | ---------------- |
-| **Hash Algorithm**     | SHA-256          |
-| **Chunk Size**         | 256 KB           |
-| **Encryption**         | AES-256-GCM      |
-| **Compression**        | Optional (zstd)  |
-| **Max File Size**      | 10 GB (per file) |
-| **Replication Factor** | 3 (configurable) |
-| **Erasure Coding**     | 10 data, 4 parity shards |
+| Aspect             | Specification           |
+| ------------------ | ----------------------- |
+| **Hash Algorithm** | SHA-256                 |
+| **Chunk Size**     | 256 KB                  |
+| **Encryption**     | AES-256-GCM             |
+| **Compression**    | Optional (zstd)         |
+| **Chunking**       | 256 KB encrypted chunks |
 
-### Erasure Coding
+### Chunking
 
-To enhance data durability without the high storage overhead of full replication, the Chiral Network employs Reed-Solomon erasure coding. Each 256 KB file chunk is encoded into a set of shards, which are then distributed across the network.
-
-- **Data Shards**: Each chunk is divided into 10 data shards.
-- **Parity Shards**: An additional 4 parity shards are generated for each chunk.
-- **Total Shards**: This results in a total of 14 shards per chunk.
-- **Reconstruction**: The original chunk can be fully reconstructed from any 10 of these 14 shards. This means the network can tolerate the loss of up to 4 shards per chunk without any data loss.
-
-This (10, 4) erasure coding scheme provides a high degree of fault tolerance while being more space-efficient than simple replication. Each of these 14 shards is then treated as an individual piece of data to be stored on the network, subject to the standard replication factor for availability.
+Files are divided into fixed-size chunks of 256 KB for efficient storage and transfer. Each chunk is encrypted individually and stored as a separate unit on the network.
 
 ### Chunk Structure
 
@@ -128,21 +119,19 @@ This is the public record stored on the network for file discovery. It correspon
   "fileHash": "string (The Merkle Root of the file, used as the unique identifier)",
   "fileName": "string",
   "fileSize": "u64 (Total size of the original file in bytes)",
-  "seeders": [
-    "string (A list of PeerIDs that are hosting the file)"
-  ],
+  "seeders": ["string (A list of PeerIDs that are hosting the file)"],
   "createdAt": "u64 (Unix timestamp of creation)",
   "mimeType": "string | null",
   "isEncrypted": "boolean",
   "encryptionMethod": "string | null (e.g., 'AES-256-GCM')",
   "keyFingerprint": "string | null",
-  "version": "u32 | null (For file versioning)",
+  "version": "u32 | null (For file versioning)"
 }
 ```
 
 #### 2. File Manifest Specification
 
-This is a client-side structure, generated upon upload and required for download. It contains all information needed to reassemble and decrypt the file from its constituent shards. It corresponds to the `FileManifest` struct in `manager.rs`.
+This is a client-side structure, generated upon upload and required for download. It contains all information needed to reassemble and decrypt the file from its constituent chunks. It corresponds to the `FileManifest` struct in `manager.rs`.
 
 ```json
 {
@@ -152,13 +141,8 @@ This is a client-side structure, generated upon upload and required for download
       "index": "u32 (The sequential order of the chunk)",
       "hash": "string (hex, The SHA-256 hash of the original, unencrypted chunk data)",
       "size": "usize (The size of the original chunk in bytes)",
-      "shards": [
-        "string (hex, The hash of encrypted shard 0)",
-        "string (hex, The hash of encrypted shard 1)",
-        "...",
-        "string (hex, The hash of encrypted shard 13)"
-      ],
-      "encryptedSize": "usize (The total size of all 14 encrypted shards in bytes)"
+      "encryptedHash": "string (hex, The hash of the encrypted chunk)",
+      "encryptedSize": "usize (The size of the encrypted chunk in bytes)"
     }
   ],
   "encryptedKeyBundle": {
@@ -178,7 +162,6 @@ This is a client-side structure, generated upon upload and required for download
 | **K**                | 20       | Bucket size           |
 | **α**                | 3        | Concurrency parameter |
 | **Key Space**        | 160 bits | Node ID size          |
-| **Replication**      | 20       | Number of replicas    |
 | **Refresh Interval** | 3600s    | Bucket refresh time   |
 | **Expiration**       | 86400s   | Record expiration     |
 
@@ -290,8 +273,6 @@ Master Key (from mnemonic)
 | Type                | Description          | Base Gas Cost |
 | ------------------- | -------------------- | ------------- |
 | **Transfer**        | Send coins           | 21,000 gas    |
-| **Storage Request** | Request file storage | 100,000 gas   |
-| **Storage Proof**   | Prove file storage   | 50,000 gas    |
 | **File Access**     | Access stored file   | 30,000 gas    |
 
 ### Transaction Structure
@@ -362,6 +343,7 @@ The file hash is the hex-encoded SHA-256 Merkle root of the file's original chun
 
 **Format**: `<merkle_root_hash>`
 **Example**: `7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a17d8f9e8c7b6a5d4f3e2d1c0`
+
 - **Hash**: SHA-256 Merkle root in hex (64 chars)
 
 (Note: The `version` of a file is tracked as a separate field in the DHT Record, not as part of the hash string itself.)

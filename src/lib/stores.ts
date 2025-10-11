@@ -33,6 +33,9 @@ export interface FileItem {
   isNewVersion?: boolean; // Whether this is a new version of an existing file
   speed?: string; // Download/upload speed display
   eta?: string; // Estimated time remaining display
+  isEncrypted?: boolean;
+  manifest?: any;
+  path?: string;
 }
 
 export interface ProxyNode {
@@ -56,6 +59,7 @@ export interface WalletInfo {
   miningRewards?: number;
   reputation?: number;
   totalEarned?: number;
+  totalSpent?: number;
 }
 
 export interface ETCAccount {
@@ -157,15 +161,6 @@ const dummyFiles: FileItem[] = [
     status: "completed",
     progress: 100,
     visualOrder: 2,
-  },
-  {
-    id: "2",
-    name: "Archive.zip",
-    hash: "QmZ4tDuvesekqMG",
-    size: 10485760,
-    status: "uploaded",
-    progress: 100,
-    visualOrder: 3,
   },
 ];
 
@@ -393,6 +388,8 @@ export const miningState = writable<MiningState>({
   miningHistory: [],
 });
 
+export const miningProgress = writable({ cumulative: 0, lastBlock: 0 });
+
 export const totalEarned = derived(
   miningState,
   ($miningState) => $miningState.totalRewards
@@ -413,6 +410,18 @@ export interface ActiveTransfer {
 
 export const activeTransfers = writable<Map<string, ActiveTransfer>>(new Map());
 
+// Interface for Bandwidth Schedule Entry
+export interface BandwidthScheduleEntry {
+  id: string;
+  name: string;
+  startTime: string; // Format: "HH:MM" (24-hour)
+  endTime: string; // Format: "HH:MM" (24-hour)
+  daysOfWeek: number[]; // 0-6, where 0 = Sunday
+  uploadLimit: number; // KB/s, 0 = unlimited
+  downloadLimit: number; // KB/s, 0 = unlimited
+  enabled: boolean;
+}
+
 // Interface for Application Settings
 export interface AppSettings {
   storagePath: string;
@@ -428,7 +437,11 @@ export interface AppSettings {
   userLocation: string;
   enableProxy: boolean; // For SOCKS5 feature
   proxyAddress: string; // For SOCKS5 feature
-  enableEncryption: boolean;
+  enableAutonat: boolean; // AutoNAT reachability detection
+  autonatProbeInterval: number; // Seconds between AutoNAT probes
+  autonatServers: string[]; // Custom AutoNAT server multiaddrs
+  enableAutorelay: boolean; // Circuit Relay v2 with AutoRelay (renamed from enableAutoRelay)
+  preferredRelays: string[]; // Preferred relay node multiaddrs
   anonymousMode: boolean;
   shareAnalytics: boolean;
   enableNotifications: boolean;
@@ -441,6 +454,8 @@ export interface AppSettings {
   cacheSize: number; // MB
   logLevel: string;
   autoUpdate: boolean;
+  enableBandwidthScheduling: boolean;
+  bandwidthSchedules: BandwidthScheduleEntry[];
 }
 
 // Export the settings store
@@ -459,7 +474,11 @@ export const settings = writable<AppSettings>({
   userLocation: "US-East",
   enableProxy: true, // Defaulting to enabled for SOCKS5 feature
   proxyAddress: "127.0.0.1:9050", // Default Tor SOCKS address
-  enableEncryption: true,
+  enableAutonat: true, // Enable AutoNAT by default
+  autonatProbeInterval: 30, // 30 seconds default
+  autonatServers: [], // Use bootstrap nodes by default
+  enableAutorelay: false, // Enable AutoRelay by default (disabled until configured)
+  preferredRelays: [], // Use bootstrap nodes as relays by default
   anonymousMode: false,
   shareAnalytics: true,
   enableNotifications: true,
@@ -472,4 +491,6 @@ export const settings = writable<AppSettings>({
   cacheSize: 1024,
   logLevel: "info",
   autoUpdate: true,
+  enableBandwidthScheduling: false,
+  bandwidthSchedules: [],
 });

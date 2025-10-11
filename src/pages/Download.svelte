@@ -7,6 +7,7 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation } from 'lucide-svelte'
   import { files, downloadQueue, activeTransfers } from '$lib/stores'
+  import { dhtService } from '$lib/dht'
   import DownloadSearchSection from '$lib/components/download/DownloadSearchSection.svelte'
   import type { FileMetadata } from '$lib/dht'
   import { onDestroy, onMount } from 'svelte'
@@ -14,17 +15,107 @@
   import { get } from 'svelte/store'
   import { toHumanReadableSize } from '$lib/utils'
   import { initDownloadTelemetry, disposeDownloadTelemetry } from '$lib/downloadTelemetry'
+  import { MultiSourceDownloadService, type MultiSourceProgress } from '$lib/services/multiSourceDownloadService'
+  import { listen } from '@tauri-apps/api/event'
+
+ 
+  import { invoke }  from '@tauri-apps/api/core';
+
   
   const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params)
 
   onMount(() => {
     initDownloadTelemetry()
+    
+    // Listen for multi-source download events
+    const setupEventListeners = async () => {
+      try {
+        const unlistenProgress = await listen('multi_source_progress_update', (event) => {
+          const progress = event.payload as MultiSourceProgress
+          
+          // Find the corresponding file and update its progress
+          files.update(f => f.map(file => {
+            if (file.hash === progress.fileHash) {
+              return {
+                ...file,
+                progress: progress.percentage,
+                status: 'downloading' as const,
+                speed: MultiSourceDownloadService.formatSpeed(progress.downloadSpeed),
+                eta: MultiSourceDownloadService.formatETA(progress.eta)
+              };
+            }
+            return file;
+          }));
+          
+          multiSourceProgress.set(progress.fileHash, progress)
+          multiSourceProgress = multiSourceProgress // Trigger reactivity
+        })
+
+        const unlistenCompleted = await listen('multi_source_download_completed', (event) => {
+          const data = event.payload as any
+          
+          // Update file status to completed
+          files.update(f => f.map(file => {
+            if (file.hash === data.file_hash) {
+              return {
+                ...file,
+                status: 'completed' as const,
+                progress: 100,
+                downloadPath: data.output_path
+              };
+            }
+            return file;
+          }));
+          
+          multiSourceProgress.delete(data.file_hash)
+          multiSourceProgress = multiSourceProgress
+          showNotification(`Multi-source download completed: ${data.file_name}`, 'success')
+        })
+
+        const unlistenStarted = await listen('multi_source_download_started', (event) => {
+          const data = event.payload as any
+          showNotification(`Multi-source download started with ${data.total_peers} peers`, 'info')
+        })
+
+        const unlistenFailed = await listen('multi_source_download_failed', (event) => {
+          const data = event.payload as any
+          
+          // Update file status to failed
+          files.update(f => f.map(file => {
+            if (file.hash === data.file_hash) {
+              return {
+                ...file,
+                status: 'failed' as const
+              };
+            }
+            return file;
+          }));
+          
+          multiSourceProgress.delete(data.file_hash)
+          multiSourceProgress = multiSourceProgress
+          showNotification(`Multi-source download failed: ${data.error}`, 'error')
+        })
+
+        // Cleanup listeners on destroy
+        return () => {
+          unlistenProgress.then(fn => fn())
+          unlistenCompleted.then(fn => fn())
+          unlistenStarted.then(fn => fn())
+          unlistenFailed.then(fn => fn())
+        }
+      } catch (error) {
+        console.error('Failed to setup event listeners:', error)
+        return () => {} // Return empty cleanup function
+      }
+    }
+    
+    setupEventListeners()
   })
 
   onDestroy(() => {
     disposeDownloadTelemetry()
   })
-  
+
   let searchFilter = ''  // For searching existing downloads
   let maxConcurrentDownloads: string | number = 3
   let lastValidMaxConcurrent = 3 // Store the last valid value
@@ -32,6 +123,11 @@
   let autoClearCompleted = false // New setting for auto-clearing
   let filterStatus = 'all' // 'all', 'active', 'paused', 'queued', 'completed', 'failed'
   let activeSimulations = new Set<string>() // Track files with active progress simulations
+
+  // Multi-source download state
+  let multiSourceProgress = new Map<string, MultiSourceProgress>()
+  let multiSourceEnabled = true
+  let maxPeersPerDownload = 3
 
   // Add notification related variables
   let currentNotification: HTMLElement | null = null
@@ -43,14 +139,14 @@
       currentNotification.remove()
       currentNotification = null
     }
-    
+
     const colors = {
       success: '#22c55e',
-      error: '#ef4444', 
+      error: '#ef4444',
       info: '#3b82f6',
       warning: '#f59e0b'
     }
-    
+
     const notification = document.createElement('div')
     notification.style.cssText = `
       position: fixed;
@@ -71,7 +167,7 @@
       align-items: center;
       gap: 8px;
     `
-    
+
     // Add CSS animation styles
     if (!document.querySelector('#download-notification-styles')) {
       const style = document.createElement('style')
@@ -84,7 +180,7 @@
       `
       document.head.appendChild(style)
     }
-    
+
     notification.innerHTML = `
       <span>${message}</span>
       <button onclick="this.parentElement.remove()" style="
@@ -98,10 +194,10 @@
         opacity: 0.8;
       ">×</button>
     `
-    
+
     document.body.appendChild(notification)
     currentNotification = notification
-    
+
     // Auto remove
     setTimeout(() => {
       if (notification.parentNode) {
@@ -180,6 +276,20 @@
         return FileIcon;
     }
   }
+    async function saveRawData(fileName: string, data: Uint8Array) {
+    try {
+      const { save } = await import('@tauri-apps/plugin-dialog');
+      const filePath = await save({ defaultPath: fileName });
+      if (filePath) {
+        const { writeFile } = await import('@tauri-apps/plugin-fs');
+        await writeFile(filePath, new Uint8Array(data));
+        showNotification(`Successfully saved "${fileName}"`, 'success');
+      }
+    } catch (error) {
+      console.error('Failed to save file:', error);
+      showNotification(`Error saving "${fileName}"`, 'error');
+    }
+  }
 
   function handleSearchMessage(event: CustomEvent<{ message: string; type?: 'success' | 'error' | 'info' | 'warning'; duration?: number }>) {
     const { message, type = 'info', duration = 4000 } = event.detail
@@ -187,8 +297,11 @@
   }
 
   async function handleSearchDownload(metadata: FileMetadata) {
-    const allFiles = [...$files, ...$downloadQueue]
+    const allFiles = [...$downloadQueue]
     const existingFile = allFiles.find((file) => file.hash === metadata.fileHash)
+    const fileName = metadata.fileName;
+    const fileData = new Uint8Array(metadata.fileData ?? []);
+    //saveRawData(fileName, fileData); // testing
 
     if (existingFile) {
       let statusMessage = ''
@@ -233,6 +346,9 @@
       version: metadata.version, // Preserve version info if available
       seeders: metadata.seeders.length, // Convert array length to number
       seederAddresses: metadata.seeders, // Store the actual seeder addresses
+      // Pass encryption info to the download item
+      isEncrypted: metadata.isEncrypted,
+      manifest: metadata.manifest ? JSON.parse(metadata.manifest) : null
     }
 
     downloadQueue.update((queue) => [...queue, newFile])
@@ -250,7 +366,7 @@
       maxConcurrentDownloads = lastValidMaxConcurrent
       return
     }
-    
+
     const parsed = Number(maxConcurrentDownloads)
     if (isNaN(parsed) || parsed < 1) {
       maxConcurrentDownloads = lastValidMaxConcurrent
@@ -265,18 +381,18 @@
   function handleMaxConcurrentInput(event: Event) {
     const target = (event.target as HTMLInputElement)
     let value = target.value
-    
+
     // Remove any non-digit characters
     value = value.replace(/\D/g, '')
-    
+
     // Remove leading zeros but allow empty string
     if (value.length > 1 && value.startsWith('0')) {
       value = value.replace(/^0+/, '')
     }
-    
+
     // Update the input value to the cleaned version
     target.value = value
-    
+
     // Update the bound variable (allow empty string during typing)
     if (value === '') {
       maxConcurrentDownloads = '' // Allow empty during typing
@@ -284,7 +400,7 @@
       maxConcurrentDownloads = parseInt(value)
     }
   }
-  
+
   // Combine all files and queue into single list with stable sorting
   $: allDownloads = (() => {
     const combined = [...$files, ...$downloadQueue]
@@ -315,15 +431,15 @@
       return statusDiff
     })
   })()
-  
-  
+
+
   // Filter downloads based on selected status and search
   $: filteredDownloads = (() => {
     let filtered = allDownloads.filter(f => f.status !== 'uploaded' && f.status !== 'seeding')
 
     // Apply search filter first
     if (searchFilter.trim()) {
-      filtered = filtered.filter(f => 
+      filtered = filtered.filter(f =>
         f.hash.toLowerCase().includes(searchFilter.toLowerCase()) ||
         f.name.toLowerCase().includes(searchFilter.toLowerCase())
       )
@@ -348,7 +464,7 @@
 }
 
   })()
-  
+
   // Calculate counts from the filtered set (excluding uploaded/seeding)
   $: allFilteredDownloads = allDownloads.filter(f => f.status !== 'uploaded' && f.status !== 'seeding')
   $: activeCount = allFilteredDownloads.filter(f => f.status === 'downloading').length
@@ -366,7 +482,7 @@
       }
     })
   }
-  
+
   // Process download queue
   $: {
     if (autoStartQueue) {
@@ -374,7 +490,7 @@
       const queued = $downloadQueue.filter(f => f.status === 'queued')
       // Handle case where maxConcurrentDownloads might be empty during typing
       const maxConcurrent = Math.max(1, Number(maxConcurrentDownloads) || 3)
-      
+
       if (activeDownloads < maxConcurrent && queued.length > 0) {
         // Start next queued download
         const nextFile = queued.sort((a, b) => {
@@ -382,16 +498,16 @@
           const priorityOrder = { high: 3, normal: 2, low: 1 }
           return (priorityOrder[b.priority || 'normal'] - priorityOrder[a.priority || 'normal'])
         })[0]
-        
+
         if (nextFile) {
           startQueuedDownload(nextFile.id)
         }
       }
     }
   }
-  
+
   // New search function that only searches without downloading
-  
+
 
   // New function to download from search results
 
@@ -405,9 +521,9 @@
     const nextFile = $downloadQueue[0]
     if (!nextFile) return
     downloadQueue.update(q => q.filter(f => f.id !== nextFile.id))
-    const downloadingFile = { 
-      ...nextFile, 
-      status: 'downloading' as const, 
+    const downloadingFile = {
+      ...nextFile,
+      status: 'downloading' as const,
       progress: 0,
       speed: '0 B/s', // Ensure speed property exists
       eta: 'N/A'      // Ensure eta property exists
@@ -415,14 +531,14 @@
     files.update(f => [...f, downloadingFile])
     simulateDownloadProgress(downloadingFile.id)
   }
-  
+
   function togglePause(fileId: string) {
     files.update(f => f.map(file => {
       if (file.id === fileId) {
         const newStatus = file.status === 'downloading' ? 'paused' as const : 'downloading' as const
         // Ensure speed and eta are always present
-        return { 
-          ...file, 
+        return {
+          ...file,
           status: newStatus,
           speed: file.speed ?? '0 B/s',
           eta: file.eta ?? 'N/A'
@@ -431,7 +547,7 @@
       return file
     }))
   }
-  
+
   async function cancelDownload(fileId: string) {
     files.update(f => f.map(file =>
       file.id === fileId
@@ -452,14 +568,14 @@
       });
     }
   }
-  
+
   function startQueuedDownload(fileId: string) {
     downloadQueue.update(queue => {
       const file = queue.find(f => f.id === fileId)
       if (file) {
-        files.update(f => [...f, { 
-          ...file, 
-          status: 'downloading', 
+        files.update(f => [...f, {
+          ...file,
+          status: 'downloading',
           progress: 0,
           speed: '0 B/s', // Ensure speed property exists
           eta: 'N/A'      // Ensure eta property exists
@@ -469,7 +585,7 @@
       return queue.filter(f => f.id !== fileId)
     })
   }
-  
+
   async function simulateDownloadProgress(fileId: string) {
     // Prevent duplicate simulations
     if (activeSimulations.has(fileId)) {
@@ -488,7 +604,7 @@
       // Proceed directly to file dialog
       try {
         const { save } = await import('@tauri-apps/plugin-dialog');
-        
+
         // Show file save dialog
         const outputPath = await save({
           defaultPath: fileToDownload.name,
@@ -497,109 +613,227 @@
             extensions: ['*']
           }]
         });
-        
+
         if (!outputPath) {
           // User cancelled the save dialog
           activeSimulations.delete(fileId);
-          files.update(f => f.map(file => 
-            file.id === fileId 
+          files.update(f => f.map(file =>
+            file.id === fileId
               ? { ...file, status: 'canceled' }
               : file
           ));
           return;
         }
-      
-      // Show "automatically started" message now that download is proceeding
-      showNotification(tr('download.notifications.autostart'), 'info');
-      
-      // Import P2P file transfer service
-      const { p2pFileTransferService } = await import('$lib/services/p2pFileTransfer');
 
-      // Start P2P download using the P2P file transfer service
-      try {
-        const seeders = fileToDownload.seederAddresses || [];
 
-        if (seeders.length === 0) {
-          throw new Error('No seeders available for this file');
+      // Determine seeders, prefer local seeder when available
+        let seeders = (fileToDownload.seederAddresses || []).slice();
+        try {
+          const localPeerId = dhtService.getPeerId ? dhtService.getPeerId() : null;
+          if ((!seeders || seeders.length === 0) && fileToDownload.status === 'seeding') {
+            if (localPeerId) seeders.unshift(localPeerId)
+            else seeders.unshift('local_peer')
+          }
+        } catch (e) {
+          // ignore
         }
 
-        // Create file metadata for P2P transfer
-        const fileMetadata = {
-          fileHash: fileToDownload.hash,
-          fileName: fileToDownload.name,
-          fileSize: fileToDownload.size,
-          seeders: seeders,
-          createdAt: Date.now(),
-          isEncrypted: false
-        };
-
-        // Initiate P2P download with file saving
-        const transferId = await p2pFileTransferService.initiateDownloadWithSave(
-          fileMetadata,
-          seeders,
-          outputPath,
-          (transfer) => {
-            // Update UI with transfer progress
-            files.update(f => f.map(file => {
-              if (file.id === fileId) {
-                return {
-                  ...file,
-                  progress: transfer.progress,
-                  status: transfer.status === 'completed' ? 'completed' :
-                         transfer.status === 'failed' ? 'failed' :
-                         transfer.status === 'transferring' ? 'downloading' : file.status,
-                  speed: `${Math.round(transfer.speed / 1024)} KB/s`,
-                  eta: transfer.eta ? `${Math.round(transfer.eta)}s` : 'N/A',
-                  downloadPath: transfer.outputPath // Store the download path
-                };
+        // If the local copy is available and we're running in Tauri, copy directly to outputPath
+        const localPeerIdNow = dhtService.getPeerId ? dhtService.getPeerId() : null;
+       
+        if (outputPath && (localPeerIdNow || seeders.includes('local_peer'))) {
+          try {
+            
+            let hash = fileToDownload.hash
+            const base64Data = await invoke('get_file_data', { fileHash: hash }) as string;
+            console.log("Retrieved base64 data length:", base64Data.length);
+            
+            // Convert base64 to Uint8Array
+            let data_ = new Uint8Array(0); // Default empty array
+            if (base64Data && base64Data.length > 0) {
+              const binaryStr = atob(base64Data);
+              data_ = new Uint8Array(binaryStr.length);
+              for (let i = 0; i < binaryStr.length; i++) {
+                data_[i] = binaryStr.charCodeAt(i);
               }
-              return file;
-            }));
-
-            // Show notification on completion or failure
-            if (transfer.status === 'completed') {
-              showNotification(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
-            } else if (transfer.status === 'failed') {
-              showNotification(tr('download.notifications.downloadFailed', { values: { name: fileToDownload.name } }), 'error');
+              console.log("Converted to Uint8Array with length:", data_.length);
+            } else {
+              console.warn("No file data found for hash:", hash);
             }
+            
+            console.log("Final data array length:", data_.length);
+
+            // Write the file data to the output path
+            const { writeFile } = await import('@tauri-apps/plugin-fs');
+            await writeFile(outputPath, data_);
+            files.update(f => f.map(file => file.id === fileId ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath } : file));
+            showNotification(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
+            activeSimulations.delete(fileId);
+            console.log("Done with downloading file")
+            return;
+          } catch (e) {
+            console.warn('Local copy fallback failed, continuing with P2P download', e);
+            // fall through to p2p path
+          }
+        }
+
+      // Show "automatically started" message now that download is proceeding
+      showNotification(tr('download.notifications.autostart'), 'info');
+        
+       if (fileToDownload.isEncrypted && fileToDownload.manifest) {
+        // 1. Download all the required encrypted chunks using the P2P service.
+        //    This new function will handle fetching multiple chunks in parallel.
+        showNotification(`Downloading encrypted chunks for "${fileToDownload.name}"...`, 'info');
+        
+        const { p2pFileTransferService } = await import('$lib/services/p2pFileTransfer');
+        
+
+        await p2pFileTransferService.downloadEncryptedChunks(
+          fileToDownload.manifest,
+          seeders, // Pass the list of seeders
+          (progress) => { // This is the progress callback
+            files.update(f => f.map(file =>
+              file.id === fileId ? { ...file, progress: progress.percentage, status: 'downloading', speed: progress.speed, eta: progress.eta } : file
+            ));
           }
         );
 
-        // Store transfer ID for cleanup
-        activeTransfers.update(transfers => {
-          transfers.set(fileId, { fileId, transferId, type: 'p2p' });
-          return transfers;
-        });
+        // 2. Once all chunks are downloaded, call the backend to decrypt.
+        showNotification(`All chunks received. Decrypting file...`, 'info');
+        const { encryptionService } = await import('$lib/services/encryption');
+        await encryptionService.decryptFile(fileToDownload.manifest, outputPath);
 
-        activeSimulations.delete(fileId);
-
-      } catch (error) {
-        console.error('P2P download failed:', error);
-        activeSimulations.delete(fileId);
+        // 3. Mark the download as complete.
         files.update(f => f.map(file =>
-          file.id === fileId
-            ? { ...file, status: 'failed' }
-            : file
+          file.id === fileId ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath } : file
         ));
+        showNotification(`Successfully decrypted and saved "${fileToDownload.name}"!`, 'success');
+        activeSimulations.delete(fileId);
+
+      } else {
+        // Check if we should use multi-source download
+        const seeders = fileToDownload.seederAddresses || [];
+        
+        if (multiSourceEnabled && seeders.length >= 2 && fileToDownload.size > 1024 * 1024) {
+          // Use multi-source download for files > 1MB with multiple seeders
+          try {
+            showNotification(`Starting multi-source download from ${seeders.length} peers...`, 'info');
+            
+            const multiSourceService = new MultiSourceDownloadService();
+            await multiSourceService.startDownload(
+              fileToDownload.hash,
+              fileToDownload.name,
+              fileToDownload.size,
+              outputPath,
+              seeders.slice(0, maxPeersPerDownload) // Limit to max peers
+            );
+
+            // The progress updates will be handled by the event listeners in onMount
+            activeSimulations.delete(fileId);
+
+          } catch (error) {
+            console.error('Multi-source download failed, falling back to P2P:', error);
+            // Fall back to single-peer P2P download
+            await fallbackToP2PDownload();
+          }
+        } else {
+          // Use traditional P2P download for smaller files or single seeder
+          await fallbackToP2PDownload();
+        }
+
+        async function fallbackToP2PDownload() {
+          const { p2pFileTransferService } = await import('$lib/services/p2pFileTransfer');
+
+          try {
+            if (seeders.length === 0) {
+              throw new Error('No seeders available for this file');
+            }
+
+            // Create file metadata for P2P transfer
+            const fileMetadata = {
+              fileHash: fileToDownload.hash,
+              fileName: fileToDownload.name,
+              fileSize: fileToDownload.size,
+              seeders: seeders,
+              createdAt: Date.now(),
+              isEncrypted: false
+            };
+
+            // Initiate P2P download with file saving
+            const transferId = await p2pFileTransferService.initiateDownloadWithSave(
+              fileMetadata,
+              seeders,
+              outputPath,
+              (transfer) => {
+                // Update UI with transfer progress
+                files.update(f => f.map(file => {
+                  if (file.id === fileId) {
+                    return {
+                      ...file,
+                      progress: transfer.progress,
+                      status: transfer.status === 'completed' ? 'completed' :
+                            transfer.status === 'failed' ? 'failed' :
+                            transfer.status === 'transferring' ? 'downloading' : file.status,
+                      speed: `${Math.round(transfer.speed / 1024)} KB/s`,
+                      eta: transfer.eta ? `${Math.round(transfer.eta)}s` : 'N/A',
+                      downloadPath: transfer.outputPath // Store the download path
+                    };
+                  }
+                  return file;
+                }));
+
+                // Show notification on completion or failure
+                if (transfer.status === 'completed') {
+                  showNotification(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
+                } else if (transfer.status === 'failed') {
+                  //THIS IS WHERE DOWNLOAD IS FAILING
+                  showNotification(tr('download.notifications.downloadFailed', { values: { name: fileToDownload.name } })+"HI", 'error');
+                }
+              }
+            );
+
+            // Store transfer ID for cleanup
+            activeTransfers.update(transfers => {
+              transfers.set(fileId, { fileId, transferId, type: 'p2p' });
+              return transfers;
+            });
+
+            activeSimulations.delete(fileId);
+
+          } catch (error) {
+            console.error('P2P download failed:', error);
+            showNotification("BAD","error");
+            activeSimulations.delete(fileId);
+            files.update(f => f.map(file =>
+              file.id === fileId
+                ? { ...file, status: 'failed' }
+                : file
+            ));
+          }
+        }
       }
-      
     } catch (error) {
       // Download failed
+      showNotification("BADHI", 'error');
       activeSimulations.delete(fileId);
-      
-      files.update(f => f.map(file => 
-        file.id === fileId 
+
+      files.update(f => f.map(file =>
+        file.id === fileId
           ? { ...file, status: 'failed' }
           : file
       ));
-      
-      console.error('Download failed:', error);
-      showNotification(tr('download.notifications.downloadFailed', { values: { name: fileToDownload.name } }), 'error');
+
+      let errorMsg = error && error.message ? error.message : String(error);
+      console.error('Download failed:', error, fileToDownload);
+      showNotification(
+        tr('download.notifications.downloadFailed', { values: { name: fileToDownload.name } }) + (errorMsg ? `: ${errorMsg}` : ''),
+        'error'
+      );
     }
   }
-  
+
   function changePriority(fileId: string, priority: 'low' | 'normal' | 'high') {
-    downloadQueue.update(queue => queue.map(file => 
+    downloadQueue.update(queue => queue.map(file =>
       file.id === fileId ? { ...file, priority } : file
     ))
   }
@@ -616,7 +850,7 @@
       }
     }
   }
-  
+
   function clearDownload(fileId: string) {
     // Remove from both files and downloadQueue for good measure
     files.update(f => f.filter(file => file.id !== fileId));
@@ -624,9 +858,9 @@
   }
 
   function clearAllFinished() {
-    files.update(f => f.filter(file => 
-      file.status !== 'completed' && 
-      file.status !== 'failed' && 
+    files.update(f => f.filter(file =>
+      file.status !== 'completed' &&
+      file.status !== 'failed' &&
       file.status !== 'canceled'
     ));
   }
@@ -666,7 +900,7 @@
       return newQueue
     })
   }
-  
+
   const formatFileSize = toHumanReadableSize
 
 
@@ -678,7 +912,7 @@
     <h1 class="text-3xl font-bold">{$t('download.title')}</h1>
     <p class="text-muted-foreground mt-2">{$t('download.subtitle')}</p>
   </div>
-  
+
   <DownloadSearchSection
     on:download={(event) => handleSearchDownload(event.detail)}
     on:message={handleSearchMessage}
@@ -689,7 +923,7 @@
     <div class="space-y-4 mb-6">
       <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <h2 class="text-xl font-semibold">{$t('download.downloads')}</h2>
-        
+
         <!-- Search Bar -->
         <div class="relative w-full sm:w-80">
           <Input
@@ -711,7 +945,7 @@
           {/if}
         </div>
       </div>
-      
+
       <!-- Filter Buttons and Controls -->
       <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <!-- Filter Buttons -->
@@ -783,7 +1017,7 @@
             {$t('download.filters.failed')} ({failedCount})
           </Button>
         </div>
-        
+
         <!-- Settings Controls -->
         <div class="flex flex-wrap items-center gap-4 text-sm">
           <div class="flex items-center gap-2">
@@ -799,7 +1033,7 @@
               class="w-14 h-7 text-center text-xs border border-input bg-background px-2 py-1 ring-offset-background file:border-0 file:bg-transparent file:font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 rounded-md"
             />
           </div>
-          
+
           <div class="flex items-center gap-2">
             <Label class="font-medium">{$t('download.settings.autoStart')}:</Label>
             <button
@@ -817,7 +1051,7 @@
             </button>
           </div>
           <div class="flex items-center gap-2">
-            <Label class="font-medium">Auto-clear:</Label>
+            <Label class="font-medium">{$t('download.autoClear')}:</Label>
             <button
               type="button"
               aria-label="Toggle auto-clear completed downloads"
@@ -832,10 +1066,41 @@
               ></span>
             </button>
           </div>
+
+          <div class="flex items-center gap-2">
+            <Label class="font-medium">{$t('download.multiSource')}:</Label>
+            <button
+              type="button"
+              aria-label="Toggle multi-source downloads"
+              on:click={() => multiSourceEnabled = !multiSourceEnabled}
+              class="relative inline-flex h-4 w-8 items-center rounded-full transition-colors focus:outline-none"
+              class:bg-green-500={multiSourceEnabled}
+              class:bg-muted-foreground={!multiSourceEnabled}
+            >
+              <span
+                class="inline-block h-3 w-3 rounded-full bg-white transition-transform shadow-sm"
+                style="transform: translateX({multiSourceEnabled ? '18px' : '2px'})"
+              ></span>
+            </button>
+          </div>
+
+          {#if multiSourceEnabled}
+          <div class="flex items-center gap-2">
+            <Label class="font-medium">{$t('download.maxPeers')}:</Label>
+            <input
+              type="number"
+              bind:value={maxPeersPerDownload}
+              min="2"
+              max="10"
+              step="1"
+              class="w-14 h-7 text-center text-xs border border-input bg-background px-2 py-1 ring-offset-background file:border-0 file:bg-transparent file:font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 rounded-md"
+            />
+          </div>
+          {/if}
         </div>
       </div>
     </div>
-    
+
     {#if filteredDownloads.length === 0}
       <p class="text-sm text-muted-foreground text-center py-8">
         {#if filterStatus === 'all'}
@@ -883,7 +1148,7 @@
                       </Button>
                     </div>
                   {/if}
-                  
+
                   <!-- File Info -->
                   <div class="flex items-start gap-3 flex-1 min-w-0">
                     <svelte:component this={getFileIcon(file.name)} class="h-4 w-4 text-muted-foreground mt-0.5" />
@@ -893,6 +1158,11 @@
                         {#if file.version}
                           <Badge class="bg-blue-100 text-blue-800 text-xs px-2 py-0.5">
                             v{file.version}
+                          </Badge>
+                        {/if}
+                        {#if multiSourceProgress.has(file.hash)}
+                          <Badge class="bg-purple-100 text-purple-800 text-xs px-2 py-0.5">
+                            Multi-source
                           </Badge>
                         {/if}
                         <Badge class="text-xs font-semibold bg-muted-foreground/20 text-foreground border-0 px-2 py-0.5">
@@ -921,7 +1191,7 @@
                     </div>
                   </div>
                 </div>
-                
+
                 <!-- Status Badge -->
                 <Badge class={
                   file.status === 'downloading' ? 'bg-blue-500 text-white border-blue-500' :
@@ -936,7 +1206,7 @@
                 </Badge>
               </div>
             </div>
-            
+
             <!-- Progress Section -->
             {#if file.status === 'downloading' || file.status === 'paused'}
               <div class="pb-2 ml-7">
@@ -944,6 +1214,13 @@
                   <div class="flex items-center gap-4 text-muted-foreground">
                     <span>Speed: {file.speed || '0 B/s'}</span>
                     <span>ETA: {file.eta || 'N/A'}</span>
+                    {#if multiSourceProgress.has(file.hash)}
+                      {@const msProgress = multiSourceProgress.get(file.hash)}
+                      {#if msProgress}
+                        <span class="text-purple-600">Peers: {msProgress.activePeers}/{msProgress.totalPeers}</span>
+                        <span class="text-purple-600">Chunks: {msProgress.completedChunks}/{msProgress.totalChunks}</span>
+                      {/if}
+                    {/if}
                   </div>
                   <span class="text-foreground">{(file.progress || 0).toFixed(2)}%</span>
                 </div>
@@ -952,9 +1229,29 @@
                   max={100}
                   class="h-2 bg-background [&>div]:bg-green-500 w-full"
                 />
+                {#if multiSourceProgress.has(file.hash)}
+                  {@const msProgress = multiSourceProgress.get(file.hash)}
+                  {#if msProgress && msProgress.peerProgress.length > 0}
+                    <div class="mt-2 space-y-1">
+                      <div class="text-xs text-muted-foreground">Peer progress:</div>
+                      {#each msProgress.peerProgress as peerProgress}
+                        <div class="flex items-center gap-2 text-xs">
+                          <span class="w-20 truncate">{peerProgress.peerId.slice(0, 8)}...</span>
+                          <div class="flex-1 bg-muted rounded-full h-1">
+                            <div 
+                              class="bg-purple-500 h-1 rounded-full transition-all duration-300"
+                              style="width: {peerProgress.chunksCompleted / peerProgress.chunksAssigned * 100}%"
+                            ></div>
+                          </div>
+                          <span class="text-muted-foreground">{peerProgress.chunksCompleted}/{peerProgress.chunksAssigned}</span>
+                        </div>
+                      {/each}
+                    </div>
+                  {/if}
+                {/if}
               </div>
             {/if}
-            
+
             <!-- Action Buttons -->
             <div class="pt-2 ml-7">
               <div class="flex flex-wrap gap-2">
@@ -1042,4 +1339,3 @@
     {/if}
   </Card>
 </div>
-

@@ -202,7 +202,7 @@ impl FileEncryption {
 
 /// A bundle containing the encrypted AES key and the necessary data for decryption.
 /// This struct is designed to be serialized (e.g., to JSON) and stored as file metadata.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct EncryptedAesKeyBundle {
     /// The sender's temporary public key (32 bytes), hex-encoded.
     pub ephemeral_public_key: String,
@@ -248,7 +248,10 @@ pub fn encrypt_aes_key(
     let shared_secret = ephemeral_secret.diffie_hellman(recipient_public_key);
 
     // 3. Use HKDF to derive a Key Encryption Key (KEK) from the shared secret.
-    let hk = Hkdf::<Sha256>::new(Some(ephemeral_public_key.as_bytes()), shared_secret.as_bytes());
+    let hk = Hkdf::<Sha256>::new(
+        Some(ephemeral_public_key.as_bytes()),
+        shared_secret.as_bytes(),
+    );
     let mut kek = [0u8; 32]; // 32 bytes for an AES-256 key
     hk.expand(b"chiral-network-kek", &mut kek)
         .map_err(|e| format!("HKDF expansion failed: {}", e))?;
@@ -295,7 +298,10 @@ pub fn decrypt_aes_key<S: DiffieHellman>(
     let shared_secret = recipient_secret_key.diffie_hellman(&ephemeral_public_key);
 
     // 3. Derive the same KEK using the same HKDF parameters.
-    let hk = Hkdf::<Sha256>::new(Some(ephemeral_public_key.as_bytes()), shared_secret.as_bytes());
+    let hk = Hkdf::<Sha256>::new(
+        Some(ephemeral_public_key.as_bytes()),
+        shared_secret.as_bytes(),
+    );
     let mut kek = [0u8; 32];
     hk.expand(b"chiral-network-kek", &mut kek)
         .map_err(|e| format!("HKDF expansion failed: {}", e))?;
@@ -311,6 +317,100 @@ pub fn decrypt_aes_key<S: DiffieHellman>(
     decrypted_key_vec
         .try_into()
         .map_err(|_| "Decrypted key is not 32 bytes".to_string())
+}
+
+/// A bundle containing an encrypted message and the necessary data for decryption.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct EncryptedMessageBundle {
+    /// The sender's temporary public key (32 bytes), hex-encoded.
+    pub ephemeral_public_key: String,
+    /// The message, encrypted and then hex-encoded.
+    pub encrypted_message: String,
+    /// The nonce used for AES-GCM encryption (12 bytes), hex-encoded.
+    pub nonce: String,
+}
+
+/// Encrypts a message using the recipient's public key (ECIES pattern).
+///
+/// # Arguments
+/// * `message` - The message to encrypt.
+/// * `recipient_public_key` - The recipient's X25519 public key.
+///
+/// # Returns
+/// An `EncryptedMessageBundle` struct containing the data needed for decryption.
+pub fn encrypt_message(
+    message: &[u8],
+    recipient_public_key: &PublicKey,
+) -> Result<EncryptedMessageBundle, String> {
+    // 1. Generate a temporary (ephemeral) X25519 key pair for the sender.
+    let ephemeral_secret = EphemeralSecret::random_from_rng(OsRng);
+    let ephemeral_public_key = PublicKey::from(&ephemeral_secret);
+
+    // 2. Compute the shared secret.
+    let shared_secret = ephemeral_secret.diffie_hellman(recipient_public_key);
+
+    // 3. Use HKDF to derive an encryption key from the shared secret.
+    let hk = Hkdf::<Sha256>::new(
+        Some(ephemeral_public_key.as_bytes()),
+        shared_secret.as_bytes(),
+    );
+    let mut encryption_key = [0u8; 32]; // 32 bytes for an AES-256 key
+    hk.expand(b"chiral-network-msg", &mut encryption_key)
+        .map_err(|e| format!("HKDF expansion failed: {}", e))?;
+
+    // 4. Encrypt the message with the derived key.
+    let key = Key::<Aes256Gcm>::from_slice(&encryption_key);
+    let cipher = Aes256Gcm::new(key);
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng); // Generate a random nonce
+    let encrypted_message = cipher
+        .encrypt(&nonce, message)
+        .map_err(|e| format!("Message encryption failed: {}", e))?;
+
+    // 5. Return the bundle with hex-encoded data.
+    Ok(EncryptedMessageBundle {
+        ephemeral_public_key: hex::encode(ephemeral_public_key.as_bytes()),
+        encrypted_message: hex::encode(encrypted_message),
+        nonce: hex::encode(nonce.as_slice()),
+    })
+}
+
+/// Decrypts a message using the recipient's private key.
+///
+/// # Arguments
+/// * `encrypted_bundle` - The `EncryptedMessageBundle` received from the sender.
+/// * `recipient_secret_key` - The recipient's X25519 private key.
+///
+/// # Returns
+/// The decrypted message as a `Vec<u8>`.
+pub fn decrypt_message<S: DiffieHellman>(
+    encrypted_bundle: &EncryptedMessageBundle,
+    recipient_secret_key: S,
+) -> Result<Vec<u8>, String> {
+    // 1. Decode hex-encoded data from the bundle.
+    let ephemeral_public_key_bytes: [u8; 32] = hex::decode(&encrypted_bundle.ephemeral_public_key)
+        .map_err(|e| e.to_string())?
+        .try_into()
+        .map_err(|_| "Invalid ephemeral public key length".to_string())?;
+    let ephemeral_public_key = PublicKey::from(ephemeral_public_key_bytes);
+
+    let encrypted_message =
+        hex::decode(&encrypted_bundle.encrypted_message).map_err(|e| e.to_string())?;
+    let nonce_bytes = hex::decode(&encrypted_bundle.nonce).map_err(|e| e.to_string())?;
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    // 2. Derive the same encryption key using the same process as encryption.
+    let shared_secret = recipient_secret_key.diffie_hellman(&ephemeral_public_key);
+    let hk = Hkdf::<Sha256>::new(Some(ephemeral_public_key.as_bytes()), shared_secret.as_bytes());
+    let mut encryption_key = [0u8; 32];
+    hk.expand(b"chiral-network-msg", &mut encryption_key)
+        .map_err(|e| format!("HKDF expansion failed: {}", e))?;
+
+    // 3. Decrypt the message.
+    let key = Key::<Aes256Gcm>::from_slice(&encryption_key);
+    let cipher = Aes256Gcm::new(key);
+    cipher
+        .decrypt(nonce, encrypted_message.as_ref())
+        .map_err(|e| format!("Message decryption failed: {}", e))
 }
 
 #[cfg(test)]
@@ -420,5 +520,32 @@ mod tests {
 
         assert!(decrypt_result.is_err());
         assert!(decrypt_result.unwrap_err().contains("fingerprint mismatch"));
+    }
+
+    #[test]
+    fn test_message_encryption_decryption() {
+        // 1. Setup recipient's key pair.
+        let recipient_secret = StaticSecret::random_from_rng(OsRng);
+        let recipient_public = PublicKey::from(&recipient_secret);
+
+        // 2. Define a message to encrypt.
+        let original_message = b"This is a secret message for the Chiral Network.";
+
+        // 3. Encrypt the message for the recipient.
+        let encrypted_bundle = encrypt_message(original_message, &recipient_public).unwrap();
+
+        // 4. Decrypt the message using the recipient's secret key.
+        let decrypted_message = decrypt_message(&encrypted_bundle, &recipient_secret).unwrap();
+
+        // 5. Verify that the decrypted message matches the original.
+        assert_eq!(original_message.to_vec(), decrypted_message);
+
+        // 6. Negative test: try to decrypt with the wrong key.
+        let wrong_secret = StaticSecret::random_from_rng(OsRng);
+        let decryption_result = decrypt_message(&encrypted_bundle, &wrong_secret);
+        assert!(decryption_result.is_err());
+        assert!(decryption_result
+            .unwrap_err()
+            .contains("Message decryption failed"));
     }
 }
