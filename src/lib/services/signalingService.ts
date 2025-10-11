@@ -15,7 +15,7 @@ function createClientId(): string {
 export class SignalingService {
   private ws: WebSocket | null = null;
   private clientId: string;
-  
+
   public connected: Writable<boolean> = writable(false);
   public peers: Writable<string[]> = writable([]);
 
@@ -31,9 +31,9 @@ export class SignalingService {
       try {
         console.log("[SignalingService] Initializing connection to:", this.url);
         console.log("[SignalingService] Client ID:", this.clientId);
-        
+
         this.ws = new WebSocket(this.url);
-        
+
         this.ws.onopen = () => {
           console.log("[SignalingService] WebSocket connection established");
           this.connected.set(true);
@@ -46,7 +46,7 @@ export class SignalingService {
         this.ws.onmessage = (event) => {
           console.log("[SignalingService] Received message:", event.data);
           const message = JSON.parse(event.data);
-          
+
           if (message.type === "peers") {
             this.peers.set(message.peers);
           } else {
@@ -65,7 +65,6 @@ export class SignalingService {
           console.error("[SignalingService] WebSocket error:", error);
           reject(error);
         };
-
       } catch (error) {
         console.error("[SignalingService] Connection failed:", error);
         reject(error);
@@ -96,5 +95,10 @@ export class SignalingService {
   // Expose this client’s ID
   getClientId(): string {
     return this.clientId;
+  }
+
+  // Check if connected
+  isConnected(): boolean {
+    return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
   }
 }

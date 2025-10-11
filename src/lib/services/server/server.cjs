@@ -1,6 +1,7 @@
 // WebSocket signaling server for peer discovery and WebRTC signaling
 const WebSocket = require("ws");
-const wss = new WebSocket.Server({ port: 9000 });
+const port = process.env.PORT || 9000;
+const wss = new WebSocket.Server({ port: parseInt(port) });
 
 // Track connected peers
 const peers = new Map(); // clientId -> WebSocket

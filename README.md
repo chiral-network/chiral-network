@@ -163,7 +163,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
    - Persistent peer identity across restarts
    - JSON metrics export for monitoring
    - Production-ready with systemd/Docker support
-   - Location: `relay-infrastructure/`
+   - Location: `relay/`
 
 2. **Deployment Scripts**
    - `start-relay.sh` - Bootstrap script with auto IP detection
@@ -173,8 +173,8 @@ This implementation synthesizes concepts from multiple design teams, focusing on
    - PID file management
 
 3. **Documentation**
-   - `relay-infrastructure/README.md` - Quick start guide
-   - `relay-infrastructure/DEPLOYMENT.md` - Production deployment
+   - `relay/README.md` - Quick start guide
+   - `relay/DEPLOYMENT.md` - Production deployment
    - systemd service examples
    - Docker/docker-compose configs
    - Cloud deployment guides (AWS, GCP, DigitalOcean)
@@ -187,7 +187,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
    - Rate limiting for AutoNAT probes
    - Anti-amplification safeguards
 
-3. **Resilience Testing**
+2. **Resilience Testing**
    - End-to-end NAT traversal scenarios
    - Private↔Public connection tests
    - Private↔Private relay/hole-punch tests
@@ -475,10 +475,10 @@ npm run test:watch
 - Key exchange UI for recipient-specific encryption
 - No centralized servers to compromise
 - Fully decentralized architecture prevents single points of failure
+- Key exchange UI for encrypted sharing
 
 ### Planned Security
 
-- ✅ Key exchange UI for encrypted sharing
 - File encryption at rest
 - Signed software updates
 - Two-factor authentication
