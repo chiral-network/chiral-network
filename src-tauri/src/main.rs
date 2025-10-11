@@ -18,6 +18,7 @@ mod multi_source_download;
 pub mod net;
 mod peer_selection;
 mod pool;
+mod proxy_latency;
 mod stream_auth;
 mod webrtc_service;
 use std::sync::Mutex as StdMutex;
@@ -2129,6 +2130,41 @@ async fn get_multi_source_progress(
 }
 
 #[tauri::command]
+async fn update_proxy_latency(
+    state: State<'_, AppState>,
+    proxy_id: String,
+    latency_ms: Option<u64>,
+) -> Result<(), String> {
+    let ms = {
+        let ms_guard = state.multi_source_download.lock().await;
+        ms_guard.as_ref().cloned()
+    };
+
+    if let Some(multi_source_service) = ms {
+        multi_source_service.update_proxy_latency(proxy_id, latency_ms).await;
+        Ok(())
+    } else {
+        Err("Multi-source download service not available for proxy latency update".to_string())
+    }
+}
+
+#[tauri::command]
+async fn get_proxy_optimization_status(
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let ms = {
+        let ms_guard = state.multi_source_download.lock().await;
+        ms_guard.as_ref().cloned()
+    };
+
+    if let Some(multi_source_service) = ms {
+        Ok(multi_source_service.get_proxy_optimization_status().await)
+    } else {
+        Err("Multi-source download service not available for proxy optimization status".to_string())
+    }
+}
+
+#[tauri::command]
 async fn download_file_multi_source(
     state: State<'_, AppState>,
     file_hash: String,
@@ -3203,6 +3239,8 @@ fn main() {
             start_multi_source_download,
             cancel_multi_source_download,
             get_multi_source_progress,
+            update_proxy_latency,
+            get_proxy_optimization_status,
             download_file_multi_source,
             get_file_transfer_events,
             get_download_metrics,

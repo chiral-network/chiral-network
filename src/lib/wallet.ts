@@ -193,11 +193,11 @@ export class WalletService {
     }
   
     try {
-      // Get mining state which now has the real total block count
+      // Get block data that was already loaded from miningState
       const currentMiningState = get(miningState);
-      const blocksMined = currentMiningState.blocksFound ?? 0;
+      const blocksMined = currentMiningState.recentBlocks?.length ?? 0;
       
-      // Calculate total rewards using REAL block count
+      // Calculate total rewards (real block data was already fetched in refreshTransactions)
       const totalEarned = blocksMined * 2;
       
       // Try to get balance from geth
@@ -240,7 +240,7 @@ export class WalletService {
         }
       }
   
-      // Update mining state
+      // Update mining state with real block data
       miningState.update((state) => ({
         ...state,
         totalRewards: totalEarned,

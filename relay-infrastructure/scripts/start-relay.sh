@@ -21,6 +21,7 @@ MAX_RESERVATIONS="${MAX_RESERVATIONS:-128}"
 MAX_CIRCUITS="${MAX_CIRCUITS:-16}"
 EXTERNAL_ADDRESS="${EXTERNAL_ADDRESS:-}"
 VERBOSE="${VERBOSE:-false}"
+BINARY_PATH=""  # Will be set by check_binary()
 
 # Print functions
 print_info() {
@@ -60,13 +61,16 @@ setup_directories() {
 
 # Check if binary exists
 check_binary() {
-    local binary_path="$RELAY_DIR/../target/release/chiral-relay"
+    # Get the absolute path to the script's directory
+    local script_dir="$(cd "$(dirname "$0")" && pwd)"
+    local project_dir="$(cd "$script_dir/.." && pwd)"
+    BINARY_PATH="$project_dir/target/release/chiral-relay"
 
-    if [ ! -f "$binary_path" ]; then
-        print_warn "Binary not found at $binary_path"
+    if [ ! -f "$BINARY_PATH" ]; then
+        print_warn "Binary not found at $BINARY_PATH"
         print_info "Building relay daemon..."
 
-        cd "$(dirname "$0")/.."
+        cd "$project_dir"
         cargo build --release
 
         if [ $? -ne 0 ]; then
@@ -124,7 +128,7 @@ build_args() {
 
 # Start the relay daemon
 start_relay() {
-    local binary_path="$RELAY_DIR/../target/release/chiral-relay"
+    # Use the BINARY_PATH set by check_binary()
     local args=$(build_args)
 
     print_info "Starting Chiral Network Relay Daemon..."
@@ -141,7 +145,7 @@ start_relay() {
     fi
 
     # Start daemon in background
-    nohup "$binary_path" $args > "$LOG_FILE" 2>&1 &
+    nohup "$BINARY_PATH" $args > "$LOG_FILE" 2>&1 &
     local pid=$!
 
     # Wait a moment and verify it started
