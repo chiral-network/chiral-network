@@ -180,3 +180,16 @@ export async function listProxies() {
     proxyNodes.set([]);
   }
 }
+
+export async function getProxyOptimizationStatus(): Promise<string> {
+  try {
+    const status = await invoke<any>("get_proxy_optimization_status");
+    if (typeof status === 'object' && status !== null) {
+      return JSON.stringify(status, null, 2);
+    }
+    return String(status);
+  } catch (e) {
+    console.error("get_proxy_optimization_status failed:", e);
+    return "❌ Failed to get optimization status";
+  }
+}

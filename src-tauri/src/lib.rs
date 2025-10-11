@@ -12,5 +12,8 @@ pub mod webrtc_service;
 pub mod encryption;
 pub mod keystore;
 
+// Proxy latency optimization module
+pub mod proxy_latency;
+
 // Stream authentication module
 pub mod stream_auth;

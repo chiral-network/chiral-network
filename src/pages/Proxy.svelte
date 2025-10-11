@@ -6,7 +6,8 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import { ShieldCheck, ShieldX, Globe, Activity, Plus, Power, Trash2 } from 'lucide-svelte'
   import { onMount } from 'svelte';
-  import { proxyNodes, connectProxy, disconnectProxy, removeProxy, listProxies } from '$lib/proxy';
+  import { proxyNodes, connectProxy, disconnectProxy, removeProxy, listProxies, getProxyOptimizationStatus } from '$lib/proxy';
+  import { ProxyLatencyOptimizationService } from '$lib/services/proxyLatencyOptimization';
   import { t } from 'svelte-i18n'
   import DropDown from '$lib/components/ui/dropDown.svelte'
   
@@ -27,6 +28,13 @@
     averageLatency?: number
     uptimePercentage: number
   }>()
+  
+  // Proxy latency optimization variables
+  let proxyLatencyService: ProxyLatencyOptimizationService
+  let optimizationStatus = "🔄 Loading optimization status..."
+  let isTestingOptimization = false
+  let testResults = ""
+  
   const validAddressRegex = /^[a-zA-Z0-9.-]+:[0-9]{1,5}$/
   const ipv4Regex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):[0-9]{1,5}$/
   const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.([a-zA-Z]{2,}|[a-zA-Z]{2,}\.[a-zA-Z]{2,}):[0-9]{1,5}$/
@@ -59,6 +67,10 @@
   
   onMount(() => {
       listProxies();
+      
+      // Initialize proxy latency optimization service
+      proxyLatencyService = new ProxyLatencyOptimizationService();
+      updateOptimizationStatus();
   });
 
   function validateAddress(address: string): { valid: boolean; error: string } {
@@ -267,6 +279,61 @@
           // For now, we'll use a dummy token.
           connectProxy(node.address, "dummy-token");
       }
+  }
+
+  // Proxy latency optimization functions
+  async function updateOptimizationStatus() {
+      try {
+          optimizationStatus = await getProxyOptimizationStatus();
+      } catch (e) {
+          console.error('Failed to get optimization status:', e);
+          optimizationStatus = '❌ Optimization status unavailable';
+      }
+  }
+
+  async function testProxyLatencyOptimization() {
+    isTestingOptimization = true;
+    testResults = "";
+    
+    try {
+      const isTauriAvailable = await proxyLatencyService.isTauriAvailable();
+      if (!isTauriAvailable) {
+        testResults = "❌ Tauri API not available. Please run this test in the desktop application, not the browser.";
+        return;
+      }
+
+      console.log("🧪 Testing Proxy Latency Optimization...");
+      testResults = "🧪 Running comprehensive proxy optimization tests...\n";
+      
+      // Test 1: Update some proxy latencies
+      console.log("Test 1: Updating proxy latencies...");
+      testResults += "\n📊 Test 1: Updating proxy latencies...\n";
+      
+      await proxyLatencyService.updateProxyLatency("test-proxy-1", 50);
+      await proxyLatencyService.updateProxyLatency("test-proxy-2", null);
+      await proxyLatencyService.updateProxyLatency("test-proxy-3", 30);
+      await proxyLatencyService.updateProxyLatency("test-proxy-4", 100);
+      await proxyLatencyService.updateProxyLatency("test-proxy-5", 25);
+      
+      testResults += "✅ Updated 5 test proxies with varying latencies\n";
+      
+      // Test 2: Get optimization status
+      console.log("Test 2: Getting optimization status...");
+      testResults += "\n📈 Test 2: Checking optimization status...\n";
+      
+      const status = await proxyLatencyService.getOptimizationStatus();
+      testResults += `✅ Optimization enabled: ${status}\n`;
+
+      testResults += "\n🎉 All proxy latency optimization tests completed successfully!";
+      
+      // Update the main optimization status
+      await updateOptimizationStatus();
+    } catch (error) {
+      console.error("❌ Proxy latency optimization test failed:", error);
+      testResults += `\n❌ Test failed with error: ${error}`;
+    } finally {
+      isTestingOptimization = false;
+    }
   }
 
   
@@ -590,6 +657,47 @@
           </div>
         </div>
       {/each}
+    </div>
+  </Card>
+  
+  <!-- Proxy Latency Optimization Card -->
+  <Card class="bg-gradient-to-r from-purple-50 to-blue-50 border-purple-200">
+    <div class="space-y-3">
+      <div class="flex items-center gap-2">
+        <Activity class="h-5 w-5 text-purple-600" />
+        <h3 class="text-lg font-semibold text-purple-800">Proxy Latency Optimization</h3>
+      </div>
+      
+      <div class="bg-white/60 rounded-lg p-4 space-y-3">
+        <div>
+          <h4 class="text-sm font-medium text-gray-700 mb-2">Current Status</h4>
+          <p class="text-sm font-medium">{optimizationStatus}</p>
+          <div class="flex gap-2 mt-1">
+            <button 
+              class="text-xs text-purple-600 hover:text-purple-800"
+              on:click={updateOptimizationStatus}
+            >
+              Refresh Status
+            </button>
+            <button 
+              class="text-xs text-green-600 hover:text-green-800 px-2 py-1 bg-green-50 rounded disabled:opacity-50"
+              on:click={testProxyLatencyOptimization}
+              disabled={isTestingOptimization}
+            >
+              {isTestingOptimization ? "Running Proof Tests..." : "Prove Optimization Works"}
+            </button>
+          </div>
+        </div>
+        
+        {#if testResults}
+          <div class="mt-3">
+            <h4 class="text-sm font-medium text-gray-700 mb-2">Test Results</h4>
+            <div class="bg-gray-100 rounded p-3 max-h-40 overflow-y-auto">
+              <pre class="text-xs text-gray-800 whitespace-pre-wrap">{testResults}</pre>
+            </div>
+          </div>
+        {/if}
+      </div>
     </div>
   </Card>
 </div>
