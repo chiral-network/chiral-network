@@ -505,10 +505,13 @@
   
   function startDhtPolling() {
     if (dhtPollInterval) return // Already polling
-    
+
     dhtPollInterval = setInterval(async () => {
       try {
-        const events = await dhtService.getEvents() as any[]
+        // Only call getEvents if running in Tauri mode
+        const events = (isTauri && typeof dhtService.getEvents === 'function')
+          ? await dhtService.getEvents() as any[]
+          : []
         if (events.length > 0) {
           const formattedEvents = events.map(event => {
             if (event.peerDisconnected) {
@@ -597,9 +600,11 @@
         }
         await signaling.connect();
         signalingConnected = true;
+        const myClientId = signaling.getClientId();
         signaling.peers.subscribe(peers => {
-          discoveredPeers = peers;
-          console.log('Updated discovered peers:', peers);
+          // Filter out own client ID from discovered peers
+          discoveredPeers = peers.filter(p => p !== myClientId);
+          console.log('Updated discovered peers (excluding self):', discoveredPeers);
         });
 
         // Register signaling message handler for WebRTC
@@ -929,8 +934,10 @@
         signaling = new SignalingService();
         await signaling.connect();
         signalingConnected = true;
+        const myClientId = signaling.getClientId();
         signaling.peers.subscribe(peers => {
-          discoveredPeers = peers;
+          // Filter out own client ID from discovered peers
+          discoveredPeers = peers.filter(p => p !== myClientId);
         });
 
         // Register signaling message handler for WebRTC

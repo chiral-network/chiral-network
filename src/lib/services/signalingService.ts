@@ -22,7 +22,7 @@ export class SignalingService {
   // handler for WebRTC signaling messages
   private onMessageHandler: ((msg: any) => void) | null = null;
 
-  constructor(private url: string = "ws://localhost:9000") {
+  constructor(private url: string = "ws://localhost:3000") {
     this.clientId = createClientId();
   }
 
