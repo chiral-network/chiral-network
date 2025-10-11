@@ -17,3 +17,5 @@ pub mod proxy_latency;
 
 // Stream authentication module
 pub mod stream_auth;
+// Reputation system
+pub mod reputation;
