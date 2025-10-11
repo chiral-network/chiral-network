@@ -91,6 +91,18 @@ pub struct CliArgs {
 }
 
 pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error>> {
+    use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+    tracing_subscriber::registry()
+        .with(fmt::layer())
+        .with(
+            EnvFilter::from_default_env()
+                .add_directive("chiral_network=info".parse().unwrap())
+                .add_directive("libp2p=info".parse().unwrap())
+                .add_directive("libp2p_kad=debug".parse().unwrap())
+                .add_directive("libp2p_swarm=debug".parse().unwrap()),
+        )
+        .init();
+
     info!("Starting Chiral Network in headless mode");
     info!("DHT Port: {}", args.dht_port);
 
