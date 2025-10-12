@@ -393,8 +393,8 @@
       // Try to connect to bootstrap nodes
       let connectionSuccessful = false
 
-      if (DEFAULT_BOOTSTRAP_NODES.length > 0) {
-        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to ${DEFAULT_BOOTSTRAP_NODES.length} bootstrap node(s)...`]
+      if (dhtBootstrapNodes.length > 0) {
+        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to ${dhtBootstrapNodes.length} bootstrap node(s)...`]
         
         // Add another small delay to show the connection attempt
         await new Promise(resolve => setTimeout(resolve, 1000))
@@ -527,7 +527,7 @@
           })
           dhtEvents = [...dhtEvents, ...formattedEvents].slice(-10)
         }
-        
+
         let peerCount = dhtPeerCount
         const health = await dhtService.getHealth()
         if (health) {
@@ -635,23 +635,50 @@
   
   async function connectToPeer() {
     if (!newPeerAddress.trim()) {
-      showToast('Please enter a peer ID', 'error');
+      showToast('Please enter a peer address', 'error');
       return;
     }
-    
+
+    const peerAddress = newPeerAddress.trim();
+
+    // In Tauri mode, use DHT backend for P2P connections
+    if (isTauri) {
+      if (dhtStatus !== 'connected') {
+        showToast('DHT not connected. Please start DHT first.', 'error');
+        return;
+      }
+
+      try {
+        showToast('Connecting to peer via DHT...', 'info');
+        await invoke('connect_to_peer', { peerAddress });
+        showToast('Successfully connected to peer!', 'success');
+
+        // Clear input on successful connection
+        newPeerAddress = '';
+
+        // Refresh peer list to show the new connection
+        // The peer will appear in the connected peers list via DHT polling
+      } catch (error) {
+        console.error('Failed to connect to peer:', error);
+        showToast('Failed to connect to peer: ' + error, 'error');
+      }
+      return;
+    }
+
+    // In web mode, use WebRTC for testing
     if (!signalingConnected) {
       showToast('Signaling server not connected. Please start DHT first.', 'error');
       return;
     }
-    
-    const peerId = newPeerAddress.trim();
-    
+
+    const peerId = peerAddress;
+
     // Check if peer exists in discovered peers
     if (!discoveredPeers.includes(peerId)) {
       showToast(`Peer ${peerId} not found in discovered peers`, 'warning');
       // Still attempt connection in case peer was discovered recently
     }
-    
+
     try {
       webrtcSession = createWebRTCSession({
         peerId,
@@ -721,7 +748,7 @@
 
       // Clear input on successful connection attempt
       newPeerAddress = '';
-      
+
     } catch (error) {
       console.error('Failed to create WebRTC session:', error);
       showToast('Failed to create connection: ' + error, 'error');
@@ -1366,21 +1393,22 @@
             <div class="pt-2 space-y-2">
               <p class="text-sm text-muted-foreground">{$t('network.dht.listenAddresses')}</p>
               {#each dhtHealth.listenAddrs as addr}
+                {@const fullAddr = dhtPeerId ? `${addr}/p2p/${dhtPeerId}` : addr}
                 <div class="bg-muted/40 rounded-lg px-3 py-2">
                   <div class="flex items-start justify-between gap-2">
-                    <p class="text-xs font-mono break-all flex-1">{addr}</p>
+                    <p class="text-xs font-mono break-all flex-1">{fullAddr}</p>
                     <Button
                       variant="outline"
                       size="sm"
                       class="h-7 px-2 flex-shrink-0"
                       on:click={async () => {
-                        await copy(addr)
-                        copiedListenAddr = addr
+                        await copy(fullAddr)
+                        copiedListenAddr = fullAddr
                         setTimeout(() => (copiedListenAddr = null), 1200)
                       }}
                     >
                       <Clipboard class="h-3.5 w-3.5 mr-1" />
-                      {copiedListenAddr === addr ? $t('network.copied') : $t('network.copy')}
+                      {copiedListenAddr === fullAddr ? $t('network.copied') : $t('network.copy')}
                     </Button>
                   </div>
                 </div>
