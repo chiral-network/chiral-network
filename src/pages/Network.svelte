@@ -1991,10 +1991,23 @@
           </div>
         </div>
       {/each}
-      
+
       {#if $peers.length === 0}
         <p class="text-center text-muted-foreground py-8">{$t('network.connectedPeers.noPeers')}</p>
       {/if}
+    </div>
+
+    <!-- Refresh button at bottom right -->
+    <div class="flex justify-end mt-4">
+      <Button
+        size="sm"
+        variant="outline"
+        on:click={refreshConnectedPeers}
+        disabled={!isTauri || dhtStatus !== 'connected'}
+      >
+        <RefreshCw class="h-4 w-4 mr-2" />
+        Refresh Peers
+      </Button>
     </div>
   </Card>
 </div>
