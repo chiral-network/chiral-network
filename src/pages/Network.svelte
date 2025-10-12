@@ -661,15 +661,19 @@
           showToast('Received from peer: ' + data, 'info');
         },
         onConnectionStateChange: (state) => {
-          showToast('WebRTC state: ' + state, 'info');
+          console.log('[WebRTC] Connection state:', state);
 
-          // When the data channel/peer connection becomes connected, add to connected peers
+          // Only show toasts for important states (not every intermediate state)
           if (state === 'connected') {
             showToast('Successfully connected to peer!', 'success');
             // Add minimal PeerInfo to peers store if not present
             addConnectedPeer(peerId);
-          } else if (state === 'failed' || state === 'disconnected' || state === 'closed') {
-            showToast('Connection to peer failed or disconnected', 'error');
+          } else if (state === 'failed') {
+            showToast('Connection to peer failed', 'error');
+            // Mark peer as offline / remove from peers list
+            markPeerDisconnected(peerId);
+          } else if (state === 'disconnected' || state === 'closed') {
+            console.log('[WebRTC] Peer disconnected');
             // Mark peer as offline / remove from peers list
             markPeerDisconnected(peerId);
           }
@@ -711,9 +715,10 @@
         return [pending, ...list]
       })
 
-  await webrtcSession.createOffer();
-  showToast('Connecting to peer: ' + peerId, 'success');
-      
+      // Create offer asynchronously (don't await to avoid freezing UI)
+      webrtcSession.createOffer();
+      showToast('Connecting to peer: ' + peerId, 'success');
+
       // Clear input on successful connection attempt
       newPeerAddress = '';
       
@@ -993,10 +998,8 @@
         natStatusUnlisten()
         natStatusUnlisten = null
       }
-      // Disconnect signaling service
-      if (signaling) {
-        signaling.disconnect()
-      }
+      // Note: We do NOT disconnect the signaling service here
+      // It should persist across page navigations to maintain peer connections
     }
   })
 
