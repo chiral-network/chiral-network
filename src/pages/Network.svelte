@@ -141,16 +141,20 @@
   let copiedBootstrap = false
   let copiedListenAddr: string | null = null
 
-  function formatSize(bytes: number): string {
+  function formatSize(bytes: number | undefined): string {
+    if (bytes === undefined || bytes === null || isNaN(bytes)) {
+      return '0 B'
+    }
+
     const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
     let size = bytes
     let unitIndex = 0
-    
+
     while (size >= 1024 && unitIndex < units.length - 1) {
       size /= 1024
       unitIndex++
     }
-    
+
     return `${size.toFixed(2)} ${units[unitIndex]}`
   }
 
@@ -503,6 +507,8 @@
     }
   }
   
+  let peerRefreshCounter = 0;
+
   function startDhtPolling() {
     if (dhtPollInterval) return // Already polling
 
@@ -550,6 +556,20 @@
         } else if (dhtStatus === 'disconnected' && peerCount > 0) {
           dhtStatus = 'connected'
           dhtEvents = [...dhtEvents, `✓ Reconnected to ${peerCount} peer(s)`]
+        }
+
+        // Auto-refresh connected peers list every 5 seconds (every ~2.5 poll cycles)
+        peerRefreshCounter++;
+        if (peerRefreshCounter >= 3 && isTauri && peerCount > 0) {
+          peerRefreshCounter = 0;
+          // Silently refresh peer list in background
+          try {
+            const { peerService } = await import('$lib/services/peerService');
+            const connectedPeers = await peerService.getConnectedPeers();
+            peers.set(connectedPeers);
+          } catch (error) {
+            console.debug('Background peer refresh failed:', error);
+          }
         }
       } catch (error) {
         console.error('Failed to poll DHT status:', error)
@@ -656,8 +676,7 @@
         // Clear input on successful connection
         newPeerAddress = '';
 
-        // Refresh peer list to show the new connection
-        // The peer will appear in the connected peers list via DHT polling
+        // Peer list will auto-update via polling within ~5 seconds
       } catch (error) {
         console.error('Failed to connect to peer:', error);
         showToast('Failed to connect to peer: ' + error, 'error');
@@ -770,6 +789,20 @@
     }
   }
   
+  async function refreshConnectedPeers() {
+    if (!isTauri) {
+      return;
+    }
+
+    try {
+      const { peerService } = await import('$lib/services/peerService');
+      const connectedPeers = await peerService.getConnectedPeers();
+      peers.set(connectedPeers);
+    } catch (error) {
+      console.debug('Failed to refresh peers:', error);
+    }
+  }
+
   async function disconnectFromPeer(peerId: string) {
     if (!isTauri) {
       // Mock disconnection in web mode
@@ -777,7 +810,7 @@
       showToast($t('network.connectedPeers.disconnected'), 'success')
       return
     }
-    
+
     try {
       await invoke('disconnect_from_peer', { peerId })
       // Remove peer from local store
@@ -1904,7 +1937,7 @@
             </div>
             <div class="flex flex-wrap items-center gap-2 justify-end">
               <Badge variant="outline" class="flex-shrink-0">
-              ⭐ {peer.reputation.toFixed(1)}
+              ⭐ {(peer.reputation ?? 0).toFixed(1)}
               </Badge>
                 <Badge variant={peer.status === 'online' ? 'default' : 'secondary'}
                        class={

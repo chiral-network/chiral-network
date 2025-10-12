@@ -222,28 +222,23 @@ export class PeerService {
    * Generate a readable address from peer ID
    */
   private generateAddressFromPeerId(peerId: string): string {
-    // Extract a portion of the peer ID to create an IP-like address
-    const hash = peerId.slice(-12);
-    const parts = [];
-    for (let i = 0; i < 4; i++) {
-      const hex = hash.slice(i * 3, (i + 1) * 3);
-      parts.push(parseInt(hex, 16) % 256);
-    }
-    return `${parts.join('.')}:8080`;
+    // Return the actual peer ID instead of a fake IP address
+    // This is what users need to identify and connect to peers
+    return peerId;
   }
 
   /**
-   * Infer geographic location from address (mock implementation)
+   * Infer geographic location from peer ID (mock implementation)
    */
-  private inferLocationFromAddress(address: string): string {
-    const ip = address.split(':')[0];
-    const firstOctet = parseInt(ip.split('.')[0]);
+  private inferLocationFromAddress(peerId: string): string {
+    // Use a simple hash-based approach to assign locations pseudo-randomly
+    // but consistently for the same peer ID
+    const hash = peerId.split('').reduce((acc, char) => {
+      return acc + char.charCodeAt(0);
+    }, 0);
 
-    // Simple mock geolocation based on IP ranges
-    if (firstOctet >= 1 && firstOctet <= 63) return "US-East";
-    if (firstOctet >= 64 && firstOctet <= 127) return "US-West";
-    if (firstOctet >= 128 && firstOctet <= 191) return "EU-West";
-    return "Asia-Pacific";
+    const locations = ["US-East", "US-West", "EU-West", "Asia-Pacific"];
+    return locations[hash % locations.length];
   }
 
   /**
@@ -254,6 +249,7 @@ export class PeerService {
     // Create a friendly nickname from the peer ID
     const shortId = peerId.slice(-8); // Last 8 characters
     const nickname = `Peer_${shortId}`;
+    const now = new Date();
 
     return {
       id: peerId,
@@ -263,9 +259,9 @@ export class PeerService {
       reputation: 3.0, // Default neutral reputation
       sharedFiles: 0, // Unknown
       totalSize: 0, // Unknown
-      joinDate: new Date(), // Current time as join date
-      lastSeen: new Date(), // Current time
-      location: this.inferLocationFromAddress(address)
+      joinDate: now, // Current time as join date
+      lastSeen: now, // Current time
+      location: this.inferLocationFromAddress(peerId)
     };
   }
 
