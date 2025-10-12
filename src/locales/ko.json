@@ -25,6 +25,7 @@
       "notInstalled": "설치되지 않음",
       "downloading": "다운로드 중...",
       "starting": "시작 중...",
+      "connecting": "연결 중...",
       "connected": "연결됨",
       "disconnected": "연결 끊김"
     },
@@ -137,6 +138,23 @@
         "lastFailure": "마지막 실패",
         "never": "없음",
         "description": "릴레이를 통한 직접 연결 업그레이드(DCUtR)는 NAT 홀 펀칭을 활성화하여 직접 피어 연결을 설정합니다."
+      },
+      "relay": {
+        "title": "릴레이 상태",
+        "enabled": "자동 릴레이 활성화됨",
+        "disabled": "자동 릴레이 비활성화됨",
+        "noPeer": "릴레이에 연결되지 않음",
+        "activePeer": "활성 릴레이",
+        "status": "상태",
+        "lastSuccess": "마지막 예약 성공",
+        "lastFailure": "마지막 예약 실패",
+        "renewals": "예약 갱신",
+        "evictions": "예약 제거",
+        "never": "없음",
+        "noEvictions": "제거 없음",
+        "accepted": "예약 수락됨",
+        "pending": "대기 중",
+        "failed": "실패"
       }
     },
     "networkStatus": "네트워크 상태",
@@ -237,6 +255,36 @@
       "peersShort": "{count}개 피어",
       "emptyState": "DHT에 연결해 피어 위치를 확인하세요.",
       "unknownNotice": "{count}개의 피어가 아직 위치를 제공하지 않았습니다."
+    },
+    "quickActions": {
+      "title": "빠른 작업",
+      "badge": "네트워크 도구",
+      "discoverPeers": {
+        "tooltip": "네트워크에서 새로운 피어 찾기",
+        "discovering": "검색 중...",
+        "button": "피어 검색"
+      },
+      "addPeer": {
+        "placeholder": "피어 주소",
+        "tooltip": "주소로 피어 추가",
+        "success": "피어가 추가되었습니다!"
+      },
+      "copyPeerId": {
+        "tooltip": "내 피어 ID 복사",
+        "tooltipUnavailable": "피어 ID를 사용할 수 없음",
+        "button": "피어 ID 복사",
+        "success": "피어 ID가 복사되었습니다!"
+      },
+      "refreshStatus": {
+        "tooltip": "노드 및 네트워크 상태 새로고침",
+        "button": "상태 새로고침",
+        "success": "네트워크 상태가 새로고침되었습니다"
+      },
+      "restartNode": {
+        "tooltip": "로컬 노드 재시작",
+        "button": "노드 재시작",
+        "success": "노드가 재시작되었습니다"
+      }
     }
   },
   "regions.usEast": "미국 동부",
@@ -995,7 +1043,9 @@
           "other": "이미 다운로드 목록에 있습니다 ({status})"
         }
       },
-      "button": "검색"
+      "button": "검색",
+      "searchVersions": "버전 검색",
+      "namePlaceholder": "파일 이름 입력 (예: \"document.pdf\")"
     },
     "telemetry": {
       "retrying": "{hash} 다운로드 재시도 중 (시도 {attempt}/{max})",
