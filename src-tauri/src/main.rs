@@ -26,6 +26,7 @@ use std::sync::Mutex as StdMutex;
 use crate::commands::bootstrap::get_bootstrap_nodes_command;
 use crate::commands::proxy::{
     list_proxies, proxy_connect, proxy_disconnect, proxy_echo, proxy_remove, ProxyNode,
+    enable_privacy_routing, disable_privacy_routing,
 };
 use chiral_network::stream_auth::{
     AuthMessage, HmacKeyExchangeConfirmation, HmacKeyExchangeRequest, HmacKeyExchangeResponse,
@@ -108,6 +109,7 @@ struct AppState {
     multi_source_download: Mutex<Option<Arc<MultiSourceDownloadService>>>,
     keystore: Arc<Mutex<Keystore>>,
     proxies: Arc<Mutex<Vec<ProxyNode>>>,
+    privacy_proxies: Arc<Mutex<Vec<String>>>,
     file_transfer_pump: Mutex<Option<JoinHandle<()>>>,
     multi_source_pump: Mutex<Option<JoinHandle<()>>>,
     socks5_proxy_cli: Mutex<Option<String>>,
@@ -3167,6 +3169,7 @@ fn main() {
                 Keystore::load().unwrap_or_else(|_| Keystore::new()),
             )),
             proxies: Arc::new(Mutex::new(Vec::new())),
+            privacy_proxies: Arc::new(Mutex::new(Vec::new())),
             file_transfer_pump: Mutex::new(None),
             multi_source_pump: Mutex::new(None),
             socks5_proxy_cli: Mutex::new(args.socks5_proxy),
@@ -3254,6 +3257,8 @@ fn main() {
             proxy_remove,
             proxy_echo,
             list_proxies,
+            enable_privacy_routing,
+            disable_privacy_routing,
             get_bootstrap_nodes_command,
             generate_totp_secret,
             is_2fa_enabled,

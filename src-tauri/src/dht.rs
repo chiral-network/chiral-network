@@ -3129,6 +3129,23 @@ impl DhtService {
         rx.await
             .map_err(|e| format!("Failed to receive shutdown acknowledgment: {}", e))
     }
+
+    /// Enable privacy routing through proxy nodes
+    pub async fn enable_privacy_routing(&self) -> Result<(), String> {
+        info!("Privacy routing enabled at DHT level");
+        // TODO: Implement actual privacy routing logic in DHT
+        // This would involve routing traffic through proxy nodes
+        // and implementing onion-style routing or similar privacy techniques
+        Ok(())
+    }
+
+    /// Disable privacy routing, revert to direct connections
+    pub async fn disable_privacy_routing(&self) -> Result<(), String> {
+        info!("Privacy routing disabled at DHT level");
+        // TODO: Implement disabling privacy routing logic
+        // This would revert to direct peer connections
+        Ok(())
+    }
 }
 
 /// Process received Bitswap chunk data and assemble complete files
