@@ -35,7 +35,7 @@ The relay daemon implements:
 ### 1. Build the Relay Daemon
 
 ```bash
-cd relay-infrastructure
+cd relay
 cargo build --release
 ```
 
@@ -80,19 +80,19 @@ MAX_CIRCUITS=32 \
 
 All scripts support these environment variables:
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `RELAY_PORT` | `4001` | TCP port to listen on |
-| `RELAY_DIR` | `~/.chiral-relay` | Data directory |
-| `EXTERNAL_ADDRESS` | Auto-detected | External multiaddr (e.g., `/ip4/1.2.3.4/tcp/4001`) |
-| `MAX_RESERVATIONS` | `128` | Maximum concurrent relay reservations |
-| `MAX_CIRCUITS` | `16` | Maximum concurrent relay circuits |
-| `IDENTITY_FILE` | `$RELAY_DIR/identity.key` | Path to persistent identity |
-| `PID_FILE` | `$RELAY_DIR/relay.pid` | PID file location |
-| `LOG_FILE` | `$RELAY_DIR/relay.log` | Log file location |
-| `METRICS_FILE` | `$RELAY_DIR/metrics.json` | Metrics JSON file |
-| `VERBOSE` | `false` | Enable verbose logging |
-| `TIMEOUT` | `30` | Shutdown timeout (seconds) |
+| Variable           | Default                   | Description                                        |
+| ------------------ | ------------------------- | -------------------------------------------------- |
+| `RELAY_PORT`       | `4001`                    | TCP port to listen on                              |
+| `RELAY_DIR`        | `~/.chiral-relay`         | Data directory                                     |
+| `EXTERNAL_ADDRESS` | Auto-detected             | External multiaddr (e.g., `/ip4/1.2.3.4/tcp/4001`) |
+| `MAX_RESERVATIONS` | `128`                     | Maximum concurrent relay reservations              |
+| `MAX_CIRCUITS`     | `16`                      | Maximum concurrent relay circuits                  |
+| `IDENTITY_FILE`    | `$RELAY_DIR/identity.key` | Path to persistent identity                        |
+| `PID_FILE`         | `$RELAY_DIR/relay.pid`    | PID file location                                  |
+| `LOG_FILE`         | `$RELAY_DIR/relay.log`    | Log file location                                  |
+| `METRICS_FILE`     | `$RELAY_DIR/metrics.json` | Metrics JSON file                                  |
+| `VERBOSE`          | `false`                   | Enable verbose logging                             |
+| `TIMEOUT`          | `30`                      | Shutdown timeout (seconds)                         |
 
 ### Manual Execution
 
@@ -228,7 +228,7 @@ docker run -d \
 **Docker Compose (`docker-compose.yml`):**
 
 ```yaml
-version: '3.8'
+version: "3.8"
 
 services:
   chiral-relay:
@@ -415,10 +415,10 @@ Add to Prometheus config:
 
 ```yaml
 scrape_configs:
-  - job_name: 'chiral-relay'
+  - job_name: "chiral-relay"
     static_configs:
-      - targets: ['localhost:9100']
-    metrics_path: '/metrics'
+      - targets: ["localhost:9100"]
+    metrics_path: "/metrics"
 ```
 
 ## Troubleshooting
@@ -426,11 +426,13 @@ scrape_configs:
 ### Relay Won't Start
 
 **Check logs:**
+
 ```bash
 tail -f ~/.chiral-relay/relay.log
 ```
 
 **Common issues:**
+
 - Port already in use: `lsof -i :4001`
 - Permission denied: Run with appropriate user
 - Invalid external address: Check multiaddr format
@@ -438,12 +440,14 @@ tail -f ~/.chiral-relay/relay.log
 ### No Connections
 
 **Verify reachability:**
+
 ```bash
 # From another machine
 telnet YOUR_PUBLIC_IP 4001
 ```
 
 **Check firewall:**
+
 ```bash
 sudo iptables -L -n | grep 4001
 ```
@@ -451,6 +455,7 @@ sudo iptables -L -n | grep 4001
 ### High Resource Usage
 
 **Reduce limits:**
+
 ```bash
 MAX_RESERVATIONS=64 \
 MAX_CIRCUITS=8 \
@@ -458,6 +463,7 @@ MAX_CIRCUITS=8 \
 ```
 
 **Monitor with:**
+
 ```bash
 # CPU and memory
 top -p $(cat ~/.chiral-relay/relay.pid)
@@ -532,6 +538,7 @@ net.core.somaxconn = 1024
 ```
 
 Apply with:
+
 ```bash
 sudo sysctl -p
 ```

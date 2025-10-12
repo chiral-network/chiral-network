@@ -144,19 +144,32 @@ export class WalletService {
     await Promise.allSettled([this.refreshBalance(), this.refreshTransactions()]);
   }
 
+  
   async refreshTransactions(): Promise<void> {
     const account = get(etcAccount);
     if (!account || !this.isTauri) {
       return;
     }
-
+  
     try {
-      const blocks = (await invoke('get_recent_mined_blocks_pub', {
-        address: account.address,
-        lookback: 2000,
-        limit: 50,
-      })) as Array<{ hash: string; timestamp: number; reward?: number }>;
-
+      // Get data in parallel
+      const [blocks, totalBlockCount] = await Promise.all([
+        invoke('get_recent_mined_blocks_pub', {
+          address: account.address,
+          lookback: 2000,
+          limit: 50,
+        }) as Promise<Array<{ hash: string; timestamp: number; reward?: number }>>,
+        invoke('get_blocks_mined', {
+          address: account.address,
+        }) as Promise<number>
+      ]);
+  
+      // Update total count FIRST, before adding blocks
+      miningState.update((state) => ({
+        ...state,
+        blocksFound: totalBlockCount,
+      }));
+  
       for (const block of blocks) {
         if (this.seenHashes.has(block.hash)) {
           continue;
@@ -237,6 +250,7 @@ export class WalletService {
       console.error('Failed to refresh balance:', error);
     }
   }
+
 
   async ensureGethRunning(): Promise<boolean> {
     if (!this.isTauri) {
@@ -450,7 +464,7 @@ export class WalletService {
 
   private pushRecentBlock(block: { hash: string; reward?: number; timestamp?: Date }): void {
     const reward = typeof block.reward === 'number' ? block.reward : 0;
-
+  
     const newBlock = {
       id: `block-${block.hash}-${block.timestamp?.getTime() ?? Date.now()}`,
       hash: block.hash,
@@ -459,12 +473,13 @@ export class WalletService {
       difficulty: 0,
       nonce: 0,
     };
-
+  
     miningState.update((state) => ({
       ...state,
       recentBlocks: [newBlock, ...(state.recentBlocks ?? [])].slice(0, 50),
+      blocksFound: state.blocksFound ?? (state.recentBlocks?.length ?? 0) + 1,
     }));
-
+  
     if (reward > 0) {
       const last4 = block.hash.slice(-4);
       const tx: Transaction = {
