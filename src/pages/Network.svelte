@@ -1018,9 +1018,9 @@
   <!-- Quick Actions -->
 <Card class="p-6 bg-muted/60 border border-muted-foreground/10 rounded-xl shadow-sm mb-6">
   <div class="flex items-center justify-between mb-4">
-    <h2 class="text-lg font-semibold text-foreground tracking-tight">Quick Actions</h2>
+    <h2 class="text-lg font-semibold text-foreground tracking-tight">{$t('network.quickActions.title')}</h2>
     <Badge variant="outline" class="text-xs text-muted-foreground border-muted-foreground/20 bg-transparent">
-      Network Tools
+      {$t('network.quickActions.badge')}
     </Badge>
   </div>
   <div class="flex flex-wrap gap-4 justify-start items-center">
@@ -1029,7 +1029,7 @@
       size="lg"
       variant="secondary"
       class="flex items-center gap-2 px-6 py-3 font-semibold text-base rounded-lg shadow-sm border border-primary/10 bg-background hover:bg-secondary/80"
-      title="Find new peers on the network"
+      title={$t('network.quickActions.discoverPeers.tooltip')}
       on:click={async () => {
         if (dhtStatus !== 'connected') await startDht();
         await runDiscovery();
@@ -1037,13 +1037,13 @@
       disabled={dhtStatus === 'connecting'}
     >
       <RefreshCw class={`h-5 w-5${dhtStatus === 'connecting' ? ' animate-spin' : ''}`} />
-      {dhtStatus === 'connecting' ? 'Discovering...' : 'Discover Peers'}
+      {dhtStatus === 'connecting' ? $t('network.quickActions.discoverPeers.discovering') : $t('network.quickActions.discoverPeers.button')}
     </Button>
 
     <!-- Add Peer by Address (inline input, condensed) -->
     <div class="flex items-center gap-2 bg-muted/80 border border-muted-foreground/10 rounded-lg px-3 py-2">
-      <Input placeholder="Peer Address" bind:value={newPeerAddress} class="w-32 text-sm bg-background border border-muted-foreground/10 rounded" />
-      <Button size="sm" variant="secondary" class="rounded" title="Add a peer by address" on:click={async () => { if (newPeerAddress) { await addConnectedPeer(newPeerAddress); showToast('Peer added!', 'success'); newPeerAddress = ''; }}} disabled={!newPeerAddress}>
+      <Input placeholder={$t('network.quickActions.addPeer.placeholder')} bind:value={newPeerAddress} class="w-32 text-sm bg-background border border-muted-foreground/10 rounded" />
+      <Button size="sm" variant="secondary" class="rounded" title={$t('network.quickActions.addPeer.tooltip')} on:click={async () => { if (newPeerAddress) { await addConnectedPeer(newPeerAddress); showToast($t('network.quickActions.addPeer.success'), 'success'); newPeerAddress = ''; }}} disabled={!newPeerAddress}>
         <UserPlus class="h-4 w-4" />
       </Button>
     </div>
@@ -1053,17 +1053,17 @@
       size="lg"
       variant="secondary"
       class="flex items-center gap-2 px-6 py-3 font-semibold text-base rounded-lg shadow-sm border border-primary/10 bg-background hover:bg-secondary/80"
-      title={dhtPeerId ? 'Copy your Peer ID' : 'Peer ID not available'}
+      title={dhtPeerId ? $t('network.quickActions.copyPeerId.tooltip') : $t('network.quickActions.copyPeerId.tooltipUnavailable')}
       on:click={async () => {
         if (dhtPeerId) {
           await copy(dhtPeerId);
-          showToast('Peer ID copied!', 'success');
+          showToast($t('network.quickActions.copyPeerId.success'), 'success');
         }
       }}
       disabled={!dhtPeerId}
     >
       <Users class="h-5 w-5" />
-      Copy Peer ID
+      {$t('network.quickActions.copyPeerId.button')}
     </Button>
 
     <!-- Refresh Status -->
@@ -1071,15 +1071,15 @@
       size="lg"
       variant="secondary"
       class="flex items-center gap-2 px-6 py-3 font-semibold text-base rounded-lg shadow-sm border border-primary/10 bg-background hover:bg-secondary/80"
-      title="Refresh node and network status"
+      title={$t('network.quickActions.refreshStatus.tooltip')}
       on:click={async () => {
         await checkGethStatus();
         if (gethStatusCardRef?.refresh) await gethStatusCardRef.refresh();
-        showToast('Network status refreshed', 'success');
+        showToast($t('network.quickActions.refreshStatus.success'), 'success');
       }}
     >
       <Activity class="h-5 w-5" />
-      Refresh Status
+      {$t('network.quickActions.refreshStatus.button')}
     </Button>
 
     <!-- Restart Node -->
@@ -1087,16 +1087,16 @@
       size="lg"
       variant="secondary"
       class="flex items-center gap-2 px-6 py-3 font-semibold text-base rounded-lg shadow-sm border border-primary/10 bg-background hover:bg-secondary/80"
-      title="Restart the local node"
+      title={$t('network.quickActions.restartNode.tooltip')}
       on:click={async () => {
         await stopNode();
         await startNode();
-        showToast('Node restarted', 'success');
+        showToast($t('network.quickActions.restartNode.success'), 'success');
       }}
       disabled={!isGethInstalled || isStartingNode}
     >
       <Square class="h-5 w-5" />
-      Restart Node
+      {$t('network.quickActions.restartNode.button')}
     </Button>
   </div>
 </Card>
@@ -1295,7 +1295,7 @@
           <Wifi class="h-12 w-12 text-yellow-500 mx-auto mb-2 animate-pulse" />
           <p class="text-sm text-muted-foreground">{$t('network.dht.connectingToBootstrap')}</p>
           <p class="text-xs text-muted-foreground mt-1">{dhtBootstrapNode}</p>
-          <p class="text-xs text-yellow-500 mt-2">{$t('network.dht.attempt', { values: { connectionAttempts } })}</p>
+          <p class="text-xs text-yellow-500 mt-2">{$t('network.dht.attempt', { values: { connectionAttempts: connectionAttempts } })}</p>
         </div>
       {:else}
         <div class="space-y-3">

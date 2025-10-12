@@ -347,7 +347,7 @@
           <Input
             id="hash-input"
             bind:value={searchHash}
-            placeholder={searchMode === 'hash' ? tr('download.placeholder') : 'Enter file name (e.g., "document.pdf")'}
+            placeholder={searchMode === 'hash' ? tr('download.placeholder') : tr('download.search.namePlaceholder')}
             class="pr-20 h-10"
             on:focus={toggleHistoryDropdown}
           />
@@ -422,7 +422,7 @@
           class="h-10 px-6"
         >
           <Search class="h-4 w-4 mr-2" />
-          {isSearching ? tr('download.search.status.searching') : (searchMode === 'name' ? 'Search Versions' : tr('download.search.button'))}
+          {isSearching ? tr('download.search.status.searching') : (searchMode === 'name' ? tr('download.search.searchVersions') : tr('download.search.button'))}
         </Button>
       </div>
     </div>
