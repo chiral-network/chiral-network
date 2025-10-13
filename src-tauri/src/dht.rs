@@ -3318,6 +3318,99 @@ impl DhtService {
         }
     }
 
+    /// Discovers proxy services through DHT provider queries
+    /// Uses DHT provider discovery to find peers advertising proxy services
+    async fn discover_proxy_services_through_dht_providers(&self, proxy_mgr: &mut ProxyManager) -> usize {
+        let mut discovered_and_verified = 0;
+
+        info!("Starting DHT proxy service discovery using provider queries...");
+
+        // Query DHT for peers that provide proxy services
+        // Use a standard proxy service identifier that proxy nodes would register as providers for
+        let proxy_service_cid = "proxy:service:available"; // This would be a well-known CID for proxy services
+
+        match self.query_dht_proxy_providers(proxy_service_cid.to_string()).await {
+            Ok(provider_peers) => {
+                for peer_id in provider_peers {
+                    if !proxy_mgr.capable.contains(&peer_id) {
+                        info!("Discovered proxy provider via DHT: {}", peer_id);
+
+                        // Add to capable list for verification
+                        proxy_mgr.set_capable(peer_id.clone());
+
+                        // Verify the discovered proxy
+                        match self.verify_proxy_capabilities(&peer_id).await {
+                            Ok(_) => {
+                                proxy_mgr.add_trusted_proxy_node(peer_id.clone());
+                                discovered_and_verified += 1;
+                                info!("✅ Verified and added DHT-discovered proxy provider: {}", peer_id);
+                            }
+                            Err(e) => {
+                                warn!("❌ DHT proxy provider verification failed for {}: {}", peer_id, e);
+                                proxy_mgr.capable.remove(&peer_id);
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("DHT proxy provider discovery failed: {}", e);
+            }
+        }
+
+        info!("DHT proxy provider discovery completed: {} proxies verified and added", discovered_and_verified);
+        discovered_and_verified
+    }
+
+    /// Query DHT for peers providing proxy services using provider records
+    /// Returns a list of peer IDs that provide proxy services
+    async fn query_dht_proxy_providers(&self, service_identifier: String) -> Result<Vec<PeerId>, String> {
+        // Create a DHT record key for proxy services
+        let key = kad::RecordKey::new(&service_identifier);
+
+        // Query DHT for providers of this service
+        // This finds peers that have registered as providers for proxy services
+        let (tx, rx) = oneshot::channel();
+
+        // Send command to query providers
+        if let Err(e) = self.cmd_tx.send(DhtCommand::GetProviders {
+            file_hash: service_identifier.clone(),
+            sender: tx,
+        }).await {
+            return Err(format!("Failed to send GetProviders command: {}", e));
+        }
+
+        // Wait for response with timeout
+        match tokio::time::timeout(Duration::from_secs(15), rx).await {
+            Ok(Ok(Ok(provider_strings))) => {
+                let total_count = provider_strings.len();
+
+                // Convert string peer IDs to PeerId objects
+                let mut peer_ids = Vec::new();
+                for peer_string in provider_strings {
+                    match peer_string.parse::<PeerId>() {
+                        Ok(peer_id) => peer_ids.push(peer_id),
+                        Err(e) => {
+                            warn!("Failed to parse peer ID from provider string: {}", e);
+                        }
+                    }
+                }
+
+                info!("Found {} proxy service providers in DHT ({} valid peer IDs)", total_count, peer_ids.len());
+                Ok(peer_ids)
+            }
+            Ok(Ok(Err(e))) => {
+                Err(format!("GetProviders command failed: {}", e))
+            }
+            Ok(Err(_)) => {
+                Err("GetProviders channel closed unexpectedly".to_string())
+            }
+            Err(_) => {
+                Err("GetProviders query timed out".to_string())
+            }
+        }
+    }
+
     pub async fn metrics_snapshot(&self) -> DhtMetricsSnapshot {
         let metrics = self.metrics.lock().await.clone();
         let peer_count = self.connected_peers.lock().await.len();
@@ -3553,11 +3646,10 @@ impl DhtService {
             }
         }
 
-        // TODO: Additionally, query DHT for peers advertising proxy services
-        // This would involve searching for peers with specific DHT records indicating proxy services
-        // For now, we rely on the connected peers we know are capable
+        // Query DHT for peers advertising proxy services and add them to verification pipeline
+        let dht_proxy_count = self.discover_proxy_services_through_dht_providers(&mut proxy_mgr).await;
 
-        let trusted_count = trusted_proxy_count;
+        let trusted_count = trusted_proxy_count + dht_proxy_count;
         info!(
             "Privacy routing enabled with {} trusted proxy nodes",
             trusted_count
