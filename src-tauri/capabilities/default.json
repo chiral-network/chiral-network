@@ -13,6 +13,11 @@
     "shell:allow-open",
     "os:default",
     "dialog:default",
-    "dialog:allow-open"
+    "dialog:allow-open",
+    "fs:allow-write-file",
+    {
+      "identifier": "fs:scope",
+      "allow": [{ "path": "**" }]
+    }
   ]
 }
