@@ -1021,12 +1021,18 @@ async fn run_dht_node(
     relay_candidates: HashSet<String>,
     chunk_size: usize,
 ) {
+    let mut dht_maintenance_interval = tokio::time::interval(Duration::from_secs(30 * 60)); 
+    dht_maintenance_interval.tick().await; 
     // Periodic bootstrap interval
     let mut shutdown_ack: Option<oneshot::Sender<()>> = None;
     let mut ping_failures: HashMap<PeerId, u8> = HashMap::new();
 
     'outer: loop {
         tokio::select! {
+            _= dht_maintenance_interval.tick() => {
+                info!("Triggering periodic DHT maintenanace: Kademlia bootstrap and Record Refresh.");
+                let _ = swarm.behaviour_mut().kademlia.bootstrap();
+            }
             cmd = cmd_rx.recv() => {
                 match cmd {
                     Some(DhtCommand::Shutdown(ack)) => {
