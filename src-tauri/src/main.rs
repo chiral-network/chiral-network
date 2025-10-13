@@ -28,6 +28,10 @@ use crate::commands::proxy::{
     disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect,
     proxy_disconnect, proxy_echo, proxy_remove, ProxyNode,
 };
+use crate::commands::auth::{
+    generate_proxy_auth_token, validate_proxy_auth_token, revoke_proxy_auth_token,
+    cleanup_expired_proxy_auth_tokens,
+};
 use chiral_network::stream_auth::{
     AuthMessage, HmacKeyExchangeConfirmation, HmacKeyExchangeRequest, HmacKeyExchangeResponse,
     StreamAuthService,
@@ -72,6 +76,82 @@ use crate::manager::ChunkManager; // Import the ChunkManager
 use blockstore::block::Block;
 use x25519_dalek::{PublicKey, StaticSecret}; // For key handling
 
+/// Detect MIME type from file extension
+fn detect_mime_type_from_filename(filename: &str) -> Option<String> {
+    let extension = filename
+        .rsplit('.')
+        .next()?
+        .to_lowercase();
+
+    match extension.as_str() {
+        // Images
+        "jpg" | "jpeg" => Some("image/jpeg".to_string()),
+        "png" => Some("image/png".to_string()),
+        "gif" => Some("image/gif".to_string()),
+        "bmp" => Some("image/bmp".to_string()),
+        "webp" => Some("image/webp".to_string()),
+        "svg" => Some("image/svg+xml".to_string()),
+        "ico" => Some("image/x-icon".to_string()),
+
+        // Videos
+        "mp4" => Some("video/mp4".to_string()),
+        "avi" => Some("video/x-msvideo".to_string()),
+        "mkv" => Some("video/x-matroska".to_string()),
+        "mov" => Some("video/quicktime".to_string()),
+        "wmv" => Some("video/x-ms-wmv".to_string()),
+        "flv" => Some("video/x-flv".to_string()),
+        "webm" => Some("video/webm".to_string()),
+
+        // Audio
+        "mp3" => Some("audio/mpeg".to_string()),
+        "wav" => Some("audio/wav".to_string()),
+        "flac" => Some("audio/flac".to_string()),
+        "aac" => Some("audio/aac".to_string()),
+        "ogg" => Some("audio/ogg".to_string()),
+        "wma" => Some("audio/x-ms-wma".to_string()),
+
+        // Documents
+        "pdf" => Some("application/pdf".to_string()),
+        "doc" => Some("application/msword".to_string()),
+        "docx" => Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document".to_string()),
+        "xls" => Some("application/vnd.ms-excel".to_string()),
+        "xlsx" => Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string()),
+        "ppt" => Some("application/vnd.ms-powerpoint".to_string()),
+        "pptx" => Some("application/vnd.openxmlformats-officedocument.presentationml.presentation".to_string()),
+        "txt" => Some("text/plain".to_string()),
+        "rtf" => Some("application/rtf".to_string()),
+
+        // Archives
+        "zip" => Some("application/zip".to_string()),
+        "rar" => Some("application/x-rar-compressed".to_string()),
+        "7z" => Some("application/x-7z-compressed".to_string()),
+        "tar" => Some("application/x-tar".to_string()),
+        "gz" => Some("application/gzip".to_string()),
+
+        // Code files
+        "html" | "htm" => Some("text/html".to_string()),
+        "css" => Some("text/css".to_string()),
+        "js" => Some("application/javascript".to_string()),
+        "json" => Some("application/json".to_string()),
+        "xml" => Some("application/xml".to_string()),
+        "py" => Some("text/x-python".to_string()),
+        "rs" => Some("text/rust".to_string()),
+        "java" => Some("text/x-java-source".to_string()),
+        "cpp" | "cc" | "cxx" => Some("text/x-c++src".to_string()),
+        "c" => Some("text/x-csrc".to_string()),
+        "h" => Some("text/x-chdr".to_string()),
+        "hpp" => Some("text/x-c++hdr".to_string()),
+
+        // Other common types
+        "exe" => Some("application/x-msdownload".to_string()),
+        "dll" => Some("application/x-msdownload".to_string()),
+        "iso" => Some("application/x-iso9660-image".to_string()),
+
+        // Default fallback
+        _ => Some("application/octet-stream".to_string()),
+    }
+}
+
 #[derive(Clone)]
 struct QueuedTransaction {
     id: String,
@@ -81,15 +161,23 @@ struct QueuedTransaction {
 }
 
 #[derive(Clone)]
-struct StreamingUploadSession {
-    file_name: String,
-    file_size: u64,
-    received_chunks: u32,
-    total_chunks: u32,
-    hasher: sha2::Sha256,
-    created_at: std::time::SystemTime,
-    chunk_cids: Vec<dht::Cid>, // Collect CIDs of all chunks for root block creation
-    file_data: Vec<u8>,        // Accumulate file data for local storage
+struct ProxyAuthToken {
+    token: String,
+    proxy_address: String,
+    expires_at: u64,
+    created_at: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct StreamingUploadSession {
+    pub file_name: String,
+    pub file_size: u64,
+    pub received_chunks: u32,
+    pub total_chunks: u32,
+    pub hasher: sha2::Sha256,
+    pub created_at: std::time::SystemTime,
+    pub chunk_cids: Vec<String>,
+    pub file_data: Vec<u8>,
 }
 
 struct AppState {
@@ -121,6 +209,9 @@ struct AppState {
 
     // New field for streaming upload sessions
     upload_sessions: Arc<Mutex<std::collections::HashMap<String, StreamingUploadSession>>>,
+
+    // Proxy authentication tokens storage
+    proxy_auth_tokens: Arc<Mutex<std::collections::HashMap<String, ProxyAuthToken>>>,
 
     // Stream authentication service
     stream_auth: Arc<Mutex<StreamAuthService>>,
@@ -168,12 +259,14 @@ async fn import_chiral_account(
 }
 
 #[tauri::command]
-async fn start_geth_node(state: State<'_, AppState>, data_dir: String) -> Result<(), String> {
+async fn start_geth_node(
+    state: State<'_, AppState>,
+    data_dir: String,
+    rpc_url: Option<String>,
+) -> Result<(), String> {
     let mut geth = state.geth.lock().await;
     let miner_address = state.miner_address.lock().await;
-    // TODO: The port and address should be configurable from the frontend.
-    // For now, we'll update the rpc_url in the state when starting.
-    let rpc_url = "http://127.0.0.1:8545".to_string();
+    let rpc_url = rpc_url.unwrap_or_else(|| "http://127.0.0.1:8545".to_string());
     *state.rpc_url.lock().await = rpc_url;
 
     geth.start(&data_dir, miner_address.as_deref())
@@ -1522,11 +1615,10 @@ async fn download_file_from_network(
 
                     if available_peers.is_empty() {
                         info!("File found but no seeders currently available");
-                        // TODO: Return metadata to frontend with 0 seeders instead of error
-                        return Err(format!(
-                            "File found but no seeders available: {} ({} bytes) - 0 seeders online",
-                            metadata.file_name, metadata.file_size
-                        ));
+                        // Return metadata as JSON instead of error so frontend can display file info
+                        let metadata_json = serde_json::to_string(&metadata)
+                            .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+                        return Ok(metadata_json);
                     }
 
                     // Implement chunk requesting protocol with real WebRTC
@@ -1825,7 +1917,7 @@ async fn upload_file_chunk(
             };
 
             // Collect CID for root block creation
-            session.chunk_cids.push(cid.clone());
+            session.chunk_cids.push(cid.to_string());
 
             // Store block in Bitswap via DHT command
             if let Err(e) = dht.store_block(cid.clone(), block.data().to_vec()).await {
@@ -3182,6 +3274,9 @@ fn main() {
             // Initialize upload sessions
             upload_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
 
+            // Initialize proxy authentication tokens
+            proxy_auth_tokens: Arc::new(Mutex::new(std::collections::HashMap::new())),
+
             // Initialize stream authentication
             stream_auth: Arc::new(Mutex::new(StreamAuthService::new())),
         })
@@ -3304,6 +3399,10 @@ fn main() {
             finalize_hmac_key_exchange,
             get_hmac_exchange_status,
             get_active_hmac_exchanges,
+            generate_proxy_auth_token,
+            validate_proxy_auth_token,
+            revoke_proxy_auth_token,
+            cleanup_expired_proxy_auth_tokens,
             get_file_data,
             store_file_data
         ])
@@ -3639,6 +3738,7 @@ async fn upload_and_publish_file(
             .as_secs();
 
         // Use prepare_versioned_metadata to handle version incrementing and parent_hash
+        let mime_type = detect_mime_type_from_filename(&file_name).unwrap_or_else(|| "application/octet-stream".to_string());
         let metadata = dht
             .prepare_versioned_metadata(
                 manifest.merkle_root.clone(),
@@ -3646,7 +3746,7 @@ async fn upload_and_publish_file(
                 file_size,
                 vec![], // Empty - chunks already stored
                 created_at,
-                None, // TODO: detect mime type from file extension
+                Some(mime_type),
                 true, // is_encrypted
                 Some("AES-256-GCM".to_string()),
                 None, // key_fingerprint

@@ -10,6 +10,7 @@
   import { ProxyLatencyOptimizationService } from '$lib/services/proxyLatencyOptimization';
   import { t } from 'svelte-i18n'
   import DropDown from '$lib/components/ui/dropDown.svelte'
+  import { ProxyAuthService } from '$lib/proxyAuth';
   
   let newNodeAddress = ''
   let proxyEnabled = true
@@ -68,6 +69,9 @@
       
       // Initialize proxy latency optimization
       updateOptimizationStatus();
+
+      // Clean up expired authentication tokens
+      ProxyAuthService.cleanupExpiredTokens();
   });
 
   function validateAddress(address: string): { valid: boolean; error: string } {
@@ -239,10 +243,19 @@
       // Start connection timeout
       startConnectionTimeout(newNodeAddress.trim())
 
-      // For now, we'll use a dummy token.
-      connectProxy(newNodeAddress.trim(), "dummy-token");
-      newNodeAddress = ''
-      addressError = ''
+      // Generate secure authentication token
+      ProxyAuthService.generateProxyToken(newNodeAddress.trim()).then(token => {
+          connectProxy(newNodeAddress.trim(), token);
+          newNodeAddress = ''
+          addressError = ''
+      }).catch(error => {
+          console.error('Failed to generate proxy auth token:', error);
+          // Fallback to a basic token if generation fails
+          const fallbackToken = ProxyAuthService.generateFallbackToken(newNodeAddress.trim());
+          connectProxy(newNodeAddress.trim(), fallbackToken);
+          newNodeAddress = ''
+          addressError = ''
+      });
   }
 
   function requestRemoveNode(node: any) {
@@ -273,8 +286,35 @@
       } else {
           // Start connection timeout for reconnection attempts
           startConnectionTimeout(node.address)
-          // For now, we'll use a dummy token.
-          connectProxy(node.address, "dummy-token");
+
+          // Get or generate authentication token
+          ProxyAuthService.getProxyToken(node.address).then(existingToken => {
+              if (existingToken) {
+                  // Use existing valid token
+                  connectProxy(node.address, existingToken);
+              } else {
+                  // Generate new token
+                  ProxyAuthService.generateProxyToken(node.address).then(token => {
+                      connectProxy(node.address, token);
+                  }).catch(error => {
+                      console.error('Failed to generate proxy auth token:', error);
+                      // Fallback to a basic token if generation fails
+                      const fallbackToken = ProxyAuthService.generateFallbackToken(node.address);
+                      connectProxy(node.address, fallbackToken);
+                  });
+              }
+          }).catch(error => {
+              console.error('Failed to get proxy auth token:', error);
+              // Fallback to generating a new token
+              ProxyAuthService.generateProxyToken(node.address).then(token => {
+                  connectProxy(node.address, token);
+              }).catch(error => {
+                  console.error('Failed to generate proxy auth token:', error);
+                  // Fallback to a basic token if generation fails
+                  const fallbackToken = ProxyAuthService.generateFallbackToken(node.address);
+                  connectProxy(node.address, fallbackToken);
+              });
+          });
       }
   }
 

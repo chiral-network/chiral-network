@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { createWebRTCSession } from "./webrtcService";
 import { SignalingService } from "./signalingService";
 import type { FileMetadata } from "../dht";
-import type { FileManifestForJs } from "./encryption"; 
+import type { FileManifestForJs } from "./encryption";
 
 export interface P2PTransfer {
   id: string;
@@ -26,6 +26,7 @@ export interface P2PTransfer {
   startTime: number;
   outputPath?: string;
   receivedChunks?: Map<number, Uint8Array>;
+  requestedChunks?: Set<number>;
   currentSeederIndex?: number;
   retryCount?: number;
   lastError?: string;
@@ -122,6 +123,7 @@ export class P2PFileTransferService {
     transfer.retryCount = 0;
     transfer.totalChunks = Math.ceil(metadata.fileSize / (16 * 1024)); // Assume 16KB chunks
     transfer.corruptedChunks = new Set();
+    transfer.requestedChunks = new Set();
 
     // Connect to signaling service if not connected
     try {
@@ -175,8 +177,8 @@ export class P2PFileTransferService {
             }
           },
           onDataChannelOpen: () => {},
-          onMessage: (data) => {
-            this.handleIncomingChunk(transfer, data);
+          onMessage: async (data) => {
+            await this.handleIncomingChunk(transfer, data);
           },
           onError: (error) => {
             console.error("WebRTC error:", error);
@@ -341,47 +343,55 @@ export class P2PFileTransferService {
     totalChunks: number,
     parallelRequests: number
   ): void {
-    // This method will be called periodically to request more chunks
-    // For now, we'll use a simple interval-based approach
-    const checkInterval = setInterval(() => {
+    const requestMoreChunks = () => {
       // Stop if transfer is not active anymore
       if (
         transfer.status !== "transferring" &&
         transfer.status !== "connecting"
       ) {
-        clearInterval(checkInterval);
         return;
       }
 
       const receivedCount = transfer.receivedChunks?.size || 0;
       const requestedCount = this.getRequestedChunkCount(transfer);
 
-      // If we have capacity for more requests, request more chunks
-      if (
-        receivedCount + requestedCount < totalChunks &&
-        requestedCount < parallelRequests
-      ) {
-        const nextChunkIndex = receivedCount + requestedCount;
-        if (nextChunkIndex < totalChunks) {
-          this.requestChunk(transfer, nextChunkIndex);
+      // Calculate how many more chunks we can request
+      const availableSlots = parallelRequests - requestedCount;
+
+      if (availableSlots > 0 && receivedCount + requestedCount < totalChunks) {
+        // Request multiple chunks in parallel if slots are available
+        const startIndex = receivedCount + requestedCount;
+        const endIndex = Math.min(startIndex + availableSlots, totalChunks);
+
+        for (let i = startIndex; i < endIndex; i++) {
+          this.requestChunk(transfer, i);
         }
       }
-    }, 100); // Check every 100ms
 
-    // Set up a one-time check for completion after a delay
-    setTimeout(() => {
+      // Schedule next check if transfer is still active and not complete
       if (
-        transfer.status === "completed" ||
-        transfer.status === "failed" ||
-        transfer.status === "cancelled"
+        transfer.status === "transferring" ||
+        transfer.status === "connecting"
       ) {
-        clearInterval(checkInterval);
+        // Use a longer interval since we now track requests properly
+        setTimeout(requestMoreChunks, 200);
       }
-    }, 1000);
+    };
+
+    // Start the chunk requesting process
+    setTimeout(requestMoreChunks, 100);
   }
 
   private requestChunk(transfer: P2PTransfer, chunkIndex: number): void {
     if (!transfer.webrtcSession) return;
+
+    // Don't request chunks that are already requested or received
+    if (
+      transfer.requestedChunks?.has(chunkIndex) ||
+      transfer.receivedChunks?.has(chunkIndex)
+    ) {
+      return;
+    }
 
     try {
       const chunkRequest = {
@@ -390,23 +400,38 @@ export class P2PFileTransferService {
         chunkIndex: chunkIndex,
       };
 
+      // Track that we've requested this chunk
+      transfer.requestedChunks?.add(chunkIndex);
+
       transfer.webrtcSession.send(JSON.stringify(chunkRequest));
     } catch (error) {
       console.error(`Failed to request chunk ${chunkIndex}:`, error);
+      // Remove from requested if send failed
+      transfer.requestedChunks?.delete(chunkIndex);
     }
   }
 
   private getRequestedChunkCount(transfer: P2PTransfer): number {
-    // This is a simplified calculation - in a complete implementation,
-    // you'd track which chunks have been requested but not yet received
-    return Math.max(
-      0,
-      (transfer.progress / 100) * (transfer.totalChunks || 0) -
-        (transfer.receivedChunks?.size || 0)
-    );
+    // Return the actual count of chunks that have been requested but not yet received
+    if (!transfer.requestedChunks || !transfer.receivedChunks) {
+      return 0;
+    }
+
+    // Count requested chunks that haven't been received yet
+    let count = 0;
+    for (const chunkIndex of transfer.requestedChunks) {
+      if (!transfer.receivedChunks.has(chunkIndex)) {
+        count++;
+      }
+    }
+
+    return count;
   }
 
-  private handleIncomingChunk(transfer: P2PTransfer, data: any): void {
+  private async handleIncomingChunk(
+    transfer: P2PTransfer,
+    data: any
+  ): Promise<void> {
     try {
       const message = typeof data === "string" ? JSON.parse(data) : data;
 
@@ -418,7 +443,7 @@ export class P2PFileTransferService {
         }
 
         // Validate chunk data
-        if (!this.validateChunk(message)) {
+        if (!(await this.validateChunk(message))) {
           console.warn("Received corrupted chunk:", message.chunk_index);
           transfer.corruptedChunks?.add(message.chunk_index);
 
@@ -432,6 +457,9 @@ export class P2PFileTransferService {
         // Store the chunk data
         const chunkData = new Uint8Array(message.data);
         transfer.receivedChunks.set(message.chunk_index, chunkData);
+
+        // Remove from requested chunks since it's now received
+        transfer.requestedChunks?.delete(message.chunk_index);
 
         // Remove from corrupted chunks if it was previously corrupted
         transfer.corruptedChunks?.delete(message.chunk_index);
@@ -465,14 +493,30 @@ export class P2PFileTransferService {
     }
   }
 
-  private validateChunk(chunkMessage: any): boolean {
+  private async validateChunk(chunkMessage: any): Promise<boolean> {
     // Basic validation - check if chunk data exists and chunk index is valid
     if (!chunkMessage.data || typeof chunkMessage.chunk_index !== "number") {
       return false;
     }
 
-    // In a complete implementation, you would verify checksums here
-    // For now, we'll assume chunks are valid if they have data and a valid index
+    // Verify checksum if provided
+    if (chunkMessage.checksum) {
+      try {
+        const chunkData = new Uint8Array(chunkMessage.data);
+        const calculatedChecksum = await this.calculateSHA256(chunkData);
+
+        if (calculatedChecksum !== chunkMessage.checksum) {
+          console.warn(
+            `Chunk checksum mismatch for chunk ${chunkMessage.chunk_index}. Expected: ${chunkMessage.checksum}, Got: ${calculatedChecksum}`
+          );
+          return false;
+        }
+      } catch (error) {
+        console.error("Failed to verify chunk checksum:", error);
+        return false;
+      }
+    }
+
     return true;
   }
 
@@ -500,6 +544,9 @@ export class P2PFileTransferService {
         fileHash: transfer.fileHash,
         chunkIndex: chunkIndex,
       };
+
+      // Add back to requested chunks since we're re-requesting it
+      transfer.requestedChunks?.add(chunkIndex);
 
       transfer.webrtcSession.send(JSON.stringify(chunkRequest));
     } catch (error) {
@@ -546,16 +593,23 @@ export class P2PFileTransferService {
   async downloadEncryptedChunks(
     manifest: FileManifestForJs,
     seederAddresses: string[],
-    onProgress: (progress: { percentage: number; speed: string; eta: string }) => void
+    onProgress: (progress: {
+      percentage: number;
+      speed: string;
+      eta: string;
+    }) => void
   ): Promise<void> {
     const totalChunks = manifest.chunks.length;
     let downloadedChunks = 0;
-    const totalSize = manifest.chunks.reduce((sum, chunk) => sum + chunk.encryptedSize, 0);
+    const totalSize = manifest.chunks.reduce(
+      (sum, chunk) => sum + chunk.encryptedSize,
+      0
+    );
     let bytesDownloaded = 0;
     const startTime = Date.now();
 
     // Create a download promise for each encrypted chunk. This allows for parallel downloads.
-    const downloadPromises = manifest.chunks.map(chunkInfo => {
+    const downloadPromises = manifest.chunks.map((chunkInfo) => {
       // Use the helper function to download each individual chunk.
       return this.initiateChunkDownload(
         chunkInfo.encryptedHash,
@@ -565,12 +619,13 @@ export class P2PFileTransferService {
         downloadedChunks++;
         bytesDownloaded += chunkInfo.encryptedSize;
         const percentage = (downloadedChunks / totalChunks) * 100;
-        
+
         // Calculate speed and ETA for the UI
         const elapsedTime = (Date.now() - startTime) / 1000; // in seconds
         const speedBps = elapsedTime > 0 ? bytesDownloaded / elapsedTime : 0;
         const remainingBytes = totalSize - bytesDownloaded;
-        const etaSeconds = speedBps > 0 ? Math.round(remainingBytes / speedBps) : 0;
+        const etaSeconds =
+          speedBps > 0 ? Math.round(remainingBytes / speedBps) : 0;
 
         // Update the UI via the progress callback
         onProgress({
@@ -589,7 +644,10 @@ export class P2PFileTransferService {
    * Helper function to download a single encrypted chunk from the network.
    * It tries to connect to one of the available seeders and request the chunk.
    */
-  async initiateChunkDownload(chunkHash: string, seeders: string[]): Promise<void> {
+  async initiateChunkDownload(
+    chunkHash: string,
+    seeders: string[]
+  ): Promise<void> {
     if (seeders.length === 0) {
       throw new Error(`No seeders available to download chunk ${chunkHash}`);
     }
@@ -598,13 +656,16 @@ export class P2PFileTransferService {
     const seederId = seeders[0];
 
     try {
-      await invoke('request_file_chunk', { 
+      await invoke("request_file_chunk", {
         fileHash: chunkHash,
-        peerId: seederId 
+        peerId: seederId,
       });
       console.log(`Successfully received and stored chunk: ${chunkHash}`);
     } catch (error) {
-      console.error(`Failed to request chunk ${chunkHash} from peer ${seederId}:`, error);
+      console.error(
+        `Failed to request chunk ${chunkHash} from peer ${seederId}:`,
+        error
+      );
       throw error;
     }
   }
@@ -613,6 +674,7 @@ export class P2PFileTransferService {
     // Handle WebRTC signaling messages received through DHT
     if (message.message?.type === "webrtc_signaling") {
       // This would contain WebRTC signaling data (offer/answer/candidate)
+      // TODO: Integrate with WebRTC session
       // For now, we'll log it, but in a real implementation,
       // this would be passed to the WebRTC session
     }
@@ -647,6 +709,24 @@ export class P2PFileTransferService {
 
   getAllTransfers(): P2PTransfer[] {
     return Array.from(this.transfers.values());
+  }
+
+  /**
+   * Calculates SHA-256 hash of the provided data
+   * @param data The data to hash
+   * @returns Promise that resolves to the hex-encoded hash
+   */
+  private async calculateSHA256(data: Uint8Array): Promise<string> {
+    // Use the Web Crypto API to calculate SHA-256
+    // Convert to ArrayBuffer to ensure compatibility with crypto.subtle.digest
+    const hashBuffer = await crypto.subtle.digest(
+      "SHA-256",
+      data.slice().buffer
+    );
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+
+    // Convert to hex string
+    return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
   }
 }
 

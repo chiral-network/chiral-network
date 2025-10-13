@@ -8,6 +8,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, info_span, warn};
+use x25519_dalek::StaticSecret;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncryptedFileMetadata {
@@ -698,17 +699,44 @@ impl FileTransferService {
         Ok(())
     }
 
-    async fn get_decryption_key_for_file(metadata: &EncryptedFileMetadata) -> Option<[u8; 32]> {
-        // TODO: Implement key retrieval logic
-        // This is a placeholder implementation
-        let _ = metadata; // Acknowledge parameter until implemented
-        // In a real system, this would:
-        // 1. Check if the user is the original uploader (key stored in keystore)
-        // 2. Check if there's an encrypted key bundle for this user
-        // 3. Decrypt the key bundle using the user's private key
+    async fn get_decryption_key_for_file(
+        metadata: &EncryptedFileMetadata,
+        keystore: &Arc<Mutex<crate::keystore::Keystore>>,
+        active_account: Option<&str>,
+        active_private_key: Option<&str>,
+        user_public_key: Option<&str>,
+    ) -> Option<[u8; 32]> {
+        // Try to get the key from keystore if user is the original uploader
+        if let (Some(account), Some(private_key)) = (active_account, active_private_key) {
+            let keystore_guard = keystore.lock().await;
+            if let Ok(key) = keystore_guard.get_file_encryption_key_with_private_key(
+                account,
+                &metadata.original_file_hash,
+                private_key,
+            ) {
+                return Some(key);
+            }
+        }
 
-        // For now, return None to indicate no key available
-        // This would need to be implemented with proper key management
+        // Try to decrypt the key bundle if one exists and user has the right private key
+        if let (Some(key_bundle), Some(private_key_hex), Some(user_pk)) = (
+            &metadata.encrypted_key_bundle,
+            active_private_key,
+            user_public_key,
+        ) {
+            // Check if this bundle is for this user by comparing public keys
+            if metadata.recipient_public_key.as_ref().map(|s| s.as_str()) == Some(user_pk) {
+                let private_key_bytes = hex::decode(private_key_hex.trim_start_matches("0x"))
+                    .ok()?;
+                let private_key_array: [u8; 32] = private_key_bytes.try_into().ok()?;
+                let private_key = StaticSecret::from(private_key_array);
+
+                if let Ok(key) = crate::encryption::decrypt_aes_key(key_bundle, &private_key) {
+                    return Some(key);
+                }
+            }
+        }
+
         None
     }
 
