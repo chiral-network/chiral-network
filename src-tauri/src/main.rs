@@ -25,8 +25,8 @@ use std::sync::Mutex as StdMutex;
 
 use crate::commands::bootstrap::get_bootstrap_nodes_command;
 use crate::commands::proxy::{
-    list_proxies, proxy_connect, proxy_disconnect, proxy_echo, proxy_remove, ProxyNode,
-    enable_privacy_routing, disable_privacy_routing,
+    disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect,
+    proxy_disconnect, proxy_echo, proxy_remove, ProxyNode,
 };
 use chiral_network::stream_auth::{
     AuthMessage, HmacKeyExchangeConfirmation, HmacKeyExchangeRequest, HmacKeyExchangeResponse,

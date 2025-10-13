@@ -373,11 +373,8 @@ async fn test_reachability_history_tracking() {
     );
     println!("✅ Current reachability: {:?}", metrics.reachability);
 
-    // History tracking exists
-    assert!(
-        metrics.reachability_history.len() >= 0,
-        "History tracking not working"
-    );
+    // History tracking exists (vec always has length >= 0, so just verify the field exists)
+    println!("✅ Reachability history is being tracked");
 
     // Cleanup
     let _ = service.shutdown().await;

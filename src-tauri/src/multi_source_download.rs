@@ -1018,7 +1018,7 @@ impl MultiSourceDownloadService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dht::{DhtService, FileMetadata};
+    use crate::dht::DhtService;
     use crate::webrtc_service::WebRTCService;
     use std::sync::Arc;
 

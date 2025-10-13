@@ -251,12 +251,6 @@
   }
 
   async function fetchBootstrapNodes() {
-    if (!isTauri) {
-      dhtBootstrapNodes = ['/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ']
-      dhtBootstrapNode = dhtBootstrapNodes[0]
-      return
-    }
-    
     try {
       dhtBootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command")
       dhtBootstrapNode = dhtBootstrapNodes[0] || 'No bootstrap nodes configured'
