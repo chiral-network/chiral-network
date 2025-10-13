@@ -393,8 +393,8 @@
       // Try to connect to bootstrap nodes
       let connectionSuccessful = false
 
-      if (DEFAULT_BOOTSTRAP_NODES.length > 0) {
-        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to ${DEFAULT_BOOTSTRAP_NODES.length} bootstrap node(s)...`]
+      if (dhtBootstrapNodes.length > 0) {
+        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to ${dhtBootstrapNodes.length} bootstrap node(s)...`]
         
         // Add another small delay to show the connection attempt
         await new Promise(resolve => setTimeout(resolve, 1000))
