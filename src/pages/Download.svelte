@@ -1043,6 +1043,20 @@
             />
           </div>
 
+          {#if multiSourceEnabled}
+          <div class="flex items-center gap-2">
+            <Label class="font-medium">{$t('download.maxPeers')}:</Label>
+            <input
+              type="number"
+              bind:value={maxPeersPerDownload}
+              min="2"
+              max="10"
+              step="1"
+              class="w-14 h-7 text-center text-xs border border-input bg-background px-2 py-1 ring-offset-background file:border-0 file:bg-transparent file:font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 rounded-md"
+            />
+          </div>
+          {/if}
+
           <div class="flex items-center gap-2">
             <Label class="font-medium">{$t('download.settings.autoStart')}:</Label>
             <button
@@ -1059,6 +1073,7 @@
               ></span>
             </button>
           </div>
+
           <div class="flex items-center gap-2">
             <Label class="font-medium">{$t('download.autoClear')}:</Label>
             <button
@@ -1092,20 +1107,6 @@
               ></span>
             </button>
           </div>
-
-          {#if multiSourceEnabled}
-          <div class="flex items-center gap-2">
-            <Label class="font-medium">{$t('download.maxPeers')}:</Label>
-            <input
-              type="number"
-              bind:value={maxPeersPerDownload}
-              min="2"
-              max="10"
-              step="1"
-              class="w-14 h-7 text-center text-xs border border-input bg-background px-2 py-1 ring-offset-background file:border-0 file:bg-transparent file:font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 rounded-md"
-            />
-          </div>
-          {/if}
         </div>
       </div>
     </div>

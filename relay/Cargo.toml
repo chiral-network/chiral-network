@@ -22,6 +22,10 @@ anyhow = "1.0"
 futures = "0.3"
 rand = "0.8"
 
+[profile.dev]
+incremental = true
+opt-level = 0
+
 [profile.release]
 lto = true
 opt-level = 3
