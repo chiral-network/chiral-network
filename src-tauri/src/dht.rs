@@ -1014,6 +1014,8 @@ async fn run_dht_node(
         >,
     >,
     pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
+    root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>>,
+    active_downloads: Arc<Mutex<HashMap<String, ActiveDownload>>>,
     is_bootstrap: bool,
     enable_autorelay: bool,
     relay_candidates: HashSet<String>,
@@ -1022,9 +1024,6 @@ async fn run_dht_node(
     // Periodic bootstrap interval
     let mut shutdown_ack: Option<oneshot::Sender<()>> = None;
     let mut ping_failures: HashMap<PeerId, u8> = HashMap::new();
-    let mut queries: HashMap<beetswap::QueryId, u32> = HashMap::new();
-    let mut downloaded_chunks: HashMap<usize, Vec<u8>> = HashMap::new();
-    let mut current_metadata: Option<FileMetadata> = None;
 
     'outer: loop {
         tokio::select! {
@@ -1160,9 +1159,6 @@ async fn run_dht_node(
                         let _ = event_tx.send(DhtEvent::PublishedFile(metadata)).await;
                     }
                     Some(DhtCommand::DownloadFile(file_metadata)) =>{
-                        // currently only able to process one download at a time
-                        current_metadata = Some(file_metadata.clone());
-
                         // Get root CID from file hash
                         let root_cid: Cid = match file_metadata.file_hash.parse() {
                             Ok(cid) => cid,
@@ -1176,9 +1172,8 @@ async fn run_dht_node(
                         // Request the root block which contains the CIDs
                         let root_query_id = swarm.behaviour_mut().bitswap.get(&root_cid);
 
-                        // TODO: Store the root query ID to handle when we get the root block
-                        // We'll need to modify the Bitswap handling to distinguish root blocks from data blocks
-                        // For now, we'll handle this in the Bitswap event handler
+                        // Store the root query ID to handle when we get the root block
+                        root_query_mapping.lock().await.insert(root_query_id, file_metadata);
                     }
 
                     Some(DhtCommand::StopPublish(file_hash)) => {
@@ -1489,44 +1484,72 @@ async fn run_dht_node(
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) => match bitswap {
                         beetswap::Event::GetQueryResponse { query_id, data } => {
-                            // Handle successful Bitswap response
-                            if let Some(_metadata) = &current_metadata {
-                                // Check if this is the root block (contains CIDs array)
+                            // Check if this is a root block query first
+                            if let Some(metadata) = root_query_mapping.lock().await.remove(&query_id) {
+                                // This is the root block containing CIDs - parse and request all data blocks
                                 if let Ok(cids) = serde_json::from_slice::<Vec<Cid>>(&data) {
-                                    info!("Received root block with {} CIDs", cids.len());
-                                    // This is the root block containing CIDs - request all data blocks
+                                    info!("Received root block for file {} with {} CIDs", metadata.file_hash, cids.len());
+
+                                    // Create queries map for this file's data blocks
+                                    let mut file_queries = HashMap::new();
+
                                     for (i, cid) in cids.iter().enumerate() {
                                         let block_query_id = swarm.behaviour_mut().bitswap.get(cid);
-                                        queries.insert(block_query_id, i as u32);
+                                        file_queries.insert(block_query_id, i as u32);
                                     }
+
+                                    // Create active download tracking for this file
+                                    let active_download = ActiveDownload {
+                                        metadata: metadata.clone(),
+                                        queries: file_queries,
+                                        downloaded_chunks: HashMap::new(),
+                                    };
+
+                                    // Store the active download
+                                    active_downloads.lock().await.insert(metadata.file_hash.clone(), active_download);
+
+                                    info!("Started tracking download for file {} with {} chunks", metadata.file_hash, cids.len());
                                 } else {
-                                    // This is a regular data block
-                                    match queries.get(&query_id) {
-                                        Some(index) => {
-                                            downloaded_chunks.insert(*index as usize, data.clone());
-                                            queries.remove(&query_id);
-                                            if queries.is_empty() {
-                                                info!("all requested cids have been downloaded.");
-                                                // reassemble file from downloaded chunks
-                                                let mut file = Vec::new();
-                                                for i in 0..=downloaded_chunks.len()-1 {
-                                                    file.extend_from_slice(&downloaded_chunks.remove(&i).unwrap());
-                                                }
-                                                if let Some(metadata) = current_metadata.as_mut() {
-                                                        metadata.file_data = file; // OK, file_data is Vec<u8>
+                                    error!("Failed to parse root block as CIDs array for file {}", metadata.file_hash);
+                                }
+                            } else {
+                                // This is a data block query - find the corresponding file and handle it
+                                let mut completed_downloads = Vec::new();
+
+                                // Check all active downloads for this query_id
+                                {
+                                    let mut active_downloads_guard = active_downloads.lock().await;
+                                    for (file_hash, active_download) in active_downloads_guard.iter_mut() {
+                                        if let Some(chunk_index) = active_download.queries.remove(&query_id) {
+                                            // This query belongs to this file - store the chunk
+                                            active_download.downloaded_chunks.insert(chunk_index as usize, data.clone());
+
+                                            // Check if all chunks for this file are downloaded
+                                            if active_download.queries.is_empty() {
+                                                info!("All chunks downloaded for file {}", file_hash);
+
+                                                // Reassemble the file
+                                                let mut file_data = Vec::new();
+                                                for i in 0..active_download.downloaded_chunks.len() {
+                                                    if let Some(chunk) = active_download.downloaded_chunks.get(&i) {
+                                                        file_data.extend_from_slice(chunk);
                                                     }
-                                                if let Some(metadata) = current_metadata.take() {
-                                                    let _ = event_tx.send(DhtEvent::DownloadedFile(metadata)).await;
                                                 }
-                                                downloaded_chunks.clear();
-                                                current_metadata = None;
+
+                                                // Create the completed metadata
+                                                let mut completed_metadata = active_download.metadata.clone();
+                                                completed_metadata.file_data = file_data;
+
+                                                completed_downloads.push(completed_metadata);
                                             }
-                                        }
-                                        None => {
-                                            // TODO: Handle unexpected blocks
-                                            // This might be an unexpected block - ignore for now
+                                            break;
                                         }
                                     }
+                                }
+
+                                // Send completion events for finished downloads
+                                for metadata in completed_downloads {
+                                    let _ = event_tx.send(DhtEvent::DownloadedFile(metadata)).await;
                                 }
                             }
 
@@ -1543,6 +1566,25 @@ async fn run_dht_node(
                         beetswap::Event::GetQueryError { query_id, error } => {
                             // Handle Bitswap query error
                             warn!("Bitswap query {:?} failed: {:?}", query_id, error);
+
+                            // Clean up any active downloads that contain this failed query
+                            {
+                                let mut active_downloads_guard = active_downloads.lock().await;
+                                let mut failed_files = Vec::new();
+
+                                for (file_hash, active_download) in active_downloads_guard.iter_mut() {
+                                    if active_download.queries.remove(&query_id).is_some() {
+                                        warn!("Query {:?} failed for file {}, removing from active downloads", query_id, file_hash);
+                                        failed_files.push(file_hash.clone());
+                                    }
+                                }
+
+                                // Remove failed downloads from active downloads
+                                for file_hash in failed_files {
+                                    active_downloads_guard.remove(&file_hash);
+                                }
+                            }
+
                             let _ = event_tx.send(DhtEvent::BitswapError {
                                 query_id: format!("{:?}", query_id),
                                 error: format!("{:?}", error),
@@ -2554,7 +2596,17 @@ pub struct DhtService {
         >,
     >,
     pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
+    root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>>, // Track root query IDs for file downloads
+    active_downloads: Arc<Mutex<HashMap<String, ActiveDownload>>>, // Track active file downloads
     chunk_size: usize, // Configurable chunk size in bytes
+}
+
+/// Tracks an active file download with its associated queries and chunks
+#[derive(Debug, Clone)]
+struct ActiveDownload {
+    metadata: FileMetadata,
+    queries: HashMap<beetswap::QueryId, u32>, // query_id -> chunk_index
+    downloaded_chunks: HashMap<usize, Vec<u8>>, // chunk_index -> data
 }
 
 impl DhtService {
@@ -2823,6 +2875,8 @@ impl DhtService {
         let peer_selection = Arc::new(Mutex::new(PeerSelectionService::new()));
         let pending_webrtc_offers = Arc::new(Mutex::new(HashMap::new()));
         let pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>> = Arc::new(Mutex::new(HashMap::new()));
+        let root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>> = Arc::new(Mutex::new(HashMap::new()));
+        let active_downloads: Arc<Mutex<HashMap<String, ActiveDownload>>> = Arc::new(Mutex::new(HashMap::new()));
 
         {
             let mut guard = metrics.lock().await;
@@ -2848,6 +2902,8 @@ impl DhtService {
             file_transfer_service.clone(),
             pending_webrtc_offers.clone(),
             pending_provider_queries.clone(),
+            root_query_mapping.clone(),
+            active_downloads.clone(),
             is_bootstrap,
             enable_autorelay,
             relay_candidates,
@@ -2870,6 +2926,8 @@ impl DhtService {
             file_transfer_service,
             pending_webrtc_offers,
             pending_provider_queries,
+            root_query_mapping,
+            active_downloads,
             chunk_size,
         })
     }
