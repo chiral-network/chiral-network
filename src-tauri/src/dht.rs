@@ -374,6 +374,12 @@ struct PendingSearch {
     sender: oneshot::Sender<SearchResponse>,
 }
 
+#[derive(Debug)]
+struct PendingProviderQuery {
+    id: u64,
+    sender: oneshot::Sender<Result<Vec<String>, String>>,
+}
+
 #[derive(Debug, Clone, Default)]
 struct DhtMetrics {
     last_bootstrap: Option<SystemTime>,
@@ -1007,6 +1013,7 @@ async fn run_dht_node(
             HashMap<rr::OutboundRequestId, oneshot::Sender<Result<WebRTCAnswerResponse, String>>>,
         >,
     >,
+    pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
     is_bootstrap: bool,
     enable_autorelay: bool,
     relay_candidates: HashSet<String>,
@@ -1355,14 +1362,12 @@ async fn run_dht_node(
                         let query_id = swarm.behaviour_mut().kademlia.get_providers(key);
                         info!("Querying providers for file: {} (query_id: {:?})", file_hash, query_id);
 
-                        // TODO: Implement provider query handling
-                        // For now, return connected peers as providers
-                        // In a full implementation, we'd wait for the provider query results
-                        let connected_peers = connected_peers.lock().await;
-                        let providers: Vec<String> = connected_peers.iter().take(3).map(|p| p.to_string()).collect();
-
-                        // Send the response
-                        let _ = sender.send(Ok(providers));
+                        // Store the query for async handling
+                        let pending_query = PendingProviderQuery {
+                            id: 0, // Not used for matching
+                            sender,
+                        };
+                        pending_provider_queries.lock().await.insert(file_hash, pending_query);
                     }
                     Some(DhtCommand::SendWebRTCOffer { peer, offer_request, sender }) => {
                         let id = swarm.behaviour_mut().webrtc_signaling_rr.send_request(&peer, offer_request);
@@ -1409,6 +1414,7 @@ async fn run_dht_node(
                             &connected_peers,
                             &event_tx,
                             &pending_searches,
+                            &pending_provider_queries,
                         )
                         .await;
                     }
@@ -1859,6 +1865,7 @@ async fn handle_kademlia_event(
     connected_peers: &Arc<Mutex<HashSet<PeerId>>>,
     event_tx: &mpsc::Sender<DhtEvent>,
     pending_searches: &Arc<Mutex<HashMap<String, Vec<PendingSearch>>>>,
+    pending_provider_queries: &Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
 ) {
     match event {
         KademliaEvent::RoutingUpdated { peer, .. } => {
@@ -2048,6 +2055,30 @@ async fn handle_kademlia_event(
                 QueryResult::GetClosestPeers(Err(err)) => {
                     warn!("GetClosestPeers query failed: {:?}", err);
                     let _ = event_tx.send(DhtEvent::Error(format!("Peer discovery failed: {:?}", err))).await;
+                }
+                QueryResult::GetProviders(Ok(ok)) => {
+                    if let kad::GetProvidersOk::FoundProviders { key, providers } = ok {
+                        let file_hash = String::from_utf8_lossy(key.as_ref()).to_string();
+                        info!("Found {} providers for file: {}", providers.len(), file_hash);
+
+                        // Convert providers to string format
+                        let provider_strings: Vec<String> = providers.iter().map(|p| p.to_string()).collect();
+
+                        // Find and notify the pending query
+                        let mut pending_queries = pending_provider_queries.lock().await;
+                        if let Some(pending_query) = pending_queries.remove(&file_hash) {
+                            let _ = pending_query.sender.send(Ok(provider_strings));
+                        } else {
+                            warn!("No pending provider query found for file: {}", file_hash);
+                        }
+                    }
+                },
+                QueryResult::GetProviders(Err(err)) => {
+                    warn!("GetProviders query failed: {:?}", err);
+                    // TODO: Handle get providers errors (for errors, we can't easily match to a specific file_hash)
+                    // For errors, we can't easily match to a specific file_hash
+                    // This is a limitation - we could improve this by storing query_id -> file_hash mapping
+                    // For now, we'll just log the error
                 }
                 _ => {}
             }
@@ -2522,6 +2553,7 @@ pub struct DhtService {
             HashMap<rr::OutboundRequestId, oneshot::Sender<Result<WebRTCAnswerResponse, String>>>,
         >,
     >,
+    pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
     chunk_size: usize, // Configurable chunk size in bytes
 }
 
@@ -2790,6 +2822,7 @@ impl DhtService {
         let proxy_mgr: ProxyMgr = Arc::new(Mutex::new(ProxyManager::default()));
         let peer_selection = Arc::new(Mutex::new(PeerSelectionService::new()));
         let pending_webrtc_offers = Arc::new(Mutex::new(HashMap::new()));
+        let pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>> = Arc::new(Mutex::new(HashMap::new()));
 
         {
             let mut guard = metrics.lock().await;
@@ -2814,6 +2847,7 @@ impl DhtService {
             received_chunks_clone.clone(),
             file_transfer_service.clone(),
             pending_webrtc_offers.clone(),
+            pending_provider_queries.clone(),
             is_bootstrap,
             enable_autorelay,
             relay_candidates,
@@ -2835,6 +2869,7 @@ impl DhtService {
             received_chunks: received_chunks_clone,
             file_transfer_service,
             pending_webrtc_offers,
+            pending_provider_queries,
             chunk_size,
         })
     }

@@ -1,11 +1,11 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from "@tauri-apps/api/core";
 
 /**
  * Proxy authentication service
  * Handles secure token generation and validation for proxy connections
  */
 export class ProxyAuthService {
-  private static readonly TOKEN_STORAGE_KEY = 'proxy_auth_tokens';
+  private static readonly TOKEN_STORAGE_KEY = "proxy_auth_tokens";
   private static readonly TOKEN_EXPIRY_HOURS = 24; // Tokens expire after 24 hours
 
   /**
@@ -16,18 +16,25 @@ export class ProxyAuthService {
   static async generateProxyToken(proxyAddress: string): Promise<string> {
     try {
       // Generate a cryptographically secure token using the backend
-      const tokenData = await invoke<{ token: string; expires_at: number }>('generate_proxy_auth_token', {
-        proxyAddress,
-        expiryHours: this.TOKEN_EXPIRY_HOURS,
-      });
+      const tokenData = await invoke<{ token: string; expires_at: number }>(
+        "generate_proxy_auth_token",
+        {
+          proxyAddress,
+          expiryHours: this.TOKEN_EXPIRY_HOURS,
+        }
+      );
 
       // Store token locally for validation
-      await this.storeToken(proxyAddress, tokenData.token, tokenData.expires_at);
+      await this.storeToken(
+        proxyAddress,
+        tokenData.token,
+        tokenData.expires_at
+      );
 
       console.log(`Generated proxy auth token for ${proxyAddress}`);
       return tokenData.token;
     } catch (error) {
-      console.error('Failed to generate proxy auth token:', error);
+      console.error("Failed to generate proxy auth token:", error);
       // Fallback: generate a client-side token (less secure but better than dummy)
       return this.generateFallbackToken(proxyAddress);
     }
@@ -39,26 +46,39 @@ export class ProxyAuthService {
    * @param token - The token to validate
    * @returns Promise<boolean> - Whether the token is valid
    */
-  static async validateProxyToken(proxyAddress: string, token: string): Promise<boolean> {
+  static async validateProxyToken(
+    proxyAddress: string,
+    token: string
+  ): Promise<boolean> {
     try {
       // Check local storage first
       const storedToken = await this.getStoredToken(proxyAddress);
-      if (storedToken && storedToken.token === token && !this.isTokenExpired(storedToken.expiresAt)) {
+      if (
+        storedToken &&
+        storedToken.token === token &&
+        !this.isTokenExpired(storedToken.expiresAt)
+      ) {
         return true;
       }
 
       // Validate with backend if available
-      const isValid = await invoke<boolean>('validate_proxy_auth_token', {
+      const isValid = await invoke<boolean>("validate_proxy_auth_token", {
         proxyAddress,
         token,
       });
 
       return isValid;
     } catch (error) {
-      console.warn('Backend token validation failed, using local validation:', error);
+      console.warn(
+        "Backend token validation failed, using local validation:",
+        error
+      );
       // Fallback to local validation only
       const storedToken = await this.getStoredToken(proxyAddress);
-      return storedToken ? storedToken.token === token && !this.isTokenExpired(storedToken.expiresAt) : false;
+      return storedToken
+        ? storedToken.token === token &&
+            !this.isTokenExpired(storedToken.expiresAt)
+        : false;
     }
   }
 
@@ -89,7 +109,7 @@ export class ProxyAuthService {
       // In the future, this could check proxy capabilities or configuration
       return true;
     } catch (error) {
-      console.warn('Failed to check proxy authentication requirement:', error);
+      console.warn("Failed to check proxy authentication requirement:", error);
       return true; // Default to requiring authentication for security
     }
   }
@@ -111,16 +131,21 @@ export class ProxyAuthService {
 
       if (expiredAddresses.length > 0) {
         const updatedTokens = { ...tokens };
-        expiredAddresses.forEach(address => delete updatedTokens[address]);
+        expiredAddresses.forEach((address) => delete updatedTokens[address]);
 
-        if (typeof window !== 'undefined' && window.localStorage) {
-          localStorage.setItem(this.TOKEN_STORAGE_KEY, JSON.stringify(updatedTokens));
+        if (typeof window !== "undefined" && window.localStorage) {
+          localStorage.setItem(
+            this.TOKEN_STORAGE_KEY,
+            JSON.stringify(updatedTokens)
+          );
         }
 
-        console.log(`Cleaned up ${expiredAddresses.length} expired proxy tokens`);
+        console.log(
+          `Cleaned up ${expiredAddresses.length} expired proxy tokens`
+        );
       }
     } catch (error) {
-      console.warn('Failed to cleanup expired tokens:', error);
+      console.warn("Failed to cleanup expired tokens:", error);
     }
   }
 
@@ -135,11 +160,17 @@ export class ProxyAuthService {
     const timestamp = Date.now();
     const random = Math.random().toString(36).substring(2, 15);
     const data = `${proxyAddress}:${timestamp}:${random}`;
-    return btoa(data).replace(/[^a-zA-Z0-9]/g, '').substring(0, 32);
+    return btoa(data)
+      .replace(/[^a-zA-Z0-9]/g, "")
+      .substring(0, 32);
   }
 
-  private static async storeToken(proxyAddress: string, token: string, expiresAt: number): Promise<void> {
-    if (typeof window === 'undefined' || !window.localStorage) {
+  private static async storeToken(
+    proxyAddress: string,
+    token: string,
+    expiresAt: number
+  ): Promise<void> {
+    if (typeof window === "undefined" || !window.localStorage) {
       return; // No local storage available
     }
 
@@ -148,12 +179,14 @@ export class ProxyAuthService {
       tokens[proxyAddress] = { token, expiresAt };
       localStorage.setItem(this.TOKEN_STORAGE_KEY, JSON.stringify(tokens));
     } catch (error) {
-      console.warn('Failed to store proxy token:', error);
+      console.warn("Failed to store proxy token:", error);
     }
   }
 
-  private static async getStoredToken(proxyAddress: string): Promise<{ token: string; expiresAt: number } | null> {
-    if (typeof window === 'undefined' || !window.localStorage) {
+  private static async getStoredToken(
+    proxyAddress: string
+  ): Promise<{ token: string; expiresAt: number } | null> {
+    if (typeof window === "undefined" || !window.localStorage) {
       return null;
     }
 
@@ -161,13 +194,13 @@ export class ProxyAuthService {
       const tokens = await this.getAllStoredTokens();
       return tokens[proxyAddress] || null;
     } catch (error) {
-      console.warn('Failed to get stored proxy token:', error);
+      console.warn("Failed to get stored proxy token:", error);
       return null;
     }
   }
 
   private static async removeStoredToken(proxyAddress: string): Promise<void> {
-    if (typeof window === 'undefined' || !window.localStorage) {
+    if (typeof window === "undefined" || !window.localStorage) {
       return;
     }
 
@@ -176,12 +209,14 @@ export class ProxyAuthService {
       delete tokens[proxyAddress];
       localStorage.setItem(this.TOKEN_STORAGE_KEY, JSON.stringify(tokens));
     } catch (error) {
-      console.warn('Failed to remove stored proxy token:', error);
+      console.warn("Failed to remove stored proxy token:", error);
     }
   }
 
-  private static async getAllStoredTokens(): Promise<Record<string, { token: string; expiresAt: number }>> {
-    if (typeof window === 'undefined' || !window.localStorage) {
+  private static async getAllStoredTokens(): Promise<
+    Record<string, { token: string; expiresAt: number }>
+  > {
+    if (typeof window === "undefined" || !window.localStorage) {
       return {};
     }
 
@@ -189,7 +224,7 @@ export class ProxyAuthService {
       const stored = localStorage.getItem(this.TOKEN_STORAGE_KEY);
       return stored ? JSON.parse(stored) : {};
     } catch (error) {
-      console.warn('Failed to parse stored tokens:', error);
+      console.warn("Failed to parse stored tokens:", error);
       return {};
     }
   }
