@@ -105,8 +105,7 @@ export class ProxyAuthService {
    */
   static async requiresAuthentication(_proxyAddress: string): Promise<boolean> {
     try {
-      // For now, all proxies require authentication
-      // In the future, this could check proxy capabilities or configuration
+      // All proxies require authentication
       return true;
     } catch (error) {
       console.warn("Failed to check proxy authentication requirement:", error);

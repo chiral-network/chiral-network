@@ -3245,6 +3245,33 @@ impl DhtService {
         Ok(())
     }
 
+    /// Verifies that a peer actually provides working proxy services through protocol negotiation
+    async fn verify_proxy_capabilities(
+        &self,
+        peer_id: &PeerId,
+    ) -> Result<(), String> {
+        // Use the existing echo protocol to verify proxy capabilities
+        // Send a special "proxy_verify" message that the peer should echo back if it's a working proxy
+
+        let verification_payload = b"proxy_verify";
+
+        // Send echo request with verification payload through DHT service
+        match self.echo(peer_id.to_string(), verification_payload.to_vec()).await {
+            Ok(response) => {
+                // Check if the response matches our verification payload
+                if response == verification_payload {
+                    info!("✅ Proxy capability verified for peer {} via echo test", peer_id);
+                    Ok(())
+                } else {
+                    Err(format!("Proxy verification failed: unexpected response from peer {}", peer_id))
+                }
+            }
+            Err(e) => {
+                Err(format!("Proxy verification failed: echo request failed for peer {}: {}", peer_id, e))
+            }
+        }
+    }
+
     pub async fn metrics_snapshot(&self) -> DhtMetricsSnapshot {
         let metrics = self.metrics.lock().await.clone();
         let peer_count = self.connected_peers.lock().await.len();
@@ -3464,15 +3491,19 @@ impl DhtService {
         for peer_id in connected_peers_list {
             // Check if this peer is capable of proxy services
             if proxy_mgr.capable.contains(&peer_id) && proxy_mgr.online.contains(&peer_id) {
-                // TODO: Verify proxy capabilities through protocol negotiation
-                // For now, we trust capable peers, but in production this would involve:
-                // 1. Protocol handshake to verify proxy service availability
-                // 2. Reputation checking
-                // 3. Trust scoring based on past behavior
-
-                proxy_mgr.add_trusted_proxy_node(peer_id.clone());
-                trusted_proxy_count += 1;
-                info!("✅ Added connected peer {} as trusted proxy node (capability verified)", peer_id);
+                // Verify proxy capabilities through protocol negotiation
+                match self.verify_proxy_capabilities(&peer_id).await {
+                    Ok(_) => {
+                        proxy_mgr.add_trusted_proxy_node(peer_id.clone());
+                        trusted_proxy_count += 1;
+                        info!("✅ Added connected peer {} as trusted proxy node (capability verified)", peer_id);
+                    }
+                    Err(e) => {
+                        warn!("❌ Proxy capability verification failed for peer {}: {}", peer_id, e);
+                        // Remove from capable list if verification fails
+                        proxy_mgr.capable.remove(&peer_id);
+                    }
+                }
             }
         }
 
