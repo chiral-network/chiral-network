@@ -371,7 +371,7 @@ impl ReputationContract {
     pub async fn submit_epoch(
         &self,
         epoch: &ReputationEpoch,
-        private_key: &str,
+        _private_key: &str,
     ) -> Result<String, String> {
         // In a real implementation, this would:
         // 1. Connect to Ethereum network
@@ -384,7 +384,7 @@ impl ReputationContract {
         Ok(format!("0x{:x}", epoch.epoch_id))
     }
 
-    pub async fn get_epoch(&self, epoch_id: u64) -> Result<Option<ReputationEpoch>, String> {
+    pub async fn get_epoch(&self, _epoch_id: u64) -> Result<Option<ReputationEpoch>, String> {
         // In a real implementation, this would:
         // 1. Connect to Ethereum network
         // 2. Call getEpoch function on contract
@@ -397,9 +397,9 @@ impl ReputationContract {
 
     pub async fn verify_event_proof(
         &self,
-        event_hash: &str,
-        proof: Vec<String>,
-        epoch_id: u64,
+        _event_hash: &str,
+        _proof: Vec<String>,
+        _epoch_id: u64,
     ) -> Result<bool, String> {
         // In a real implementation, this would:
         // 1. Connect to Ethereum network
@@ -424,7 +424,7 @@ pub struct ReputationSystem {
     dht_service: ReputationDhtService,
     contract: ReputationContract,
     key_manager: NodeKeyManager,
-    key_cache: PublicKeyCache,
+    _key_cache: PublicKeyCache,
     current_epoch: u64,
 }
 
@@ -435,7 +435,7 @@ impl ReputationSystem {
             dht_service: ReputationDhtService::new(),
             contract: ReputationContract::new(network_id),
             key_manager: NodeKeyManager::new(),
-            key_cache: PublicKeyCache::new(),
+            _key_cache: PublicKeyCache::new(),
             current_epoch: 0,
         }
     }
@@ -591,7 +591,6 @@ pub struct ReputationSystemWithEpochs {
     dht_service: ReputationDhtService,
     contract: ReputationContract,
     key_manager: NodeKeyManager,
-    key_cache: PublicKeyCache,
     epoch_manager: EpochManager,
     pending_events: Vec<ReputationEvent>,
 }
@@ -603,7 +602,6 @@ impl ReputationSystemWithEpochs {
             dht_service: ReputationDhtService::new(),
             contract: ReputationContract::new(network_id),
             key_manager: NodeKeyManager::new(),
-            key_cache: PublicKeyCache::new(),
             epoch_manager: EpochManager::new(epoch_duration_seconds, max_events_per_epoch),
             pending_events: Vec::new(),
         }
@@ -728,9 +726,9 @@ impl ReputationVerifier {
 
     pub fn verify_event_against_merkle_root(
         &self,
-        event: &ReputationEvent,
-        merkle_root: &str,
-        proof: Vec<String>,
+        _event: &ReputationEvent,
+        _merkle_root: &str,
+        _proof: Vec<String>,
     ) -> Result<bool, String> {
         // In a real implementation, this would:
         // 1. Recreate the event hash

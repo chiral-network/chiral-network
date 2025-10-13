@@ -25,14 +25,14 @@ use std::sync::Mutex as StdMutex;
 
 use crate::commands::bootstrap::get_bootstrap_nodes_command;
 use crate::commands::proxy::{
-    list_proxies, proxy_connect, proxy_disconnect, proxy_echo, proxy_remove, ProxyNode,
-    enable_privacy_routing, disable_privacy_routing,
+    disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect,
+    proxy_disconnect, proxy_echo, proxy_remove, ProxyNode,
 };
 use chiral_network::stream_auth::{
     AuthMessage, HmacKeyExchangeConfirmation, HmacKeyExchangeRequest, HmacKeyExchangeResponse,
     StreamAuthService,
 };
-use dht::{split_into_blocks, DhtEvent, DhtMetricsSnapshot, DhtService, FileMetadata, StringBlock};
+use dht::{DhtEvent, DhtMetricsSnapshot, DhtService, FileMetadata};
 use ethereum::{
     create_new_account, get_account_from_private_key, get_balance, get_block_number, get_hashrate,
     get_mined_blocks_count, get_mining_logs, get_mining_performance, get_mining_status,
@@ -46,8 +46,8 @@ use keystore::Keystore;
 use lazy_static::lazy_static;
 use multi_source_download::{MultiSourceDownloadService, MultiSourceEvent, MultiSourceProgress};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::collections::{HashMap, VecDeque};
+use sha2::Digest;
+use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -57,19 +57,18 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use sysinfo::{Components, System, MINIMUM_CPU_UPDATE_INTERVAL};
-use systemstat::{Platform, System as SystemStat};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State,
 };
-use tokio::{io::AsyncReadExt, sync::Mutex, task::JoinHandle, time::sleep};
+use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{error, info, warn};
 use webrtc_service::{WebRTCFileRequest, WebRTCService};
 
 use crate::manager::ChunkManager; // Import the ChunkManager
-use base64::{engine::general_purpose, Engine as _}; // For key encoding
+// For key encoding
 use blockstore::block::Block;
 use x25519_dalek::{PublicKey, StaticSecret}; // For key handling
 
@@ -375,7 +374,7 @@ async fn upload_versioned_file(
     state: State<'_, AppState>,
     file_name: String,
     file_path: String,
-    file_size: u64,
+    _file_size: u64,
     mime_type: Option<String>,
     is_encrypted: bool,
     encryption_method: Option<String>,
@@ -662,8 +661,7 @@ async fn start_dht_node(
 
     let peer_id = dht_service.get_peer_id().await;
 
-    // Start the DHT node running in background
-    dht_service.run().await;
+    // DHT node is already running in a spawned background task
     let dht_arc = Arc::new(dht_service);
 
     // Spawn the event pump
@@ -1139,10 +1137,9 @@ fn get_cpu_temperature() -> Option<f32> {
     // Windows-specific temperature detection methods
     #[cfg(target_os = "windows")]
     {
-        // todo: Getting windows temp needs fixing - currently makes app performance very slow
-        // if let Some(temp) = get_windows_temperature() {
-        //     return None;
-        // }
+        if let Some(temp) = get_windows_temperature() {
+            return Some(temp);
+        }
     }
 
     // Linux-specific temperature detection methods
@@ -1153,58 +1150,18 @@ fn get_cpu_temperature() -> Option<f32> {
         }
     }
 
-    // Fallback for other platforms
-    let stat_sys = SystemStat::new();
-    if let Ok(temp) = stat_sys.cpu_temp() {
-        return Some(temp);
-    }
+    // Final fallback: return None when sensors are unavailable
+    // Only log the info message once to avoid spamming logs
+    static SENSOR_WARNING_LOGGED: OnceLock<()> = OnceLock::new();
+    
+    SENSOR_WARNING_LOGGED.get_or_init(|| {
+        info!("Hardware temperature sensors not accessible on this system. Temperature monitoring disabled.");
+    });
 
     None
 }
 
-//todo for fixing later
-#[cfg(target_os = "windows")]
-fn get_windows_temperature() -> Option<f32> {
-    use std::process::Command;
 
-    // Method 1: Try the fastest method first - HighPrecisionTemperature from WMI
-    if let Ok(output) = Command::new("powershell")
-        .args([
-            "-Command",
-            "Get-WmiObject -Query \"SELECT HighPrecisionTemperature FROM Win32_PerfRawData_Counters_ThermalZoneInformation\" | Select-Object -First 1 -ExpandProperty HighPrecisionTemperature"
-        ])
-        .output()
-    {
-        if let Ok(output_str) = String::from_utf8(output.stdout) {
-            if let Ok(temp_tenths_kelvin) = output_str.trim().parse::<f32>() {
-                let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
-                if temp_celsius > 0.0 && temp_celsius < 150.0 {
-                    return Some(temp_celsius);
-                }
-            }
-        }
-    }
-
-    // Method 2: Fallback to regular Temperature field
-    if let Ok(output) = Command::new("powershell")
-        .args([
-            "-Command",
-            "Get-WmiObject -Query \"SELECT Temperature FROM Win32_PerfRawData_Counters_ThermalZoneInformation\" | Select-Object -First 1 -ExpandProperty Temperature"
-        ])
-        .output()
-    {
-        if let Ok(output_str) = String::from_utf8(output.stdout) {
-            if let Ok(temp_tenths_kelvin) = output_str.trim().parse::<f32>() {
-                let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
-                if temp_celsius > 0.0 && temp_celsius < 150.0 {
-                    return Some(temp_celsius);
-                }
-            }
-        }
-    }
-
-    None
-}
 
 #[cfg(target_os = "linux")]
 fn get_linux_temperature() -> Option<f32> {
@@ -1362,6 +1319,48 @@ fn get_linux_temperature() -> Option<f32> {
     None
 }
 
+#[cfg(target_os = "windows")]
+fn get_windows_temperature() -> Option<f32> {
+    use std::sync::OnceLock;
+    
+    static LAST_LOG_STATE: OnceLock<std::sync::Mutex<bool>> = OnceLock::new();
+    
+    // Try the fastest method - HighPrecisionTemperature from WMI via PowerShell
+    if let Ok(output) = Command::new("powershell")
+        .args([
+            "-Command",
+            "Get-WmiObject -Query \"SELECT HighPrecisionTemperature FROM Win32_PerfRawData_Counters_ThermalZoneInformation\" | Select-Object -First 1 -ExpandProperty HighPrecisionTemperature"
+        ])
+        .output()
+    {
+        if let Ok(output_str) = String::from_utf8(output.stdout) {
+            if let Ok(temp_tenths_kelvin) = output_str.trim().parse::<f32>() {
+                let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
+                if temp_celsius > 0.0 && temp_celsius < 150.0 {
+                    // Log success only once
+                    let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
+                    let mut logged = log_state.lock().unwrap();
+                    if !*logged {
+                        info!("✅ Temperature sensor detected via WMI: {:.1}°C", temp_celsius);
+                        *logged = true;
+                    }
+                    return Some(temp_celsius);
+                }
+            }
+        }
+    }
+    
+    // Log only once when no sensor is found
+    let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
+    let mut logged = log_state.lock().unwrap();
+    if !*logged {
+        info!("⚠️ No WMI temperature sensors detected. Temperature monitoring disabled.");
+        *logged = true;
+    }
+    
+    None
+}
+
 #[tauri::command]
 fn detect_locale() -> String {
     sys_locale::get_locale().unwrap_or_else(|| "en-US".into())
@@ -1473,7 +1472,7 @@ async fn download_blocks_from_network(
 async fn download_file_from_network(
     state: State<'_, AppState>,
     file_hash: String,
-    output_path: String,
+    _output_path: String,
 ) -> Result<String, String> {
     let ft = {
         let ft_guard = state.file_transfer.lock().await;
@@ -1757,7 +1756,7 @@ async fn start_streaming_upload(
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     // Check for active account - require login for all uploads
-    let _account = get_active_account(&state).await?;
+    let account = get_active_account(&state).await?;
 
     let dht_opt = { state.dht.lock().await.as_ref().cloned() };
     if dht_opt.is_none() {
@@ -1796,7 +1795,7 @@ async fn start_streaming_upload(
 async fn upload_file_chunk(
     upload_id: String,
     chunk_data: Vec<u8>,
-    chunk_index: u32,
+    _chunk_index: u32,
     is_last_chunk: bool,
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
@@ -1813,7 +1812,7 @@ async fn upload_file_chunk(
     // Store chunk directly in Bitswap (if DHT is available)
     if let Some(dht) = state.dht.lock().await.as_ref() {
         // Create a block from the chunk data
-        use dht::{split_into_blocks, StringBlock};
+        use dht::split_into_blocks;
         let blocks = split_into_blocks(&chunk_data, dht.chunk_size());
 
         for block in blocks.iter() {
@@ -2032,8 +2031,8 @@ async fn pump_multi_source_events(app: tauri::AppHandle, ms: Arc<MultiSourceDown
         for event in events {
             match &event {
                 MultiSourceEvent::DownloadStarted {
-                    file_hash,
-                    total_peers,
+                    file_hash: _,
+                    total_peers: _,
                 } => {
                     if let Err(err) = app.emit("multi_source_download_started", &event) {
                         warn!(
@@ -2043,7 +2042,7 @@ async fn pump_multi_source_events(app: tauri::AppHandle, ms: Arc<MultiSourceDown
                     }
                 }
                 MultiSourceEvent::ProgressUpdate {
-                    file_hash,
+                    file_hash: _,
                     progress,
                 } => {
                     if let Err(err) = app.emit("multi_source_progress_update", progress) {
@@ -2051,10 +2050,10 @@ async fn pump_multi_source_events(app: tauri::AppHandle, ms: Arc<MultiSourceDown
                     }
                 }
                 MultiSourceEvent::DownloadCompleted {
-                    file_hash,
-                    output_path,
-                    duration_secs,
-                    average_speed_bps,
+                    file_hash: _,
+                    output_path: _,
+                    duration_secs: _,
+                    average_speed_bps: _,
                 } => {
                     if let Err(err) = app.emit("multi_source_download_completed", &event) {
                         warn!(
@@ -2872,7 +2871,7 @@ async fn queue_transaction(
     amount: f64,
 ) -> Result<String, String> {
     // Validate account is logged in
-    let _account = get_active_account(&state).await?;
+    let account = get_active_account(&state).await?;
 
     // Generate unique transaction ID
     let tx_id = format!(
@@ -3123,9 +3122,10 @@ fn main() {
             .with(
                 EnvFilter::from_default_env()
                     .add_directive("chiral_network=info".parse().unwrap())
-                    .add_directive("libp2p=info".parse().unwrap())
-                    .add_directive("libp2p_kad=debug".parse().unwrap())
-                    .add_directive("libp2p_swarm=info".parse().unwrap()),
+                    .add_directive("libp2p=warn".parse().unwrap())
+                    .add_directive("libp2p_kad=warn".parse().unwrap())
+                    .add_directive("libp2p_swarm=warn".parse().unwrap())
+                    .add_directive("libp2p_mdns=warn".parse().unwrap()),
             )
             .init();
     }
@@ -3150,7 +3150,6 @@ fn main() {
     }
 
     println!("Starting Chiral Network...");
-    tracing::info!("🚀 Registering pool mining commands...");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
@@ -3326,7 +3325,6 @@ fn main() {
         })
         .setup(|app| {
             // Clean up any orphaned geth processes on startup
-            println!("Cleaning up any orphaned geth processes from previous sessions...");
             #[cfg(unix)]
             {
                 use std::process::Command;
@@ -3361,15 +3359,12 @@ fn main() {
                 let _ = std::fs::remove_file(&ipc_file);
             }
 
-            println!("App setup complete");
-            println!("Window should be visible now!");
-
             let show_i = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
             let hide_i = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &hide_i, &quit_i])?;
 
-            let _tray = TrayIconBuilder::new()
+            let tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .tooltip("Chiral Network")
@@ -3423,7 +3418,6 @@ fn main() {
             if let Some(window) = app.get_webview_window("main") {
                 window.show().unwrap();
                 window.set_focus().unwrap();
-                println!("Window shown and focused");
 
                 let app_handle = app.handle().clone();
                 window.on_window_event(move |event| {
@@ -3746,7 +3740,8 @@ async fn get_file_data(state: State<'_, AppState>, file_hash: String) -> Result<
             .get_file_data(&file_hash)
             .await
             .ok_or("File not found".to_string())?;
-        Ok(base64::encode(&data))
+        use base64::{Engine as _, engine::general_purpose};
+        Ok(general_purpose::STANDARD.encode(&data))
     } else {
         Err("File transfer service not running".to_string())
     }

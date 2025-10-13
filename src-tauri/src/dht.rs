@@ -66,7 +66,6 @@ use rand::rngs::OsRng;
 const EXPECTED_PROTOCOL_VERSION: &str = "/chiral/1.0.0";
 const MAX_MULTIHASH_LENGHT: usize = 64;
 pub const RAW_CODEC: u64 = 0x55;
-const CHUNK_SIZE: usize = 256 * 1024; // 256 KiB (262144 bytes)
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1103,7 +1102,6 @@ async fn run_dht_node(
 
                         // Request the root block which contains the CIDs
                         let root_query_id = swarm.behaviour_mut().bitswap.get(&root_cid);
-                        info!("Requesting root block for file: {}", file_metadata.file_hash);
 
                         // Store the root query ID to handle when we get the root block
                         // We'll need to modify the Bitswap handling to distinguish root blocks from data blocks
@@ -1118,8 +1116,8 @@ async fn run_dht_node(
                     }
                     Some(DhtCommand::SearchFile(file_hash)) => {
                         let key = kad::RecordKey::new(&file_hash.as_bytes());
-                        let _query_id = swarm.behaviour_mut().kademlia.get_record(key);
-                        info!("Searching for file: {}", file_hash);
+                        let query_id = swarm.behaviour_mut().kademlia.get_record(key);
+                        info!("Searching for file: {} (query: {:?})", file_hash, query_id);
                     }
                     Some(DhtCommand::ConnectPeer(addr)) => {
                         info!("Attempting to connect to: {}", addr);
@@ -1351,7 +1349,7 @@ async fn run_dht_node(
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) => match bitswap {
                         beetswap::Event::GetQueryResponse { query_id, data } => {
                             // Handle successful Bitswap response
-                            if let Some(metadata) = &current_metadata {
+                            if let Some(_metadata) = &current_metadata {
                                 // Check if this is the root block (contains CIDs array)
                                 if let Ok(cids) = serde_json::from_slice::<Vec<Cid>>(&data) {
                                     info!("Received root block with {} CIDs", cids.len());
@@ -1414,6 +1412,7 @@ async fn run_dht_node(
                             libp2p::ping::Event { peer, result: Ok(rtt), .. } => {
                                 let is_connected = connected_peers.lock().await.contains(&peer);
                                 let rtt_ms = rtt.as_millis() as u64;
+                                debug!("Ping from peer {}: {} ms (connected: {})", peer, rtt_ms, is_connected);
 
                                 // Update peer selection metrics with latency
                                 {
@@ -1482,9 +1481,6 @@ async fn run_dht_node(
                             .await;
                     }
                     SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
-                        info!("✅ CONNECTION ESTABLISHED with peer: {}", peer_id);
-                        info!("   Endpoint: {:?}", endpoint);
-
                         // Initialize peer metrics for smart selection
                         {
                             let mut selection = peer_selection.lock().await;
@@ -1506,6 +1502,7 @@ async fn run_dht_node(
                         if let Ok(mut m) = metrics.try_lock() {
                             m.last_success = Some(SystemTime::now());
                         }
+                        info!("✅ Connected to {} via {}", peer_id, endpoint.get_remote_address());
                         info!("   Total connected peers: {}", peers_count);
                     }
                     SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
@@ -1521,7 +1518,6 @@ async fn run_dht_node(
                         info!("   Remaining connected peers: {}", peers_count);
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
-                        info!("📡 Now listening on: {}", address);
                         if address.iter().any(|component| matches!(component, Protocol::P2pCircuit)) {
                             swarm.add_external_address(address.clone());
                             debug!("Advertised relay external address: {}", address);
@@ -1646,7 +1642,7 @@ async fn run_dht_node(
                             RREvent::Message { peer, message } => match message {
                                 // WebRTC offer request
                                 Message::Request { request, channel, .. } => {
-                                    let WebRTCOfferRequest { offer_sdp, file_hash, requester_peer_id } = request;
+                                    let WebRTCOfferRequest { offer_sdp, file_hash, requester_peer_id: _requester_peer_id } = request;
                                     info!("Received WebRTC offer from {} for file {}", peer, file_hash);
 
                                     // Get WebRTC service to handle the offer
@@ -1803,6 +1799,7 @@ async fn handle_kademlia_event(
 
                                 let notify_metadata = metadata.clone();
                                 let file_hash = notify_metadata.file_hash.clone();
+                                info!("File discovered: {} ({})", notify_metadata.file_name, file_hash);
                                 let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
 
                                 // only for synchronous_search_metadata
@@ -2268,7 +2265,6 @@ pub fn build_transport_with_relay(
                 .boxed()
         }
         (None, relay_transport) => {
-            info!("Direct P2P connection mode.");
             let direct_tcp = tcp::tokio::Transport::new(tcp::Config::default())
                 .map(|s, _| Box::new(s.0.compat()) as Box<dyn AsyncIo>);
 
@@ -2351,13 +2347,8 @@ impl DhtService {
     ) -> Result<Self, Box<dyn Error>> {
         // Convert chunk size from KB to bytes
         let chunk_size = chunk_size_kb.unwrap_or(256) * 1024; // Default 256 KB
-        let _cache_size = cache_size_mb.unwrap_or(1024); // Default 1024 MB
+        let cache_size = cache_size_mb.unwrap_or(1024); // Default 1024 MB
 
-        info!(
-            "DHT Configuration: chunk_size={} KB, cache_size={} MB",
-            chunk_size / 1024,
-            _cache_size
-        );
         // Generate a new keypair for this node
         // Generate a keypair either from the secret or randomly
         let local_key = match secret {
@@ -2373,8 +2364,6 @@ impl DhtService {
         };
         let local_peer_id = PeerId::from(local_key.public());
         let peer_id_str = local_peer_id.to_string();
-
-        info!("Local peer id: {}", local_peer_id);
 
         // Create a Kademlia behaviour with tuned configuration
         let store = MemoryStore::new(local_peer_id);
@@ -2443,7 +2432,6 @@ impl DhtService {
                 v2::client::Config::default().with_probe_interval(probe_interval),
             ))
         } else {
-            info!("AutoNAT disabled");
             None
         };
         let autonat_server_behaviour = if enable_autonat {
@@ -2463,7 +2451,6 @@ impl DhtService {
             info!("DCUtR enabled (requires relay for hole-punching coordination)");
             Some(dcutr::Behaviour::new(local_peer_id))
         } else {
-            info!("DCUtR disabled (autonat is disabled)");
             None
         };
         let dcutr_toggle = toggle::Toggle::from(dcutr_behaviour);
@@ -2515,7 +2502,6 @@ impl DhtService {
                 bootstrap_set.iter().cloned().collect()
             }
         } else {
-            info!("AutoRelay disabled");
             HashSet::new()
         };
 
@@ -2536,18 +2522,14 @@ impl DhtService {
         // Listen on the specified port
         let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", port).parse()?;
         swarm.listen_on(listen_addr)?;
-        info!("DHT listening on port: {}", port);
 
         // Connect to bootstrap nodes
-        info!("Bootstrap nodes to connect: {:?}", bootstrap_nodes);
         let mut successful_connections = 0;
         let total_bootstrap_nodes = bootstrap_nodes.len();
         for bootstrap_addr in &bootstrap_nodes {
-            info!("Attempting to connect to bootstrap: {}", bootstrap_addr);
             if let Ok(addr) = bootstrap_addr.parse::<Multiaddr>() {
                 match swarm.dial(addr.clone()) {
                     Ok(_) => {
-                        info!("✓ Initiated connection to bootstrap: {}", bootstrap_addr);
                         successful_connections += 1;
                         // Add bootstrap nodes to Kademlia routing table if it has a peer ID
                         if let Some(peer_id) = addr.iter().find_map(|p| {
@@ -2592,10 +2574,6 @@ impl DhtService {
         // Trigger initial bootstrap if we have any bootstrap nodes (even if connection failed)
         if !bootstrap_nodes.is_empty() {
             let _ = swarm.behaviour_mut().kademlia.bootstrap();
-            info!(
-                "Triggered initial Kademlia bootstrap (attempted {}/{} connections)",
-                successful_connections, total_bootstrap_nodes
-            );
             if successful_connections == 0 {
                 warn!(
                     "⚠ No bootstrap connections succeeded - node will operate in standalone mode"
@@ -2663,11 +2641,6 @@ impl DhtService {
             pending_webrtc_offers,
             chunk_size,
         })
-    }
-
-    pub async fn run(&self) {
-        // The node is already running in a spawned task
-        info!("DHT node is running");
     }
 
     pub fn chunk_size(&self) -> usize {
@@ -3342,7 +3315,6 @@ mod tests {
                 panic!("start service: {message}");
             }
         };
-        service.run().await;
 
         service.shutdown().await.expect("shutdown");
 

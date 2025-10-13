@@ -369,7 +369,7 @@ impl MultiSourceDownloadService {
 
     fn calculate_chunks(&self, metadata: &FileMetadata, chunk_size: usize) -> Vec<ChunkInfo> {
         let mut chunks = Vec::new();
-        let _total_size = metadata.file_size as usize;
+        let total_size = metadata.file_size as usize;
         let mut offset = 0u64;
         let mut chunk_id = 0u32;
 
@@ -1018,7 +1018,7 @@ impl MultiSourceDownloadService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dht::{DhtService, FileMetadata};
+    use crate::dht::DhtService;
     use crate::webrtc_service::WebRTCService;
     use std::sync::Arc;
 

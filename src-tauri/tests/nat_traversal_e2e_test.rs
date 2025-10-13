@@ -65,9 +65,6 @@ async fn test_autonat_detection() {
     assert!(service.is_ok(), "Failed to create DHT service with AutoNAT");
     let service = service.unwrap();
 
-    // Start the service
-    service.run().await;
-
     let peer_id = service.get_peer_id().await;
     println!("✅ DHT service started with peer ID: {}", peer_id);
 
@@ -111,7 +108,6 @@ async fn test_dht_peer_discovery() {
     .await
     .expect("Failed to create service1");
 
-    service1.run().await;
     let peer_id1 = service1.get_peer_id().await;
     println!("✅ Service 1 started: {}", peer_id1);
 
@@ -149,7 +145,6 @@ async fn test_dht_peer_discovery() {
     .await
     .expect("Failed to create service2");
 
-    service2.run().await;
     let peer_id2 = service2.get_peer_id().await;
     println!("✅ Service 2 started: {}", peer_id2);
 
@@ -199,7 +194,6 @@ async fn test_file_publish_and_search() {
     .await
     .expect("Failed to create service1");
 
-    service1.run().await;
     let peer_id1 = service1.get_peer_id().await;
 
     sleep(Duration::from_secs(1)).await;
@@ -229,7 +223,6 @@ async fn test_file_publish_and_search() {
     .await
     .expect("Failed to create service2");
 
-    service2.run().await;
 
     // Wait for connection
     sleep(Duration::from_secs(3)).await;
@@ -286,8 +279,6 @@ async fn test_dcutr_enabled() {
     .await
     .expect("Failed to create service");
 
-    service.run().await;
-
     sleep(Duration::from_secs(1)).await;
 
     // Get metrics to verify DCUtR is enabled
@@ -338,8 +329,6 @@ async fn test_multiple_autonat_servers() {
     .await
     .expect("Failed to create service");
 
-    service.run().await;
-
     println!(
         "✅ Service started with {} AutoNAT servers",
         autonat_servers.len()
@@ -373,7 +362,6 @@ async fn test_reachability_history_tracking() {
     .await
     .expect("Failed to create service");
 
-    service.run().await;
 
     // Wait for some probes to occur
     sleep(Duration::from_secs(3)).await;
@@ -385,11 +373,8 @@ async fn test_reachability_history_tracking() {
     );
     println!("✅ Current reachability: {:?}", metrics.reachability);
 
-    // History tracking exists
-    assert!(
-        metrics.reachability_history.len() >= 0,
-        "History tracking not working"
-    );
+    // History tracking exists (vec always has length >= 0, so just verify the field exists)
+    println!("✅ Reachability history is being tracked");
 
     // Cleanup
     let _ = service.shutdown().await;
@@ -420,7 +405,6 @@ async fn test_connection_metrics_tracking() {
     .await
     .expect("Failed to create service1");
 
-    service1.run().await;
     let peer_id1 = service1.get_peer_id().await;
 
     sleep(Duration::from_secs(1)).await;
@@ -450,7 +434,6 @@ async fn test_connection_metrics_tracking() {
     .await
     .expect("Failed to create service2");
 
-    service2.run().await;
 
     // Wait for connection
     sleep(Duration::from_secs(3)).await;
@@ -501,7 +484,6 @@ async fn test_nat_resilience_private_to_public() {
     .await
     .expect("Failed to create public peer");
 
-    public_peer.run().await;
     let public_peer_id = public_peer.get_peer_id().await;
     println!("✅ Public peer started: {}", public_peer_id);
 
@@ -540,7 +522,6 @@ async fn test_nat_resilience_private_to_public() {
     .await
     .expect("Failed to create private peer");
 
-    private_peer.run().await;
     let private_peer_id = private_peer.get_peer_id().await;
     println!("✅ Private peer started: {}", private_peer_id);
 
@@ -607,7 +588,6 @@ async fn test_nat_resilience_connection_fallback() {
     );
 
     let service = service.unwrap();
-    service.run().await;
 
     sleep(Duration::from_secs(2)).await;
 

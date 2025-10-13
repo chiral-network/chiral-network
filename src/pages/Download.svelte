@@ -36,12 +36,13 @@
           // Find the corresponding file and update its progress
           files.update(f => f.map(file => {
             if (file.hash === progress.fileHash) {
+              const percentage = MultiSourceDownloadService.getCompletionPercentage(progress);
               return {
                 ...file,
-                progress: progress.percentage,
+                progress: percentage,
                 status: 'downloading' as const,
-                speed: MultiSourceDownloadService.formatSpeed(progress.downloadSpeed),
-                eta: MultiSourceDownloadService.formatETA(progress.eta)
+                speed: MultiSourceDownloadService.formatSpeed(progress.downloadSpeedBps),
+                eta: MultiSourceDownloadService.formatETA(progress.etaSeconds)
               };
             }
             return file;
@@ -98,10 +99,10 @@
 
         // Cleanup listeners on destroy
         return () => {
-          unlistenProgress.then(fn => fn())
-          unlistenCompleted.then(fn => fn())
-          unlistenStarted.then(fn => fn())
-          unlistenFailed.then(fn => fn())
+          unlistenProgress()
+          unlistenCompleted()
+          unlistenStarted()
+          unlistenFailed()
         }
       } catch (error) {
         console.error('Failed to setup event listeners:', error)
@@ -276,20 +277,21 @@
         return FileIcon;
     }
   }
-    async function saveRawData(fileName: string, data: Uint8Array) {
-    try {
-      const { save } = await import('@tauri-apps/plugin-dialog');
-      const filePath = await save({ defaultPath: fileName });
-      if (filePath) {
-        const { writeFile } = await import('@tauri-apps/plugin-fs');
-        await writeFile(filePath, new Uint8Array(data));
-        showNotification(`Successfully saved "${fileName}"`, 'success');
-      }
-    } catch (error) {
-      console.error('Failed to save file:', error);
-      showNotification(`Error saving "${fileName}"`, 'error');
-    }
-  }
+  // Commented out - not currently used but kept for future reference
+  // async function saveRawData(fileName: string, data: Uint8Array) {
+  //   try {
+  //     const { save } = await import('@tauri-apps/plugin-dialog');
+  //     const filePath = await save({ defaultPath: fileName });
+  //     if (filePath) {
+  //       const { writeFile } = await import('@tauri-apps/plugin-fs');
+  //       await writeFile(filePath, new Uint8Array(data));
+  //       showNotification(`Successfully saved "${fileName}"`, 'success');
+  //     }
+  //   } catch (error) {
+  //     console.error('Failed to save file:', error);
+  //     showNotification(`Error saving "${fileName}"`, 'error');
+  //   }
+  // }
 
   function handleSearchMessage(event: CustomEvent<{ message: string; type?: 'success' | 'error' | 'info' | 'warning'; duration?: number }>) {
     const { message, type = 'info', duration = 4000 } = event.detail
@@ -299,9 +301,10 @@
   async function handleSearchDownload(metadata: FileMetadata) {
     const allFiles = [...$downloadQueue]
     const existingFile = allFiles.find((file) => file.hash === metadata.fileHash)
-    const fileName = metadata.fileName;
-    const fileData = new Uint8Array(metadata.fileData ?? []);
-    //saveRawData(fileName, fileData); // testing
+    // Uncomment below if you need to save raw data for testing
+    // const fileName = metadata.fileName;
+    // const fileData = new Uint8Array(metadata.fileData ?? []);
+    // saveRawData(fileName, fileData);
 
     if (existingFile) {
       let statusMessage = ''
@@ -714,18 +717,21 @@
         // Check if we should use multi-source download
         const seeders = fileToDownload.seederAddresses || [];
         
-        if (multiSourceEnabled && seeders.length >= 2 && fileToDownload.size > 1024 * 1024) {
+        if (multiSourceEnabled && seeders.length >= 2 && fileToDownload && fileToDownload.size > 1024 * 1024) {
           // Use multi-source download for files > 1MB with multiple seeders
           try {
             showNotification(`Starting multi-source download from ${seeders.length} peers...`, 'info');
             
-            const multiSourceService = new MultiSourceDownloadService();
-            await multiSourceService.startDownload(
+            if (!outputPath) {
+              throw new Error('Output path is required for download');
+            }
+            
+            await MultiSourceDownloadService.startDownload(
               fileToDownload.hash,
-              fileToDownload.name,
-              fileToDownload.size,
               outputPath,
-              seeders.slice(0, maxPeersPerDownload) // Limit to max peers
+              {
+                maxPeers: maxPeersPerDownload
+              }
             );
 
             // The progress updates will be handled by the event listeners in onMount
@@ -750,20 +756,24 @@
             }
 
             // Create file metadata for P2P transfer
-            const fileMetadata = {
+            const fileMetadata = fileToDownload ? {
               fileHash: fileToDownload.hash,
               fileName: fileToDownload.name,
               fileSize: fileToDownload.size,
               seeders: seeders,
               createdAt: Date.now(),
               isEncrypted: false
-            };
+            } : null;
+
+            if (!fileMetadata) {
+              throw new Error('File metadata is not available');
+            }
 
             // Initiate P2P download with file saving
             const transferId = await p2pFileTransferService.initiateDownloadWithSave(
               fileMetadata,
               seeders,
-              outputPath,
+              outputPath || undefined,
               (transfer) => {
                 // Update UI with transfer progress
                 files.update(f => f.map(file => {
@@ -783,11 +793,10 @@
                 }));
 
                 // Show notification on completion or failure
-                if (transfer.status === 'completed') {
+                if (transfer.status === 'completed' && fileToDownload) {
                   showNotification(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
-                } else if (transfer.status === 'failed') {
-                  //THIS IS WHERE DOWNLOAD IS FAILING
-                  showNotification(tr('download.notifications.downloadFailed', { values: { name: fileToDownload.name } })+"HI", 'error');
+                } else if (transfer.status === 'failed' && fileToDownload) {
+                  showNotification(tr('download.notifications.downloadFailed', { values: { name: fileToDownload.name } }), 'error');
                 }
               }
             );
@@ -823,10 +832,10 @@
           : file
       ));
 
-      let errorMsg = error && error.message ? error.message : String(error);
+      const errorMsg = error instanceof Error ? error.message : String(error);
       console.error('Download failed:', error, fileToDownload);
       showNotification(
-        tr('download.notifications.downloadFailed', { values: { name: fileToDownload.name } }) + (errorMsg ? `: ${errorMsg}` : ''),
+        tr('download.notifications.downloadFailed', { values: { name: fileToDownload?.name || 'Unknown file' } }) + (errorMsg ? `: ${errorMsg}` : ''),
         'error'
       );
     }
@@ -1034,6 +1043,20 @@
             />
           </div>
 
+          {#if multiSourceEnabled}
+          <div class="flex items-center gap-2">
+            <Label class="font-medium">{$t('download.maxPeers')}:</Label>
+            <input
+              type="number"
+              bind:value={maxPeersPerDownload}
+              min="2"
+              max="10"
+              step="1"
+              class="w-14 h-7 text-center text-xs border border-input bg-background px-2 py-1 ring-offset-background file:border-0 file:bg-transparent file:font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 rounded-md"
+            />
+          </div>
+          {/if}
+
           <div class="flex items-center gap-2">
             <Label class="font-medium">{$t('download.settings.autoStart')}:</Label>
             <button
@@ -1050,6 +1073,7 @@
               ></span>
             </button>
           </div>
+
           <div class="flex items-center gap-2">
             <Label class="font-medium">{$t('download.autoClear')}:</Label>
             <button
@@ -1083,20 +1107,6 @@
               ></span>
             </button>
           </div>
-
-          {#if multiSourceEnabled}
-          <div class="flex items-center gap-2">
-            <Label class="font-medium">{$t('download.maxPeers')}:</Label>
-            <input
-              type="number"
-              bind:value={maxPeersPerDownload}
-              min="2"
-              max="10"
-              step="1"
-              class="w-14 h-7 text-center text-xs border border-input bg-background px-2 py-1 ring-offset-background file:border-0 file:bg-transparent file:font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 rounded-md"
-            />
-          </div>
-          {/if}
         </div>
       </div>
     </div>
@@ -1217,7 +1227,7 @@
                     {#if multiSourceProgress.has(file.hash)}
                       {@const msProgress = multiSourceProgress.get(file.hash)}
                       {#if msProgress}
-                        <span class="text-purple-600">Peers: {msProgress.activePeers}/{msProgress.totalPeers}</span>
+                        <span class="text-purple-600">Peers: {msProgress.activePeers}</span>
                         <span class="text-purple-600">Chunks: {msProgress.completedChunks}/{msProgress.totalChunks}</span>
                       {/if}
                     {/if}
@@ -1231,19 +1241,19 @@
                 />
                 {#if multiSourceProgress.has(file.hash)}
                   {@const msProgress = multiSourceProgress.get(file.hash)}
-                  {#if msProgress && msProgress.peerProgress.length > 0}
+                  {#if msProgress && msProgress.peerAssignments.length > 0}
                     <div class="mt-2 space-y-1">
                       <div class="text-xs text-muted-foreground">Peer progress:</div>
-                      {#each msProgress.peerProgress as peerProgress}
+                      {#each msProgress.peerAssignments as peerAssignment}
                         <div class="flex items-center gap-2 text-xs">
-                          <span class="w-20 truncate">{peerProgress.peerId.slice(0, 8)}...</span>
+                          <span class="w-20 truncate">{peerAssignment.peerId.slice(0, 8)}...</span>
                           <div class="flex-1 bg-muted rounded-full h-1">
                             <div 
                               class="bg-purple-500 h-1 rounded-full transition-all duration-300"
-                              style="width: {peerProgress.chunksCompleted / peerProgress.chunksAssigned * 100}%"
+                              style="width: {peerAssignment.status === 'Completed' ? 100 : peerAssignment.status === 'Downloading' ? 50 : 0}%"
                             ></div>
                           </div>
-                          <span class="text-muted-foreground">{peerProgress.chunksCompleted}/{peerProgress.chunksAssigned}</span>
+                          <span class="text-muted-foreground">{peerAssignment.status}</span>
                         </div>
                       {/each}
                     </div>

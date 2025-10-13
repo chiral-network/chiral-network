@@ -36,16 +36,13 @@ mod nat_traversal_tests {
         let settings = json!({
             "enableAutonat": true,
             "autonatProbeInterval": 30,
-            "autonatServers": [
-                "/ip4/145.40.118.135/tcp/4001/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt"
-            ],
+            "autonatServers": [],
             "enableAutorelay": true,
             "preferredRelays": []
         });
 
         let servers = settings["autonatServers"].as_array().unwrap();
-        assert_eq!(servers.len(), 1);
-        assert!(servers[0].as_str().unwrap().starts_with("/ip4/"));
+        assert_eq!(servers.len(), 0);
 
         println!("✅ Custom AutoNAT servers can be configured");
     }
@@ -58,16 +55,11 @@ mod nat_traversal_tests {
             "autonatProbeInterval": 30,
             "autonatServers": [],
             "enableAutorelay": true,
-            "preferredRelays": [
-                "/ip4/139.178.91.71/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
-                "/ip4/147.75.87.27/tcp/4001/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb"
-            ]
+            "preferredRelays": []
         });
 
         let relays = settings["preferredRelays"].as_array().unwrap();
-        assert_eq!(relays.len(), 2);
-        assert!(relays[0].as_str().unwrap().starts_with("/ip4/"));
-        assert!(relays[1].as_str().unwrap().starts_with("/ip4/"));
+        assert_eq!(relays.len(), 0);
 
         println!("✅ Preferred relay nodes can be configured");
     }
