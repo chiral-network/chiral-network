@@ -612,7 +612,23 @@
       showToast($t('network.errors.dhtNotConnected'), 'error');
       return;
     }
-    
+
+    // In Tauri mode, use DHT backend for peer discovery
+    if (isTauri) {
+      try {
+        showToast('Discovering peers via DHT...', 'info');
+        const peers = await invoke<string[]>('get_dht_connected_peers');
+        discoveredPeers = peers;
+        console.log('Discovered peers from DHT:', discoveredPeers);
+        showToast(tr('network.peerDiscovery.discoveryStarted', { values: { count: discoveredPeers.length } }), 'success');
+      } catch (error) {
+        console.error('Failed to discover peers:', error);
+        showToast('Failed to discover peers: ' + error, 'error');
+      }
+      return;
+    }
+
+    // In web mode, use WebRTC signaling for testing
     if (!signalingConnected) {
       try {
         if (!signaling) {
@@ -644,11 +660,11 @@
         showToast('Connected to signaling server', 'success');
       } catch (error) {
         console.error('Failed to connect to signaling server:', error);
-        showToast('Failed to connect to signaling server. Make sure DHT is running.', 'error');
+        showToast('Failed to connect to signaling server for web mode testing', 'error');
         return;
       }
     }
-    
+
     // discoveredPeers will update automatically
     showToast(tr('network.peerDiscovery.discoveryStarted', { values: { count: discoveredPeers.length } }), 'info');
   }
