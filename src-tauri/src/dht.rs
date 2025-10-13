@@ -1481,9 +1481,6 @@ async fn run_dht_node(
                             .await;
                     }
                     SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
-                        info!("✅ CONNECTION ESTABLISHED with peer: {}", peer_id);
-                        info!("   Endpoint: {:?}", endpoint);
-
                         // Initialize peer metrics for smart selection
                         {
                             let mut selection = peer_selection.lock().await;
@@ -1505,6 +1502,7 @@ async fn run_dht_node(
                         if let Ok(mut m) = metrics.try_lock() {
                             m.last_success = Some(SystemTime::now());
                         }
+                        info!("✅ Connected to {} via {}", peer_id, endpoint.get_remote_address());
                         info!("   Total connected peers: {}", peers_count);
                     }
                     SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
@@ -2434,7 +2432,6 @@ impl DhtService {
                 v2::client::Config::default().with_probe_interval(probe_interval),
             ))
         } else {
-            info!("AutoNAT disabled");
             None
         };
         let autonat_server_behaviour = if enable_autonat {
@@ -2454,7 +2451,6 @@ impl DhtService {
             info!("DCUtR enabled (requires relay for hole-punching coordination)");
             Some(dcutr::Behaviour::new(local_peer_id))
         } else {
-            info!("DCUtR disabled (autonat is disabled)");
             None
         };
         let dcutr_toggle = toggle::Toggle::from(dcutr_behaviour);
@@ -2506,7 +2502,6 @@ impl DhtService {
                 bootstrap_set.iter().cloned().collect()
             }
         } else {
-            info!("AutoRelay disabled");
             HashSet::new()
         };
 
@@ -2579,10 +2574,6 @@ impl DhtService {
         // Trigger initial bootstrap if we have any bootstrap nodes (even if connection failed)
         if !bootstrap_nodes.is_empty() {
             let _ = swarm.behaviour_mut().kademlia.bootstrap();
-            info!(
-                "Triggered initial Kademlia bootstrap (attempted {}/{} connections)",
-                successful_connections, total_bootstrap_nodes
-            );
             if successful_connections == 0 {
                 warn!(
                     "⚠ No bootstrap connections succeeded - node will operate in standalone mode"
@@ -2775,7 +2766,7 @@ impl DhtService {
         self.search_file(file_hash).await
     }
 
-    pub async fn search_metadata(&self, file_hash: String, _timeout_ms: u64) -> Result<(), String> {
+    pub async fn search_metadata(&self, file_hash: String, timeout_ms: u64) -> Result<(), String> {
         self.cmd_tx
             .send(DhtCommand::SearchFile(file_hash.clone()))
             .await

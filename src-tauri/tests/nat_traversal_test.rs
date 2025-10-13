@@ -59,15 +59,13 @@ mod nat_traversal_tests {
             "autonatServers": [],
             "enableAutorelay": true,
             "preferredRelays": [
-                "/ip4/139.178.91.71/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
-                "/ip4/147.75.87.27/tcp/4001/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb"
+                "/ip4/139.178.91.71/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN"
             ]
         });
 
         let relays = settings["preferredRelays"].as_array().unwrap();
-        assert_eq!(relays.len(), 2);
+        assert_eq!(relays.len(), 1);
         assert!(relays[0].as_str().unwrap().starts_with("/ip4/"));
-        assert!(relays[1].as_str().unwrap().starts_with("/ip4/"));
 
         println!("✅ Preferred relay nodes can be configured");
     }

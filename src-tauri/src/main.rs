@@ -3122,9 +3122,10 @@ fn main() {
             .with(
                 EnvFilter::from_default_env()
                     .add_directive("chiral_network=info".parse().unwrap())
-                    .add_directive("libp2p=info".parse().unwrap())
-                    .add_directive("libp2p_kad=debug".parse().unwrap())
-                    .add_directive("libp2p_swarm=info".parse().unwrap()),
+                    .add_directive("libp2p=warn".parse().unwrap())
+                    .add_directive("libp2p_kad=warn".parse().unwrap())
+                    .add_directive("libp2p_swarm=warn".parse().unwrap())
+                    .add_directive("libp2p_mdns=warn".parse().unwrap()),
             )
             .init();
     }
@@ -3324,7 +3325,6 @@ fn main() {
         })
         .setup(|app| {
             // Clean up any orphaned geth processes on startup
-            println!("Cleaning up any orphaned geth processes from previous sessions...");
             #[cfg(unix)]
             {
                 use std::process::Command;
@@ -3358,9 +3358,6 @@ fn main() {
                 println!("Removing stale IPC file: {:?}", ipc_file);
                 let _ = std::fs::remove_file(&ipc_file);
             }
-
-            println!("App setup complete");
-            println!("Window should be visible now!");
 
             let show_i = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
             let hide_i = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
@@ -3421,7 +3418,6 @@ fn main() {
             if let Some(window) = app.get_webview_window("main") {
                 window.show().unwrap();
                 window.set_focus().unwrap();
-                println!("Window shown and focused");
 
                 let app_handle = app.handle().clone();
                 window.on_window_event(move |event| {
