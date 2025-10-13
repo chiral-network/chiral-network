@@ -57,7 +57,6 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use sysinfo::{Components, System, MINIMUM_CPU_UPDATE_INTERVAL};
-use systemstat::{Platform, System as SystemStat};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -1153,19 +1152,10 @@ fn get_cpu_temperature() -> Option<f32> {
     }
 
     // Final fallback: return None when sensors are unavailable
-    // This allows the app to continue functioning even without hardware temperature sensors
     // Only log the info message once to avoid spamming logs
     static SENSOR_WARNING_LOGGED: OnceLock<()> = OnceLock::new();
     
     SENSOR_WARNING_LOGGED.get_or_init(|| {
-        #[cfg(target_os = "windows")]
-        {
-            info!("CPU temperature sensors not detected.");
-            info!("On Windows, temperature monitoring requires hardware monitoring software.");
-            info!("Install LibreHardwareMonitor (https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) or Open Hardware Monitor to enable temperature detection.");
-        }
-        
-        #[cfg(not(target_os = "windows"))]
         info!("Hardware temperature sensors not accessible on this system. Temperature monitoring disabled.");
     });
 
@@ -1332,48 +1322,41 @@ fn get_linux_temperature() -> Option<f32> {
 
 #[cfg(target_os = "windows")]
 fn get_windows_temperature() -> Option<f32> {
-    // On Windows, sysinfo can read temperature sensors if they're exposed by:
-    // - LibreHardwareMonitor or Open Hardware Monitor (via WMI)
-    // - Some motherboard manufacturers' monitoring software
-    // - Direct hardware access (rare, usually blocked by Windows security)
+    use std::sync::OnceLock;
     
-    use sysinfo::Components;
+    static LAST_LOG_STATE: OnceLock<std::sync::Mutex<bool>> = OnceLock::new();
     
-    let components = Components::new_with_refreshed_list();
-    
-    // Look for CPU temperature sensors
-    let mut temps: Vec<f32> = components
-        .iter()
-        .filter(|c| {
-            let label = c.label().to_lowercase();
-            // Look for CPU-related temperature sensors
-            label.contains("cpu")
-                || label.contains("processor")
-                || label.contains("package")
-                || label.contains("core")
-                || label.contains("tctl")
-                || label.contains("tdie")
-        })
-        .map(|c| c.temperature())
-        .filter(|&temp| temp > 0.0 && temp < 150.0) // Sanity check
-        .collect();
-    
-    if !temps.is_empty() {
-        // Return average of all CPU temperature readings
-        let sum: f32 = temps.iter().sum();
-        return Some(sum / temps.len() as f32);
+    // Try the fastest method - HighPrecisionTemperature from WMI via PowerShell
+    if let Ok(output) = Command::new("powershell")
+        .args([
+            "-Command",
+            "Get-WmiObject -Query \"SELECT HighPrecisionTemperature FROM Win32_PerfRawData_Counters_ThermalZoneInformation\" | Select-Object -First 1 -ExpandProperty HighPrecisionTemperature"
+        ])
+        .output()
+    {
+        if let Ok(output_str) = String::from_utf8(output.stdout) {
+            if let Ok(temp_tenths_kelvin) = output_str.trim().parse::<f32>() {
+                let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
+                if temp_celsius > 0.0 && temp_celsius < 150.0 {
+                    // Log success only once
+                    let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
+                    let mut logged = log_state.lock().unwrap();
+                    if !*logged {
+                        info!("✅ Temperature sensor detected via WMI: {:.1}°C", temp_celsius);
+                        *logged = true;
+                    }
+                    return Some(temp_celsius);
+                }
+            }
+        }
     }
     
-    // If no CPU temps found, try any temperature sensor as last resort
-    let all_temps: Vec<f32> = components
-        .iter()
-        .map(|c| c.temperature())
-        .filter(|&temp| temp > 0.0 && temp < 150.0)
-        .collect();
-    
-    if !all_temps.is_empty() {
-        let sum: f32 = all_temps.iter().sum();
-        return Some(sum / all_temps.len() as f32);
+    // Log only once when no sensor is found
+    let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
+    let mut logged = log_state.lock().unwrap();
+    if !*logged {
+        info!("⚠️ No WMI temperature sensors detected. Temperature monitoring disabled.");
+        *logged = true;
     }
     
     None

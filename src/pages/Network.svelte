@@ -111,7 +111,7 @@
         id: address,
         address,
         nickname: undefined,
-        status: 'online',
+        status: 'online' as const,
         reputation: 0,
         sharedFiles: 0,
         totalSize: 0,
@@ -515,9 +515,8 @@
     dhtPollInterval = setInterval(async () => {
       try {
         // Only call getEvents if running in Tauri mode
-        const events = (isTauri && typeof dhtService.getEvents === 'function')
-          ? await dhtService.getEvents() as any[]
-          : []
+        // Note: getEvents is not available in the current DhtService implementation
+        const events: any[] = []
         if (events.length > 0) {
           const formattedEvents = events.map(event => {
             if (event.peerDisconnected) {
@@ -750,7 +749,7 @@
           id: peerId,
           address: peerId,
           nickname: undefined,
-          status: 'away', // using 'away' to indicate in-progress
+          status: 'away' as const, // using 'away' to indicate in-progress
           reputation: 0,
           sharedFiles: 0,
           totalSize: 0,
@@ -1159,8 +1158,8 @@
       class="flex items-center gap-2 px-6 py-3 font-semibold text-base rounded-lg shadow-sm border border-primary/10 bg-background hover:bg-secondary/80"
       title={$t('network.quickActions.restartNode.tooltip')}
       on:click={async () => {
-        await stopNode();
-        await startNode();
+        await stopGethNode();
+        await startGethNode();
         showToast($t('network.quickActions.restartNode.success'), 'success');
       }}
       disabled={!isGethInstalled || isStartingNode}
