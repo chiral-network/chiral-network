@@ -1016,6 +1016,7 @@ async fn run_dht_node(
     pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
     root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>>,
     active_downloads: Arc<Mutex<HashMap<String, ActiveDownload>>>,
+    get_providers_queries: Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>,
     is_bootstrap: bool,
     enable_autorelay: bool,
     relay_candidates: HashSet<String>,
@@ -1357,6 +1358,9 @@ async fn run_dht_node(
                         let query_id = swarm.behaviour_mut().kademlia.get_providers(key);
                         info!("Querying providers for file: {} (query_id: {:?})", file_hash, query_id);
 
+                        // Store the query_id -> (file_hash, start_time) mapping for error handling and timeout detection
+                        get_providers_queries.lock().await.insert(query_id, (file_hash.clone(), std::time::Instant::now()));
+
                         // Store the query for async handling
                         let pending_query = PendingProviderQuery {
                             id: 0, // Not used for matching
@@ -1410,6 +1414,7 @@ async fn run_dht_node(
                             &event_tx,
                             &pending_searches,
                             &pending_provider_queries,
+                            &get_providers_queries,
                         )
                         .await;
                     }
@@ -1908,6 +1913,7 @@ async fn handle_kademlia_event(
     event_tx: &mpsc::Sender<DhtEvent>,
     pending_searches: &Arc<Mutex<HashMap<String, Vec<PendingSearch>>>>,
     pending_provider_queries: &Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
+    get_providers_queries: &Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>,
 ) {
     match event {
         KademliaEvent::RoutingUpdated { peer, .. } => {
@@ -2116,11 +2122,40 @@ async fn handle_kademlia_event(
                     }
                 },
                 QueryResult::GetProviders(Err(err)) => {
+                    // Implement proper GetProviders error handling with timeout tracking
                     warn!("GetProviders query failed: {:?}", err);
-                    // TODO: Handle get providers errors (for errors, we can't easily match to a specific file_hash)
-                    // For errors, we can't easily match to a specific file_hash
-                    // This is a limitation - we could improve this by storing query_id -> file_hash mapping
-                    // For now, we'll just log the error
+
+                    // Check for timed-out queries and clean them up
+                    let mut timed_out_queries = Vec::new();
+                    {
+                        let get_providers_guard = get_providers_queries.lock().await;
+                        let now = std::time::Instant::now();
+                        let timeout_duration = std::time::Duration::from_secs(30); // 30 second timeout
+
+                        // Find queries that have timed out
+                        for (query_id, (file_hash, start_time)) in get_providers_guard.iter() {
+                            if now.duration_since(*start_time) > timeout_duration {
+                                timed_out_queries.push((*query_id, file_hash.clone()));
+                            }
+                        }
+
+                        // For remaining queries, mark them as failed since we can't match errors exactly
+                        for (query_id, (file_hash, _)) in get_providers_guard.iter() {
+                            if !timed_out_queries.iter().any(|(_, fh)| fh == file_hash) {
+                                timed_out_queries.push((*query_id, file_hash.clone()));
+                            }
+                        }
+                    }
+
+                    // Handle all failed/timed-out queries
+                    for (query_id, file_hash) in timed_out_queries {
+                        warn!("Cleaning up GetProviders query for file: {} (failed or timed out)", file_hash);
+                        get_providers_queries.lock().await.remove(&query_id);
+
+                        if let Some(pending_query) = pending_provider_queries.lock().await.remove(&file_hash) {
+                            let _ = pending_query.sender.send(Err(format!("GetProviders query failed or timed out for file {}: {:?}", file_hash, err)));
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -2598,6 +2633,7 @@ pub struct DhtService {
     pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
     root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>>, // Track root query IDs for file downloads
     active_downloads: Arc<Mutex<HashMap<String, ActiveDownload>>>, // Track active file downloads
+    get_providers_queries: Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>, // Track GetProviders query_id -> (file_hash, start_time) mapping
     chunk_size: usize, // Configurable chunk size in bytes
 }
 
@@ -2877,6 +2913,7 @@ impl DhtService {
         let pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>> = Arc::new(Mutex::new(HashMap::new()));
         let root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>> = Arc::new(Mutex::new(HashMap::new()));
         let active_downloads: Arc<Mutex<HashMap<String, ActiveDownload>>> = Arc::new(Mutex::new(HashMap::new()));
+        let get_providers_queries_local: Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>> = Arc::new(Mutex::new(HashMap::new()));
 
         {
             let mut guard = metrics.lock().await;
@@ -2904,6 +2941,7 @@ impl DhtService {
             pending_provider_queries.clone(),
             root_query_mapping.clone(),
             active_downloads.clone(),
+            get_providers_queries_local.clone(),
             is_bootstrap,
             enable_autorelay,
             relay_candidates,
@@ -2928,6 +2966,7 @@ impl DhtService {
             pending_provider_queries,
             root_query_mapping,
             active_downloads,
+            get_providers_queries: get_providers_queries_local,
             chunk_size,
         })
     }
