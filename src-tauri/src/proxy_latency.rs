@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::Instant;
 
 /// Proxy latency information for optimization
 #[derive(Debug, Clone, Serialize, Deserialize)]

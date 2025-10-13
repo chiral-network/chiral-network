@@ -152,8 +152,6 @@ pub struct FileTransferService {
     event_rx: Arc<Mutex<mpsc::Receiver<FileTransferEvent>>>,
     storage_dir: PathBuf,
     download_metrics: Arc<Mutex<DownloadMetrics>>,
-    encryption_enabled: bool,
-    keystore: Arc<Mutex<crate::keystore::Keystore>>,
 }
 
 impl FileTransferService {
@@ -355,8 +353,6 @@ impl FileTransferService {
             event_rx: Arc::new(Mutex::new(event_rx)),
             storage_dir,
             download_metrics,
-            encryption_enabled,
-            keystore,
         })
     }
 
@@ -700,7 +696,8 @@ impl FileTransferService {
         Ok(())
     }
 
-    async fn get_decryption_key_for_file(metadata: &EncryptedFileMetadata) -> Option<[u8; 32]> {
+    async fn get_decryption_key_for_file(_metadata: &EncryptedFileMetadata) -> Option<[u8; 32]> {
+        // TODO: Implement key retrieval logic
         // This is a placeholder implementation
         // In a real system, this would:
         // 1. Check if the user is the original uploader (key stored in keystore)

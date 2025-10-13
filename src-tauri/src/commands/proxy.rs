@@ -6,7 +6,6 @@ use tauri::State;
 use libp2p::PeerId;
 use std::net::Ipv4Addr;
 use std::str::FromStr;
-use std::sync::Arc;
 use tracing::{info, warn};
 
 #[derive(Clone, serde::Serialize)]

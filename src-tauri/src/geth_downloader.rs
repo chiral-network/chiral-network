@@ -189,7 +189,7 @@ impl GethDownloader {
 
                     let mut file = fs::File::create(&geth_path)
                         .map_err(|e| format!("Failed to create geth file: {}", e))?;
-                    let bytes_copied = std::io::copy(&mut entry, &mut file)
+                    let _bytes_copied = std::io::copy(&mut entry, &mut file)
                         .map_err(|e| format!("Failed to write geth file: {}", e))?;
 
                     found_geth = true;

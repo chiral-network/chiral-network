@@ -2,7 +2,7 @@ use aes_gcm::aead::{Aead, AeadCore, OsRng};
 use aes_gcm::{Aes256Gcm, Key, KeyInit, Nonce};
 use rand::RngCore;
 use rs_merkle::{Hasher, MerkleTree};
-use sha2::{Digest, Sha256};
+use sha2::Digest;
 use std::fs::{self, File};
 use std::io::{Error, Read, Write};
 use std::path::{Path, PathBuf};

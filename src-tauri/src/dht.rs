@@ -66,7 +66,6 @@ use rand::rngs::OsRng;
 const EXPECTED_PROTOCOL_VERSION: &str = "/chiral/1.0.0";
 const MAX_MULTIHASH_LENGHT: usize = 64;
 pub const RAW_CODEC: u64 = 0x55;
-const CHUNK_SIZE: usize = 256 * 1024; // 256 KiB (262144 bytes)
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1102,7 +1101,7 @@ async fn run_dht_node(
                         };
 
                         // Request the root block which contains the CIDs
-                        let root_query_id = swarm.behaviour_mut().bitswap.get(&root_cid);
+                        let _root_query_id = swarm.behaviour_mut().bitswap.get(&root_cid);
                         info!("Requesting root block for file: {}", file_metadata.file_hash);
 
                         // Store the root query ID to handle when we get the root block
@@ -1351,7 +1350,7 @@ async fn run_dht_node(
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) => match bitswap {
                         beetswap::Event::GetQueryResponse { query_id, data } => {
                             // Handle successful Bitswap response
-                            if let Some(metadata) = &current_metadata {
+                            if let Some(_metadata) = &current_metadata {
                                 // Check if this is the root block (contains CIDs array)
                                 if let Ok(cids) = serde_json::from_slice::<Vec<Cid>>(&data) {
                                     info!("Received root block with {} CIDs", cids.len());
@@ -1412,7 +1411,7 @@ async fn run_dht_node(
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Ping(ev)) => {
                         match ev {
                             libp2p::ping::Event { peer, result: Ok(rtt), .. } => {
-                                let is_connected = connected_peers.lock().await.contains(&peer);
+                                let _is_connected = connected_peers.lock().await.contains(&peer);
                                 let rtt_ms = rtt.as_millis() as u64;
 
                                 // Update peer selection metrics with latency
@@ -1646,7 +1645,7 @@ async fn run_dht_node(
                             RREvent::Message { peer, message } => match message {
                                 // WebRTC offer request
                                 Message::Request { request, channel, .. } => {
-                                    let WebRTCOfferRequest { offer_sdp, file_hash, requester_peer_id } = request;
+                                    let WebRTCOfferRequest { offer_sdp, file_hash, requester_peer_id: _requester_peer_id } = request;
                                     info!("Received WebRTC offer from {} for file {}", peer, file_hash);
 
                                     // Get WebRTC service to handle the offer
@@ -1756,7 +1755,7 @@ async fn handle_kademlia_event(
                                 metadata_json.get("file_size").and_then(|v| v.as_u64()),
                                 metadata_json.get("created_at").and_then(|v| v.as_u64()),
                             ) {
-                                let metadata = FileMetadata {
+                                let _metadata = FileMetadata {
                                     file_hash: file_hash.to_string(),
                                     file_name: file_name.to_string(),
                                     file_size,
@@ -1801,9 +1800,9 @@ async fn handle_kademlia_event(
                                         .unwrap_or(true),
                                 };
 
-                                let notify_metadata = metadata.clone();
+                                let notify_metadata = _metadata.clone();
                                 let file_hash = notify_metadata.file_hash.clone();
-                                let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
+                                let _ = event_tx.send(DhtEvent::FileDiscovered(_metadata)).await;
 
                                 // only for synchronous_search_metadata
                                 notify_pending_searches(
@@ -2793,7 +2792,7 @@ impl DhtService {
         self.search_file(file_hash).await
     }
 
-    pub async fn search_metadata(&self, file_hash: String, timeout_ms: u64) -> Result<(), String> {
+    pub async fn search_metadata(&self, file_hash: String, _timeout_ms: u64) -> Result<(), String> {
         self.cmd_tx
             .send(DhtCommand::SearchFile(file_hash.clone()))
             .await
