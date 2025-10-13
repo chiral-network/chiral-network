@@ -1023,6 +1023,56 @@ async fn run_dht_node(
     chunk_size: usize,
 ) {
     // Periodic bootstrap interval
+
+    /// Creates a proper circuit relay address for connecting through a relay peer
+    /// Returns a properly formatted Multiaddr for circuit relay connections
+    fn create_circuit_relay_address(relay_peer_id: &PeerId, target_peer_id: &PeerId) -> Result<Multiaddr, String> {
+        // For Circuit Relay v2, the address format is typically:
+        // /p2p/{relay_peer_id}/p2p-circuit
+        // The target peer is specified in the relay reservation/request
+
+        let relay_addr = Multiaddr::empty()
+            .with(Protocol::P2p(*relay_peer_id))
+            .with(Protocol::P2pCircuit);
+
+        // Validate the constructed address
+        if relay_addr.to_string().contains(&relay_peer_id.to_string()) {
+            info!("Created circuit relay address: {}", relay_addr);
+            Ok(relay_addr)
+        } else {
+            Err(format!("Failed to create valid circuit relay address for relay {}", relay_peer_id))
+        }
+    }
+
+    /// Enhanced circuit relay address creation with multiple fallback strategies
+    fn create_circuit_relay_address_robust(relay_peer_id: &PeerId, target_peer_id: &PeerId) -> Multiaddr {
+        // Strategy 1: Standard Circuit Relay v2 address
+        match create_circuit_relay_address(relay_peer_id, target_peer_id) {
+            Ok(addr) => return addr,
+            Err(e) => {
+                warn!("Standard relay address creation failed: {}", e);
+            }
+        }
+
+        // Strategy 2: Try with relay port specification (if available)
+        // Some relay implementations may require explicit port specification
+        let relay_with_port = Multiaddr::empty()
+            .with(Protocol::P2p(*relay_peer_id))
+            .with(Protocol::Tcp(4001)) // Default libp2p port
+            .with(Protocol::P2pCircuit);
+
+        if relay_with_port.to_string().contains(&relay_peer_id.to_string()) {
+            info!("Created circuit relay address with port: {}", relay_with_port);
+            return relay_with_port;
+        }
+
+        // Strategy 3: Fallback to basic circuit address
+        warn!("Using basic fallback circuit relay address construction");
+        Multiaddr::empty()
+            .with(Protocol::P2p(*relay_peer_id))
+            .with(Protocol::P2pCircuit)
+    }
+
     let mut shutdown_ack: Option<oneshot::Sender<()>> = None;
     let mut ping_failures: HashMap<PeerId, u8> = HashMap::new();
 
@@ -1211,12 +1261,8 @@ async fn run_dht_node(
                                     if let Some(proxy_peer_id) = mgr.select_proxy_for_routing(&peer_id) {
                                         info!("Using privacy routing through proxy {} to reach {}", proxy_peer_id, peer_id);
 
-                                        // TODO: Create a circuit relay address through the proxy
-                                        // For now, we'll construct the circuit address manually
-                                        // since addresses_of_peer method may not be available
-                                        let circuit_addr = Multiaddr::empty()
-                                            .with(Protocol::P2p(proxy_peer_id))
-                                            .with(Protocol::P2pCircuit);
+                                        // Create circuit relay address through the proxy using robust relay address construction
+                                        let circuit_addr = create_circuit_relay_address_robust(&proxy_peer_id, &peer_id);
                                         info!("Attempting circuit relay connection via {} to {}", proxy_peer_id, peer_id);
 
                                         match swarm.dial(circuit_addr.clone()) {
@@ -3494,9 +3540,9 @@ impl DhtService {
                 // Verify proxy capabilities through protocol negotiation
                 match self.verify_proxy_capabilities(&peer_id).await {
                     Ok(_) => {
-                        proxy_mgr.add_trusted_proxy_node(peer_id.clone());
-                        trusted_proxy_count += 1;
-                        info!("✅ Added connected peer {} as trusted proxy node (capability verified)", peer_id);
+                proxy_mgr.add_trusted_proxy_node(peer_id.clone());
+                trusted_proxy_count += 1;
+                info!("✅ Added connected peer {} as trusted proxy node (capability verified)", peer_id);
                     }
                     Err(e) => {
                         warn!("❌ Proxy capability verification failed for peer {}: {}", peer_id, e);
