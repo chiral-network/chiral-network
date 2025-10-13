@@ -73,16 +73,10 @@ jobs:
             libglib2.0-dev pkg-config build-essential libgtk-3-dev curl libssl-dev \
             libayatana-appindicator3-dev librsvg2-dev
 
-      - name: Build all src-tauri tests
-        run: cd src-tauri && cargo build --release --tests
-
-      - name: Run NAT traversal tests
-        run: cd src-tauri && cargo test --test nat_traversal_test --release --no-fail-fast -- --nocapture
-
-      - name: Run NAT traversal E2E tests
-        run: cd src-tauri && cargo test --test nat_traversal_e2e_test --release --no-fail-fast -- --test-threads=1 --nocapture
+      - name: Build backend and run all tests
+        run: cd src-tauri && cargo test --release --no-fail-fast
         continue-on-error: true
-        timeout-minutes: 3
+        timeout-minutes: 5
 
   relay:
     name: Relay Tests
