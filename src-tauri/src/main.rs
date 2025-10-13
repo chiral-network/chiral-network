@@ -661,8 +661,7 @@ async fn start_dht_node(
 
     let peer_id = dht_service.get_peer_id().await;
 
-    // Start the DHT node running in background
-    dht_service.run().await;
+    // DHT node is already running in a spawned background task
     let dht_arc = Arc::new(dht_service);
 
     // Spawn the event pump
@@ -3150,7 +3149,6 @@ fn main() {
     }
 
     println!("Starting Chiral Network...");
-    tracing::info!("🚀 Registering pool mining commands...");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())

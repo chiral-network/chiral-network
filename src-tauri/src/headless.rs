@@ -164,11 +164,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
     .await?;
     let peer_id = dht_service.get_peer_id().await;
 
-    // Start the DHT running in background
-    dht_service.run().await;
-
-    info!("✅ DHT node started");
-    info!("📍 Local Peer ID: {}", peer_id);
+    // DHT is already running in a spawned background task
 
     if let Some(ft) = &file_transfer_service {
         let snapshot = ft.download_metrics_snapshot().await;

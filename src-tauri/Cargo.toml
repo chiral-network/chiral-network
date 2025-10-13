@@ -88,6 +88,10 @@ dead_code = "allow"
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
 
+[profile.dev]
+incremental = true
+opt-level = 0
+
 [profile.release]
 lto = true
 opt-level = "z"

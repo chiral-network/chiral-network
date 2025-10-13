@@ -1520,7 +1520,6 @@ async fn run_dht_node(
                         info!("   Remaining connected peers: {}", peers_count);
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
-                        info!("📡 Now listening on: {}", address);
                         if address.iter().any(|component| matches!(component, Protocol::P2pCircuit)) {
                             swarm.add_external_address(address.clone());
                             debug!("Advertised relay external address: {}", address);
@@ -2268,7 +2267,6 @@ pub fn build_transport_with_relay(
                 .boxed()
         }
         (None, relay_transport) => {
-            info!("Direct P2P connection mode.");
             let direct_tcp = tcp::tokio::Transport::new(tcp::Config::default())
                 .map(|s, _| Box::new(s.0.compat()) as Box<dyn AsyncIo>);
 
@@ -2353,11 +2351,6 @@ impl DhtService {
         let chunk_size = chunk_size_kb.unwrap_or(256) * 1024; // Default 256 KB
         let cache_size = cache_size_mb.unwrap_or(1024); // Default 1024 MB
 
-        info!(
-            "DHT Configuration: chunk_size={} KB, cache_size={} MB",
-            chunk_size / 1024,
-            cache_size
-        );
         // Generate a new keypair for this node
         // Generate a keypair either from the secret or randomly
         let local_key = match secret {
@@ -2373,8 +2366,6 @@ impl DhtService {
         };
         let local_peer_id = PeerId::from(local_key.public());
         let peer_id_str = local_peer_id.to_string();
-
-        info!("Local peer id: {}", local_peer_id);
 
         // Create a Kademlia behaviour with tuned configuration
         let store = MemoryStore::new(local_peer_id);
@@ -2536,18 +2527,14 @@ impl DhtService {
         // Listen on the specified port
         let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", port).parse()?;
         swarm.listen_on(listen_addr)?;
-        info!("DHT listening on port: {}", port);
 
         // Connect to bootstrap nodes
-        info!("Bootstrap nodes to connect: {:?}", bootstrap_nodes);
         let mut successful_connections = 0;
         let total_bootstrap_nodes = bootstrap_nodes.len();
         for bootstrap_addr in &bootstrap_nodes {
-            info!("Attempting to connect to bootstrap: {}", bootstrap_addr);
             if let Ok(addr) = bootstrap_addr.parse::<Multiaddr>() {
                 match swarm.dial(addr.clone()) {
                     Ok(_) => {
-                        info!("✓ Initiated connection to bootstrap: {}", bootstrap_addr);
                         successful_connections += 1;
                         // Add bootstrap nodes to Kademlia routing table if it has a peer ID
                         if let Some(peer_id) = addr.iter().find_map(|p| {
@@ -2663,11 +2650,6 @@ impl DhtService {
             pending_webrtc_offers,
             chunk_size,
         })
-    }
-
-    pub async fn run(&self) {
-        // The node is already running in a spawned task
-        info!("DHT node is running");
     }
 
     pub fn chunk_size(&self) -> usize {
@@ -3342,7 +3324,6 @@ mod tests {
                 panic!("start service: {message}");
             }
         };
-        service.run().await;
 
         service.shutdown().await.expect("shutdown");
 
