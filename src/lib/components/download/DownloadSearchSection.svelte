@@ -262,19 +262,6 @@
     pushMessage(`Starting download of ${version.file_name} v${version.version}`, 'info', 3000);
   }
 
-  function statusLabel(status: string) {
-    switch (status) {
-      case 'found':
-        return tr('download.search.status.found');
-      case 'not_found':
-        return tr('download.search.history.notFound');
-      case 'error':
-        return tr('download.search.status.error');
-      default:
-        return tr('download.search.history.pending');
-    }
-  }
-
   function statusIcon(status: string) {
     switch (status) {
       case 'found':
@@ -370,49 +357,52 @@
             <History class="h-4 w-4 text-muted-foreground hover:text-foreground" />
           </button>
 
-          {#if showHistoryDropdown && historyEntries.length > 0}
+          {#if showHistoryDropdown}
             <div class="absolute top-full left-0 right-0 mt-1 bg-background border border-border rounded-md shadow-lg z-50 max-h-80 overflow-auto">
-              <div class="p-2 border-b border-border">
-                <div class="flex items-center justify-between">
-                  <span class="text-sm font-medium text-muted-foreground">Search History</span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    class="h-6 px-2 text-xs"
-                    on:click={clearHistory}
-                  >
-                    <RotateCcw class="h-3 w-3 mr-1" />
-                    Clear
-                  </Button>
+              {#if historyEntries.length > 0}
+                <div class="p-2 border-b border-border">
+                  <div class="flex items-center justify-between">
+                    <span class="text-sm font-medium text-muted-foreground">Search History</span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      class="h-6 px-2 text-xs"
+                      on:click={clearHistory}
+                    >
+                      <RotateCcw class="h-3 w-3 mr-1" />
+                      Clear
+                    </Button>
+                  </div>
                 </div>
-              </div>
-              <div class="py-1">
-                {#each historyEntries as entry}
-                  <button
-                    type="button"
-                    class="w-full px-3 py-2 text-left hover:bg-muted/60 transition-colors flex items-center justify-between"
-                    on:click={() => selectHistoryEntry(entry)}
-                  >
-                    <div class="flex items-center gap-2 flex-1 min-w-0">
-                      <span class="text-sm font-medium truncate">{entry.hash}</span>
-                      <Badge variant="outline" class="text-xs">
-                        {statusLabel(entry.status)}
-                      </Badge>
-                    </div>
-                    <div class="flex items-center gap-2 text-xs text-muted-foreground">
-                      <svelte:component this={statusIcon(entry.status)} class={`h-3 w-3 ${statusClass(entry.status)}`} />
-                      {#if entry.elapsedMs}
-                        <span>{(entry.elapsedMs / 1000).toFixed(1)}s</span>
-                      {/if}
-                    </div>
-                  </button>
-                  {#if entry.metadata?.fileName}
-                    <div class="px-3 pb-2 text-xs text-muted-foreground truncate">
-                      {entry.metadata.fileName}
-                    </div>
-                  {/if}
-                {/each}
-              </div>
+                <div class="py-1">
+                  {#each historyEntries as entry}
+                    <button
+                      type="button"
+                      class="w-full px-3 py-2 text-left hover:bg-muted/60 transition-colors flex items-center justify-between"
+                      on:click={() => selectHistoryEntry(entry)}
+                    >
+                      <div class="flex items-center gap-2 flex-1 min-w-0">
+                        <span class="text-sm font-medium truncate">{entry.hash}</span>
+                      </div>
+                      <div class="flex items-center gap-2 text-xs text-muted-foreground">
+                        <svelte:component this={statusIcon(entry.status)} class={`h-3 w-3 ${statusClass(entry.status)}`} />
+                        {#if entry.elapsedMs}
+                          <span>{(entry.elapsedMs / 1000).toFixed(1)}s</span>
+                        {/if}
+                      </div>
+                    </button>
+                    {#if entry.metadata?.fileName}
+                      <div class="px-3 pb-2 text-xs text-muted-foreground truncate">
+                        {entry.metadata.fileName}
+                      </div>
+                    {/if}
+                  {/each}
+                </div>
+              {:else}
+                <div class="p-4 text-center">
+                  <p class="text-sm text-muted-foreground">No search history yet</p>
+                </div>
+              {/if}
             </div>
           {/if}
         </div>

@@ -959,7 +959,7 @@
       "failed": "Fallidas"
     },
     "settings": {
-      "maxConcurrent": "Máx. concurrentes",
+      "maxConcurrent": "Máx. Descargas Concurrentes",
       "autoStart": "Inicio automático",
       "toggleAutoStart": "Alternar inicio automático de la cola {status}"
     },

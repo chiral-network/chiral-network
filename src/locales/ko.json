@@ -962,7 +962,7 @@
       "failed": "실패함"
     },
     "settings": {
-      "maxConcurrent": "최대 동시",
+      "maxConcurrent": "최대 동시 다운로드",
       "autoStart": "자동 시작",
       "toggleAutoStart": "자동 시작 큐 {status} 전환"
     },
