@@ -1420,7 +1420,16 @@ async fn run_dht_node(
                         .await;
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Identify(identify_event)) => {
-                        handle_identify_event(identify_event, &mut swarm, &event_tx, metrics.clone(), enable_autorelay, &relay_candidates).await;
+                        handle_identify_event(
+                            identify_event,
+                            &mut swarm,
+                            &event_tx,
+                            metrics.clone(),
+                            enable_autorelay,
+                            &relay_candidates,
+                            &proxy_mgr,
+                        )
+                        .await;
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Mdns(mdns_event)) => {
                         if !is_bootstrap{
@@ -2141,6 +2150,7 @@ async fn handle_identify_event(
     metrics: Arc<Mutex<DhtMetrics>>,
     enable_autorelay: bool,
     relay_candidates: &HashSet<String>,
+    proxy_mgr: &ProxyMgr,
 ) {
     match event {
         IdentifyEvent::Received { peer_id, info, .. } => {
@@ -2536,7 +2546,7 @@ pub fn build_transport_with_relay(
                 .upgrade(Version::V1)
                 .authenticate(noise_keys)
                 .multiplex(yamux_config)
-                .timeout(Duration::from_secs(30))
+                .timeout(Duration::from_secs(10))
                 .boxed()
         }
         (None, relay_transport) => {
@@ -2551,7 +2561,7 @@ pub fn build_transport_with_relay(
                 .upgrade(Version::V1)
                 .authenticate(noise_keys)
                 .multiplex(yamux_config)
-                .timeout(Duration::from_secs(30))
+                .timeout(Duration::from_secs(10))
                 .boxed()
         }
     };
