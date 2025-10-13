@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import Card from '$lib/components/ui/card.svelte'
   import Button from '$lib/components/ui/button.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
@@ -1047,7 +1047,7 @@
                 class="h-2 {temperature > 80 ? '[&>div]:bg-red-500' : temperature > 70 ? '[&>div]:bg-orange-500' : temperature > 60 ? '[&>div]:bg-yellow-500' : '[&>div]:bg-green-500'}"
               />
               <p class="text-xs text-muted-foreground mt-1">
-                {temperature > 85 ? 'Critical' : temperature > 75 ? 'Hot' : temperature > 65 ? 'Warm' : 'Normal'}
+                {temperature > 85 ? $t('mining.temperatureStatus.critical') : temperature > 75 ? $t('mining.temperatureStatus.hot') : temperature > 65 ? $t('mining.temperatureStatus.warm') : $t('mining.temperatureStatus.normal')}
               </p>
             {:else}
               <Progress value={0} max={100} class="h-2 opacity-30" />
@@ -1293,9 +1293,9 @@
         <div class="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 mt-2">
           <div class="flex items-center gap-2">
             <AlertCircle class="h-4 w-4 text-blue-500 flex-shrink-0" />
-            <p class="text-sm text-blue-600">
-              Please create a Chiral Network account from the <a href="/account" class="underline font-medium">Account page</a> to start mining
-            </p>
+                        <p class="text-sm text-blue-600">
+                          {@html $t('mining.errors.noAccountToStart', { values: { link: '<a href="/account" class="underline font-medium">' + $t('mining.accountPage') + '</a>' } })}
+                        </p>
           </div>
         </div>
       {/if}
