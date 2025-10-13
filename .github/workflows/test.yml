@@ -74,7 +74,9 @@ jobs:
             libayatana-appindicator3-dev librsvg2-dev
 
       - name: Build backend
-        run: cd src-tauri && cargo build --release --tests
+        run: |
+          cd src-tauri && cargo test --release --no-run
+          cd ../relay && cargo test --release --no-run
 
       - name: Run NAT traversal tests
         run: cd src-tauri && cargo test --test nat_traversal_test --release --no-fail-fast
