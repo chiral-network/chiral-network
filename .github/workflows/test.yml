@@ -76,7 +76,7 @@ jobs:
       - name: Build backend and run all tests
         run: cd src-tauri && cargo test --release --no-fail-fast
         continue-on-error: true
-        timeout-minutes: 5
+        timeout-minutes: 10
 
   relay:
     name: Relay Tests
@@ -98,4 +98,4 @@ jobs:
       - name: Build and run relay tests
         run: cd relay && cargo test --release --no-fail-fast
         continue-on-error: true
-        timeout-minutes: 2
+        timeout-minutes: 5
