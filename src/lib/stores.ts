@@ -171,44 +171,7 @@ const dummyWallet: WalletInfo = {
 };
 
 // Additional dummy data
-const dummyPeers: PeerInfo[] = [
-  {
-    id: "peer1",
-    address: "192.168.1.50:8080",
-    nickname: "AliceNode",
-    status: "online",
-    reputation: 4.8,
-    sharedFiles: 150,
-    totalSize: 5368709120,
-    joinDate: new Date("2024-01-01"),
-    lastSeen: new Date(),
-    location: "US-East",
-  },
-  {
-    id: "peer2",
-    address: "10.0.0.25:8080",
-    nickname: "BobStorage",
-    status: "offline",
-    reputation: 4.5,
-    sharedFiles: 89,
-    totalSize: 2147483648,
-    joinDate: new Date("2024-02-15"),
-    lastSeen: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000), // 3 days ago
-    location: "EU-West",
-  },
-  {
-    id: "peer3",
-    address: "172.16.0.100:8080",
-    nickname: "CharlieShare",
-    status: "away",
-    reputation: 4.2,
-    sharedFiles: 45,
-    totalSize: 1073741824,
-    joinDate: new Date("2024-03-01"),
-    lastSeen: new Date(Date.now() - 3600000),
-    location: "Asia-Pacific",
-  },
-];
+const dummyPeers: PeerInfo[] = [];
 
 const blacklistedPeers: BlacklistEntry[] = [
   {

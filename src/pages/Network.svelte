@@ -141,16 +141,20 @@
   let copiedBootstrap = false
   let copiedListenAddr: string | null = null
 
-  function formatSize(bytes: number): string {
+  function formatSize(bytes: number | undefined): string {
+    if (bytes === undefined || bytes === null || isNaN(bytes)) {
+      return '0 B'
+    }
+
     const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
     let size = bytes
     let unitIndex = 0
-    
+
     while (size >= 1024 && unitIndex < units.length - 1) {
       size /= 1024
       unitIndex++
     }
-    
+
     return `${size.toFixed(2)} ${units[unitIndex]}`
   }
 
@@ -503,12 +507,17 @@
     }
   }
   
+  let peerRefreshCounter = 0;
+
   function startDhtPolling() {
     if (dhtPollInterval) return // Already polling
-    
+
     dhtPollInterval = setInterval(async () => {
       try {
-        const events = await dhtService.getEvents() as any[]
+        // Only call getEvents if running in Tauri mode
+        const events = (isTauri && typeof dhtService.getEvents === 'function')
+          ? await dhtService.getEvents() as any[]
+          : []
         if (events.length > 0) {
           const formattedEvents = events.map(event => {
             if (event.peerDisconnected) {
@@ -524,7 +533,7 @@
           })
           dhtEvents = [...dhtEvents, ...formattedEvents].slice(-10)
         }
-        
+
         let peerCount = dhtPeerCount
         const health = await dhtService.getHealth()
         if (health) {
@@ -547,6 +556,20 @@
         } else if (dhtStatus === 'disconnected' && peerCount > 0) {
           dhtStatus = 'connected'
           dhtEvents = [...dhtEvents, `✓ Reconnected to ${peerCount} peer(s)`]
+        }
+
+        // Auto-refresh connected peers list every 5 seconds (every ~2.5 poll cycles)
+        peerRefreshCounter++;
+        if (peerRefreshCounter >= 3 && isTauri && peerCount > 0) {
+          peerRefreshCounter = 0;
+          // Silently refresh peer list in background
+          try {
+            const { peerService } = await import('$lib/services/peerService');
+            const connectedPeers = await peerService.getConnectedPeers();
+            peers.set(connectedPeers);
+          } catch (error) {
+            console.debug('Background peer refresh failed:', error);
+          }
         }
       } catch (error) {
         console.error('Failed to poll DHT status:', error)
@@ -597,9 +620,11 @@
         }
         await signaling.connect();
         signalingConnected = true;
+        const myClientId = signaling.getClientId();
         signaling.peers.subscribe(peers => {
-          discoveredPeers = peers;
-          console.log('Updated discovered peers:', peers);
+          // Filter out own client ID from discovered peers
+          discoveredPeers = peers.filter(p => p !== myClientId);
+          console.log('Updated discovered peers (excluding self):', discoveredPeers);
         });
 
         // Register signaling message handler for WebRTC
@@ -630,23 +655,49 @@
   
   async function connectToPeer() {
     if (!newPeerAddress.trim()) {
-      showToast('Please enter a peer ID', 'error');
+      showToast('Please enter a peer address', 'error');
       return;
     }
-    
+
+    const peerAddress = newPeerAddress.trim();
+
+    // In Tauri mode, use DHT backend for P2P connections
+    if (isTauri) {
+      if (dhtStatus !== 'connected') {
+        showToast('DHT not connected. Please start DHT first.', 'error');
+        return;
+      }
+
+      try {
+        showToast('Connecting to peer via DHT...', 'info');
+        await invoke('connect_to_peer', { peerAddress });
+        showToast('Successfully connected to peer!', 'success');
+
+        // Clear input on successful connection
+        newPeerAddress = '';
+
+        // Peer list will auto-update via polling within ~5 seconds
+      } catch (error) {
+        console.error('Failed to connect to peer:', error);
+        showToast('Failed to connect to peer: ' + error, 'error');
+      }
+      return;
+    }
+
+    // In web mode, use WebRTC for testing
     if (!signalingConnected) {
       showToast('Signaling server not connected. Please start DHT first.', 'error');
       return;
     }
-    
-    const peerId = newPeerAddress.trim();
-    
+
+    const peerId = peerAddress;
+
     // Check if peer exists in discovered peers
     if (!discoveredPeers.includes(peerId)) {
       showToast(`Peer ${peerId} not found in discovered peers`, 'warning');
       // Still attempt connection in case peer was discovered recently
     }
-    
+
     try {
       webrtcSession = createWebRTCSession({
         peerId,
@@ -656,15 +707,19 @@
           showToast('Received from peer: ' + data, 'info');
         },
         onConnectionStateChange: (state) => {
-          showToast('WebRTC state: ' + state, 'info');
+          console.log('[WebRTC] Connection state:', state);
 
-          // When the data channel/peer connection becomes connected, add to connected peers
+          // Only show toasts for important states (not every intermediate state)
           if (state === 'connected') {
             showToast('Successfully connected to peer!', 'success');
             // Add minimal PeerInfo to peers store if not present
             addConnectedPeer(peerId);
-          } else if (state === 'failed' || state === 'disconnected' || state === 'closed') {
-            showToast('Connection to peer failed or disconnected', 'error');
+          } else if (state === 'failed') {
+            showToast('Connection to peer failed', 'error');
+            // Mark peer as offline / remove from peers list
+            markPeerDisconnected(peerId);
+          } else if (state === 'disconnected' || state === 'closed') {
+            console.log('[WebRTC] Peer disconnected');
             // Mark peer as offline / remove from peers list
             markPeerDisconnected(peerId);
           }
@@ -706,12 +761,13 @@
         return [pending, ...list]
       })
 
-  await webrtcSession.createOffer();
-  showToast('Connecting to peer: ' + peerId, 'success');
-      
+      // Create offer asynchronously (don't await to avoid freezing UI)
+      webrtcSession.createOffer();
+      showToast('Connecting to peer: ' + peerId, 'success');
+
       // Clear input on successful connection attempt
       newPeerAddress = '';
-      
+
     } catch (error) {
       console.error('Failed to create WebRTC session:', error);
       showToast('Failed to create connection: ' + error, 'error');
@@ -733,6 +789,20 @@
     }
   }
   
+  async function refreshConnectedPeers() {
+    if (!isTauri) {
+      return;
+    }
+
+    try {
+      const { peerService } = await import('$lib/services/peerService');
+      const connectedPeers = await peerService.getConnectedPeers();
+      peers.set(connectedPeers);
+    } catch (error) {
+      console.debug('Failed to refresh peers:', error);
+    }
+  }
+
   async function disconnectFromPeer(peerId: string) {
     if (!isTauri) {
       // Mock disconnection in web mode
@@ -740,7 +810,7 @@
       showToast($t('network.connectedPeers.disconnected'), 'success')
       return
     }
-    
+
     try {
       await invoke('disconnect_from_peer', { peerId })
       // Remove peer from local store
@@ -929,8 +999,10 @@
         signaling = new SignalingService();
         await signaling.connect();
         signalingConnected = true;
+        const myClientId = signaling.getClientId();
         signaling.peers.subscribe(peers => {
-          discoveredPeers = peers;
+          // Filter out own client ID from discovered peers
+          discoveredPeers = peers.filter(p => p !== myClientId);
         });
 
         // Register signaling message handler for WebRTC
@@ -986,10 +1058,8 @@
         natStatusUnlisten()
         natStatusUnlisten = null
       }
-      // Disconnect signaling service
-      if (signaling) {
-        signaling.disconnect()
-      }
+      // Note: We do NOT disconnect the signaling service here
+      // It should persist across page navigations to maintain peer connections
     }
   })
 
@@ -1356,21 +1426,22 @@
             <div class="pt-2 space-y-2">
               <p class="text-sm text-muted-foreground">{$t('network.dht.listenAddresses')}</p>
               {#each dhtHealth.listenAddrs as addr}
+                {@const fullAddr = dhtPeerId ? `${addr}/p2p/${dhtPeerId}` : addr}
                 <div class="bg-muted/40 rounded-lg px-3 py-2">
                   <div class="flex items-start justify-between gap-2">
-                    <p class="text-xs font-mono break-all flex-1">{addr}</p>
+                    <p class="text-xs font-mono break-all flex-1">{fullAddr}</p>
                     <Button
                       variant="outline"
                       size="sm"
                       class="h-7 px-2 flex-shrink-0"
                       on:click={async () => {
-                        await copy(addr)
-                        copiedListenAddr = addr
+                        await copy(fullAddr)
+                        copiedListenAddr = fullAddr
                         setTimeout(() => (copiedListenAddr = null), 1200)
                       }}
                     >
                       <Clipboard class="h-3.5 w-3.5 mr-1" />
-                      {copiedListenAddr === addr ? $t('network.copied') : $t('network.copy')}
+                      {copiedListenAddr === fullAddr ? $t('network.copied') : $t('network.copy')}
                     </Button>
                   </div>
                 </div>
@@ -1866,7 +1937,7 @@
             </div>
             <div class="flex flex-wrap items-center gap-2 justify-end">
               <Badge variant="outline" class="flex-shrink-0">
-              ⭐ {peer.reputation.toFixed(1)}
+              ⭐ {(peer.reputation ?? 0).toFixed(1)}
               </Badge>
                 <Badge variant={peer.status === 'online' ? 'default' : 'secondary'}
                        class={
@@ -1920,10 +1991,23 @@
           </div>
         </div>
       {/each}
-      
+
       {#if $peers.length === 0}
         <p class="text-center text-muted-foreground py-8">{$t('network.connectedPeers.noPeers')}</p>
       {/if}
+    </div>
+
+    <!-- Refresh button at bottom right -->
+    <div class="flex justify-end mt-4">
+      <Button
+        size="sm"
+        variant="outline"
+        on:click={refreshConnectedPeers}
+        disabled={!isTauri || dhtStatus !== 'connected'}
+      >
+        <RefreshCw class="h-4 w-4 mr-2" />
+        Refresh Peers
+      </Button>
     </div>
   </Card>
 </div>
