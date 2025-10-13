@@ -986,7 +986,7 @@
       "failed": "失败"
     },
     "settings": {
-      "maxConcurrent": "最大并发数",
+      "maxConcurrent": "最大并发下载数",
       "autoStart": "自动开始",
       "toggleAutoStart": "切换队列自动开始 {status}"
     },

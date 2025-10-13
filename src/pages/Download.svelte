@@ -132,6 +132,7 @@
 
   // Add notification related variables
   let currentNotification: HTMLElement | null = null
+  let showSettings = false // Toggle for settings panel
 
   // Show notification function
   function showNotification(message: string, type: 'success' | 'error' | 'info' | 'warning' = 'success', duration = 4000) {
@@ -509,11 +510,7 @@
     }
   }
 
-  // New search function that only searches without downloading
-
-
   // New function to download from search results
-
   function processQueue() {
     // Only prevent starting new downloads if we've reached the max concurrent limit
     const activeDownloads = $files.filter(f => f.status === 'downloading').length
@@ -957,18 +954,8 @@
 
       <!-- Filter Buttons and Controls -->
       <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-        <!-- Filter Buttons -->
-        <div class="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            on:click={clearAllFinished}
-            class="text-xs text-destructive border-destructive hover:bg-destructive/10 hover:text-destructive"
-            disabled={completedCount === 0 && failedCount === 0 && allFilteredDownloads.filter(f => f.status === 'canceled').length === 0}
-          >
-            <X class="h-3 w-3 mr-1" />
-            {$t('download.clearFinished')}
-          </Button>
+        <!-- Filter Buttons and Clear Finished -->
+        <div class="flex flex-wrap items-center gap-2">
           <Button
             size="sm"
             variant={filterStatus === 'all' ? 'default' : 'outline'}
@@ -1025,90 +1012,151 @@
           >
             {$t('download.filters.failed')} ({failedCount})
           </Button>
-        </div>
 
-        <!-- Settings Controls -->
-        <div class="flex flex-wrap items-center gap-4 text-sm">
-          <div class="flex items-center gap-2">
-            <Settings class="h-4 w-4 text-muted-foreground" />
-            <Label class="font-medium">{$t('download.settings.maxConcurrent')}:</Label>
-            <input
-              type="number"
-              bind:value={maxConcurrentDownloads}
-              on:input={handleMaxConcurrentInput}
-              on:blur={validateMaxConcurrent}
-              min="1"
-              step="1"
-              class="w-14 h-7 text-center text-xs border border-input bg-background px-2 py-1 ring-offset-background file:border-0 file:bg-transparent file:font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 rounded-md"
-            />
-          </div>
-
-          {#if multiSourceEnabled}
-          <div class="flex items-center gap-2">
-            <Label class="font-medium">{$t('download.maxPeers')}:</Label>
-            <input
-              type="number"
-              bind:value={maxPeersPerDownload}
-              min="2"
-              max="10"
-              step="1"
-              class="w-14 h-7 text-center text-xs border border-input bg-background px-2 py-1 ring-offset-background file:border-0 file:bg-transparent file:font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 rounded-md"
-            />
-          </div>
+          {#if completedCount > 0 || failedCount > 0 || allFilteredDownloads.filter(f => f.status === 'canceled').length > 0}
+            <Button
+              size="sm"
+              variant="outline"
+              on:click={clearAllFinished}
+              class="text-xs text-destructive border-destructive hover:bg-destructive/10 hover:text-destructive"
+            >
+              <X class="h-3 w-3 mr-1" />
+              {$t('download.clearFinished')}
+            </Button>
           {/if}
-
-          <div class="flex items-center gap-2">
-            <Label class="font-medium">{$t('download.settings.autoStart')}:</Label>
-            <button
-              type="button"
-              aria-label={$t('download.settings.toggleAutoStart', { values: { status: autoStartQueue ? 'off' : 'on' } })}
-              on:click={() => autoStartQueue = !autoStartQueue}
-              class="relative inline-flex h-4 w-8 items-center rounded-full transition-colors focus:outline-none"
-              class:bg-green-500={autoStartQueue}
-              class:bg-muted-foreground={!autoStartQueue}
-            >
-              <span
-                class="inline-block h-3 w-3 rounded-full bg-white transition-transform shadow-sm"
-                style="transform: translateX({autoStartQueue ? '18px' : '2px'})"
-              ></span>
-            </button>
-          </div>
-
-          <div class="flex items-center gap-2">
-            <Label class="font-medium">{$t('download.autoClear')}:</Label>
-            <button
-              type="button"
-              aria-label="Toggle auto-clear completed downloads"
-              on:click={() => autoClearCompleted = !autoClearCompleted}
-              class="relative inline-flex h-4 w-8 items-center rounded-full transition-colors focus:outline-none"
-              class:bg-green-500={autoClearCompleted}
-              class:bg-muted-foreground={!autoClearCompleted}
-            >
-              <span
-                class="inline-block h-3 w-3 rounded-full bg-white transition-transform shadow-sm"
-                style="transform: translateX({autoClearCompleted ? '18px' : '2px'})"
-              ></span>
-            </button>
-          </div>
-
-          <div class="flex items-center gap-2">
-            <Label class="font-medium">{$t('download.multiSource')}:</Label>
-            <button
-              type="button"
-              aria-label="Toggle multi-source downloads"
-              on:click={() => multiSourceEnabled = !multiSourceEnabled}
-              class="relative inline-flex h-4 w-8 items-center rounded-full transition-colors focus:outline-none"
-              class:bg-green-500={multiSourceEnabled}
-              class:bg-muted-foreground={!multiSourceEnabled}
-            >
-              <span
-                class="inline-block h-3 w-3 rounded-full bg-white transition-transform shadow-sm"
-                style="transform: translateX({multiSourceEnabled ? '18px' : '2px'})"
-              ></span>
-            </button>
-          </div>
         </div>
+
+        <!-- Settings Toggle Button -->
+        <Button
+          size="sm"
+          variant="outline"
+          on:click={() => showSettings = !showSettings}
+          class="text-xs"
+        >
+          <Settings class="h-3 w-3 mr-1" />
+          {$t('download.settings.title')}
+          {#if showSettings}
+            <ChevronUp class="h-3 w-3 ml-1" />
+          {:else}
+            <ChevronDown class="h-3 w-3 ml-1" />
+          {/if}
+        </Button>
       </div>
+
+      <!-- Collapsible Settings Panel -->
+      {#if showSettings}
+        <Card class="p-4 bg-muted/50 border-dashed">
+          <div class="space-y-4">
+            <h3 class="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+              {$t('download.settings.title')}
+            </h3>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <!-- Concurrency Settings -->
+              <div class="space-y-3">
+                <h4 class="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  {$t('download.settings.concurrency')}
+                </h4>
+                <div class="space-y-2">
+                  <div class="flex items-center justify-between">
+                    <Label class="text-sm">{$t('download.settings.maxConcurrent')}:</Label>
+                    <input
+                      type="number"
+                      bind:value={maxConcurrentDownloads}
+                      on:input={handleMaxConcurrentInput}
+                      on:blur={validateMaxConcurrent}
+                      min="1"
+                      step="1"
+                      class="w-16 h-8 text-center text-sm border border-input bg-background px-2 py-1 rounded-md focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                    />
+                  </div>
+
+                  {#if multiSourceEnabled}
+                    <div class="flex items-center justify-between">
+                      <Label class="text-sm">{$t('download.maxPeers')}:</Label>
+                      <input
+                        type="number"
+                        bind:value={maxPeersPerDownload}
+                        min="2"
+                        max="10"
+                        step="1"
+                        class="w-16 h-8 text-center text-sm border border-input bg-background px-2 py-1 rounded-md focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                      />
+                    </div>
+                  {/if}
+                </div>
+              </div>
+
+              <!-- Automation Settings -->
+              <div class="space-y-3">
+                <h4 class="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  {$t('download.settings.automation')}
+                </h4>
+                <div class="space-y-3">
+                  <div class="flex items-center justify-between">
+                    <Label class="text-sm">{$t('download.settings.autoStart')}:</Label>
+                    <button
+                      type="button"
+                      aria-label={$t('download.settings.toggleAutoStart', { values: { status: autoStartQueue ? 'off' : 'on' } })}
+                      on:click={() => autoStartQueue = !autoStartQueue}
+                      class="relative inline-flex h-4 w-8 items-center rounded-full transition-colors focus:outline-none"
+                      class:bg-green-500={autoStartQueue}
+                      class:bg-muted-foreground={!autoStartQueue}
+                    >
+                      <span
+                        class="inline-block h-3 w-3 rounded-full bg-white transition-transform shadow-sm"
+                        style="transform: translateX({autoStartQueue ? '18px' : '2px'})"
+                      ></span>
+                    </button>
+                  </div>
+
+                  <div class="flex items-center justify-between">
+                    <Label class="text-sm">{$t('download.autoClear')}:</Label>
+                    <button
+                      type="button"
+                      aria-label="Toggle auto-clear completed downloads"
+                      on:click={() => autoClearCompleted = !autoClearCompleted}
+                      class="relative inline-flex h-4 w-8 items-center rounded-full transition-colors focus:outline-none"
+                      class:bg-green-500={autoClearCompleted}
+                      class:bg-muted-foreground={!autoClearCompleted}
+                    >
+                      <span
+                        class="inline-block h-3 w-3 rounded-full bg-white transition-transform shadow-sm"
+                        style="transform: translateX({autoClearCompleted ? '18px' : '2px'})"
+                      ></span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Feature Settings -->
+              <div class="space-y-3">
+                <h4 class="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  {$t('download.settings.features')}
+                </h4>
+                <div class="space-y-3">
+                  <div class="flex items-center justify-between">
+                    <Label class="text-sm">{$t('download.multiSource')}:</Label>
+                    <button
+                      type="button"
+                      aria-label="Toggle multi-source downloads"
+                      on:click={() => multiSourceEnabled = !multiSourceEnabled}
+                      class="relative inline-flex h-4 w-8 items-center rounded-full transition-colors focus:outline-none"
+                      class:bg-green-500={multiSourceEnabled}
+                      class:bg-muted-foreground={!multiSourceEnabled}
+                    >
+                      <span
+                        class="inline-block h-3 w-3 rounded-full bg-white transition-transform shadow-sm"
+                        style="transform: translateX({multiSourceEnabled ? '18px' : '2px'})"
+                      ></span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </Card>
+      {/if}
     </div>
 
     {#if filteredDownloads.length === 0}
@@ -1130,7 +1178,7 @@
     {:else}
       <div class="space-y-3">
         {#each filteredDownloads as file, index}
-          <div class="p-3 bg-secondary rounded-lg hover:bg-secondary/80 transition-colors">
+          <div class="p-3 bg-muted/60 rounded-lg hover:bg-muted/80 transition-colors">
             <!-- File Header -->
             <div class="pb-2">
               <div class="flex items-start justify-between gap-4">
@@ -1222,9 +1270,9 @@
               <div class="pb-2 ml-7">
                 <div class="flex items-center justify-between text-sm mb-1">
                   <div class="flex items-center gap-4 text-muted-foreground">
-                    <span>Speed: {file.speed || '0 B/s'}</span>
-                    <span>ETA: {file.eta || 'N/A'}</span>
-                    {#if multiSourceProgress.has(file.hash)}
+                    <span>Speed: {file.status === 'paused' ? '0 B/s' : (file.speed || '0 B/s')}</span>
+                    <span>ETA: {file.status === 'paused' ? 'N/A' : (file.eta || 'N/A')}</span>
+                    {#if multiSourceProgress.has(file.hash) && file.status === 'downloading'}
                       {@const msProgress = multiSourceProgress.get(file.hash)}
                       {#if msProgress}
                         <span class="text-purple-600">Peers: {msProgress.activePeers}</span>
@@ -1237,7 +1285,7 @@
                 <Progress
                   value={file.progress || 0}
                   max={100}
-                  class="h-2 bg-background [&>div]:bg-green-500 w-full"
+                  class="h-2 bg-border [&>div]:bg-green-500 w-full"
                 />
                 {#if multiSourceProgress.has(file.hash)}
                   {@const msProgress = multiSourceProgress.get(file.hash)}

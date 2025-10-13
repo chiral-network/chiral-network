@@ -309,7 +309,11 @@
       "failed": "Failed"
     },
     "settings": {
-      "maxConcurrent": "Max Concurrent",
+      "title": "Settings",
+      "concurrency": "Concurrency",
+      "automation": "Automation",
+      "features": "Features",
+      "maxConcurrent": "Max Concurrent Downloads",
       "autoStart": "Auto-start",
       "toggleAutoStart": "Toggle auto-start {status}"
     },
