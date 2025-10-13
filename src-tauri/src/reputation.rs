@@ -311,8 +311,8 @@ impl ReputationDhtService {
         let search_key = format!("reputation:{}", peer_id);
         dht_service.search_file(search_key).await?;
 
-        // Note: In a real implementation, we would need to handle the search results
-        // and deserialize the events. For now, return empty vector as placeholder.
+        // TODO: Need to handle the search results and deserialize the events. 
+        // For now, return empty vector as placeholder.
         Ok(vec![])
     }
 
@@ -373,6 +373,7 @@ impl ReputationContract {
         epoch: &ReputationEpoch,
         _private_key: &str,
     ) -> Result<String, String> {
+        // TODO: Implement actual Ethereum transaction submission
         // In a real implementation, this would:
         // 1. Connect to Ethereum network
         // 2. Create transaction to submitEpoch function
@@ -385,6 +386,7 @@ impl ReputationContract {
     }
 
     pub async fn get_epoch(&self, _epoch_id: u64) -> Result<Option<ReputationEpoch>, String> {
+        // TODO: Implement actual Ethereum contract call
         // In a real implementation, this would:
         // 1. Connect to Ethereum network
         // 2. Call getEpoch function on contract
@@ -401,6 +403,7 @@ impl ReputationContract {
         _proof: Vec<String>,
         _epoch_id: u64,
     ) -> Result<bool, String> {
+        // TODO: Implement actual Ethereum contract call
         // In a real implementation, this would:
         // 1. Connect to Ethereum network
         // 2. Call verifyEvent function on contract
@@ -730,6 +733,7 @@ impl ReputationVerifier {
         _merkle_root: &str,
         _proof: Vec<String>,
     ) -> Result<bool, String> {
+        // TODO: Implement actual Merkle proof verification
         // In a real implementation, this would:
         // 1. Recreate the event hash
         // 2. Verify the Merkle proof against the root

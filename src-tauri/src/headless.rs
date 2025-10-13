@@ -233,6 +233,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             match dht_service.connect_peer(bootstrap_addr.clone()).await {
                 Ok(_) => {
                     info!("Connected to bootstrap: {}", bootstrap_addr);
+                    // TODO: In a full implementation, we might want to verify the connection
                     // In a real implementation, bootstrap nodes would:
                     // 1. Add us to their routing table
                     // 2. Announce our presence to other peers in the network

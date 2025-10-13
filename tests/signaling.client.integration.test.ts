@@ -81,6 +81,7 @@ describe("SignalingService", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 100));
 
+    // TODO: Implement a way to get peers from the client or store
     // For now, just test that we can connect
     expect(client.getClientId()).toBeDefined();
 

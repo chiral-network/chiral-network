@@ -35,7 +35,9 @@ impl ProxyLatencyService {
     pub fn update_proxy_latency(&mut self, proxy_id: String, latency_ms: Option<u64>, status: ProxyStatus) {
         let info = ProxyLatencyInfo {
             proxy_id: proxy_id.clone(),
-            address: proxy_id.clone(), // For now, use ID as address
+            // TODO: Fetch actual address from proxy management
+            // For now, use ID as address
+            address: proxy_id.clone(),
             latency_ms,
             last_updated: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

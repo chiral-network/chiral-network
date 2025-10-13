@@ -342,6 +342,7 @@ export class P2PFileTransferService {
     parallelRequests: number
   ): void {
     // This method will be called periodically to request more chunks
+    // TODO: Implement a more sophisticated mechanism to track requested chunks
     // For now, we'll use a simple interval-based approach
     const checkInterval = setInterval(() => {
       // Stop if transfer is not active anymore
@@ -471,7 +472,7 @@ export class P2PFileTransferService {
       return false;
     }
 
-    // In a complete implementation, you would verify checksums here
+    // TODO: Verify checksums here
     // For now, we'll assume chunks are valid if they have data and a valid index
     return true;
   }
@@ -613,6 +614,7 @@ export class P2PFileTransferService {
     // Handle WebRTC signaling messages received through DHT
     if (message.message?.type === "webrtc_signaling") {
       // This would contain WebRTC signaling data (offer/answer/candidate)
+      // TODO: Integrate with WebRTC session
       // For now, we'll log it, but in a real implementation,
       // this would be passed to the WebRTC session
     }
