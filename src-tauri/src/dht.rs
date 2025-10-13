@@ -1101,8 +1101,7 @@ async fn run_dht_node(
                         };
 
                         // Request the root block which contains the CIDs
-                        let _root_query_id = swarm.behaviour_mut().bitswap.get(&root_cid);
-                        info!("Requesting root block for file: {}", file_metadata.file_hash);
+                        let root_query_id = swarm.behaviour_mut().bitswap.get(&root_cid);
 
                         // Store the root query ID to handle when we get the root block
                         // We'll need to modify the Bitswap handling to distinguish root blocks from data blocks
@@ -1117,8 +1116,8 @@ async fn run_dht_node(
                     }
                     Some(DhtCommand::SearchFile(file_hash)) => {
                         let key = kad::RecordKey::new(&file_hash.as_bytes());
-                        let _query_id = swarm.behaviour_mut().kademlia.get_record(key);
-                        info!("Searching for file: {}", file_hash);
+                        let query_id = swarm.behaviour_mut().kademlia.get_record(key);
+                        info!("Searching for file: {} (query: {:?})", file_hash, query_id);
                     }
                     Some(DhtCommand::ConnectPeer(addr)) => {
                         info!("Attempting to connect to: {}", addr);
@@ -1411,8 +1410,9 @@ async fn run_dht_node(
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Ping(ev)) => {
                         match ev {
                             libp2p::ping::Event { peer, result: Ok(rtt), .. } => {
-                                let _is_connected = connected_peers.lock().await.contains(&peer);
+                                let is_connected = connected_peers.lock().await.contains(&peer);
                                 let rtt_ms = rtt.as_millis() as u64;
+                                debug!("Ping from peer {}: {} ms (connected: {})", peer, rtt_ms, is_connected);
 
                                 // Update peer selection metrics with latency
                                 {
@@ -1755,7 +1755,7 @@ async fn handle_kademlia_event(
                                 metadata_json.get("file_size").and_then(|v| v.as_u64()),
                                 metadata_json.get("created_at").and_then(|v| v.as_u64()),
                             ) {
-                                let _metadata = FileMetadata {
+                                let metadata = FileMetadata {
                                     file_hash: file_hash.to_string(),
                                     file_name: file_name.to_string(),
                                     file_size,
@@ -1800,9 +1800,10 @@ async fn handle_kademlia_event(
                                         .unwrap_or(true),
                                 };
 
-                                let notify_metadata = _metadata.clone();
+                                let notify_metadata = metadata.clone();
                                 let file_hash = notify_metadata.file_hash.clone();
-                                let _ = event_tx.send(DhtEvent::FileDiscovered(_metadata)).await;
+                                info!("File discovered: {} ({})", notify_metadata.file_name, file_hash);
+                                let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
 
                                 // only for synchronous_search_metadata
                                 notify_pending_searches(
@@ -2350,12 +2351,12 @@ impl DhtService {
     ) -> Result<Self, Box<dyn Error>> {
         // Convert chunk size from KB to bytes
         let chunk_size = chunk_size_kb.unwrap_or(256) * 1024; // Default 256 KB
-        let _cache_size = cache_size_mb.unwrap_or(1024); // Default 1024 MB
+        let cache_size = cache_size_mb.unwrap_or(1024); // Default 1024 MB
 
         info!(
             "DHT Configuration: chunk_size={} KB, cache_size={} MB",
             chunk_size / 1024,
-            _cache_size
+            cache_size
         );
         // Generate a new keypair for this node
         // Generate a keypair either from the secret or randomly

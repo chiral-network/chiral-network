@@ -193,7 +193,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
     }
 
     // Optionally start geth
-    let _geth_handle = if args.enable_geth {
+    let geth_handle = if args.enable_geth {
         info!("Starting geth node...");
         let mut geth = GethProcess::new();
         geth.start(&args.geth_data_dir, args.miner_address.as_deref())?;

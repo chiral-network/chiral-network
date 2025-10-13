@@ -358,7 +358,6 @@ impl WebRTCService {
         // Set up peer connection event handlers
         let event_tx_clone = event_tx.clone();
         let peer_id_clone = peer_id.to_string();
-        let data_channel_clone = data_channel.clone();
 
         let event_tx_for_ice = event_tx_clone.clone();
         let peer_id_for_ice = peer_id_clone.clone();
@@ -387,7 +386,6 @@ impl WebRTCService {
             move |state: RTCPeerConnectionState| {
                 let event_tx = event_tx_clone.clone();
                 let peer_id = peer_id_clone.clone();
-                let _data_channel = data_channel_clone.clone();
 
                 Box::pin(async move {
                     match state {
@@ -1082,7 +1080,6 @@ impl WebRTCService {
         // Set up peer connection event handlers
         let event_tx_clone = self.event_tx.clone();
         let peer_id_clone = peer_id.clone();
-        let data_channel_clone = data_channel.clone();
 
         let event_tx_for_ice = event_tx_clone.clone();
         let peer_id_for_ice = peer_id_clone.clone();
@@ -1111,7 +1108,6 @@ impl WebRTCService {
             move |state: RTCPeerConnectionState| {
                 let event_tx = event_tx_clone.clone();
                 let peer_id = peer_id_clone.clone();
-                let _data_channel = data_channel_clone.clone();
 
                 Box::pin(async move {
                     match state {
@@ -1249,7 +1245,6 @@ impl WebRTCService {
         // Set up peer connection event handlers
         let event_tx_clone = self.event_tx.clone();
         let peer_id_clone = peer_id.clone();
-        let data_channel_clone = data_channel.clone();
 
         let event_tx_for_ice = event_tx_clone.clone();
         let peer_id_for_ice = peer_id_clone.clone();
@@ -1278,7 +1273,6 @@ impl WebRTCService {
             move |state: RTCPeerConnectionState| {
                 let event_tx = event_tx_clone.clone();
                 let peer_id = peer_id_clone.clone();
-                let _data_channel = data_channel_clone.clone();
 
                 Box::pin(async move {
                     match state {

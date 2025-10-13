@@ -199,8 +199,8 @@ impl FileTransferService {
             }
 
             let result = {
-                let _guard = span.enter();
-                Self::handle_download_file(
+                let guard = span.enter();
+                let result = Self::handle_download_file(
                     file_hash,
                     output_path,
                     storage_dir,
@@ -208,7 +208,9 @@ impl FileTransferService {
                     active_account,
                     active_private_key,
                 )
-                .await
+                .await;
+                drop(guard); // Explicitly drop the guard
+                result
             };
 
             match result {
@@ -696,9 +698,10 @@ impl FileTransferService {
         Ok(())
     }
 
-    async fn get_decryption_key_for_file(_metadata: &EncryptedFileMetadata) -> Option<[u8; 32]> {
+    async fn get_decryption_key_for_file(metadata: &EncryptedFileMetadata) -> Option<[u8; 32]> {
         // TODO: Implement key retrieval logic
         // This is a placeholder implementation
+        let _ = metadata; // Acknowledge parameter until implemented
         // In a real system, this would:
         // 1. Check if the user is the original uploader (key stored in keystore)
         // 2. Check if there's an encrypted key bundle for this user

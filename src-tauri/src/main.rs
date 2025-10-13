@@ -1757,7 +1757,7 @@ async fn start_streaming_upload(
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     // Check for active account - require login for all uploads
-    let _account = get_active_account(&state).await?;
+    let account = get_active_account(&state).await?;
 
     let dht_opt = { state.dht.lock().await.as_ref().cloned() };
     if dht_opt.is_none() {
@@ -2872,7 +2872,7 @@ async fn queue_transaction(
     amount: f64,
 ) -> Result<String, String> {
     // Validate account is logged in
-    let _account = get_active_account(&state).await?;
+    let account = get_active_account(&state).await?;
 
     // Generate unique transaction ID
     let tx_id = format!(
@@ -3369,7 +3369,7 @@ fn main() {
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &hide_i, &quit_i])?;
 
-            let _tray = TrayIconBuilder::new()
+            let tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .tooltip("Chiral Network")

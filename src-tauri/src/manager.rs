@@ -289,7 +289,7 @@ impl ChunkManager {
         result
     }
 
-    pub fn _hash_file(&self, file_path: &Path) -> Result<String, Error> {
+    pub fn hash_file(&self, file_path: &Path) -> Result<String, Error> {
         let mut file = File::open(file_path)?;
         let mut hasher = sha2::Sha256::default();
         let mut buffer = vec![0; 1024 * 1024]; // 1MB buffer on the heap
@@ -447,7 +447,7 @@ mod tests {
         let index_to_prove = 2;
         let leaf_to_prove = leaves[index_to_prove];
         let proof = merkle_tree.proof(&[index_to_prove]);
-        let _proof_hashes = proof.proof_hashes();
+        let proof_hashes = proof.proof_hashes();
 
         // 4. Verify the proof
         let is_valid = proof.verify(

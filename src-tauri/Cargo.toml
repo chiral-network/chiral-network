@@ -80,6 +80,10 @@ ed25519-dalek = { version = "2.0", features = ["rand_core", "serde"] }
 [dev-dependencies]
 tempfile = "3.8"
 
+[lints.rust]
+unused_variables = "allow"
+dead_code = "allow"
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
