@@ -9,11 +9,7 @@
 
 #[cfg(test)]
 mod analytics_integration_tests {
-    use chiral_network::analytics::{
-        AnalyticsService, BandwidthStats, NetworkActivity, PerformanceMetrics, ResourceContribution,
-    };
-    use std::time::Duration;
-    use tokio::time::sleep;
+    use chiral_network::analytics::AnalyticsService;
 
     #[tokio::test]
     async fn test_bandwidth_tracking() {

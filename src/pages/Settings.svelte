@@ -49,8 +49,6 @@
     port: 30303,
     enableUPnP: true,
     enableNAT: true,
-    enableAutoRelay: true, // Enabled by default
-    preferredRelays: "", // Empty by default
     userLocation: "US-East", // Geographic region for peer sorting
 
     // Privacy settings
@@ -665,14 +663,14 @@ function sectionMatches(section: string, query: string) {
             <input
               type="checkbox"
               id="enable-autorelay"
-              bind:checked={localSettings.enableAutoRelay}
+              bind:checked={localSettings.enableAutorelay}
             />
             <Label for="enable-autorelay" class="cursor-pointer">
               {$t("settings.autorelay.enable")}
             </Label>
           </div>
 
-          {#if localSettings.enableAutoRelay}
+          {#if localSettings.enableAutorelay}
             <div class="space-y-2 ml-6">
               <Label for="preferred-relays">{$t("settings.autorelay.relays")}</Label>
               <textarea
@@ -681,7 +679,7 @@ function sectionMatches(section: string, query: string) {
                 placeholder="/ip4/147.75.80.110/tcp/4001/p2p/QmNnooDu..."
                 rows="3"
                 class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
-              />
+              ></textarea>
               <p class="text-xs text-muted-foreground">
                 {$t("settings.autorelay.description")}
               </p>

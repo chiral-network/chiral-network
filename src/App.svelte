@@ -86,7 +86,7 @@
     });
 
     let sidebarCollapsed = false
-    let mobileMenuOpen = false
+    let sidebarMenuOpen = false
 
     // Scroll to top when page changes
     $: if (currentPage) {
@@ -228,31 +228,31 @@
       </nav>
     </div>
   
-    <!-- Mobile Menu Button -->
+    <!-- Sidebar Menu Button -->
     <div class="absolute top-2 right-2 md:hidden">
       <button
         class="p-2 rounded bg-card shadow"
-        on:click={() => mobileMenuOpen = true}
+        on:click={() => sidebarMenuOpen = true}
       >
         <Menu class="h-6 w-6" />
       </button>
     </div>
   
-<!-- Mobile Menu Overlay -->
-{#if mobileMenuOpen}
+<!-- Sidebar Menu Overlay -->
+{#if sidebarMenuOpen}
   <!-- Backdrop -->
   <div
     class="fixed inset-0 bg-black bg-opacity-50 z-40 md:hidden"
     role="button"
     tabindex="0"
-    aria-label={$t('nav.closeMobileMenu')}
-    on:click={() => mobileMenuOpen = false}
-    on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { mobileMenuOpen = false } }}
+    aria-label={$t('nav.closeSidebarMenu')}
+    on:click={() => sidebarMenuOpen = false}
+    on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { sidebarMenuOpen = false } }}
   ></div>
 
   <!-- Sidebar -->
   <div class="fixed top-0 right-0 h-full w-64 bg-white z-50 flex flex-col md:hidden">
-    <!-- Mobile Header -->
+    <!-- Sidebar Header -->
     <div class="flex justify-between items-center p-4 border-b">
       <!-- Left side -->
       <span class="font-bold text-base">{$t('nav.menu')}</span>
@@ -263,20 +263,20 @@
           <div class="w-2 h-2 rounded-full {$networkStatus === 'connected' ? 'bg-green-500' : 'bg-red-500'}"></div>
           <span class="text-muted-foreground text-sm">{$networkStatus === 'connected' ? $t('nav.connected') : $t('nav.disconnected')}</span>
         </div>
-        <button on:click={() => mobileMenuOpen = false}>
+        <button on:click={() => sidebarMenuOpen = false}>
           <X class="h-6 w-6" />
         </button>
       </div>
     </div>
 
-    <!-- Mobile Nav Items -->
+    <!-- Sidebar Nav Items -->
     <nav class="flex-1 p-4 space-y-2">
       {#each menuItems as item}
         <button
           on:click={() => {
             currentPage = item.id
             goto(`/${item.id}`)
-            mobileMenuOpen = false
+            sidebarMenuOpen = false
           }}
           class="w-full flex items-center rounded px-4 py-3 text-lg hover:bg-gray-100"
           aria-current={currentPage === item.id ? 'page' : undefined}

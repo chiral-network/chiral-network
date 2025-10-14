@@ -311,8 +311,8 @@ impl ReputationDhtService {
         let search_key = format!("reputation:{}", peer_id);
         dht_service.search_file(search_key).await?;
 
-        // Note: In a real implementation, we would need to handle the search results
-        // and deserialize the events. For now, return empty vector as placeholder.
+        // TODO: Need to handle the search results and deserialize the events. 
+        // For now, return empty vector as placeholder.
         Ok(vec![])
     }
 
@@ -371,8 +371,9 @@ impl ReputationContract {
     pub async fn submit_epoch(
         &self,
         epoch: &ReputationEpoch,
-        private_key: &str,
+        _private_key: &str,
     ) -> Result<String, String> {
+        // TODO: Implement actual Ethereum transaction submission
         // In a real implementation, this would:
         // 1. Connect to Ethereum network
         // 2. Create transaction to submitEpoch function
@@ -384,7 +385,8 @@ impl ReputationContract {
         Ok(format!("0x{:x}", epoch.epoch_id))
     }
 
-    pub async fn get_epoch(&self, epoch_id: u64) -> Result<Option<ReputationEpoch>, String> {
+    pub async fn get_epoch(&self, _epoch_id: u64) -> Result<Option<ReputationEpoch>, String> {
+        // TODO: Implement actual Ethereum contract call
         // In a real implementation, this would:
         // 1. Connect to Ethereum network
         // 2. Call getEpoch function on contract
@@ -397,10 +399,11 @@ impl ReputationContract {
 
     pub async fn verify_event_proof(
         &self,
-        event_hash: &str,
-        proof: Vec<String>,
-        epoch_id: u64,
+        _event_hash: &str,
+        _proof: Vec<String>,
+        _epoch_id: u64,
     ) -> Result<bool, String> {
+        // TODO: Implement actual Ethereum contract call
         // In a real implementation, this would:
         // 1. Connect to Ethereum network
         // 2. Call verifyEvent function on contract
@@ -424,7 +427,7 @@ pub struct ReputationSystem {
     dht_service: ReputationDhtService,
     contract: ReputationContract,
     key_manager: NodeKeyManager,
-    key_cache: PublicKeyCache,
+    _key_cache: PublicKeyCache,
     current_epoch: u64,
 }
 
@@ -435,7 +438,7 @@ impl ReputationSystem {
             dht_service: ReputationDhtService::new(),
             contract: ReputationContract::new(network_id),
             key_manager: NodeKeyManager::new(),
-            key_cache: PublicKeyCache::new(),
+            _key_cache: PublicKeyCache::new(),
             current_epoch: 0,
         }
     }
@@ -591,7 +594,6 @@ pub struct ReputationSystemWithEpochs {
     dht_service: ReputationDhtService,
     contract: ReputationContract,
     key_manager: NodeKeyManager,
-    key_cache: PublicKeyCache,
     epoch_manager: EpochManager,
     pending_events: Vec<ReputationEvent>,
 }
@@ -603,7 +605,6 @@ impl ReputationSystemWithEpochs {
             dht_service: ReputationDhtService::new(),
             contract: ReputationContract::new(network_id),
             key_manager: NodeKeyManager::new(),
-            key_cache: PublicKeyCache::new(),
             epoch_manager: EpochManager::new(epoch_duration_seconds, max_events_per_epoch),
             pending_events: Vec::new(),
         }
@@ -728,10 +729,11 @@ impl ReputationVerifier {
 
     pub fn verify_event_against_merkle_root(
         &self,
-        event: &ReputationEvent,
-        merkle_root: &str,
-        proof: Vec<String>,
+        _event: &ReputationEvent,
+        _merkle_root: &str,
+        _proof: Vec<String>,
     ) -> Result<bool, String> {
+        // TODO: Implement actual Merkle proof verification
         // In a real implementation, this would:
         // 1. Recreate the event hash
         // 2. Verify the Merkle proof against the root

@@ -309,7 +309,11 @@
       "failed": "Failed"
     },
     "settings": {
-      "maxConcurrent": "Max Concurrent",
+      "title": "Settings",
+      "concurrency": "Concurrency",
+      "automation": "Automation",
+      "features": "Features",
+      "maxConcurrent": "Max Concurrent Downloads",
       "autoStart": "Auto-start",
       "toggleAutoStart": "Toggle auto-start {status}"
     },
@@ -423,7 +427,7 @@
     "disconnected": "Disconnected",
     "expandSidebar": "Expand sidebar",
     "collapseSidebar": "Collapse sidebar",
-    "closeMobileMenu": "Close mobile menu"
+    "closeSidebarMenu": "Close sidebar menu"
   },
   "privacy.title": "Privacy & Security",
   "privacy.enableProxy": "Enable proxy routing for anonymity",

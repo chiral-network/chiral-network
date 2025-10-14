@@ -5,7 +5,6 @@
   import ReputationCard from '$lib/components/ReputationCard.svelte';
   import ReputationAnalyticsComponent from '$lib/components/ReputationAnalytics.svelte';
   import Card from '$lib/components/ui/card.svelte';
-  import Badge from '$lib/components/ui/badge.svelte';
   import Button from '$lib/components/ui/button.svelte';
   import PeerSelectionService, { type PeerMetrics as BackendPeerMetrics } from '$lib/services/peerSelectionService';
   import { invoke } from '@tauri-apps/api/core';
@@ -203,8 +202,8 @@
     currentPage = 1;
   }
 
-  onMount(async () => {
-    await loadPeersFromBackend();
+  onMount(() => {
+    loadPeersFromBackend();
     // Best-effort latency probe and follow-up refresh
     probePeerLatencies();
     // Refresh after a short delay to pick up new latency

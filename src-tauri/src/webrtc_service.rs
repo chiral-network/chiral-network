@@ -2,8 +2,8 @@ use crate::encryption::{decrypt_aes_key, encrypt_aes_key, EncryptedAesKeyBundle,
 use crate::file_transfer::FileTransferService;
 use crate::keystore::Keystore;
 use crate::stream_auth::{AuthMessage, StreamAuthService};
-use aes_gcm::aead::{Aead, OsRng};
-use aes_gcm::{AeadCore, Aes256Gcm, KeyInit};
+use aes_gcm::aead::{Aead};
+use aes_gcm::{AeadCore, KeyInit};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -358,7 +358,6 @@ impl WebRTCService {
         // Set up peer connection event handlers
         let event_tx_clone = event_tx.clone();
         let peer_id_clone = peer_id.to_string();
-        let data_channel_clone = data_channel.clone();
 
         let event_tx_for_ice = event_tx_clone.clone();
         let peer_id_for_ice = peer_id_clone.clone();
@@ -387,7 +386,6 @@ impl WebRTCService {
             move |state: RTCPeerConnectionState| {
                 let event_tx = event_tx_clone.clone();
                 let peer_id = peer_id_clone.clone();
-                let _data_channel = data_channel_clone.clone();
 
                 Box::pin(async move {
                     match state {
@@ -560,7 +558,7 @@ impl WebRTCService {
 
         if has_file {
             // Start sending file chunks
-            Self::start_file_transfer(
+            if let Err(e) = Self::start_file_transfer(
                 peer_id,
                 request,
                 event_tx,
@@ -569,7 +567,16 @@ impl WebRTCService {
                 keystore,
                 stream_auth,
             )
-            .await;
+            .await
+            {
+                let _ = event_tx
+                    .send(WebRTCEvent::TransferFailed {
+                        peer_id: peer_id.to_string(),
+                        file_hash: request.file_hash.clone(),
+                        error: format!("Failed to start file transfer: {}", e),
+                    })
+                    .await;
+            }
         } else {
             let _ = event_tx
                 .send(WebRTCEvent::TransferFailed {
@@ -609,7 +616,7 @@ impl WebRTCService {
         file_hash: &str,
         chunk_index: u32,
         event_tx: &mpsc::Sender<WebRTCEvent>,
-        connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
+        _connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
     ) {
         let _ = event_tx
             .send(WebRTCEvent::FileChunkRequested {
@@ -889,7 +896,7 @@ impl WebRTCService {
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
         event_tx: &mpsc::Sender<WebRTCEvent>,
         peer_id: &str,
-        keystore: &Arc<Mutex<Keystore>>,
+        _keystore: &Arc<Mutex<Keystore>>,
         active_private_key: &Arc<Mutex<Option<String>>>,
         stream_auth: &Arc<Mutex<StreamAuthService>>,
     ) {
@@ -1073,7 +1080,6 @@ impl WebRTCService {
         // Set up peer connection event handlers
         let event_tx_clone = self.event_tx.clone();
         let peer_id_clone = peer_id.clone();
-        let data_channel_clone = data_channel.clone();
 
         let event_tx_for_ice = event_tx_clone.clone();
         let peer_id_for_ice = peer_id_clone.clone();
@@ -1102,7 +1108,6 @@ impl WebRTCService {
             move |state: RTCPeerConnectionState| {
                 let event_tx = event_tx_clone.clone();
                 let peer_id = peer_id_clone.clone();
-                let _data_channel = data_channel_clone.clone();
 
                 Box::pin(async move {
                     match state {
@@ -1240,7 +1245,6 @@ impl WebRTCService {
         // Set up peer connection event handlers
         let event_tx_clone = self.event_tx.clone();
         let peer_id_clone = peer_id.clone();
-        let data_channel_clone = data_channel.clone();
 
         let event_tx_for_ice = event_tx_clone.clone();
         let peer_id_for_ice = peer_id_clone.clone();
@@ -1269,7 +1273,6 @@ impl WebRTCService {
             move |state: RTCPeerConnectionState| {
                 let event_tx = event_tx_clone.clone();
                 let peer_id = peer_id_clone.clone();
-                let _data_channel = data_channel_clone.clone();
 
                 Box::pin(async move {
                     match state {
@@ -1422,7 +1425,7 @@ impl WebRTCService {
     async fn encrypt_chunk_for_peer(
         chunk_data: &[u8],
         recipient_public_key_hex: &str,
-        keystore: &Arc<Mutex<Keystore>>,
+        _keystore: &Arc<Mutex<Keystore>>,
     ) -> Result<(Vec<u8>, EncryptedAesKeyBundle), String> {
         use x25519_dalek::PublicKey;
 
@@ -1522,7 +1525,7 @@ impl FileTransferService {
         &self,
         file_hash: String,
         peer_id: String,
-        output_path: String,
+        _output_path: String,
     ) -> Result<(), String> {
         info!(
             "Initiating P2P download: {} from peer {}",

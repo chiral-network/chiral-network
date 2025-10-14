@@ -311,7 +311,7 @@
     "reputation": "평판",
     "account": "계정",
     "settings": "설정",
-    "closeMobileMenu": "모바일 메뉴 닫기",
+    "closeSidebarMenu": "사이드바 메뉴 닫기",
     "connected": "연결됨",
     "disconnected": "연결 끊김"
   },
@@ -962,7 +962,7 @@
       "failed": "실패함"
     },
     "settings": {
-      "maxConcurrent": "최대 동시",
+      "maxConcurrent": "최대 동시 다운로드",
       "autoStart": "자동 시작",
       "toggleAutoStart": "자동 시작 큐 {status} 전환"
     },

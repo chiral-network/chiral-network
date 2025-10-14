@@ -36,12 +36,13 @@
           // Find the corresponding file and update its progress
           files.update(f => f.map(file => {
             if (file.hash === progress.fileHash) {
+              const percentage = MultiSourceDownloadService.getCompletionPercentage(progress);
               return {
                 ...file,
-                progress: progress.percentage,
+                progress: percentage,
                 status: 'downloading' as const,
-                speed: MultiSourceDownloadService.formatSpeed(progress.downloadSpeed),
-                eta: MultiSourceDownloadService.formatETA(progress.eta)
+                speed: MultiSourceDownloadService.formatSpeed(progress.downloadSpeedBps),
+                eta: MultiSourceDownloadService.formatETA(progress.etaSeconds)
               };
             }
             return file;
@@ -98,10 +99,10 @@
 
         // Cleanup listeners on destroy
         return () => {
-          unlistenProgress.then(fn => fn())
-          unlistenCompleted.then(fn => fn())
-          unlistenStarted.then(fn => fn())
-          unlistenFailed.then(fn => fn())
+          unlistenProgress()
+          unlistenCompleted()
+          unlistenStarted()
+          unlistenFailed()
         }
       } catch (error) {
         console.error('Failed to setup event listeners:', error)
@@ -131,6 +132,7 @@
 
   // Add notification related variables
   let currentNotification: HTMLElement | null = null
+  let showSettings = false // Toggle for settings panel
 
   // Show notification function
   function showNotification(message: string, type: 'success' | 'error' | 'info' | 'warning' = 'success', duration = 4000) {
@@ -276,20 +278,21 @@
         return FileIcon;
     }
   }
-    async function saveRawData(fileName: string, data: Uint8Array) {
-    try {
-      const { save } = await import('@tauri-apps/plugin-dialog');
-      const filePath = await save({ defaultPath: fileName });
-      if (filePath) {
-        const { writeFile } = await import('@tauri-apps/plugin-fs');
-        await writeFile(filePath, new Uint8Array(data));
-        showNotification(`Successfully saved "${fileName}"`, 'success');
-      }
-    } catch (error) {
-      console.error('Failed to save file:', error);
-      showNotification(`Error saving "${fileName}"`, 'error');
-    }
-  }
+  // Commented out - not currently used but kept for future reference
+  // async function saveRawData(fileName: string, data: Uint8Array) {
+  //   try {
+  //     const { save } = await import('@tauri-apps/plugin-dialog');
+  //     const filePath = await save({ defaultPath: fileName });
+  //     if (filePath) {
+  //       const { writeFile } = await import('@tauri-apps/plugin-fs');
+  //       await writeFile(filePath, new Uint8Array(data));
+  //       showNotification(`Successfully saved "${fileName}"`, 'success');
+  //     }
+  //   } catch (error) {
+  //     console.error('Failed to save file:', error);
+  //     showNotification(`Error saving "${fileName}"`, 'error');
+  //   }
+  // }
 
   function handleSearchMessage(event: CustomEvent<{ message: string; type?: 'success' | 'error' | 'info' | 'warning'; duration?: number }>) {
     const { message, type = 'info', duration = 4000 } = event.detail
@@ -299,9 +302,10 @@
   async function handleSearchDownload(metadata: FileMetadata) {
     const allFiles = [...$downloadQueue]
     const existingFile = allFiles.find((file) => file.hash === metadata.fileHash)
-    const fileName = metadata.fileName;
-    const fileData = new Uint8Array(metadata.fileData ?? []);
-    //saveRawData(fileName, fileData); // testing
+    // Uncomment below if you need to save raw data for testing
+    // const fileName = metadata.fileName;
+    // const fileData = new Uint8Array(metadata.fileData ?? []);
+    // saveRawData(fileName, fileData);
 
     if (existingFile) {
       let statusMessage = ''
@@ -506,11 +510,7 @@
     }
   }
 
-  // New search function that only searches without downloading
-
-
   // New function to download from search results
-
   function processQueue() {
     // Only prevent starting new downloads if we've reached the max concurrent limit
     const activeDownloads = $files.filter(f => f.status === 'downloading').length
@@ -603,9 +603,11 @@
 
       // Proceed directly to file dialog
       try {
+        console.log("🔍 DEBUG: Starting download for file:", fileToDownload.name);
         const { save } = await import('@tauri-apps/plugin-dialog');
 
         // Show file save dialog
+        console.log("🔍 DEBUG: Opening file save dialog...");
         const outputPath = await save({
           defaultPath: fileToDownload.name,
           filters: [{
@@ -613,6 +615,7 @@
             extensions: ['*']
           }]
         });
+        console.log("✅ DEBUG: File save dialog result:", outputPath);
 
         if (!outputPath) {
           // User cancelled the save dialog
@@ -645,8 +648,9 @@
           try {
             
             let hash = fileToDownload.hash
+            console.log("🔍 DEBUG: Attempting to get file data for hash:", hash);
             const base64Data = await invoke('get_file_data', { fileHash: hash }) as string;
-            console.log("Retrieved base64 data length:", base64Data.length);
+            console.log("✅ DEBUG: Retrieved base64 data length:", base64Data.length);
             
             // Convert base64 to Uint8Array
             let data_ = new Uint8Array(0); // Default empty array
@@ -664,16 +668,26 @@
             console.log("Final data array length:", data_.length);
 
             // Write the file data to the output path
+            console.log("🔍 DEBUG: About to write file to:", outputPath);
             const { writeFile } = await import('@tauri-apps/plugin-fs');
             await writeFile(outputPath, data_);
+            console.log("✅ DEBUG: File written successfully to:", outputPath);
             files.update(f => f.map(file => file.id === fileId ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath } : file));
             showNotification(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
             activeSimulations.delete(fileId);
             console.log("Done with downloading file")
             return;
           } catch (e) {
-            console.warn('Local copy fallback failed, continuing with P2P download', e);
-            // fall through to p2p path
+            console.error('❌ DEBUG: Local copy fallback failed:', e);
+            console.error('❌ DEBUG: Error details:', e);
+            showNotification(`Download failed: ${e}`, 'error');
+            activeSimulations.delete(fileId);
+            files.update(f => f.map(file =>
+              file.id === fileId
+                ? { ...file, status: 'failed' }
+                : file
+            ));
+            return; // Don't continue to P2P download
           }
         }
 
@@ -714,18 +728,21 @@
         // Check if we should use multi-source download
         const seeders = fileToDownload.seederAddresses || [];
         
-        if (multiSourceEnabled && seeders.length >= 2 && fileToDownload.size > 1024 * 1024) {
+        if (multiSourceEnabled && seeders.length >= 2 && fileToDownload && fileToDownload.size > 1024 * 1024) {
           // Use multi-source download for files > 1MB with multiple seeders
           try {
             showNotification(`Starting multi-source download from ${seeders.length} peers...`, 'info');
             
-            const multiSourceService = new MultiSourceDownloadService();
-            await multiSourceService.startDownload(
+            if (!outputPath) {
+              throw new Error('Output path is required for download');
+            }
+            
+            await MultiSourceDownloadService.startDownload(
               fileToDownload.hash,
-              fileToDownload.name,
-              fileToDownload.size,
               outputPath,
-              seeders.slice(0, maxPeersPerDownload) // Limit to max peers
+              {
+                maxPeers: maxPeersPerDownload
+              }
             );
 
             // The progress updates will be handled by the event listeners in onMount
@@ -750,20 +767,24 @@
             }
 
             // Create file metadata for P2P transfer
-            const fileMetadata = {
+            const fileMetadata = fileToDownload ? {
               fileHash: fileToDownload.hash,
               fileName: fileToDownload.name,
               fileSize: fileToDownload.size,
               seeders: seeders,
               createdAt: Date.now(),
               isEncrypted: false
-            };
+            } : null;
+
+            if (!fileMetadata) {
+              throw new Error('File metadata is not available');
+            }
 
             // Initiate P2P download with file saving
             const transferId = await p2pFileTransferService.initiateDownloadWithSave(
               fileMetadata,
               seeders,
-              outputPath,
+              outputPath || undefined,
               (transfer) => {
                 // Update UI with transfer progress
                 files.update(f => f.map(file => {
@@ -783,11 +804,10 @@
                 }));
 
                 // Show notification on completion or failure
-                if (transfer.status === 'completed') {
+                if (transfer.status === 'completed' && fileToDownload) {
                   showNotification(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
-                } else if (transfer.status === 'failed') {
-                  //THIS IS WHERE DOWNLOAD IS FAILING
-                  showNotification(tr('download.notifications.downloadFailed', { values: { name: fileToDownload.name } })+"HI", 'error');
+                } else if (transfer.status === 'failed' && fileToDownload) {
+                  showNotification(tr('download.notifications.downloadFailed', { values: { name: fileToDownload.name } }), 'error');
                 }
               }
             );
@@ -823,10 +843,10 @@
           : file
       ));
 
-      let errorMsg = error && error.message ? error.message : String(error);
+      const errorMsg = error instanceof Error ? error.message : String(error);
       console.error('Download failed:', error, fileToDownload);
       showNotification(
-        tr('download.notifications.downloadFailed', { values: { name: fileToDownload.name } }) + (errorMsg ? `: ${errorMsg}` : ''),
+        tr('download.notifications.downloadFailed', { values: { name: fileToDownload?.name || 'Unknown file' } }) + (errorMsg ? `: ${errorMsg}` : ''),
         'error'
       );
     }
@@ -948,18 +968,8 @@
 
       <!-- Filter Buttons and Controls -->
       <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-        <!-- Filter Buttons -->
-        <div class="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            on:click={clearAllFinished}
-            class="text-xs text-destructive border-destructive hover:bg-destructive/10 hover:text-destructive"
-            disabled={completedCount === 0 && failedCount === 0 && allFilteredDownloads.filter(f => f.status === 'canceled').length === 0}
-          >
-            <X class="h-3 w-3 mr-1" />
-            {$t('download.clearFinished')}
-          </Button>
+        <!-- Filter Buttons and Clear Finished -->
+        <div class="flex flex-wrap items-center gap-2">
           <Button
             size="sm"
             variant={filterStatus === 'all' ? 'default' : 'outline'}
@@ -1016,89 +1026,151 @@
           >
             {$t('download.filters.failed')} ({failedCount})
           </Button>
-        </div>
 
-        <!-- Settings Controls -->
-        <div class="flex flex-wrap items-center gap-4 text-sm">
-          <div class="flex items-center gap-2">
-            <Settings class="h-4 w-4 text-muted-foreground" />
-            <Label class="font-medium">{$t('download.settings.maxConcurrent')}:</Label>
-            <input
-              type="number"
-              bind:value={maxConcurrentDownloads}
-              on:input={handleMaxConcurrentInput}
-              on:blur={validateMaxConcurrent}
-              min="1"
-              step="1"
-              class="w-14 h-7 text-center text-xs border border-input bg-background px-2 py-1 ring-offset-background file:border-0 file:bg-transparent file:font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 rounded-md"
-            />
-          </div>
-
-          <div class="flex items-center gap-2">
-            <Label class="font-medium">{$t('download.settings.autoStart')}:</Label>
-            <button
-              type="button"
-              aria-label={$t('download.settings.toggleAutoStart', { values: { status: autoStartQueue ? 'off' : 'on' } })}
-              on:click={() => autoStartQueue = !autoStartQueue}
-              class="relative inline-flex h-4 w-8 items-center rounded-full transition-colors focus:outline-none"
-              class:bg-green-500={autoStartQueue}
-              class:bg-muted-foreground={!autoStartQueue}
+          {#if completedCount > 0 || failedCount > 0 || allFilteredDownloads.filter(f => f.status === 'canceled').length > 0}
+            <Button
+              size="sm"
+              variant="outline"
+              on:click={clearAllFinished}
+              class="text-xs text-destructive border-destructive hover:bg-destructive/10 hover:text-destructive"
             >
-              <span
-                class="inline-block h-3 w-3 rounded-full bg-white transition-transform shadow-sm"
-                style="transform: translateX({autoStartQueue ? '18px' : '2px'})"
-              ></span>
-            </button>
-          </div>
-          <div class="flex items-center gap-2">
-            <Label class="font-medium">{$t('download.autoClear')}:</Label>
-            <button
-              type="button"
-              aria-label="Toggle auto-clear completed downloads"
-              on:click={() => autoClearCompleted = !autoClearCompleted}
-              class="relative inline-flex h-4 w-8 items-center rounded-full transition-colors focus:outline-none"
-              class:bg-green-500={autoClearCompleted}
-              class:bg-muted-foreground={!autoClearCompleted}
-            >
-              <span
-                class="inline-block h-3 w-3 rounded-full bg-white transition-transform shadow-sm"
-                style="transform: translateX({autoClearCompleted ? '18px' : '2px'})"
-              ></span>
-            </button>
-          </div>
-
-          <div class="flex items-center gap-2">
-            <Label class="font-medium">{$t('download.multiSource')}:</Label>
-            <button
-              type="button"
-              aria-label="Toggle multi-source downloads"
-              on:click={() => multiSourceEnabled = !multiSourceEnabled}
-              class="relative inline-flex h-4 w-8 items-center rounded-full transition-colors focus:outline-none"
-              class:bg-green-500={multiSourceEnabled}
-              class:bg-muted-foreground={!multiSourceEnabled}
-            >
-              <span
-                class="inline-block h-3 w-3 rounded-full bg-white transition-transform shadow-sm"
-                style="transform: translateX({multiSourceEnabled ? '18px' : '2px'})"
-              ></span>
-            </button>
-          </div>
-
-          {#if multiSourceEnabled}
-          <div class="flex items-center gap-2">
-            <Label class="font-medium">{$t('download.maxPeers')}:</Label>
-            <input
-              type="number"
-              bind:value={maxPeersPerDownload}
-              min="2"
-              max="10"
-              step="1"
-              class="w-14 h-7 text-center text-xs border border-input bg-background px-2 py-1 ring-offset-background file:border-0 file:bg-transparent file:font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 rounded-md"
-            />
-          </div>
+              <X class="h-3 w-3 mr-1" />
+              {$t('download.clearFinished')}
+            </Button>
           {/if}
         </div>
+
+        <!-- Settings Toggle Button -->
+        <Button
+          size="sm"
+          variant="outline"
+          on:click={() => showSettings = !showSettings}
+          class="text-xs"
+        >
+          <Settings class="h-3 w-3 mr-1" />
+          {$t('download.settings.title')}
+          {#if showSettings}
+            <ChevronUp class="h-3 w-3 ml-1" />
+          {:else}
+            <ChevronDown class="h-3 w-3 ml-1" />
+          {/if}
+        </Button>
       </div>
+
+      <!-- Collapsible Settings Panel -->
+      {#if showSettings}
+        <Card class="p-4 bg-muted/50 border-dashed">
+          <div class="space-y-4">
+            <h3 class="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+              {$t('download.settings.title')}
+            </h3>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <!-- Concurrency Settings -->
+              <div class="space-y-3">
+                <h4 class="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  {$t('download.settings.concurrency')}
+                </h4>
+                <div class="space-y-2">
+                  <div class="flex items-center justify-between">
+                    <Label class="text-sm">{$t('download.settings.maxConcurrent')}:</Label>
+                    <input
+                      type="number"
+                      bind:value={maxConcurrentDownloads}
+                      on:input={handleMaxConcurrentInput}
+                      on:blur={validateMaxConcurrent}
+                      min="1"
+                      step="1"
+                      class="w-16 h-8 text-center text-sm border border-input bg-background px-2 py-1 rounded-md focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                    />
+                  </div>
+
+                  {#if multiSourceEnabled}
+                    <div class="flex items-center justify-between">
+                      <Label class="text-sm">{$t('download.maxPeers')}:</Label>
+                      <input
+                        type="number"
+                        bind:value={maxPeersPerDownload}
+                        min="2"
+                        max="10"
+                        step="1"
+                        class="w-16 h-8 text-center text-sm border border-input bg-background px-2 py-1 rounded-md focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                      />
+                    </div>
+                  {/if}
+                </div>
+              </div>
+
+              <!-- Automation Settings -->
+              <div class="space-y-3">
+                <h4 class="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  {$t('download.settings.automation')}
+                </h4>
+                <div class="space-y-3">
+                  <div class="flex items-center justify-between">
+                    <Label class="text-sm">{$t('download.settings.autoStart')}:</Label>
+                    <button
+                      type="button"
+                      aria-label={$t('download.settings.toggleAutoStart', { values: { status: autoStartQueue ? 'off' : 'on' } })}
+                      on:click={() => autoStartQueue = !autoStartQueue}
+                      class="relative inline-flex h-4 w-8 items-center rounded-full transition-colors focus:outline-none"
+                      class:bg-green-500={autoStartQueue}
+                      class:bg-muted-foreground={!autoStartQueue}
+                    >
+                      <span
+                        class="inline-block h-3 w-3 rounded-full bg-white transition-transform shadow-sm"
+                        style="transform: translateX({autoStartQueue ? '18px' : '2px'})"
+                      ></span>
+                    </button>
+                  </div>
+
+                  <div class="flex items-center justify-between">
+                    <Label class="text-sm">{$t('download.autoClear')}:</Label>
+                    <button
+                      type="button"
+                      aria-label="Toggle auto-clear completed downloads"
+                      on:click={() => autoClearCompleted = !autoClearCompleted}
+                      class="relative inline-flex h-4 w-8 items-center rounded-full transition-colors focus:outline-none"
+                      class:bg-green-500={autoClearCompleted}
+                      class:bg-muted-foreground={!autoClearCompleted}
+                    >
+                      <span
+                        class="inline-block h-3 w-3 rounded-full bg-white transition-transform shadow-sm"
+                        style="transform: translateX({autoClearCompleted ? '18px' : '2px'})"
+                      ></span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Feature Settings -->
+              <div class="space-y-3">
+                <h4 class="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  {$t('download.settings.features')}
+                </h4>
+                <div class="space-y-3">
+                  <div class="flex items-center justify-between">
+                    <Label class="text-sm">{$t('download.multiSource')}:</Label>
+                    <button
+                      type="button"
+                      aria-label="Toggle multi-source downloads"
+                      on:click={() => multiSourceEnabled = !multiSourceEnabled}
+                      class="relative inline-flex h-4 w-8 items-center rounded-full transition-colors focus:outline-none"
+                      class:bg-green-500={multiSourceEnabled}
+                      class:bg-muted-foreground={!multiSourceEnabled}
+                    >
+                      <span
+                        class="inline-block h-3 w-3 rounded-full bg-white transition-transform shadow-sm"
+                        style="transform: translateX({multiSourceEnabled ? '18px' : '2px'})"
+                      ></span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </Card>
+      {/if}
     </div>
 
     {#if filteredDownloads.length === 0}
@@ -1120,7 +1192,7 @@
     {:else}
       <div class="space-y-3">
         {#each filteredDownloads as file, index}
-          <div class="p-3 bg-secondary rounded-lg hover:bg-secondary/80 transition-colors">
+          <div class="p-3 bg-muted/60 rounded-lg hover:bg-muted/80 transition-colors">
             <!-- File Header -->
             <div class="pb-2">
               <div class="flex items-start justify-between gap-4">
@@ -1212,12 +1284,12 @@
               <div class="pb-2 ml-7">
                 <div class="flex items-center justify-between text-sm mb-1">
                   <div class="flex items-center gap-4 text-muted-foreground">
-                    <span>Speed: {file.speed || '0 B/s'}</span>
-                    <span>ETA: {file.eta || 'N/A'}</span>
-                    {#if multiSourceProgress.has(file.hash)}
+                    <span>Speed: {file.status === 'paused' ? '0 B/s' : (file.speed || '0 B/s')}</span>
+                    <span>ETA: {file.status === 'paused' ? 'N/A' : (file.eta || 'N/A')}</span>
+                    {#if multiSourceProgress.has(file.hash) && file.status === 'downloading'}
                       {@const msProgress = multiSourceProgress.get(file.hash)}
                       {#if msProgress}
-                        <span class="text-purple-600">Peers: {msProgress.activePeers}/{msProgress.totalPeers}</span>
+                        <span class="text-purple-600">Peers: {msProgress.activePeers}</span>
                         <span class="text-purple-600">Chunks: {msProgress.completedChunks}/{msProgress.totalChunks}</span>
                       {/if}
                     {/if}
@@ -1227,23 +1299,23 @@
                 <Progress
                   value={file.progress || 0}
                   max={100}
-                  class="h-2 bg-background [&>div]:bg-green-500 w-full"
+                  class="h-2 bg-border [&>div]:bg-green-500 w-full"
                 />
                 {#if multiSourceProgress.has(file.hash)}
                   {@const msProgress = multiSourceProgress.get(file.hash)}
-                  {#if msProgress && msProgress.peerProgress.length > 0}
+                  {#if msProgress && msProgress.peerAssignments.length > 0}
                     <div class="mt-2 space-y-1">
                       <div class="text-xs text-muted-foreground">Peer progress:</div>
-                      {#each msProgress.peerProgress as peerProgress}
+                      {#each msProgress.peerAssignments as peerAssignment}
                         <div class="flex items-center gap-2 text-xs">
-                          <span class="w-20 truncate">{peerProgress.peerId.slice(0, 8)}...</span>
+                          <span class="w-20 truncate">{peerAssignment.peerId.slice(0, 8)}...</span>
                           <div class="flex-1 bg-muted rounded-full h-1">
                             <div 
                               class="bg-purple-500 h-1 rounded-full transition-all duration-300"
-                              style="width: {peerProgress.chunksCompleted / peerProgress.chunksAssigned * 100}%"
+                              style="width: {peerAssignment.status === 'Completed' ? 100 : peerAssignment.status === 'Downloading' ? 50 : 0}%"
                             ></div>
                           </div>
-                          <span class="text-muted-foreground">{peerProgress.chunksCompleted}/{peerProgress.chunksAssigned}</span>
+                          <span class="text-muted-foreground">{peerAssignment.status}</span>
                         </div>
                       {/each}
                     </div>

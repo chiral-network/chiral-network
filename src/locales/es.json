@@ -308,7 +308,7 @@
     "disconnected": "Desconectado",
     "expandSidebar": "Expandir barra lateral",
     "collapseSidebar": "Colapsar barra lateral",
-    "closeMobileMenu": "Cerrar menú móvil"
+    "closeSidebarMenu": "Cerrar menú lateral"
   },
   "privacy.title": "Privacidad y seguridad",
   "privacy.enableProxy": "Habilitar enrutamiento por proxy para anonimato",
@@ -959,7 +959,7 @@
       "failed": "Fallidas"
     },
     "settings": {
-      "maxConcurrent": "Máx. concurrentes",
+      "maxConcurrent": "Máx. Descargas Concurrentes",
       "autoStart": "Inicio automático",
       "toggleAutoStart": "Alternar inicio automático de la cola {status}"
     },
