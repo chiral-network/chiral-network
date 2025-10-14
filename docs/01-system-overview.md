@@ -172,7 +172,6 @@ Note: There is no external storage node, the user is the storage node, client no
 - Improved P2P networking
 - Advanced encryption options
 - Reputation system
-- Mobile applications
 
 ### Phase 3: Optimization
 

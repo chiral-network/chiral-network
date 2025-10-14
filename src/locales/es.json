@@ -308,7 +308,7 @@
     "disconnected": "Desconectado",
     "expandSidebar": "Expandir barra lateral",
     "collapseSidebar": "Colapsar barra lateral",
-    "closeMobileMenu": "Cerrar menú móvil"
+    "closeSidebarMenu": "Cerrar menú lateral"
   },
   "privacy.title": "Privacidad y seguridad",
   "privacy.enableProxy": "Habilitar enrutamiento por proxy para anonimato",
