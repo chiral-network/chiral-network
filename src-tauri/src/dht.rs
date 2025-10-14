@@ -876,6 +876,7 @@ impl DhtMetricsSnapshot {
             observed_addrs,
             reachability_history: history,
             autonat_enabled,
+            // AutoRelay metrics
             autorelay_enabled,
             active_relay_peer_id,
             relay_reservation_status,
@@ -883,6 +884,7 @@ impl DhtMetricsSnapshot {
             last_reservation_failure: last_reservation_failure.and_then(to_secs),
             reservation_renewals,
             reservation_evictions,
+            // DCUtR metrics
             dcutr_enabled,
             dcutr_hole_punch_attempts,
             dcutr_hole_punch_successes,
@@ -1184,7 +1186,8 @@ async fn run_dht_node(
                             "encryption_method": metadata.encryption_method,
                             "key_fingerprint": metadata.key_fingerprint,
                             "version": metadata.version,
-                            "parent_hash": metadata.parent_hash
+                            "parent_hash": metadata.parent_hash,
+                            "merkle_root": metadata.merkle_root, // <-- Ensure Merkle root is included
                         });
 
                         let dht_record_data = match serde_json::to_vec(&dht_metadata) {
@@ -3333,7 +3336,7 @@ impl DhtService {
     pub async fn echo(&self, peer_id: String, payload: Vec<u8>) -> Result<Vec<u8>, String> {
         let target_peer_id: PeerId = peer_id
             .parse()
-            .map_err(|e| format!("Invalid peer ID: {}", e))?;
+            .map_err(|e| format!("Invalid peer ID: {e}"))?;
 
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
@@ -3343,7 +3346,7 @@ impl DhtService {
                 tx,
             })
             .await
-            .map_err(|e| format!("Failed to send echo command: {}", e))?;
+            .map_err(|e| format!("Failed to send echo command: {e}"))?;
 
         rx.await
             .map_err(|e| format!("Echo response error: {}", e))?
@@ -3365,7 +3368,7 @@ impl DhtService {
                 message,
             })
             .await
-            .map_err(|e| format!("Failed to send DHT command: {}", e))?;
+            .map_err(|e| format!("Failed to send DHT command: {e}"))?;
 
         Ok(())
     }
@@ -3680,7 +3683,7 @@ impl DhtService {
         }
     }
 
-    /// Shutdown the DHT service
+    /// Shutdown the Dht service
     pub async fn shutdown(&self) -> Result<(), String> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
