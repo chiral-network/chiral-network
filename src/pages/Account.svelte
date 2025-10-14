@@ -954,14 +954,36 @@
 
   
   //Guard add with validity check
-  function addBlacklistEntry() {
-    if (!isBlacklistFormValid) return;
-    const newEntry = { chiral_address: newBlacklistEntry.chiral_address, reason: newBlacklistEntry.reason, timestamp: new Date() };
-    blacklist.update(entries => [...entries, newEntry]);
-    // Clear input fields
-    newBlacklistEntry.chiral_address = "";
-    newBlacklistEntry.reason = "";
+  async function addBlacklistEntry() {
+  if (!isBlacklistFormValid) return;
+  
+  const newEntry = { 
+    chiral_address: newBlacklistEntry.chiral_address, 
+    reason: newBlacklistEntry.reason, 
+    timestamp: new Date() 
+  };
+  
+  // Add to store
+  blacklist.update(entries => [...entries, newEntry]);
+  
+  // Disconnect peer if currently connected
+  try {
+    await invoke('disconnect_peer', { 
+      peerId: newEntry.chiral_address 
+    });
+    console.log(`Disconnected blacklisted peer: ${newEntry.chiral_address}`);
+  } catch (error) {
+    // Peer not connected or already disconnected - this is fine
+    console.log('Peer not connected or already disconnected:', error);
   }
+  
+  // Clear form
+  newBlacklistEntry.chiral_address = "";
+  newBlacklistEntry.reason = "";
+  
+  // Show success message
+  showToast($t('account.blacklist.added'), 'success');
+}
 
   function removeBlacklistEntry(chiral_address: string) {
     if (confirm(tr('blacklist.confirm.remove', { address: chiral_address }))) {
