@@ -616,7 +616,16 @@
       showToast($t('network.errors.dhtNotConnected'), 'error');
       return;
     }
-    
+
+    // In Tauri mode, peer discovery happens automatically via DHT events
+    // This button just shows the current count
+    if (isTauri) {
+      const discoveryCount = discoveredPeerEntries.length;
+      showToast(tr('network.peerDiscovery.discoveryStarted', { values: { count: discoveryCount } }), 'info');
+      return;
+    }
+
+    // In web mode, use WebRTC signaling for testing
     if (!signalingConnected) {
       try {
         if (!signaling) {
@@ -650,11 +659,11 @@
         showToast('Connected to signaling server', 'success');
       } catch (error) {
         console.error('Failed to connect to signaling server:', error);
-        showToast('Failed to connect to signaling server. Make sure DHT is running.', 'error');
+        showToast('Failed to connect to signaling server for web mode testing', 'error');
         return;
       }
     }
-    
+
     // discoveredPeers will update automatically
     // showToast(tr('network.peerDiscovery.discoveryStarted', { values: { count: discoveredPeers.length } }), 'info');
     const discoveryCount = isTauri ? discoveredPeerEntries.length : webDiscoveredPeers.length;
