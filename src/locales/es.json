@@ -20,6 +20,7 @@
       "notInstalled": "No instalado",
       "downloading": "Descargando...",
       "starting": "Iniciando...",
+      "connecting": "Conectando...",
       "connected": "Conectado",
       "disconnected": "Desconectado"
     },
@@ -76,8 +77,8 @@
       "peers": "Pares conectados",
       "peerId": "ID de par",
       "bootstrapNode": "Nodo bootstrap",
-      "listenAddresses": "Direcciones de escucha",
-      "noListenAddresses": "Sin direcciones de escucha aún",
+      "listenAddresses": "Multidirecciones",
+      "noListenAddresses": "Sin multidirecciones aún",
       "recentEvents": "Eventos recientes",
       "disconnect": "Desconectar del DHT",
       "health": {
@@ -132,6 +133,23 @@
         "lastFailure": "Último fallo",
         "never": "Nunca",
         "description": "La actualización de conexión directa a través de relé (DCUtR) habilita la perforación de NAT para establecer conexiones directas entre pares."
+      },
+      "relay": {
+        "title": "Estado del Relay",
+        "enabled": "AutoRelay Activado",
+        "disabled": "AutoRelay Desactivado",
+        "noPeer": "No conectado al relay",
+        "activePeer": "Relay Activo",
+        "status": "Estado",
+        "lastSuccess": "Última reserva exitosa",
+        "lastFailure": "Última reserva fallida",
+        "renewals": "Reservas renovadas",
+        "evictions": "Reservas desalojadas",
+        "never": "Nunca",
+        "noEvictions": "Sin desalojos",
+        "accepted": "Reserva aceptada",
+        "pending": "Pendiente",
+        "failed": "Fallido"
       }
     },
     "networkStatus": "Estado de la red",
@@ -143,7 +161,7 @@
       "discovering": "Descubriendo...",
       "run": "Ejecutar descubrimiento",
       "directConnect": "Conexión directa",
-      "placeholder": "Introduce dirección de par (IP:Puerto o ID de par)",
+      "placeholder": "Introduce multidirección de par (ej., /ip4/192.168.1.81/tcp/4001/p2p/12D3KooW...)",
       "connect": "Conectar",
       "foundPeers": "Pares encontrados: {count}",
       "discoveryStarted": "Descubrimiento iniciado. Pares encontrados: {count}",
@@ -232,6 +250,36 @@
       "peersShort": "{count} pares",
       "emptyState": "Conéctate al DHT para comenzar a mapear pares.",
       "unknownNotice": "{count} pares todavía no informan su ubicación."
+    },
+    "quickActions": {
+      "title": "Acciones Rápidas",
+      "badge": "Herramientas de Red",
+      "discoverPeers": {
+        "tooltip": "Buscar nuevos pares en la red",
+        "discovering": "Descubriendo...",
+        "button": "Descubrir Pares"
+      },
+      "addPeer": {
+        "placeholder": "Dirección del Par",
+        "tooltip": "Agregar un par por dirección",
+        "success": "¡Par agregado!"
+      },
+      "copyPeerId": {
+        "tooltip": "Copiar tu ID de Par",
+        "tooltipUnavailable": "ID de Par no disponible",
+        "button": "Copiar ID de Par",
+        "success": "¡ID de Par copiado!"
+      },
+      "refreshStatus": {
+        "tooltip": "Actualizar estado del nodo y la red",
+        "button": "Actualizar Estado",
+        "success": "Estado de la red actualizado"
+      },
+      "restartNode": {
+        "tooltip": "Reiniciar el nodo local",
+        "button": "Reiniciar Nodo",
+        "success": "Nodo reiniciado"
+      }
     }
   },
   "regions.usEast": "EE. UU. Este",
@@ -260,7 +308,7 @@
     "disconnected": "Desconectado",
     "expandSidebar": "Expandir barra lateral",
     "collapseSidebar": "Colapsar barra lateral",
-    "closeMobileMenu": "Cerrar menú móvil"
+    "closeSidebarMenu": "Cerrar menú lateral"
   },
   "privacy.title": "Privacidad y seguridad",
   "privacy.enableProxy": "Habilitar enrutamiento por proxy para anonimato",
@@ -674,6 +722,12 @@
     "powerUsage": "Consumo de energía",
     "hw": "H/W",
     "temperature": "Temperatura",
+    "temperatureStatus": {
+      "critical": "Crítico",
+      "hot": "Caliente",
+      "warm": "Tibio",
+      "normal": "Normal"
+    },
     "control": "Control de minería",
     "active": "Minería activa",
     "stopped": "Minería detenida",
@@ -776,6 +830,7 @@
       "threads": "Los hilos deben estar entre 1 y {cpuThreads}",
       "intensity": "La intensidad debe estar entre 1 y 100",
       "noAccount": "Primero crea una cuenta de la Red Chiral en la página de Cuenta",
+      "noAccountToStart": "Para comenzar a minar, por favor crea una cuenta de Chiral Network desde la página de Cuenta",
       "gethNotRunning": "El nodo Chiral no se está ejecutando. Inícialo desde la página de Red",
       "noAccountLink": "Por favor crea una cuenta de la Red Chiral desde la"
     },
@@ -904,7 +959,7 @@
       "failed": "Fallidas"
     },
     "settings": {
-      "maxConcurrent": "Máx. concurrentes",
+      "maxConcurrent": "Máx. Descargas Concurrentes",
       "autoStart": "Inicio automático",
       "toggleAutoStart": "Alternar inicio automático de la cola {status}"
     },
@@ -985,7 +1040,9 @@
           "other": "El archivo ya está en tus descargas ({status})"
         }
       },
-      "button": "Buscar"
+      "button": "Buscar",
+      "searchVersions": "Buscar Versiones",
+      "namePlaceholder": "Ingrese el nombre del archivo (ej., \"documento.pdf\")"
     },
     "telemetry": {
       "retrying": "Reintentando descarga de {hash} (intento {attempt} de {max})",

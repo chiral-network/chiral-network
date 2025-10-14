@@ -62,6 +62,13 @@
   const successRate = peer.totalInteractions > 0 
     ? (peer.successfulInteractions / peer.totalInteractions) * 100 
     : 0;
+
+  const latencyLabel = (val: number) => (val && val > 0 ? `${val}ms` : 'N/A');
+  const bandwidthLabel = (mbps: number) => (mbps && mbps > 0 ? `${mbps} Mbps` : 'N/A');
+  const uptimeLabel = (pct: number) => {
+    const v = Number.isFinite(pct) ? Math.max(0, Math.min(100, pct)) : 0;
+    return v > 0 ? `${v}%` : 'N/A';
+  };
   
   const starRating = getStarRating(peer.score);
 </script>
@@ -94,9 +101,9 @@
         </p>
       </div>
       <div class="text-right">
-        <p class="text-xs text-gray-500">Success Rate</p>
+        <p class="text-xs text-gray-500">Transfers</p>
         <p class="text-sm font-semibold text-gray-900">
-          {successRate.toFixed(1)}%
+          {peer.successfulInteractions}/{peer.totalInteractions}
         </p>
       </div>
     </div>
@@ -124,15 +131,15 @@
       </div>
       <div class="flex justify-between w-full col-span-2">
         <span class="text-gray-500">Latency:</span>
-        <span class="font-medium">{peer.metrics.averageLatency}ms</span>
+        <span class="font-medium">{latencyLabel(peer.metrics.averageLatency)}</span>
       </div>
       <div class="flex justify-between w-full col-span-2">
         <span class="text-gray-500">Bandwidth:</span>
-        <span class="font-medium">{peer.metrics.bandwidth} Mbps</span>
+        <span class="font-medium">{bandwidthLabel(peer.metrics.bandwidth)}</span>
       </div>
       <div class="flex justify-between w-full col-span-2">
         <span class="text-gray-500">Uptime:</span>
-        <span class="font-medium">{peer.metrics.uptime}%</span>
+        <span class="font-medium">{uptimeLabel(peer.metrics.uptime)}</span>
       </div>
     </div>
 

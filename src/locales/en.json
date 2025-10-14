@@ -23,6 +23,7 @@
       "notInstalled": "Not Installed",
       "downloading": "Downloading...",
       "starting": "Starting...",
+      "connecting": "Connecting...",
       "connected": "Connected",
       "disconnected": "Disconnected"
     },
@@ -79,8 +80,8 @@
       "peers": "Connected Peers",
       "peerId": "Peer ID",
       "bootstrapNode": "Bootstrap Node",
-      "listenAddresses": "Listen Addresses",
-      "noListenAddresses": "No listen addresses available. DHT may be running in client-only mode.",
+      "listenAddresses": "Multiaddresses",
+      "noListenAddresses": "No multiaddresses available. DHT may be running in client-only mode.",
       "health": {
         "lastBootstrap": "Last Bootstrap",
         "lastPeer": "Last Peer Event",
@@ -163,7 +164,7 @@
       "discovering": "Discovering...",
       "run": "Run Discovery",
       "directConnect": "Direct Connect",
-      "placeholder": "Enter peer address (IP:Port or peer ID)",
+      "placeholder": "Enter peer multiaddress (e.g., /ip4/192.168.1.81/tcp/4001/p2p/12D3KooW...)",
       "connect": "Connect",
       "foundPeers": "Found peers: {count}",
       "discoveryStarted": "Discovery started. Found peers: {count}",
@@ -252,6 +253,36 @@
       "peersShort": "{count} peers",
       "emptyState": "Connect to the DHT to start mapping peers.",
       "unknownNotice": "{count} peers have no advertised location yet."
+    },
+    "quickActions": {
+      "title": "Quick Actions",
+      "badge": "Network Tools",
+      "discoverPeers": {
+        "tooltip": "Find new peers on the network",
+        "discovering": "Discovering...",
+        "button": "Discover Peers"
+      },
+      "addPeer": {
+        "placeholder": "Peer Address",
+        "tooltip": "Add a peer by address",
+        "success": "Peer added!"
+      },
+      "copyPeerId": {
+        "tooltip": "Copy your Peer ID",
+        "tooltipUnavailable": "Peer ID not available",
+        "button": "Copy Peer ID",
+        "success": "Peer ID copied!"
+      },
+      "refreshStatus": {
+        "tooltip": "Refresh node and network status",
+        "button": "Refresh Status",
+        "success": "Network status refreshed"
+      },
+      "restartNode": {
+        "tooltip": "Restart the local node",
+        "button": "Restart Node",
+        "success": "Node restarted"
+      }
     }
   },
   "download": {
@@ -278,7 +309,11 @@
       "failed": "Failed"
     },
     "settings": {
-      "maxConcurrent": "Max Concurrent",
+      "title": "Settings",
+      "concurrency": "Concurrency",
+      "automation": "Automation",
+      "features": "Features",
+      "maxConcurrent": "Max Concurrent Downloads",
       "autoStart": "Auto-start",
       "toggleAutoStart": "Toggle auto-start {status}"
     },
@@ -356,7 +391,9 @@
           "other": "File is already in your downloads ({status})"
         }
       },
-      "button": "Search"
+      "button": "Search",
+      "searchVersions": "Search Versions",
+      "namePlaceholder": "Enter file name (e.g., \"document.pdf\")"
     },
     "telemetry": {
       "retrying": "Retrying download for {hash} (attempt {attempt} of {max})",
@@ -390,7 +427,7 @@
     "disconnected": "Disconnected",
     "expandSidebar": "Expand sidebar",
     "collapseSidebar": "Collapse sidebar",
-    "closeMobileMenu": "Close mobile menu"
+    "closeSidebarMenu": "Close sidebar menu"
   },
   "privacy.title": "Privacy & Security",
   "privacy.enableProxy": "Enable proxy routing for anonymity",
@@ -768,6 +805,12 @@
     "powerUsage": "Power Usage",
     "hw": "H/W",
     "temperature": "Temperature",
+    "temperatureStatus": {
+      "critical": "Critical",
+      "hot": "Hot",
+      "warm": "Warm",
+      "normal": "Normal"
+    },
     "control": "Mining Control",
     "active": "Mining Active",
     "stopped": "Mining Stopped",
@@ -869,6 +912,7 @@
       "threads": "Threads must be between 1 and {cpuThreads}",
       "intensity": "Intensity must be between 1 and 100",
       "noAccount": "Please create a Chiral Network account first in the Account page",
+      "noAccountToStart": "Please create a Chiral Network account from the Account page to start mining",
       "gethNotRunning": "Chiral node is not running. Please start it from the Network page",
       "noAccountLink": "Please create a Chiral Network account from the"
     },

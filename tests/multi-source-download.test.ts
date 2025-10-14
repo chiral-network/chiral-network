@@ -135,7 +135,7 @@ describe("Multi-Source Download System", () => {
       expect(true).toBe(true); // Placeholder
     });
 
-    it("should validate sample test files exist and have correct sizes", async () => {
+    it("should correctly identify which files should use multi-source download", async () => {
       const fileValidation = await MultiSourceTestUtils.validateSampleFiles();
 
       // Large file should exist and be ~2MB (should trigger multi-source)
@@ -163,14 +163,14 @@ describe("Multi-Source Download System", () => {
 
       // Only the large file should be flagged for multi-source download
       const multiSourceFiles = Object.values(fileValidation).filter(
-        (f) => f.shouldBeMultiSource
+        (f: any) => f.shouldBeMultiSource
       );
       expect(multiSourceFiles.length).toBe(1);
       expect(multiSourceFiles[0]).toBe(fileValidation.large);
 
       // All other files should use single-source
       const singleSourceFiles = Object.values(fileValidation).filter(
-        (f) => !f.shouldBeMultiSource && f.exists
+        (f: any) => !f.shouldBeMultiSource && f.exists
       );
       expect(singleSourceFiles.length).toBe(3); // medium, small, text
     });
@@ -181,7 +181,7 @@ describe("Multi-Source Download System", () => {
  * Test Utilities for Multi-Source Downloads
  */
 export class MultiSourceTestUtils {
-  static createMockPeers(count = 3) {
+  static createMockPeers(count: number = 3): any[] {
     return Array.from({ length: count }, (_, i) => ({
       id: `peer_${i}`,
       reputation: Math.random() * 100,
@@ -190,7 +190,7 @@ export class MultiSourceTestUtils {
     }));
   }
 
-  static createMockFile(size = 2 * 1024 * 1024) {
+  static createMockFile(size: number = 2 * 1024 * 1024): any {
     // 2MB default
     return {
       hash: "mock_file_hash",
@@ -199,7 +199,7 @@ export class MultiSourceTestUtils {
     };
   }
 
-  static getSampleFilePaths() {
+  static getSampleFilePaths(): Record<string, string> {
     return {
       large: "tests/sample-files/large-test-file.bin", // 2MB - should trigger multi-source
       medium: "tests/sample-files/medium-test-file.bin", // 500KB - single-source
@@ -208,20 +208,23 @@ export class MultiSourceTestUtils {
     };
   }
 
-  static async getFileSize(filePath) {
+  static async getFileSize(filePath: string): Promise<number> {
     try {
       const fs = await import("fs/promises");
       const stats = await fs.stat(filePath);
       return stats.size;
     } catch (error) {
-      console.warn(`Could not get file size for ${filePath}:`, error.message);
+      console.warn(
+        `Could not get file size for ${filePath}:`,
+        (error as Error).message
+      );
       return 0;
     }
   }
 
-  static async validateSampleFiles() {
+  static async validateSampleFiles(): Promise<Record<string, any>> {
     const files = this.getSampleFilePaths();
-    const results = {};
+    const results: Record<string, any> = {};
 
     for (const [name, path] of Object.entries(files)) {
       const size = await this.getFileSize(path);
@@ -236,7 +239,7 @@ export class MultiSourceTestUtils {
     return results;
   }
 
-  static simulateDownload(file, peers) {
+  static simulateDownload(file: any, peers: any[]): any {
     // Simulate multi-source download
     return {
       file,

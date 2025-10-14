@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';
-  import { TrustLevel, type PeerReputation, type ReputationAnalytics, type ReputationEvent, EventType } from '$lib/types/reputation';
+  import { TrustLevel, type PeerReputation, type ReputationAnalytics } from '$lib/types/reputation';
   import ReputationCard from '$lib/components/ReputationCard.svelte';
   import ReputationAnalyticsComponent from '$lib/components/ReputationAnalytics.svelte';
   import Card from '$lib/components/ui/card.svelte';
-  import Badge from '$lib/components/ui/badge.svelte';
   import Button from '$lib/components/ui/button.svelte';
+  import PeerSelectionService, { type PeerMetrics as BackendPeerMetrics } from '$lib/services/peerSelectionService';
+  import { invoke } from '@tauri-apps/api/core';
 
   // State
   let peers: PeerReputation[] = [];
@@ -22,12 +23,12 @@
   let isFilterOpen = false;
   let selectedTrustLevels: TrustLevel[] = [];
   let filterEncryptionSupported: boolean | null = null;
-  let minUptime = 70;
+  let minUptime = 0;
 
   // Pending filter states for the dropdown
   let pendingSelectedTrustLevels: TrustLevel[] = [];
   let pendingFilterEncryptionSupported: boolean | null = null;
-  let pendingMinUptime = 70;
+  let pendingMinUptime = 0;
 
   function openFilters() {
     // Sync pending state with applied state when opening
@@ -47,7 +48,7 @@
   function clearFilters() {
     pendingSelectedTrustLevels = [];
     pendingFilterEncryptionSupported = null;
-    pendingMinUptime = 70;
+    pendingMinUptime = 0;
   }
 
   // Action to detect clicks outside an element
@@ -77,78 +78,93 @@
     { value: 'lastSeen', label: $t('reputation.sortOptions.lastSeen') }
   ];
 
-  // Generate mock data
-  function generateMockData() {
-    const mockPeers: PeerReputation[] = [];
-    const mockEvents: ReputationEvent[] = [];
-    
-    // Generate random peer data
-    for (let i = 0; i < 25; i++) {
-      const peerId = `peer_${Math.random().toString(36).substr(2, 9)}`;
-      const score = Math.random();
-      const totalInteractions = Math.floor(Math.random() * 100) + 10;
-      const successfulInteractions = Math.floor(totalInteractions * (0.6 + Math.random() * 0.4));
-      
-      const trustLevel = score >= 0.8 ? TrustLevel.Trusted :
-                        score >= 0.6 ? TrustLevel.High :
-                        score >= 0.4 ? TrustLevel.Medium :
-                        score >= 0.2 ? TrustLevel.Low : TrustLevel.Unknown;
+  // Map backend metrics to UI PeerReputation[] and analytics
+  async function loadPeersFromBackend() {
+    try {
+      const metrics: BackendPeerMetrics[] = await PeerSelectionService.getPeerMetrics();
 
-      const peer: PeerReputation = {
-        peerId,
-        trustLevel,
-        score,
-        totalInteractions,
-        successfulInteractions,
-        lastSeen: new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000), // Last 7 days
-        reputationHistory: [],
-        metrics: {
-          averageLatency: Math.floor(Math.random() * 200) + 10,
-          bandwidth: Math.floor(Math.random() * 100) + 10,
-          uptime: Math.floor(Math.random() * 30) + 70,
-          storageOffered: Math.floor(Math.random() * 1000) + 100,
-          filesShared: Math.floor(Math.random() * 50) + 5,
-          encryptionSupported: Math.random() > 0.3
-        }
+      const mappedPeers: PeerReputation[] = metrics.map((m) => {
+        const score = PeerSelectionService.compositeScoreFromMetrics(m);
+        const totalInteractions = Math.max(1, m.transfer_count);
+        const successfulInteractions = Math.min(totalInteractions, m.successful_transfers);
+        const trustLevel = score >= 0.8 ? TrustLevel.Trusted :
+                          score >= 0.6 ? TrustLevel.High :
+                          score >= 0.4 ? TrustLevel.Medium :
+                          score >= 0.2 ? TrustLevel.Low : TrustLevel.Unknown;
+
+        return {
+          peerId: m.peer_id,
+          trustLevel,
+          score,
+          totalInteractions,
+          successfulInteractions,
+          lastSeen: new Date((m.last_seen || 0) * 1000),
+          reputationHistory: [],
+          metrics: {
+            averageLatency: typeof m.latency_ms === 'number' ? m.latency_ms : 0,
+            bandwidth: typeof m.bandwidth_kbps === 'number' ? Math.round(m.bandwidth_kbps / 1024) : 0,
+            uptime: Math.round(m.uptime_score * 100),
+            storageOffered: 0,
+            filesShared: 0,
+            encryptionSupported: !!m.encryption_support
+          }
+        };
+      });
+
+      // Build analytics
+      const totalPeers = mappedPeers.length;
+      const trustedPeers = mappedPeers.filter(p => p.trustLevel === TrustLevel.Trusted).length;
+      const averageScore = totalPeers > 0 ? mappedPeers.reduce((sum, p) => sum + p.score, 0) / totalPeers : 0;
+      const topPerformers = [...mappedPeers].sort((a, b) => b.score - a.score).slice(0, 10);
+      const trustLevelDistribution = Object.values(TrustLevel).reduce((acc, level) => {
+        acc[level] = mappedPeers.filter(p => p.trustLevel === level).length;
+        return acc;
+      }, {} as Record<TrustLevel, number>);
+
+      analytics = {
+        totalPeers,
+        trustedPeers,
+        averageScore,
+        topPerformers,
+        recentEvents: [],
+        trustLevelDistribution
       };
 
-      mockPeers.push(peer);
-    }
-
-    // Generate mock events
-    const eventTypes = Object.values(EventType);
-    for (let i = 0; i < 50; i++) {
-      const event: ReputationEvent = {
-        id: `event_${i}`,
-        type: eventTypes[Math.floor(Math.random() * eventTypes.length)],
-        peerId: mockPeers[Math.floor(Math.random() * mockPeers.length)].peerId,
-        timestamp: new Date(Date.now() - Math.random() * 24 * 60 * 60 * 1000), // Last 24 hours
-        data: {},
-        impact: Math.random() > 0.5 ? Math.random() * 0.5 + 0.1 : -(Math.random() * 0.5 + 0.1)
+      peers = mappedPeers;
+    } catch (e) {
+      console.error('Failed to load peer metrics', e);
+      peers = [];
+      analytics = {
+        totalPeers: 0,
+        trustedPeers: 0,
+        averageScore: 0,
+        topPerformers: [],
+        recentEvents: [],
+        trustLevelDistribution: {
+          [TrustLevel.Trusted]: 0,
+          [TrustLevel.High]: 0,
+          [TrustLevel.Medium]: 0,
+          [TrustLevel.Low]: 0,
+          [TrustLevel.Unknown]: 0,
+        },
       };
-      mockEvents.push(event);
     }
+  }
 
-    // Calculate analytics
-    const totalPeers = mockPeers.length;
-    const trustedPeers = mockPeers.filter(p => p.trustLevel === TrustLevel.Trusted).length;
-    const averageScore = mockPeers.reduce((sum, p) => sum + p.score, 0) / totalPeers;
-    const topPerformers = [...mockPeers].sort((a, b) => b.score - a.score).slice(0, 10);
-    const trustLevelDistribution = Object.values(TrustLevel).reduce((acc, level) => {
-      acc[level] = mockPeers.filter(p => p.trustLevel === level).length;
-      return acc;
-    }, {} as Record<TrustLevel, number>);
-
-    analytics = {
-      totalPeers,
-      trustedPeers,
-      averageScore,
-      topPerformers,
-      recentEvents: mockEvents.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime()),
-      trustLevelDistribution
-    };
-
-    peers = mockPeers;
+  // Attempt to trigger latency collection by connecting to known peers, when available
+  async function probePeerLatencies() {
+    try {
+      const connectedPeers = await invoke<string[]>('get_dht_connected_peers');
+      if (Array.isArray(connectedPeers) && connectedPeers.length > 0) {
+        // Nudge DHT to interact, which will allow libp2p ping to update latency
+        // Avoid spamming: connect to a small subset
+        const sample = connectedPeers.slice(0, Math.min(5, connectedPeers.length));
+        await Promise.allSettled(sample.map((p) => invoke('connect_to_peer', { peerId: p })));
+      }
+    } catch (e) {
+      // Best-effort; ignore errors
+      console.debug('probePeerLatencies ignored', e);
+    }
   }
 
   // Filter and sort peers
@@ -187,19 +203,21 @@
   }
 
   onMount(() => {
-    // Simulate loading
-    setTimeout(() => {
-      generateMockData();
-      isLoading = false;
-    }, 1000);
+    loadPeersFromBackend();
+    // Best-effort latency probe and follow-up refresh
+    probePeerLatencies();
+    // Refresh after a short delay to pick up new latency
+    setTimeout(() => { loadPeersFromBackend(); }, 1500);
+    // Periodic refresh to keep data live
+    const interval = setInterval(() => { loadPeersFromBackend(); }, 10000);
+    isLoading = false;
+    return () => clearInterval(interval);
   });
 
-  function refreshData() {
+  async function refreshData() {
     isLoading = true;
-    setTimeout(() => {
-      generateMockData();
-      isLoading = false;
-    }, 500);
+    await loadPeersFromBackend();
+    isLoading = false;
   }
 </script>
 

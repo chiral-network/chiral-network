@@ -6,7 +6,6 @@ use tauri::State;
 use libp2p::PeerId;
 use std::net::Ipv4Addr;
 use std::str::FromStr;
-use std::sync::Arc;
 use tracing::{info, warn};
 
 #[derive(Clone, serde::Serialize)]
@@ -186,4 +185,68 @@ pub(crate) async fn proxy_echo(
         .as_ref()
         .ok_or_else(|| "DHT not running".to_string())?;
     dht.echo(peer_id, payload).await
+}
+
+#[tauri::command]
+pub(crate) async fn enable_privacy_routing(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    proxy_addresses: Vec<String>,
+) -> Result<(), String> {
+    info!("Enabling privacy routing through {} proxies", proxy_addresses.len());
+
+    if proxy_addresses.is_empty() {
+        return Err("No proxy addresses provided".into());
+    }
+
+    // Store the proxy addresses for routing
+    {
+        let mut privacy_proxies = state.privacy_proxies.lock().await;
+        privacy_proxies.clear();
+        for addr in &proxy_addresses {
+            match normalize_to_multiaddr(addr) {
+                Ok(multiaddr) => {
+                    privacy_proxies.push(multiaddr);
+                    info!("Added proxy for privacy routing: {}", addr);
+                }
+                Err(e) => {
+                    warn!("Failed to normalize proxy address {}: {}", addr, e);
+                }
+            }
+        }
+    }
+
+    // Enable privacy routing in DHT service
+    if let Some(dht) = state.dht.lock().await.as_ref() {
+        dht.enable_privacy_routing().await?;
+    } else {
+        return Err("DHT not initialized".into());
+    }
+
+    let _ = app.emit("privacy_routing_enabled", proxy_addresses.len());
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) async fn disable_privacy_routing(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    info!("Disabling privacy routing");
+
+    // Clear stored proxy addresses
+    {
+        let mut privacy_proxies = state.privacy_proxies.lock().await;
+        privacy_proxies.clear();
+    }
+
+    // Disable privacy routing in DHT service
+    if let Some(dht) = state.dht.lock().await.as_ref() {
+        dht.disable_privacy_routing().await?;
+    } else {
+        return Err("DHT not initialized".into());
+    }
+
+    let _ = app.emit("privacy_routing_disabled", ());
+    Ok(())
 }
