@@ -308,7 +308,7 @@
     "disconnected": "未连接",
     "expandSidebar": "展开侧边栏",
     "collapseSidebar": "收起侧边栏",
-    "closeMobileMenu": "关闭移动菜单"
+    "closeSidebarMenu": "关闭侧边栏菜单"
   },
   "privacy.title": "隐私与安全",
   "privacy.enableProxy": "启用代理路由以保持匿名",
