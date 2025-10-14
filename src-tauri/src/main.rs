@@ -1241,9 +1241,11 @@ async fn get_cpu_temperature() -> Option<f32> {
 
         static LAST_UPDATE: OnceLock<std::sync::Mutex<Option<Instant>>> = OnceLock::new();
         static WORKING_METHOD: OnceLock<std::sync::Mutex<Option<TemperatureMethod>>> = OnceLock::new();
+        static TEMP_HISTORY: OnceLock<std::sync::Mutex<Vec<(Instant, f32)>>> = OnceLock::new();
 
         let last_update_mutex = LAST_UPDATE.get_or_init(|| std::sync::Mutex::new(None));
         let working_method_mutex = WORKING_METHOD.get_or_init(|| std::sync::Mutex::new(None));
+        let temp_history_mutex = TEMP_HISTORY.get_or_init(|| std::sync::Mutex::new(Vec::new()));
 
         {
             let mut last_update = last_update_mutex.lock().unwrap();
@@ -1255,12 +1257,39 @@ async fn get_cpu_temperature() -> Option<f32> {
             *last_update = Some(Instant::now());
         }
 
+        // Helper function to add temperature to history and return smoothed value
+        let smooth_temperature = |raw_temp: f32| -> f32 {
+            let now = Instant::now();
+            let mut history = temp_history_mutex.lock().unwrap();
+            
+            // Add current reading
+            history.push((now, raw_temp));
+            
+            // Keep only last 5 readings within 30 seconds
+            history.retain(|(time, _)| now.duration_since(*time).as_secs() < 30);
+            if history.len() > 5 {
+                let excess = history.len() - 5;
+                history.drain(0..excess);
+            }
+            
+            // Return smoothed temperature (weighted average, recent readings have more weight)
+            if history.len() == 1 {
+                raw_temp
+            } else {
+                let total_weight: f32 = (1..=history.len()).map(|i| i as f32).sum();
+                let weighted_sum: f32 = history.iter().enumerate()
+                    .map(|(i, (_, temp))| temp * (i + 1) as f32)
+                    .sum();
+                weighted_sum / total_weight
+            }
+        };
+
         // Try cached working method first
         {
             let working_method = working_method_mutex.lock().unwrap();
             if let Some(ref method) = *working_method {
                 if let Some(temp) = try_temperature_method(method) {
-                    return Some(temp);
+                    return Some(smooth_temperature(temp));
                 }
                 // Method stopped working, clear cache
                 drop(working_method);
@@ -1283,7 +1312,7 @@ async fn get_cpu_temperature() -> Option<f32> {
                 // Cache the working method
                 let mut working_method = working_method_mutex.lock().unwrap();
                 *working_method = Some(method.clone());
-                return Some(temp);
+                return Some(smooth_temperature(temp));
             }
         }
 
@@ -1293,7 +1322,7 @@ async fn get_cpu_temperature() -> Option<f32> {
             if let Some((temp, method)) = get_linux_temperature_advanced() {
                 let mut working_method = working_method_mutex.lock().unwrap();
                 *working_method = Some(method);
-                return Some(temp);
+                return Some(smooth_temperature(temp));
             }
         }
 
