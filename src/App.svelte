@@ -12,16 +12,18 @@
     import ReputationPage from './pages/Reputation.svelte'
     import NotFound from './pages/NotFound.svelte'
     import ProxySelfTest from './routes/proxy-self-test.svelte'
-    import { networkStatus } from './lib/stores'
+    import { networkStatus, settings, userLocation } from './lib/stores'
     import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
     import {onMount, setContext} from 'svelte';
     import { tick } from 'svelte';
+    import { get } from 'svelte/store';
     import { setupI18n } from './i18n/i18n';
     import { t } from 'svelte-i18n';
     import SimpleToast from './lib/components/SimpleToast.svelte';
     import { startNetworkMonitoring } from './lib/services/networkService';
     import { fileService } from '$lib/services/fileService';
     import { bandwidthScheduler } from '$lib/services/bandwidthScheduler';
+    import { detectUserRegion } from '$lib/services/geolocation';
     // gets path name not entire url:
     // ex: http://locatlhost:1420/download -> /download
     
@@ -48,6 +50,50 @@
         await setupI18n();
         loading = false;
 
+        let storedLocation: string | null = null;
+        try {
+          const storedSettings = localStorage.getItem('chiralSettings');
+          if (storedSettings) {
+            const parsed = JSON.parse(storedSettings);
+            if (typeof parsed?.userLocation === 'string' && parsed.userLocation) {
+              storedLocation = parsed.userLocation;
+              userLocation.set(parsed.userLocation);
+            }
+          }
+        } catch (error) {
+          console.warn('Failed to load stored user location:', error);
+        }
+        try {
+          const currentLocation = get(userLocation);
+          const shouldAutoDetect = !storedLocation || currentLocation === 'US-East';
+
+          if (shouldAutoDetect) {
+            const detection = await detectUserRegion();
+            const detectedLocation = detection.region.label;
+            if (detectedLocation && detectedLocation !== currentLocation) {
+              userLocation.set(detectedLocation);
+              settings.update((previous) => {
+                const next = { ...previous, userLocation: detectedLocation };
+                try {
+                  const storedSettings = localStorage.getItem('chiralSettings');
+                  if (storedSettings) {
+                    const parsed = JSON.parse(storedSettings) ?? {};
+                    parsed.userLocation = detectedLocation;
+                    localStorage.setItem ('chiralSettings', JSON.stringify(parsed));
+                  } else {
+                    localStorage.setItem('chiralSettings', JSON.stringify(next));
+                  }
+                } catch (storageError) {
+                  console.warn('Failed to persist detected location:', storageError);
+                }
+                console.log('User region detected via ${detection.source}: ${detectedLocation}');
+                return next;
+              });
+            }
+          }
+        } catch (error) {
+          console.warn('Automatic location detection failed:', error);
+        }
         // Initialize backend services (File Transfer, DHT)
         try {
           await fileService.initializeServices();

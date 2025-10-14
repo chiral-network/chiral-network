@@ -20,6 +20,7 @@
   import { homeDir } from "@tauri-apps/api/path";
   import { getVersion } from "@tauri-apps/api/app";
   import { userLocation } from "$lib/stores";
+  import { GEO_REGIONS, UNKNOWN_REGION_ID } from '$lib/geo';
   import { changeLocale, loadLocale } from "../i18n/i18n";
   import { t } from "svelte-i18n";
   import { get } from "svelte/store";
@@ -94,12 +95,10 @@
   let autonatServersText = '';
   let preferredRelaysText = '';
 
-  const locations = [
-    { value: "US-East", label: "US East" },
-    { value: "US-West", label: "US West" },
-    { value: "EU-West", label: "Europe West" },
-    { value: "Asia-Pacific", label: "Asia Pacific" },
-  ];
+  const locationOptions = GEO_REGIONS
+    .filter((region) => region.id !== UNKNOWN_REGION_ID)
+    .map((region) => ({ value: region.label, label: region.label }))
+    .sort((a, b) => a.label.localeCompare(b.label));
 
   let languages = [];
   $: languages = [
@@ -617,7 +616,7 @@ function sectionMatches(section: string, query: string) {
           <Label for="user-location">{$t("network.userLocation")}</Label>
           <DropDown
             id="user-location"
-            options={locations}
+            options={locationOptions}
             bind:value={localSettings.userLocation}
           />
           <p class="text-xs text-muted-foreground mt-1">
