@@ -32,6 +32,19 @@ pub struct WebRTCFileRequest {
     pub recipient_public_key: Option<String>, // For encrypted transfers
 }
 
+/// Sent by a downloader to request the full file manifest.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebRTCManifestRequest {
+    pub file_hash: String, // The Merkle Root
+}
+
+/// Sent by a seeder in response to a manifest request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebRTCManifestResponse {
+    pub file_hash: String, // The Merkle Root, to match the request
+    pub manifest_json: String, // The full FileManifest, serialized to JSON
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileChunk {
     pub file_hash: String,
@@ -154,6 +167,16 @@ pub enum WebRTCEvent {
         file_hash: String,
         error: String,
     },
+}
+
+/// A new enum to wrap different message types for clarity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum WebRTCMessage {
+    FileRequest(WebRTCFileRequest),
+    ManifestRequest(WebRTCManifestRequest),
+    ManifestResponse(WebRTCManifestResponse),
+    FileChunk(FileChunk),
 }
 
 pub struct WebRTCService {
@@ -691,6 +714,33 @@ impl WebRTCService {
                     stream_auth,
                 )
                 .await;
+            }
+            // Try to parse as a generic WebRTCMessage
+            else if let Ok(message) = serde_json::from_str::<WebRTCMessage>(text) {
+                match message {
+                    WebRTCMessage::FileRequest(request) => {
+                         let _ = event_tx
+                            .send(WebRTCEvent::FileRequestReceived {
+                                peer_id: peer_id.to_string(),
+                                request: request.clone(),
+                            })
+                            .await;
+                        Self::handle_file_request(peer_id, &request, event_tx, file_transfer_service, connections, keystore, stream_auth).await;
+                    }
+                    WebRTCMessage::ManifestRequest(request) => {
+                        info!("Received manifest request for file: {}", request.file_hash);
+                        // Seeder logic to find and send manifest would go here.
+                        // This is typically handled by the application logic that has access to manifests.
+                    }
+                    WebRTCMessage::ManifestResponse(response) => {
+                        info!("Received manifest response for a file download.");
+                        // Downloader receives this. We can emit a specific event or handle it directly.
+                        // For simplicity, we can have the main download logic listen for this.
+                    }
+                    WebRTCMessage::FileChunk(chunk) => {
+                        Self::process_incoming_chunk(&chunk, file_transfer_service, connections, event_tx, peer_id, keystore, &active_private_key, stream_auth).await;
+                    }
+                }
             }
         }
     }
