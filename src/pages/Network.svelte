@@ -23,6 +23,8 @@
   import DropDown from '$lib/components/ui/dropDown.svelte'
   import { SignalingService } from '$lib/services/signalingService';
   import { createWebRTCSession } from '$lib/services/webrtcService';
+  import { peerDiscoveryStore, startPeerEventStream, type PeerDiscovery } from '$lib/services/peerEventService';
+
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -92,7 +94,11 @@
   // WebRTC and Signaling variables
   let signaling: SignalingService;
   let webrtcSession: ReturnType<typeof createWebRTCSession> | null = null;
-  let discoveredPeers: string[] = [];
+  // let discoveredPeers: string[] = [];
+  let webDiscoveredPeers: string[] = [];
+  let discoveredPeerEntries: PeerDiscovery[] = [];
+  let peerDiscoveryUnsub: (() => void) | null = null;
+  let stopPeerEvents: (() => void) | null = null;
   let signalingConnected = false;
 
   // Helper: add a connected peer to the central peers store (if not present)
@@ -156,6 +162,11 @@
     }
 
     return `${size.toFixed(2)} ${units[unitIndex]}`
+  }
+
+  function formatPeerTimestamp(ms?: number): string {
+    if (!ms) return tr('network.dht.health.never')
+    return new Date(ms).toLocaleString()
   }
 
   function formatHealthTimestamp(epoch: number | null): string {
@@ -616,8 +627,10 @@
         const myClientId = signaling.getClientId();
         signaling.peers.subscribe(peers => {
           // Filter out own client ID from discovered peers
-          discoveredPeers = peers.filter(p => p !== myClientId);
-          console.log('Updated discovered peers (excluding self):', discoveredPeers);
+          // discoveredPeers = peers.filter(p => p !== myClientId);
+          // console.log('Updated discovered peers (excluding self):', discoveredPeers);
+          webDiscoveredPeers = peers.filter(p => p !== myClientId);
+          console.log('Updated discovered peers (excluding self):', webDiscoveredPeers);
         });
 
         // Register signaling message handler for WebRTC
@@ -643,7 +656,9 @@
     }
     
     // discoveredPeers will update automatically
-    showToast(tr('network.peerDiscovery.discoveryStarted', { values: { count: discoveredPeers.length } }), 'info');
+    // showToast(tr('network.peerDiscovery.discoveryStarted', { values: { count: discoveredPeers.length } }), 'info');
+    const discoveryCount = isTauri ? discoveredPeerEntries.length : webDiscoveredPeers.length;
+    showToast(tr('network.peerDiscovery.discoveryStarted', { values: { count: discoveryCount } }), 'info');
   }
   
   async function connectToPeer() {
@@ -686,7 +701,8 @@
     const peerId = peerAddress;
 
     // Check if peer exists in discovered peers
-    if (!discoveredPeers.includes(peerId)) {
+    // if (!discoveredPeers.includes(peerId)) {
+    if (!webDiscoveredPeers.includes(peerId)) {
       showToast(`Peer ${peerId} not found in discovered peers`, 'warning');
       // Still attempt connection in case peer was discovered recently
     }
@@ -986,57 +1002,84 @@
     const interval = setInterval(refreshStats, 5000)
     let unlistenProgress: (() => void) | null = null
     
-    // Initialize signaling service
+    // Initialize signaling service (web preview only) and DHT integrations
     ;(async () => {
-      try {
-        signaling = new SignalingService();
-        await signaling.connect();
-        signalingConnected = true;
-        const myClientId = signaling.getClientId();
-        signaling.peers.subscribe(peers => {
-          // Filter out own client ID from discovered peers
-          discoveredPeers = peers.filter(p => p !== myClientId);
-        });
+      if (!isTauri) {
+        try {
+          signaling = new SignalingService();
+          await signaling.connect();
+          signalingConnected = true;
+          const myClientId = signaling.getClientId();
+          signaling.peers.subscribe(peers => {
+            // Filter out own client ID from discovered peers
+            webDiscoveredPeers = peers.filter(p => p !== myClientId);
+          });
 
-        // Register signaling message handler for WebRTC
-        signaling.setOnMessage((msg) => {
-          if (webrtcSession && msg.from === webrtcSession.peerId) {
-            if (msg.type === "offer") {
-              webrtcSession.acceptOfferCreateAnswer(msg.sdp).then(answer => {
-                signaling.send({ type: "answer", sdp: answer, to: msg.from });
-              });
-            } else if (msg.type === "answer") {
-              webrtcSession.acceptAnswer(msg.sdp);
-            } else if (msg.type === "candidate") {
-              webrtcSession.addRemoteIceCandidate(msg.candidate);
+          // Register signaling message handler for WebRTC
+          signaling.setOnMessage((msg) => {
+            if (webrtcSession && msg.from === webrtcSession.peerId) {
+              if (msg.type === "offer") {
+                webrtcSession.acceptOfferCreateAnswer(msg.sdp).then(answer => {
+                  signaling.send({ type: "answer", sdp: answer, to: msg.from });
+                });
+              } else if (msg.type === "answer") {
+                webrtcSession.acceptAnswer(msg.sdp);
+              } else if (msg.type === "candidate") {
+                webrtcSession.addRemoteIceCandidate(msg.candidate);
+              }
             }
-          }
-        });
-      } catch (error) {
-        // Signaling service not available (DHT not running) - this is normal
-        signalingConnected = false;
-      }
-      
-      // Initialize async operations
-      const initAsync = async () => {
-        await fetchBootstrapNodes()
-        await checkGethStatus()
-        
-        // DHT check will happen in startDht()
-
-        // Also passively sync DHT state if it's already running
-        await syncDhtStatusOnMount()
-        
-        // Listen for download progress updates (only in Tauri)
-        if (isTauri) {
-          await registerNatListener()
-          unlistenProgress = await listen('geth-download-progress', (event) => {
-            downloadProgress = event.payload as typeof downloadProgress
-          })
+          });
+        } catch (error) {
+          // Signaling service not available (DHT not running) - this is normal
+          signalingConnected = false;
         }
       }
       
-      initAsync()
+      // Initialize async operations
+      // const initAsync = async () => {
+      //   await fetchBootstrapNodes()
+      //   await checkGethStatus()
+        
+      //   // DHT check will happen in startDht()
+
+      //   // Also passively sync DHT state if it's already running
+      //   await syncDhtStatusOnMount()
+        
+      //   // Listen for download progress updates (only in Tauri)
+      //   if (isTauri) {
+      //     await registerNatListener()
+      //     unlistenProgress = await listen('geth-download-progress', (event) => {
+      //       downloadProgress = event.payload as typeof downloadProgress
+      //     })
+      await fetchBootstrapNodes()
+      await checkGethStatus()
+
+      // DHT check will happen in startDht()
+
+      // Also passively sync DHT state if it's already running
+      await syncDhtStatusOnMount()
+
+      if (isTauri) {
+        if (!peerDiscoveryUnsub) {
+          peerDiscoveryUnsub = peerDiscoveryStore.subscribe((entries) => {
+            discoveredPeerEntries = entries;
+          });
+        }
+        if (!stopPeerEvents) {
+          try {
+            stopPeerEvents = await startPeerEventStream();
+          } catch (error) {
+            console.error('Failed to start peer event stream:', error);
+          }
+        }
+        await refreshConnectedPeers();
+        await registerNatListener()
+        unlistenProgress = await listen('geth-download-progress', (event) => {
+          downloadProgress = event.payload as typeof downloadProgress
+        })
+      }
+      
+      // initAsync()
     })()
     
     return () => {
@@ -1050,6 +1093,14 @@
       if (natStatusUnlisten) {
         natStatusUnlisten()
         natStatusUnlisten = null
+      }
+      if (stopPeerEvents) {
+        stopPeerEvents()
+        stopPeerEvents = null
+      }
+      if (peerDiscoveryUnsub) {
+        peerDiscoveryUnsub()
+        peerDiscoveryUnsub = null
       }
       // Note: We do NOT disconnect the signaling service here
       // It should persist across page navigations to maintain peer connections
@@ -1066,6 +1117,14 @@
     if (natStatusUnlisten) {
       natStatusUnlisten()
       natStatusUnlisten = null
+    }
+    if (stopPeerEvents) {
+      stopPeerEvents()
+      stopPeerEvents = null
+    }
+    if (peerDiscoveryUnsub) {
+      peerDiscoveryUnsub()
+      peerDiscoveryUnsub = null
     }
     // Note: We do NOT stop the DHT service here
     // The DHT should persist across page navigations
@@ -1765,18 +1824,75 @@
             {$t('network.sendTest')}
           </Button>
         </div>
-        {#if discoveredPeers && discoveredPeers.length > 0}
+        <!-- {#if discoveredPeers && discoveredPeers.length > 0} -->
+         {#if isTauri}
+          <div class="mt-4 space-y-3">
+            <p class="text-sm text-muted-foreground">{$t('network.peerDiscovery.foundPeers', { values: { count: discoveredPeerEntries.length } })}</p>
+            {#if discoveredPeerEntries.length > 0}
+              <ul class="space-y-3">
+                {#each discoveredPeerEntries as peer}
+                  <li class="border rounded p-3 space-y-2 bg-background/50">
+                    <div class="flex items-start justify-between gap-2">
+                      <div class="text-sm font-mono break-all">{peer.peerId}</div>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        class="h-8 w-8"
+                        title={$t('network.quickActions.copyPeerId.button')}
+                        on:click={async () => {
+                          await copy(peer.peerId)
+                          showToast($t('network.quickActions.copyPeerId.success'), 'success')
+                        }}
+                      >
+                        <Clipboard class="h-4 w-4" />
+                      </Button>
+                    </div>
+                    {#if peer.addresses.length > 0}
+                      <div class="space-y-1">
+                        {#each peer.addresses as addr}
+                          <div class="flex items-center justify-between gap-2">
+                            <span class="text-xs font-mono break-all">{addr}</span>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              on:click={() => {
+                                newPeerAddress = addr
+                                showToast($t('network.peerDiscovery.peerAddedToInput'), 'success')
+                              }}
+                            >
+                              {$t('network.peerDiscovery.add')}
+                            </Button>
+                          </div>
+                        {/each}
+                      </div>
+                    {:else}
+                      <p class="text-xs text-muted-foreground">{$t('network.peerMetrics.noPeers')}</p>
+                    {/if}
+                    <p class="text-xs text-muted-foreground">{$t('network.connectedPeers.lastSeen')}: {formatPeerTimestamp(peer.lastSeen)}</p>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+          </div>
+        {:else if webDiscoveredPeers.length > 0}
           <div class="mt-4">
-            <p class="text-sm text-muted-foreground">{$t('network.peerDiscovery.foundPeers', { values: { count: discoveredPeers.length } })}</p>
+            <!-- <p class="text-sm text-muted-foreground">{$t('network.peerDiscovery.foundPeers', { values: { count: discoveredPeers.length } })}</p> -->
+             <p class="text-sm text-muted-foreground">{$t('network.peerDiscovery.foundPeers', { values: { count: webDiscoveredPeers.length } })}</p>
             <ul class="mt-2 space-y-2">
-              {#each discoveredPeers as p}
+              <!-- {#each discoveredPeers as p} -->
+               {#each webDiscoveredPeers as p}
                 <li class="flex items-center justify-between p-2 border rounded">
                   <div class="truncate mr-4">{p}</div>
-                      <div class="flex items-center gap-2">
+                      <!-- <div class="flex items-center gap-2">
                         <Button size="sm" variant="outline" on:click={() => { newPeerAddress = p; showToast($t('network.peerDiscovery.peerAddedToInput'), 'success'); }}>
                           {$t('network.peerDiscovery.add')}
                         </Button>
-                      </div>
+                      </div> -->
+                    <div class="flex items-center gap-2">
+                      <Button size="sm" variant="outline" on:click={() => { newPeerAddress = p; showToast($t('network.peerDiscovery.peerAddedToInput'), 'success'); }}>
+                        {$t('network.peerDiscovery.add')}
+                      </Button>
+                    </div>
                 </li>
               {/each}
             </ul>

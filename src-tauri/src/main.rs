@@ -781,6 +781,24 @@ async fn start_dht_node(
 
             for ev in events {
                 match ev {
+                    DhtEvent::PeerDiscovered { peer_id, addresses } => {
+                        let payload = serde_json::json!({
+                            "peerId": peer_id,
+                            "addresses": addresses,
+                        });
+                        let _ = app_handle.emit("dht_peer_discovered", payload);
+                    }
+                    DhtEvent::PeerConnected { peer_id, address } => {
+                        let payload = serde_json::json!({
+                            "peerId": peer_id,
+                            "address": address,
+                        });
+                        let _ = app_handle.emit("dht_peer_connected", payload);
+                    }
+                    DhtEvent::PeerDisconnected { peer_id } => {
+                        let payload = serde_json::json!({ "peerId": peer_id });
+                        let _ = app_handle.emit("dht_peer_disconnected", payload);
+                    }
                     DhtEvent::ProxyStatus {
                         id,
                         address,
@@ -1109,9 +1127,23 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
         let mapped: Vec<String> = events
             .into_iter()
             .map(|e| match e {
-                DhtEvent::PeerDiscovered(p) => format!("peer_discovered:{}", p),
-                DhtEvent::PeerConnected(p) => format!("peer_connected:{}", p),
-                DhtEvent::PeerDisconnected(p) => format!("peer_disconnected:{}", p),
+                // DhtEvent::PeerDiscovered(p) => format!("peer_discovered:{}", p),
+                // DhtEvent::PeerConnected(p) => format!("peer_connected:{}", p),
+                // DhtEvent::PeerDisconnected(p) => format!("peer_disconnected:{}", p),
+                DhtEvent::PeerDiscovered { peer_id, addresses } => {
+                    let joined = if addresses.is_empty() {
+                        "-".to_string()
+                    } else {
+                        addresses.join("|")
+                    };
+                    format!("peer_discovered:{}:{}", peer_id, joined)
+                }
+                DhtEvent::PeerConnected { peer_id, address } => {
+                    format!("peer_connected:{}:{}", peer_id, address.unwrap_or_default())
+                }
+                DhtEvent::PeerDisconnected { peer_id } => {
+                    format!("peer_disconnected:{}", peer_id)
+                }
                 DhtEvent::FileDiscovered(meta) => format!(
                     "file_discovered:{}:{}:{}",
                     meta.file_hash, meta.file_name, meta.file_size
@@ -2876,6 +2908,7 @@ async fn select_peers_with_strategy(
     count: usize,
     strategy: String,
     require_encryption: bool,
+    blacklisted_peers: Vec<String>,
 ) -> Result<Vec<String>, String> {
     use crate::peer_selection::SelectionStrategy;
 
@@ -2889,11 +2922,16 @@ async fn select_peers_with_strategy(
         _ => SelectionStrategy::Balanced,
     };
 
+    let filtered_peers: Vec<String> = available_peers
+        .into_iter()
+        .filter(|peer| !blacklisted_peers.contains(peer))
+        .collect();
+    
     let dht_guard = state.dht.lock().await;
     if let Some(ref dht) = *dht_guard {
         Ok(dht
             .select_peers_with_strategy(
-                &available_peers,
+                &filtered_peers,
                 count,
                 selection_strategy,
                 require_encryption,

@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { toHumanReadableSize } from "$lib/utils";
 import {ReputationStore} from "$lib/reputationStore";
-
+import { get } from 'svelte/store';
+import { blacklist } from '$lib/stores';
 /**
  * Peer metrics interface matching the Rust struct
  */
@@ -110,24 +111,29 @@ export class PeerSelectionService {
    * Select peers using a specific strategy
    */
   static async selectPeersWithStrategy(
-    availablePeers: string[],
-    count: number,
-    strategy: PeerSelectionStrategy,
-    requireEncryption: boolean = false
-  ): Promise<string[]> {
-    try {
-      const peers = await invoke<string[]>("select_peers_with_strategy", {
-        availablePeers,
-        count,
-        strategy,
-        requireEncryption,
-      });
-      return peers || [];
-    } catch (error) {
-      console.error("Failed to select peers with strategy:", error);
-      return [];
-    }
+  availablePeers: string[],
+  count: number,
+  strategy: PeerSelectionStrategy,
+  requireEncryption: boolean = false
+): Promise<string[]> {
+  try {
+    // Get blacklist from store
+    const blacklistedAddresses = get(blacklist).map(entry => entry.chiral_address);
+    
+    //  Pass blacklist to backend
+    const peers = await invoke<string[]>("select_peers_with_strategy", {
+      availablePeers,
+      count,
+      strategy,
+      requireEncryption,
+      blacklistedPeers: blacklistedAddresses 
+    });
+    return peers || [];
+  } catch (error) {
+    console.error("Failed to select peers with strategy:", error);
+    return [];
   }
+}
 
   /**
    * Set encryption support capability for a peer
