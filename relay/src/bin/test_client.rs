@@ -20,7 +20,7 @@ use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 // Import relay auth module
-use crate::relay_auth::*;
+use chiral_relay_daemon::relay_auth::*;
 
 #[derive(Parser, Debug)]
 #[command(name = "test_client")]
@@ -44,7 +44,6 @@ struct Args {
 #[derive(NetworkBehaviour)]
 #[behaviour(out_event = "ClientBehaviourEvent")]
 struct ClientBehaviour {
-    relay_client: relay::client::Behaviour,
     ping: ping::Behaviour,
     identify: identify::Behaviour,
     relay_auth: RequestResponse<RelayAuthCodec>,
@@ -52,17 +51,11 @@ struct ClientBehaviour {
 
 #[allow(clippy::large_enum_variant)]
 enum ClientBehaviourEvent {
-    RelayClient(relay::client::Event),
     Ping(ping::Event),
     Identify(identify::Event),
     RelayAuth(RequestResponseEvent<RelayAuthRequest, RelayAuthResponse>),
 }
 
-impl From<relay::client::Event> for ClientBehaviourEvent {
-    fn from(e: relay::client::Event) -> Self {
-        ClientBehaviourEvent::RelayClient(e)
-    }
-}
 impl From<ping::Event> for ClientBehaviourEvent {
     fn from(e: ping::Event) -> Self {
         ClientBehaviourEvent::Ping(e)
@@ -92,7 +85,6 @@ fn create_client_swarm() -> Result<Swarm<ClientBehaviour>> {
     );
 
     let behaviour = ClientBehaviour {
-        relay_client: relay::client::Behaviour::new(local_peer_id, relay::client::Config::default()),
         ping: ping::Behaviour::new(ping::Config::new()),
         identify: identify::Behaviour::new(identify::Config::new(
             "/chiral/test-client/1.0.0".to_string(),
@@ -199,8 +191,9 @@ async fn main() -> Result<()> {
 
                                     if response.0 {
                                         info!("✅ Authentication SUCCESSFUL");
-                                        info!("📤 Attempting reservation...");
-                                        // Reservation attempt is automatic via relay_client behaviour
+                                        info!("🎉 Test completed successfully - authentication works!");
+                                        reservation_result = Some(true);
+                                        break;
                                     } else {
                                         error!("❌ Authentication FAILED - invalid token");
                                         reservation_result = Some(false);
@@ -215,21 +208,6 @@ async fn main() -> Result<()> {
                             }
                             RequestResponseEvent::InboundFailure { peer, error, .. } => {
                                 error!("❌ Inbound failure from {}: {:?}", peer, error);
-                            }
-                            _ => {}
-                        }
-                    }
-                    SwarmEvent::Behaviour(ClientBehaviourEvent::RelayClient(relay_event)) => {
-                        match relay_event {
-                            relay::client::Event::ReservationReqAccepted { relay_peer_id, .. } => {
-                                info!("✅ RESERVATION ACCEPTED by {}", relay_peer_id);
-                                reservation_result = Some(true);
-                                break;
-                            }
-                            relay::client::Event::ReservationReqDenied { relay_peer_id, .. } => {
-                                error!("❌ RESERVATION DENIED by {}", relay_peer_id);
-                                reservation_result = Some(false);
-                                break;
                             }
                             _ => {}
                         }

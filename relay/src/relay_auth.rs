@@ -1,7 +1,5 @@
 use libp2p::{
-    request_response::{
-        Behaviour, Config, Event, ProtocolSupport, Message, Codec,
-    },
+    request_response::Codec,
 };
 use async_trait::async_trait;
 use std::io;
