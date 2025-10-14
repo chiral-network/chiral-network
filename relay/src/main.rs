@@ -14,6 +14,11 @@
 /// - Health check endpoint via metrics
 /// - Graceful shutdown handling
 
+/// for relay authentication
+mod relay_auth;
+use relay_auth::*;
+
+
 use anyhow::Result;
 use clap::Parser;
 use futures::StreamExt;
@@ -23,11 +28,14 @@ use libp2p::{
     noise, ping, relay,
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux, Multiaddr, PeerId,
+    request_response::{Behaviour as RequestResponse, Config as RequestResponseConfig, Event as RequestResponseEvent, ProtocolSupport, Message as RequestResponseMessage},
 };
 use std::{
     net::Ipv4Addr,
     path::PathBuf,
     time::Duration,
+    collections::{HashSet},
+    sync::{Arc, Mutex},
 };
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -70,12 +78,41 @@ struct Args {
     metrics_file: Option<PathBuf>,
 }
 
+// Composite event for all behaviours
+#[allow(clippy::large_enum_variant)]
+enum RelayBehaviourEvent {
+    Relay(relay::Event),
+    Ping(ping::Event),
+    Identify(identify::Event),
+    Autonat(autonat::Event),
+    RelayAuth(RequestResponseEvent<RelayAuthRequest, RelayAuthResponse>),
+}
+impl From<relay::Event> for RelayBehaviourEvent {
+    fn from(e: relay::Event) -> Self { RelayBehaviourEvent::Relay(e) }
+}
+impl From<ping::Event> for RelayBehaviourEvent {
+    fn from(e: ping::Event) -> Self { RelayBehaviourEvent::Ping(e) }
+}
+impl From<identify::Event> for RelayBehaviourEvent {
+    fn from(e: identify::Event) -> Self { RelayBehaviourEvent::Identify(e) }
+}
+impl From<autonat::Event> for RelayBehaviourEvent {
+    fn from(e: autonat::Event) -> Self { RelayBehaviourEvent::Autonat(e) }
+}
+impl From<RequestResponseEvent<RelayAuthRequest, RelayAuthResponse>> for RelayBehaviourEvent {
+    fn from(e: RequestResponseEvent<RelayAuthRequest, RelayAuthResponse>) -> Self {
+        RelayBehaviourEvent::RelayAuth(e)
+    }
+}
+
 #[derive(NetworkBehaviour)]
+#[behaviour(out_event = "RelayBehaviourEvent")]
 struct RelayBehaviour {
     relay: relay::Behaviour,
     ping: ping::Behaviour,
     identify: identify::Behaviour,
     autonat: autonat::Behaviour,
+    relay_auth: RequestResponse<RelayAuthCodec>,
 }
 
 #[derive(serde::Serialize)]
@@ -131,11 +168,29 @@ async fn main() -> Result<()> {
         info!("📝 PID {} written to {}", pid, pid_path.display());
     }
 
-    // Configure relay behaviour with limits
+    // === TOKEN SETUP ===
+    // Replace with your real tokens!
+    let tokens: HashSet<Vec<u8>> = [
+        b"mysecrettoken1".to_vec(),
+        b"mysecrettoken2".to_vec(),
+    ].iter().cloned().collect();
+    // Track authenticated peers
+    let authed_peers: Arc<Mutex<HashSet<PeerId>>> = Arc::new(Mutex::new(HashSet::new()));
+
+    // Relay Auth protocol setup
+    let relay_auth_protocols = std::iter::once((RelayAuthProtocol(), ProtocolSupport::Full));
+    let relay_auth = RequestResponse::new(
+        relay_auth_protocols,
+        RequestResponseConfig::default(),
+    );
+
+    // === RELAY CONFIG ===
+    // Note: In libp2p 0.54, reservation_handler is not supported
+    // Authentication will be handled at the application level
     let relay_config = relay::Config {
-        max_reservations: args.max_reservations,
-        max_circuits: args.max_circuits,
-        reservation_duration: Duration::from_secs(3600), // 1 hour
+        max_reservations_per_peer: args.max_reservations,
+        max_circuits_per_peer: args.max_circuits,
+        max_circuit_duration: Duration::from_secs(3600), // 1 hour
         ..Default::default()
     };
 
@@ -147,6 +202,7 @@ async fn main() -> Result<()> {
             local_key.public(),
         )),
         autonat: autonat::Behaviour::new(local_peer_id, autonat::Config::default()),
+        relay_auth,
     };
 
     // Build the swarm using the manual approach compatible with libp2p 0.54
@@ -196,11 +252,19 @@ async fn main() -> Result<()> {
                     SwarmEvent::Behaviour(RelayBehaviourEvent::Relay(relay_event)) => {
                         match relay_event {
                             relay::Event::ReservationReqAccepted { src_peer_id, .. } => {
-                                reservation_count += 1;
-                                info!("✅ Reservation accepted for peer: {}", src_peer_id);
+                                if authed_peers.lock().unwrap().contains(&src_peer_id) {
+                                    reservation_count += 1;
+                                    info!("✅ Reservation accepted for authenticated peer: {}", src_peer_id);
+                                } else {
+                                    warn!("⚠️  Reservation accepted for unauthenticated peer: {} (should not happen)", src_peer_id);
+                                }
                             }
                             relay::Event::ReservationReqDenied { src_peer_id } => {
-                                warn!("⚠️  Reservation denied for peer: {}", src_peer_id);
+                                if authed_peers.lock().unwrap().contains(&src_peer_id) {
+                                    warn!("⚠️  Reservation denied for authenticated peer: {}", src_peer_id);
+                                } else {
+                                    info!("🔒 Reservation denied for unauthenticated peer: {}", src_peer_id);
+                                }
                             }
                             relay::Event::ReservationTimedOut { src_peer_id } => {
                                 reservation_count = reservation_count.saturating_sub(1);
@@ -232,6 +296,26 @@ async fn main() -> Result<()> {
                                 circuit_count = circuit_count.saturating_sub(1);
                                 debug!("❌ Circuit closed: {} -> {}", src_peer_id, dst_peer_id);
                             }
+                        }
+                    }
+                    SwarmEvent::Behaviour(RelayBehaviourEvent::RelayAuth(event)) => {
+                        match event {
+                            RequestResponseEvent::Message { peer, message } => {
+                                match message {
+                                    RequestResponseMessage::Request { request, channel, .. } => {
+                                        let accepted = tokens.contains(&request.0);
+                                        if accepted {
+                                            authed_peers.lock().unwrap().insert(peer);
+                                            info!("✅ Authenticated peer for relay: {}", peer);
+                                        } else {
+                                            warn!("❌ Invalid relay token from peer: {}", peer);
+                                        }
+                                        swarm.behaviour_mut().relay_auth.send_response(channel, RelayAuthResponse(accepted)).unwrap();
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     SwarmEvent::Behaviour(RelayBehaviourEvent::Identify(identify_event)) => {
