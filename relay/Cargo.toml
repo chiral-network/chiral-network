@@ -27,6 +27,7 @@ futures = "0.3"
 rand = "0.8"
 async-trait = "0.1"
 async-std = { version = "1.12", features = ["attributes"] }
+web-time = "1.1"
 
 [profile.dev]
 incremental = true
