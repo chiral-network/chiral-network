@@ -617,18 +617,11 @@
       return;
     }
 
-    // In Tauri mode, use DHT backend for peer discovery
+    // In Tauri mode, peer discovery happens automatically via DHT events
+    // This button just shows the current count
     if (isTauri) {
-      try {
-        showToast('Discovering peers via DHT...', 'info');
-        const peers = await invoke<string[]>('get_dht_connected_peers');
-        discoveredPeers = peers;
-        console.log('Discovered peers from DHT:', discoveredPeers);
-        showToast(tr('network.peerDiscovery.discoveryStarted', { values: { count: discoveredPeers.length } }), 'success');
-      } catch (error) {
-        console.error('Failed to discover peers:', error);
-        showToast('Failed to discover peers: ' + error, 'error');
-      }
+      const discoveryCount = discoveredPeerEntries.length;
+      showToast(tr('network.peerDiscovery.discoveryStarted', { values: { count: discoveryCount } }), 'info');
       return;
     }
 
