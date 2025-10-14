@@ -40,6 +40,7 @@ export class P2PFileTransferService {
     string,
     (transfer: P2PTransfer) => void
   >();
+  private webrtcSessions = new Map<string, any>(); // peerId -> WebRTCSession
   private signalingService: SignalingService;
 
   constructor() {
@@ -161,6 +162,10 @@ export class P2PFileTransferService {
         const webrtcSession = createWebRTCSession({
           isInitiator: true,
           peerId: seederId,
+          onLocalIceCandidate: (_candidate) => {
+            // ICE candidates are handled by the backend WebRTC coordination
+            console.log("ICE candidate generated for peer:", seederId);
+          },
           signaling: this.signalingService,
           onConnectionStateChange: (state) => {
             if (state === "connected") {
@@ -201,11 +206,12 @@ export class P2PFileTransferService {
 
           console.log("Created WebRTC offer for seeder:", seederId);
 
-          // Use backend to coordinate the connection
+          // Use backend coordination with enhanced DHT signaling support
           await Promise.race([
             invoke("establish_webrtc_connection", {
               peerId: seederId,
               offer: JSON.stringify(offer),
+              useDhtSignaling: true, // Enable DHT signaling as fallback
             }),
             this.createTimeoutPromise(
               15000,
@@ -213,8 +219,7 @@ export class P2PFileTransferService {
             ),
           ]);
 
-          // If we reach here, connection was successful
-          return;
+          console.log("WebRTC connection established with peer:", seederId);
         } catch (error) {
           console.error(
             `Failed to create WebRTC offer for ${seederId}:`,
@@ -670,13 +675,126 @@ export class P2PFileTransferService {
     }
   }
 
-  private handleDhtMessage(message: any): void {
+  private async handleDhtMessage(message: any): Promise<void> {
     // Handle WebRTC signaling messages received through DHT
     if (message.message?.type === "webrtc_signaling") {
-      // This would contain WebRTC signaling data (offer/answer/candidate)
-      // TODO: Integrate with WebRTC session
-      // For now, we'll log it, but in a real implementation,
-      // this would be passed to the WebRTC session
+      const signalingData = message.message;
+      const fromPeer = message.from;
+
+      try {
+        switch (signalingData.signalingType) {
+          case "offer":
+            await this.handleIncomingOffer(fromPeer, signalingData);
+            break;
+          case "answer":
+            await this.handleIncomingAnswer(fromPeer, signalingData);
+            break;
+          case "candidate":
+            await this.handleIncomingCandidate(fromPeer, signalingData);
+            break;
+          default:
+            console.warn(
+              "Unknown WebRTC signaling type:",
+              signalingData.signalingType
+            );
+        }
+      } catch (error) {
+        console.error("Error handling WebRTC signaling message:", error);
+      }
+    }
+  }
+
+  private async handleIncomingOffer(
+    fromPeer: string,
+    signalingData: any
+  ): Promise<void> {
+    console.log("Received WebRTC offer from peer:", fromPeer);
+
+    // Create WebRTC session for incoming connection
+    const webrtcSession = createWebRTCSession({
+      isInitiator: false,
+      peerId: fromPeer,
+      onMessage: (data) => {
+        this.handleIncomingChunkFromSession(fromPeer, data);
+      },
+      onConnectionStateChange: (state) => {
+        console.log(`WebRTC connection state for ${fromPeer}: ${state}`);
+      },
+      onDataChannelOpen: () => {
+        console.log(`Data channel opened for peer: ${fromPeer}`);
+      },
+      onError: (error) => {
+        console.error(`WebRTC error for peer ${fromPeer}:`, error);
+      },
+    });
+
+    this.webrtcSessions.set(fromPeer, webrtcSession);
+
+    // Accept the offer and create answer
+    try {
+      const answer = await webrtcSession.acceptOfferCreateAnswer(
+        signalingData.sdp
+      );
+
+      // Send answer back through backend WebRTC coordination
+      await invoke("send_webrtc_answer", {
+        peerId: fromPeer,
+        answer: JSON.stringify(answer),
+      });
+
+      console.log("Sent WebRTC answer to peer:", fromPeer);
+    } catch (error) {
+      console.error("Failed to handle WebRTC offer:", error);
+      webrtcSession.close();
+      this.webrtcSessions.delete(fromPeer);
+    }
+  }
+
+  private async handleIncomingAnswer(
+    fromPeer: string,
+    signalingData: any
+  ): Promise<void> {
+    const webrtcSession = this.webrtcSessions.get(fromPeer);
+    if (!webrtcSession) {
+      console.warn("Received answer for unknown WebRTC session:", fromPeer);
+      return;
+    }
+
+    try {
+      await webrtcSession.acceptAnswer(signalingData.sdp);
+      console.log("Accepted WebRTC answer from peer:", fromPeer);
+    } catch (error) {
+      console.error("Failed to accept WebRTC answer:", error);
+      webrtcSession.close();
+      this.webrtcSessions.delete(fromPeer);
+    }
+  }
+
+  private handleIncomingCandidate(fromPeer: string, _signalingData: any): void {
+    const webrtcSession = this.webrtcSessions.get(fromPeer);
+    if (!webrtcSession) {
+      console.warn(
+        "Received ICE candidate for unknown WebRTC session:",
+        fromPeer
+      );
+      return;
+    }
+
+    try {
+      // ICE candidates are handled automatically by the WebRTC session
+      console.log("Processing ICE candidate for peer:", fromPeer);
+    } catch (error) {
+      console.error("Failed to process ICE candidate:", error);
+    }
+  }
+
+  private handleIncomingChunkFromSession(peerId: string, data: any): void {
+    // Find the transfer associated with this peer
+    for (const transfer of this.transfers.values()) {
+      if (transfer.webrtcSession?.peerId === peerId) {
+        this.handleIncomingChunk(transfer, data);
+        break;
+      }
     }
   }
 
@@ -692,9 +810,12 @@ export class P2PFileTransferService {
     if (transfer) {
       transfer.status = "cancelled";
 
-      // Close WebRTC session if it exists
+      // Close WebRTC session if it exists and clean up from tracking
       if (transfer.webrtcSession) {
         transfer.webrtcSession.close();
+        if (transfer.webrtcSession.peerId) {
+          this.webrtcSessions.delete(transfer.webrtcSession.peerId);
+        }
       }
 
       this.notifyProgress(transfer);

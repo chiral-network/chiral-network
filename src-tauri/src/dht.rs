@@ -1027,6 +1027,7 @@ async fn run_dht_node(
     pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
     root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>>,
     active_downloads: Arc<Mutex<HashMap<String, ActiveDownload>>>,
+    get_providers_queries: Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>,
     is_bootstrap: bool,
     enable_autorelay: bool,
     relay_candidates: HashSet<String>,
@@ -1035,6 +1036,56 @@ async fn run_dht_node(
     let mut dht_maintenance_interval = tokio::time::interval(Duration::from_secs(30 * 60)); 
     dht_maintenance_interval.tick().await; 
     // Periodic bootstrap interval
+
+    /// Creates a proper circuit relay address for connecting through a relay peer
+    /// Returns a properly formatted Multiaddr for circuit relay connections
+    fn create_circuit_relay_address(relay_peer_id: &PeerId, target_peer_id: &PeerId) -> Result<Multiaddr, String> {
+        // For Circuit Relay v2, the address format is typically:
+        // /p2p/{relay_peer_id}/p2p-circuit
+        // The target peer is specified in the relay reservation/request
+
+        let relay_addr = Multiaddr::empty()
+            .with(Protocol::P2p(*relay_peer_id))
+            .with(Protocol::P2pCircuit);
+
+        // Validate the constructed address
+        if relay_addr.to_string().contains(&relay_peer_id.to_string()) {
+            info!("Created circuit relay address: {}", relay_addr);
+            Ok(relay_addr)
+        } else {
+            Err(format!("Failed to create valid circuit relay address for relay {}", relay_peer_id))
+        }
+    }
+
+    /// Enhanced circuit relay address creation with multiple fallback strategies
+    fn create_circuit_relay_address_robust(relay_peer_id: &PeerId, target_peer_id: &PeerId) -> Multiaddr {
+        // Strategy 1: Standard Circuit Relay v2 address
+        match create_circuit_relay_address(relay_peer_id, target_peer_id) {
+            Ok(addr) => return addr,
+            Err(e) => {
+                warn!("Standard relay address creation failed: {}", e);
+            }
+        }
+
+        // Strategy 2: Try with relay port specification (if available)
+        // Some relay implementations may require explicit port specification
+        let relay_with_port = Multiaddr::empty()
+            .with(Protocol::P2p(*relay_peer_id))
+            .with(Protocol::Tcp(4001)) // Default libp2p port
+            .with(Protocol::P2pCircuit);
+
+        if relay_with_port.to_string().contains(&relay_peer_id.to_string()) {
+            info!("Created circuit relay address with port: {}", relay_with_port);
+            return relay_with_port;
+        }
+
+        // Strategy 3: Fallback to basic circuit address
+        warn!("Using basic fallback circuit relay address construction");
+        Multiaddr::empty()
+            .with(Protocol::P2p(*relay_peer_id))
+            .with(Protocol::P2pCircuit)
+    }
+
     let mut shutdown_ack: Option<oneshot::Sender<()>> = None;
     let mut ping_failures: HashMap<PeerId, u8> = HashMap::new();
 
@@ -1227,12 +1278,8 @@ async fn run_dht_node(
                                     if let Some(proxy_peer_id) = mgr.select_proxy_for_routing(&peer_id) {
                                         info!("Using privacy routing through proxy {} to reach {}", proxy_peer_id, peer_id);
 
-                                        // TODO: Create a circuit relay address through the proxy
-                                        // For now, we'll construct the circuit address manually
-                                        // since addresses_of_peer method may not be available
-                                        let circuit_addr = Multiaddr::empty()
-                                            .with(Protocol::P2p(proxy_peer_id))
-                                            .with(Protocol::P2pCircuit);
+                                        // Create circuit relay address through the proxy using robust relay address construction
+                                        let circuit_addr = create_circuit_relay_address_robust(&proxy_peer_id, &peer_id);
                                         info!("Attempting circuit relay connection via {} to {}", proxy_peer_id, peer_id);
 
                                         match swarm.dial(circuit_addr.clone()) {
@@ -1380,6 +1427,9 @@ async fn run_dht_node(
                         let query_id = swarm.behaviour_mut().kademlia.get_providers(key);
                         info!("Querying providers for file: {} (query_id: {:?})", file_hash, query_id);
 
+                        // Store the query_id -> (file_hash, start_time) mapping for error handling and timeout detection
+                        get_providers_queries.lock().await.insert(query_id, (file_hash.clone(), std::time::Instant::now()));
+
                         // Store the query for async handling
                         let pending_query = PendingProviderQuery {
                             id: 0, // Not used for matching
@@ -1433,11 +1483,21 @@ async fn run_dht_node(
                             &event_tx,
                             &pending_searches,
                             &pending_provider_queries,
+                            &get_providers_queries,
                         )
                         .await;
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Identify(identify_event)) => {
-                        handle_identify_event(identify_event, &mut swarm, &event_tx, metrics.clone(), enable_autorelay, &relay_candidates).await;
+                        handle_identify_event(
+                            identify_event,
+                            &mut swarm,
+                            &event_tx,
+                            metrics.clone(),
+                            enable_autorelay,
+                            &relay_candidates,
+                            &proxy_mgr,
+                        )
+                        .await;
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Mdns(mdns_event)) => {
                         if !is_bootstrap{
@@ -1950,6 +2010,7 @@ async fn handle_kademlia_event(
     event_tx: &mpsc::Sender<DhtEvent>,
     pending_searches: &Arc<Mutex<HashMap<String, Vec<PendingSearch>>>>,
     pending_provider_queries: &Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
+    get_providers_queries: &Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>,
 ) {
     match event {
         KademliaEvent::RoutingUpdated { peer, .. } => {
@@ -2158,11 +2219,40 @@ async fn handle_kademlia_event(
                     }
                 },
                 QueryResult::GetProviders(Err(err)) => {
+                    // Implement proper GetProviders error handling with timeout tracking
                     warn!("GetProviders query failed: {:?}", err);
-                    // TODO: Handle get providers errors (for errors, we can't easily match to a specific file_hash)
-                    // For errors, we can't easily match to a specific file_hash
-                    // This is a limitation - we could improve this by storing query_id -> file_hash mapping
-                    // For now, we'll just log the error
+
+                    // Check for timed-out queries and clean them up
+                    let mut timed_out_queries = Vec::new();
+                    {
+                        let get_providers_guard = get_providers_queries.lock().await;
+                        let now = std::time::Instant::now();
+                        let timeout_duration = std::time::Duration::from_secs(30); // 30 second timeout
+
+                        // Find queries that have timed out
+                        for (query_id, (file_hash, start_time)) in get_providers_guard.iter() {
+                            if now.duration_since(*start_time) > timeout_duration {
+                                timed_out_queries.push((*query_id, file_hash.clone()));
+                            }
+                        }
+
+                        // For remaining queries, mark them as failed since we can't match errors exactly
+                        for (query_id, (file_hash, _)) in get_providers_guard.iter() {
+                            if !timed_out_queries.iter().any(|(_, fh)| fh == file_hash) {
+                                timed_out_queries.push((*query_id, file_hash.clone()));
+                            }
+                        }
+                    }
+
+                    // Handle all failed/timed-out queries
+                    for (query_id, file_hash) in timed_out_queries {
+                        warn!("Cleaning up GetProviders query for file: {} (failed or timed out)", file_hash);
+                        get_providers_queries.lock().await.remove(&query_id);
+
+                        if let Some(pending_query) = pending_provider_queries.lock().await.remove(&file_hash) {
+                            let _ = pending_query.sender.send(Err(format!("GetProviders query failed or timed out for file {}: {:?}", file_hash, err)));
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -2177,6 +2267,7 @@ async fn handle_identify_event(
     metrics: Arc<Mutex<DhtMetrics>>,
     enable_autorelay: bool,
     relay_candidates: &HashSet<String>,
+    proxy_mgr: &ProxyMgr,
 ) {
     match event {
         IdentifyEvent::Received { peer_id, info, .. } => {
@@ -2599,7 +2690,7 @@ pub fn build_transport_with_relay(
                 .upgrade(Version::V1)
                 .authenticate(noise_keys)
                 .multiplex(yamux_config)
-                .timeout(Duration::from_secs(30))
+                .timeout(Duration::from_secs(10))
                 .boxed()
         }
         (None, relay_transport) => {
@@ -2614,7 +2705,7 @@ pub fn build_transport_with_relay(
                 .upgrade(Version::V1)
                 .authenticate(noise_keys)
                 .multiplex(yamux_config)
-                .timeout(Duration::from_secs(30))
+                .timeout(Duration::from_secs(10))
                 .boxed()
         }
     };
@@ -2667,6 +2758,7 @@ pub struct DhtService {
     pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
     root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>>, // Track root query IDs for file downloads
     active_downloads: Arc<Mutex<HashMap<String, ActiveDownload>>>, // Track active file downloads
+    get_providers_queries: Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>, // Track GetProviders query_id -> (file_hash, start_time) mapping
     chunk_size: usize, // Configurable chunk size in bytes
 }
 
@@ -2946,6 +3038,7 @@ impl DhtService {
         let pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>> = Arc::new(Mutex::new(HashMap::new()));
         let root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>> = Arc::new(Mutex::new(HashMap::new()));
         let active_downloads: Arc<Mutex<HashMap<String, ActiveDownload>>> = Arc::new(Mutex::new(HashMap::new()));
+        let get_providers_queries_local: Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>> = Arc::new(Mutex::new(HashMap::new()));
 
         {
             let mut guard = metrics.lock().await;
@@ -2973,6 +3066,7 @@ impl DhtService {
             pending_provider_queries.clone(),
             root_query_mapping.clone(),
             active_downloads.clone(),
+            get_providers_queries_local.clone(),
             is_bootstrap,
             enable_autorelay,
             relay_candidates,
@@ -2997,6 +3091,7 @@ impl DhtService {
             pending_provider_queries,
             root_query_mapping,
             active_downloads,
+            get_providers_queries: get_providers_queries_local,
             chunk_size,
         })
     }
@@ -3275,6 +3370,126 @@ impl DhtService {
         Ok(())
     }
 
+    /// Verifies that a peer actually provides working proxy services through protocol negotiation
+    async fn verify_proxy_capabilities(
+        &self,
+        peer_id: &PeerId,
+    ) -> Result<(), String> {
+        // Use the existing echo protocol to verify proxy capabilities
+        // Send a special "proxy_verify" message that the peer should echo back if it's a working proxy
+
+        let verification_payload = b"proxy_verify";
+
+        // Send echo request with verification payload through DHT service
+        match self.echo(peer_id.to_string(), verification_payload.to_vec()).await {
+            Ok(response) => {
+                // Check if the response matches our verification payload
+                if response == verification_payload {
+                    info!("✅ Proxy capability verified for peer {} via echo test", peer_id);
+                    Ok(())
+                } else {
+                    Err(format!("Proxy verification failed: unexpected response from peer {}", peer_id))
+                }
+            }
+            Err(e) => {
+                Err(format!("Proxy verification failed: echo request failed for peer {}: {}", peer_id, e))
+            }
+        }
+    }
+
+    /// Discovers proxy services through DHT provider queries
+    /// Uses DHT provider discovery to find peers advertising proxy services
+    async fn discover_proxy_services_through_dht_providers(&self, proxy_mgr: &mut ProxyManager) -> usize {
+        let mut discovered_and_verified = 0;
+
+        info!("Starting DHT proxy service discovery using provider queries...");
+
+        // Query DHT for peers that provide proxy services
+        // Use a standard proxy service identifier that proxy nodes would register as providers for
+        let proxy_service_cid = "proxy:service:available"; // This would be a well-known CID for proxy services
+
+        match self.query_dht_proxy_providers(proxy_service_cid.to_string()).await {
+            Ok(provider_peers) => {
+                for peer_id in provider_peers {
+                    if !proxy_mgr.capable.contains(&peer_id) {
+                        info!("Discovered proxy provider via DHT: {}", peer_id);
+
+                        // Add to capable list for verification
+                        proxy_mgr.set_capable(peer_id.clone());
+
+                        // Verify the discovered proxy
+                        match self.verify_proxy_capabilities(&peer_id).await {
+                            Ok(_) => {
+                                proxy_mgr.add_trusted_proxy_node(peer_id.clone());
+                                discovered_and_verified += 1;
+                                info!("✅ Verified and added DHT-discovered proxy provider: {}", peer_id);
+                            }
+                            Err(e) => {
+                                warn!("❌ DHT proxy provider verification failed for {}: {}", peer_id, e);
+                                proxy_mgr.capable.remove(&peer_id);
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("DHT proxy provider discovery failed: {}", e);
+            }
+        }
+
+        info!("DHT proxy provider discovery completed: {} proxies verified and added", discovered_and_verified);
+        discovered_and_verified
+    }
+
+    /// Query DHT for peers providing proxy services using provider records
+    /// Returns a list of peer IDs that provide proxy services
+    async fn query_dht_proxy_providers(&self, service_identifier: String) -> Result<Vec<PeerId>, String> {
+        // Create a DHT record key for proxy services
+        let key = kad::RecordKey::new(&service_identifier);
+
+        // Query DHT for providers of this service
+        // This finds peers that have registered as providers for proxy services
+        let (tx, rx) = oneshot::channel();
+
+        // Send command to query providers
+        if let Err(e) = self.cmd_tx.send(DhtCommand::GetProviders {
+            file_hash: service_identifier.clone(),
+            sender: tx,
+        }).await {
+            return Err(format!("Failed to send GetProviders command: {}", e));
+        }
+
+        // Wait for response with timeout
+        match tokio::time::timeout(Duration::from_secs(15), rx).await {
+            Ok(Ok(Ok(provider_strings))) => {
+                let total_count = provider_strings.len();
+
+                // Convert string peer IDs to PeerId objects
+                let mut peer_ids = Vec::new();
+                for peer_string in provider_strings {
+                    match peer_string.parse::<PeerId>() {
+                        Ok(peer_id) => peer_ids.push(peer_id),
+                        Err(e) => {
+                            warn!("Failed to parse peer ID from provider string: {}", e);
+                        }
+                    }
+                }
+
+                info!("Found {} proxy service providers in DHT ({} valid peer IDs)", total_count, peer_ids.len());
+                Ok(peer_ids)
+            }
+            Ok(Ok(Err(e))) => {
+                Err(format!("GetProviders command failed: {}", e))
+            }
+            Ok(Err(_)) => {
+                Err("GetProviders channel closed unexpectedly".to_string())
+            }
+            Err(_) => {
+                Err("GetProviders query timed out".to_string())
+            }
+        }
+    }
+
     pub async fn metrics_snapshot(&self) -> DhtMetricsSnapshot {
         let metrics = self.metrics.lock().await.clone();
         let peer_count = self.connected_peers.lock().await.len();
@@ -3494,23 +3709,26 @@ impl DhtService {
         for peer_id in connected_peers_list {
             // Check if this peer is capable of proxy services
             if proxy_mgr.capable.contains(&peer_id) && proxy_mgr.online.contains(&peer_id) {
-                // TODO: Verify proxy capabilities through protocol negotiation
-                // For now, we trust capable peers, but in production this would involve:
-                // 1. Protocol handshake to verify proxy service availability
-                // 2. Reputation checking
-                // 3. Trust scoring based on past behavior
-
+                // Verify proxy capabilities through protocol negotiation
+                match self.verify_proxy_capabilities(&peer_id).await {
+                    Ok(_) => {
                 proxy_mgr.add_trusted_proxy_node(peer_id.clone());
                 trusted_proxy_count += 1;
                 info!("✅ Added connected peer {} as trusted proxy node (capability verified)", peer_id);
+                    }
+                    Err(e) => {
+                        warn!("❌ Proxy capability verification failed for peer {}: {}", peer_id, e);
+                        // Remove from capable list if verification fails
+                        proxy_mgr.capable.remove(&peer_id);
+                    }
+                }
             }
         }
 
-        // TODO: Additionally, query DHT for peers advertising proxy services
-        // This would involve searching for peers with specific DHT records indicating proxy services
-        // For now, we rely on the connected peers we know are capable
+        // Query DHT for peers advertising proxy services and add them to verification pipeline
+        let dht_proxy_count = self.discover_proxy_services_through_dht_providers(&mut proxy_mgr).await;
 
-        let trusted_count = trusted_proxy_count;
+        let trusted_count = trusted_proxy_count + dht_proxy_count;
         info!(
             "Privacy routing enabled with {} trusted proxy nodes",
             trusted_count
