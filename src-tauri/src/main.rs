@@ -2876,6 +2876,7 @@ async fn select_peers_with_strategy(
     count: usize,
     strategy: String,
     require_encryption: bool,
+    blacklisted_peers: Vec<String>,
 ) -> Result<Vec<String>, String> {
     use crate::peer_selection::SelectionStrategy;
 
@@ -2889,11 +2890,16 @@ async fn select_peers_with_strategy(
         _ => SelectionStrategy::Balanced,
     };
 
+    let filtered_peers: Vec<String> = available_peers
+        .into_iter()
+        .filter(|peer| !blacklisted_peers.contains(peer))
+        .collect();
+    
     let dht_guard = state.dht.lock().await;
     if let Some(ref dht) = *dht_guard {
         Ok(dht
             .select_peers_with_strategy(
-                &available_peers,
+                &filtered_peers,
                 count,
                 selection_strategy,
                 require_encryption,
