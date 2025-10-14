@@ -10,6 +10,8 @@ use futures::{AsyncReadExt as _, AsyncWriteExt as _};
 use futures_util::StreamExt;
 use libp2p::multiaddr::Protocol;
 pub use multihash_codetable::{Code, MultihashDigest};
+use rs_merkle::{Hasher, MerkleTree};
+use crate::manager::Sha256Hasher;
 use relay::client::Event as RelayClientEvent;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -90,7 +92,8 @@ pub struct FileMetadata {
     // --- VERSIONING FIELDS ---
     pub version: Option<u32>,
     pub parent_hash: Option<String>,
-    pub cids: Option<Vec<Cid>>, // list of CIDs for all chunks
+    /// The root CID(s) for retrieving the file from Bitswap. Usually one.
+    pub cids: Option<Vec<Cid>>,
     pub is_root: bool,
 }
 
@@ -1106,13 +1109,12 @@ async fn run_dht_node(
                     }
                     Some(DhtCommand::PublishFile(mut metadata)) => {
                         // If file_data is NOT empty (non-encrypted files or inline data),
-                        // create blocks and generate a root CID
+                        // create blocks, generate a Merkle root, and a root CID.
                         if !metadata.file_data.is_empty() {
-                            // Store the Merkle root before processing
-                            let original_merkle_root = metadata.merkle_root.clone();
-
                             let blocks = split_into_blocks(&metadata.file_data, chunk_size);
                             let mut block_cids = Vec::new();
+                            let mut original_chunk_hashes: Vec<[u8; 32]> = Vec::new();
+
                             for (idx, block) in blocks.iter().enumerate() {
                                 let cid = match block.cid() {
                                     Ok(c) => c,
@@ -1122,6 +1124,9 @@ async fn run_dht_node(
                                         return;
                                     }
                                 };
+                                // Also hash the original data for the Merkle root
+                                original_chunk_hashes.push(Sha256Hasher::hash(block.data()));
+
                                 println!("block {} size={} cid={}", idx, block.data().len(), cid);
 
                                 match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(cid.clone(), block.data().to_vec())                          {
@@ -1134,6 +1139,10 @@ async fn run_dht_node(
                                 };
                                 block_cids.push(cid);
                             }
+
+                            // Build the Merkle tree from original chunk hashes
+                            let merkle_tree = MerkleTree::<Sha256Hasher>::from_leaves(&original_chunk_hashes);
+                            let merkle_root = merkle_tree.root().ok_or("Failed to compute Merkle root").unwrap();
 
                             // Create root block containing just the CIDs
                             let root_block_data = match serde_json::to_vec(&block_cids) {
@@ -1155,18 +1164,13 @@ async fn run_dht_node(
                                 }
                             }
 
-                            // Clear file data and set file hash to root CID
+                            // The file_hash is the Merkle Root. The root_cid is for retrieval.
+                            metadata.file_hash = hex::encode(merkle_root);
+                            metadata.cids = Some(vec![root_cid]); // Store the root CID for bitswap retrieval
                             metadata.file_data.clear();
-                            metadata.file_hash = root_cid.to_string();
-                            // Preserve the Merkle root if it was provided
-                            if original_merkle_root.is_some() {
-                                metadata.merkle_root = original_merkle_root;
-                            }
-                            // Don't store CIDs in metadata - they're in the root block now
-                            metadata.cids = None;
 
                             println!("Publishing file with root CID: {} (merkle_root: {:?})",
-                                metadata.file_hash, metadata.merkle_root);
+                                root_cid, metadata.file_hash);
                         } else {
                             // File data is empty - chunks and root block are already in Bitswap
                             // (from streaming upload or pre-processed encrypted file)
@@ -1187,6 +1191,7 @@ async fn run_dht_node(
                             "key_fingerprint": metadata.key_fingerprint,
                             "version": metadata.version,
                             "parent_hash": metadata.parent_hash,
+                            "cids": metadata.cids, // The root CID for Bitswap
                             "merkle_root": metadata.merkle_root, // <-- Ensure Merkle root is included
                         });
 
