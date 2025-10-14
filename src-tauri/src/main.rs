@@ -709,6 +709,9 @@ async fn start_dht_node(
     is_bootstrap: Option<bool>,
     chunk_size_kb: Option<usize>,
     cache_size_mb: Option<usize>,
+    // New optional relay controls
+    enable_autorelay: Option<bool>,
+    preferred_relays: Option<Vec<String>>,
 ) -> Result<String, String> {
     {
         let dht_guard = state.dht.lock().await;
@@ -746,8 +749,8 @@ async fn start_dht_node(
         file_transfer_service,
         chunk_size_kb,
         cache_size_mb,
-        false, // enable_autorelay - hardcoded to false for CLI start
-        Vec::new(), // preferred_relays
+        enable_autorelay.unwrap_or(false),
+        preferred_relays.unwrap_or_default(),
     )
     .await
     .map_err(|e| format!("Failed to start DHT: {}", e))?;

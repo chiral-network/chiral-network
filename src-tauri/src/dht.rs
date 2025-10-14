@@ -436,6 +436,7 @@ pub struct DhtMetricsSnapshot {
     pub last_error_at: Option<u64>,
     pub bootstrap_failures: u64,
     pub listen_addrs: Vec<String>,
+    pub relay_listen_addrs: Vec<String>,
     pub reachability: NatReachabilityState,
     pub reachability_confidence: NatConfidence,
     pub last_reachability_change: Option<u64>,
@@ -845,6 +846,13 @@ impl DhtMetricsSnapshot {
             ..
         } = metrics;
 
+        // Derive relay listen addresses (those that include p2p-circuit)
+        let relay_listen_addrs: Vec<String> = listen_addrs
+            .iter()
+            .filter(|a| a.contains("p2p-circuit"))
+            .cloned()
+            .collect();
+
         let history: Vec<NatHistoryItem> = reachability_history
             .into_iter()
             .map(|record| NatHistoryItem {
@@ -868,6 +876,7 @@ impl DhtMetricsSnapshot {
             last_error_at: last_error_at.and_then(to_secs),
             bootstrap_failures,
             listen_addrs,
+            relay_listen_addrs,
             reachability: reachability_state,
             reachability_confidence,
             last_reachability_change: last_reachability_change.and_then(to_secs),
@@ -2586,6 +2595,11 @@ async fn handle_external_addr_confirmed(
     }
 
     if let Some(relay_peer_id) = extract_relay_peer(addr) {
+        // Update relay metrics to reflect an active (listening) relay external address
+        if let Ok(mut m) = metrics.try_lock() {
+            m.active_relay_peer_id = Some(relay_peer_id.to_string());
+            m.relay_reservation_status = Some("active".to_string());
+        }
         let mut mgr = proxy_mgr.lock().await;
         let newly_ready = mgr.mark_relay_ready(relay_peer_id.clone());
         drop(mgr);
@@ -2640,6 +2654,12 @@ async fn handle_external_addr_expired(
     }
 
     if let Some(relay_peer_id) = extract_relay_peer(addr) {
+        // Mark relay as expired in metrics
+        if let Ok(mut m) = metrics.try_lock() {
+            m.relay_reservation_status = Some("expired".to_string());
+            m.active_relay_peer_id = None;
+            m.reservation_evictions = m.reservation_evictions.saturating_add(1);
+        }
         let mut mgr = proxy_mgr.lock().await;
         mgr.relay_ready.remove(&relay_peer_id);
         mgr.relay_pending.remove(&relay_peer_id);
