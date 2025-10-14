@@ -191,9 +191,20 @@ pub enum DhtCommand {
 
 #[derive(Debug, Clone, Serialize)]
 pub enum DhtEvent {
-    PeerDiscovered(String),
-    PeerConnected(String),
-    PeerDisconnected(String),
+    // PeerDiscovered(String),
+    // PeerConnected(String),
+    // PeerDisconnected(String),
+    PeerDiscovered {
+        peer_id: String,
+        addresses: Vec<String>,
+    },
+    PeerConnected {
+        peer_id: String,
+        address: Option<String>,
+    },
+    PeerDisconnected {
+        peer_id: String,
+    },
     FileDiscovered(FileMetadata),
     FileNotFound(String),
     DownloadedFile(FileMetadata),
@@ -1378,7 +1389,13 @@ async fn run_dht_node(
                         let connected_peers = connected_peers.lock().await;
                         if connected_peers.contains(&peer_id) {
                             info!("Already connected to peer {}", peer_id);
-                            let _ = event_tx.send(DhtEvent::PeerConnected(peer_id.to_string())).await;
+                            // let _ = event_tx.send(DhtEvent::PeerConnected(peer_id.to_string())).await;
+                            let _ = event_tx
+                                .send(DhtEvent::PeerConnected {
+                                    peer_id: peer_id.to_string(),
+                                    address: None,
+                                })
+                                .await;
                             return;
                         }
                         drop(connected_peers);
@@ -1731,18 +1748,25 @@ async fn run_dht_node(
                             .await;
                     }
                     SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
+                        let remote_addr = endpoint.get_remote_address().clone();
+
                         // Initialize peer metrics for smart selection
                         {
                             let mut selection = peer_selection.lock().await;
                             let peer_metrics = PeerMetrics::new(
                                 peer_id.to_string(),
-                                endpoint.get_remote_address().to_string(),
+                                // endpoint.get_remote_address().to_string(),
+                                remote_addr.to_string(),
                             );
                             selection.update_peer_metrics(peer_metrics);
                         }
 
                         // Add peer to Kademlia routing table
-                        swarm.behaviour_mut().kademlia.add_address(&peer_id, endpoint.get_remote_address().clone());
+                        // swarm.behaviour_mut().kademlia.add_address(&peer_id, endpoint.get_remote_address().clone());
+                        swarm
+                            .behaviour_mut()
+                            .kademlia
+                            .add_address(&peer_id, remote_addr.clone());
 
                         let peers_count = {
                             let mut peers = connected_peers.lock().await;
@@ -1752,8 +1776,15 @@ async fn run_dht_node(
                         if let Ok(mut m) = metrics.try_lock() {
                             m.last_success = Some(SystemTime::now());
                         }
-                        info!("✅ Connected to {} via {}", peer_id, endpoint.get_remote_address());
+                        // info!("✅ Connected to {} via {}", peer_id, endpoint.get_remote_address());
+                        info!("✅ Connected to {} via {}", peer_id, remote_addr);
                         info!("   Total connected peers: {}", peers_count);
+                        let _ = event_tx
+                            .send(DhtEvent::PeerConnected {
+                                peer_id: peer_id.to_string(),
+                                address: Some(remote_addr.to_string()),
+                            })
+                            .await;
                     }
                     SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
                         warn!("❌ DISCONNECTED from peer: {}", peer_id);
@@ -1766,6 +1797,11 @@ async fn run_dht_node(
                         };
                         proxy_mgr.lock().await.remove_all(&peer_id);
                         info!("   Remaining connected peers: {}", peers_count);
+                        let _ = event_tx
+                            .send(DhtEvent::PeerDisconnected {
+                                peer_id: peer_id.to_string(),
+                            })
+                            .await;
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
                         if address.iter().any(|component| matches!(component, Protocol::P2pCircuit)) {
@@ -2267,10 +2303,12 @@ async fn handle_identify_event(
                 );
                 swarm.behaviour_mut().kademlia.remove_peer(&peer_id);
             } else {
+                let listen_addrs = info.listen_addrs.clone();
                 if let Ok(mut metrics_guard) = metrics.try_lock() {
                     metrics_guard.record_observed_addr(&info.observed_addr);
                 }
-                for addr in info.listen_addrs {
+                // for addr in info.listen_addrs {
+                for addr in listen_addrs.iter() {
                     info!("  📍 Peer {} listen addr: {}", peer_id, addr);
                     if not_loopback(&addr) {
                         swarm
@@ -2300,6 +2338,19 @@ async fn handle_identify_event(
                         }
                     }
                 }
+                // let mut addresses: Vec<String> = listen_addrs.iter().map(|a| a.to_string()).collect();
+                // if let Some(observed) = info.observed_addr {
+                //     addresses.push(observed.to_string());
+                // }
+                let mut addresses: Vec<String> = listen_addrs.iter().map(|a| a.to_string()).collect();
+addresses.push(info.observed_addr.to_string());
+
+                let _ = event_tx
+                    .send(DhtEvent::PeerDiscovered {
+                        peer_id: peer_id.to_string(),
+                        addresses,
+                    })
+                    .await;
             }
         }
         IdentifyEvent::Pushed { peer_id, info, .. } => {
@@ -2332,16 +2383,28 @@ async fn handle_mdns_event(
 ) {
     match event {
         MdnsEvent::Discovered(list) => {
+            let mut discovered: HashMap<PeerId, Vec<String>> = HashMap::new();
             for (peer_id, multiaddr) in list {
                 debug!("mDNS discovered peer {} at {}", peer_id, multiaddr);
                 if not_loopback(&multiaddr) {
                     swarm
                         .behaviour_mut()
                         .kademlia
-                        .add_address(&peer_id, multiaddr);
+                        // .add_address(&peer_id, multiaddr);
+                        .add_address(&peer_id, multiaddr.clone());
                 }
+                discovered
+                    .entry(peer_id)
+                    .or_default()
+                    .push(multiaddr.to_string());
+            }
+            for (peer_id, addresses) in discovered {
                 let _ = event_tx
-                    .send(DhtEvent::PeerDiscovered(peer_id.to_string()))
+                    // .send(DhtEvent::PeerDiscovered(peer_id.to_string()))
+                    .send(DhtEvent::PeerDiscovered {
+                        peer_id: peer_id.to_string(),
+                        addresses,
+                    })
                     .await;
             }
         }
