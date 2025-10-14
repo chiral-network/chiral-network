@@ -3792,6 +3792,22 @@ async fn upload_and_publish_file(
             .await?;
 
         let version = metadata.version.unwrap_or(1);
+        
+        // Store file data locally for seeding (CRITICAL FIX)
+        let ft = {
+            let ft_guard = state.file_transfer.lock().await;
+            ft_guard.as_ref().cloned()
+        };
+        if let Some(ft) = ft {
+            // Read the original file data to store locally
+            let file_data = tokio::fs::read(&file_path)
+                .await
+                .map_err(|e| format!("Failed to read file for local storage: {}", e))?;
+            
+            ft.store_file_data(manifest.merkle_root.clone(), file_name.clone(), file_data)
+                .await;
+        }
+        
         dht.publish_file(metadata).await?;
         version
     } else {
