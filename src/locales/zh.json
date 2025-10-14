@@ -278,7 +278,8 @@
       "restartNode": {
         "tooltip": "重启本地节点",
         "button": "重启节点",
-        "success": "节点已重启"
+        "success": "节点已重启",
+        "notRunning": "无法重启：节点未运行"
       }
     }
   },
@@ -791,7 +792,7 @@
     "discoverPools": "发现矿池",
     "createPool": "创建矿池",
     "poolConfiguration": "矿池配置",
-    "pool": {
+    "poolDetails": {
       "connectedTo": "已连接到",
       "leave": "离开矿池",
       "yourHashrate": "您的算力",

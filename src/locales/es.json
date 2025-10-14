@@ -278,7 +278,8 @@
       "restartNode": {
         "tooltip": "Reiniciar el nodo local",
         "button": "Reiniciar Nodo",
-        "success": "Nodo reiniciado"
+        "success": "Nodo reiniciado",
+        "notRunning": "No se puede reiniciar: El nodo no está en ejecución"
       }
     }
   },
@@ -788,7 +789,7 @@
     "discoverPools": "Descubrir pools",
     "createPool": "Crear pool",
     "poolConfiguration": "Configuración de pool",
-    "pool": {
+    "poolDetails": {
       "connectedTo": "Conectado a",
       "leave": "Salir del pool",
       "yourHashrate": "Tu tasa de hash",
