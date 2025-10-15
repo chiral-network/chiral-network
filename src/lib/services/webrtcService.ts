@@ -196,7 +196,9 @@ export function createWebRTCSession(opts: WebRTCOptions = {}): WebRTCSession {
 
   return {
     pc,
-    channel,
+    get channel() {
+      return channel;
+    },
     connectionState,
     channelState,
     createOffer,
