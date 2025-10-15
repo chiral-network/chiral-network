@@ -3882,8 +3882,10 @@ async fn encrypt_file_for_recipient(
         let manifest = manager.chunk_and_encrypt_file(Path::new(&file_path), &recipient_pk)?;
 
         // Serialize the key bundle to a JSON string so it can be sent to the frontend easily.
-        let bundle_json =
-            serde_json::to_string(&manifest.encrypted_key_bundle).map_err(|e| e.to_string())?;
+        let bundle_json = match manifest.encrypted_key_bundle {
+            Some(bundle) => serde_json::to_string(&bundle).map_err(|e| e.to_string())?,
+            None => return Err("No encryption key bundle generated".to_string()),
+        };
 
         Ok(FileManifestForJs {
             merkle_root: manifest.merkle_root,
@@ -4058,7 +4060,7 @@ async fn decrypt_and_reassemble_file(
         manager.reassemble_and_decrypt_file(
             &chunks,
             Path::new(&output_path_clone),
-            &encrypted_key_bundle,
+            &Some(encrypted_key_bundle),
             &secret_key, // Pass the secret key
         )
     })

@@ -51,14 +51,14 @@ struct ClientBehaviour {
 
 #[allow(clippy::large_enum_variant)]
 enum ClientBehaviourEvent {
-    Ping(ping::Event),
+    Ping(()),
     Identify(identify::Event),
     RelayAuth(RequestResponseEvent<RelayAuthRequest, RelayAuthResponse>),
 }
 
 impl From<ping::Event> for ClientBehaviourEvent {
-    fn from(e: ping::Event) -> Self {
-        ClientBehaviourEvent::Ping(e)
+    fn from(_e: ping::Event) -> Self {
+        ClientBehaviourEvent::Ping(())
     }
 }
 impl From<identify::Event> for ClientBehaviourEvent {

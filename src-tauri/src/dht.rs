@@ -1311,18 +1311,12 @@ async fn run_dht_node(
                             });
 
                             if let Some(peer_id) = maybe_peer_id.clone() {
-                                let mut attempt_direct = true;
-                                let mut strict_privacy = false;
-
                                 {
                                     let mut mgr = proxy_mgr.lock().await;
                                     mgr.set_target(peer_id.clone());
                                     let use_proxy_routing = mgr.is_privacy_routing_enabled();
-                                    strict_privacy = mgr.privacy_mode() == PrivacyMode::Strict;
 
                                     if use_proxy_routing {
-                                        attempt_direct = false;
-
                                         if let Some(proxy_peer_id) = mgr.select_proxy_for_routing(&peer_id) {
                                             drop(mgr);
 
@@ -1357,14 +1351,15 @@ async fn run_dht_node(
                                                             e
                                                         )))
                                                         .await;
-                                                    if strict_privacy {
+                                                    if {
+                                                        let mgr = proxy_mgr.lock().await;
+                                                        mgr.privacy_mode() == PrivacyMode::Strict
+                                                    } {
                                                         {
                                                             let mut mgr = proxy_mgr.lock().await;
                                                             mgr.clear_target(&peer_id);
                                                         }
                                                         continue;
-                                                    } else {
-                                                        attempt_direct = true;
                                                     }
                                                 }
                                             }
@@ -1380,23 +1375,18 @@ async fn run_dht_node(
                                                     peer_id
                                                 )))
                                                 .await;
-                                            if strict_privacy {
+                                            if {
+                                                let mgr = proxy_mgr.lock().await;
+                                                mgr.privacy_mode() == PrivacyMode::Strict
+                                            } {
                                                 {
                                                     let mut mgr = proxy_mgr.lock().await;
                                                     mgr.clear_target(&peer_id);
                                                 }
                                                 continue;
-                                            } else {
-                                                attempt_direct = true;
                                             }
                                         }
-                                    } else {
-                                        attempt_direct = true;
                                     }
-                                }
-
-                                if !attempt_direct {
-                                    continue;
                                 }
 
                                 let should_request = {
@@ -1689,21 +1679,8 @@ async fn run_dht_node(
                             RelayEvent::CircuitClosed { src_peer_id, dst_peer_id, .. } => {
                                 debug!("🔁 Relay server: Circuit closed between {} and {}", src_peer_id, dst_peer_id);
                             }
-                            RelayEvent::ReservationReqAcceptFailed { src_peer_id, error, .. } => {
-                                warn!("🔁 Relay server: Failed to accept reservation from {}: {:?}", src_peer_id, error);
-                            }
-                            RelayEvent::ReservationReqDenyFailed { src_peer_id, error, .. } => {
-                                warn!("🔁 Relay server: Failed to deny reservation from {}: {:?}", src_peer_id, error);
-                            }
-                            RelayEvent::CircuitReqAcceptFailed { src_peer_id, dst_peer_id, error, .. } => {
-                                warn!("🔁 Relay server: Failed to accept circuit from {} to {}: {:?}", src_peer_id, dst_peer_id, error);
-                            }
-                            RelayEvent::CircuitReqDenyFailed { src_peer_id, dst_peer_id, error, .. } => {
-                                warn!("🔁 Relay server: Failed to deny circuit from {} to {}: {:?}", src_peer_id, dst_peer_id, error);
-                            }
-                            RelayEvent::CircuitReqOutboundConnectFailed { src_peer_id, dst_peer_id, error, .. } => {
-                                warn!("🔁 Relay server: Failed to connect to destination {} for circuit from {}: {:?}", dst_peer_id, src_peer_id, error);
-                            }
+                            // Handle deprecated relay events (libp2p handles logging internally)
+                            _ => {}
                         }
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) => match bitswap {
