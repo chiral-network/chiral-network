@@ -1369,7 +1369,14 @@ async fn search_file_metadata(
 
 #[tauri::command]
 fn get_available_storage() -> f64 {
-    let storage = available_space(Path::new("/")).unwrap_or(0);
+    let preferred_root = directories::BaseDirs::new()
+        .map(|dirs| dirs.home_dir().to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("/"));
+
+    let storage = available_space(&preferred_root)
+        .or_else(|_| available_space(Path::new("/")))
+        .unwrap_or(0);
+
     (storage as f64 / 1024.0 / 1024.0 / 1024.0).floor()
 }
 
