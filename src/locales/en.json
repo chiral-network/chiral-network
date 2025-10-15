@@ -281,7 +281,8 @@
       "restartNode": {
         "tooltip": "Restart the local node",
         "button": "Restart Node",
-        "success": "Node restarted"
+        "success": "Node restarted",
+        "notRunning": "Cannot restart: Node is not running"
       }
     }
   },
@@ -870,7 +871,7 @@
     "discovering": "Discovering...",
     "discoverPools": "Discover Pools",
     "createPool": "Create Pool",
-    "pool": {
+    "poolDetails": {
       "connectedTo": "Connected to",
       "leave": "Leave Pool",
       "yourHashrate": "Your Hashrate",

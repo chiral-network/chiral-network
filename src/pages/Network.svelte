@@ -1220,11 +1220,15 @@
       class="flex items-center gap-2 px-6 py-3 font-semibold text-base rounded-lg shadow-sm border border-primary/10 bg-background hover:bg-secondary/80"
       title={$t('network.quickActions.restartNode.tooltip')}
       on:click={async () => {
+        if (!isGethRunning) {
+          showToast($t('network.quickActions.restartNode.notRunning'), 'error');
+          return;
+        }
         await stopGethNode();
         await startGethNode();
         showToast($t('network.quickActions.restartNode.success'), 'success');
       }}
-      disabled={!isGethInstalled || isStartingNode}
+      disabled={!isGethInstalled || isStartingNode || !isGethRunning}
     >
       <Square class="h-5 w-5" />
       {$t('network.quickActions.restartNode.button')}

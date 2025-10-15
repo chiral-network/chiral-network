@@ -283,7 +283,8 @@
       "restartNode": {
         "tooltip": "로컬 노드 재시작",
         "button": "노드 재시작",
-        "success": "노드가 재시작되었습니다"
+        "success": "노드가 재시작되었습니다",
+        "notRunning": "재시작할 수 없음: 노드가 실행 중이 아닙니다"
       }
     }
   },
@@ -767,7 +768,7 @@
     "discoverPools": "풀 검색",
     "createPool": "풀 생성",
     "poolConfiguration": "풀 설정",
-    "pool": {
+    "poolDetails": {
       "connectedTo": "연결됨",
       "leave": "풀 나가기",
       "yourHashrate": "내 해시레이트",
