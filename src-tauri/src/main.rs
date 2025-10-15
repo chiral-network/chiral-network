@@ -503,7 +503,7 @@ async fn upload_versioned_file(
 
         // Store file data locally for seeding
         let ft = {
-            let ft_guard = state.file_transfer.lock().await;
+            let ft_guard = state.file_transfer.lock().await; // Store the file locally for seeding
             ft_guard.as_ref().cloned()
         };
         if let Some(ft) = ft {
@@ -1148,14 +1148,15 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                 DhtEvent::PeerDisconnected { peer_id } => {
                     format!("peer_disconnected:{}", peer_id)
                 }
-                DhtEvent::FileDiscovered(meta) => format!(
-                    "file_discovered:{}:{}:{}",
-                    meta.file_hash, meta.file_name, meta.file_size
-                ),
+                DhtEvent::FileDiscovered(meta) => {
+                    // Serialize the full metadata object to JSON for the frontend
+                    let payload = serde_json::to_string(&meta).unwrap_or_else(|_| "{}".to_string());
+                    format!("file_discovered:{}", payload)
+                }
                 DhtEvent::DownloadedFile(_) => "file_downloaded".to_string(),
                 DhtEvent::PublishedFile(meta) => format!(
-                    "file_published:{}:{}:{}",
-                    meta.file_hash, meta.file_name, meta.file_size
+                    "file_published:{}:{}:{}", // Use merkle_root as the primary identifier
+                    meta.merkle_root, meta.file_name, meta.file_size
                 ),
                 DhtEvent::FileNotFound(hash) => format!("file_not_found:{}", hash),
                 DhtEvent::Error(err) => format!("error:{}", err),
@@ -1818,7 +1819,7 @@ async fn download_file_from_network(
                     if metadata.seeders.is_empty() {
                         return Err(format!(
                             "No seeders available for file: {} ({})",
-                            metadata.file_name, metadata.file_hash
+                            metadata.file_name, metadata.merkle_root
                         ));
                     }
 
@@ -1872,8 +1873,8 @@ async fn download_file_from_network(
 
                                 // Send WebRTC offer via DHT signaling
                                 let offer_request = dht::WebRTCOfferRequest {
-                                    offer_sdp: offer,
-                                    file_hash: metadata.file_hash.clone(),
+                                    offer_sdp: offer, // The Merkle root is now the primary file hash
+                                    file_hash: metadata.merkle_root.clone(),
                                     requester_peer_id: dht_service.get_peer_id().await,
                                 };
 
@@ -1913,7 +1914,7 @@ async fn download_file_from_network(
 
                                                         // Send file request over WebRTC data channel
                                                         let file_request = crate::webrtc_service::WebRTCFileRequest {
-                                                            file_hash: metadata.file_hash.clone(),
+                                                            file_hash: metadata.merkle_root.clone(),
                                                             file_name: metadata.file_name.clone(),
                                                             file_size: metadata.file_size,
                                                             requester_peer_id: dht_service.get_peer_id().await,
@@ -2178,7 +2179,7 @@ async fn upload_file_chunk(
             .as_secs();
 
         let metadata = dht::FileMetadata {
-            file_hash: root_cid.to_string(), // Use root CID for retrieval
+            merkle_root: merkle_root, // Store Merkle root for verification
             file_name: session.file_name.clone(),
             file_size: session.file_size,
             file_data: vec![], // Empty - data is stored in Bitswap blocks
@@ -2188,10 +2189,9 @@ async fn upload_file_chunk(
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
-            merkle_root: Some(merkle_root), // Store Merkle root for verification
             parent_hash: None,
             version: Some(1),
-            cids: None, // CIDs are stored in the root block, not in metadata
+            cids: Some(vec![root_cid.clone()]), // The root CID for retrieval
             is_root: true,
         };
 
@@ -3950,7 +3950,7 @@ async fn upload_and_publish_file(
 
     // 4. Publish to DHT with versioning support
     let dht = {
-        let dht_guard = state.dht.lock().await;
+        let dht_guard = state.dht.lock().await; // Use the Merkle root as the file hash
         dht_guard.as_ref().cloned()
     };
 
@@ -3959,20 +3959,20 @@ async fn upload_and_publish_file(
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-
+        
         // Use prepare_versioned_metadata to handle version incrementing and parent_hash
         let mime_type = detect_mime_type_from_filename(&file_name).unwrap_or_else(|| "application/octet-stream".to_string());
         let metadata = dht
             .prepare_versioned_metadata(
-                manifest.merkle_root.clone(),
+                manifest.merkle_root.clone(), // This is the Merkle root
                 file_name.clone(),
                 file_size,
                 vec![], // Empty - chunks already stored
                 created_at,
                 Some(mime_type),
                 true, // is_encrypted
-                Some("AES-256-GCM".to_string()),
-                None, // key_fingerprint
+                Some("AES-256-GCM".to_string()), // Encryption method
+                None, // key_fingerprint (deprecated)
             )
             .await?;
 
@@ -3990,7 +3990,7 @@ async fn upload_and_publish_file(
                 .map_err(|e| format!("Failed to read file for local storage: {}", e))?;
             
             ft.store_file_data(manifest.merkle_root.clone(), file_name.clone(), file_data)
-                .await;
+                .await; // Store with Merkle root as key
         }
         
         dht.publish_file(metadata).await?;

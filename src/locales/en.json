@@ -353,7 +353,8 @@
       "addedToQueue": "File added to the download queue.",
       "autostart": "Download automatically started.",
       "searchFailed": "Search failed: {error}",
-      "downloadFailed": "Download failed for {name}."
+      "downloadFailed": "Download failed for {name}.",
+      "downloadComplete": "Download complete for {name}."
     },
     "search": {
       "status": {

@@ -283,7 +283,7 @@ impl ReputationDhtService {
 
         // Store in DHT (using existing file metadata structure as template)
         let metadata = crate::dht::FileMetadata {
-            file_hash: key.clone(),
+            merkle_root: key.clone(),
             file_name: format!("reputation_{}.json", event.id),
             file_size: serialized.len() as u64,
             file_data: serialized,
@@ -293,7 +293,6 @@ impl ReputationDhtService {
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
-            merkle_root: None,
             version: Some(1),
             parent_hash: None,
             cids: None, // Not needed for reputation events
@@ -326,7 +325,7 @@ impl ReputationDhtService {
             .map_err(|e| format!("Serialization error: {}", e))?;
 
         let metadata = crate::dht::FileMetadata {
-            file_hash: key.clone(),
+            merkle_root: epoch.merkle_root.clone(),
             file_name: format!("merkle_root_{}.json", epoch.epoch_id),
             file_size: serialized.len() as u64,
             file_data: serialized,
@@ -336,7 +335,6 @@ impl ReputationDhtService {
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
-            merkle_root: Some(epoch.merkle_root.clone()),
             version: Some(1),
             parent_hash: None,
             cids: None, // Not needed for merkle roots
