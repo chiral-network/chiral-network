@@ -82,8 +82,8 @@ pub struct FileManifest {
     pub merkle_root: String,
     /// Information about each chunk needed for reassembly.
     pub chunks: Vec<ChunkInfo>,
-    /// The encrypted AES key bundle needed for decryption.
-    pub encrypted_key_bundle: EncryptedAesKeyBundle,
+    /// The encrypted AES key bundle needed for decryption (None for unencrypted files).
+    pub encrypted_key_bundle: Option<EncryptedAesKeyBundle>,
 }
 
 /// A simple Sha256 hasher implementation for the Merkle tree.
@@ -167,7 +167,7 @@ impl ChunkManager {
         Ok(FileManifest {
             merkle_root: hex::encode(merkle_root),
             chunks: chunks_info,
-            encrypted_key_bundle,
+            encrypted_key_bundle: Some(encrypted_key_bundle),
         })
     }
 
@@ -248,10 +248,13 @@ impl ChunkManager {
         &self,
         chunks: &[ChunkInfo],
         output_path: &Path,
-        encrypted_key_bundle: &EncryptedAesKeyBundle,
+        encrypted_key_bundle: &Option<EncryptedAesKeyBundle>,
         recipient_secret_key: S,
     ) -> Result<(), String> {
-        let key_bytes = decrypt_aes_key(encrypted_key_bundle, recipient_secret_key)?;
+        let key_bytes = match encrypted_key_bundle {
+            Some(bundle) => decrypt_aes_key(bundle, recipient_secret_key)?,
+            None => return Err("No encryption key bundle provided for encrypted file".to_string()),
+        };
         let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
 
         let mut output_file = File::create(output_path).map_err(|e| e.to_string())?;

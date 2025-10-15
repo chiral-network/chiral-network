@@ -91,6 +91,18 @@ pub struct CliArgs {
 }
 
 pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error>> {
+    use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+    tracing_subscriber::registry()
+        .with(fmt::layer())
+        .with(
+            EnvFilter::from_default_env()
+                .add_directive("chiral_network=info".parse().unwrap())
+                .add_directive("libp2p=info".parse().unwrap())
+                .add_directive("libp2p_kad=debug".parse().unwrap())
+                .add_directive("libp2p_swarm=debug".parse().unwrap()),
+        )
+        .init();
+
     info!("Starting Chiral Network in headless mode");
     info!("DHT Port: {}", args.dht_port);
 
@@ -206,7 +218,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
 
         // Publish some example metadata to seed the network
         let example_metadata = FileMetadata {
-            file_hash: "QmBootstrap123Example".to_string(),
+            merkle_root: "QmBootstrap123Example".to_string(),
             file_name: "welcome.txt".to_string(),
             file_size: 1024,
             file_data: b"Hello, world!".to_vec(),
@@ -219,7 +231,6 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
-            merkle_root: None,
             parent_hash: None,
             version: Some(1),
             cids: None,

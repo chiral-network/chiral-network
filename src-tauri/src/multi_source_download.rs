@@ -378,7 +378,7 @@ impl MultiSourceDownloadService {
             let size = remaining.min(chunk_size);
 
             // Calculate chunk hash (simplified - in real implementation this would be pre-calculated)
-            let hash = format!("{}_{}", metadata.file_hash, chunk_id);
+            let hash = format!("{}_{}", metadata.merkle_root, chunk_id);
 
             chunks.push(ChunkInfo {
                 chunk_id,
@@ -664,7 +664,7 @@ impl MultiSourceDownloadService {
 
         if let Some(metadata) = metadata {
             let file_request = WebRTCFileRequest {
-                file_hash: metadata.file_hash.clone(),
+                file_hash: metadata.merkle_root.clone(),
                 file_name: metadata.file_name.clone(),
                 file_size: metadata.file_size,
                 requester_peer_id: self.dht_service.get_peer_id().await,
@@ -815,7 +815,7 @@ impl MultiSourceDownloadService {
         };
 
         MultiSourceProgress {
-            file_hash: download.file_metadata.file_hash.clone(),
+            file_hash: download.file_metadata.merkle_root.clone(),
             file_name: download.file_metadata.file_name.clone(),
             total_size: download.file_metadata.file_size,
             downloaded_size,
@@ -909,7 +909,7 @@ impl MultiSourceDownloadService {
         };
 
         MultiSourceProgress {
-            file_hash: download.file_metadata.file_hash.clone(),
+            file_hash: download.file_metadata.merkle_root.clone(),
             file_name: download.file_metadata.file_name.clone(),
             total_size: download.file_metadata.file_size,
             downloaded_size,

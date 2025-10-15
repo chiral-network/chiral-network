@@ -9,6 +9,7 @@ use futures::io::{AsyncRead as FAsyncRead, AsyncWrite as FAsyncWrite};
 use futures::{AsyncReadExt as _, AsyncWriteExt as _};
 use futures_util::StreamExt;
 use libp2p::multiaddr::Protocol;
+use sha2::{Digest, Sha256};
 pub use multihash_codetable::{Code, MultihashDigest};
 use rs_merkle::{Hasher, MerkleTree};
 use crate::manager::Sha256Hasher;
@@ -72,9 +73,8 @@ pub const RAW_CODEC: u64 = 0x55;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileMetadata {
-    /// The CID (Content Identifier) used for retrieval from the DHT/Bitswap network.
-    /// This is the root CID that points to a block containing child chunk CIDs.
-    pub file_hash: String, // This is the root CID
+    /// The Merkle root of the original file chunks, used as the primary identifier for integrity.
+    pub merkle_root: String,
     pub file_name: String,
     pub file_size: u64,
     pub file_data: Vec<u8>, // holds the actual file data
@@ -85,10 +85,9 @@ pub struct FileMetadata {
     pub is_encrypted: bool,
     /// The encryption method used (e.g., "AES-256-GCM")
     pub encryption_method: Option<String>,
-    /// Fingerprint of the encryption key for identification
+    /// Fingerprint of the encryption key for identification.
+    /// This is now deprecated in favor of the merkle_root.
     pub key_fingerprint: Option<String>,
-    /// The Merkle root hash for integrity verification (optional, separate from file_hash)
-    pub merkle_root: Option<String>,
     // --- VERSIONING FIELDS ---
     pub version: Option<u32>,
     pub parent_hash: Option<String>,
@@ -1200,23 +1199,23 @@ async fn run_dht_node(
                             }
 
                             // The file_hash is the Merkle Root. The root_cid is for retrieval.
-                            metadata.file_hash = hex::encode(merkle_root);
+                            metadata.merkle_root = hex::encode(merkle_root);
                             metadata.cids = Some(vec![root_cid]); // Store the root CID for bitswap retrieval
-                            metadata.file_data.clear();
+                            metadata.file_data.clear(); // Don't store full data in DHT record
 
                             println!("Publishing file with root CID: {} (merkle_root: {:?})",
-                                root_cid, metadata.file_hash);
+                                root_cid, metadata.merkle_root);
                         } else {
                             // File data is empty - chunks and root block are already in Bitswap
                             // (from streaming upload or pre-processed encrypted file)
                             // Use the provided file_hash (which should already be a CID)
-                            println!("Publishing file with pre-computed CID: {} (merkle_root: {:?})",
-                                metadata.file_hash, metadata.merkle_root);
+                            println!("Publishing file with pre-computed Merkle root: {} and CID: {:?}",
+                                metadata.merkle_root, metadata.cids);
                         }
 
                         // Store minimal metadata in DHT
                         let dht_metadata = serde_json::json!({
-                            "file_hash": metadata.file_hash,
+                            "merkle_root": metadata.merkle_root,
                             "file_name": metadata.file_name,
                             "file_size": metadata.file_size,
                             "created_at": metadata.created_at,
@@ -1227,7 +1226,6 @@ async fn run_dht_node(
                             "version": metadata.version,
                             "parent_hash": metadata.parent_hash,
                             "cids": metadata.cids, // The root CID for Bitswap
-                            "merkle_root": metadata.merkle_root, // <-- Ensure Merkle root is included
                         });
 
                         let dht_record_data = match serde_json::to_vec(&dht_metadata) {
@@ -1238,7 +1236,7 @@ async fn run_dht_node(
                             }
                         };
 
-                        let key = kad::RecordKey::new(&metadata.file_hash.as_bytes());
+                        let key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
                         let record = Record {
                                     key,
                                     value: dht_record_data,
@@ -1248,22 +1246,22 @@ async fn run_dht_node(
 
                         match swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One){
                             Ok(query_id) => {
-                                info!("started providing file: {}, query id: {:?}", metadata.file_hash, query_id);
+                                info!("started providing file: {}, query id: {:?}", metadata.merkle_root, query_id);
                             }
                             Err(e) => {
-                                error!("failed to start providing file {}: {}", metadata.file_hash, e);
+                                error!("failed to start providing file {}: {}", metadata.merkle_root, e);
                                 let _ = event_tx.send(DhtEvent::Error(format!("failed to start providing: {}", e))).await;
                             }
                         }
 
                         // Register this peer as a provider for the file
-                        let provider_key = kad::RecordKey::new(&metadata.file_hash.as_bytes());
+                        let provider_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
                         match swarm.behaviour_mut().kademlia.start_providing(provider_key) {
                             Ok(query_id) => {
-                                info!("registered as provider for file: {}, query id: {:?}", metadata.file_hash, query_id);
+                                info!("registered as provider for file: {}, query id: {:?}", metadata.merkle_root, query_id);
                             }
                             Err(e) => {
-                                error!("failed to register as provider for file {}: {}", metadata.file_hash, e);
+                                error!("failed to register as provider for file {}: {}", metadata.merkle_root, e);
                                 let _ = event_tx.send(DhtEvent::Error(format!("failed to register as provider: {}", e))).await;
                             }
                         }
@@ -1271,15 +1269,18 @@ async fn run_dht_node(
                     }
                     Some(DhtCommand::DownloadFile(file_metadata)) =>{
                         // Get root CID from file hash
-                        let root_cid: Cid = match file_metadata.file_hash.parse() {
-                            Ok(cid) => cid,
-                            Err(e) => {
-                                error!("Invalid root CID in file metadata: {}", e);
-                                let _ = event_tx.send(DhtEvent::Error(format!("Invalid root CID: {}", e))).await;
-                                return;
-                            }
-                        };
+                        let root_cid_result = file_metadata.cids.as_ref()
+                            .and_then(|cids| cids.first())
+                            .ok_or_else(|| {
+                                let msg = format!("No root CID found for file with Merkle root: {}", file_metadata.merkle_root);
+                                error!("{}", msg);
+                                msg
+                            });
 
+                        let root_cid = match root_cid_result {
+                            Ok(cid) => cid.clone(),
+                            Err(e) => { let _ = event_tx.send(DhtEvent::Error(e)).await; continue; }
+                        };
                         // Request the root block which contains the CIDs
                         let root_query_id = swarm.behaviour_mut().bitswap.get(&root_cid);
 
@@ -1310,18 +1311,12 @@ async fn run_dht_node(
                             });
 
                             if let Some(peer_id) = maybe_peer_id.clone() {
-                                let mut attempt_direct = true;
-                                let mut strict_privacy = false;
-
                                 {
                                     let mut mgr = proxy_mgr.lock().await;
                                     mgr.set_target(peer_id.clone());
                                     let use_proxy_routing = mgr.is_privacy_routing_enabled();
-                                    strict_privacy = mgr.privacy_mode() == PrivacyMode::Strict;
 
                                     if use_proxy_routing {
-                                        attempt_direct = false;
-
                                         if let Some(proxy_peer_id) = mgr.select_proxy_for_routing(&peer_id) {
                                             drop(mgr);
 
@@ -1356,14 +1351,15 @@ async fn run_dht_node(
                                                             e
                                                         )))
                                                         .await;
-                                                    if strict_privacy {
+                                                    if {
+                                                        let mgr = proxy_mgr.lock().await;
+                                                        mgr.privacy_mode() == PrivacyMode::Strict
+                                                    } {
                                                         {
                                                             let mut mgr = proxy_mgr.lock().await;
                                                             mgr.clear_target(&peer_id);
                                                         }
                                                         continue;
-                                                    } else {
-                                                        attempt_direct = true;
                                                     }
                                                 }
                                             }
@@ -1379,23 +1375,18 @@ async fn run_dht_node(
                                                     peer_id
                                                 )))
                                                 .await;
-                                            if strict_privacy {
+                                            if {
+                                                let mgr = proxy_mgr.lock().await;
+                                                mgr.privacy_mode() == PrivacyMode::Strict
+                                            } {
                                                 {
                                                     let mut mgr = proxy_mgr.lock().await;
                                                     mgr.clear_target(&peer_id);
                                                 }
                                                 continue;
-                                            } else {
-                                                attempt_direct = true;
                                             }
                                         }
-                                    } else {
-                                        attempt_direct = true;
                                     }
-                                }
-
-                                if !attempt_direct {
-                                    continue;
                                 }
 
                                 let should_request = {
@@ -1688,21 +1679,8 @@ async fn run_dht_node(
                             RelayEvent::CircuitClosed { src_peer_id, dst_peer_id, .. } => {
                                 debug!("🔁 Relay server: Circuit closed between {} and {}", src_peer_id, dst_peer_id);
                             }
-                            RelayEvent::ReservationReqAcceptFailed { src_peer_id, error, .. } => {
-                                warn!("🔁 Relay server: Failed to accept reservation from {}: {:?}", src_peer_id, error);
-                            }
-                            RelayEvent::ReservationReqDenyFailed { src_peer_id, error, .. } => {
-                                warn!("🔁 Relay server: Failed to deny reservation from {}: {:?}", src_peer_id, error);
-                            }
-                            RelayEvent::CircuitReqAcceptFailed { src_peer_id, dst_peer_id, error, .. } => {
-                                warn!("🔁 Relay server: Failed to accept circuit from {} to {}: {:?}", src_peer_id, dst_peer_id, error);
-                            }
-                            RelayEvent::CircuitReqDenyFailed { src_peer_id, dst_peer_id, error, .. } => {
-                                warn!("🔁 Relay server: Failed to deny circuit from {} to {}: {:?}", src_peer_id, dst_peer_id, error);
-                            }
-                            RelayEvent::CircuitReqOutboundConnectFailed { src_peer_id, dst_peer_id, error, .. } => {
-                                warn!("🔁 Relay server: Failed to connect to destination {} for circuit from {}: {:?}", dst_peer_id, src_peer_id, error);
-                            }
+                            // Handle deprecated relay events (libp2p handles logging internally)
+                            _ => {}
                         }
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) => match bitswap {
@@ -1711,7 +1689,7 @@ async fn run_dht_node(
                             if let Some(metadata) = root_query_mapping.lock().await.remove(&query_id) {
                                 // This is the root block containing CIDs - parse and request all data blocks
                                 if let Ok(cids) = serde_json::from_slice::<Vec<Cid>>(&data) {
-                                    info!("Received root block for file {} with {} CIDs", metadata.file_hash, cids.len());
+                                    info!("Received root block for file {} with {} CIDs", metadata.merkle_root, cids.len());
 
                                     // Create queries map for this file's data blocks
                                     let mut file_queries = HashMap::new();
@@ -1729,11 +1707,11 @@ async fn run_dht_node(
                                     };
 
                                     // Store the active download
-                                    active_downloads.lock().await.insert(metadata.file_hash.clone(), active_download);
+                                    active_downloads.lock().await.insert(metadata.merkle_root.clone(), active_download);
 
-                                    info!("Started tracking download for file {} with {} chunks", metadata.file_hash, cids.len());
+                                    info!("Started tracking download for file {} with {} chunks", metadata.merkle_root, cids.len());
                                 } else {
-                                    error!("Failed to parse root block as CIDs array for file {}", metadata.file_hash);
+                                    error!("Failed to parse root block as CIDs array for file {}", metadata.merkle_root);
                                 }
                             } else {
                                 // This is a data block query - find the corresponding file and handle it
@@ -1745,7 +1723,7 @@ async fn run_dht_node(
                                     for (file_hash, active_download) in active_downloads_guard.iter_mut() {
                                         if let Some(chunk_index) = active_download.queries.remove(&query_id) {
                                             // This query belongs to this file - store the chunk
-                                            active_download.downloaded_chunks.insert(chunk_index as usize, data.clone());
+                                            active_download.downloaded_chunks.insert(chunk_index, data.clone());
 
                                             // Check if all chunks for this file are downloaded
                                             if active_download.queries.is_empty() {
@@ -1753,8 +1731,8 @@ async fn run_dht_node(
 
                                                 // Reassemble the file
                                                 let mut file_data = Vec::new();
-                                                for i in 0..active_download.downloaded_chunks.len() {
-                                                    if let Some(chunk) = active_download.downloaded_chunks.get(&i) {
+                                                for i in 0..active_download.downloaded_chunks.len() as u32 {
+                                    if let Some(chunk) = active_download.downloaded_chunks.get(&(i as u32)) {
                                                         file_data.extend_from_slice(chunk);
                                                     }
                                                 }
@@ -2176,14 +2154,14 @@ async fn handle_kademlia_event(
                                 Some(file_name),
                                 Some(file_size),
                                 Some(created_at),
-                            ) = (
-                                metadata_json.get("file_hash").and_then(|v| v.as_str()),
+                            ) = ( // Use merkle_root as the primary identifier
+                                metadata_json.get("merkle_root").and_then(|v| v.as_str()),
                                 metadata_json.get("file_name").and_then(|v| v.as_str()),
                                 metadata_json.get("file_size").and_then(|v| v.as_u64()),
                                 metadata_json.get("created_at").and_then(|v| v.as_u64()),
                             ) {
                                 let metadata = FileMetadata {
-                                    file_hash: file_hash.to_string(),
+                                    merkle_root: file_hash.to_string(),
                                     file_name: file_name.to_string(),
                                     file_size,
                                     file_data: Vec::new(), // Will be populated during download
@@ -2208,10 +2186,6 @@ async fn handle_kademlia_event(
                                         .get("key_fingerprint")
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string()),
-                                    merkle_root: metadata_json
-                                        .get("merkle_root")
-                                        .and_then(|v| v.as_str())
-                                        .map(|s| s.to_string()),
                                     version: metadata_json
                                         .get("version")
                                         .and_then(|v| v.as_u64())
@@ -2220,7 +2194,10 @@ async fn handle_kademlia_event(
                                         .get("parent_hash")
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string()),
-                                    cids: None, // CIDs are in the root block
+                                    cids: metadata_json.get("cids").and_then(|v| {
+                                        serde_json::from_value::<Option<Vec<Cid>>>(v.clone())
+                                            .unwrap_or(None)
+                                    }),
                                     is_root: metadata_json
                                         .get("is_root")
                                         .and_then(|v| v.as_bool())
@@ -2228,7 +2205,7 @@ async fn handle_kademlia_event(
                                 };
 
                                 let notify_metadata = metadata.clone();
-                                let file_hash = notify_metadata.file_hash.clone();
+                                let file_hash = notify_metadata.merkle_root.clone();
                                 info!("File discovered: {} ({})", notify_metadata.file_name, file_hash);
                                 let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
 
@@ -2918,7 +2895,7 @@ pub struct DhtService {
 struct ActiveDownload {
     metadata: FileMetadata,
     queries: HashMap<beetswap::QueryId, u32>, // query_id -> chunk_index
-    downloaded_chunks: HashMap<usize, Vec<u8>>, // chunk_index -> data
+    downloaded_chunks: HashMap<u32, Vec<u8>>, // chunk_index -> data
 }
 
 impl DhtService {
@@ -2943,14 +2920,15 @@ impl DhtService {
         let cache_size = cache_size_mb.unwrap_or(1024); // Default 1024 MB
 
         // Generate a new keypair for this node
-        // Generate a keypair either from the secret or randomly
+        // If a secret is provided, derive a stable 32-byte seed via SHA-256(secret)
+        // Otherwise, generate a fresh random key.
         let local_key = match secret {
             Some(secret_str) => {
-                let secret_bytes = secret_str.as_bytes();
+                let mut hasher = Sha256::new();
+                hasher.update(secret_str.as_bytes());
+                let digest = hasher.finalize();
                 let mut seed = [0u8; 32];
-                for (i, &b) in secret_bytes.iter().take(32).enumerate() {
-                    seed[i] = b;
-                }
+                seed.copy_from_slice(&digest[..32]);
                 identity::Keypair::ed25519_from_bytes(seed)?
             }
             None => identity::Keypair::generate_ed25519(),
@@ -3269,7 +3247,7 @@ impl DhtService {
         self.file_metadata_cache
             .lock()
             .await
-            .insert(metadata.file_hash.clone(), metadata.clone());
+            .insert(metadata.merkle_root.clone(), metadata.clone());
         self.cmd_tx
             .send(DhtCommand::PublishFile(metadata))
             .await
@@ -3285,7 +3263,7 @@ impl DhtService {
         self.file_metadata_cache
             .lock()
             .await
-            .insert(metadata.file_hash.clone(), metadata.clone());
+            .insert(metadata.merkle_root.clone(), metadata.clone());
     }
     /// List all known FileMetadata (from cache, i.e., locally published or discovered)
     pub async fn get_all_file_metadata(&self) -> Result<Vec<FileMetadata>, String> {
@@ -3304,10 +3282,9 @@ impl DhtService {
             .filter(|m| m.file_name == file_name) // Remove is_root filter - get all versions
             .collect();
         versions.sort_by(|a, b| b.version.unwrap_or(1).cmp(&a.version.unwrap_or(1)));
-
         // For each version, try to find seeders (peers that have this file)
         for version in &mut versions {
-            version.seeders = self.get_seeders_for_file(&version.file_hash).await;
+            version.seeders = self.get_seeders_for_file(&version.merkle_root).await;
         }
 
         Ok(versions)
@@ -3342,13 +3319,13 @@ impl DhtService {
         let (version, parent_hash, is_root) = match latest {
             Some(ref prev) => (
                 prev.version.map(|v| v + 1).unwrap_or(2),
-                Some(prev.file_hash.clone()),
+                Some(prev.merkle_root.clone()),
                 false, // not root if there was a previous version
             ),
             None => (1, None, true), // root if first version
         };
         Ok(FileMetadata {
-            file_hash,
+            merkle_root: file_hash,
             file_name,
             file_size,
             file_data,
@@ -3358,7 +3335,6 @@ impl DhtService {
             is_encrypted,
             encryption_method,
             key_fingerprint,
-            merkle_root: None,
             version: Some(version),
             parent_hash,
             cids: None,
@@ -3753,11 +3729,11 @@ impl DhtService {
     /// Discover and verify available peers for a specific file
     pub async fn discover_peers_for_file(
         &self,
-        metadata: &FileMetadata,
+        metadata: &FileMetadata, // This now contains the merkle_root
     ) -> Result<Vec<String>, String> {
         info!(
             "Starting peer discovery for file: {} with {} seeders",
-            metadata.file_hash,
+            metadata.merkle_root,
             metadata.seeders.len()
         );
 
