@@ -15,8 +15,33 @@
   let isAddressValid = true
   let showConfirmDialog = false
   let nodeToRemove: any = null
-  const validAddressRegex = /^[a-zA-Z0-9.-]+:[0-9]{1,5}$/
   let statusFilter = 'all'
+
+  function isValidProxyAddressInput(rawValue: string): boolean {
+    const value = rawValue.trim()
+    if (!value) {
+      return false
+    }
+
+    if (value.startsWith('/')) {
+      // Accept multiaddr-like inputs that include a transport segment
+      return /\/(tcp|udp)\//.test(value)
+    }
+
+    const candidate = value.includes('://') ? value : `tcp://${value}`
+    try {
+      const parsed = new URL(candidate)
+      const port = Number(parsed.port)
+      return (
+        parsed.hostname.length > 0 &&
+        Number.isInteger(port) &&
+        port >= 1 &&
+        port <= 65535
+      )
+    } catch {
+      return false
+    }
+  }
   
   $: statusOptions = [
     { value: 'all', label: $t('All') },
@@ -52,7 +77,7 @@
           return
       }
 
-      if (!newNodeAddress || !validAddressRegex.test(newNodeAddress.trim())) {
+      if (!isValidProxyAddressInput(newNodeAddress)) {
           alert($t('proxy.invalidAddress'))
           return
       }
@@ -92,7 +117,7 @@
   
   $: activeNodes = $proxyNodes.filter(n => n.status === 'online').length
   $: totalBandwidth = $proxyNodes.reduce((sum, n) => sum + (n.status === 'online' ? (n.latency ? Math.round(100 - n.latency) : 50) : 0), 0)
-  $: isAddressValid = validAddressRegex.test(newNodeAddress.trim())
+  $: isAddressValid = isValidProxyAddressInput(newNodeAddress)
 </script>
 
 <!-- Confirmation Dialog -->
