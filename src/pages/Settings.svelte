@@ -20,6 +20,7 @@
   import { homeDir } from "@tauri-apps/api/path";
   import { getVersion } from "@tauri-apps/api/app";
   import { userLocation } from "$lib/stores";
+  import { GEO_REGIONS, UNKNOWN_REGION_ID } from '$lib/geo';
   import { changeLocale, loadLocale } from "../i18n/i18n";
   import { t } from "svelte-i18n";
   import { get } from "svelte/store";
@@ -49,13 +50,14 @@
     port: 30303,
     enableUPnP: true,
     enableNAT: true,
-    enableAutoRelay: true, // Enabled by default
-    preferredRelays: "", // Empty by default
     userLocation: "US-East", // Geographic region for peer sorting
 
     // Privacy settings
     enableProxy: true,
     proxyAddress: "127.0.0.1:9050", // Default Tor SOCKS address
+    ipPrivacyMode: "off",
+    trustedProxyRelays: [],
+    disableDirectNatTraversal: false,
     enableAutonat: true,
     autonatProbeInterval: 30,
     autonatServers: [],
@@ -92,16 +94,15 @@
     type: "success" | "error";
   } | null = null;
 
-  // NAT configuration text bindings
+  // NAT & privacy configuration text bindings
   let autonatServersText = '';
   let preferredRelaysText = '';
+  let trustedProxyText = '';
 
-  const locations = [
-    { value: "US-East", label: "US East" },
-    { value: "US-West", label: "US West" },
-    { value: "EU-West", label: "Europe West" },
-    { value: "Asia-Pacific", label: "Asia Pacific" },
-  ];
+  const locationOptions = GEO_REGIONS
+    .filter((region) => region.id !== UNKNOWN_REGION_ID)
+    .map((region) => ({ value: region.label, label: region.label }))
+    .sort((a, b) => a.label.localeCompare(b.label));
 
   let languages = [];
   $: languages = [
@@ -111,14 +112,41 @@
     { value: "ko", label: $t("language.korean") },
   ];
 
-  // Initialize NAT configuration text from arrays
+  // Initialize configuration text from arrays
   $: autonatServersText = localSettings.autonatServers?.join('\n') || '';
   $: preferredRelaysText = localSettings.preferredRelays?.join('\n') || '';
+  $: trustedProxyText = localSettings.trustedProxyRelays?.join('\n') || '';
+
+  const privacyModeOptions = [
+    {
+      value: "off",
+      label: "Off (direct connections allowed)",
+    },
+    {
+      value: "prefer",
+      label: "Prefer Relay (fall back to direct if needed)",
+    },
+    {
+      value: "strict",
+      label: "Strict Relay-only (never expose your IP)",
+    },
+  ];
+
+  $: privacyStatus = (() => {
+    switch (localSettings.ipPrivacyMode) {
+      case "prefer":
+        return "Relay routing will be attempted first. If no relay is available, the app falls back to a direct connection and your IP may be exposed.";
+      case "strict":
+        return "All traffic must tunnel through a trusted relay or proxy. Direct connections and IP exposure are blocked.";
+      default:
+        return "Direct connections are allowed. Use a SOCKS5 proxy if you still want to mask your IP.";
+    }
+  })();
 
   // Check for changes
   $: hasChanges = JSON.stringify(localSettings) !== JSON.stringify(savedSettings);
 
-  function saveSettings() {
+  async function saveSettings() {
     if (!isValid || maxStorageError) {
       return;
     }
@@ -136,7 +164,93 @@
     bandwidthScheduler.forceUpdate();
     
     importExportFeedback = null;
-    showToast("Settings Updated!");
+
+    try {
+      await applyPrivacyRoutingSettings();
+      await restartDhtWithProxy();
+      showToast("Settings Updated!");
+    } catch (error) {
+      console.error("Failed to apply networking settings:", error);
+      showToast("Settings saved, but networking update failed", "error");
+    }
+  }
+
+  async function applyPrivacyRoutingSettings() {
+    if (typeof window === "undefined" || !("__TAURI__" in window)) {
+      return;
+    }
+
+    if (localSettings.ipPrivacyMode !== "off" && (!localSettings.trustedProxyRelays || localSettings.trustedProxyRelays.length === 0)) {
+      showToast("Add at least one trusted proxy relay before enabling Hide My IP.", "warning");
+      try {
+        await invoke("disable_privacy_routing");
+      } catch (error) {
+        console.warn("disable_privacy_routing failed while updating privacy settings:", error);
+      }
+      return;
+    }
+
+    if (localSettings.ipPrivacyMode === "off") {
+      try {
+        await invoke("disable_privacy_routing");
+      } catch (error) {
+        console.warn("disable_privacy_routing failed while turning privacy off:", error);
+      }
+      return;
+    }
+
+    await invoke("enable_privacy_routing", {
+      proxyAddresses: localSettings.trustedProxyRelays,
+      mode: localSettings.ipPrivacyMode,
+    });
+  }
+
+  async function restartDhtWithProxy() {
+    if (typeof window === "undefined" || !("__TAURI__" in window)) {
+      return;
+    }
+
+    try {
+      await invoke("stop_dht_node");
+    } catch (error) {
+      console.debug("stop_dht_node failed (probably already stopped):", error);
+    }
+
+    let bootstrapNodes: string[] = [];
+    try {
+      bootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command");
+    } catch (error) {
+      console.error("Failed to fetch bootstrap nodes:", error);
+      throw error;
+    }
+
+    if (!Array.isArray(bootstrapNodes) || bootstrapNodes.length === 0) {
+      throw new Error("No bootstrap nodes available to restart DHT");
+    }
+
+    const payload: Record<string, unknown> = {
+      port: localSettings.port,
+      bootstrapNodes,
+      enableAutonat: !localSettings.disableDirectNatTraversal,
+      autonatProbeIntervalSecs: localSettings.autonatProbeInterval,
+      chunkSizeKb: localSettings.chunkSize,
+      cacheSizeMb: localSettings.cacheSize,
+      enableAutorelay: localSettings.ipPrivacyMode !== "off" ? true : localSettings.enableAutorelay,
+    };
+
+    if (localSettings.autonatServers?.length) {
+      payload.autonatServers = localSettings.autonatServers;
+    }
+    if (localSettings.trustedProxyRelays?.length) {
+      payload.preferredRelays = localSettings.trustedProxyRelays;
+    } else if (localSettings.preferredRelays?.length) {
+      payload.preferredRelays = localSettings.preferredRelays;
+    }
+    if (localSettings.enableProxy && localSettings.proxyAddress?.trim()) {
+      payload.proxyAddress = localSettings.proxyAddress.trim();
+    }
+
+    await invoke("start_dht_node", payload);
   }
 
   $: {
@@ -153,10 +267,10 @@
     advancedSectionOpen = hasAdvancedError;
   }
 
-  function handleConfirmReset() {
+  async function handleConfirmReset() {
     localSettings = { ...defaultSettings }; // Reset local changes
     settings.set(defaultSettings); // Reset the store
-    saveSettings(); // Save the reset state
+    await saveSettings(); // Save the reset state
     showResetConfirmModal = false;
   }
 
@@ -242,11 +356,11 @@
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const imported = JSON.parse(e.target?.result as string);
         localSettings = { ...localSettings, ...imported };
-        saveSettings(); // This saves, updates savedSettings, and clears any old feedback.
+        await saveSettings(); // This saves, updates savedSettings, and clears any old feedback.
         // Now we set the new feedback for the import action.
         importExportFeedback = {
           message: $t("advanced.importSuccess", {
@@ -284,33 +398,40 @@
       .filter(s => s.length > 0);
   }
 
+  function updateTrustedProxyRelays() {
+    localSettings.trustedProxyRelays = trustedProxyText
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+  }
+
     onMount(async () => {
     // Load settings from local storage
     const stored = localStorage.getItem("chiralSettings");
     if (stored) {
-      try {
-        const loadedSettings: AppSettings = JSON.parse(stored);
-        // Set the store, which ensures it is available globally
-        settings.set({ ...defaultSettings, ...loadedSettings }); 
-        // Update local state from the store after loading
-        localSettings = get(settings); 
-        savedSettings = get(settings); 
-      } catch (e) {
-        console.error("Failed to load settings:", e);
-      }
-    }
+  try {
+    const loadedSettings: AppSettings = JSON.parse(stored);
+    // Set the store, which ensures it is available globally
+    settings.set({ ...defaultSettings, ...loadedSettings }); 
+    // Update local state from the store after loading
+    localSettings = get(settings); 
+    savedSettings = get(settings); 
+  } catch (e) {
+    console.error("Failed to load settings:", e);
+  }
+}
 
-    const saved = await loadLocale(); // 'en' | 'ko' | null
-    const initial = saved || "en";
-    selectedLanguage = initial; // Synchronize dropdown display value
-    // (From root, setupI18n() has already been called, so only once here)
-  });
+const saved = await loadLocale(); // 'en' | 'ko' | null
+const initial = saved || "en";
+selectedLanguage = initial; // Synchronize dropdown display value
+// (From root, setupI18n() has already been called, so only once here)
+});
 
-  function onLanguageChange(lang: string) {
+  async function onLanguageChange(lang: string) {
     selectedLanguage = lang;
     changeLocale(lang); // Save + update global state (yes, i18n.ts takes care of saving)
     (settings as any).language = lang;
-    saveSettings(); // If you want to reflect in settings as well
+    await saveSettings(); // If you want to reflect in settings as well
   }
 
   const limits = {
@@ -619,7 +740,7 @@ function sectionMatches(section: string, query: string) {
           <Label for="user-location">{$t("network.userLocation")}</Label>
           <DropDown
             id="user-location"
-            options={locations}
+            options={locationOptions}
             bind:value={localSettings.userLocation}
           />
           <p class="text-xs text-muted-foreground mt-1">
@@ -665,14 +786,14 @@ function sectionMatches(section: string, query: string) {
             <input
               type="checkbox"
               id="enable-autorelay"
-              bind:checked={localSettings.enableAutoRelay}
+              bind:checked={localSettings.enableAutorelay}
             />
             <Label for="enable-autorelay" class="cursor-pointer">
               {$t("settings.autorelay.enable")}
             </Label>
           </div>
 
-          {#if localSettings.enableAutoRelay}
+          {#if localSettings.enableAutorelay}
             <div class="space-y-2 ml-6">
               <Label for="preferred-relays">{$t("settings.autorelay.relays")}</Label>
               <textarea
@@ -681,7 +802,7 @@ function sectionMatches(section: string, query: string) {
                 placeholder="/ip4/147.75.80.110/tcp/4001/p2p/QmNnooDu..."
                 rows="3"
                 class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
-              />
+              ></textarea>
               <p class="text-xs text-muted-foreground">
                 {$t("settings.autorelay.description")}
               </p>
@@ -886,7 +1007,7 @@ function sectionMatches(section: string, query: string) {
         <Shield class="h-6 w-6 text-blue-600" />
         <h2 class="text-xl font-semibold text-black">{$t("privacy.title")}</h2>
       </div>
-      <div class="space-y-2">
+      <div class="space-y-4">
         <div class="flex items-center gap-2">
           <input
             type="checkbox"
@@ -910,6 +1031,60 @@ function sectionMatches(section: string, query: string) {
             <p class="text-xs text-muted-foreground mt-1">{$t("privacy.proxyHint")}</p>
           </div>
         {/if}
+
+        <div class="space-y-3 border-t pt-3">
+          <h4 class="font-medium flex items-center gap-2">
+            <Shield class="h-4 w-4 text-blue-600" />
+            Hide My IP
+          </h4>
+
+          <div>
+            <Label for="privacy-mode-select">Routing preference</Label>
+            <DropDown
+              id="privacy-mode-select"
+              options={privacyModeOptions}
+              bind:value={localSettings.ipPrivacyMode}
+            />
+          </div>
+
+          <div class="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+            {privacyStatus}
+          </div>
+
+          {#if localSettings.ipPrivacyMode !== "off"}
+            <div>
+              <Label for="trusted-proxies">Trusted proxy relays</Label>
+              <textarea
+                id="trusted-proxies"
+                bind:value={trustedProxyText}
+                on:blur={updateTrustedProxyRelays}
+                placeholder="/dns4/relay.example.com/tcp/4001/p2p/12D3KooW...\nOne multiaddress per line."
+                rows="4"
+                class="w-full px-3 py-2 border rounded-md text-sm"
+              ></textarea>
+              <p class="text-xs text-muted-foreground mt-1">
+                These peers will be used when auto-routing traffic to hide your IP. Make sure they are operated by someone you trust.
+              </p>
+            </div>
+
+            <div class="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="disable-nat-privacy"
+                bind:checked={localSettings.disableDirectNatTraversal}
+              />
+              <Label for="disable-nat-privacy" class="cursor-pointer">
+                Disable STUN/DCUtR while hiding IP
+              </Label>
+            </div>
+
+            <div class="rounded-md border border-dashed border-slate-200 p-3 text-xs text-muted-foreground space-y-1">
+              <p>Trusted relays configured: {localSettings.trustedProxyRelays.length}</p>
+              <p>SOCKS5 proxy: {localSettings.enableProxy ? (localSettings.proxyAddress || "Not set") : "Disabled"}</p>
+              <p>Direct NAT traversal: {localSettings.disableDirectNatTraversal ? "Disabled (safer)" : "Enabled (may reveal IP)"}</p>
+            </div>
+          {/if}
+        </div>
 
         <!-- AutoNAT Configuration -->
         <div class="space-y-3 border-t pt-3">

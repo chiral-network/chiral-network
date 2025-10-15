@@ -2,7 +2,6 @@
 // Following README approach: "Progressive Decentralization - Start with mock data for immediate usability"
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::command;

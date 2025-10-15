@@ -413,9 +413,8 @@ Techniques:
 ### Phase 3: Optimization
 
 1. Performance improvements
-2. Mobile applications
-3. Advanced features
-4. Enterprise support
+2. Advanced features
+3. Enterprise support
 
 ## Architecture Decisions Log
 

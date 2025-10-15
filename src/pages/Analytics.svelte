@@ -3,7 +3,7 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
   import { TrendingUp, Upload, DollarSign, HardDrive, Award, BarChart3, TrendingUp as LineChart } from 'lucide-svelte'
-  import { files, wallet, networkStats } from '$lib/stores';
+  import { files, wallet } from '$lib/stores';
   import { proxyNodes } from '$lib/proxy';
   import { onMount, onDestroy } from 'svelte'
   import { t } from 'svelte-i18n'
@@ -12,7 +12,7 @@
   import { miningState } from '$lib/stores';
   import { miningProgress } from '$lib/stores';
   import { analyticsService } from '$lib/services/analyticsService';
-  import type { BandwidthStats, PerformanceMetrics, NetworkActivity, ResourceContribution } from '$lib/services/analyticsService';
+  import type { BandwidthStats, NetworkActivity } from '$lib/services/analyticsService';
   
   let uploadedFiles: FileItem[] = []
   let downloadedFiles: FileItem[] = []
@@ -24,9 +24,7 @@
 
   // Real analytics data
   let realBandwidthStats: BandwidthStats | null = null
-  let realPerformanceMetrics: PerformanceMetrics | null = null
   let realNetworkActivity: NetworkActivity | null = null
-  let realResourceContribution: ResourceContribution | null = null
   
   // Latency analytics (derived from proxy nodes)
   let avgLatency = 0
@@ -266,9 +264,7 @@
   // Fetch real analytics data
   async function fetchAnalyticsData() {
     realBandwidthStats = await analyticsService.getBandwidthStats();
-    realPerformanceMetrics = await analyticsService.getPerformanceMetrics();
     realNetworkActivity = await analyticsService.getNetworkActivity();
-    realResourceContribution = await analyticsService.getResourceContribution();
 
     // Update bandwidth used with real data
     if (realBandwidthStats) {

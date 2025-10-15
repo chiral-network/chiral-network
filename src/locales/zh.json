@@ -20,6 +20,7 @@
       "notInstalled": "未安装",
       "downloading": "下载中...",
       "starting": "启动中...",
+      "connecting": "连接中...",
       "connected": "已连接",
       "disconnected": "已断开"
     },
@@ -76,8 +77,8 @@
       "peers": "已连接节点",
       "peerId": "节点ID",
       "bootstrapNode": "引导节点",
-      "listenAddresses": "监听地址",
-      "noListenAddresses": "暂无监听地址",
+      "listenAddresses": "多地址",
+      "noListenAddresses": "暂无多地址",
       "recentEvents": "最近事件",
       "disconnect": "断开DHT",
       "health": {
@@ -132,6 +133,23 @@
         "lastFailure": "最后失败",
         "never": "从未",
         "description": "通过中继的直接连接升级（DCUtR）启用 NAT 打洞以建立直接的对等连接。"
+      },
+      "relay": {
+        "title": "中继状态",
+        "enabled": "自动中继已启用",
+        "disabled": "自动中继已禁用",
+        "noPeer": "未连接到中继",
+        "activePeer": "活动中继",
+        "status": "状态",
+        "lastSuccess": "最近成功预留",
+        "lastFailure": "最近预留失败",
+        "renewals": "预留续期次数",
+        "evictions": "预留被逐次数",
+        "never": "从未",
+        "noEvictions": "无被逐记录",
+        "accepted": "预留已接受",
+        "pending": "待定",
+        "failed": "失败"
       }
     },
     "networkStatus": "网络状态",
@@ -232,6 +250,37 @@
       "peersShort": "{count} 个节点",
       "emptyState": "连接到 DHT 后即可开始绘制节点地图。",
       "unknownNotice": "仍有 {count} 个节点未提供位置信息。"
+    },
+    "quickActions": {
+      "title": "快速操作",
+      "badge": "网络工具",
+      "discoverPeers": {
+        "tooltip": "在网络中查找新节点",
+        "discovering": "发现中...",
+        "button": "发现节点"
+      },
+      "addPeer": {
+        "placeholder": "节点地址",
+        "tooltip": "通过地址添加节点",
+        "success": "节点已添加！"
+      },
+      "copyPeerId": {
+        "tooltip": "复制你的节点ID",
+        "tooltipUnavailable": "节点ID不可用",
+        "button": "复制节点ID",
+        "success": "节点ID已复制！"
+      },
+      "refreshStatus": {
+        "tooltip": "刷新节点和网络状态",
+        "button": "刷新状态",
+        "success": "网络状态已刷新"
+      },
+      "restartNode": {
+        "tooltip": "重启本地节点",
+        "button": "重启节点",
+        "success": "节点已重启",
+        "notRunning": "无法重启：节点未运行"
+      }
     }
   },
   "regions.usEast": "美国东部",
@@ -260,7 +309,7 @@
     "disconnected": "未连接",
     "expandSidebar": "展开侧边栏",
     "collapseSidebar": "收起侧边栏",
-    "closeMobileMenu": "关闭移动菜单"
+    "closeSidebarMenu": "关闭侧边栏菜单"
   },
   "privacy.title": "隐私与安全",
   "privacy.enableProxy": "启用代理路由以保持匿名",
@@ -743,7 +792,7 @@
     "discoverPools": "发现矿池",
     "createPool": "创建矿池",
     "poolConfiguration": "矿池配置",
-    "pool": {
+    "poolDetails": {
       "connectedTo": "已连接到",
       "leave": "离开矿池",
       "yourHashrate": "您的算力",
@@ -938,7 +987,7 @@
       "failed": "失败"
     },
     "settings": {
-      "maxConcurrent": "最大并发数",
+      "maxConcurrent": "最大并发下载数",
       "autoStart": "自动开始",
       "toggleAutoStart": "切换队列自动开始 {status}"
     },
@@ -1019,7 +1068,9 @@
           "other": "文件已在下载列表中 ({status})"
         }
       },
-      "button": "搜索"
+      "button": "搜索",
+      "searchVersions": "搜索版本",
+      "namePlaceholder": "输入文件名 (例如：\"document.pdf\")"
     },
     "telemetry": {
       "retrying": "正在重试 {hash} 下载（第 {attempt}/{max} 次尝试）",

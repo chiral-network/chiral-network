@@ -172,15 +172,12 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         None, // cache_size_mb: use default
         enable_autorelay,
         args.relay.clone(),
+        false, // enable_relay_server - disabled by default
     )
     .await?;
     let peer_id = dht_service.get_peer_id().await;
 
-    // Start the DHT running in background
-    dht_service.run().await;
-
-    info!("✅ DHT node started");
-    info!("📍 Local Peer ID: {}", peer_id);
+    // DHT is already running in a spawned background task
 
     if let Some(ft) = &file_transfer_service {
         let snapshot = ft.download_metrics_snapshot().await;
@@ -205,7 +202,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
     }
 
     // Optionally start geth
-    let _geth_handle = if args.enable_geth {
+    let geth_handle = if args.enable_geth {
         info!("Starting geth node...");
         let mut geth = GethProcess::new();
         geth.start(&args.geth_data_dir, args.miner_address.as_deref())?;
@@ -249,6 +246,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             match dht_service.connect_peer(bootstrap_addr.clone()).await {
                 Ok(_) => {
                     info!("Connected to bootstrap: {}", bootstrap_addr);
+                    // TODO: In a full implementation, we might want to verify the connection
                     // In a real implementation, bootstrap nodes would:
                     // 1. Add us to their routing table
                     // 2. Announce our presence to other peers in the network

@@ -7,9 +7,8 @@ export default defineConfig({
   clearScreen: false,
   server: {
     port: 1420,
-    
     watch: {
-      ignored: ["**/src-tauri/**"],
+      ignored: ["**/src-tauri/**", "**/target/**", "**/relay/target/**"],
     },
   },
   resolve: {
@@ -17,7 +16,12 @@ export default defineConfig({
       $lib: path.resolve("./src/lib"),
     },
   },
+  optimizeDeps: {
+    include: ["@tauri-apps/api"],
+  },
   build: {
+    target: "esnext",
+    minify: "esbuild",
     rollupOptions: {
       external: ["@tauri-apps/api/tauri", "@tauri-apps/plugin-fs"],
     },

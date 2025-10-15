@@ -18,19 +18,25 @@ mod multi_source_download;
 pub mod net;
 mod peer_selection;
 mod pool;
+mod proxy_latency;
 mod stream_auth;
 mod webrtc_service;
 use std::sync::Mutex as StdMutex;
 
 use crate::commands::bootstrap::get_bootstrap_nodes_command;
 use crate::commands::proxy::{
-    list_proxies, proxy_connect, proxy_disconnect, proxy_echo, proxy_remove, ProxyNode,
+    disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect,
+    proxy_disconnect, proxy_echo, proxy_remove, ProxyNode,
+};
+use crate::commands::auth::{
+    generate_proxy_auth_token, validate_proxy_auth_token, revoke_proxy_auth_token,
+    cleanup_expired_proxy_auth_tokens,
 };
 use chiral_network::stream_auth::{
     AuthMessage, HmacKeyExchangeConfirmation, HmacKeyExchangeRequest, HmacKeyExchangeResponse,
     StreamAuthService,
 };
-use dht::{split_into_blocks, DhtEvent, DhtMetricsSnapshot, DhtService, FileMetadata, StringBlock};
+use dht::{DhtEvent, DhtMetricsSnapshot, DhtService, FileMetadata};
 use ethereum::{
     create_new_account, get_account_from_private_key, get_balance, get_block_number, get_hashrate,
     get_mined_blocks_count, get_mining_logs, get_mining_performance, get_mining_status,
@@ -44,8 +50,8 @@ use keystore::Keystore;
 use lazy_static::lazy_static;
 use multi_source_download::{MultiSourceDownloadService, MultiSourceEvent, MultiSourceProgress};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::collections::{HashMap, VecDeque};
+use sha2::Digest;
+use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -54,22 +60,97 @@ use std::{
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use sysinfo::{Components, System, MINIMUM_CPU_UPDATE_INTERVAL};
-use systemstat::{Platform, System as SystemStat};
+use sysinfo::{Components, System};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State,
 };
-use tokio::{io::AsyncReadExt, sync::Mutex, task::JoinHandle, time::sleep};
+use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{error, info, warn};
 use webrtc_service::{WebRTCFileRequest, WebRTCService};
 
 use crate::manager::ChunkManager; // Import the ChunkManager
-use base64::{engine::general_purpose, Engine as _}; // For key encoding
+// For key encoding
 use blockstore::block::Block;
 use x25519_dalek::{PublicKey, StaticSecret}; // For key handling
+
+/// Detect MIME type from file extension
+fn detect_mime_type_from_filename(filename: &str) -> Option<String> {
+    let extension = filename
+        .rsplit('.')
+        .next()?
+        .to_lowercase();
+
+    match extension.as_str() {
+        // Images
+        "jpg" | "jpeg" => Some("image/jpeg".to_string()),
+        "png" => Some("image/png".to_string()),
+        "gif" => Some("image/gif".to_string()),
+        "bmp" => Some("image/bmp".to_string()),
+        "webp" => Some("image/webp".to_string()),
+        "svg" => Some("image/svg+xml".to_string()),
+        "ico" => Some("image/x-icon".to_string()),
+
+        // Videos
+        "mp4" => Some("video/mp4".to_string()),
+        "avi" => Some("video/x-msvideo".to_string()),
+        "mkv" => Some("video/x-matroska".to_string()),
+        "mov" => Some("video/quicktime".to_string()),
+        "wmv" => Some("video/x-ms-wmv".to_string()),
+        "flv" => Some("video/x-flv".to_string()),
+        "webm" => Some("video/webm".to_string()),
+
+        // Audio
+        "mp3" => Some("audio/mpeg".to_string()),
+        "wav" => Some("audio/wav".to_string()),
+        "flac" => Some("audio/flac".to_string()),
+        "aac" => Some("audio/aac".to_string()),
+        "ogg" => Some("audio/ogg".to_string()),
+        "wma" => Some("audio/x-ms-wma".to_string()),
+
+        // Documents
+        "pdf" => Some("application/pdf".to_string()),
+        "doc" => Some("application/msword".to_string()),
+        "docx" => Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document".to_string()),
+        "xls" => Some("application/vnd.ms-excel".to_string()),
+        "xlsx" => Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string()),
+        "ppt" => Some("application/vnd.ms-powerpoint".to_string()),
+        "pptx" => Some("application/vnd.openxmlformats-officedocument.presentationml.presentation".to_string()),
+        "txt" => Some("text/plain".to_string()),
+        "rtf" => Some("application/rtf".to_string()),
+
+        // Archives
+        "zip" => Some("application/zip".to_string()),
+        "rar" => Some("application/x-rar-compressed".to_string()),
+        "7z" => Some("application/x-7z-compressed".to_string()),
+        "tar" => Some("application/x-tar".to_string()),
+        "gz" => Some("application/gzip".to_string()),
+
+        // Code files
+        "html" | "htm" => Some("text/html".to_string()),
+        "css" => Some("text/css".to_string()),
+        "js" => Some("application/javascript".to_string()),
+        "json" => Some("application/json".to_string()),
+        "xml" => Some("application/xml".to_string()),
+        "py" => Some("text/x-python".to_string()),
+        "rs" => Some("text/rust".to_string()),
+        "java" => Some("text/x-java-source".to_string()),
+        "cpp" | "cc" | "cxx" => Some("text/x-c++src".to_string()),
+        "c" => Some("text/x-csrc".to_string()),
+        "h" => Some("text/x-chdr".to_string()),
+        "hpp" => Some("text/x-c++hdr".to_string()),
+
+        // Other common types
+        "exe" => Some("application/x-msdownload".to_string()),
+        "dll" => Some("application/x-msdownload".to_string()),
+        "iso" => Some("application/x-iso9660-image".to_string()),
+
+        // Default fallback
+        _ => Some("application/octet-stream".to_string()),
+    }
+}
 
 #[derive(Clone)]
 struct QueuedTransaction {
@@ -80,15 +161,23 @@ struct QueuedTransaction {
 }
 
 #[derive(Clone)]
-struct StreamingUploadSession {
-    file_name: String,
-    file_size: u64,
-    received_chunks: u32,
-    total_chunks: u32,
-    hasher: sha2::Sha256,
-    created_at: std::time::SystemTime,
-    chunk_cids: Vec<dht::Cid>, // Collect CIDs of all chunks for root block creation
-    file_data: Vec<u8>,        // Accumulate file data for local storage
+struct ProxyAuthToken {
+    token: String,
+    proxy_address: String,
+    expires_at: u64,
+    created_at: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct StreamingUploadSession {
+    pub file_name: String,
+    pub file_size: u64,
+    pub received_chunks: u32,
+    pub total_chunks: u32,
+    pub hasher: sha2::Sha256,
+    pub created_at: std::time::SystemTime,
+    pub chunk_cids: Vec<String>,
+    pub file_data: Vec<u8>,
 }
 
 struct AppState {
@@ -107,6 +196,7 @@ struct AppState {
     multi_source_download: Mutex<Option<Arc<MultiSourceDownloadService>>>,
     keystore: Arc<Mutex<Keystore>>,
     proxies: Arc<Mutex<Vec<ProxyNode>>>,
+    privacy_proxies: Arc<Mutex<Vec<String>>>,
     file_transfer_pump: Mutex<Option<JoinHandle<()>>>,
     multi_source_pump: Mutex<Option<JoinHandle<()>>>,
     socks5_proxy_cli: Mutex<Option<String>>,
@@ -119,6 +209,9 @@ struct AppState {
 
     // New field for streaming upload sessions
     upload_sessions: Arc<Mutex<std::collections::HashMap<String, StreamingUploadSession>>>,
+
+    // Proxy authentication tokens storage
+    proxy_auth_tokens: Arc<Mutex<std::collections::HashMap<String, ProxyAuthToken>>>,
 
     // Stream authentication service
     stream_auth: Arc<Mutex<StreamAuthService>>,
@@ -166,12 +259,14 @@ async fn import_chiral_account(
 }
 
 #[tauri::command]
-async fn start_geth_node(state: State<'_, AppState>, data_dir: String) -> Result<(), String> {
+async fn start_geth_node(
+    state: State<'_, AppState>,
+    data_dir: String,
+    rpc_url: Option<String>,
+) -> Result<(), String> {
     let mut geth = state.geth.lock().await;
     let miner_address = state.miner_address.lock().await;
-    // TODO: The port and address should be configurable from the frontend.
-    // For now, we'll update the rpc_url in the state when starting.
-    let rpc_url = "http://127.0.0.1:8545".to_string();
+    let rpc_url = rpc_url.unwrap_or_else(|| "http://127.0.0.1:8545".to_string());
     *state.rpc_url.lock().await = rpc_url;
 
     geth.start(&data_dir, miner_address.as_deref())
@@ -372,7 +467,7 @@ async fn upload_versioned_file(
     state: State<'_, AppState>,
     file_name: String,
     file_path: String,
-    file_size: u64,
+    _file_size: u64,
     mime_type: Option<String>,
     is_encrypted: bool,
     encryption_method: Option<String>,
@@ -614,6 +709,9 @@ async fn start_dht_node(
     is_bootstrap: Option<bool>,
     chunk_size_kb: Option<usize>,
     cache_size_mb: Option<usize>,
+    // New optional relay controls
+    enable_autorelay: Option<bool>,
+    preferred_relays: Option<Vec<String>>,
 ) -> Result<String, String> {
     {
         let dht_guard = state.dht.lock().await;
@@ -651,16 +749,16 @@ async fn start_dht_node(
         file_transfer_service,
         chunk_size_kb,
         cache_size_mb,
-        false, // enable_autorelay - hardcoded to false for CLI start
-        Vec::new(), // preferred_relays
+        enable_autorelay.unwrap_or(false),
+        preferred_relays.unwrap_or_default(),
+        false, // enable_relay_server - disabled by default
     )
     .await
     .map_err(|e| format!("Failed to start DHT: {}", e))?;
 
     let peer_id = dht_service.get_peer_id().await;
 
-    // Start the DHT node running in background
-    dht_service.run().await;
+    // DHT node is already running in a spawned background task
     let dht_arc = Arc::new(dht_service);
 
     // Spawn the event pump
@@ -687,6 +785,24 @@ async fn start_dht_node(
 
             for ev in events {
                 match ev {
+                    DhtEvent::PeerDiscovered { peer_id, addresses } => {
+                        let payload = serde_json::json!({
+                            "peerId": peer_id,
+                            "addresses": addresses,
+                        });
+                        let _ = app_handle.emit("dht_peer_discovered", payload);
+                    }
+                    DhtEvent::PeerConnected { peer_id, address } => {
+                        let payload = serde_json::json!({
+                            "peerId": peer_id,
+                            "address": address,
+                        });
+                        let _ = app_handle.emit("dht_peer_connected", payload);
+                    }
+                    DhtEvent::PeerDisconnected { peer_id } => {
+                        let payload = serde_json::json!({ "peerId": peer_id });
+                        let _ = app_handle.emit("dht_peer_disconnected", payload);
+                    }
                     DhtEvent::ProxyStatus {
                         id,
                         address,
@@ -1015,9 +1131,23 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
         let mapped: Vec<String> = events
             .into_iter()
             .map(|e| match e {
-                DhtEvent::PeerDiscovered(p) => format!("peer_discovered:{}", p),
-                DhtEvent::PeerConnected(p) => format!("peer_connected:{}", p),
-                DhtEvent::PeerDisconnected(p) => format!("peer_disconnected:{}", p),
+                // DhtEvent::PeerDiscovered(p) => format!("peer_discovered:{}", p),
+                // DhtEvent::PeerConnected(p) => format!("peer_connected:{}", p),
+                // DhtEvent::PeerDisconnected(p) => format!("peer_disconnected:{}", p),
+                DhtEvent::PeerDiscovered { peer_id, addresses } => {
+                    let joined = if addresses.is_empty() {
+                        "-".to_string()
+                    } else {
+                        addresses.join("|")
+                    };
+                    format!("peer_discovered:{}:{}", peer_id, joined)
+                }
+                DhtEvent::PeerConnected { peer_id, address } => {
+                    format!("peer_connected:{}:{}", peer_id, address.unwrap_or_default())
+                }
+                DhtEvent::PeerDisconnected { peer_id } => {
+                    format!("peer_disconnected:{}", peer_id)
+                }
                 DhtEvent::FileDiscovered(meta) => format!(
                     "file_discovered:{}:{}:{}",
                     meta.file_hash, meta.file_name, meta.file_size
@@ -1089,125 +1219,196 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
     }
 }
 
-#[tauri::command]
-fn get_cpu_temperature() -> Option<f32> {
-    use std::sync::OnceLock;
-
-    static LAST_UPDATE: OnceLock<std::sync::Mutex<Option<Instant>>> = OnceLock::new();
-
-    let last_update_mutex = LAST_UPDATE.get_or_init(|| std::sync::Mutex::new(None));
-
-    {
-        let mut last_update = last_update_mutex.lock().unwrap();
-        if let Some(last) = *last_update {
-            if last.elapsed() < MINIMUM_CPU_UPDATE_INTERVAL {
-                return None;
-            }
-        }
-        *last_update = Some(Instant::now());
-    }
-
-    // Try sysinfo first (works on some platforms including M1 macs and some Windows)
-    let mut sys = System::new_all();
-    sys.refresh_cpu_all();
-    let components = Components::new_with_refreshed_list();
-
-    let mut core_count = 0;
-
-    let sum: f32 = components
-        .iter()
-        .filter(|c| {
-            let label = c.label().to_lowercase();
-            label.contains("cpu")
-                || label.contains("package")
-                || label.contains("tdie")
-                || label.contains("core")
-                || label.contains("thermal")
-        })
-        .map(|c| {
-            core_count += 1;
-            c.temperature()
-        })
-        .sum();
-    if core_count > 0 {
-        return Some(sum / core_count as f32);
-    }
-
-    // Windows-specific temperature detection methods
+#[derive(Debug, Clone)]
+enum TemperatureMethod {
+    Sysinfo,
     #[cfg(target_os = "windows")]
-    {
-        // todo: Getting windows temp needs fixing - currently makes app performance very slow
-        // if let Some(temp) = get_windows_temperature() {
-        //     return None;
-        // }
-    }
-
-    // Linux-specific temperature detection methods
+    WindowsWmi,
     #[cfg(target_os = "linux")]
-    {
-        if let Some(temp) = get_linux_temperature() {
-            return Some(temp);
-        }
-    }
-
-    // Fallback for other platforms
-    let stat_sys = SystemStat::new();
-    if let Ok(temp) = stat_sys.cpu_temp() {
-        return Some(temp);
-    }
-
-    None
+    LinuxSensors,
+    #[cfg(target_os = "linux")]
+    LinuxThermalZone(String),
+    #[cfg(target_os = "linux")]
+    LinuxHwmon(String),
 }
 
-//todo for fixing later
-#[cfg(target_os = "windows")]
-fn get_windows_temperature() -> Option<f32> {
-    use std::process::Command;
+#[tauri::command]
+async fn get_cpu_temperature() -> Option<f32> {
+    tokio::task::spawn_blocking(move || {
+        use std::sync::OnceLock;
+        use std::time::Instant;
+        use sysinfo::MINIMUM_CPU_UPDATE_INTERVAL;
+        use tracing::info;
 
-    // Method 1: Try the fastest method first - HighPrecisionTemperature from WMI
-    if let Ok(output) = Command::new("powershell")
-        .args([
-            "-Command",
-            "Get-WmiObject -Query \"SELECT HighPrecisionTemperature FROM Win32_PerfRawData_Counters_ThermalZoneInformation\" | Select-Object -First 1 -ExpandProperty HighPrecisionTemperature"
-        ])
-        .output()
-    {
-        if let Ok(output_str) = String::from_utf8(output.stdout) {
-            if let Ok(temp_tenths_kelvin) = output_str.trim().parse::<f32>() {
-                let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
-                if temp_celsius > 0.0 && temp_celsius < 150.0 {
-                    return Some(temp_celsius);
+        static LAST_UPDATE: OnceLock<std::sync::Mutex<Option<Instant>>> = OnceLock::new();
+        static WORKING_METHOD: OnceLock<std::sync::Mutex<Option<TemperatureMethod>>> = OnceLock::new();
+        static TEMP_HISTORY: OnceLock<std::sync::Mutex<Vec<(Instant, f32)>>> = OnceLock::new();
+
+        let last_update_mutex = LAST_UPDATE.get_or_init(|| std::sync::Mutex::new(None));
+        let working_method_mutex = WORKING_METHOD.get_or_init(|| std::sync::Mutex::new(None));
+        let temp_history_mutex = TEMP_HISTORY.get_or_init(|| std::sync::Mutex::new(Vec::new()));
+
+        {
+            let mut last_update = last_update_mutex.lock().unwrap();
+            if let Some(last) = *last_update {
+                if last.elapsed() < MINIMUM_CPU_UPDATE_INTERVAL {
+                    return None;
                 }
             }
+            *last_update = Some(Instant::now());
         }
-    }
 
-    // Method 2: Fallback to regular Temperature field
-    if let Ok(output) = Command::new("powershell")
-        .args([
-            "-Command",
-            "Get-WmiObject -Query \"SELECT Temperature FROM Win32_PerfRawData_Counters_ThermalZoneInformation\" | Select-Object -First 1 -ExpandProperty Temperature"
-        ])
-        .output()
-    {
-        if let Ok(output_str) = String::from_utf8(output.stdout) {
-            if let Ok(temp_tenths_kelvin) = output_str.trim().parse::<f32>() {
-                let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
-                if temp_celsius > 0.0 && temp_celsius < 150.0 {
-                    return Some(temp_celsius);
+        // Helper function to add temperature to history and return smoothed value
+        let smooth_temperature = |raw_temp: f32| -> f32 {
+            let now = Instant::now();
+            let mut history = temp_history_mutex.lock().unwrap();
+            
+            // Add current reading
+            history.push((now, raw_temp));
+            
+            // Keep only last 5 readings within 30 seconds
+            history.retain(|(time, _)| now.duration_since(*time).as_secs() < 30);
+            if history.len() > 5 {
+                let excess = history.len() - 5;
+                history.drain(0..excess);
+            }
+            
+            // Return smoothed temperature (weighted average, recent readings have more weight)
+            if history.len() == 1 {
+                raw_temp
+            } else {
+                let total_weight: f32 = (1..=history.len()).map(|i| i as f32).sum();
+                let weighted_sum: f32 = history.iter().enumerate()
+                    .map(|(i, (_, temp))| temp * (i + 1) as f32)
+                    .sum();
+                weighted_sum / total_weight
+            }
+        };
+
+        // Try cached working method first
+        {
+            let working_method = working_method_mutex.lock().unwrap();
+            if let Some(ref method) = *working_method {
+                if let Some(temp) = try_temperature_method(method) {
+                    return Some(smooth_temperature(temp));
                 }
+                // Method stopped working, clear cache
+                drop(working_method);
+                let mut working_method = working_method_mutex.lock().unwrap();
+                *working_method = None;
             }
         }
-    }
 
-    None
+        // Try all methods to find one that works and cache it
+        let methods_to_try = vec![
+            TemperatureMethod::Sysinfo,
+            #[cfg(target_os = "windows")]
+            TemperatureMethod::WindowsWmi,
+            #[cfg(target_os = "linux")]
+            TemperatureMethod::LinuxSensors,
+        ];
+
+        for method in methods_to_try {
+            if let Some(temp) = try_temperature_method(&method) {
+                // Cache the working method
+                let mut working_method = working_method_mutex.lock().unwrap();
+                *working_method = Some(method.clone());
+                return Some(smooth_temperature(temp));
+            }
+        }
+
+        // Try more Linux methods if the basic ones failed
+        #[cfg(target_os = "linux")]
+        {
+            if let Some((temp, method)) = get_linux_temperature_advanced() {
+                let mut working_method = working_method_mutex.lock().unwrap();
+                *working_method = Some(method);
+                return Some(smooth_temperature(temp));
+            }
+        }
+
+        // Final fallback: return None when sensors are unavailable
+        // Only log the info message once to avoid spamming logs
+        static SENSOR_WARNING_LOGGED: OnceLock<()> = OnceLock::new();
+        
+        SENSOR_WARNING_LOGGED.get_or_init(|| {
+            info!("Hardware temperature sensors not accessible on this system. Temperature monitoring disabled.");
+        });
+
+        None
+    })
+    .await // 2. Await the result of the blocking task
+    .unwrap_or(None)
 }
+
+fn try_temperature_method(method: &TemperatureMethod) -> Option<f32> {
+    match method {
+        TemperatureMethod::Sysinfo => {
+            let mut sys = System::new_all();
+            sys.refresh_cpu_all();
+            let components = Components::new_with_refreshed_list();
+
+            let mut core_count = 0;
+            let sum: f32 = components
+                .iter()
+                .filter(|c| {
+                    let label = c.label().to_lowercase();
+                    label.contains("cpu")
+                        || label.contains("package")
+                        || label.contains("tdie")
+                        || label.contains("core")
+                        || label.contains("thermal")
+                })
+                .map(|c| {
+                    core_count += 1;
+                    c.temperature()
+                })
+                .sum();
+            
+            if core_count > 0 {
+                let avg_temp = sum / core_count as f32;
+                if avg_temp > 0.0 && avg_temp < 150.0 {
+                    return Some(avg_temp);
+                }
+            }
+            None
+        }
+        #[cfg(target_os = "windows")]
+        TemperatureMethod::WindowsWmi => get_windows_temperature(),
+        #[cfg(target_os = "linux")]
+        TemperatureMethod::LinuxSensors => get_linux_sensors_temperature(),
+        #[cfg(target_os = "linux")]
+        TemperatureMethod::LinuxThermalZone(path) => {
+            if let Ok(temp_str) = std::fs::read_to_string(path) {
+                if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
+                    let temp_celsius = temp_millidegrees as f32 / 1000.0;
+                    if temp_celsius > 0.0 && temp_celsius < 150.0 {
+                        return Some(temp_celsius);
+                    }
+                }
+            }
+            None
+        }
+        #[cfg(target_os = "linux")]
+        TemperatureMethod::LinuxHwmon(path) => {
+            if let Ok(temp_str) = std::fs::read_to_string(path) {
+                if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
+                    let temp_celsius = temp_millidegrees as f32 / 1000.0;
+                    if temp_celsius > 0.0 && temp_celsius < 150.0 {
+                        return Some(temp_celsius);
+                    }
+                }
+            }
+            None
+        }
+    }
+}
+
+
 
 #[cfg(target_os = "linux")]
-fn get_linux_temperature() -> Option<f32> {
-    use std::fs;
-
-    // Method 1: Try sensors command first (most reliable and matches user expectations)
+fn get_linux_sensors_temperature() -> Option<f32> {
+    // Try sensors command (most reliable and matches user expectations)
     if let Ok(output) = std::process::Command::new("sensors")
         .arg("-u") // Raw output
         .output()
@@ -1258,7 +1459,14 @@ fn get_linux_temperature() -> Option<f32> {
         }
     }
 
-    // Method 2: Try thermal zones (fallback)
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn get_linux_temperature_advanced() -> Option<(f32, TemperatureMethod)> {
+    use std::fs;
+
+    // Method 1: Try thermal zones (prioritize x86_pkg_temp)
     // Look for CPU thermal zones in /sys/class/thermal/
     // Prioritize x86_pkg_temp as it's usually the most accurate for CPU package temperature
     for i in 0..20 {
@@ -1271,7 +1479,7 @@ fn get_linux_temperature() -> Option<f32> {
                     if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
                         let temp_celsius = temp_millidegrees as f32 / 1000.0;
                         if temp_celsius > 0.0 && temp_celsius < 150.0 {
-                            return Some(temp_celsius);
+                            return Some((temp_celsius, TemperatureMethod::LinuxThermalZone(thermal_path)));
                         }
                     }
                 }
@@ -1293,7 +1501,7 @@ fn get_linux_temperature() -> Option<f32> {
                     if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
                         let temp_celsius = temp_millidegrees as f32 / 1000.0;
                         if temp_celsius > 0.0 && temp_celsius < 150.0 {
-                            return Some(temp_celsius);
+                            return Some((temp_celsius, TemperatureMethod::LinuxThermalZone(thermal_path)));
                         }
                     }
                 }
@@ -1301,7 +1509,7 @@ fn get_linux_temperature() -> Option<f32> {
         }
     }
 
-    // Method 3: Try hwmon (hardware monitoring) interfaces
+    // Method 2: Try hwmon (hardware monitoring) interfaces
     // Look for CPU temperature sensors in /sys/class/hwmon/
     for i in 0..10 {
         let hwmon_dir = format!("/sys/class/hwmon/hwmon{}", i);
@@ -1322,7 +1530,7 @@ fn get_linux_temperature() -> Option<f32> {
                         if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
                             let temp_celsius = temp_millidegrees as f32 / 1000.0;
                             if temp_celsius > 0.0 && temp_celsius < 150.0 {
-                                return Some(temp_celsius);
+                                return Some((temp_celsius, TemperatureMethod::LinuxHwmon(temp_path)));
                             }
                         }
                     }
@@ -1331,7 +1539,7 @@ fn get_linux_temperature() -> Option<f32> {
         }
     }
 
-    // Method 4: Try reading from specific CPU temperature files
+    // Method 3: Try reading from specific CPU temperature files using glob patterns
     let cpu_temp_paths = [
         "/sys/devices/platform/coretemp.0/hwmon/hwmon*/temp1_input",
         "/sys/devices/platform/coretemp.0/temp1_input",
@@ -1347,7 +1555,8 @@ fn get_linux_temperature() -> Option<f32> {
                         if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
                             let temp_celsius = temp_millidegrees as f32 / 1000.0;
                             if temp_celsius > 0.0 && temp_celsius < 150.0 {
-                                return Some(temp_celsius);
+                                let path_str = path.to_string_lossy().to_string();
+                                return Some((temp_celsius, TemperatureMethod::LinuxHwmon(path_str)));
                             }
                         }
                     }
@@ -1356,6 +1565,107 @@ fn get_linux_temperature() -> Option<f32> {
         }
     }
 
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn get_windows_temperature() -> Option<f32> {
+    use std::sync::OnceLock;
+    
+    static LAST_LOG_STATE: OnceLock<std::sync::Mutex<bool>> = OnceLock::new();
+    
+    // Try multiple WMI methods for better compatibility
+    
+    // Method 1: Try HighPrecisionTemperature (newer Windows versions)
+    if let Ok(output) = Command::new("powershell")
+        .args([
+            "-Command",
+            "try { Get-WmiObject -Query \"SELECT HighPrecisionTemperature FROM Win32_PerfRawData_Counters_ThermalZoneInformation\" -ErrorAction Stop | Select-Object -First 1 -ExpandProperty HighPrecisionTemperature } catch { $null }"
+        ])
+        .output()
+    {
+        if let Ok(output_str) = String::from_utf8(output.stdout) {
+            let trimmed = output_str.trim();
+            if !trimmed.is_empty() && trimmed != "null" {
+                if let Ok(temp_tenths_kelvin) = trimmed.parse::<f32>() {
+                    let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
+                    if temp_celsius > 0.0 && temp_celsius < 150.0 {
+                        // Log success only once
+                        let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
+                        let mut logged = log_state.lock().unwrap();
+                        if !*logged {
+                            info!("✅ Temperature sensor detected via WMI HighPrecision: {:.1}°C", temp_celsius);
+                            *logged = true;
+                        }
+                        return Some(temp_celsius);
+                    }
+                }
+            }
+        }
+    }
+    
+    // Method 2: Try CurrentTemperature (older Windows versions)
+    if let Ok(output) = Command::new("powershell")
+        .args([
+            "-Command",
+            "try { Get-WmiObject -Query \"SELECT CurrentTemperature FROM Win32_TemperatureProbe\" -ErrorAction Stop | Select-Object -First 1 -ExpandProperty CurrentTemperature } catch { $null }"
+        ])
+        .output()
+    {
+        if let Ok(output_str) = String::from_utf8(output.stdout) {
+            let trimmed = output_str.trim();
+            if !trimmed.is_empty() && trimmed != "null" {
+                if let Ok(temp_tenths_kelvin) = trimmed.parse::<f32>() {
+                    let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
+                    if temp_celsius > 0.0 && temp_celsius < 150.0 {
+                        let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
+                        let mut logged = log_state.lock().unwrap();
+                        if !*logged {
+                            info!("✅ Temperature sensor detected via WMI CurrentTemperature: {:.1}°C", temp_celsius);
+                            *logged = true;
+                        }
+                        return Some(temp_celsius);
+                    }
+                }
+            }
+        }
+    }
+
+    // Method 3: Try MSAcpi_ThermalZoneTemperature (alternative approach)
+    if let Ok(output) = Command::new("powershell")
+        .args([
+            "-Command",
+            "try { Get-WmiObject -Namespace \"root\\wmi\" -Query \"SELECT CurrentTemperature FROM MSAcpi_ThermalZoneTemperature\" -ErrorAction Stop | Select-Object -First 1 -ExpandProperty CurrentTemperature } catch { $null }"
+        ])
+        .output()
+    {
+        if let Ok(output_str) = String::from_utf8(output.stdout) {
+            let trimmed = output_str.trim();
+            if !trimmed.is_empty() && trimmed != "null" {
+                if let Ok(temp_tenths_kelvin) = trimmed.parse::<f32>() {
+                    let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
+                    if temp_celsius > 0.0 && temp_celsius < 150.0 {
+                        let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
+                        let mut logged = log_state.lock().unwrap();
+                        if !*logged {
+                            info!("✅ Temperature sensor detected via MSAcpi: {:.1}°C", temp_celsius);
+                            *logged = true;
+                        }
+                        return Some(temp_celsius);
+                    }
+                }
+            }
+        }
+    }
+    
+    // Log only once when no sensor is found
+    let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
+    let mut logged = log_state.lock().unwrap();
+    if !*logged {
+        info!("⚠️ No WMI temperature sensors detected. Temperature monitoring disabled.");
+        *logged = true;
+    }
+    
     None
 }
 
@@ -1470,7 +1780,7 @@ async fn download_blocks_from_network(
 async fn download_file_from_network(
     state: State<'_, AppState>,
     file_hash: String,
-    output_path: String,
+    _output_path: String,
 ) -> Result<String, String> {
     let ft = {
         let ft_guard = state.file_transfer.lock().await;
@@ -1520,11 +1830,10 @@ async fn download_file_from_network(
 
                     if available_peers.is_empty() {
                         info!("File found but no seeders currently available");
-                        // TODO: Return metadata to frontend with 0 seeders instead of error
-                        return Err(format!(
-                            "File found but no seeders available: {} ({} bytes) - 0 seeders online",
-                            metadata.file_name, metadata.file_size
-                        ));
+                        // Return metadata as JSON instead of error so frontend can display file info
+                        let metadata_json = serde_json::to_string(&metadata)
+                            .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+                        return Ok(metadata_json);
                     }
 
                     // Implement chunk requesting protocol with real WebRTC
@@ -1754,7 +2063,7 @@ async fn start_streaming_upload(
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     // Check for active account - require login for all uploads
-    let _account = get_active_account(&state).await?;
+    let account = get_active_account(&state).await?;
 
     let dht_opt = { state.dht.lock().await.as_ref().cloned() };
     if dht_opt.is_none() {
@@ -1793,7 +2102,7 @@ async fn start_streaming_upload(
 async fn upload_file_chunk(
     upload_id: String,
     chunk_data: Vec<u8>,
-    chunk_index: u32,
+    _chunk_index: u32,
     is_last_chunk: bool,
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
@@ -1810,7 +2119,7 @@ async fn upload_file_chunk(
     // Store chunk directly in Bitswap (if DHT is available)
     if let Some(dht) = state.dht.lock().await.as_ref() {
         // Create a block from the chunk data
-        use dht::{split_into_blocks, StringBlock};
+        use dht::split_into_blocks;
         let blocks = split_into_blocks(&chunk_data, dht.chunk_size());
 
         for block in blocks.iter() {
@@ -1823,7 +2132,7 @@ async fn upload_file_chunk(
             };
 
             // Collect CID for root block creation
-            session.chunk_cids.push(cid.clone());
+            session.chunk_cids.push(cid.to_string());
 
             // Store block in Bitswap via DHT command
             if let Err(e) = dht.store_block(cid.clone(), block.data().to_vec()).await {
@@ -2029,8 +2338,8 @@ async fn pump_multi_source_events(app: tauri::AppHandle, ms: Arc<MultiSourceDown
         for event in events {
             match &event {
                 MultiSourceEvent::DownloadStarted {
-                    file_hash,
-                    total_peers,
+                    file_hash: _,
+                    total_peers: _,
                 } => {
                     if let Err(err) = app.emit("multi_source_download_started", &event) {
                         warn!(
@@ -2040,7 +2349,7 @@ async fn pump_multi_source_events(app: tauri::AppHandle, ms: Arc<MultiSourceDown
                     }
                 }
                 MultiSourceEvent::ProgressUpdate {
-                    file_hash,
+                    file_hash: _,
                     progress,
                 } => {
                     if let Err(err) = app.emit("multi_source_progress_update", progress) {
@@ -2048,10 +2357,10 @@ async fn pump_multi_source_events(app: tauri::AppHandle, ms: Arc<MultiSourceDown
                     }
                 }
                 MultiSourceEvent::DownloadCompleted {
-                    file_hash,
-                    output_path,
-                    duration_secs,
-                    average_speed_bps,
+                    file_hash: _,
+                    output_path: _,
+                    duration_secs: _,
+                    average_speed_bps: _,
                 } => {
                     if let Err(err) = app.emit("multi_source_download_completed", &event) {
                         warn!(
@@ -2125,6 +2434,41 @@ async fn get_multi_source_progress(
         Ok(multi_source_service.get_download_progress(&file_hash).await)
     } else {
         Err("Multi-source download service not available".to_string())
+    }
+}
+
+#[tauri::command]
+async fn update_proxy_latency(
+    state: State<'_, AppState>,
+    proxy_id: String,
+    latency_ms: Option<u64>,
+) -> Result<(), String> {
+    let ms = {
+        let ms_guard = state.multi_source_download.lock().await;
+        ms_guard.as_ref().cloned()
+    };
+
+    if let Some(multi_source_service) = ms {
+        multi_source_service.update_proxy_latency(proxy_id, latency_ms).await;
+        Ok(())
+    } else {
+        Err("Multi-source download service not available for proxy latency update".to_string())
+    }
+}
+
+#[tauri::command]
+async fn get_proxy_optimization_status(
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let ms = {
+        let ms_guard = state.multi_source_download.lock().await;
+        ms_guard.as_ref().cloned()
+    };
+
+    if let Some(multi_source_service) = ms {
+        Ok(multi_source_service.get_proxy_optimization_status().await)
+    } else {
+        Err("Multi-source download service not available for proxy optimization status".to_string())
     }
 }
 
@@ -2747,6 +3091,7 @@ async fn select_peers_with_strategy(
     count: usize,
     strategy: String,
     require_encryption: bool,
+    blacklisted_peers: Vec<String>,
 ) -> Result<Vec<String>, String> {
     use crate::peer_selection::SelectionStrategy;
 
@@ -2760,11 +3105,16 @@ async fn select_peers_with_strategy(
         _ => SelectionStrategy::Balanced,
     };
 
+    let filtered_peers: Vec<String> = available_peers
+        .into_iter()
+        .filter(|peer| !blacklisted_peers.contains(peer))
+        .collect();
+    
     let dht_guard = state.dht.lock().await;
     if let Some(ref dht) = *dht_guard {
         Ok(dht
             .select_peers_with_strategy(
-                &available_peers,
+                &filtered_peers,
                 count,
                 selection_strategy,
                 require_encryption,
@@ -2834,7 +3184,7 @@ async fn queue_transaction(
     amount: f64,
 ) -> Result<String, String> {
     // Validate account is logged in
-    let _account = get_active_account(&state).await?;
+    let account = get_active_account(&state).await?;
 
     // Generate unique transaction ID
     let tx_id = format!(
@@ -3085,9 +3435,10 @@ fn main() {
             .with(
                 EnvFilter::from_default_env()
                     .add_directive("chiral_network=info".parse().unwrap())
-                    .add_directive("libp2p=info".parse().unwrap())
-                    .add_directive("libp2p_kad=debug".parse().unwrap())
-                    .add_directive("libp2p_swarm=info".parse().unwrap()),
+                    .add_directive("libp2p=warn".parse().unwrap())
+                    .add_directive("libp2p_kad=warn".parse().unwrap())
+                    .add_directive("libp2p_swarm=warn".parse().unwrap())
+                    .add_directive("libp2p_mdns=warn".parse().unwrap()),
             )
             .init();
     }
@@ -3112,7 +3463,6 @@ fn main() {
     }
 
     println!("Starting Chiral Network...");
-    tracing::info!("🚀 Registering pool mining commands...");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
@@ -3131,6 +3481,7 @@ fn main() {
                 Keystore::load().unwrap_or_else(|_| Keystore::new()),
             )),
             proxies: Arc::new(Mutex::new(Vec::new())),
+            privacy_proxies: Arc::new(Mutex::new(Vec::new())),
             file_transfer_pump: Mutex::new(None),
             multi_source_pump: Mutex::new(None),
             socks5_proxy_cli: Mutex::new(args.socks5_proxy),
@@ -3143,6 +3494,9 @@ fn main() {
 
             // Initialize upload sessions
             upload_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+
+            // Initialize proxy authentication tokens
+            proxy_auth_tokens: Arc::new(Mutex::new(std::collections::HashMap::new())),
 
             // Initialize stream authentication
             stream_auth: Arc::new(Mutex::new(StreamAuthService::new())),
@@ -3203,6 +3557,8 @@ fn main() {
             start_multi_source_download,
             cancel_multi_source_download,
             get_multi_source_progress,
+            update_proxy_latency,
+            get_proxy_optimization_status,
             download_file_multi_source,
             get_file_transfer_events,
             get_download_metrics,
@@ -3216,6 +3572,8 @@ fn main() {
             proxy_remove,
             proxy_echo,
             list_proxies,
+            enable_privacy_routing,
+            disable_privacy_routing,
             get_bootstrap_nodes_command,
             generate_totp_secret,
             is_2fa_enabled,
@@ -3262,6 +3620,10 @@ fn main() {
             finalize_hmac_key_exchange,
             get_hmac_exchange_status,
             get_active_hmac_exchanges,
+            generate_proxy_auth_token,
+            validate_proxy_auth_token,
+            revoke_proxy_auth_token,
+            cleanup_expired_proxy_auth_tokens,
             get_file_data,
             store_file_data
         ])
@@ -3283,7 +3645,6 @@ fn main() {
         })
         .setup(|app| {
             // Clean up any orphaned geth processes on startup
-            println!("Cleaning up any orphaned geth processes from previous sessions...");
             #[cfg(unix)]
             {
                 use std::process::Command;
@@ -3318,15 +3679,12 @@ fn main() {
                 let _ = std::fs::remove_file(&ipc_file);
             }
 
-            println!("App setup complete");
-            println!("Window should be visible now!");
-
             let show_i = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
             let hide_i = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &hide_i, &quit_i])?;
 
-            let _tray = TrayIconBuilder::new()
+            let tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .tooltip("Chiral Network")
@@ -3380,7 +3738,6 @@ fn main() {
             if let Some(window) = app.get_webview_window("main") {
                 window.show().unwrap();
                 window.set_focus().unwrap();
-                println!("Window shown and focused");
 
                 let app_handle = app.handle().clone();
                 window.on_window_event(move |event| {
@@ -3602,6 +3959,7 @@ async fn upload_and_publish_file(
             .as_secs();
 
         // Use prepare_versioned_metadata to handle version incrementing and parent_hash
+        let mime_type = detect_mime_type_from_filename(&file_name).unwrap_or_else(|| "application/octet-stream".to_string());
         let metadata = dht
             .prepare_versioned_metadata(
                 manifest.merkle_root.clone(),
@@ -3609,7 +3967,7 @@ async fn upload_and_publish_file(
                 file_size,
                 vec![], // Empty - chunks already stored
                 created_at,
-                None, // TODO: detect mime type from file extension
+                Some(mime_type),
                 true, // is_encrypted
                 Some("AES-256-GCM".to_string()),
                 None, // key_fingerprint
@@ -3617,6 +3975,22 @@ async fn upload_and_publish_file(
             .await?;
 
         let version = metadata.version.unwrap_or(1);
+        
+        // Store file data locally for seeding (CRITICAL FIX)
+        let ft = {
+            let ft_guard = state.file_transfer.lock().await;
+            ft_guard.as_ref().cloned()
+        };
+        if let Some(ft) = ft {
+            // Read the original file data to store locally
+            let file_data = tokio::fs::read(&file_path)
+                .await
+                .map_err(|e| format!("Failed to read file for local storage: {}", e))?;
+            
+            ft.store_file_data(manifest.merkle_root.clone(), file_name.clone(), file_data)
+                .await;
+        }
+        
         dht.publish_file(metadata).await?;
         version
     } else {
@@ -3703,7 +4077,8 @@ async fn get_file_data(state: State<'_, AppState>, file_hash: String) -> Result<
             .get_file_data(&file_hash)
             .await
             .ok_or("File not found".to_string())?;
-        Ok(base64::encode(&data))
+        use base64::{Engine as _, engine::general_purpose};
+        Ok(general_purpose::STANDARD.encode(&data))
     } else {
         Err("File transfer service not running".to_string())
     }

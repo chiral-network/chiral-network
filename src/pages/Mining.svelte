@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import Card from '$lib/components/ui/card.svelte'
   import Button from '$lib/components/ui/button.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
@@ -1047,7 +1047,7 @@
                 class="h-2 {temperature > 80 ? '[&>div]:bg-red-500' : temperature > 70 ? '[&>div]:bg-orange-500' : temperature > 60 ? '[&>div]:bg-yellow-500' : '[&>div]:bg-green-500'}"
               />
               <p class="text-xs text-muted-foreground mt-1">
-                {temperature > 85 ? 'Critical' : temperature > 75 ? 'Hot' : temperature > 65 ? 'Warm' : 'Normal'}
+                {temperature > 85 ? $t('mining.temperatureStatus.critical') : temperature > 75 ? $t('mining.temperatureStatus.hot') : temperature > 65 ? $t('mining.temperatureStatus.warm') : $t('mining.temperatureStatus.normal')}
               </p>
             {:else}
               <Progress value={0} max={100} class="h-2 opacity-30" />
@@ -1123,44 +1123,44 @@
               <div class="flex items-center justify-between mb-3">
                 <div class="flex items-center gap-2">
                   <div class="w-3 h-3 bg-green-500 rounded-full"></div>
-                  <h4 class="font-semibold text-green-700">{$t('mining.pool.connectedTo')}: {currentPool.pool.name}</h4>
+                  <h4 class="font-semibold text-green-700">{$t('mining.poolDetails.connectedTo')}: {currentPool.pool.name}</h4>
                 </div>
                 <Button variant="destructive" size="sm" on:click={leavePool} disabled={$miningState.isMining}>
-                  {$t('mining.pool.leave')}
+                  {$t('mining.poolDetails.leave')}
                 </Button>
               </div>
 
               <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                 <div>
-                  <p class="text-muted-foreground">{$t('mining.pool.yourHashrate')}</p>
+                  <p class="text-muted-foreground">{$t('mining.poolDetails.yourHashrate')}</p>
                   <p class="font-semibold">{currentPool.stats.your_hashrate}</p>
                 </div>
                 <div>
-                  <p class="text-muted-foreground">{$t('mining.pool.poolHashrate')}</p>
+                  <p class="text-muted-foreground">{$t('mining.poolDetails.poolHashrate')}</p>
                   <p class="font-semibold">{currentPool.stats.pool_hashrate}</p>
                 </div>
                 <div>
-                  <p class="text-muted-foreground">{$t('mining.pool.yourShare')}</p>
+                  <p class="text-muted-foreground">{$t('mining.poolDetails.yourShare')}</p>
                   <p class="font-semibold">{currentPool.stats.your_share_percentage.toFixed(2)}%</p>
                 </div>
                 <div>
-                  <p class="text-muted-foreground">{$t('mining.pool.est24hPayout')}</p>
+                  <p class="text-muted-foreground">{$t('mining.poolDetails.est24hPayout')}</p>
                   <p class="font-semibold">{currentPool.stats.estimated_payout_24h.toFixed(3)} Chiral</p>
                 </div>
                 <div>
-                  <p class="text-muted-foreground">{$t('mining.pool.shares')}</p>
+                  <p class="text-muted-foreground">{$t('mining.poolDetails.shares')}</p>
                   <p class="font-semibold">{currentPool.stats.shares_accepted}/{currentPool.stats.shares_submitted}</p>
                 </div>
                 <div>
-                  <p class="text-muted-foreground">{$t('mining.pool.connectedMiners')}</p>
+                  <p class="text-muted-foreground">{$t('mining.poolDetails.connectedMiners')}</p>
                   <p class="font-semibold">{currentPool.stats.connected_miners}</p>
                 </div>
                 <div>
-                  <p class="text-muted-foreground">{$t('mining.pool.poolFee')}</p>
+                  <p class="text-muted-foreground">{$t('mining.poolDetails.poolFee')}</p>
                   <p class="font-semibold">{currentPool.pool.fee_percentage}%</p>
                 </div>
                 <div>
-                  <p class="text-muted-foreground">{$t('mining.pool.lastShare')}</p>
+                  <p class="text-muted-foreground">{$t('mining.poolDetails.lastShare')}</p>
                   <p class="font-semibold">{formatTimestamp(currentPool.stats.last_share_time)}</p>
                 </div>
               </div>
@@ -1170,10 +1170,10 @@
             <div class="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4">
               <div class="flex items-center gap-2">
                 <div class="w-3 h-3 bg-blue-500 rounded-full"></div>
-                <h4 class="font-semibold text-blue-700">{$t('mining.pool.soloMining')}</h4>
+                <h4 class="font-semibold text-blue-700">{$t('mining.poolDetails.soloMining')}</h4>
               </div>
               <p class="text-sm text-muted-foreground mt-2">
-                {$t('mining.pool.soloMiningDesc')}
+                {$t('mining.poolDetails.soloMiningDesc')}
               </p>
             </div>
           {/if}
@@ -1293,9 +1293,9 @@
         <div class="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 mt-2">
           <div class="flex items-center gap-2">
             <AlertCircle class="h-4 w-4 text-blue-500 flex-shrink-0" />
-            <p class="text-sm text-blue-600">
-              Please create a Chiral Network account from the <a href="/account" class="underline font-medium">Account page</a> to start mining
-            </p>
+                        <p class="text-sm text-blue-600">
+                          {@html $t('mining.errors.noAccountToStart', { values: { link: '<a href="/account" class="underline font-medium">' + $t('mining.accountPage') + '</a>' } })}
+                        </p>
           </div>
         </div>
       {/if}
@@ -1821,7 +1821,7 @@
   <div class="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
     <Card class="w-full max-w-4xl max-h-[80vh] flex flex-col">
       <div class="p-4 border-b flex items-center justify-between">
-        <h2 class="text-lg font-semibold">{$t('mining.pool.availablePools')}</h2>
+        <h2 class="text-lg font-semibold">{$t('mining.poolDetails.availablePools')}</h2>
         <Button size="sm" variant="ghost" on:click={() => showPoolList = false}>
           <X class="h-4 w-4" />
         </Button>
@@ -1830,7 +1830,7 @@
       <div class="flex-1 overflow-y-auto p-4">
         {#if availablePools.length === 0}
           <div class="text-center py-8">
-            <p class="text-muted-foreground">{$t('mining.pool.noPoolsFound')}</p>
+            <p class="text-muted-foreground">{$t('mining.poolDetails.noPoolsFound')}</p>
           </div>
         {:else}
           <div class="space-y-3">
@@ -1850,35 +1850,35 @@
                     
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                       <div>
-                        <p class="text-muted-foreground">{$t('mining.pool.miners')}</p>
+                        <p class="text-muted-foreground">{$t('mining.poolDetails.miners')}</p>
                         <p class="font-medium">{pool.miners_count}</p>
                       </div>
                       <div>
-                        <p class="text-muted-foreground">{$t('mining.pool.hashrate')}</p>
+                        <p class="text-muted-foreground">{$t('mining.poolDetails.hashrate')}</p>
                         <p class="font-medium">{pool.total_hashrate}</p>
                       </div>
                       <div>
-                        <p class="text-muted-foreground">{$t('mining.pool.fee')}</p>
+                        <p class="text-muted-foreground">{$t('mining.poolDetails.fee')}</p>
                         <p class="font-medium">{pool.fee_percentage}%</p>
                       </div>
                       <div>
-                        <p class="text-muted-foreground">{$t('mining.pool.lastBlock')}</p>
-                        <p class="font-medium">{pool.last_block_time > 0 ? formatTimestamp(pool.last_block_time) : $t('mining.pool.never')}</p>
+                        <p class="text-muted-foreground">{$t('mining.poolDetails.lastBlock')}</p>
+                        <p class="font-medium">{pool.last_block_time > 0 ? formatTimestamp(pool.last_block_time) : $t('mining.poolDetails.never')}</p>
                       </div>
                       <div>
-                        <p class="text-muted-foreground">{$t('mining.pool.blocks24h')}</p>
+                        <p class="text-muted-foreground">{$t('mining.poolDetails.blocks24h')}</p>
                         <p class="font-medium">{pool.blocks_found_24h}</p>
                       </div>
                       <div>
-                        <p class="text-muted-foreground">{$t('mining.pool.minPayout')}</p>
+                        <p class="text-muted-foreground">{$t('mining.poolDetails.minPayout')}</p>
                         <p class="font-medium">{pool.min_payout} Chiral</p>
                       </div>
                       <div>
-                        <p class="text-muted-foreground">{$t('mining.pool.payment')}</p>
+                        <p class="text-muted-foreground">{$t('mining.poolDetails.payment')}</p>
                         <p class="font-medium">{pool.payment_method}</p>
                       </div>
                       <div>
-                        <p class="text-muted-foreground">{$t('mining.pool.url')}</p>
+                        <p class="text-muted-foreground">{$t('mining.poolDetails.url')}</p>
                         <p class="font-mono text-xs">{pool.url}</p>
                       </div>
                     </div>
@@ -1890,7 +1890,7 @@
                       on:click={() => joinPool(pool)}
                       disabled={pool.status !== 'Active' || $miningState.isMining}
                     >
-                      {$t('mining.pool.join')}
+                      {$t('mining.poolDetails.join')}
                     </Button>
                   </div>
                 </div>
@@ -1908,7 +1908,7 @@
   <div class="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
     <Card class="w-full max-w-2xl">
       <div class="p-4 border-b flex items-center justify-between">
-        <h2 class="text-lg font-semibold">{$t('mining.pool.createNew')}</h2>
+        <h2 class="text-lg font-semibold">{$t('mining.poolDetails.createNew')}</h2>
         <Button size="sm" variant="ghost" on:click={() => showCreatePool = false}>
           <X class="h-4 w-4" />
         </Button>
@@ -1917,16 +1917,16 @@
       <div class="p-4 space-y-4">
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <Label for="pool-name">{$t('mining.pool.poolName')} *</Label>
+            <Label for="pool-name">{$t('mining.poolDetails.poolName')} *</Label>
             <Input
               id="pool-name"
               bind:value={newPool.name}
-              placeholder={$t('mining.pool.poolNamePlaceholder')}
+              placeholder={$t('mining.poolDetails.poolNamePlaceholder')}
               class="mt-2"
             />
           </div>
           <div>
-            <Label for="pool-region">{$t('mining.pool.region')}</Label>
+            <Label for="pool-region">{$t('mining.poolDetails.region')}</Label>
             <select bind:value={newPool.region} class="w-full mt-2 px-3 py-2 border rounded-md bg-background">
               <option value="Global">Global</option>
               <option value="Americas">Americas</option>
@@ -1938,18 +1938,18 @@
         </div>
         
         <div>
-          <Label for="pool-description">{$t('mining.pool.description')}</Label>
+          <Label for="pool-description">{$t('mining.poolDetails.description')}</Label>
           <Input
             id="pool-description"
             bind:value={newPool.description}
-            placeholder={$t('mining.pool.descriptionPlaceholder')}
+            placeholder={$t('mining.poolDetails.descriptionPlaceholder')}
             class="mt-2"
           />
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
-            <Label for="pool-fee">{$t('mining.pool.feePercentage')}</Label>
+            <Label for="pool-fee">{$t('mining.poolDetails.feePercentage')}</Label>
             <Input
               id="pool-fee"
               type="number"
@@ -1961,7 +1961,7 @@
             />
           </div>
           <div>
-            <Label for="pool-payout">{$t('mining.pool.minPayoutChiral')}</Label>
+            <Label for="pool-payout">{$t('mining.poolDetails.minPayoutChiral')}</Label>
             <Input
               id="pool-payout"
               type="number"
@@ -1972,7 +1972,7 @@
             />
           </div>
           <div>
-            <Label for="pool-payment">{$t('mining.pool.paymentMethod')}</Label>
+            <Label for="pool-payment">{$t('mining.poolDetails.paymentMethod')}</Label>
             <select bind:value={newPool.payment_method} class="w-full mt-2 px-3 py-2 border rounded-md bg-background">
               <option value="PPLNS">PPLNS</option>
               <option value="PPS">PPS</option>
@@ -1984,13 +1984,13 @@
         
         <div class="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3">
           <p class="text-sm text-blue-600">
-            <strong>{$t('mining.pool.note')}:</strong> {$t('mining.pool.createNote')}
+            <strong>{$t('mining.poolDetails.note')}:</strong> {$t('mining.poolDetails.createNote')}
           </p>
         </div>
 
         <div class="flex justify-end gap-2 pt-4">
           <Button variant="outline" on:click={() => showCreatePool = false}>
-            {$t('mining.pool.cancel')}
+            {$t('mining.poolDetails.cancel')}
           </Button>
           <Button on:click={createNewPool} disabled={!newPool.name.trim()}>
             {$t('mining.createPool')}

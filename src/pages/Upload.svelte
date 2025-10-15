@@ -14,7 +14,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { dhtService } from '$lib/dht';
   import Label from '$lib/components/ui/label.svelte';
-  import Input from '$lib/components/ui/input.svelte'; 
+  import Input from '$lib/components/ui/input.svelte';
 
   const tr = (k: string, params?: Record<string, any>): string => (get(t) as (key: string, params?: any) => string)(k, params)
   // Check if running in Tauri environment
@@ -245,10 +245,27 @@
             isUploading = true
             let duplicateCount = 0
             let addedCount = 0
+            let blockedCount = 0
 
             // Process each dropped file using versioned upload
             for (const file of droppedFiles) {
-              try {
+              // Block executable files for security
+              const blockedExtensions = ['.exe', '.bat', '.cmd', '.com', '.msi', '.scr', '.vbs']
+              const fileName = file.name.toLowerCase()
+              if (blockedExtensions.some(ext => fileName.endsWith(ext))) {
+                showToast(`${file.name}: Executable files are not allowed for security reasons`, 'error')
+                blockedCount++
+                continue
+              }
+
+              // Check for empty files
+              if (file.size === 0) {
+                showToast(`${file.name}: File is empty`, 'error')
+                blockedCount++
+                continue
+              }
+
+              try{
                 // Check for existing versions before upload
                 let existingVersions: any[] = [];
                 try {
@@ -378,8 +395,8 @@
   const unsubscribeFiles = files.subscribe(($files) => {
     // Collect seeding entries
     const seeds: SeedRecord[] = $files
-      .filter(f => f.status === 'seeding')
-      .map(f => ({ id: f.id, path: f.path, hash: f.hash, name: f.name, size: f.size, addedAt: (f.uploadDate ? f.uploadDate.toISOString() : new Date().toISOString()), manifest: f.manifest }))
+      .filter(f => f.status === 'seeding' && f.path)
+      .map(f => ({ id: f.id, path: f.path!, hash: f.hash, name: f.name, size: f.size, addedAt: (f.uploadDate ? f.uploadDate.toISOString() : new Date().toISOString()), manifest: f.manifest }))
 
     if (persistTimeout) clearTimeout(persistTimeout)
     persistTimeout = setTimeout(() => {

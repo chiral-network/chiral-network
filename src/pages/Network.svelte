@@ -8,6 +8,7 @@
   import PeerMetrics from '$lib/components/PeerMetrics.svelte'
   import GeoDistributionCard from '$lib/components/GeoDistributionCard.svelte'
   import { peers, networkStats, networkStatus, userLocation, etcAccount, settings } from '$lib/stores'
+  import { normalizeRegion, UNKNOWN_REGION_ID } from '$lib/geo'
   import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Play, Square, Download, AlertCircle, Wifi, UserMinus } from 'lucide-svelte'
   import { get } from 'svelte/store'
   import { onMount, onDestroy } from 'svelte'
@@ -23,6 +24,9 @@
   import DropDown from '$lib/components/ui/dropDown.svelte'
   import { SignalingService } from '$lib/services/signalingService';
   import { createWebRTCSession } from '$lib/services/webrtcService';
+  import { peerDiscoveryStore, startPeerEventStream, type PeerDiscovery } from '$lib/services/peerEventService';
+  import type { GeoRegionConfig } from '$lib/geo';
+  import { calculateRegionDistance } from '$lib/services/geolocation';
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -39,7 +43,11 @@
   let newPeerAddress = ''
   let sortBy: 'reputation' | 'sharedFiles' | 'totalSize' | 'nickname' | 'location' | 'joinDate' | 'lastSeen' | 'status' = 'reputation'
   let sortDirection: 'asc' | 'desc' = 'desc'
-  
+
+  const UNKNOWN_DISTANCE = 1_000_000;
+
+  let currentUserRegion: GeoRegionConfig = normalizeRegion(undefined);
+  $: currentUserRegion = normalizeRegion($userLocation);
   // Update sort direction when category changes to match the default
   $: if (sortBy) {
     const defaults: Record<typeof sortBy, 'asc' | 'desc'> = {
@@ -92,7 +100,11 @@
   // WebRTC and Signaling variables
   let signaling: SignalingService;
   let webrtcSession: ReturnType<typeof createWebRTCSession> | null = null;
-  let discoveredPeers: string[] = [];
+  // let discoveredPeers: string[] = [];
+  let webDiscoveredPeers: string[] = [];
+  let discoveredPeerEntries: PeerDiscovery[] = [];
+  let peerDiscoveryUnsub: (() => void) | null = null;
+  let stopPeerEvents: (() => void) | null = null;
   let signalingConnected = false;
 
   // Helper: add a connected peer to the central peers store (if not present)
@@ -111,7 +123,7 @@
         id: address,
         address,
         nickname: undefined,
-        status: 'online',
+        status: 'online' as const,
         reputation: 0,
         sharedFiles: 0,
         totalSize: 0,
@@ -141,17 +153,26 @@
   let copiedBootstrap = false
   let copiedListenAddr: string | null = null
 
-  function formatSize(bytes: number): string {
+  function formatSize(bytes: number | undefined): string {
+    if (bytes === undefined || bytes === null || isNaN(bytes)) {
+      return '0 B'
+    }
+
     const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
     let size = bytes
     let unitIndex = 0
-    
+
     while (size >= 1024 && unitIndex < units.length - 1) {
       size /= 1024
       unitIndex++
     }
-    
+
     return `${size.toFixed(2)} ${units[unitIndex]}`
+  }
+
+  function formatPeerTimestamp(ms?: number): string {
+    if (!ms) return tr('network.dht.health.never')
+    return new Date(ms).toLocaleString()
   }
 
   function formatHealthTimestamp(epoch: number | null): string {
@@ -247,12 +268,6 @@
   }
 
   async function fetchBootstrapNodes() {
-    if (!isTauri) {
-      dhtBootstrapNodes = ['/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ']
-      dhtBootstrapNode = dhtBootstrapNodes[0]
-      return
-    }
-    
     try {
       dhtBootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command")
       dhtBootstrapNode = dhtBootstrapNodes[0] || 'No bootstrap nodes configured'
@@ -393,8 +408,8 @@
       // Try to connect to bootstrap nodes
       let connectionSuccessful = false
 
-      if (DEFAULT_BOOTSTRAP_NODES.length > 0) {
-        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to ${DEFAULT_BOOTSTRAP_NODES.length} bootstrap node(s)...`]
+      if (dhtBootstrapNodes.length > 0) {
+        dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to ${dhtBootstrapNodes.length} bootstrap node(s)...`]
         
         // Add another small delay to show the connection attempt
         await new Promise(resolve => setTimeout(resolve, 1000))
@@ -503,12 +518,16 @@
     }
   }
   
+  let peerRefreshCounter = 0;
+
   function startDhtPolling() {
     if (dhtPollInterval) return // Already polling
-    
+
     dhtPollInterval = setInterval(async () => {
       try {
-        const events = await dhtService.getEvents() as any[]
+        // Only call getEvents if running in Tauri mode
+        // Note: getEvents is not available in the current DhtService implementation
+        const events: any[] = []
         if (events.length > 0) {
           const formattedEvents = events.map(event => {
             if (event.peerDisconnected) {
@@ -524,7 +543,7 @@
           })
           dhtEvents = [...dhtEvents, ...formattedEvents].slice(-10)
         }
-        
+
         let peerCount = dhtPeerCount
         const health = await dhtService.getHealth()
         if (health) {
@@ -547,6 +566,20 @@
         } else if (dhtStatus === 'disconnected' && peerCount > 0) {
           dhtStatus = 'connected'
           dhtEvents = [...dhtEvents, `✓ Reconnected to ${peerCount} peer(s)`]
+        }
+
+        // Auto-refresh connected peers list every 5 seconds (every ~2.5 poll cycles)
+        peerRefreshCounter++;
+        if (peerRefreshCounter >= 3 && isTauri && peerCount > 0) {
+          peerRefreshCounter = 0;
+          // Silently refresh peer list in background
+          try {
+            const { peerService } = await import('$lib/services/peerService');
+            const connectedPeers = await peerService.getConnectedPeers();
+            peers.set(connectedPeers);
+          } catch (error) {
+            console.debug('Background peer refresh failed:', error);
+          }
         }
       } catch (error) {
         console.error('Failed to poll DHT status:', error)
@@ -589,7 +622,16 @@
       showToast($t('network.errors.dhtNotConnected'), 'error');
       return;
     }
-    
+
+    // In Tauri mode, peer discovery happens automatically via DHT events
+    // This button just shows the current count
+    if (isTauri) {
+      const discoveryCount = discoveredPeerEntries.length;
+      showToast(tr('network.peerDiscovery.discoveryStarted', { values: { count: discoveryCount } }), 'info');
+      return;
+    }
+
+    // In web mode, use WebRTC signaling for testing
     if (!signalingConnected) {
       try {
         if (!signaling) {
@@ -597,9 +639,13 @@
         }
         await signaling.connect();
         signalingConnected = true;
+        const myClientId = signaling.getClientId();
         signaling.peers.subscribe(peers => {
-          discoveredPeers = peers;
-          console.log('Updated discovered peers:', peers);
+          // Filter out own client ID from discovered peers
+          // discoveredPeers = peers.filter(p => p !== myClientId);
+          // console.log('Updated discovered peers (excluding self):', discoveredPeers);
+          webDiscoveredPeers = peers.filter(p => p !== myClientId);
+          console.log('Updated discovered peers (excluding self):', webDiscoveredPeers);
         });
 
         // Register signaling message handler for WebRTC
@@ -619,34 +665,63 @@
         showToast('Connected to signaling server', 'success');
       } catch (error) {
         console.error('Failed to connect to signaling server:', error);
-        showToast('Failed to connect to signaling server. Make sure DHT is running.', 'error');
+        showToast('Failed to connect to signaling server for web mode testing', 'error');
         return;
       }
     }
-    
+
     // discoveredPeers will update automatically
-    showToast(tr('network.peerDiscovery.discoveryStarted', { values: { count: discoveredPeers.length } }), 'info');
+    // showToast(tr('network.peerDiscovery.discoveryStarted', { values: { count: discoveredPeers.length } }), 'info');
+    const discoveryCount = isTauri ? discoveredPeerEntries.length : webDiscoveredPeers.length;
+    showToast(tr('network.peerDiscovery.discoveryStarted', { values: { count: discoveryCount } }), 'info');
   }
   
   async function connectToPeer() {
     if (!newPeerAddress.trim()) {
-      showToast('Please enter a peer ID', 'error');
+      showToast('Please enter a peer address', 'error');
       return;
     }
-    
+
+    const peerAddress = newPeerAddress.trim();
+
+    // In Tauri mode, use DHT backend for P2P connections
+    if (isTauri) {
+      if (dhtStatus !== 'connected') {
+        showToast('DHT not connected. Please start DHT first.', 'error');
+        return;
+      }
+
+      try {
+        showToast('Connecting to peer via DHT...', 'info');
+        await invoke('connect_to_peer', { peerAddress });
+        showToast('Successfully connected to peer!', 'success');
+
+        // Clear input on successful connection
+        newPeerAddress = '';
+
+        // Peer list will auto-update via polling within ~5 seconds
+      } catch (error) {
+        console.error('Failed to connect to peer:', error);
+        showToast('Failed to connect to peer: ' + error, 'error');
+      }
+      return;
+    }
+
+    // In web mode, use WebRTC for testing
     if (!signalingConnected) {
       showToast('Signaling server not connected. Please start DHT first.', 'error');
       return;
     }
-    
-    const peerId = newPeerAddress.trim();
-    
+
+    const peerId = peerAddress;
+
     // Check if peer exists in discovered peers
-    if (!discoveredPeers.includes(peerId)) {
+    // if (!discoveredPeers.includes(peerId)) {
+    if (!webDiscoveredPeers.includes(peerId)) {
       showToast(`Peer ${peerId} not found in discovered peers`, 'warning');
       // Still attempt connection in case peer was discovered recently
     }
-    
+
     try {
       webrtcSession = createWebRTCSession({
         peerId,
@@ -656,15 +731,19 @@
           showToast('Received from peer: ' + data, 'info');
         },
         onConnectionStateChange: (state) => {
-          showToast('WebRTC state: ' + state, 'info');
+          console.log('[WebRTC] Connection state:', state);
 
-          // When the data channel/peer connection becomes connected, add to connected peers
+          // Only show toasts for important states (not every intermediate state)
           if (state === 'connected') {
             showToast('Successfully connected to peer!', 'success');
             // Add minimal PeerInfo to peers store if not present
             addConnectedPeer(peerId);
-          } else if (state === 'failed' || state === 'disconnected' || state === 'closed') {
-            showToast('Connection to peer failed or disconnected', 'error');
+          } else if (state === 'failed') {
+            showToast('Connection to peer failed', 'error');
+            // Mark peer as offline / remove from peers list
+            markPeerDisconnected(peerId);
+          } else if (state === 'disconnected' || state === 'closed') {
+            console.log('[WebRTC] Peer disconnected');
             // Mark peer as offline / remove from peers list
             markPeerDisconnected(peerId);
           }
@@ -695,7 +774,7 @@
           id: peerId,
           address: peerId,
           nickname: undefined,
-          status: 'away', // using 'away' to indicate in-progress
+          status: 'away' as const, // using 'away' to indicate in-progress
           reputation: 0,
           sharedFiles: 0,
           totalSize: 0,
@@ -706,12 +785,13 @@
         return [pending, ...list]
       })
 
-  await webrtcSession.createOffer();
-  showToast('Connecting to peer: ' + peerId, 'success');
-      
+      // Create offer asynchronously (don't await to avoid freezing UI)
+      webrtcSession.createOffer();
+      showToast('Connecting to peer: ' + peerId, 'success');
+
       // Clear input on successful connection attempt
       newPeerAddress = '';
-      
+
     } catch (error) {
       console.error('Failed to create WebRTC session:', error);
       showToast('Failed to create connection: ' + error, 'error');
@@ -733,6 +813,20 @@
     }
   }
   
+  async function refreshConnectedPeers() {
+    if (!isTauri) {
+      return;
+    }
+
+    try {
+      const { peerService } = await import('$lib/services/peerService');
+      const connectedPeers = await peerService.getConnectedPeers();
+      peers.set(connectedPeers);
+    } catch (error) {
+      console.debug('Failed to refresh peers:', error);
+    }
+  }
+
   async function disconnectFromPeer(peerId: string) {
     if (!isTauri) {
       // Mock disconnection in web mode
@@ -740,7 +834,7 @@
       showToast($t('network.connectedPeers.disconnected'), 'success')
       return
     }
-    
+
     try {
       await invoke('disconnect_from_peer', { peerId })
       // Remove peer from local store
@@ -923,55 +1017,84 @@
     const interval = setInterval(refreshStats, 5000)
     let unlistenProgress: (() => void) | null = null
     
-    // Initialize signaling service
+    // Initialize signaling service (web preview only) and DHT integrations
     ;(async () => {
-      try {
-        signaling = new SignalingService();
-        await signaling.connect();
-        signalingConnected = true;
-        signaling.peers.subscribe(peers => {
-          discoveredPeers = peers;
-        });
+      if (!isTauri) {
+        try {
+          signaling = new SignalingService();
+          await signaling.connect();
+          signalingConnected = true;
+          const myClientId = signaling.getClientId();
+          signaling.peers.subscribe(peers => {
+            // Filter out own client ID from discovered peers
+            webDiscoveredPeers = peers.filter(p => p !== myClientId);
+          });
 
-        // Register signaling message handler for WebRTC
-        signaling.setOnMessage((msg) => {
-          if (webrtcSession && msg.from === webrtcSession.peerId) {
-            if (msg.type === "offer") {
-              webrtcSession.acceptOfferCreateAnswer(msg.sdp).then(answer => {
-                signaling.send({ type: "answer", sdp: answer, to: msg.from });
-              });
-            } else if (msg.type === "answer") {
-              webrtcSession.acceptAnswer(msg.sdp);
-            } else if (msg.type === "candidate") {
-              webrtcSession.addRemoteIceCandidate(msg.candidate);
+          // Register signaling message handler for WebRTC
+          signaling.setOnMessage((msg) => {
+            if (webrtcSession && msg.from === webrtcSession.peerId) {
+              if (msg.type === "offer") {
+                webrtcSession.acceptOfferCreateAnswer(msg.sdp).then(answer => {
+                  signaling.send({ type: "answer", sdp: answer, to: msg.from });
+                });
+              } else if (msg.type === "answer") {
+                webrtcSession.acceptAnswer(msg.sdp);
+              } else if (msg.type === "candidate") {
+                webrtcSession.addRemoteIceCandidate(msg.candidate);
+              }
             }
-          }
-        });
-      } catch (error) {
-        // Signaling service not available (DHT not running) - this is normal
-        signalingConnected = false;
-      }
-      
-      // Initialize async operations
-      const initAsync = async () => {
-        await fetchBootstrapNodes()
-        await checkGethStatus()
-        
-        // DHT check will happen in startDht()
-
-        // Also passively sync DHT state if it's already running
-        await syncDhtStatusOnMount()
-        
-        // Listen for download progress updates (only in Tauri)
-        if (isTauri) {
-          await registerNatListener()
-          unlistenProgress = await listen('geth-download-progress', (event) => {
-            downloadProgress = event.payload as typeof downloadProgress
-          })
+          });
+        } catch (error) {
+          // Signaling service not available (DHT not running) - this is normal
+          signalingConnected = false;
         }
       }
       
-      initAsync()
+      // Initialize async operations
+      // const initAsync = async () => {
+      //   await fetchBootstrapNodes()
+      //   await checkGethStatus()
+        
+      //   // DHT check will happen in startDht()
+
+      //   // Also passively sync DHT state if it's already running
+      //   await syncDhtStatusOnMount()
+        
+      //   // Listen for download progress updates (only in Tauri)
+      //   if (isTauri) {
+      //     await registerNatListener()
+      //     unlistenProgress = await listen('geth-download-progress', (event) => {
+      //       downloadProgress = event.payload as typeof downloadProgress
+      //     })
+      await fetchBootstrapNodes()
+      await checkGethStatus()
+
+      // DHT check will happen in startDht()
+
+      // Also passively sync DHT state if it's already running
+      await syncDhtStatusOnMount()
+
+      if (isTauri) {
+        if (!peerDiscoveryUnsub) {
+          peerDiscoveryUnsub = peerDiscoveryStore.subscribe((entries) => {
+            discoveredPeerEntries = entries;
+          });
+        }
+        if (!stopPeerEvents) {
+          try {
+            stopPeerEvents = await startPeerEventStream();
+          } catch (error) {
+            console.error('Failed to start peer event stream:', error);
+          }
+        }
+        await refreshConnectedPeers();
+        await registerNatListener()
+        unlistenProgress = await listen('geth-download-progress', (event) => {
+          downloadProgress = event.payload as typeof downloadProgress
+        })
+      }
+      
+      // initAsync()
     })()
     
     return () => {
@@ -986,10 +1109,16 @@
         natStatusUnlisten()
         natStatusUnlisten = null
       }
-      // Disconnect signaling service
-      if (signaling) {
-        signaling.disconnect()
+      if (stopPeerEvents) {
+        stopPeerEvents()
+        stopPeerEvents = null
       }
+      if (peerDiscoveryUnsub) {
+        peerDiscoveryUnsub()
+        peerDiscoveryUnsub = null
+      }
+      // Note: We do NOT disconnect the signaling service here
+      // It should persist across page navigations to maintain peer connections
     }
   })
 
@@ -1004,6 +1133,14 @@
       natStatusUnlisten()
       natStatusUnlisten = null
     }
+    if (stopPeerEvents) {
+      stopPeerEvents()
+      stopPeerEvents = null
+    }
+    if (peerDiscoveryUnsub) {
+      peerDiscoveryUnsub()
+      peerDiscoveryUnsub = null
+    }
     // Note: We do NOT stop the DHT service here
     // The DHT should persist across page navigations
   })
@@ -1014,6 +1151,97 @@
     <h1 class="text-3xl font-bold">{$t('network.title')}</h1>
     <p class="text-muted-foreground mt-2">{$t('network.subtitle')}</p>
   </div>
+
+  <!-- Quick Actions -->
+<Card class="p-6 bg-muted/60 border border-muted-foreground/10 rounded-xl shadow-sm mb-6">
+  <div class="flex items-center justify-between mb-4">
+    <h2 class="text-lg font-semibold text-foreground tracking-tight">{$t('network.quickActions.title')}</h2>
+    <Badge variant="outline" class="text-xs text-muted-foreground border-muted-foreground/20 bg-transparent">
+      {$t('network.quickActions.badge')}
+    </Badge>
+  </div>
+  <div class="flex flex-wrap gap-4 justify-start items-center">
+    <!-- Discover Peers -->
+    <Button
+      size="lg"
+      variant="secondary"
+      class="flex items-center gap-2 px-6 py-3 font-semibold text-base rounded-lg shadow-sm border border-primary/10 bg-background hover:bg-secondary/80"
+      title={$t('network.quickActions.discoverPeers.tooltip')}
+      on:click={async () => {
+        if (dhtStatus !== 'connected') await startDht();
+        await runDiscovery();
+      }}
+      disabled={dhtStatus === 'connecting'}
+    >
+      <RefreshCw class={`h-5 w-5${dhtStatus === 'connecting' ? ' animate-spin' : ''}`} />
+      {dhtStatus === 'connecting' ? $t('network.quickActions.discoverPeers.discovering') : $t('network.quickActions.discoverPeers.button')}
+    </Button>
+
+    <!-- Add Peer by Address (inline input, condensed) -->
+    <div class="flex items-center gap-2 bg-muted/80 border border-muted-foreground/10 rounded-lg px-3 py-2">
+      <Input placeholder={$t('network.quickActions.addPeer.placeholder')} bind:value={newPeerAddress} class="w-32 text-sm bg-background border border-muted-foreground/10 rounded" />
+      <Button size="sm" variant="secondary" class="rounded" title={$t('network.quickActions.addPeer.tooltip')} on:click={async () => { if (newPeerAddress) { await addConnectedPeer(newPeerAddress); showToast($t('network.quickActions.addPeer.success'), 'success'); newPeerAddress = ''; }}} disabled={!newPeerAddress}>
+        <UserPlus class="h-4 w-4" />
+      </Button>
+    </div>
+
+    <!-- Copy Peer ID -->
+    <Button
+      size="lg"
+      variant="secondary"
+      class="flex items-center gap-2 px-6 py-3 font-semibold text-base rounded-lg shadow-sm border border-primary/10 bg-background hover:bg-secondary/80"
+      title={dhtPeerId ? $t('network.quickActions.copyPeerId.tooltip') : $t('network.quickActions.copyPeerId.tooltipUnavailable')}
+      on:click={async () => {
+        if (dhtPeerId) {
+          await copy(dhtPeerId);
+          showToast($t('network.quickActions.copyPeerId.success'), 'success');
+        }
+      }}
+      disabled={!dhtPeerId}
+    >
+      <Users class="h-5 w-5" />
+      {$t('network.quickActions.copyPeerId.button')}
+    </Button>
+
+    <!-- Refresh Status -->
+    <Button
+      size="lg"
+      variant="secondary"
+      class="flex items-center gap-2 px-6 py-3 font-semibold text-base rounded-lg shadow-sm border border-primary/10 bg-background hover:bg-secondary/80"
+      title={$t('network.quickActions.refreshStatus.tooltip')}
+      on:click={async () => {
+        await checkGethStatus();
+        if (gethStatusCardRef?.refresh) await gethStatusCardRef.refresh();
+        showToast($t('network.quickActions.refreshStatus.success'), 'success');
+      }}
+    >
+      <Activity class="h-5 w-5" />
+      {$t('network.quickActions.refreshStatus.button')}
+    </Button>
+
+    <!-- Restart Node -->
+    <Button
+      size="lg"
+      variant="secondary"
+      class="flex items-center gap-2 px-6 py-3 font-semibold text-base rounded-lg shadow-sm border border-primary/10 bg-background hover:bg-secondary/80"
+      title={$t('network.quickActions.restartNode.tooltip')}
+      on:click={async () => {
+        if (!isGethRunning) {
+          showToast($t('network.quickActions.restartNode.notRunning'), 'error');
+          return;
+        }
+        await stopGethNode();
+        await startGethNode();
+        showToast($t('network.quickActions.restartNode.success'), 'success');
+      }}
+      disabled={!isGethInstalled || isStartingNode || !isGethRunning}
+    >
+      <Square class="h-5 w-5" />
+      {$t('network.quickActions.restartNode.button')}
+    </Button>
+  </div>
+</Card>
+
   
   <!-- Chiral Network Node Status Card -->
   <Card class="p-6">
@@ -1208,7 +1436,7 @@
           <Wifi class="h-12 w-12 text-yellow-500 mx-auto mb-2 animate-pulse" />
           <p class="text-sm text-muted-foreground">{$t('network.dht.connectingToBootstrap')}</p>
           <p class="text-xs text-muted-foreground mt-1">{dhtBootstrapNode}</p>
-          <p class="text-xs text-yellow-500 mt-2">{$t('network.dht.attempt', { values: { connectionAttempts } })}</p>
+          <p class="text-xs text-yellow-500 mt-2">{$t('network.dht.attempt', { values: { connectionAttempts: connectionAttempts } })}</p>
         </div>
       {:else}
         <div class="space-y-3">
@@ -1269,21 +1497,22 @@
             <div class="pt-2 space-y-2">
               <p class="text-sm text-muted-foreground">{$t('network.dht.listenAddresses')}</p>
               {#each dhtHealth.listenAddrs as addr}
+                {@const fullAddr = dhtPeerId ? `${addr}/p2p/${dhtPeerId}` : addr}
                 <div class="bg-muted/40 rounded-lg px-3 py-2">
                   <div class="flex items-start justify-between gap-2">
-                    <p class="text-xs font-mono break-all flex-1">{addr}</p>
+                    <p class="text-xs font-mono break-all flex-1">{fullAddr}</p>
                     <Button
                       variant="outline"
                       size="sm"
                       class="h-7 px-2 flex-shrink-0"
                       on:click={async () => {
-                        await copy(addr)
-                        copiedListenAddr = addr
+                        await copy(fullAddr)
+                        copiedListenAddr = fullAddr
                         setTimeout(() => (copiedListenAddr = null), 1200)
                       }}
                     >
                       <Clipboard class="h-3.5 w-3.5 mr-1" />
-                      {copiedListenAddr === addr ? $t('network.copied') : $t('network.copy')}
+                      {copiedListenAddr === fullAddr ? $t('network.copied') : $t('network.copy')}
                     </Button>
                   </div>
                 </div>
@@ -1614,18 +1843,75 @@
             {$t('network.sendTest')}
           </Button>
         </div>
-        {#if discoveredPeers && discoveredPeers.length > 0}
+        <!-- {#if discoveredPeers && discoveredPeers.length > 0} -->
+         {#if isTauri}
+          <div class="mt-4 space-y-3">
+            <p class="text-sm text-muted-foreground">{$t('network.peerDiscovery.foundPeers', { values: { count: discoveredPeerEntries.length } })}</p>
+            {#if discoveredPeerEntries.length > 0}
+              <ul class="space-y-3">
+                {#each discoveredPeerEntries as peer}
+                  <li class="border rounded p-3 space-y-2 bg-background/50">
+                    <div class="flex items-start justify-between gap-2">
+                      <div class="text-sm font-mono break-all">{peer.peerId}</div>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        class="h-8 w-8"
+                        title={$t('network.quickActions.copyPeerId.button')}
+                        on:click={async () => {
+                          await copy(peer.peerId)
+                          showToast($t('network.quickActions.copyPeerId.success'), 'success')
+                        }}
+                      >
+                        <Clipboard class="h-4 w-4" />
+                      </Button>
+                    </div>
+                    {#if peer.addresses.length > 0}
+                      <div class="space-y-1">
+                        {#each peer.addresses as addr}
+                          <div class="flex items-center justify-between gap-2">
+                            <span class="text-xs font-mono break-all">{addr}</span>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              on:click={() => {
+                                newPeerAddress = addr
+                                showToast($t('network.peerDiscovery.peerAddedToInput'), 'success')
+                              }}
+                            >
+                              {$t('network.peerDiscovery.add')}
+                            </Button>
+                          </div>
+                        {/each}
+                      </div>
+                    {:else}
+                      <p class="text-xs text-muted-foreground">{$t('network.peerMetrics.noPeers')}</p>
+                    {/if}
+                    <p class="text-xs text-muted-foreground">{$t('network.connectedPeers.lastSeen')}: {formatPeerTimestamp(peer.lastSeen)}</p>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+          </div>
+        {:else if webDiscoveredPeers.length > 0}
           <div class="mt-4">
-            <p class="text-sm text-muted-foreground">{$t('network.peerDiscovery.foundPeers', { values: { count: discoveredPeers.length } })}</p>
+            <!-- <p class="text-sm text-muted-foreground">{$t('network.peerDiscovery.foundPeers', { values: { count: discoveredPeers.length } })}</p> -->
+             <p class="text-sm text-muted-foreground">{$t('network.peerDiscovery.foundPeers', { values: { count: webDiscoveredPeers.length } })}</p>
             <ul class="mt-2 space-y-2">
-              {#each discoveredPeers as p}
+              <!-- {#each discoveredPeers as p} -->
+               {#each webDiscoveredPeers as p}
                 <li class="flex items-center justify-between p-2 border rounded">
                   <div class="truncate mr-4">{p}</div>
-                      <div class="flex items-center gap-2">
+                      <!-- <div class="flex items-center gap-2">
                         <Button size="sm" variant="outline" on:click={() => { newPeerAddress = p; showToast($t('network.peerDiscovery.peerAddedToInput'), 'success'); }}>
                           {$t('network.peerDiscovery.add')}
                         </Button>
-                      </div>
+                      </div> -->
+                    <div class="flex items-center gap-2">
+                      <Button size="sm" variant="outline" on:click={() => { newPeerAddress = p; showToast($t('network.peerDiscovery.peerAddedToInput'), 'success'); }}>
+                        {$t('network.peerDiscovery.add')}
+                      </Button>
+                    </div>
                 </li>
               {/each}
             </ul>
@@ -1708,21 +1994,24 @@
                     bVal = (b.nickname || 'zzzzz').toLowerCase()
                     break
                 case 'location':
-                    aVal = (a.location || 'zzzzz').toLowerCase() // Put empty locations at the end
-                    bVal = (b.location || 'zzzzz').toLowerCase()
-                    // Distance-based sorting: closer peers first
                     const getLocationDistance = (peerLocation: string | undefined) => {
-                        if (!peerLocation) return 999; // Unknown locations go to the end
-                        
-                        // Distance map from user's location to other regions
-                        const distanceMap: Record<string, Record<string, number>> = {
-                            'US-East': { 'US-East': 0, 'US-West': 1, 'EU-West': 2, 'Asia-Pacific': 3 },
-                            'US-West': { 'US-West': 0, 'US-East': 1, 'EU-West': 3, 'Asia-Pacific': 2 },
-                            'EU-West': { 'EU-West': 0, 'US-East': 1, 'US-West': 3, 'Asia-Pacific': 2 },
-                            'Asia-Pacific': { 'Asia-Pacific': 0, 'US-West': 1, 'EU-West': 2, 'US-East': 3 }
-                        };
-                        
-                        return distanceMap[$userLocation]?.[peerLocation] ?? 999;
+                        if (!peerLocation) return UNKNOWN_DISTANCE;
+
+                        const peerRegion = normalizeRegion(peerLocation);
+
+                        if (peerRegion.id === UNKNOWN_REGION_ID) {
+                            return UNKNOWN_DISTANCE;
+                        }
+
+                        if (currentUserRegion.id === UNKNOWN_REGION_ID) {
+                            return peerRegion.id === UNKNOWN_REGION_ID ? 0 : UNKNOWN_DISTANCE;
+                        }
+
+                        if (peerRegion.id === currentUserRegion.id) {
+                            return 0;
+                        }
+
+                        return Math.round(calculateRegionDistance(currentUserRegion, peerRegion));
                     };
                     
                     aVal = getLocationDistance(a.location);
@@ -1779,7 +2068,7 @@
             </div>
             <div class="flex flex-wrap items-center gap-2 justify-end">
               <Badge variant="outline" class="flex-shrink-0">
-              ⭐ {peer.reputation.toFixed(1)}
+              ⭐ {(peer.reputation ?? 0).toFixed(1)}
               </Badge>
                 <Badge variant={peer.status === 'online' ? 'default' : 'secondary'}
                        class={
@@ -1833,10 +2122,23 @@
           </div>
         </div>
       {/each}
-      
+
       {#if $peers.length === 0}
         <p class="text-center text-muted-foreground py-8">{$t('network.connectedPeers.noPeers')}</p>
       {/if}
+    </div>
+
+    <!-- Refresh button at bottom right -->
+    <div class="flex justify-end mt-4">
+      <Button
+        size="sm"
+        variant="outline"
+        on:click={refreshConnectedPeers}
+        disabled={!isTauri || dhtStatus !== 'connected'}
+      >
+        <RefreshCw class="h-4 w-4 mr-2" />
+        Refresh Peers
+      </Button>
     </div>
   </Card>
 </div>

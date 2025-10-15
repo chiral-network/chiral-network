@@ -10,8 +10,12 @@ license = "MIT"
 name = "chiral-relay"
 path = "src/main.rs"
 
+[[bin]]
+name = "test_client"
+path = "src/bin/test_client.rs"
+
 [dependencies]
-libp2p = { version = "0.54", features = ["tcp", "noise", "yamux", "relay", "identify", "macros", "ping", "autonat", "tokio"] }
+libp2p = { version = "0.54", features = ["tcp", "noise", "yamux", "relay", "identify", "macros", "ping", "autonat", "tokio", "request-response"] }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -21,6 +25,13 @@ serde_json = "1.0"
 anyhow = "1.0"
 futures = "0.3"
 rand = "0.8"
+async-trait = "0.1"
+async-std = { version = "1.12", features = ["attributes"] }
+web-time = "1.1"
+
+[profile.dev]
+incremental = true
+opt-level = 0
 
 [profile.release]
 lto = true

@@ -63,6 +63,8 @@ glob = "0.3"
 rs_merkle = "1.5.0"
 tokio-util = { version = "0.7", features = ["compat"] }
 tokio-socks = "0.5"
+
+# Bitswap and related dependencies
 beetswap = { git = "https://github.com/totoro-ming-lin/beetswap.git", branch = "older-version" }
 multihash-codetable = { version = "0.1", features = ["blake3", "sha2", "sha3"] }
 cid = { version = "0.11.1", features = ["serde-codec"] }
@@ -71,15 +73,24 @@ blockstore = "0.7.0"
 # WebRTC dependencies for P2P file transfers
 webrtc = "0.10"
 tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
-uuid = { version = "1.0", features = ["v4"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
 tauri-plugin-fs = "2"
+ed25519-dalek = { version = "2.0", features = ["rand_core", "serde"] }
 
 [dev-dependencies]
 tempfile = "3.8"
 
+[lints.rust]
+unused_variables = "allow"
+dead_code = "allow"
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+
+[profile.dev]
+incremental = true
+opt-level = 0
 
 [profile.release]
 lto = true

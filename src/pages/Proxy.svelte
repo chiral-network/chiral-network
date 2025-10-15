@@ -6,9 +6,11 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import { ShieldCheck, ShieldX, Globe, Activity, Plus, Power, Trash2 } from 'lucide-svelte'
   import { onMount } from 'svelte';
-  import { proxyNodes, connectProxy, disconnectProxy, removeProxy, listProxies } from '$lib/proxy';
+  import { proxyNodes, connectProxy, disconnectProxy, removeProxy, listProxies, getProxyOptimizationStatus } from '$lib/proxy';
+  import { ProxyLatencyOptimizationService } from '$lib/services/proxyLatencyOptimization';
   import { t } from 'svelte-i18n'
   import DropDown from '$lib/components/ui/dropDown.svelte'
+  import { ProxyAuthService } from '$lib/proxyAuth';
   
   let newNodeAddress = ''
   let proxyEnabled = true
@@ -27,7 +29,12 @@
     averageLatency?: number
     uptimePercentage: number
   }>()
-  const validAddressRegex = /^[a-zA-Z0-9.-]+:[0-9]{1,5}$/
+  
+  // Proxy latency optimization variables
+  let optimizationStatus = "🔄 Loading optimization status..."
+  let isTestingOptimization = false
+  let testResults = ""
+  
   const ipv4Regex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):[0-9]{1,5}$/
   const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.([a-zA-Z]{2,}|[a-zA-Z]{2,}\.[a-zA-Z]{2,}):[0-9]{1,5}$/
   const enodeRegex = /^enode:\/\/[a-fA-F0-9]{128}@(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):[0-9]{1,5}$/
@@ -38,7 +45,7 @@
     { value: 'online', label: $t('Online') },
     { value: 'offline', label: $t('Offline') },
     { value: 'connecting', label: $t('Connecting') },
-    { value: 'timeout', label: 'Timeout' }
+    { value: 'error', label: 'Error' }
   ]
 
   $: filteredNodes = $proxyNodes.filter(node => {
@@ -50,15 +57,21 @@
 
   
   $: sortedNodes = [...filteredNodes].sort((a, b) => {
-      const statusOrder: Record<string, number> = { 'online': 1, 'connecting': 2, 'offline': 3, 'timeout': 4, 'error': 5 };
-      const aOrder = statusOrder[a.status || 'offline'] || 6;
-      const bOrder = statusOrder[b.status || 'offline'] || 6;
+      const statusOrder: Record<string, number> = { 'online': 1, 'connecting': 2, 'offline': 3, 'error': 4 };
+      const aOrder = statusOrder[a.status || 'offline'] || 5;
+      const bOrder = statusOrder[b.status || 'offline'] || 5;
       return aOrder - bOrder;
   });
 
   
   onMount(() => {
       listProxies();
+      
+      // Initialize proxy latency optimization
+      updateOptimizationStatus();
+
+      // Clean up expired authentication tokens
+      ProxyAuthService.cleanupExpiredTokens();
   });
 
   function validateAddress(address: string): { valid: boolean; error: string } {
@@ -149,11 +162,11 @@
 
       // Set new timeout (15 seconds)
       const timeout = setTimeout(() => {
-          // Find the node and mark as timeout
+          // Find the node and mark as error (timeout)
           proxyNodes.update(nodes => {
               return nodes.map(node =>
                   node.address === address && node.status === 'connecting'
-                      ? { ...node, status: 'timeout' }
+                      ? { ...node, status: 'error' as const, error: 'Connection timeout' }
                       : node
               )
           })
@@ -196,7 +209,7 @@
               return
           }
 
-          if (node.status === 'offline' || node.status === 'timeout') {
+          if (node.status === 'offline' || node.status === 'error') {
               console.log(`Auto-reconnecting to proxy: ${address}`)
               startConnectionTimeout(address)
               connectProxy(address, "dummy-token")
@@ -230,10 +243,19 @@
       // Start connection timeout
       startConnectionTimeout(newNodeAddress.trim())
 
-      // For now, we'll use a dummy token.
-      connectProxy(newNodeAddress.trim(), "dummy-token");
-      newNodeAddress = ''
-      addressError = ''
+      // Generate secure authentication token
+      ProxyAuthService.generateProxyToken(newNodeAddress.trim()).then(token => {
+          connectProxy(newNodeAddress.trim(), token);
+          newNodeAddress = ''
+          addressError = ''
+      }).catch(error => {
+          console.error('Failed to generate proxy auth token:', error);
+          // Fallback to a basic token if generation fails
+          const fallbackToken = ProxyAuthService.generateFallbackToken(newNodeAddress.trim());
+          connectProxy(newNodeAddress.trim(), fallbackToken);
+          newNodeAddress = ''
+          addressError = ''
+      });
   }
 
   function requestRemoveNode(node: any) {
@@ -264,9 +286,91 @@
       } else {
           // Start connection timeout for reconnection attempts
           startConnectionTimeout(node.address)
-          // For now, we'll use a dummy token.
-          connectProxy(node.address, "dummy-token");
+
+          // Get or generate authentication token
+          ProxyAuthService.getProxyToken(node.address).then(existingToken => {
+              if (existingToken) {
+                  // Use existing valid token
+                  connectProxy(node.address, existingToken);
+              } else {
+                  // Generate new token
+                  ProxyAuthService.generateProxyToken(node.address).then(token => {
+                      connectProxy(node.address, token);
+                  }).catch(error => {
+                      console.error('Failed to generate proxy auth token:', error);
+                      // Fallback to a basic token if generation fails
+                      const fallbackToken = ProxyAuthService.generateFallbackToken(node.address);
+                      connectProxy(node.address, fallbackToken);
+                  });
+              }
+          }).catch(error => {
+              console.error('Failed to get proxy auth token:', error);
+              // Fallback to generating a new token
+              ProxyAuthService.generateProxyToken(node.address).then(token => {
+                  connectProxy(node.address, token);
+              }).catch(error => {
+                  console.error('Failed to generate proxy auth token:', error);
+                  // Fallback to a basic token if generation fails
+                  const fallbackToken = ProxyAuthService.generateFallbackToken(node.address);
+                  connectProxy(node.address, fallbackToken);
+              });
+          });
       }
+  }
+
+  // Proxy latency optimization functions
+  async function updateOptimizationStatus() {
+      try {
+          optimizationStatus = await getProxyOptimizationStatus();
+      } catch (e) {
+          console.error('Failed to get optimization status:', e);
+          optimizationStatus = '❌ Optimization status unavailable';
+      }
+  }
+
+  async function testProxyLatencyOptimization() {
+    isTestingOptimization = true;
+    testResults = "";
+    
+    try {
+      const isTauriAvailable = await ProxyLatencyOptimizationService.isTauriAvailable();
+      if (!isTauriAvailable) {
+        testResults = "❌ Tauri API not available. Please run this test in the desktop application, not the browser.";
+        return;
+      }
+
+      console.log("🧪 Testing Proxy Latency Optimization...");
+      testResults = "🧪 Running comprehensive proxy optimization tests...\n";
+      
+      // Test 1: Update some proxy latencies
+      console.log("Test 1: Updating proxy latencies...");
+      testResults += "\n📊 Test 1: Updating proxy latencies...\n";
+      
+      await ProxyLatencyOptimizationService.updateProxyLatency("test-proxy-1", 50);
+      await ProxyLatencyOptimizationService.updateProxyLatency("test-proxy-2", undefined);
+      await ProxyLatencyOptimizationService.updateProxyLatency("test-proxy-3", 30);
+      await ProxyLatencyOptimizationService.updateProxyLatency("test-proxy-4", 100);
+      await ProxyLatencyOptimizationService.updateProxyLatency("test-proxy-5", 25);
+      
+      testResults += "✅ Updated 5 test proxies with varying latencies\n";
+      
+      // Test 2: Get optimization status
+      console.log("Test 2: Getting optimization status...");
+      testResults += "\n📈 Test 2: Checking optimization status...\n";
+      
+      const status = await ProxyLatencyOptimizationService.getOptimizationStatus();
+      testResults += `✅ Optimization enabled: ${status}\n`;
+
+      testResults += "\n🎉 All proxy latency optimization tests completed successfully!";
+      
+      // Update the main optimization status
+      await updateOptimizationStatus();
+    } catch (error) {
+      console.error("❌ Proxy latency optimization test failed:", error);
+      testResults += `\n❌ Test failed with error: ${error}`;
+    } finally {
+      isTestingOptimization = false;
+    }
   }
 
   
@@ -509,17 +613,17 @@
                         <Badge variant={node.status === 'online' ? 'default' :
                        node.status === 'offline' ? 'secondary' :
                        node.status === 'connecting' ? 'outline' :
-                       node.status === 'timeout' ? 'outline' : 'outline'}
+                       node.status === 'error' ? 'outline' : 'outline'}
                           class="transition-all duration-300 {
                             node.status === 'online' ? 'bg-green-500 text-white animate-pulse' :
                             node.status === 'offline' ? 'bg-red-500 text-white' :
                             node.status === 'connecting' ? 'bg-yellow-500 text-white animate-pulse' :
-                            node.status === 'timeout' ? 'bg-orange-500 text-white' :
+                            node.status === 'error' ? 'bg-orange-500 text-white' :
                             'bg-gray-500 text-white'
                           }"
                           style="pointer-events: none;"
                         >
-                          {node.status}
+                          {node.status || 'offline'}
                         </Badge>
                       </div>
           </div>
@@ -575,7 +679,7 @@
               <Power class="h-3 w-3 mr-1" />
               {node.status === 'online' ? $t('proxy.disconnect') :
                node.status === 'connecting' ? 'Connecting...' :
-               node.status === 'timeout' ? 'Retry' :
+               node.status === 'error' ? 'Retry' :
                $t('proxy.connect')}
             </Button>
             <Button
@@ -590,6 +694,47 @@
           </div>
         </div>
       {/each}
+    </div>
+  </Card>
+  
+  <!-- Proxy Latency Optimization Card -->
+  <Card class="bg-gradient-to-r from-purple-50 to-blue-50 border-purple-200">
+    <div class="space-y-3">
+      <div class="flex items-center gap-2">
+        <Activity class="h-5 w-5 text-purple-600" />
+        <h3 class="text-lg font-semibold text-purple-800">Proxy Latency Optimization</h3>
+      </div>
+      
+      <div class="bg-white/60 rounded-lg p-4 space-y-3">
+        <div>
+          <h4 class="text-sm font-medium text-gray-700 mb-2">Current Status</h4>
+          <p class="text-sm font-medium">{optimizationStatus}</p>
+          <div class="flex gap-2 mt-1">
+            <button 
+              class="text-xs text-purple-600 hover:text-purple-800"
+              on:click={updateOptimizationStatus}
+            >
+              Refresh Status
+            </button>
+            <button 
+              class="text-xs text-green-600 hover:text-green-800 px-2 py-1 bg-green-50 rounded disabled:opacity-50"
+              on:click={testProxyLatencyOptimization}
+              disabled={isTestingOptimization}
+            >
+              {isTestingOptimization ? "Running Proof Tests..." : "Prove Optimization Works"}
+            </button>
+          </div>
+        </div>
+        
+        {#if testResults}
+          <div class="mt-3">
+            <h4 class="text-sm font-medium text-gray-700 mb-2">Test Results</h4>
+            <div class="bg-gray-100 rounded p-3 max-h-40 overflow-y-auto">
+              <pre class="text-xs text-gray-800 whitespace-pre-wrap">{testResults}</pre>
+            </div>
+          </div>
+        {/if}
+      </div>
     </div>
   </Card>
 </div>

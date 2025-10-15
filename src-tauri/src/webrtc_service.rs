@@ -2,8 +2,8 @@ use crate::encryption::{decrypt_aes_key, encrypt_aes_key, EncryptedAesKeyBundle,
 use crate::file_transfer::FileTransferService;
 use crate::keystore::Keystore;
 use crate::stream_auth::{AuthMessage, StreamAuthService};
-use aes_gcm::aead::{Aead, OsRng};
-use aes_gcm::{AeadCore, Aes256Gcm, KeyInit};
+use aes_gcm::aead::{Aead};
+use aes_gcm::{AeadCore, KeyInit};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -30,6 +30,19 @@ pub struct WebRTCFileRequest {
     pub file_size: u64,
     pub requester_peer_id: String,
     pub recipient_public_key: Option<String>, // For encrypted transfers
+}
+
+/// Sent by a downloader to request the full file manifest.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebRTCManifestRequest {
+    pub file_hash: String, // The Merkle Root
+}
+
+/// Sent by a seeder in response to a manifest request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebRTCManifestResponse {
+    pub file_hash: String, // The Merkle Root, to match the request
+    pub manifest_json: String, // The full FileManifest, serialized to JSON
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,6 +167,16 @@ pub enum WebRTCEvent {
         file_hash: String,
         error: String,
     },
+}
+
+/// A new enum to wrap different message types for clarity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum WebRTCMessage {
+    FileRequest(WebRTCFileRequest),
+    ManifestRequest(WebRTCManifestRequest),
+    ManifestResponse(WebRTCManifestResponse),
+    FileChunk(FileChunk),
 }
 
 pub struct WebRTCService {
@@ -358,7 +381,6 @@ impl WebRTCService {
         // Set up peer connection event handlers
         let event_tx_clone = event_tx.clone();
         let peer_id_clone = peer_id.to_string();
-        let data_channel_clone = data_channel.clone();
 
         let event_tx_for_ice = event_tx_clone.clone();
         let peer_id_for_ice = peer_id_clone.clone();
@@ -387,7 +409,6 @@ impl WebRTCService {
             move |state: RTCPeerConnectionState| {
                 let event_tx = event_tx_clone.clone();
                 let peer_id = peer_id_clone.clone();
-                let _data_channel = data_channel_clone.clone();
 
                 Box::pin(async move {
                     match state {
@@ -560,7 +581,7 @@ impl WebRTCService {
 
         if has_file {
             // Start sending file chunks
-            Self::start_file_transfer(
+            if let Err(e) = Self::start_file_transfer(
                 peer_id,
                 request,
                 event_tx,
@@ -569,7 +590,16 @@ impl WebRTCService {
                 keystore,
                 stream_auth,
             )
-            .await;
+            .await
+            {
+                let _ = event_tx
+                    .send(WebRTCEvent::TransferFailed {
+                        peer_id: peer_id.to_string(),
+                        file_hash: request.file_hash.clone(),
+                        error: format!("Failed to start file transfer: {}", e),
+                    })
+                    .await;
+            }
         } else {
             let _ = event_tx
                 .send(WebRTCEvent::TransferFailed {
@@ -609,7 +639,7 @@ impl WebRTCService {
         file_hash: &str,
         chunk_index: u32,
         event_tx: &mpsc::Sender<WebRTCEvent>,
-        connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
+        _connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
     ) {
         let _ = event_tx
             .send(WebRTCEvent::FileChunkRequested {
@@ -684,6 +714,33 @@ impl WebRTCService {
                     stream_auth,
                 )
                 .await;
+            }
+            // Try to parse as a generic WebRTCMessage
+            else if let Ok(message) = serde_json::from_str::<WebRTCMessage>(text) {
+                match message {
+                    WebRTCMessage::FileRequest(request) => {
+                         let _ = event_tx
+                            .send(WebRTCEvent::FileRequestReceived {
+                                peer_id: peer_id.to_string(),
+                                request: request.clone(),
+                            })
+                            .await;
+                        Self::handle_file_request(peer_id, &request, event_tx, file_transfer_service, connections, keystore, stream_auth).await;
+                    }
+                    WebRTCMessage::ManifestRequest(request) => {
+                        info!("Received manifest request for file: {}", request.file_hash);
+                        // Seeder logic to find and send manifest would go here.
+                        // This is typically handled by the application logic that has access to manifests.
+                    }
+                    WebRTCMessage::ManifestResponse(response) => {
+                        info!("Received manifest response for a file download.");
+                        // Downloader receives this. We can emit a specific event or handle it directly.
+                        // For simplicity, we can have the main download logic listen for this.
+                    }
+                    WebRTCMessage::FileChunk(chunk) => {
+                        Self::process_incoming_chunk(&chunk, file_transfer_service, connections, event_tx, peer_id, keystore, &active_private_key, stream_auth).await;
+                    }
+                }
             }
         }
     }
@@ -889,7 +946,7 @@ impl WebRTCService {
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
         event_tx: &mpsc::Sender<WebRTCEvent>,
         peer_id: &str,
-        keystore: &Arc<Mutex<Keystore>>,
+        _keystore: &Arc<Mutex<Keystore>>,
         active_private_key: &Arc<Mutex<Option<String>>>,
         stream_auth: &Arc<Mutex<StreamAuthService>>,
     ) {
@@ -1073,7 +1130,6 @@ impl WebRTCService {
         // Set up peer connection event handlers
         let event_tx_clone = self.event_tx.clone();
         let peer_id_clone = peer_id.clone();
-        let data_channel_clone = data_channel.clone();
 
         let event_tx_for_ice = event_tx_clone.clone();
         let peer_id_for_ice = peer_id_clone.clone();
@@ -1102,7 +1158,6 @@ impl WebRTCService {
             move |state: RTCPeerConnectionState| {
                 let event_tx = event_tx_clone.clone();
                 let peer_id = peer_id_clone.clone();
-                let _data_channel = data_channel_clone.clone();
 
                 Box::pin(async move {
                     match state {
@@ -1240,7 +1295,6 @@ impl WebRTCService {
         // Set up peer connection event handlers
         let event_tx_clone = self.event_tx.clone();
         let peer_id_clone = peer_id.clone();
-        let data_channel_clone = data_channel.clone();
 
         let event_tx_for_ice = event_tx_clone.clone();
         let peer_id_for_ice = peer_id_clone.clone();
@@ -1269,7 +1323,6 @@ impl WebRTCService {
             move |state: RTCPeerConnectionState| {
                 let event_tx = event_tx_clone.clone();
                 let peer_id = peer_id_clone.clone();
-                let _data_channel = data_channel_clone.clone();
 
                 Box::pin(async move {
                     match state {
@@ -1422,7 +1475,7 @@ impl WebRTCService {
     async fn encrypt_chunk_for_peer(
         chunk_data: &[u8],
         recipient_public_key_hex: &str,
-        keystore: &Arc<Mutex<Keystore>>,
+        _keystore: &Arc<Mutex<Keystore>>,
     ) -> Result<(Vec<u8>, EncryptedAesKeyBundle), String> {
         use x25519_dalek::PublicKey;
 
@@ -1522,7 +1575,7 @@ impl FileTransferService {
         &self,
         file_hash: String,
         peer_id: String,
-        output_path: String,
+        _output_path: String,
     ) -> Result<(), String> {
         info!(
             "Initiating P2P download: {} from peer {}",

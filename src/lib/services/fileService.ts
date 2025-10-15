@@ -66,6 +66,19 @@ export class FileService {
     }
   }
 
+  /**
+   * Retrieves the Merkle root for a given file hash from the backend.
+   * Used for Proof of Storage challenge setup.
+   */
+  async getMerkleRoot(fileHash: string): Promise<string | null> {
+    try {
+      const root = await invoke<string | null>("get_merkle_root_for_file", { fileHash });
+      return root ?? null;
+    } catch (error) {
+      console.error("Failed to get Merkle root:", error);
+      return null;
+    }
+  }
 
   /**
    * Downloads a file from the network given its hash.
