@@ -168,9 +168,7 @@
 
     try {
       await applyPrivacyRoutingSettings();
-      if (localSettings.enableProxy && localSettings.proxyAddress?.trim()) {
-        await restartDhtWithProxy();
-      }
+      await restartDhtWithProxy();
       showToast("Settings Updated!");
     } catch (error) {
       console.error("Failed to apply networking settings:", error);
@@ -212,11 +210,6 @@
       return;
     }
 
-    const proxyAddress = localSettings.proxyAddress?.trim();
-    if (!proxyAddress) {
-      return;
-    }
-
     try {
       await invoke("stop_dht_node");
     } catch (error) {
@@ -238,19 +231,23 @@
     const payload: Record<string, unknown> = {
       port: localSettings.port,
       bootstrapNodes,
-      enableAutonat: localSettings.enableAutonat,
+      enableAutonat: !localSettings.disableDirectNatTraversal,
       autonatProbeIntervalSecs: localSettings.autonatProbeInterval,
       chunkSizeKb: localSettings.chunkSize,
       cacheSizeMb: localSettings.cacheSize,
-      enableAutorelay: localSettings.enableAutorelay,
-      proxyAddress,
+      enableAutorelay: localSettings.ipPrivacyMode !== "off" ? true : localSettings.enableAutorelay,
     };
 
     if (localSettings.autonatServers?.length) {
       payload.autonatServers = localSettings.autonatServers;
     }
-    if (localSettings.preferredRelays?.length) {
+    if (localSettings.trustedProxyRelays?.length) {
+      payload.preferredRelays = localSettings.trustedProxyRelays;
+    } else if (localSettings.preferredRelays?.length) {
       payload.preferredRelays = localSettings.preferredRelays;
+    }
+    if (localSettings.enableProxy && localSettings.proxyAddress?.trim()) {
+      payload.proxyAddress = localSettings.proxyAddress.trim();
     }
 
     await invoke("start_dht_node", payload);
