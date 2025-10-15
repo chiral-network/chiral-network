@@ -408,6 +408,7 @@ export interface AppSettings {
   autonatServers: string[]; // Custom AutoNAT server multiaddrs
   enableAutorelay: boolean; // Circuit Relay v2 with AutoRelay (renamed from enableAutoRelay)
   preferredRelays: string[]; // Preferred relay node multiaddrs
+  enableRelayServer: boolean; // Act as a relay server for other peers
   anonymousMode: boolean;
   shareAnalytics: boolean;
   enableNotifications: boolean;
@@ -448,6 +449,7 @@ export const settings = writable<AppSettings>({
   autonatServers: [], // Use bootstrap nodes by default
   enableAutorelay: false, // Enable AutoRelay by default (disabled until configured)
   preferredRelays: [], // Use bootstrap nodes as relays by default
+  enableRelayServer: false, // Disabled by default - user must opt-in
   anonymousMode: false,
   shareAnalytics: true,
   enableNotifications: true,

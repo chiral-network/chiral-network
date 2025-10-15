@@ -29,6 +29,7 @@ export interface DhtConfig {
   cacheSizeMb?: number;
   enableAutorelay?: boolean;
   preferredRelays?: string[];
+  enableRelayServer?: boolean;
 }
 
 export interface FileMetadata {
@@ -162,6 +163,9 @@ export class DhtService {
       }
       if (config?.preferredRelays && config.preferredRelays.length > 0) {
         payload.preferredRelays = config.preferredRelays;
+      }
+      if (typeof config?.enableRelayServer === "boolean") {
+        payload.enableRelayServer = config.enableRelayServer;
       }
 
       const peerId = await invoke<string>("start_dht_node", payload);
