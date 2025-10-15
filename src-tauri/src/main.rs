@@ -60,7 +60,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use sysinfo::{Components, System, MINIMUM_CPU_UPDATE_INTERVAL};
+use sysinfo::{Components, System};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -1219,84 +1219,196 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
     }
 }
 
+#[derive(Debug, Clone)]
+enum TemperatureMethod {
+    Sysinfo,
+    #[cfg(target_os = "windows")]
+    WindowsWmi,
+    #[cfg(target_os = "linux")]
+    LinuxSensors,
+    #[cfg(target_os = "linux")]
+    LinuxThermalZone(String),
+    #[cfg(target_os = "linux")]
+    LinuxHwmon(String),
+}
+
 #[tauri::command]
-fn get_cpu_temperature() -> Option<f32> {
-    use std::sync::OnceLock;
+async fn get_cpu_temperature() -> Option<f32> {
+    tokio::task::spawn_blocking(move || {
+        use std::sync::OnceLock;
+        use std::time::Instant;
+        use sysinfo::MINIMUM_CPU_UPDATE_INTERVAL;
+        use tracing::info;
 
-    static LAST_UPDATE: OnceLock<std::sync::Mutex<Option<Instant>>> = OnceLock::new();
+        static LAST_UPDATE: OnceLock<std::sync::Mutex<Option<Instant>>> = OnceLock::new();
+        static WORKING_METHOD: OnceLock<std::sync::Mutex<Option<TemperatureMethod>>> = OnceLock::new();
+        static TEMP_HISTORY: OnceLock<std::sync::Mutex<Vec<(Instant, f32)>>> = OnceLock::new();
 
-    let last_update_mutex = LAST_UPDATE.get_or_init(|| std::sync::Mutex::new(None));
+        let last_update_mutex = LAST_UPDATE.get_or_init(|| std::sync::Mutex::new(None));
+        let working_method_mutex = WORKING_METHOD.get_or_init(|| std::sync::Mutex::new(None));
+        let temp_history_mutex = TEMP_HISTORY.get_or_init(|| std::sync::Mutex::new(Vec::new()));
 
-    {
-        let mut last_update = last_update_mutex.lock().unwrap();
-        if let Some(last) = *last_update {
-            if last.elapsed() < MINIMUM_CPU_UPDATE_INTERVAL {
-                return None;
+        {
+            let mut last_update = last_update_mutex.lock().unwrap();
+            if let Some(last) = *last_update {
+                if last.elapsed() < MINIMUM_CPU_UPDATE_INTERVAL {
+                    return None;
+                }
+            }
+            *last_update = Some(Instant::now());
+        }
+
+        // Helper function to add temperature to history and return smoothed value
+        let smooth_temperature = |raw_temp: f32| -> f32 {
+            let now = Instant::now();
+            let mut history = temp_history_mutex.lock().unwrap();
+            
+            // Add current reading
+            history.push((now, raw_temp));
+            
+            // Keep only last 5 readings within 30 seconds
+            history.retain(|(time, _)| now.duration_since(*time).as_secs() < 30);
+            if history.len() > 5 {
+                let excess = history.len() - 5;
+                history.drain(0..excess);
+            }
+            
+            // Return smoothed temperature (weighted average, recent readings have more weight)
+            if history.len() == 1 {
+                raw_temp
+            } else {
+                let total_weight: f32 = (1..=history.len()).map(|i| i as f32).sum();
+                let weighted_sum: f32 = history.iter().enumerate()
+                    .map(|(i, (_, temp))| temp * (i + 1) as f32)
+                    .sum();
+                weighted_sum / total_weight
+            }
+        };
+
+        // Try cached working method first
+        {
+            let working_method = working_method_mutex.lock().unwrap();
+            if let Some(ref method) = *working_method {
+                if let Some(temp) = try_temperature_method(method) {
+                    return Some(smooth_temperature(temp));
+                }
+                // Method stopped working, clear cache
+                drop(working_method);
+                let mut working_method = working_method_mutex.lock().unwrap();
+                *working_method = None;
             }
         }
-        *last_update = Some(Instant::now());
-    }
 
-    // Try sysinfo first (works on some platforms including M1 macs and some Windows)
-    let mut sys = System::new_all();
-    sys.refresh_cpu_all();
-    let components = Components::new_with_refreshed_list();
+        // Try all methods to find one that works and cache it
+        let methods_to_try = vec![
+            TemperatureMethod::Sysinfo,
+            #[cfg(target_os = "windows")]
+            TemperatureMethod::WindowsWmi,
+            #[cfg(target_os = "linux")]
+            TemperatureMethod::LinuxSensors,
+        ];
 
-    let mut core_count = 0;
+        for method in methods_to_try {
+            if let Some(temp) = try_temperature_method(&method) {
+                // Cache the working method
+                let mut working_method = working_method_mutex.lock().unwrap();
+                *working_method = Some(method.clone());
+                return Some(smooth_temperature(temp));
+            }
+        }
 
-    let sum: f32 = components
-        .iter()
-        .filter(|c| {
-            let label = c.label().to_lowercase();
-            label.contains("cpu")
-                || label.contains("package")
-                || label.contains("tdie")
-                || label.contains("core")
-                || label.contains("thermal")
-        })
-        .map(|c| {
-            core_count += 1;
-            c.temperature()
-        })
-        .sum();
-    if core_count > 0 {
-        return Some(sum / core_count as f32);
-    }
+        // Try more Linux methods if the basic ones failed
+        #[cfg(target_os = "linux")]
+        {
+            if let Some((temp, method)) = get_linux_temperature_advanced() {
+                let mut working_method = working_method_mutex.lock().unwrap();
+                *working_method = Some(method);
+                return Some(smooth_temperature(temp));
+            }
+        }
 
-    // Windows-specific temperature detection methods
-    #[cfg(target_os = "windows")]
-    {
-        if let Some(temp) = get_windows_temperature() {
-            return Some(temp);
+        // Final fallback: return None when sensors are unavailable
+        // Only log the info message once to avoid spamming logs
+        static SENSOR_WARNING_LOGGED: OnceLock<()> = OnceLock::new();
+        
+        SENSOR_WARNING_LOGGED.get_or_init(|| {
+            info!("Hardware temperature sensors not accessible on this system. Temperature monitoring disabled.");
+        });
+
+        None
+    })
+    .await // 2. Await the result of the blocking task
+    .unwrap_or(None)
+}
+
+fn try_temperature_method(method: &TemperatureMethod) -> Option<f32> {
+    match method {
+        TemperatureMethod::Sysinfo => {
+            let mut sys = System::new_all();
+            sys.refresh_cpu_all();
+            let components = Components::new_with_refreshed_list();
+
+            let mut core_count = 0;
+            let sum: f32 = components
+                .iter()
+                .filter(|c| {
+                    let label = c.label().to_lowercase();
+                    label.contains("cpu")
+                        || label.contains("package")
+                        || label.contains("tdie")
+                        || label.contains("core")
+                        || label.contains("thermal")
+                })
+                .map(|c| {
+                    core_count += 1;
+                    c.temperature()
+                })
+                .sum();
+            
+            if core_count > 0 {
+                let avg_temp = sum / core_count as f32;
+                if avg_temp > 0.0 && avg_temp < 150.0 {
+                    return Some(avg_temp);
+                }
+            }
+            None
+        }
+        #[cfg(target_os = "windows")]
+        TemperatureMethod::WindowsWmi => get_windows_temperature(),
+        #[cfg(target_os = "linux")]
+        TemperatureMethod::LinuxSensors => get_linux_sensors_temperature(),
+        #[cfg(target_os = "linux")]
+        TemperatureMethod::LinuxThermalZone(path) => {
+            if let Ok(temp_str) = std::fs::read_to_string(path) {
+                if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
+                    let temp_celsius = temp_millidegrees as f32 / 1000.0;
+                    if temp_celsius > 0.0 && temp_celsius < 150.0 {
+                        return Some(temp_celsius);
+                    }
+                }
+            }
+            None
+        }
+        #[cfg(target_os = "linux")]
+        TemperatureMethod::LinuxHwmon(path) => {
+            if let Ok(temp_str) = std::fs::read_to_string(path) {
+                if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
+                    let temp_celsius = temp_millidegrees as f32 / 1000.0;
+                    if temp_celsius > 0.0 && temp_celsius < 150.0 {
+                        return Some(temp_celsius);
+                    }
+                }
+            }
+            None
         }
     }
-
-    // Linux-specific temperature detection methods
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(temp) = get_linux_temperature() {
-            return Some(temp);
-        }
-    }
-
-    // Final fallback: return None when sensors are unavailable
-    // Only log the info message once to avoid spamming logs
-    static SENSOR_WARNING_LOGGED: OnceLock<()> = OnceLock::new();
-    
-    SENSOR_WARNING_LOGGED.get_or_init(|| {
-        info!("Hardware temperature sensors not accessible on this system. Temperature monitoring disabled.");
-    });
-
-    None
 }
 
 
 
 #[cfg(target_os = "linux")]
-fn get_linux_temperature() -> Option<f32> {
-    use std::fs;
-
-    // Method 1: Try sensors command first (most reliable and matches user expectations)
+fn get_linux_sensors_temperature() -> Option<f32> {
+    // Try sensors command (most reliable and matches user expectations)
     if let Ok(output) = std::process::Command::new("sensors")
         .arg("-u") // Raw output
         .output()
@@ -1347,7 +1459,14 @@ fn get_linux_temperature() -> Option<f32> {
         }
     }
 
-    // Method 2: Try thermal zones (fallback)
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn get_linux_temperature_advanced() -> Option<(f32, TemperatureMethod)> {
+    use std::fs;
+
+    // Method 1: Try thermal zones (prioritize x86_pkg_temp)
     // Look for CPU thermal zones in /sys/class/thermal/
     // Prioritize x86_pkg_temp as it's usually the most accurate for CPU package temperature
     for i in 0..20 {
@@ -1360,7 +1479,7 @@ fn get_linux_temperature() -> Option<f32> {
                     if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
                         let temp_celsius = temp_millidegrees as f32 / 1000.0;
                         if temp_celsius > 0.0 && temp_celsius < 150.0 {
-                            return Some(temp_celsius);
+                            return Some((temp_celsius, TemperatureMethod::LinuxThermalZone(thermal_path)));
                         }
                     }
                 }
@@ -1382,7 +1501,7 @@ fn get_linux_temperature() -> Option<f32> {
                     if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
                         let temp_celsius = temp_millidegrees as f32 / 1000.0;
                         if temp_celsius > 0.0 && temp_celsius < 150.0 {
-                            return Some(temp_celsius);
+                            return Some((temp_celsius, TemperatureMethod::LinuxThermalZone(thermal_path)));
                         }
                     }
                 }
@@ -1390,7 +1509,7 @@ fn get_linux_temperature() -> Option<f32> {
         }
     }
 
-    // Method 3: Try hwmon (hardware monitoring) interfaces
+    // Method 2: Try hwmon (hardware monitoring) interfaces
     // Look for CPU temperature sensors in /sys/class/hwmon/
     for i in 0..10 {
         let hwmon_dir = format!("/sys/class/hwmon/hwmon{}", i);
@@ -1411,7 +1530,7 @@ fn get_linux_temperature() -> Option<f32> {
                         if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
                             let temp_celsius = temp_millidegrees as f32 / 1000.0;
                             if temp_celsius > 0.0 && temp_celsius < 150.0 {
-                                return Some(temp_celsius);
+                                return Some((temp_celsius, TemperatureMethod::LinuxHwmon(temp_path)));
                             }
                         }
                     }
@@ -1420,7 +1539,7 @@ fn get_linux_temperature() -> Option<f32> {
         }
     }
 
-    // Method 4: Try reading from specific CPU temperature files
+    // Method 3: Try reading from specific CPU temperature files using glob patterns
     let cpu_temp_paths = [
         "/sys/devices/platform/coretemp.0/hwmon/hwmon*/temp1_input",
         "/sys/devices/platform/coretemp.0/temp1_input",
@@ -1436,7 +1555,8 @@ fn get_linux_temperature() -> Option<f32> {
                         if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
                             let temp_celsius = temp_millidegrees as f32 / 1000.0;
                             if temp_celsius > 0.0 && temp_celsius < 150.0 {
-                                return Some(temp_celsius);
+                                let path_str = path.to_string_lossy().to_string();
+                                return Some((temp_celsius, TemperatureMethod::LinuxHwmon(path_str)));
                             }
                         }
                     }
@@ -1454,26 +1574,85 @@ fn get_windows_temperature() -> Option<f32> {
     
     static LAST_LOG_STATE: OnceLock<std::sync::Mutex<bool>> = OnceLock::new();
     
-    // Try the fastest method - HighPrecisionTemperature from WMI via PowerShell
+    // Try multiple WMI methods for better compatibility
+    
+    // Method 1: Try HighPrecisionTemperature (newer Windows versions)
     if let Ok(output) = Command::new("powershell")
         .args([
             "-Command",
-            "Get-WmiObject -Query \"SELECT HighPrecisionTemperature FROM Win32_PerfRawData_Counters_ThermalZoneInformation\" | Select-Object -First 1 -ExpandProperty HighPrecisionTemperature"
+            "try { Get-WmiObject -Query \"SELECT HighPrecisionTemperature FROM Win32_PerfRawData_Counters_ThermalZoneInformation\" -ErrorAction Stop | Select-Object -First 1 -ExpandProperty HighPrecisionTemperature } catch { $null }"
         ])
         .output()
     {
         if let Ok(output_str) = String::from_utf8(output.stdout) {
-            if let Ok(temp_tenths_kelvin) = output_str.trim().parse::<f32>() {
-                let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
-                if temp_celsius > 0.0 && temp_celsius < 150.0 {
-                    // Log success only once
-                    let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
-                    let mut logged = log_state.lock().unwrap();
-                    if !*logged {
-                        info!("✅ Temperature sensor detected via WMI: {:.1}°C", temp_celsius);
-                        *logged = true;
+            let trimmed = output_str.trim();
+            if !trimmed.is_empty() && trimmed != "null" {
+                if let Ok(temp_tenths_kelvin) = trimmed.parse::<f32>() {
+                    let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
+                    if temp_celsius > 0.0 && temp_celsius < 150.0 {
+                        // Log success only once
+                        let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
+                        let mut logged = log_state.lock().unwrap();
+                        if !*logged {
+                            info!("✅ Temperature sensor detected via WMI HighPrecision: {:.1}°C", temp_celsius);
+                            *logged = true;
+                        }
+                        return Some(temp_celsius);
                     }
-                    return Some(temp_celsius);
+                }
+            }
+        }
+    }
+    
+    // Method 2: Try CurrentTemperature (older Windows versions)
+    if let Ok(output) = Command::new("powershell")
+        .args([
+            "-Command",
+            "try { Get-WmiObject -Query \"SELECT CurrentTemperature FROM Win32_TemperatureProbe\" -ErrorAction Stop | Select-Object -First 1 -ExpandProperty CurrentTemperature } catch { $null }"
+        ])
+        .output()
+    {
+        if let Ok(output_str) = String::from_utf8(output.stdout) {
+            let trimmed = output_str.trim();
+            if !trimmed.is_empty() && trimmed != "null" {
+                if let Ok(temp_tenths_kelvin) = trimmed.parse::<f32>() {
+                    let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
+                    if temp_celsius > 0.0 && temp_celsius < 150.0 {
+                        let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
+                        let mut logged = log_state.lock().unwrap();
+                        if !*logged {
+                            info!("✅ Temperature sensor detected via WMI CurrentTemperature: {:.1}°C", temp_celsius);
+                            *logged = true;
+                        }
+                        return Some(temp_celsius);
+                    }
+                }
+            }
+        }
+    }
+
+    // Method 3: Try MSAcpi_ThermalZoneTemperature (alternative approach)
+    if let Ok(output) = Command::new("powershell")
+        .args([
+            "-Command",
+            "try { Get-WmiObject -Namespace \"root\\wmi\" -Query \"SELECT CurrentTemperature FROM MSAcpi_ThermalZoneTemperature\" -ErrorAction Stop | Select-Object -First 1 -ExpandProperty CurrentTemperature } catch { $null }"
+        ])
+        .output()
+    {
+        if let Ok(output_str) = String::from_utf8(output.stdout) {
+            let trimmed = output_str.trim();
+            if !trimmed.is_empty() && trimmed != "null" {
+                if let Ok(temp_tenths_kelvin) = trimmed.parse::<f32>() {
+                    let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
+                    if temp_celsius > 0.0 && temp_celsius < 150.0 {
+                        let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
+                        let mut logged = log_state.lock().unwrap();
+                        if !*logged {
+                            info!("✅ Temperature sensor detected via MSAcpi: {:.1}°C", temp_celsius);
+                            *logged = true;
+                        }
+                        return Some(temp_celsius);
+                    }
                 }
             }
         }
