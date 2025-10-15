@@ -108,7 +108,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 - ✅ **Notification Preferences**: Customize alerts and notifications
 - ✅ **Advanced Options**: Fine-tune DHT, chunk size, and cache settings (configurable through UI)
 - ✅ **Import/Export**: Backup and restore settings
-- ✅ **Multi-language Support**: English, Spanish, Chinese, Korean
+- ✅ **Multi-language Support**: English, Spanish, Chinese, Korean, Russian
 
 ## NAT Traversal & Network Reachability
 
@@ -416,7 +416,7 @@ npm run test:watch
 - ✅ Analytics dashboard with real metrics
 - ✅ CPU mining with pool support
 - ✅ Comprehensive settings management
-- ✅ Multi-language support (EN, ES, ZH, KO)
+- ✅ Multi-language support (EN, ES, ZH, KO, RU)
 
 ### Phase 2: P2P Network Infrastructure (Completed)
 

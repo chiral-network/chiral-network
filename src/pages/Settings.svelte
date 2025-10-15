@@ -111,6 +111,7 @@
     { value: "es", label: $t("language.spanish") },
     { value: "zh", label: $t("language.chinese") },
     { value: "ko", label: $t("language.korean") },
+    { value: "ru", label: $t("language.russian") },
   ];
 
   // Initialize configuration text from arrays

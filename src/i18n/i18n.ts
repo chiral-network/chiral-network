@@ -9,6 +9,7 @@ register("en", () => import("../locales/en.json"));
 register("ko", () => import("../locales/ko.json"));
 register("es", () => import("../locales/es.json"));
 register("zh", () => import("../locales/zh.json"));
+register("ru", () => import("../locales/ru.json"));
 
 let store: any = null;
 async function ensureStore() {
