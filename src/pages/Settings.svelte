@@ -202,6 +202,7 @@
 
     await invoke("enable_privacy_routing", {
       proxyAddresses: localSettings.trustedProxyRelays,
+      mode: localSettings.ipPrivacyMode,
     });
   }
 
