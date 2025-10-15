@@ -39,6 +39,7 @@ export interface FileMetadata {
   fileData?: Uint8Array | number[];
   seeders: string[];
   createdAt: number;
+  merkleRoot?: string;
   mimeType?: string;
   isEncrypted: boolean;
   encryptionMethod?: string;
@@ -191,8 +192,6 @@ export class DhtService {
       throw error;
     }
   }
-
-
 
   async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
     try {

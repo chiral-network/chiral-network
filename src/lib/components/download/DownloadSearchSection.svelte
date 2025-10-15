@@ -46,14 +46,14 @@
     // }
     if (entries.length > 0) {
       // 1. Always set the active ID from the most recent entry for the history dropdown.
-      activeHistoryId = entries[0].id; 
+      activeHistoryId = entries[0].id;
 
       // 2. Control the main UI state based on whether a search has been initiated in this session.
       if (!hasSearched) {
         // If it's a fresh load (hasSearched is false):
         // Keep the input clear, and the result panel empty.
-        searchHash = ''; 
-        latestStatus = 'pending'; 
+        searchHash = '';
+        latestStatus = 'pending';
         latestMetadata = null;
         searchError = null;
       } else {
@@ -181,6 +181,7 @@
         lastSearchDuration = elapsed;
 
         if (metadata) {
+          metadata.fileHash = metadata.merkleRoot || "";
           latestMetadata = metadata;
           latestStatus = 'found';
           dhtSearchHistory.updateEntry(entry.id, {
@@ -192,6 +193,7 @@
             tr('download.search.status.foundNotification', { values: { name: metadata.fileName } }),
             'success',
           );
+          isSearching = false;
         } else {
           latestStatus = 'not_found';
           dhtSearchHistory.updateEntry(entry.id, {
