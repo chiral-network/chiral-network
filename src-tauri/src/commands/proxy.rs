@@ -194,16 +194,7 @@ pub(crate) async fn enable_privacy_routing(
     proxy_addresses: Vec<String>,
     mode: Option<String>,
 ) -> Result<(), String> {
-    let privacy_mode = mode
-        .as_deref()
-        .map(PrivacyMode::from_str)
-        .unwrap_or(PrivacyMode::Prefer);
-
-    info!(
-        "Enabling privacy routing through {} proxies (mode: {:?})",
-        proxy_addresses.len(),
-        privacy_mode
-    );
+    
 
     if proxy_addresses.is_empty() {
         return Err("No proxy addresses provided".into());
