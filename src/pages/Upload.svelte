@@ -64,7 +64,7 @@
   let storageError: string | null = null
   let lastChecked: Date | null = null
   let isUploading = false
-  
+
   // Encrypted sharing state
   let useEncryptedSharing = false
   let recipientPublicKey = ''
@@ -625,7 +625,7 @@
   <!-- Encrypted Sharing Options -->
   {#if isTauri}
   <Card class="p-4">
-    <button 
+    <button
       class="w-full flex items-center justify-between cursor-pointer hover:opacity-80 transition-opacity"
       on:click={() => showEncryptionOptions = !showEncryptionOptions}
     >
@@ -638,16 +638,16 @@
           <p class="text-xs text-muted-foreground">{$t('upload.encryption.subtitle')}</p>
         </div>
       </div>
-      <svg 
-        class="h-5 w-5 text-muted-foreground transition-transform duration-200 {showEncryptionOptions ? 'rotate-180' : ''}" 
-        fill="none" 
-        stroke="currentColor" 
+      <svg
+        class="h-5 w-5 text-muted-foreground transition-transform duration-200 {showEncryptionOptions ? 'rotate-180' : ''}"
+        fill="none"
+        stroke="currentColor"
         viewBox="0 0 24 24"
       >
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
       </svg>
     </button>
-    
+
     {#if showEncryptionOptions}
       <div class="mt-4 space-y-4 pt-4 border-t border-border">
         <div class="flex items-center gap-2">
@@ -661,7 +661,7 @@
             {$t('upload.encryption.enableForRecipient')}
           </Label>
         </div>
-        
+
         {#if useEncryptedSharing}
           <div class="space-y-2 pl-6">
             <div class="flex items-center gap-2">
