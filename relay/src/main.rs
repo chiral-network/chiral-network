@@ -84,7 +84,7 @@ enum RelayBehaviourEvent {
     Relay(relay::Event),
     Ping(ping::Event),
     Identify(identify::Event),
-    Autonat(autonat::Event),
+    Autonat(()),
     RelayAuth(RequestResponseEvent<RelayAuthRequest, RelayAuthResponse>),
 }
 impl From<relay::Event> for RelayBehaviourEvent {
@@ -97,7 +97,7 @@ impl From<identify::Event> for RelayBehaviourEvent {
     fn from(e: identify::Event) -> Self { RelayBehaviourEvent::Identify(e) }
 }
 impl From<autonat::Event> for RelayBehaviourEvent {
-    fn from(e: autonat::Event) -> Self { RelayBehaviourEvent::Autonat(e) }
+    fn from(_e: autonat::Event) -> Self { RelayBehaviourEvent::Autonat(()) }
 }
 impl From<RequestResponseEvent<RelayAuthRequest, RelayAuthResponse>> for RelayBehaviourEvent {
     fn from(e: RequestResponseEvent<RelayAuthRequest, RelayAuthResponse>) -> Self {
@@ -195,11 +195,11 @@ async fn main() -> Result<()> {
     relay_config.max_circuit_duration = Duration::from_secs(3600); // 1 hour
 
     let authed_peers_for_limiter = authed_peers.clone();
-    relay_config.reservation_rate_limiters.push(Box::new()
-        move |peer_id: PeerId, _addr: &multiadder, _now: webtime::Instant| {
+    relay_config.reservation_rate_limiters.push(Box::new(
+        move |peer_id: PeerId, _addr: &Multiaddr, _now: web_time::Instant| {
             match authed_peers_for_limiter.lock() {
                 Ok(peers) => peers.contains(&peer_id),
-                Err(_) =>  false,
+                Err(_) => false,
             }
         },
     ));

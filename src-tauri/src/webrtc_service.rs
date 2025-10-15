@@ -1,6 +1,7 @@
 use crate::encryption::{decrypt_aes_key, encrypt_aes_key, EncryptedAesKeyBundle, FileEncryption};
 use crate::file_transfer::FileTransferService;
 use crate::keystore::Keystore;
+use crate::manager::{FileManifest, ChunkInfo};
 use crate::stream_auth::{AuthMessage, StreamAuthService};
 use aes_gcm::aead::{Aead};
 use aes_gcm::{AeadCore, KeyInit};
@@ -729,8 +730,81 @@ impl WebRTCService {
                     }
                     WebRTCMessage::ManifestRequest(request) => {
                         info!("Received manifest request for file: {}", request.file_hash);
-                        // Seeder logic to find and send manifest would go here.
-                        // This is typically handled by the application logic that has access to manifests.
+                        
+                        // Check if we have the file
+                        let stored_files = file_transfer_service.get_stored_files().await.unwrap_or_default();
+                        let has_file = stored_files.iter().any(|(hash, _)| hash == &request.file_hash);
+                        
+                        if has_file {
+                                // Get file data
+                            if let Some(file_data) = file_transfer_service.get_file_data(&request.file_hash).await {
+                                // Get metadata
+                                let storage_dir = file_transfer_service.get_storage_path();
+                                let metadata_path = storage_dir.join(format!("{}.meta", request.file_hash));
+                                let is_encrypted = if tokio::fs::metadata(&metadata_path).await.is_ok() {
+                                    let metadata_content = tokio::fs::read_to_string(&metadata_path).await.unwrap_or_default();
+                                    let metadata: serde_json::Value = serde_json::from_str(&metadata_content).unwrap_or_default();
+                                    metadata.get("is_encrypted").and_then(|v| v.as_bool()).unwrap_or(false)
+                                } else {
+                                    false
+                                };
+                                
+                                let encrypted_key_bundle = if is_encrypted {
+                                    let encmeta_path = storage_dir.join(format!("{}.encmeta", request.file_hash));
+                                    if tokio::fs::metadata(&encmeta_path).await.is_ok() {
+                                        let encmeta_content = tokio::fs::read_to_string(&encmeta_path).await.unwrap_or_default();
+                                        let encmeta: serde_json::Value = serde_json::from_str(&encmeta_content).unwrap_or_default();
+                                        encmeta.get("encrypted_key_bundle").and_then(|v| serde_json::from_value(v.clone()).ok())
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                };
+                                
+                                // Calculate chunks
+                                let mut chunks = Vec::new();
+                                let total_chunks = ((file_data.len() as f64) / CHUNK_SIZE as f64).ceil() as u32;
+                                for chunk_index in 0..total_chunks {
+                                    let start = (chunk_index as usize) * CHUNK_SIZE;
+                                    let end = (start + CHUNK_SIZE).min(file_data.len());
+                                    let chunk_data = &file_data[start..end];
+                                    let chunk_hash = Self::calculate_chunk_checksum(chunk_data);
+                                    chunks.push(ChunkInfo {
+                                        index: chunk_index,
+                                        hash: chunk_hash.clone(),
+                                        size: (end - start),
+                                        encrypted_hash: chunk_hash,
+                                        encrypted_size: (end - start),
+                                    });
+                                }                                let manifest = FileManifest {
+                                    merkle_root: request.file_hash.clone(),
+                                    chunks,
+                                    encrypted_key_bundle,
+                                };
+                                
+                                let manifest_json = serde_json::to_string(&manifest).unwrap();
+                                
+                                let response = WebRTCManifestResponse {
+                                    file_hash: request.file_hash,
+                                    manifest_json,
+                                };
+                                
+                                // Send the response
+                                let message = WebRTCMessage::ManifestResponse(response);
+                                let message_json = serde_json::to_string(&message).unwrap();
+                                
+                                // Send over data channel
+                                let mut conns = connections.lock().await;
+                                if let Some(connection) = conns.get_mut(peer_id) {
+                                    if let Some(dc) = &connection.data_channel {
+                                        if let Err(e) = dc.send_text(message_json).await {
+                                            error!("Failed to send manifest response: {}", e);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                     WebRTCMessage::ManifestResponse(response) => {
                         info!("Received manifest response for a file download.");

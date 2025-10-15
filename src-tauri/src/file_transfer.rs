@@ -875,6 +875,10 @@ impl FileTransferService {
         let metrics = self.download_metrics.lock().await;
         metrics.snapshot()
     }
+
+    pub fn get_storage_path(&self) -> &PathBuf {
+        &self.storage_dir
+    }
 }
 
 #[cfg(test)]
