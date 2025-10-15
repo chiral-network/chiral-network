@@ -385,10 +385,33 @@ async fn get_file_versions_by_name(
     state: State<'_, AppState>,
     file_name: String,
 ) -> Result<Vec<FileMetadata>, String> {
+    info!("🚀 Tauri command: get_file_versions_by_name called with: {}", file_name);
+    
     let dht = { state.dht.lock().await.as_ref().cloned() };
     if let Some(dht) = dht {
-        (*dht).get_versions_by_file_name(file_name).await
+        info!("✅ DHT service found, calling get_versions_by_file_name");
+        let result = (*dht).get_versions_by_file_name(file_name).await;
+        match &result {
+            Ok(versions) => info!("🎉 Tauri command: Successfully returned {} versions", versions.len()),
+            Err(e) => info!("❌ Tauri command: Error occurred: {}", e),
+        }
+        result
     } else {
+        info!("❌ Tauri command: DHT not running");
+        Err("DHT not running".into())
+    }
+}
+
+#[tauri::command]
+async fn test_backend_connection(state: State<'_, AppState>) -> Result<String, String> {
+    info!("🧪 Testing backend connection...");
+    
+    let dht = { state.dht.lock().await.as_ref().cloned() };
+    if let Some(dht) = dht {
+        info!("✅ DHT service is available");
+        Ok("DHT service is running".to_string())
+    } else {
+        info!("❌ DHT service is not available");
         Err("DHT not running".into())
     }
 }
@@ -3591,6 +3614,7 @@ fn main() {
             cleanup_inactive_peers,
             upload_versioned_file,
             get_file_versions_by_name,
+            test_backend_connection,
             establish_webrtc_connection,
             send_webrtc_file_request,
             get_webrtc_connection_status,
