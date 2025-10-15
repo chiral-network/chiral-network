@@ -9,6 +9,7 @@ use futures::io::{AsyncRead as FAsyncRead, AsyncWrite as FAsyncWrite};
 use futures::{AsyncReadExt as _, AsyncWriteExt as _};
 use futures_util::StreamExt;
 use libp2p::multiaddr::Protocol;
+use sha2::{Digest, Sha256};
 pub use multihash_codetable::{Code, MultihashDigest};
 use rs_merkle::{Hasher, MerkleTree};
 use crate::manager::Sha256Hasher;
@@ -2943,14 +2944,15 @@ impl DhtService {
         let cache_size = cache_size_mb.unwrap_or(1024); // Default 1024 MB
 
         // Generate a new keypair for this node
-        // Generate a keypair either from the secret or randomly
+        // If a secret is provided, derive a stable 32-byte seed via SHA-256(secret)
+        // Otherwise, generate a fresh random key.
         let local_key = match secret {
             Some(secret_str) => {
-                let secret_bytes = secret_str.as_bytes();
+                let mut hasher = Sha256::new();
+                hasher.update(secret_str.as_bytes());
+                let digest = hasher.finalize();
                 let mut seed = [0u8; 32];
-                for (i, &b) in secret_bytes.iter().take(32).enumerate() {
-                    seed[i] = b;
-                }
+                seed.copy_from_slice(&digest[..32]);
                 identity::Keypair::ed25519_from_bytes(seed)?
             }
             None => identity::Keypair::generate_ed25519(),
