@@ -63,6 +63,7 @@
     autonatServers: [],
     enableAutorelay: true,
     preferredRelays: [],
+    enableRelayServer: false,
     anonymousMode: false,
     shareAnalytics: true,
 
@@ -236,6 +237,7 @@
       chunkSizeKb: localSettings.chunkSize,
       cacheSizeMb: localSettings.cacheSize,
       enableAutorelay: localSettings.ipPrivacyMode !== "off" ? true : localSettings.enableAutorelay,
+      enableRelayServer: localSettings.enableRelayServer,
     };
 
     if (localSettings.autonatServers?.length) {
@@ -254,17 +256,17 @@
   }
 
   $: {
-    // Expand Storage section if it has any errors
+    // Open Storage section if it has any errors (but don't close it if already open)
     const hasStorageError = !!maxStorageError || !!errors.maxStorageSize || !!errors.cleanupThreshold;
-    storageSectionOpen = hasStorageError;
+    if (hasStorageError) storageSectionOpen = true;
 
-    // Expand Network section if it has any errors
+    // Open Network section if it has any errors (but don't close it if already open)
     const hasNetworkError = !!errors.maxConnections || !!errors.port || !!errors.uploadBandwidth || !!errors.downloadBandwidth;
-    networkSectionOpen = hasNetworkError;
+    if (hasNetworkError) networkSectionOpen = true;
 
-    // Expand Advanced section if it has any errors
+    // Open Advanced section if it has any errors (but don't close it if already open)
     const hasAdvancedError = !!errors.chunkSize || !!errors.cacheSize;
-    advancedSectionOpen = hasAdvancedError;
+    if (hasAdvancedError) advancedSectionOpen = true;
   }
 
   async function handleConfirmReset() {
@@ -806,6 +808,34 @@ function sectionMatches(section: string, query: string) {
               <p class="text-xs text-muted-foreground">
                 {$t("settings.autorelay.description")}
               </p>
+            </div>
+          {/if}
+
+          <div class="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="enable-relay-server"
+              bind:checked={localSettings.enableRelayServer}
+            />
+            <Label for="enable-relay-server" class="cursor-pointer">
+              Enable Relay Server
+            </Label>
+          </div>
+
+          {#if localSettings.enableRelayServer}
+            <div class="ml-6 p-4 bg-gray-50 rounded-md border border-gray-200">
+              <p class="text-sm text-gray-900 mb-2">
+                <strong>Relay Server Enabled</strong>
+              </p>
+              <p class="text-xs text-gray-700 mb-2">
+                Your node will act as a relay server, helping peers behind NATs connect to the network.
+              </p>
+              <ul class="text-xs text-gray-600 space-y-1">
+                <li>• Helps peers behind restrictive NATs connect</li>
+                <li>• Earns reputation points for your node</li>
+                <li>• Uses bandwidth when actively relaying circuits</li>
+                <li>• Can be disabled at any time</li>
+              </ul>
             </div>
           {/if}
         </div>
