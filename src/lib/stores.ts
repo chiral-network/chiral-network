@@ -400,6 +400,9 @@ export interface AppSettings {
   userLocation: string;
   enableProxy: boolean; // For SOCKS5 feature
   proxyAddress: string; // For SOCKS5 feature
+  ipPrivacyMode: "off" | "prefer" | "strict";
+  trustedProxyRelays: string[];
+  disableDirectNatTraversal: boolean;
   enableAutonat: boolean; // AutoNAT reachability detection
   autonatProbeInterval: number; // Seconds between AutoNAT probes
   autonatServers: string[]; // Custom AutoNAT server multiaddrs
@@ -437,6 +440,9 @@ export const settings = writable<AppSettings>({
   userLocation: "US-East",
   enableProxy: true, // Defaulting to enabled for SOCKS5 feature
   proxyAddress: "127.0.0.1:9050", // Default Tor SOCKS address
+  ipPrivacyMode: "off",
+  trustedProxyRelays: [],
+  disableDirectNatTraversal: false,
   enableAutonat: true, // Enable AutoNAT by default
   autonatProbeInterval: 30, // 30 seconds default
   autonatServers: [], // Use bootstrap nodes by default

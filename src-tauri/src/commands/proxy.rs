@@ -1,4 +1,4 @@
-use crate::dht::DhtService;
+use crate::dht::{DhtService, PrivacyMode};
 use crate::AppState;
 use tauri::Emitter;
 use tauri::State;
@@ -192,8 +192,18 @@ pub(crate) async fn enable_privacy_routing(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     proxy_addresses: Vec<String>,
+    mode: Option<String>,
 ) -> Result<(), String> {
-    info!("Enabling privacy routing through {} proxies", proxy_addresses.len());
+    let privacy_mode = mode
+        .as_deref()
+        .map(PrivacyMode::from_str)
+        .unwrap_or(PrivacyMode::Prefer);
+
+    info!(
+        "Enabling privacy routing through {} proxies (mode: {:?})",
+        proxy_addresses.len(),
+        privacy_mode
+    );
 
     if proxy_addresses.is_empty() {
         return Err("No proxy addresses provided".into());
@@ -218,7 +228,7 @@ pub(crate) async fn enable_privacy_routing(
 
     // Enable privacy routing in DHT service
     if let Some(dht) = state.dht.lock().await.as_ref() {
-        dht.enable_privacy_routing().await?;
+        dht.enable_privacy_routing(privacy_mode).await?;
     } else {
         return Err("DHT not initialized".into());
     }
