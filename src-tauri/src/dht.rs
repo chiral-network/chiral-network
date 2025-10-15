@@ -252,7 +252,24 @@ pub enum DhtEvent {
 }
 
 // ------------ Proxy Manager Structs and Enums ------------
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivacyMode {
+    Off,
+    Prefer,
+    Strict,
+}
+
+impl PrivacyMode {
+    pub fn from_str(mode: &str) -> Self {
+        match mode.to_lowercase().as_str() {
+            "strict" => PrivacyMode::Strict,
+            "off" => PrivacyMode::Off,
+            "prefer" => PrivacyMode::Prefer,
+            _ => PrivacyMode::Prefer,
+        }
+    }
+}
+
 struct ProxyManager {
     targets: std::collections::HashSet<PeerId>,
     capable: std::collections::HashSet<PeerId>,
@@ -262,6 +279,7 @@ struct ProxyManager {
     // Privacy routing state
     privacy_routing_enabled: bool,
     trusted_proxy_nodes: std::collections::HashSet<PeerId>,
+    privacy_mode: PrivacyMode,
 }
 
 impl ProxyManager {
@@ -306,18 +324,24 @@ impl ProxyManager {
     }
 
     // Privacy routing methods
-    fn enable_privacy_routing(&mut self) {
-        self.privacy_routing_enabled = true;
-        info!("Privacy routing enabled in proxy manager");
+    fn enable_privacy_routing(&mut self, mode: PrivacyMode) {
+        self.privacy_routing_enabled = mode != PrivacyMode::Off;
+        self.privacy_mode = mode;
+        info!("Privacy routing enabled in proxy manager (mode: {:?})", mode);
     }
 
     fn disable_privacy_routing(&mut self) {
         self.privacy_routing_enabled = false;
+        self.privacy_mode = PrivacyMode::Off;
         info!("Privacy routing disabled in proxy manager");
     }
 
     fn is_privacy_routing_enabled(&self) -> bool {
         self.privacy_routing_enabled
+    }
+
+    fn privacy_mode(&self) -> PrivacyMode {
+        self.privacy_mode
     }
 
     fn add_trusted_proxy_node(&mut self, peer_id: PeerId) {
@@ -363,6 +387,7 @@ impl Default for ProxyManager {
             relay_ready: std::collections::HashSet::new(),
             privacy_routing_enabled: false,
             trusted_proxy_nodes: std::collections::HashSet::new(),
+            privacy_mode: PrivacyMode::Off,
         }
     }
 }
@@ -1285,106 +1310,152 @@ async fn run_dht_node(
                             });
 
                             if let Some(peer_id) = maybe_peer_id.clone() {
-                                let mut mgr = proxy_mgr.lock().await;
-                                mgr.set_target(peer_id);
+                                let mut attempt_direct = true;
+                                let mut strict_privacy = false;
 
-                                // Check if privacy routing is enabled
-                                let use_proxy_routing = mgr.is_privacy_routing_enabled();
+                                {
+                                    let mut mgr = proxy_mgr.lock().await;
+                                    mgr.set_target(peer_id.clone());
+                                    let use_proxy_routing = mgr.is_privacy_routing_enabled();
+                                    strict_privacy = mgr.privacy_mode() == PrivacyMode::Strict;
 
-                                if use_proxy_routing {
-                                    // Try to find a proxy node for routing
-                                    if let Some(proxy_peer_id) = mgr.select_proxy_for_routing(&peer_id) {
-                                        info!("Using privacy routing through proxy {} to reach {}", proxy_peer_id, peer_id);
+                                    if use_proxy_routing {
+                                        attempt_direct = false;
 
-                                        // Create circuit relay address through the proxy using robust relay address construction
-                                        let circuit_addr = create_circuit_relay_address_robust(&proxy_peer_id, &peer_id);
-                                        info!("Attempting circuit relay connection via {} to {}", proxy_peer_id, peer_id);
+                                        if let Some(proxy_peer_id) = mgr.select_proxy_for_routing(&peer_id) {
+                                            drop(mgr);
 
-                                        match swarm.dial(circuit_addr.clone()) {
-                                            Ok(_) => {
-                                                info!("Requested circuit relay connection to {} via proxy {}", peer_id, proxy_peer_id);
-                                            }
-                                            Err(e) => {
-                                                error!("Failed to dial via circuit relay {}: {}", circuit_addr, e);
-                                                let _ = event_tx.send(DhtEvent::Error(format!("Circuit relay failed: {}", e))).await;
-                                            }
-                                        }
-                                        warn!("No suitable proxy available for privacy routing to {}", peer_id);
-                                        // Fall back to direct connection
-                                        match swarm.dial(multiaddr.clone()) {
-                                            Ok(_) => {
-                                                info!("Requested direct connection to: {} (no proxy available)", addr);
-                                            }
-                                            Err(e) => {
-                                                error!("Failed to dial {}: {}", addr, e);
-                                                let _ = event_tx.send(DhtEvent::Error(format!("Failed to connect: {}", e))).await;
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    // Direct connection (privacy routing disabled)
-                                    let should_request = !mgr.has_relay_request(&peer_id);
-                                    if should_request {
-                                        mgr.mark_relay_pending(peer_id);
-                                    }
-                                    drop(mgr);
+                                            info!(
+                                                "Using privacy routing through proxy {} to reach {}",
+                                                proxy_peer_id, peer_id
+                                            );
 
-                                    if should_request {
-                                        if let Some(relay_addr) = build_relay_listen_addr(&multiaddr) {
-                                            match swarm.listen_on(relay_addr.clone()) {
+                                            let circuit_addr =
+                                                create_circuit_relay_address_robust(&proxy_peer_id, &peer_id);
+                                            info!(
+                                                "Attempting circuit relay connection via {} to {}",
+                                                proxy_peer_id, peer_id
+                                            );
+
+                                            match swarm.dial(circuit_addr.clone()) {
                                                 Ok(_) => {
                                                     info!(
-                                                        "Requested relay reservation via {}",
-                                                        relay_addr
+                                                        "Requested circuit relay connection to {} via proxy {}",
+                                                        peer_id, proxy_peer_id
                                                     );
-                                                    let _ = event_tx
-                                                        .send(DhtEvent::ProxyStatus {
-                                                            id: peer_id.to_string(),
-                                                            address: relay_addr.to_string(),
-                                                            status: "relay_pending".into(),
-                                                            latency_ms: None,
-                                                            error: None,
-                                                        })
-                                                        .await;
+                                                    continue;
                                                 }
-                                                Err(err) => {
-                                                    warn!(
-                                                        "Failed to request relay reservation via {}: {}",
-                                                        relay_addr, err
+                                                Err(e) => {
+                                                    error!(
+                                                        "Failed to dial via circuit relay {}: {}",
+                                                        circuit_addr, e
                                                     );
-                                                    let mut mgr = proxy_mgr.lock().await;
-                                                    mgr.relay_pending.remove(&peer_id);
                                                     let _ = event_tx
-                                                        .send(DhtEvent::ProxyStatus {
-                                                            id: peer_id.to_string(),
-                                                            address: relay_addr.to_string(),
-                                                            status: "relay_error".into(),
-                                                            latency_ms: None,
-                                                            error: Some(err.to_string()),
-                                                        })
+                                                        .send(DhtEvent::Error(format!(
+                                                            "Circuit relay failed: {}",
+                                                            e
+                                                        )))
                                                         .await;
+                                                    if strict_privacy {
+                                                        {
+                                                            let mut mgr = proxy_mgr.lock().await;
+                                                            mgr.clear_target(&peer_id);
+                                                        }
+                                                        continue;
+                                                    } else {
+                                                        attempt_direct = true;
+                                                    }
                                                 }
                                             }
                                         } else {
+                                            drop(mgr);
                                             warn!(
-                                                "Cannot derive relay listen address from {}",
-                                                multiaddr
+                                                "No suitable proxy available for privacy routing to {}",
+                                                peer_id
                                             );
-                                        }
-                                    }
-
-                                    match swarm.dial(multiaddr.clone()) {
-                                        Ok(_) => {
-                                            info!("Requested direct connection to: {}", addr);
-                                            info!("  Multiaddr: {}", multiaddr);
-                                            info!("  Waiting for ConnectionEstablished event...");
-                                        }
-                                        Err(e) => {
-                                            error!("Failed to dial {}: {}", addr, e);
                                             let _ = event_tx
-                                                .send(DhtEvent::Error(format!("Failed to connect: {}", e)))
+                                                .send(DhtEvent::Error(format!(
+                                                    "No trusted proxy available to reach {}",
+                                                    peer_id
+                                                )))
                                                 .await;
+                                            if strict_privacy {
+                                                {
+                                                    let mut mgr = proxy_mgr.lock().await;
+                                                    mgr.clear_target(&peer_id);
+                                                }
+                                                continue;
+                                            } else {
+                                                attempt_direct = true;
+                                            }
                                         }
+                                    } else {
+                                        attempt_direct = true;
+                                    }
+                                }
+
+                                if !attempt_direct {
+                                    continue;
+                                }
+
+                                let should_request = {
+                                    let mut mgr = proxy_mgr.lock().await;
+                                    let should_request = !mgr.has_relay_request(&peer_id);
+                                    if should_request {
+                                        mgr.mark_relay_pending(peer_id.clone());
+                                    }
+                                    should_request
+                                };
+
+                                if should_request {
+                                    if let Some(relay_addr) = build_relay_listen_addr(&multiaddr) {
+                                        match swarm.listen_on(relay_addr.clone()) {
+                                            Ok(_) => {
+                                                info!("Requested relay reservation via {}", relay_addr);
+                                                let _ = event_tx
+                                                    .send(DhtEvent::ProxyStatus {
+                                                        id: peer_id.to_string(),
+                                                        address: relay_addr.to_string(),
+                                                        status: "relay_pending".into(),
+                                                        latency_ms: None,
+                                                        error: None,
+                                                    })
+                                                    .await;
+                                            }
+                                            Err(err) => {
+                                                warn!(
+                                                    "Failed to request relay reservation via {}: {}",
+                                                    relay_addr, err
+                                                );
+                                                let mut mgr = proxy_mgr.lock().await;
+                                                mgr.relay_pending.remove(&peer_id);
+                                                let _ = event_tx
+                                                    .send(DhtEvent::ProxyStatus {
+                                                        id: peer_id.to_string(),
+                                                        address: relay_addr.to_string(),
+                                                        status: "relay_error".into(),
+                                                        latency_ms: None,
+                                                        error: Some(err.to_string()),
+                                                    })
+                                                    .await;
+                                            }
+                                        }
+                                    } else {
+                                        warn!("Cannot derive relay listen address from {}", multiaddr);
+                                    }
+                                }
+
+                                match swarm.dial(multiaddr.clone()) {
+                                    Ok(_) => {
+                                        info!("Requested direct connection to: {}", addr);
+                                        info!("  Multiaddr: {}", multiaddr);
+                                        info!("  Waiting for ConnectionEstablished event...");
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to dial {}: {}", addr, e);
+                                        let _ = event_tx
+                                            .send(DhtEvent::Error(format!("Failed to connect: {}", e)))
+                                            .await;
                                     }
                                 }
                             } else {
@@ -3786,11 +3857,11 @@ impl DhtService {
     }
 
     /// Enable privacy routing through proxy nodes
-    pub async fn enable_privacy_routing(&self) -> Result<(), String> {
+    pub async fn enable_privacy_routing(&self, mode: PrivacyMode) -> Result<(), String> {
         let mut proxy_mgr = self.proxy_mgr.lock().await;
 
         // Enable privacy routing in the proxy manager
-        proxy_mgr.enable_privacy_routing();
+        proxy_mgr.enable_privacy_routing(mode);
 
         // Identify and mark trusted proxy nodes from connected peers
         // Query connected peers for proxy capabilities and establish trust relationships
@@ -3824,8 +3895,9 @@ impl DhtService {
 
         let trusted_count = trusted_proxy_count + dht_proxy_count;
         info!(
-            "Privacy routing enabled with {} trusted proxy nodes",
-            trusted_count
+            "Privacy routing enabled with {} trusted proxy nodes (mode: {:?})",
+            trusted_count,
+            mode
         );
 
         // Send event to notify about privacy routing status
