@@ -147,7 +147,7 @@
   // Check for changes
   $: hasChanges = JSON.stringify(localSettings) !== JSON.stringify(savedSettings);
 
-  function saveSettings() {
+  async function saveSettings() {
     if (!isValid || maxStorageError) {
       return;
     }
@@ -165,7 +165,95 @@
     bandwidthScheduler.forceUpdate();
     
     importExportFeedback = null;
-    showToast("Settings Updated!");
+
+    try {
+      await applyPrivacyRoutingSettings();
+      if (localSettings.enableProxy && localSettings.proxyAddress?.trim()) {
+        await restartDhtWithProxy();
+      }
+      showToast("Settings Updated!");
+    } catch (error) {
+      console.error("Failed to apply networking settings:", error);
+      showToast("Settings saved, but networking update failed", "error");
+    }
+  }
+
+  async function applyPrivacyRoutingSettings() {
+    if (typeof window === "undefined" || !("__TAURI__" in window)) {
+      return;
+    }
+
+    if (localSettings.ipPrivacyMode !== "off" && (!localSettings.trustedProxyRelays || localSettings.trustedProxyRelays.length === 0)) {
+      showToast("Add at least one trusted proxy relay before enabling Hide My IP.", "warning");
+      try {
+        await invoke("disable_privacy_routing");
+      } catch (error) {
+        console.warn("disable_privacy_routing failed while updating privacy settings:", error);
+      }
+      return;
+    }
+
+    if (localSettings.ipPrivacyMode === "off") {
+      try {
+        await invoke("disable_privacy_routing");
+      } catch (error) {
+        console.warn("disable_privacy_routing failed while turning privacy off:", error);
+      }
+      return;
+    }
+
+    await invoke("enable_privacy_routing", {
+      proxyAddresses: localSettings.trustedProxyRelays,
+    });
+  }
+
+  async function restartDhtWithProxy() {
+    if (typeof window === "undefined" || !("__TAURI__" in window)) {
+      return;
+    }
+
+    const proxyAddress = localSettings.proxyAddress?.trim();
+    if (!proxyAddress) {
+      return;
+    }
+
+    try {
+      await invoke("stop_dht_node");
+    } catch (error) {
+      console.debug("stop_dht_node failed (probably already stopped):", error);
+    }
+
+    let bootstrapNodes: string[] = [];
+    try {
+      bootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command");
+    } catch (error) {
+      console.error("Failed to fetch bootstrap nodes:", error);
+      throw error;
+    }
+
+    if (!Array.isArray(bootstrapNodes) || bootstrapNodes.length === 0) {
+      throw new Error("No bootstrap nodes available to restart DHT");
+    }
+
+    const payload: Record<string, unknown> = {
+      port: localSettings.port,
+      bootstrapNodes,
+      enableAutonat: localSettings.enableAutonat,
+      autonatProbeIntervalSecs: localSettings.autonatProbeInterval,
+      chunkSizeKb: localSettings.chunkSize,
+      cacheSizeMb: localSettings.cacheSize,
+      enableAutorelay: localSettings.enableAutorelay,
+      proxyAddress,
+    };
+
+    if (localSettings.autonatServers?.length) {
+      payload.autonatServers = localSettings.autonatServers;
+    }
+    if (localSettings.preferredRelays?.length) {
+      payload.preferredRelays = localSettings.preferredRelays;
+    }
+
+    await invoke("start_dht_node", payload);
   }
 
   $: {
@@ -182,10 +270,10 @@
     advancedSectionOpen = hasAdvancedError;
   }
 
-  function handleConfirmReset() {
+  async function handleConfirmReset() {
     localSettings = { ...defaultSettings }; // Reset local changes
     settings.set(defaultSettings); // Reset the store
-    saveSettings(); // Save the reset state
+    await saveSettings(); // Save the reset state
     showResetConfirmModal = false;
   }
 
@@ -271,11 +359,11 @@
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const imported = JSON.parse(e.target?.result as string);
         localSettings = { ...localSettings, ...imported };
-        saveSettings(); // This saves, updates savedSettings, and clears any old feedback.
+        await saveSettings(); // This saves, updates savedSettings, and clears any old feedback.
         // Now we set the new feedback for the import action.
         importExportFeedback = {
           message: $t("advanced.importSuccess", {
@@ -324,29 +412,29 @@
     // Load settings from local storage
     const stored = localStorage.getItem("chiralSettings");
     if (stored) {
-      try {
-        const loadedSettings: AppSettings = JSON.parse(stored);
-        // Set the store, which ensures it is available globally
-        settings.set({ ...defaultSettings, ...loadedSettings }); 
-        // Update local state from the store after loading
-        localSettings = get(settings); 
-        savedSettings = get(settings); 
-      } catch (e) {
-        console.error("Failed to load settings:", e);
-      }
-    }
+  try {
+    const loadedSettings: AppSettings = JSON.parse(stored);
+    // Set the store, which ensures it is available globally
+    settings.set({ ...defaultSettings, ...loadedSettings }); 
+    // Update local state from the store after loading
+    localSettings = get(settings); 
+    savedSettings = get(settings); 
+  } catch (e) {
+    console.error("Failed to load settings:", e);
+  }
+}
 
-    const saved = await loadLocale(); // 'en' | 'ko' | null
-    const initial = saved || "en";
-    selectedLanguage = initial; // Synchronize dropdown display value
-    // (From root, setupI18n() has already been called, so only once here)
-  });
+const saved = await loadLocale(); // 'en' | 'ko' | null
+const initial = saved || "en";
+selectedLanguage = initial; // Synchronize dropdown display value
+// (From root, setupI18n() has already been called, so only once here)
+});
 
-  function onLanguageChange(lang: string) {
+  async function onLanguageChange(lang: string) {
     selectedLanguage = lang;
     changeLocale(lang); // Save + update global state (yes, i18n.ts takes care of saving)
     (settings as any).language = lang;
-    saveSettings(); // If you want to reflect in settings as well
+    await saveSettings(); // If you want to reflect in settings as well
   }
 
   const limits = {
