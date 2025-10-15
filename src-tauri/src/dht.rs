@@ -155,6 +155,7 @@ struct DhtBehaviour {
     autonat_client: toggle::Toggle<v2::client::Behaviour>,
     autonat_server: toggle::Toggle<v2::server::Behaviour>,
     relay_client: relay::client::Behaviour,
+    relay_server: toggle::Toggle<relay::Behaviour>,
     dcutr: toggle::Toggle<dcutr::Behaviour>,
 }
 #[derive(Debug)]
@@ -1570,6 +1571,7 @@ async fn run_dht_node(
                                     .await;
                             }
                             RelayClientEvent::InboundCircuitEstablished { src_peer_id, .. } => {
+                                info!("📥 Inbound relay circuit established from {}", src_peer_id);
                                 let _ = event_tx
                                     .send(DhtEvent::ProxyStatus {
                                         id: src_peer_id.to_string(),
@@ -1579,6 +1581,56 @@ async fn run_dht_node(
                                         error: None,
                                     })
                                     .await;
+                            }
+                        }
+                    }
+                    SwarmEvent::Behaviour(DhtBehaviourEvent::RelayServer(relay_server_event)) => {
+                        use relay::Event as RelayEvent;
+                        match relay_server_event {
+                            RelayEvent::ReservationReqAccepted { src_peer_id, .. } => {
+                                info!("🔁 Relay server: Accepted reservation from {}", src_peer_id);
+                                let _ = event_tx
+                                    .send(DhtEvent::Info(format!(
+                                        "Acting as relay for peer {}",
+                                        src_peer_id
+                                    )))
+                                    .await;
+                            }
+                            RelayEvent::ReservationReqDenied { src_peer_id, .. } => {
+                                debug!("🔁 Relay server: Denied reservation from {}", src_peer_id);
+                            }
+                            RelayEvent::ReservationTimedOut { src_peer_id } => {
+                                debug!("🔁 Relay server: Reservation timed out for {}", src_peer_id);
+                            }
+                            RelayEvent::CircuitReqDenied { src_peer_id, dst_peer_id, .. } => {
+                                debug!("🔁 Relay server: Denied circuit from {} to {}", src_peer_id, dst_peer_id);
+                            }
+                            RelayEvent::CircuitReqAccepted { src_peer_id, dst_peer_id, .. } => {
+                                info!("🔁 Relay server: Established circuit from {} to {}", src_peer_id, dst_peer_id);
+                                let _ = event_tx
+                                    .send(DhtEvent::Info(format!(
+                                        "Relaying traffic from {} to {}",
+                                        src_peer_id, dst_peer_id
+                                    )))
+                                    .await;
+                            }
+                            RelayEvent::CircuitClosed { src_peer_id, dst_peer_id, .. } => {
+                                debug!("🔁 Relay server: Circuit closed between {} and {}", src_peer_id, dst_peer_id);
+                            }
+                            RelayEvent::ReservationReqAcceptFailed { src_peer_id, error, .. } => {
+                                warn!("🔁 Relay server: Failed to accept reservation from {}: {:?}", src_peer_id, error);
+                            }
+                            RelayEvent::ReservationReqDenyFailed { src_peer_id, error, .. } => {
+                                warn!("🔁 Relay server: Failed to deny reservation from {}: {:?}", src_peer_id, error);
+                            }
+                            RelayEvent::CircuitReqAcceptFailed { src_peer_id, dst_peer_id, error, .. } => {
+                                warn!("🔁 Relay server: Failed to accept circuit from {} to {}: {:?}", src_peer_id, dst_peer_id, error);
+                            }
+                            RelayEvent::CircuitReqDenyFailed { src_peer_id, dst_peer_id, error, .. } => {
+                                warn!("🔁 Relay server: Failed to deny circuit from {} to {}: {:?}", src_peer_id, dst_peer_id, error);
+                            }
+                            RelayEvent::CircuitReqOutboundConnectFailed { src_peer_id, dst_peer_id, error, .. } => {
+                                warn!("🔁 Relay server: Failed to connect to destination {} for circuit from {}: {:?}", dst_peer_id, src_peer_id, error);
                             }
                         }
                     }
@@ -2813,6 +2865,7 @@ impl DhtService {
         cache_size_mb: Option<usize>, // Cache size in MB (default 1024)
         enable_autorelay: bool,
         preferred_relays: Vec<String>,
+        enable_relay_server: bool,
     ) -> Result<Self, Box<dyn Error>> {
         // Convert chunk size from KB to bytes
         let chunk_size = chunk_size_kb.unwrap_or(256) * 1024; // Default 256 KB
@@ -2924,6 +2977,18 @@ impl DhtService {
         };
         let dcutr_toggle = toggle::Toggle::from(dcutr_behaviour);
 
+        // Relay server configuration
+        let relay_server_behaviour = if enable_relay_server {
+            info!("🔁 Relay server enabled - this node can relay traffic for others");
+            Some(relay::Behaviour::new(
+                local_peer_id,
+                relay::Config::default(),
+            ))
+        } else {
+            None
+        };
+        let relay_server_toggle = toggle::Toggle::from(relay_server_behaviour);
+
         let mut behaviour = Some(DhtBehaviour {
             kademlia,
             identify,
@@ -2935,6 +3000,7 @@ impl DhtService {
             autonat_client: autonat_client_toggle,
             autonat_server: autonat_server_toggle,
             relay_client: relay_client_behaviour,
+            relay_server: relay_server_toggle,
             dcutr: dcutr_toggle,
         });
 
@@ -3989,6 +4055,7 @@ mod tests {
             Some(1024), // cache_size_mb
             false,      // enable_autorelay
             Vec::new(), // preferred_relays
+            false,      // enable_relay_server
         )
         .await
         {

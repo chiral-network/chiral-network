@@ -751,6 +751,7 @@ async fn start_dht_node(
         cache_size_mb,
         enable_autorelay.unwrap_or(false),
         preferred_relays.unwrap_or_default(),
+        false, // enable_relay_server - disabled by default
     )
     .await
     .map_err(|e| format!("Failed to start DHT: {}", e))?;
