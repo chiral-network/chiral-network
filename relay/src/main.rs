@@ -187,12 +187,22 @@ async fn main() -> Result<()> {
     // === RELAY CONFIG ===
     // Note: In libp2p 0.54, reservation_handler is not supported
     // Authentication will be handled at the application level
-    let relay_config = relay::Config {
-        max_reservations_per_peer: args.max_reservations,
-        max_circuits_per_peer: args.max_circuits,
-        max_circuit_duration: Duration::from_secs(3600), // 1 hour
-        ..Default::default()
-    };
+    let mut relay_config = relay::Config::default();
+    relay_config.max_reservations = args.max_reservations;
+    relay_config.max_reservations_per_peer = args.max_reservations;
+    relay_config.max_circuits = args.max_circuits;
+    relay_config.max_circuits_per_peer = args.max_circuits;
+    relay_config.max_circuit_duration = Duration::from_secs(3600); // 1 hour
+
+    let authed_peers_for_limiter = authed_peers.clone();
+    relay_config.reservation_rate_limiters.push(Box::new()
+        move |peer_id: PeerId, _addr: &multiadder, _now: webtime::Instant| {
+            match authed_peers_for_limiter.lock() {
+                Ok(peers) => peers.contains(&peer_id),
+                Err(_) =>  false,
+            }
+        },
+    ));
 
     let behaviour = RelayBehaviour {
         relay: relay::Behaviour::new(local_peer_id, relay_config),
@@ -339,6 +349,10 @@ async fn main() -> Result<()> {
                     }
                     SwarmEvent::ConnectionClosed { peer_id, .. } => {
                         connected_peers = connected_peers.saturating_sub(1);
+                        let was_authed = authed_peers.lock().unwrap().remove(&peer_id);
+                        if was_authed {
+                            info!("🔒 Peer {} disconnected, removed from authenticated list", peer_id);
+                        }
                         info!("👋 Connection closed with peer: {} (total: {})", peer_id, connected_peers);
                     }
                     SwarmEvent::IncomingConnectionError { error, .. } => {
