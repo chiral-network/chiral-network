@@ -54,6 +54,9 @@
     // Privacy settings
     enableProxy: true,
     proxyAddress: "127.0.0.1:9050", // Default Tor SOCKS address
+    ipPrivacyMode: "off",
+    trustedProxyRelays: [],
+    disableDirectNatTraversal: false,
     enableAutonat: true,
     autonatProbeInterval: 30,
     autonatServers: [],
@@ -90,9 +93,10 @@
     type: "success" | "error";
   } | null = null;
 
-  // NAT configuration text bindings
+  // NAT & privacy configuration text bindings
   let autonatServersText = '';
   let preferredRelaysText = '';
+  let trustedProxyText = '';
 
   const locations = [
     { value: "US-East", label: "US East" },
@@ -109,9 +113,36 @@
     { value: "ko", label: $t("language.korean") },
   ];
 
-  // Initialize NAT configuration text from arrays
+  // Initialize configuration text from arrays
   $: autonatServersText = localSettings.autonatServers?.join('\n') || '';
   $: preferredRelaysText = localSettings.preferredRelays?.join('\n') || '';
+  $: trustedProxyText = localSettings.trustedProxyRelays?.join('\n') || '';
+
+  const privacyModeOptions = [
+    {
+      value: "off",
+      label: "Off (direct connections allowed)",
+    },
+    {
+      value: "prefer",
+      label: "Prefer Relay (fall back to direct if needed)",
+    },
+    {
+      value: "strict",
+      label: "Strict Relay-only (never expose your IP)",
+    },
+  ];
+
+  $: privacyStatus = (() => {
+    switch (localSettings.ipPrivacyMode) {
+      case "prefer":
+        return "Relay routing will be attempted first. If no relay is available, the app falls back to a direct connection and your IP may be exposed.";
+      case "strict":
+        return "All traffic must tunnel through a trusted relay or proxy. Direct connections and IP exposure are blocked.";
+      default:
+        return "Direct connections are allowed. Use a SOCKS5 proxy if you still want to mask your IP.";
+    }
+  })();
 
   // Check for changes
   $: hasChanges = JSON.stringify(localSettings) !== JSON.stringify(savedSettings);
@@ -280,6 +311,13 @@
       .split('\n')
       .map(s => s.trim())
       .filter(s => s.length > 0);
+  }
+
+  function updateTrustedProxyRelays() {
+    localSettings.trustedProxyRelays = trustedProxyText
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
   }
 
     onMount(async () => {
@@ -884,7 +922,7 @@ function sectionMatches(section: string, query: string) {
         <Shield class="h-6 w-6 text-blue-600" />
         <h2 class="text-xl font-semibold text-black">{$t("privacy.title")}</h2>
       </div>
-      <div class="space-y-2">
+      <div class="space-y-4">
         <div class="flex items-center gap-2">
           <input
             type="checkbox"
@@ -908,6 +946,60 @@ function sectionMatches(section: string, query: string) {
             <p class="text-xs text-muted-foreground mt-1">{$t("privacy.proxyHint")}</p>
           </div>
         {/if}
+
+        <div class="space-y-3 border-t pt-3">
+          <h4 class="font-medium flex items-center gap-2">
+            <Shield class="h-4 w-4 text-blue-600" />
+            Hide My IP
+          </h4>
+
+          <div>
+            <Label for="privacy-mode-select">Routing preference</Label>
+            <DropDown
+              id="privacy-mode-select"
+              options={privacyModeOptions}
+              bind:value={localSettings.ipPrivacyMode}
+            />
+          </div>
+
+          <div class="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+            {privacyStatus}
+          </div>
+
+          {#if localSettings.ipPrivacyMode !== "off"}
+            <div>
+              <Label for="trusted-proxies">Trusted proxy relays</Label>
+              <textarea
+                id="trusted-proxies"
+                bind:value={trustedProxyText}
+                on:blur={updateTrustedProxyRelays}
+                placeholder="/dns4/relay.example.com/tcp/4001/p2p/12D3KooW...\nOne multiaddress per line."
+                rows="4"
+                class="w-full px-3 py-2 border rounded-md text-sm"
+              ></textarea>
+              <p class="text-xs text-muted-foreground mt-1">
+                These peers will be used when auto-routing traffic to hide your IP. Make sure they are operated by someone you trust.
+              </p>
+            </div>
+
+            <div class="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="disable-nat-privacy"
+                bind:checked={localSettings.disableDirectNatTraversal}
+              />
+              <Label for="disable-nat-privacy" class="cursor-pointer">
+                Disable STUN/DCUtR while hiding IP
+              </Label>
+            </div>
+
+            <div class="rounded-md border border-dashed border-slate-200 p-3 text-xs text-muted-foreground space-y-1">
+              <p>Trusted relays configured: {localSettings.trustedProxyRelays.length}</p>
+              <p>SOCKS5 proxy: {localSettings.enableProxy ? (localSettings.proxyAddress || "Not set") : "Disabled"}</p>
+              <p>Direct NAT traversal: {localSettings.disableDirectNatTraversal ? "Disabled (safer)" : "Enabled (may reveal IP)"}</p>
+            </div>
+          {/if}
+        </div>
 
         <!-- AutoNAT Configuration -->
         <div class="space-y-3 border-t pt-3">
