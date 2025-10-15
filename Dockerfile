@@ -48,6 +48,7 @@ EXPOSE 8545
 
 ENV ENABLE_GETH=""
 ENV IS_BOOTSTRAP=""
+ENV SECRET=""
 
 # Add --enable-geth if ENABLE_GETH is set to true
-ENTRYPOINT ["/bin/sh", "-c", "exec /usr/local/bin/chiral-network --headless --dht-port 4001 --show-multiaddr ${ENABLE_GETH:+--enable-geth} ${IS_BOOTSTRAP:+--is-bootstrap}"]
+ENTRYPOINT ["/bin/sh", "-c", "exec /usr/local/bin/chiral-network --headless --dht-port 4001 --show-multiaddr ${ENABLE_GETH:+--enable-geth} ${IS_BOOTSTRAP:+--is-bootstrap} ${SECRET:+--secret $SECRET}"]
