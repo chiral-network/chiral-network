@@ -51,7 +51,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 - ✅ **Automatic Peer Discovery**: DHT-based peer finding with manual connect option
 - ✅ **Reputation-Based Peer Selection**: Track peer reliability, latency, and bandwidth for intelligent routing
 - ✅ **Multi-Source Downloads**: Parallel downloads from multiple peers for faster transfers
-- ❌ **Geographic Distribution**: View real peer locations and regional statistics (geolocation not implemented)
+- ✅ **Geographic Distribution**: View real peer locations and regional statistics (geolocation not implemented)
 - ✅ **Connection Management**: Direct control over peer connections with disconnect functionality
 - ✅ **Network Health Indicators**: Visual status of network connectivity
 - ✅ **NAT Traversal**: AutoNAT v2 reachability detection and Circuit Relay v2 for NAT'd peers
