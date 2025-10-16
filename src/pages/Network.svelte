@@ -8,6 +8,7 @@
   import PeerMetrics from '$lib/components/PeerMetrics.svelte'
   import GeoDistributionCard from '$lib/components/GeoDistributionCard.svelte'
   import { peers, networkStats, networkStatus, userLocation, etcAccount, settings } from '$lib/stores'
+  import { normalizeRegion, UNKNOWN_REGION_ID } from '$lib/geo'
   import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Play, Square, Download, AlertCircle, Wifi, UserMinus } from 'lucide-svelte'
   import { get } from 'svelte/store'
   import { onMount, onDestroy } from 'svelte'
@@ -24,7 +25,8 @@
   import { SignalingService } from '$lib/services/signalingService';
   import { createWebRTCSession } from '$lib/services/webrtcService';
   import { peerDiscoveryStore, startPeerEventStream, type PeerDiscovery } from '$lib/services/peerEventService';
-
+  import type { GeoRegionConfig } from '$lib/geo';
+  import { calculateRegionDistance } from '$lib/services/geolocation';
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -41,7 +43,11 @@
   let newPeerAddress = ''
   let sortBy: 'reputation' | 'sharedFiles' | 'totalSize' | 'nickname' | 'location' | 'joinDate' | 'lastSeen' | 'status' = 'reputation'
   let sortDirection: 'asc' | 'desc' = 'desc'
-  
+
+  const UNKNOWN_DISTANCE = 1_000_000;
+
+  let currentUserRegion: GeoRegionConfig = normalizeRegion(undefined);
+  $: currentUserRegion = normalizeRegion($userLocation);
   // Update sort direction when category changes to match the default
   $: if (sortBy) {
     const defaults: Record<typeof sortBy, 'asc' | 'desc'> = {
@@ -616,7 +622,16 @@
       showToast($t('network.errors.dhtNotConnected'), 'error');
       return;
     }
-    
+
+    // In Tauri mode, peer discovery happens automatically via DHT events
+    // This button just shows the current count
+    if (isTauri) {
+      const discoveryCount = discoveredPeerEntries.length;
+      showToast(tr('network.peerDiscovery.discoveryStarted', { values: { count: discoveryCount } }), 'info');
+      return;
+    }
+
+    // In web mode, use WebRTC signaling for testing
     if (!signalingConnected) {
       try {
         if (!signaling) {
@@ -650,11 +665,11 @@
         showToast('Connected to signaling server', 'success');
       } catch (error) {
         console.error('Failed to connect to signaling server:', error);
-        showToast('Failed to connect to signaling server. Make sure DHT is running.', 'error');
+        showToast('Failed to connect to signaling server for web mode testing', 'error');
         return;
       }
     }
-    
+
     // discoveredPeers will update automatically
     // showToast(tr('network.peerDiscovery.discoveryStarted', { values: { count: discoveredPeers.length } }), 'info');
     const discoveryCount = isTauri ? discoveredPeerEntries.length : webDiscoveredPeers.length;
@@ -1211,11 +1226,15 @@
       class="flex items-center gap-2 px-6 py-3 font-semibold text-base rounded-lg shadow-sm border border-primary/10 bg-background hover:bg-secondary/80"
       title={$t('network.quickActions.restartNode.tooltip')}
       on:click={async () => {
+        if (!isGethRunning) {
+          showToast($t('network.quickActions.restartNode.notRunning'), 'error');
+          return;
+        }
         await stopGethNode();
         await startGethNode();
         showToast($t('network.quickActions.restartNode.success'), 'success');
       }}
-      disabled={!isGethInstalled || isStartingNode}
+      disabled={!isGethInstalled || isStartingNode || !isGethRunning}
     >
       <Square class="h-5 w-5" />
       {$t('network.quickActions.restartNode.button')}
@@ -1975,21 +1994,24 @@
                     bVal = (b.nickname || 'zzzzz').toLowerCase()
                     break
                 case 'location':
-                    aVal = (a.location || 'zzzzz').toLowerCase() // Put empty locations at the end
-                    bVal = (b.location || 'zzzzz').toLowerCase()
-                    // Distance-based sorting: closer peers first
                     const getLocationDistance = (peerLocation: string | undefined) => {
-                        if (!peerLocation) return 999; // Unknown locations go to the end
-                        
-                        // Distance map from user's location to other regions
-                        const distanceMap: Record<string, Record<string, number>> = {
-                            'US-East': { 'US-East': 0, 'US-West': 1, 'EU-West': 2, 'Asia-Pacific': 3 },
-                            'US-West': { 'US-West': 0, 'US-East': 1, 'EU-West': 3, 'Asia-Pacific': 2 },
-                            'EU-West': { 'EU-West': 0, 'US-East': 1, 'US-West': 3, 'Asia-Pacific': 2 },
-                            'Asia-Pacific': { 'Asia-Pacific': 0, 'US-West': 1, 'EU-West': 2, 'US-East': 3 }
-                        };
-                        
-                        return distanceMap[$userLocation]?.[peerLocation] ?? 999;
+                        if (!peerLocation) return UNKNOWN_DISTANCE;
+
+                        const peerRegion = normalizeRegion(peerLocation);
+
+                        if (peerRegion.id === UNKNOWN_REGION_ID) {
+                            return UNKNOWN_DISTANCE;
+                        }
+
+                        if (currentUserRegion.id === UNKNOWN_REGION_ID) {
+                            return peerRegion.id === UNKNOWN_REGION_ID ? 0 : UNKNOWN_DISTANCE;
+                        }
+
+                        if (peerRegion.id === currentUserRegion.id) {
+                            return 0;
+                        }
+
+                        return Math.round(calculateRegionDistance(currentUserRegion, peerRegion));
                     };
                     
                     aVal = getLocationDistance(a.location);

@@ -11,6 +11,7 @@ pub mod webrtc_service;
 // Required modules for encryption and keystore functionality
 pub mod encryption;
 pub mod keystore;
+pub mod manager;
 
 // Proxy latency optimization module
 pub mod proxy_latency;

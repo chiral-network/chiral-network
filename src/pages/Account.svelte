@@ -33,6 +33,8 @@
   // Transaction components
   import TransactionReceipt from '$lib/components/TransactionReceipt.svelte'
 
+  // Validation utilities
+  import { validatePrivateKeyFormat, RateLimiter } from '$lib/utils/validation'
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -67,6 +69,9 @@
   let isLoadingFromKeystore = false;
   let keystoreLoadMessage = '';
   let rememberKeystorePassword = false;
+
+  // Rate limiter for keystore unlock (5 attempts per minute)
+  const keystoreRateLimiter = new RateLimiter(5, 60000);
   let passwordStrength = '';
   let isPasswordValid = false;
   let passwordFeedback = '';
@@ -605,30 +610,37 @@
 
   async function importChiralAccount() {
     if (!importPrivateKey) return
-    
+
+    // Validate private key format before attempting import
+    const validation = validatePrivateKeyFormat(importPrivateKey)
+    if (!validation.isValid) {
+      showToast(validation.error || 'Invalid private key format', 'error')
+      return
+    }
+
     isImportingAccount = true
     try {
       const account = await walletService.importAccount(importPrivateKey)
       wallet.update(w => ({
         ...w,
         address: account.address,
-        
+
         pendingTransactions: 0
       }))
       importPrivateKey = ''
-      
-      
+
+
       showToast('Account imported successfully!', 'success')
-      
+
       if (isGethRunning) {
         await walletService.refreshBalance()
       }
     } catch (error) {
       console.error('Failed to import Chiral account:', error)
-      
-      
+
+
       showToast('Failed to import account: ' + String(error), 'error')
-      
+
       alert('Failed to import account: ' + error)
     } finally {
       isImportingAccount = false
@@ -749,6 +761,13 @@
   async function loadFromKeystore() {
     if (!selectedKeystoreAccount || !loadKeystorePassword) return;
 
+    // Rate limiting: prevent brute force attacks
+    if (!keystoreRateLimiter.checkLimit('keystore-unlock')) {
+      keystoreLoadMessage = 'Too many unlock attempts. Please wait 1 minute before trying again.';
+      setTimeout(() => keystoreLoadMessage = '', 4000);
+      return;
+    }
+
     isLoadingFromKeystore = true;
     keystoreLoadMessage = '';
 
@@ -759,6 +778,9 @@
             if (account.address.toLowerCase() !== selectedKeystoreAccount.toLowerCase()) {
                 throw new Error(tr('keystore.load.addressMismatch'));
             }
+
+            // Success - reset rate limiter for this account
+            keystoreRateLimiter.reset('keystore-unlock');
 
             saveOrClearPassword(selectedKeystoreAccount, loadKeystorePassword);
 
@@ -781,14 +803,16 @@
             // Save or clear the password from local storage based on the checkbox
             saveOrClearPassword(selectedKeystoreAccount, loadKeystorePassword);
             await new Promise(resolve => setTimeout(resolve, 1000));
+            keystoreRateLimiter.reset('keystore-unlock'); // Reset on success in demo mode too
             keystoreLoadMessage = tr('keystore.load.successSimulated');
         }
-        
+
     } catch (error) {
         console.error('Failed to load from keystore:', error);
         keystoreLoadMessage = tr('keystore.load.error', { error: String(error) });
-        
+
         // Clear sensitive data on error
+        // Note: Rate limiter is NOT reset on failure - failed attempts count toward limit
         loadKeystorePassword = '';
     } finally {
         isLoadingFromKeystore = false;

@@ -603,9 +603,11 @@
 
       // Proceed directly to file dialog
       try {
+        console.log("🔍 DEBUG: Starting download for file:", fileToDownload.name);
         const { save } = await import('@tauri-apps/plugin-dialog');
 
         // Show file save dialog
+        console.log("🔍 DEBUG: Opening file save dialog...");
         const outputPath = await save({
           defaultPath: fileToDownload.name,
           filters: [{
@@ -613,6 +615,7 @@
             extensions: ['*']
           }]
         });
+        console.log("✅ DEBUG: File save dialog result:", outputPath);
 
         if (!outputPath) {
           // User cancelled the save dialog
@@ -645,8 +648,9 @@
           try {
             
             let hash = fileToDownload.hash
+            console.log("🔍 DEBUG: Attempting to get file data for hash:", hash);
             const base64Data = await invoke('get_file_data', { fileHash: hash }) as string;
-            console.log("Retrieved base64 data length:", base64Data.length);
+            console.log("✅ DEBUG: Retrieved base64 data length:", base64Data.length);
             
             // Convert base64 to Uint8Array
             let data_ = new Uint8Array(0); // Default empty array
@@ -664,16 +668,26 @@
             console.log("Final data array length:", data_.length);
 
             // Write the file data to the output path
+            console.log("🔍 DEBUG: About to write file to:", outputPath);
             const { writeFile } = await import('@tauri-apps/plugin-fs');
             await writeFile(outputPath, data_);
+            console.log("✅ DEBUG: File written successfully to:", outputPath);
             files.update(f => f.map(file => file.id === fileId ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath } : file));
             showNotification(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
             activeSimulations.delete(fileId);
             console.log("Done with downloading file")
             return;
           } catch (e) {
-            console.warn('Local copy fallback failed, continuing with P2P download', e);
-            // fall through to p2p path
+            console.error('❌ DEBUG: Local copy fallback failed:', e);
+            console.error('❌ DEBUG: Error details:', e);
+            showNotification(`Download failed: ${e}`, 'error');
+            activeSimulations.delete(fileId);
+            files.update(f => f.map(file =>
+              file.id === fileId
+                ? { ...file, status: 'failed' }
+                : file
+            ));
+            return; // Don't continue to P2P download
           }
         }
 

@@ -60,7 +60,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use sysinfo::{Components, System, MINIMUM_CPU_UPDATE_INTERVAL};
+use sysinfo::{Components, System};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -503,7 +503,7 @@ async fn upload_versioned_file(
 
         // Store file data locally for seeding
         let ft = {
-            let ft_guard = state.file_transfer.lock().await;
+            let ft_guard = state.file_transfer.lock().await; // Store the file locally for seeding
             ft_guard.as_ref().cloned()
         };
         if let Some(ft) = ft {
@@ -709,6 +709,9 @@ async fn start_dht_node(
     is_bootstrap: Option<bool>,
     chunk_size_kb: Option<usize>,
     cache_size_mb: Option<usize>,
+    // New optional relay controls
+    enable_autorelay: Option<bool>,
+    preferred_relays: Option<Vec<String>>,
 ) -> Result<String, String> {
     {
         let dht_guard = state.dht.lock().await;
@@ -746,8 +749,9 @@ async fn start_dht_node(
         file_transfer_service,
         chunk_size_kb,
         cache_size_mb,
-        false, // enable_autorelay - hardcoded to false for CLI start
-        Vec::new(), // preferred_relays
+        enable_autorelay.unwrap_or(false),
+        preferred_relays.unwrap_or_default(),
+        false, // enable_relay_server - disabled by default
     )
     .await
     .map_err(|e| format!("Failed to start DHT: {}", e))?;
@@ -1144,14 +1148,15 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                 DhtEvent::PeerDisconnected { peer_id } => {
                     format!("peer_disconnected:{}", peer_id)
                 }
-                DhtEvent::FileDiscovered(meta) => format!(
-                    "file_discovered:{}:{}:{}",
-                    meta.file_hash, meta.file_name, meta.file_size
-                ),
+                DhtEvent::FileDiscovered(meta) => {
+                    // Serialize the full metadata object to JSON for the frontend
+                    let payload = serde_json::to_string(&meta).unwrap_or_else(|_| "{}".to_string());
+                    format!("file_discovered:{}", payload)
+                }
                 DhtEvent::DownloadedFile(_) => "file_downloaded".to_string(),
                 DhtEvent::PublishedFile(meta) => format!(
-                    "file_published:{}:{}:{}",
-                    meta.file_hash, meta.file_name, meta.file_size
+                    "file_published:{}:{}:{}", // Use merkle_root as the primary identifier
+                    meta.merkle_root, meta.file_name, meta.file_size
                 ),
                 DhtEvent::FileNotFound(hash) => format!("file_not_found:{}", hash),
                 DhtEvent::Error(err) => format!("error:{}", err),
@@ -1215,84 +1220,196 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
     }
 }
 
+#[derive(Debug, Clone)]
+enum TemperatureMethod {
+    Sysinfo,
+    #[cfg(target_os = "windows")]
+    WindowsWmi,
+    #[cfg(target_os = "linux")]
+    LinuxSensors,
+    #[cfg(target_os = "linux")]
+    LinuxThermalZone(String),
+    #[cfg(target_os = "linux")]
+    LinuxHwmon(String),
+}
+
 #[tauri::command]
-fn get_cpu_temperature() -> Option<f32> {
-    use std::sync::OnceLock;
+async fn get_cpu_temperature() -> Option<f32> {
+    tokio::task::spawn_blocking(move || {
+        use std::sync::OnceLock;
+        use std::time::Instant;
+        use sysinfo::MINIMUM_CPU_UPDATE_INTERVAL;
+        use tracing::info;
 
-    static LAST_UPDATE: OnceLock<std::sync::Mutex<Option<Instant>>> = OnceLock::new();
+        static LAST_UPDATE: OnceLock<std::sync::Mutex<Option<Instant>>> = OnceLock::new();
+        static WORKING_METHOD: OnceLock<std::sync::Mutex<Option<TemperatureMethod>>> = OnceLock::new();
+        static TEMP_HISTORY: OnceLock<std::sync::Mutex<Vec<(Instant, f32)>>> = OnceLock::new();
 
-    let last_update_mutex = LAST_UPDATE.get_or_init(|| std::sync::Mutex::new(None));
+        let last_update_mutex = LAST_UPDATE.get_or_init(|| std::sync::Mutex::new(None));
+        let working_method_mutex = WORKING_METHOD.get_or_init(|| std::sync::Mutex::new(None));
+        let temp_history_mutex = TEMP_HISTORY.get_or_init(|| std::sync::Mutex::new(Vec::new()));
 
-    {
-        let mut last_update = last_update_mutex.lock().unwrap();
-        if let Some(last) = *last_update {
-            if last.elapsed() < MINIMUM_CPU_UPDATE_INTERVAL {
-                return None;
+        {
+            let mut last_update = last_update_mutex.lock().unwrap();
+            if let Some(last) = *last_update {
+                if last.elapsed() < MINIMUM_CPU_UPDATE_INTERVAL {
+                    return None;
+                }
+            }
+            *last_update = Some(Instant::now());
+        }
+
+        // Helper function to add temperature to history and return smoothed value
+        let smooth_temperature = |raw_temp: f32| -> f32 {
+            let now = Instant::now();
+            let mut history = temp_history_mutex.lock().unwrap();
+            
+            // Add current reading
+            history.push((now, raw_temp));
+            
+            // Keep only last 5 readings within 30 seconds
+            history.retain(|(time, _)| now.duration_since(*time).as_secs() < 30);
+            if history.len() > 5 {
+                let excess = history.len() - 5;
+                history.drain(0..excess);
+            }
+            
+            // Return smoothed temperature (weighted average, recent readings have more weight)
+            if history.len() == 1 {
+                raw_temp
+            } else {
+                let total_weight: f32 = (1..=history.len()).map(|i| i as f32).sum();
+                let weighted_sum: f32 = history.iter().enumerate()
+                    .map(|(i, (_, temp))| temp * (i + 1) as f32)
+                    .sum();
+                weighted_sum / total_weight
+            }
+        };
+
+        // Try cached working method first
+        {
+            let working_method = working_method_mutex.lock().unwrap();
+            if let Some(ref method) = *working_method {
+                if let Some(temp) = try_temperature_method(method) {
+                    return Some(smooth_temperature(temp));
+                }
+                // Method stopped working, clear cache
+                drop(working_method);
+                let mut working_method = working_method_mutex.lock().unwrap();
+                *working_method = None;
             }
         }
-        *last_update = Some(Instant::now());
-    }
 
-    // Try sysinfo first (works on some platforms including M1 macs and some Windows)
-    let mut sys = System::new_all();
-    sys.refresh_cpu_all();
-    let components = Components::new_with_refreshed_list();
+        // Try all methods to find one that works and cache it
+        let methods_to_try = vec![
+            TemperatureMethod::Sysinfo,
+            #[cfg(target_os = "windows")]
+            TemperatureMethod::WindowsWmi,
+            #[cfg(target_os = "linux")]
+            TemperatureMethod::LinuxSensors,
+        ];
 
-    let mut core_count = 0;
+        for method in methods_to_try {
+            if let Some(temp) = try_temperature_method(&method) {
+                // Cache the working method
+                let mut working_method = working_method_mutex.lock().unwrap();
+                *working_method = Some(method.clone());
+                return Some(smooth_temperature(temp));
+            }
+        }
 
-    let sum: f32 = components
-        .iter()
-        .filter(|c| {
-            let label = c.label().to_lowercase();
-            label.contains("cpu")
-                || label.contains("package")
-                || label.contains("tdie")
-                || label.contains("core")
-                || label.contains("thermal")
-        })
-        .map(|c| {
-            core_count += 1;
-            c.temperature()
-        })
-        .sum();
-    if core_count > 0 {
-        return Some(sum / core_count as f32);
-    }
+        // Try more Linux methods if the basic ones failed
+        #[cfg(target_os = "linux")]
+        {
+            if let Some((temp, method)) = get_linux_temperature_advanced() {
+                let mut working_method = working_method_mutex.lock().unwrap();
+                *working_method = Some(method);
+                return Some(smooth_temperature(temp));
+            }
+        }
 
-    // Windows-specific temperature detection methods
-    #[cfg(target_os = "windows")]
-    {
-        if let Some(temp) = get_windows_temperature() {
-            return Some(temp);
+        // Final fallback: return None when sensors are unavailable
+        // Only log the info message once to avoid spamming logs
+        static SENSOR_WARNING_LOGGED: OnceLock<()> = OnceLock::new();
+        
+        SENSOR_WARNING_LOGGED.get_or_init(|| {
+            info!("Hardware temperature sensors not accessible on this system. Temperature monitoring disabled.");
+        });
+
+        None
+    })
+    .await // 2. Await the result of the blocking task
+    .unwrap_or(None)
+}
+
+fn try_temperature_method(method: &TemperatureMethod) -> Option<f32> {
+    match method {
+        TemperatureMethod::Sysinfo => {
+            let mut sys = System::new_all();
+            sys.refresh_cpu_all();
+            let components = Components::new_with_refreshed_list();
+
+            let mut core_count = 0;
+            let sum: f32 = components
+                .iter()
+                .filter(|c| {
+                    let label = c.label().to_lowercase();
+                    label.contains("cpu")
+                        || label.contains("package")
+                        || label.contains("tdie")
+                        || label.contains("core")
+                        || label.contains("thermal")
+                })
+                .map(|c| {
+                    core_count += 1;
+                    c.temperature()
+                })
+                .sum();
+            
+            if core_count > 0 {
+                let avg_temp = sum / core_count as f32;
+                if avg_temp > 0.0 && avg_temp < 150.0 {
+                    return Some(avg_temp);
+                }
+            }
+            None
+        }
+        #[cfg(target_os = "windows")]
+        TemperatureMethod::WindowsWmi => get_windows_temperature(),
+        #[cfg(target_os = "linux")]
+        TemperatureMethod::LinuxSensors => get_linux_sensors_temperature(),
+        #[cfg(target_os = "linux")]
+        TemperatureMethod::LinuxThermalZone(path) => {
+            if let Ok(temp_str) = std::fs::read_to_string(path) {
+                if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
+                    let temp_celsius = temp_millidegrees as f32 / 1000.0;
+                    if temp_celsius > 0.0 && temp_celsius < 150.0 {
+                        return Some(temp_celsius);
+                    }
+                }
+            }
+            None
+        }
+        #[cfg(target_os = "linux")]
+        TemperatureMethod::LinuxHwmon(path) => {
+            if let Ok(temp_str) = std::fs::read_to_string(path) {
+                if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
+                    let temp_celsius = temp_millidegrees as f32 / 1000.0;
+                    if temp_celsius > 0.0 && temp_celsius < 150.0 {
+                        return Some(temp_celsius);
+                    }
+                }
+            }
+            None
         }
     }
-
-    // Linux-specific temperature detection methods
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(temp) = get_linux_temperature() {
-            return Some(temp);
-        }
-    }
-
-    // Final fallback: return None when sensors are unavailable
-    // Only log the info message once to avoid spamming logs
-    static SENSOR_WARNING_LOGGED: OnceLock<()> = OnceLock::new();
-    
-    SENSOR_WARNING_LOGGED.get_or_init(|| {
-        info!("Hardware temperature sensors not accessible on this system. Temperature monitoring disabled.");
-    });
-
-    None
 }
 
 
 
 #[cfg(target_os = "linux")]
-fn get_linux_temperature() -> Option<f32> {
-    use std::fs;
-
-    // Method 1: Try sensors command first (most reliable and matches user expectations)
+fn get_linux_sensors_temperature() -> Option<f32> {
+    // Try sensors command (most reliable and matches user expectations)
     if let Ok(output) = std::process::Command::new("sensors")
         .arg("-u") // Raw output
         .output()
@@ -1343,7 +1460,14 @@ fn get_linux_temperature() -> Option<f32> {
         }
     }
 
-    // Method 2: Try thermal zones (fallback)
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn get_linux_temperature_advanced() -> Option<(f32, TemperatureMethod)> {
+    use std::fs;
+
+    // Method 1: Try thermal zones (prioritize x86_pkg_temp)
     // Look for CPU thermal zones in /sys/class/thermal/
     // Prioritize x86_pkg_temp as it's usually the most accurate for CPU package temperature
     for i in 0..20 {
@@ -1356,7 +1480,7 @@ fn get_linux_temperature() -> Option<f32> {
                     if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
                         let temp_celsius = temp_millidegrees as f32 / 1000.0;
                         if temp_celsius > 0.0 && temp_celsius < 150.0 {
-                            return Some(temp_celsius);
+                            return Some((temp_celsius, TemperatureMethod::LinuxThermalZone(thermal_path)));
                         }
                     }
                 }
@@ -1378,7 +1502,7 @@ fn get_linux_temperature() -> Option<f32> {
                     if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
                         let temp_celsius = temp_millidegrees as f32 / 1000.0;
                         if temp_celsius > 0.0 && temp_celsius < 150.0 {
-                            return Some(temp_celsius);
+                            return Some((temp_celsius, TemperatureMethod::LinuxThermalZone(thermal_path)));
                         }
                     }
                 }
@@ -1386,7 +1510,7 @@ fn get_linux_temperature() -> Option<f32> {
         }
     }
 
-    // Method 3: Try hwmon (hardware monitoring) interfaces
+    // Method 2: Try hwmon (hardware monitoring) interfaces
     // Look for CPU temperature sensors in /sys/class/hwmon/
     for i in 0..10 {
         let hwmon_dir = format!("/sys/class/hwmon/hwmon{}", i);
@@ -1407,7 +1531,7 @@ fn get_linux_temperature() -> Option<f32> {
                         if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
                             let temp_celsius = temp_millidegrees as f32 / 1000.0;
                             if temp_celsius > 0.0 && temp_celsius < 150.0 {
-                                return Some(temp_celsius);
+                                return Some((temp_celsius, TemperatureMethod::LinuxHwmon(temp_path)));
                             }
                         }
                     }
@@ -1416,7 +1540,7 @@ fn get_linux_temperature() -> Option<f32> {
         }
     }
 
-    // Method 4: Try reading from specific CPU temperature files
+    // Method 3: Try reading from specific CPU temperature files using glob patterns
     let cpu_temp_paths = [
         "/sys/devices/platform/coretemp.0/hwmon/hwmon*/temp1_input",
         "/sys/devices/platform/coretemp.0/temp1_input",
@@ -1432,7 +1556,8 @@ fn get_linux_temperature() -> Option<f32> {
                         if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
                             let temp_celsius = temp_millidegrees as f32 / 1000.0;
                             if temp_celsius > 0.0 && temp_celsius < 150.0 {
-                                return Some(temp_celsius);
+                                let path_str = path.to_string_lossy().to_string();
+                                return Some((temp_celsius, TemperatureMethod::LinuxHwmon(path_str)));
                             }
                         }
                     }
@@ -1450,26 +1575,85 @@ fn get_windows_temperature() -> Option<f32> {
     
     static LAST_LOG_STATE: OnceLock<std::sync::Mutex<bool>> = OnceLock::new();
     
-    // Try the fastest method - HighPrecisionTemperature from WMI via PowerShell
+    // Try multiple WMI methods for better compatibility
+    
+    // Method 1: Try HighPrecisionTemperature (newer Windows versions)
     if let Ok(output) = Command::new("powershell")
         .args([
             "-Command",
-            "Get-WmiObject -Query \"SELECT HighPrecisionTemperature FROM Win32_PerfRawData_Counters_ThermalZoneInformation\" | Select-Object -First 1 -ExpandProperty HighPrecisionTemperature"
+            "try { Get-WmiObject -Query \"SELECT HighPrecisionTemperature FROM Win32_PerfRawData_Counters_ThermalZoneInformation\" -ErrorAction Stop | Select-Object -First 1 -ExpandProperty HighPrecisionTemperature } catch { $null }"
         ])
         .output()
     {
         if let Ok(output_str) = String::from_utf8(output.stdout) {
-            if let Ok(temp_tenths_kelvin) = output_str.trim().parse::<f32>() {
-                let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
-                if temp_celsius > 0.0 && temp_celsius < 150.0 {
-                    // Log success only once
-                    let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
-                    let mut logged = log_state.lock().unwrap();
-                    if !*logged {
-                        info!("✅ Temperature sensor detected via WMI: {:.1}°C", temp_celsius);
-                        *logged = true;
+            let trimmed = output_str.trim();
+            if !trimmed.is_empty() && trimmed != "null" {
+                if let Ok(temp_tenths_kelvin) = trimmed.parse::<f32>() {
+                    let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
+                    if temp_celsius > 0.0 && temp_celsius < 150.0 {
+                        // Log success only once
+                        let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
+                        let mut logged = log_state.lock().unwrap();
+                        if !*logged {
+                            info!("✅ Temperature sensor detected via WMI HighPrecision: {:.1}°C", temp_celsius);
+                            *logged = true;
+                        }
+                        return Some(temp_celsius);
                     }
-                    return Some(temp_celsius);
+                }
+            }
+        }
+    }
+    
+    // Method 2: Try CurrentTemperature (older Windows versions)
+    if let Ok(output) = Command::new("powershell")
+        .args([
+            "-Command",
+            "try { Get-WmiObject -Query \"SELECT CurrentTemperature FROM Win32_TemperatureProbe\" -ErrorAction Stop | Select-Object -First 1 -ExpandProperty CurrentTemperature } catch { $null }"
+        ])
+        .output()
+    {
+        if let Ok(output_str) = String::from_utf8(output.stdout) {
+            let trimmed = output_str.trim();
+            if !trimmed.is_empty() && trimmed != "null" {
+                if let Ok(temp_tenths_kelvin) = trimmed.parse::<f32>() {
+                    let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
+                    if temp_celsius > 0.0 && temp_celsius < 150.0 {
+                        let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
+                        let mut logged = log_state.lock().unwrap();
+                        if !*logged {
+                            info!("✅ Temperature sensor detected via WMI CurrentTemperature: {:.1}°C", temp_celsius);
+                            *logged = true;
+                        }
+                        return Some(temp_celsius);
+                    }
+                }
+            }
+        }
+    }
+
+    // Method 3: Try MSAcpi_ThermalZoneTemperature (alternative approach)
+    if let Ok(output) = Command::new("powershell")
+        .args([
+            "-Command",
+            "try { Get-WmiObject -Namespace \"root\\wmi\" -Query \"SELECT CurrentTemperature FROM MSAcpi_ThermalZoneTemperature\" -ErrorAction Stop | Select-Object -First 1 -ExpandProperty CurrentTemperature } catch { $null }"
+        ])
+        .output()
+    {
+        if let Ok(output_str) = String::from_utf8(output.stdout) {
+            let trimmed = output_str.trim();
+            if !trimmed.is_empty() && trimmed != "null" {
+                if let Ok(temp_tenths_kelvin) = trimmed.parse::<f32>() {
+                    let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
+                    if temp_celsius > 0.0 && temp_celsius < 150.0 {
+                        let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
+                        let mut logged = log_state.lock().unwrap();
+                        if !*logged {
+                            info!("✅ Temperature sensor detected via MSAcpi: {:.1}°C", temp_celsius);
+                            *logged = true;
+                        }
+                        return Some(temp_celsius);
+                    }
                 }
             }
         }
@@ -1635,7 +1819,7 @@ async fn download_file_from_network(
                     if metadata.seeders.is_empty() {
                         return Err(format!(
                             "No seeders available for file: {} ({})",
-                            metadata.file_name, metadata.file_hash
+                            metadata.file_name, metadata.merkle_root
                         ));
                     }
 
@@ -1689,8 +1873,8 @@ async fn download_file_from_network(
 
                                 // Send WebRTC offer via DHT signaling
                                 let offer_request = dht::WebRTCOfferRequest {
-                                    offer_sdp: offer,
-                                    file_hash: metadata.file_hash.clone(),
+                                    offer_sdp: offer, // The Merkle root is now the primary file hash
+                                    file_hash: metadata.merkle_root.clone(),
                                     requester_peer_id: dht_service.get_peer_id().await,
                                 };
 
@@ -1730,7 +1914,7 @@ async fn download_file_from_network(
 
                                                         // Send file request over WebRTC data channel
                                                         let file_request = crate::webrtc_service::WebRTCFileRequest {
-                                                            file_hash: metadata.file_hash.clone(),
+                                                            file_hash: metadata.merkle_root.clone(),
                                                             file_name: metadata.file_name.clone(),
                                                             file_size: metadata.file_size,
                                                             requester_peer_id: dht_service.get_peer_id().await,
@@ -1995,7 +2179,7 @@ async fn upload_file_chunk(
             .as_secs();
 
         let metadata = dht::FileMetadata {
-            file_hash: root_cid.to_string(), // Use root CID for retrieval
+            merkle_root: merkle_root, // Store Merkle root for verification
             file_name: session.file_name.clone(),
             file_size: session.file_size,
             file_data: vec![], // Empty - data is stored in Bitswap blocks
@@ -2005,10 +2189,9 @@ async fn upload_file_chunk(
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
-            merkle_root: Some(merkle_root), // Store Merkle root for verification
             parent_hash: None,
             version: Some(1),
-            cids: None, // CIDs are stored in the root block, not in metadata
+            cids: Some(vec![root_cid.clone()]), // The root CID for retrieval
             is_root: true,
         };
 
@@ -3699,8 +3882,10 @@ async fn encrypt_file_for_recipient(
         let manifest = manager.chunk_and_encrypt_file(Path::new(&file_path), &recipient_pk)?;
 
         // Serialize the key bundle to a JSON string so it can be sent to the frontend easily.
-        let bundle_json =
-            serde_json::to_string(&manifest.encrypted_key_bundle).map_err(|e| e.to_string())?;
+        let bundle_json = match manifest.encrypted_key_bundle {
+            Some(bundle) => serde_json::to_string(&bundle).map_err(|e| e.to_string())?,
+            None => return Err("No encryption key bundle generated".to_string()),
+        };
 
         Ok(FileManifestForJs {
             merkle_root: manifest.merkle_root,
@@ -3765,7 +3950,7 @@ async fn upload_and_publish_file(
 
     // 4. Publish to DHT with versioning support
     let dht = {
-        let dht_guard = state.dht.lock().await;
+        let dht_guard = state.dht.lock().await; // Use the Merkle root as the file hash
         dht_guard.as_ref().cloned()
     };
 
@@ -3774,24 +3959,40 @@ async fn upload_and_publish_file(
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-
+        
         // Use prepare_versioned_metadata to handle version incrementing and parent_hash
         let mime_type = detect_mime_type_from_filename(&file_name).unwrap_or_else(|| "application/octet-stream".to_string());
         let metadata = dht
             .prepare_versioned_metadata(
-                manifest.merkle_root.clone(),
+                manifest.merkle_root.clone(), // This is the Merkle root
                 file_name.clone(),
                 file_size,
                 vec![], // Empty - chunks already stored
                 created_at,
                 Some(mime_type),
                 true, // is_encrypted
-                Some("AES-256-GCM".to_string()),
-                None, // key_fingerprint
+                Some("AES-256-GCM".to_string()), // Encryption method
+                None, // key_fingerprint (deprecated)
             )
             .await?;
 
         let version = metadata.version.unwrap_or(1);
+        
+        // Store file data locally for seeding (CRITICAL FIX)
+        let ft = {
+            let ft_guard = state.file_transfer.lock().await;
+            ft_guard.as_ref().cloned()
+        };
+        if let Some(ft) = ft {
+            // Read the original file data to store locally
+            let file_data = tokio::fs::read(&file_path)
+                .await
+                .map_err(|e| format!("Failed to read file for local storage: {}", e))?;
+            
+            ft.store_file_data(manifest.merkle_root.clone(), file_name.clone(), file_data)
+                .await; // Store with Merkle root as key
+        }
+        
         dht.publish_file(metadata).await?;
         version
     } else {
@@ -3859,7 +4060,7 @@ async fn decrypt_and_reassemble_file(
         manager.reassemble_and_decrypt_file(
             &chunks,
             Path::new(&output_path_clone),
-            &encrypted_key_bundle,
+            &Some(encrypted_key_bundle),
             &secret_key, // Pass the secret key
         )
     })
