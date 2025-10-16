@@ -3684,17 +3684,27 @@ impl DhtService {
         &self,
         file_name: String,
     ) -> Result<Vec<FileMetadata>, String> {
+        info!("🔍 Backend: Starting search for file versions with name: {}", file_name);
+        
         let all = self.get_all_file_metadata().await?;
+        info!("📁 Backend: Retrieved {} total files from cache", all.len());
+        
         let mut versions: Vec<FileMetadata> = all
             .into_iter()
             .filter(|m| m.file_name == file_name) // Remove is_root filter - get all versions
             .collect();
+        
+        info!("🎯 Backend: Found {} versions matching name '{}'", versions.len(), file_name);
+        
         versions.sort_by(|a, b| b.version.unwrap_or(1).cmp(&a.version.unwrap_or(1)));
-        // For each version, try to find seeders (peers that have this file)
+        
+        // Clear seeders to avoid network calls during search
+        // The seeders will be populated when the user actually tries to download
         for version in &mut versions {
-            version.seeders = self.get_seeders_for_file(&version.merkle_root).await;
+            version.seeders = vec![]; // Clear seeders to prevent network calls
         }
-
+        
+        info!("✅ Backend: Returning {} versions for '{}' (seeders cleared)", versions.len(), file_name);
         Ok(versions)
     }
 
