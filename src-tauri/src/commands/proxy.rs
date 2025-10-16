@@ -209,14 +209,16 @@ pub(crate) async fn enable_privacy_routing(
         return Err("No proxy addresses provided".into());
     }
 
-    // Store the proxy addresses for routing
+    // Store the proxy addresses for routing and normalize to multiaddrs
+    let mut normalized_proxies: Vec<String> = Vec::new();
     {
         let mut privacy_proxies = state.privacy_proxies.lock().await;
         privacy_proxies.clear();
         for addr in &proxy_addresses {
             match normalize_to_multiaddr(addr) {
                 Ok(multiaddr) => {
-                    privacy_proxies.push(multiaddr);
+                    privacy_proxies.push(multiaddr.clone());
+                    normalized_proxies.push(multiaddr);
                     info!("Added proxy for privacy routing: {}", addr);
                 }
                 Err(e) => {
@@ -226,14 +228,20 @@ pub(crate) async fn enable_privacy_routing(
         }
     }
 
+    if normalized_proxies.is_empty() {
+        return Err("No valid proxy addresses provided".into());
+    }
+
     // Enable privacy routing in DHT service
     if let Some(dht) = state.dht.lock().await.as_ref() {
+        dht.update_privacy_proxy_targets(normalized_proxies.clone())
+            .await?;
         dht.enable_privacy_routing(privacy_mode).await?;
     } else {
         return Err("DHT not initialized".into());
     }
 
-    let _ = app.emit("privacy_routing_enabled", proxy_addresses.len());
+    let _ = app.emit("privacy_routing_enabled", normalized_proxies.len());
     Ok(())
 }
 
@@ -252,6 +260,7 @@ pub(crate) async fn disable_privacy_routing(
 
     // Disable privacy routing in DHT service
     if let Some(dht) = state.dht.lock().await.as_ref() {
+        dht.update_privacy_proxy_targets(Vec::new()).await?;
         dht.disable_privacy_routing().await?;
     } else {
         return Err("DHT not initialized".into());
