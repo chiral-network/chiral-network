@@ -87,7 +87,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 - ✅ **End-to-End Encryption**: AES-256-GCM encryption with PBKDF2 key derivation (can be enabled in Settings)
 - ✅ **Wallet Security**: Secure credential management with HD wallets
 - ✅ **Stream Authentication**: HMAC-based cryptographic verification of data integrity during file transfers
-- ❌ **Anonymous Routing**: Hide your IP from other peers (no IP hiding or anonymization implemented)
+- ✅ **Anonymous Routing**: Tunnel traffic through trusted relays/SOCKS5 proxies when anonymous mode is enabled so your IP stays hidden
 - ✅ **No Commercial Tracking**: No marketplace means no transaction tracking
 
 ### 7. Mining & Network Security
@@ -104,7 +104,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 - ✅ **Storage Management**: Configure storage location and limits
 - ✅ **Network Configuration**: Set bandwidth limits and connection parameters
 - ✅ **Advanced Bandwidth Scheduling**: Set different bandwidth limits for specific times and days
-- ✅ **Privacy Controls**: Mandatory encryption, proxy support, and anonymous mode (anonymous mode not implemented)
+- ✅ **Privacy Controls**: Mandatory encryption, proxy support, and anonymous mode with safety defaults when hiding your IP
 - ✅ **Notification Preferences**: Customize alerts and notifications
 - ✅ **Advanced Options**: Fine-tune DHT, chunk size, and cache settings (configurable through UI)
 - ✅ **Import/Export**: Backup and restore settings

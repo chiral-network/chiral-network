@@ -23,14 +23,14 @@ mod stream_auth;
 mod webrtc_service;
 use std::sync::Mutex as StdMutex;
 
+use crate::commands::auth::{
+    cleanup_expired_proxy_auth_tokens, generate_proxy_auth_token, revoke_proxy_auth_token,
+    validate_proxy_auth_token,
+};
 use crate::commands::bootstrap::get_bootstrap_nodes_command;
 use crate::commands::proxy::{
-    disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect,
-    proxy_disconnect, proxy_echo, proxy_remove, ProxyNode,
-};
-use crate::commands::auth::{
-    generate_proxy_auth_token, validate_proxy_auth_token, revoke_proxy_auth_token,
-    cleanup_expired_proxy_auth_tokens,
+    disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
+    proxy_echo, proxy_remove, ProxyNode,
 };
 use chiral_network::stream_auth::{
     AuthMessage, HmacKeyExchangeConfirmation, HmacKeyExchangeRequest, HmacKeyExchangeResponse,
@@ -72,16 +72,13 @@ use tracing::{error, info, warn};
 use webrtc_service::{WebRTCFileRequest, WebRTCService};
 
 use crate::manager::ChunkManager; // Import the ChunkManager
-// For key encoding
+                                  // For key encoding
 use blockstore::block::Block;
 use x25519_dalek::{PublicKey, StaticSecret}; // For key handling
 
 /// Detect MIME type from file extension
 fn detect_mime_type_from_filename(filename: &str) -> Option<String> {
-    let extension = filename
-        .rsplit('.')
-        .next()?
-        .to_lowercase();
+    let extension = filename.rsplit('.').next()?.to_lowercase();
 
     match extension.as_str() {
         // Images
@@ -113,11 +110,17 @@ fn detect_mime_type_from_filename(filename: &str) -> Option<String> {
         // Documents
         "pdf" => Some("application/pdf".to_string()),
         "doc" => Some("application/msword".to_string()),
-        "docx" => Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document".to_string()),
+        "docx" => Some(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document".to_string(),
+        ),
         "xls" => Some("application/vnd.ms-excel".to_string()),
-        "xlsx" => Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string()),
+        "xlsx" => {
+            Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string())
+        }
         "ppt" => Some("application/vnd.ms-powerpoint".to_string()),
-        "pptx" => Some("application/vnd.openxmlformats-officedocument.presentationml.presentation".to_string()),
+        "pptx" => Some(
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation".to_string(),
+        ),
         "txt" => Some("text/plain".to_string()),
         "rtf" => Some("application/rtf".to_string()),
 
@@ -1274,17 +1277,17 @@ async fn get_cpu_temperature() -> Option<f32> {
         let smooth_temperature = |raw_temp: f32| -> f32 {
             let now = Instant::now();
             let mut history = temp_history_mutex.lock().unwrap();
-            
+
             // Add current reading
             history.push((now, raw_temp));
-            
+
             // Keep only last 5 readings within 30 seconds
             history.retain(|(time, _)| now.duration_since(*time).as_secs() < 30);
             if history.len() > 5 {
                 let excess = history.len() - 5;
                 history.drain(0..excess);
             }
-            
+
             // Return smoothed temperature (weighted average, recent readings have more weight)
             if history.len() == 1 {
                 raw_temp
@@ -1342,7 +1345,7 @@ async fn get_cpu_temperature() -> Option<f32> {
         // Final fallback: return None when sensors are unavailable
         // Only log the info message once to avoid spamming logs
         static SENSOR_WARNING_LOGGED: OnceLock<()> = OnceLock::new();
-        
+
         SENSOR_WARNING_LOGGED.get_or_init(|| {
             info!("Hardware temperature sensors not accessible on this system. Temperature monitoring disabled.");
         });
@@ -1376,7 +1379,7 @@ fn try_temperature_method(method: &TemperatureMethod) -> Option<f32> {
                     c.temperature()
                 })
                 .sum();
-            
+
             if core_count > 0 {
                 let avg_temp = sum / core_count as f32;
                 if avg_temp > 0.0 && avg_temp < 150.0 {
@@ -1415,8 +1418,6 @@ fn try_temperature_method(method: &TemperatureMethod) -> Option<f32> {
         }
     }
 }
-
-
 
 #[cfg(target_os = "linux")]
 fn get_linux_sensors_temperature() -> Option<f32> {
@@ -1491,7 +1492,10 @@ fn get_linux_temperature_advanced() -> Option<(f32, TemperatureMethod)> {
                     if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
                         let temp_celsius = temp_millidegrees as f32 / 1000.0;
                         if temp_celsius > 0.0 && temp_celsius < 150.0 {
-                            return Some((temp_celsius, TemperatureMethod::LinuxThermalZone(thermal_path)));
+                            return Some((
+                                temp_celsius,
+                                TemperatureMethod::LinuxThermalZone(thermal_path),
+                            ));
                         }
                     }
                 }
@@ -1513,7 +1517,10 @@ fn get_linux_temperature_advanced() -> Option<(f32, TemperatureMethod)> {
                     if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
                         let temp_celsius = temp_millidegrees as f32 / 1000.0;
                         if temp_celsius > 0.0 && temp_celsius < 150.0 {
-                            return Some((temp_celsius, TemperatureMethod::LinuxThermalZone(thermal_path)));
+                            return Some((
+                                temp_celsius,
+                                TemperatureMethod::LinuxThermalZone(thermal_path),
+                            ));
                         }
                     }
                 }
@@ -1542,7 +1549,10 @@ fn get_linux_temperature_advanced() -> Option<(f32, TemperatureMethod)> {
                         if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
                             let temp_celsius = temp_millidegrees as f32 / 1000.0;
                             if temp_celsius > 0.0 && temp_celsius < 150.0 {
-                                return Some((temp_celsius, TemperatureMethod::LinuxHwmon(temp_path)));
+                                return Some((
+                                    temp_celsius,
+                                    TemperatureMethod::LinuxHwmon(temp_path),
+                                ));
                             }
                         }
                     }
@@ -1568,7 +1578,10 @@ fn get_linux_temperature_advanced() -> Option<(f32, TemperatureMethod)> {
                             let temp_celsius = temp_millidegrees as f32 / 1000.0;
                             if temp_celsius > 0.0 && temp_celsius < 150.0 {
                                 let path_str = path.to_string_lossy().to_string();
-                                return Some((temp_celsius, TemperatureMethod::LinuxHwmon(path_str)));
+                                return Some((
+                                    temp_celsius,
+                                    TemperatureMethod::LinuxHwmon(path_str),
+                                ));
                             }
                         }
                     }
@@ -1583,11 +1596,11 @@ fn get_linux_temperature_advanced() -> Option<(f32, TemperatureMethod)> {
 #[cfg(target_os = "windows")]
 fn get_windows_temperature() -> Option<f32> {
     use std::sync::OnceLock;
-    
+
     static LAST_LOG_STATE: OnceLock<std::sync::Mutex<bool>> = OnceLock::new();
-    
+
     // Try multiple WMI methods for better compatibility
-    
+
     // Method 1: Try HighPrecisionTemperature (newer Windows versions)
     if let Ok(output) = Command::new("powershell")
         .args([
@@ -1615,7 +1628,7 @@ fn get_windows_temperature() -> Option<f32> {
             }
         }
     }
-    
+
     // Method 2: Try CurrentTemperature (older Windows versions)
     if let Ok(output) = Command::new("powershell")
         .args([
@@ -1669,7 +1682,7 @@ fn get_windows_temperature() -> Option<f32> {
             }
         }
     }
-    
+
     // Log only once when no sensor is found
     let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
     let mut logged = log_state.lock().unwrap();
@@ -1677,7 +1690,7 @@ fn get_windows_temperature() -> Option<f32> {
         info!("⚠️ No WMI temperature sensors detected. Temperature monitoring disabled.");
         *logged = true;
     }
-    
+
     None
 }
 
@@ -2460,7 +2473,9 @@ async fn update_proxy_latency(
     };
 
     if let Some(multi_source_service) = ms {
-        multi_source_service.update_proxy_latency(proxy_id, latency_ms).await;
+        multi_source_service
+            .update_proxy_latency(proxy_id, latency_ms)
+            .await;
         Ok(())
     } else {
         Err("Multi-source download service not available for proxy latency update".to_string())
@@ -3120,7 +3135,7 @@ async fn select_peers_with_strategy(
         .into_iter()
         .filter(|peer| !blacklisted_peers.contains(peer))
         .collect();
-    
+
     let dht_guard = state.dht.lock().await;
     if let Some(ref dht) = *dht_guard {
         Ok(dht
@@ -3970,9 +3985,10 @@ async fn upload_and_publish_file(
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         // Use prepare_versioned_metadata to handle version incrementing and parent_hash
-        let mime_type = detect_mime_type_from_filename(&file_name).unwrap_or_else(|| "application/octet-stream".to_string());
+        let mime_type = detect_mime_type_from_filename(&file_name)
+            .unwrap_or_else(|| "application/octet-stream".to_string());
         let metadata = dht
             .prepare_versioned_metadata(
                 manifest.merkle_root.clone(), // This is the Merkle root
@@ -3981,14 +3997,14 @@ async fn upload_and_publish_file(
                 vec![], // Empty - chunks already stored
                 created_at,
                 Some(mime_type),
-                true, // is_encrypted
+                true,                            // is_encrypted
                 Some("AES-256-GCM".to_string()), // Encryption method
-                None, // key_fingerprint (deprecated)
+                None,                            // key_fingerprint (deprecated)
             )
             .await?;
 
         let version = metadata.version.unwrap_or(1);
-        
+
         // Store file data locally for seeding (CRITICAL FIX)
         let ft = {
             let ft_guard = state.file_transfer.lock().await;
@@ -3999,11 +4015,11 @@ async fn upload_and_publish_file(
             let file_data = tokio::fs::read(&file_path)
                 .await
                 .map_err(|e| format!("Failed to read file for local storage: {}", e))?;
-            
+
             ft.store_file_data(manifest.merkle_root.clone(), file_name.clone(), file_data)
                 .await; // Store with Merkle root as key
         }
-        
+
         dht.publish_file(metadata).await?;
         version
     } else {
@@ -4090,7 +4106,7 @@ async fn get_file_data(state: State<'_, AppState>, file_hash: String) -> Result<
             .get_file_data(&file_hash)
             .await
             .ok_or("File not found".to_string())?;
-        use base64::{Engine as _, engine::general_purpose};
+        use base64::{engine::general_purpose, Engine as _};
         Ok(general_purpose::STANDARD.encode(&data))
     } else {
         Err("File transfer service not running".to_string())

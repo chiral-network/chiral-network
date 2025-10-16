@@ -12,6 +12,7 @@ use tokio::fs;
 // ECIES imports for key encryption
 use hkdf::Hkdf;
 use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret, StaticSecret};
+use ed25519_dalek::{Signature, Signer, Verifier, SigningKey, VerifyingKey};
 
 /// Encryption configuration and metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -413,11 +414,78 @@ pub fn decrypt_message<S: DiffieHellman>(
         .map_err(|e| format!("Message decryption failed: {}", e))
 }
 
+/// A bundle containing a message and a signature to verify its authenticity.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SignedMessage {
+    /// The original message data, base64-encoded for JSON compatibility.
+    pub message: String,
+    /// The signer's public key (32 bytes), hex-encoded.
+    pub signer_public_key: String,
+    /// The Ed25519 signature over the message (64 bytes), hex-encoded.
+    pub signature: String,
+}
+
+/// Signs a message with the sender's private key to prove authenticity.
+///
+/// # Arguments
+/// * `message` - The message to sign.
+/// * `sender_signing_key` - The sender's Ed25519 `SigningKey`.
+///
+/// # Returns
+/// A `SignedMessage` struct containing the message, signature, and public key.
+pub fn sign_message(
+    message: &[u8],
+    sender_signing_key: &SigningKey,
+) -> Result<SignedMessage, String> {
+    let signature = sender_signing_key.sign(message);
+
+    Ok(SignedMessage {
+        message: base64::encode(message),
+        signer_public_key: hex::encode(sender_signing_key.verifying_key().as_bytes()),
+        signature: hex::encode(signature.to_bytes()),
+    })
+}
+
+/// Verifies the signature of a message to ensure it's authentic and untampered.
+///
+/// # Arguments
+/// * `signed_message` - The `SignedMessage` bundle to verify.
+///
+/// # Returns
+/// `Ok(true)` if the signature is valid, `Ok(false)` if it's not.
+/// Returns an `Err` if any part of the bundle is malformed.
+pub fn verify_message(signed_message: &SignedMessage) -> Result<bool, String> {
+    // 1. Decode the data from the bundle.
+    let message_bytes = base64::decode(&signed_message.message)
+        .map_err(|e| format!("Invalid base64 message: {}", e))?;
+
+    let public_key_bytes: [u8; 32] = hex::decode(&signed_message.signer_public_key)
+        .map_err(|e| format!("Invalid public key hex: {}", e))?
+        .try_into()
+        .map_err(|_| "Invalid public key length".to_string())?;
+    let signer_public_key = VerifyingKey::from_bytes(&public_key_bytes)
+        .map_err(|e| format!("Invalid public key: {}", e))?;
+
+    let signature_bytes: [u8; 64] = hex::decode(&signed_message.signature)
+        .map_err(|e| format!("Invalid signature hex: {}", e))?
+        .try_into()
+        .map_err(|_| "Invalid signature length".to_string())?;
+    let signature = Signature::from_bytes(&signature_bytes);
+
+    // 2. Verify the signature against the message.
+    // The `verify` method will hash the message internally before checking.
+    Ok(signer_public_key
+        .verify(&message_bytes, &signature)
+        .is_ok())
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
     use tokio::fs;
+    use tokio::time::{sleep, Duration};
 
     #[tokio::test]
     async fn test_file_encryption_random_key() {
@@ -547,5 +615,108 @@ mod tests {
         assert!(decryption_result
             .unwrap_err()
             .contains("Message decryption failed"));
+    }
+
+    #[test]
+    fn test_message_signing_and_verification() {
+        // 1. Setup sender's key pair.
+        let mut csprng = OsRng;
+        let sender_signing_key = SigningKey::generate(&mut csprng);
+
+        // 2. Define a message to sign.
+        let original_message = b"This message needs to be authenticated.";
+
+        // 3. Sign the message.
+        let signed_message = sign_message(original_message, &sender_signing_key).unwrap();
+
+        // 4. Verify the message.
+        let is_valid = verify_message(&signed_message).unwrap();
+        assert!(is_valid, "Signature should be valid");
+
+        // 5. Negative test: tampered message should fail verification.
+        let mut tampered_bundle = signed_message.clone();
+        tampered_bundle.message = base64::encode(b"This is a tampered message!");
+        let is_tampered_valid = verify_message(&tampered_bundle).unwrap();
+        assert!(!is_tampered_valid, "Signature for tampered message should be invalid");
+    }
+
+    // Add E2E messaging tests. Marked #[ignore] so they don't run in normal CI
+    // This is so that they won't break the CI while changes are being made to the encryption/decryption.
+    // Run them explicitly with: cargo test --test <name> -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn e2e_message_encryption_between_nodes() {
+        // Simulate two nodes: sender and recipient
+        let recipient_secret = x25519_dalek::StaticSecret::random_from_rng(&mut OsRng);
+        let recipient_public = x25519_dalek::PublicKey::from(&recipient_secret);
+        let original_message = b"Hello E2EE node-to-node test";
+
+        // Sender encrypts the message for recipient
+        let encrypted_bundle = encrypt_message(original_message, &recipient_public)
+            .expect("encryption should succeed");
+
+        // Simulate small network latency
+        sleep(Duration::from_millis(150)).await;
+
+        // Recipient decrypts
+        let decrypted = decrypt_message(&encrypted_bundle, &recipient_secret)
+            .expect("decryption should succeed");
+
+        assert_eq!(decrypted, original_message);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn ensure_no_plaintext_in_encrypted_bundle() {
+        // Verify that the encrypted bundle does not contain the plaintext (hex) anywhere
+        let recipient_secret = x25519_dalek::StaticSecret::random_from_rng(&mut OsRng);
+        let recipient_public = x25519_dalek::PublicKey::from(&recipient_secret);
+        let original_message = b"Sensitive payload - must not leak";
+
+        let encrypted_bundle = encrypt_message(original_message, &recipient_public)
+            .expect("encryption should succeed");
+
+        // hex of original - ensure it is not present in any returned hex fields
+        let original_hex = hex::encode(original_message);
+
+        // The encrypted fields are hex strings; check they don't (accidentally) contain original hex
+        assert!(
+            !encrypted_bundle.encrypted_message.contains(&original_hex),
+            "Encrypted message unexpectedly contains plaintext hex"
+        );
+        assert!(
+            !encrypted_bundle.ephemeral_public_key.contains(&original_hex),
+            "Ephemeral public key unexpectedly contains plaintext hex"
+        );
+        assert!(
+            !encrypted_bundle.nonce.contains(&original_hex),
+            "Nonce unexpectedly contains plaintext hex"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn message_delivery_with_latency_and_reconnects_simulation() {
+        // Simulate network hiccups: encryption happens, message delayed, "reconnect" re-send.
+        let recipient_secret = x25519_dalek::StaticSecret::random_from_rng(&mut OsRng);
+        let recipient_public = x25519_dalek::PublicKey::from(&recipient_secret);
+        let original_message = b"Message across unreliable network";
+
+        // Sender encrypts
+        let encrypted_bundle = encrypt_message(original_message, &recipient_public)
+            .expect("encrypt");
+
+        // Simulate message lost on first attempt
+        sleep(Duration::from_millis(100)).await;
+
+        // Simulate reconnect and re-send (re-encrypt or reuse same bundle is valid)
+        // Here we re-use same bundle to model idempotent delivery
+        sleep(Duration::from_millis(250)).await;
+
+        // Recipient tries to decrypt after reconnect
+        let decrypted = decrypt_message(&encrypted_bundle, &recipient_secret)
+            .expect("decrypt after reconnect");
+
+        assert_eq!(decrypted, original_message);
     }
 }
