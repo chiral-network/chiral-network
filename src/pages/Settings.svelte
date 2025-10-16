@@ -134,6 +134,72 @@
     },
   ];
 
+  type PrivacySnapshot = Pick<
+    AppSettings,
+    "ipPrivacyMode" | "enableProxy" | "proxyAddress" | "disableDirectNatTraversal" | "enableAutorelay"
+  >;
+
+  let anonymousModeRestore: PrivacySnapshot | null = null;
+
+  function capturePrivacySnapshot(): void {
+    if (anonymousModeRestore !== null) {
+      return;
+    }
+    anonymousModeRestore = {
+      ipPrivacyMode: localSettings.ipPrivacyMode,
+      enableProxy: localSettings.enableProxy,
+      proxyAddress: localSettings.proxyAddress,
+      disableDirectNatTraversal: localSettings.disableDirectNatTraversal,
+      enableAutorelay: localSettings.enableAutorelay,
+    };
+  }
+
+  function applyAnonymousDefaults(): void {
+    capturePrivacySnapshot();
+
+    const needsUpdate =
+      localSettings.ipPrivacyMode !== "strict" ||
+      !localSettings.enableProxy ||
+      !localSettings.disableDirectNatTraversal ||
+      !localSettings.enableAutorelay;
+
+    if (!needsUpdate) {
+      return;
+    }
+
+    localSettings = {
+      ...localSettings,
+      ipPrivacyMode: "strict",
+      enableProxy: true,
+      enableAutorelay: true,
+      disableDirectNatTraversal: true,
+    };
+  }
+
+  function restorePrivacySnapshot(): void {
+    if (!anonymousModeRestore) {
+      return;
+    }
+
+    const snapshot = anonymousModeRestore;
+    anonymousModeRestore = null;
+
+    localSettings = {
+      ...localSettings,
+      ipPrivacyMode: snapshot.ipPrivacyMode,
+      enableProxy: snapshot.enableProxy,
+      proxyAddress: snapshot.proxyAddress,
+      disableDirectNatTraversal: snapshot.disableDirectNatTraversal,
+      enableAutorelay: snapshot.enableAutorelay,
+    };
+  }
+
+  $: if (localSettings.anonymousMode) {
+    applyAnonymousDefaults();
+  } else {
+    restorePrivacySnapshot();
+  }
+
   $: privacyStatus = (() => {
     switch (localSettings.ipPrivacyMode) {
       case "prefer":
