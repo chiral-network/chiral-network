@@ -29,6 +29,7 @@ export interface DhtConfig {
   cacheSizeMb?: number;
   enableAutorelay?: boolean;
   preferredRelays?: string[];
+  enableRelayServer?: boolean;
 }
 
 export interface FileMetadata {
@@ -38,6 +39,7 @@ export interface FileMetadata {
   fileData?: Uint8Array | number[];
   seeders: string[];
   createdAt: number;
+  merkleRoot?: string;
   mimeType?: string;
   isEncrypted: boolean;
   encryptionMethod?: string;
@@ -163,6 +165,9 @@ export class DhtService {
       if (config?.preferredRelays && config.preferredRelays.length > 0) {
         payload.preferredRelays = config.preferredRelays;
       }
+      if (typeof config?.enableRelayServer === "boolean") {
+        payload.enableRelayServer = config.enableRelayServer;
+      }
 
       const peerId = await invoke<string>("start_dht_node", payload);
       this.peerId = peerId;
@@ -187,8 +192,6 @@ export class DhtService {
       throw error;
     }
   }
-
-
 
   async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
     try {
