@@ -1,4 +1,5 @@
 use ethers::prelude::*;
+use ethers::types::Signature;
 use rand::rngs::OsRng;
 use secp256k1::{PublicKey, Secp256k1, SecretKey};
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,13 @@ pub struct EthAccount {
     pub address: String,
     pub private_key: String,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EthSignedMessage {
+    pub message: String,
+    pub signature: String,
+}
+
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AccountInfo {
