@@ -3197,7 +3197,7 @@ pub fn build_transport_with_relay(
         t.upgrade(Version::V1Lazy)
             .authenticate(noise_cfg.clone())
             .multiplex(yamux_cfg.clone())
-            .timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(20))
             .map(|(peer, muxer), _| (peer, StreamMuxerBox::new(muxer)))
             .boxed()
     };
@@ -3228,7 +3228,7 @@ pub fn build_transport_with_relay(
         .upgrade(Version::V1Lazy)
         .authenticate(noise_cfg.clone())
         .multiplex(yamux_cfg.clone())
-        .timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(20))
         .map(|(peer, muxer), _| (peer, StreamMuxerBox::new(muxer)))
         .boxed();
 
