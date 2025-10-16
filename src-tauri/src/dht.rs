@@ -527,6 +527,15 @@ pub enum DhtCommand {
         cid: Cid,
         data: Vec<u8>,
     },
+    PutRecord {
+        key: String,
+        value: Vec<u8>,
+        sender: oneshot::Sender<Result<(), String>>,
+    },
+    GetRecord {
+        key: String,
+        sender: oneshot::Sender<Result<Option<Vec<u8>>, String>>,
+    },
         StoreBlocks {
             blocks: Vec<(Cid, Vec<u8>)>, 
             root_cid: Cid,
@@ -1556,6 +1565,10 @@ async fn run_dht_node(
     chunk_size: usize,
     bootstrap_peer_ids: HashSet<PeerId>,
 ) {
+    // Track put/get record query IDs
+    let mut put_record_senders: HashMap<kad::QueryId, oneshot::Sender<Result<(), String>>> = HashMap::new();
+    let mut get_record_senders: HashMap<kad::QueryId, oneshot::Sender<Result<Option<Vec<u8>>, String>>> = HashMap::new();
+    
     // Track peers that support relay (discovered via identify protocol)
     let relay_capable_peers: Arc<Mutex<HashMap<PeerId, Vec<Multiaddr>>>> =
         Arc::new(Mutex::new(HashMap::new()));
@@ -2740,6 +2753,33 @@ async fn run_dht_node(
                             }
                         }
                     }
+                    Some(DhtCommand::PutRecord { key, value, sender }) => {
+                        let record = Record {
+                            key: kad::RecordKey::new(&key),
+                            value,
+                            publisher: Some(peer_id),
+                            expires: None,
+                        };
+                        
+                        match swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One) {
+                            Ok(query_id) => {
+                                info!("Started put_record for key: {}, query id: {:?}", key, query_id);
+                                // Store the sender to respond when the query completes
+                                put_record_senders.insert(query_id, sender);
+                            }
+                            Err(e) => {
+                                error!("Failed to put_record for key {}: {}", key, e);
+                                let _ = sender.send(Err(format!("Failed to put record: {}", e)));
+                            }
+                        }
+                    }
+                    Some(DhtCommand::GetRecord { key, sender }) => {
+                        let record_key = kad::RecordKey::new(&key);
+                        let query_id = swarm.behaviour_mut().kademlia.get_record(record_key);
+                        info!("Started get_record for key: {}, query id: {:?}", key, query_id);
+                        // Store the sender to respond when the query completes
+                        get_record_senders.insert(query_id, sender);
+                    }
                     Some(DhtCommand::RequestFileAccess { .. }) => {
                         todo!();
                     }
@@ -2775,6 +2815,8 @@ async fn run_dht_node(
                             &pending_searches,
                             &pending_provider_queries,
                             &get_providers_queries,
+                            &mut put_record_senders,
+                            &mut get_record_senders,
                             &seeder_heartbeats_cache,
                             &pending_heartbeat_updates,
                             &pending_keyword_indexes,
@@ -3739,6 +3781,8 @@ async fn handle_kademlia_event(
     pending_searches: &Arc<Mutex<HashMap<String, Vec<PendingSearch>>>>,
     pending_provider_queries: &Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
     get_providers_queries: &Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>,
+    put_record_senders: &mut HashMap<kad::QueryId, oneshot::Sender<Result<(), String>>>,
+    get_record_senders: &mut HashMap<kad::QueryId, oneshot::Sender<Result<Option<Vec<u8>>, String>>>,
     seeder_heartbeats_cache: &Arc<Mutex<HashMap<String, FileHeartbeatCacheEntry>>>,
     pending_heartbeat_updates: &Arc<Mutex<HashSet<String>>>,
     pending_keyword_indexes: &Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>>,
@@ -3765,10 +3809,16 @@ async fn handle_kademlia_event(
                 debug!("✅ Kad RoutablePeer accepted: {} -> {}", peer, address);
             }
         }
-        KademliaEvent::OutboundQueryProgressed { result, .. } => {
+        KademliaEvent::OutboundQueryProgressed { result, id, .. } => {
             match result {
                 QueryResult::GetRecord(Ok(ok)) => match ok {
                     GetRecordOk::FoundRecord(peer_record) => {
+                        // Check if this is a query we're tracking for pool discovery
+                        if let Some(sender) = get_record_senders.remove(&id) {
+                            info!("GetRecord succeeded for pool query: {:?}", id);
+                            let _ = sender.send(Ok(Some(peer_record.record.value.clone())));
+                        } else {
+                            // This is a file metadata query (existing behavior)
                         // Try to parse DHT record as essential metadata JSON
                         if let Ok(metadata_json) =
                             serde_json::from_slice::<serde_json::Value>(&peer_record.record.value)
@@ -4035,35 +4085,62 @@ async fn handle_kademlia_event(
                         } else {
                             debug!("Received non-JSON DHT record");
                         }
+                        } // end of else block for file metadata query
                     }
                     GetRecordOk::FinishedWithNoAdditionalRecord { .. } => {
+                        // Check if this is a query we're tracking for pool discovery
+                        if let Some(sender) = get_record_senders.remove(&id) {
+                            info!("GetRecord finished with no record found: {:?}", id);
+                            let _ = sender.send(Ok(None));
+                        }
                         // No additional records; do nothing here
                     }
                 },
                 QueryResult::GetRecord(Err(err)) => {
-                    warn!("GetRecord error: {:?}", err);
-                    // If the error includes the key, emit FileNotFound
-                    if let kad::GetRecordError::NotFound { key, .. } = err {
-                        let file_hash = String::from_utf8_lossy(key.as_ref()).to_string();
-                        let _ = event_tx
-                            .send(DhtEvent::FileNotFound(file_hash.clone()))
+                    // Check if this is a query we're tracking for pool discovery
+                    if let Some(sender) = get_record_senders.remove(&id) {
+                        warn!("GetRecord failed for pool query: {:?}", err);
+                        let _ = sender.send(Err(format!("GetRecord failed: {:?}", err)));
+                    } else {
+                        // Existing error handling for file metadata queries
+                        warn!("GetRecord error: {:?}", err);
+                        // If the error includes the key, emit FileNotFound
+                        if let kad::GetRecordError::NotFound { key, .. } = err {
+                            let file_hash = String::from_utf8_lossy(key.as_ref()).to_string();
+                            let _ = event_tx
+                                .send(DhtEvent::FileNotFound(file_hash.clone()))
+                                .await;
+                            notify_pending_searches(
+                                pending_searches,
+                                &file_hash,
+                                SearchResponse::NotFound,
+                            )
                             .await;
-                        notify_pending_searches(
-                            pending_searches,
-                            &file_hash,
-                            SearchResponse::NotFound,
-                        )
-                        .await;
+                        }
                     }
                 }
                 QueryResult::PutRecord(Ok(PutRecordOk { key })) => {
-                    debug!("PutRecord succeeded for key: {:?}", key);
+                    // Check if this is a query we're tracking for pool announcements
+                    if let Some(sender) = put_record_senders.remove(&id) {
+                        info!("PutRecord succeeded for pool: {:?}", key);
+                        let _ = sender.send(Ok(()));
+                    } else {
+                        // Existing behavior for file publishing
+                        debug!("PutRecord succeeded for key: {:?}", key);
+                    }
                 }
                 QueryResult::PutRecord(Err(err)) => {
-                    warn!("PutRecord error: {:?}", err);
-                    let _ = event_tx
-                        .send(DhtEvent::Error(format!("PutRecord failed: {:?}", err)))
-                        .await;
+                    // Check if this is a query we're tracking for pool announcements
+                    if let Some(sender) = put_record_senders.remove(&id) {
+                        warn!("PutRecord failed for pool query: {:?}", err);
+                        let _ = sender.send(Err(format!("PutRecord failed: {:?}", err)));
+                    } else {
+                        // Existing error handling
+                        warn!("PutRecord error: {:?}", err);
+                        let _ = event_tx
+                            .send(DhtEvent::Error(format!("PutRecord failed: {:?}", err)))
+                            .await;
+                    }
                 }
                 QueryResult::GetClosestPeers(Ok(ok)) => match ok {
                     kad::GetClosestPeersOk { key, peers } => {
@@ -5860,6 +5937,40 @@ impl DhtService {
             .map_err(|e| format!("Failed to send DHT command: {e}"))?;
 
         Ok(())
+    }
+
+    /// Stores a key-value record in the DHT
+    /// This can be used for P2P pool announcements and other distributed data
+    pub async fn put_record(&self, key: &str, value: Vec<u8>) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(DhtCommand::PutRecord {
+                key: key.to_string(),
+                value,
+                sender: tx,
+            })
+            .await
+            .map_err(|e| format!("Failed to send put_record command: {}", e))?;
+
+        rx.await
+            .map_err(|e| format!("Put record response error: {}", e))?
+    }
+
+    /// Retrieves a value for a key from the DHT
+    /// Returns None if the key is not found
+    /// This can be used for P2P pool discovery
+    pub async fn get_record(&self, key: &str) -> Result<Option<Vec<u8>>, String> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(DhtCommand::GetRecord {
+                key: key.to_string(),
+                sender: tx,
+            })
+            .await
+            .map_err(|e| format!("Failed to send get_record command: {}", e))?;
+
+        rx.await
+            .map_err(|e| format!("Get record response error: {}", e))?
     }
 
     pub async fn update_privacy_proxy_targets(&self, addresses: Vec<String>) -> Result<(), String> {

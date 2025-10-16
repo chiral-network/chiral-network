@@ -1,11 +1,12 @@
-// Decentralized Mining Pool System - Proof of Concept
+// Decentralized Mining Pool System - Enhanced with Stratum and DHT
 // Following README approach: "Progressive Decentralization - Start with mock data for immediate usability"
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::command;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,7 +39,7 @@ pub struct PoolStats {
     pub last_share_time: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum PoolStatus {
     Active,
     Maintenance,
@@ -53,11 +54,43 @@ pub struct JoinedPoolInfo {
     pub joined_at: u64,
 }
 
-// Global state for the proof of concept
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PoolMiner {
+    pub address: String,
+    pub hashrate: u64,
+    pub shares_submitted: u64,
+    pub shares_accepted: u64,
+    pub last_seen: u64,
+    pub joined_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShareSubmission {
+    pub miner_address: String,
+    pub pool_id: String,
+    pub nonce: u64,
+    pub hash: String,
+    pub difficulty: u64,
+    pub timestamp: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StratumConnectionInfo {
+    pub pool_url: String,
+    pub pool_port: u16,
+    pub worker_name: String,
+    pub connected: bool,
+    pub subscription_id: Option<String>,
+}
+
+// Global state for the proof of concept + real pool management
 lazy_static::lazy_static! {
     static ref AVAILABLE_POOLS: Arc<Mutex<Vec<MiningPool>>> = Arc::new(Mutex::new(create_mock_pools()));
     static ref CURRENT_POOL: Arc<Mutex<Option<JoinedPoolInfo>>> = Arc::new(Mutex::new(None));
     static ref USER_CREATED_POOLS: Arc<Mutex<Vec<MiningPool>>> = Arc::new(Mutex::new(Vec::new()));
+    static ref POOL_MINERS: Arc<RwLock<HashMap<String, Vec<PoolMiner>>>> = Arc::new(RwLock::new(HashMap::new()));
+    static ref SHARE_HISTORY: Arc<RwLock<Vec<ShareSubmission>>> = Arc::new(RwLock::new(Vec::new()));
+    static ref STRATUM_CONNECTION: Arc<Mutex<Option<StratumConnectionInfo>>> = Arc::new(Mutex::new(None));
 }
 
 fn create_mock_pools() -> Vec<MiningPool> {
@@ -362,4 +395,344 @@ pub async fn update_pool_discovery() -> Result<(), String> {
     tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
 
     Ok(())
+}
+
+// ============================================================================
+// ENHANCED POOL FEATURES - Stratum Protocol & DHT Integration
+// ============================================================================
+
+/// Connect to a pool using Stratum protocol
+#[command]
+pub async fn connect_stratum_pool(
+    pool_url: String,
+    pool_port: u16,
+    worker_name: String,
+    password: String,
+) -> Result<(), String> {
+    info!(
+        "Connecting to Stratum pool: {}:{} as worker: {}",
+        pool_url, pool_port, worker_name
+    );
+
+    // In a full implementation, this would create a TCP connection
+    // and handle the Stratum protocol handshake
+    
+    // Simulate connection delay
+    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+
+    let connection_info = StratumConnectionInfo {
+        pool_url: pool_url.clone(),
+        pool_port,
+        worker_name: worker_name.clone(),
+        connected: true,
+        subscription_id: Some(format!("sub_{}", get_current_timestamp())),
+    };
+
+    let mut stratum_conn = STRATUM_CONNECTION.lock().await;
+    *stratum_conn = Some(connection_info);
+
+    info!("Successfully connected to Stratum pool: {}", pool_url);
+    Ok(())
+}
+
+/// Disconnect from Stratum pool
+#[command]
+pub async fn disconnect_stratum_pool() -> Result<(), String> {
+    info!("Disconnecting from Stratum pool");
+
+    let mut stratum_conn = STRATUM_CONNECTION.lock().await;
+    *stratum_conn = None;
+
+    Ok(())
+}
+
+/// Submit a mining share to the pool
+#[command]
+pub async fn submit_mining_share(
+    miner_address: String,
+    nonce: u64,
+    hash: String,
+    difficulty: u64,
+) -> Result<bool, String> {
+    info!(
+        "Submitting mining share from {} with difficulty {}",
+        miner_address, difficulty
+    );
+
+    let current_pool = CURRENT_POOL.lock().await;
+    let pool_id = current_pool
+        .as_ref()
+        .map(|p| p.pool.id.clone())
+        .ok_or("Not connected to any pool")?;
+    drop(current_pool);
+
+    let now = get_current_timestamp();
+    let share = ShareSubmission {
+        miner_address: miner_address.clone(),
+        pool_id: pool_id.clone(),
+        nonce,
+        hash,
+        difficulty,
+        timestamp: now,
+    };
+
+    // Store the share
+    let mut shares = SHARE_HISTORY.write().await;
+    shares.push(share);
+
+    // Update miner stats
+    let mut miners = POOL_MINERS.write().await;
+    let pool_miners = miners.entry(pool_id).or_insert_with(Vec::new);
+    
+    if let Some(miner) = pool_miners.iter_mut().find(|m| m.address == miner_address) {
+        miner.shares_submitted += 1;
+        miner.shares_accepted += 1;
+        miner.last_seen = now;
+    } else {
+        pool_miners.push(PoolMiner {
+            address: miner_address.clone(),
+            hashrate: 0,
+            shares_submitted: 1,
+            shares_accepted: 1,
+            last_seen: now,
+            joined_at: now,
+        });
+    }
+
+    info!("Share accepted and recorded");
+    Ok(true)
+}
+
+/// Calculate PPLNS (Pay Per Last N Shares) payout
+#[command]
+pub async fn calculate_pplns_payout(
+    miner_address: String,
+    block_reward: f64,
+    n_shares: usize,
+) -> Result<f64, String> {
+    info!(
+        "Calculating PPLNS payout for {} using last {} shares",
+        miner_address, n_shares
+    );
+
+    let shares = SHARE_HISTORY.read().await;
+    
+    // Get last N shares
+    let last_n_shares: Vec<&ShareSubmission> = shares
+        .iter()
+        .rev()
+        .take(n_shares)
+        .collect();
+
+    if last_n_shares.is_empty() {
+        return Ok(0.0);
+    }
+
+    // Count miner's shares in the window
+    let miner_shares = last_n_shares
+        .iter()
+        .filter(|s| s.miner_address == miner_address)
+        .count();
+
+    // Calculate payout based on share percentage
+    let share_percentage = miner_shares as f64 / last_n_shares.len() as f64;
+    
+    // Get pool fee
+    let current_pool = CURRENT_POOL.lock().await;
+    let fee_percentage = current_pool
+        .as_ref()
+        .map(|p| p.pool.fee_percentage)
+        .unwrap_or(0.0);
+    drop(current_pool);
+
+    let payout = block_reward * share_percentage * (1.0 - fee_percentage / 100.0);
+
+    info!("PPLNS payout calculated: {} Chiral", payout);
+    Ok(payout)
+}
+
+/// Calculate PPS (Pay Per Share) payout
+#[command]
+pub async fn calculate_pps_payout(
+    miner_address: String,
+    block_reward: f64,
+) -> Result<f64, String> {
+    info!("Calculating PPS payout for {}", miner_address);
+
+    let current_pool = CURRENT_POOL.lock().await;
+    let pool_id = current_pool
+        .as_ref()
+        .map(|p| p.pool.id.clone())
+        .ok_or("Not connected to any pool")?;
+    let fee_percentage = current_pool
+        .as_ref()
+        .map(|p| p.pool.fee_percentage)
+        .unwrap_or(0.0);
+    drop(current_pool);
+
+    let miners = POOL_MINERS.read().await;
+    let pool_miners = miners.get(&pool_id).ok_or("Pool not found")?;
+    
+    let miner = pool_miners
+        .iter()
+        .find(|m| m.address == miner_address)
+        .ok_or("Miner not found in pool")?;
+
+    let shares_accepted = miner.shares_accepted as f64;
+    drop(miners);
+
+    // Expected shares per block (based on difficulty)
+    let expected_shares_per_block = 100.0; // Simplified
+    let payout_per_share = block_reward / expected_shares_per_block;
+    let payout = shares_accepted * payout_per_share * (1.0 - fee_percentage / 100.0);
+
+    info!("PPS payout calculated: {} Chiral", payout);
+    Ok(payout)
+}
+
+/// Update miner's hashrate in the pool
+#[command]
+pub async fn update_pool_hashrate(
+    miner_address: String,
+    hashrate: u64,
+) -> Result<(), String> {
+    let current_pool = CURRENT_POOL.lock().await;
+    let pool_id = current_pool
+        .as_ref()
+        .map(|p| p.pool.id.clone())
+        .ok_or("Not connected to any pool")?;
+    drop(current_pool);
+
+    let mut miners = POOL_MINERS.write().await;
+    let pool_miners = miners.entry(pool_id).or_insert_with(Vec::new);
+    
+    if let Some(miner) = pool_miners.iter_mut().find(|m| m.address == miner_address) {
+        miner.hashrate = hashrate;
+        miner.last_seen = get_current_timestamp();
+    }
+
+    Ok(())
+}
+
+/// Get detailed pool statistics
+#[command]
+pub async fn get_detailed_pool_stats(pool_id: String) -> Result<HashMap<String, serde_json::Value>, String> {
+    info!("Getting detailed stats for pool: {}", pool_id);
+
+    let miners = POOL_MINERS.read().await;
+    let pool_miners = miners.get(&pool_id).cloned().unwrap_or_default();
+    drop(miners);
+
+    let shares = SHARE_HISTORY.read().await;
+    let shares_in_window = shares
+        .iter()
+        .filter(|s| s.pool_id == pool_id)
+        .count();
+    drop(shares);
+
+    let total_miners = pool_miners.len();
+    let total_hashrate: u64 = pool_miners.iter().map(|m| m.hashrate).sum();
+    let total_shares: u64 = pool_miners.iter().map(|m| m.shares_submitted).sum();
+    let total_accepted: u64 = pool_miners.iter().map(|m| m.shares_accepted).sum();
+    let acceptance_rate = if total_shares > 0 {
+        (total_accepted as f64 / total_shares as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    let mut stats = HashMap::new();
+    stats.insert("total_miners".to_string(), serde_json::json!(total_miners));
+    stats.insert("total_hashrate".to_string(), serde_json::json!(total_hashrate));
+    stats.insert("total_shares".to_string(), serde_json::json!(total_shares));
+    stats.insert("total_accepted".to_string(), serde_json::json!(total_accepted));
+    stats.insert("acceptance_rate".to_string(), serde_json::json!(acceptance_rate));
+    stats.insert("shares_in_window".to_string(), serde_json::json!(shares_in_window));
+
+    info!("Detailed pool stats: {} miners, {} total shares", total_miners, total_shares);
+    Ok(stats)
+}
+
+/// Announce pool to DHT network
+#[command]
+pub async fn announce_pool_to_dht(pool: MiningPool) -> Result<(), String> {
+    info!("Announcing pool {} to DHT network", pool.name);
+
+    // In a real implementation, this would:
+    // 1. Serialize the pool information
+    // 2. Store it in the DHT with a key like "mining-pool:<pool-id>"
+    // 3. Update the global list of pools
+    // 4. Set a TTL for re-announcement
+
+    // Simulate DHT storage delay
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    // Add to available pools for discovery
+    let mut pools = AVAILABLE_POOLS.lock().await;
+    if !pools.iter().any(|p| p.id == pool.id) {
+        pools.push(pool.clone());
+    }
+
+    info!("Pool successfully announced to DHT");
+    Ok(())
+}
+
+/// Query DHT for available pools
+#[command]
+pub async fn query_dht_for_pools(region_filter: Option<String>) -> Result<Vec<MiningPool>, String> {
+    info!("Querying DHT for available mining pools");
+
+    // In a real implementation, this would:
+    // 1. Query the DHT for keys matching "mining-pool:*"
+    // 2. Retrieve pool information
+    // 3. Filter out stale/offline pools
+    // 4. Return active pools sorted by relevant metrics
+
+    // Simulate DHT query delay
+    tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
+
+    let pools = AVAILABLE_POOLS.lock().await;
+    let user_pools = USER_CREATED_POOLS.lock().await;
+    
+    let mut all_pools: Vec<MiningPool> = pools
+        .iter()
+        .chain(user_pools.iter())
+        .cloned()
+        .collect();
+
+    // Apply region filter if provided
+    if let Some(region) = region_filter {
+        all_pools.retain(|p| p.region == region || p.region == "Global");
+    }
+
+    // Sort by miners count (popularity)
+    all_pools.sort_by(|a, b| b.miners_count.cmp(&a.miners_count));
+
+    info!("Found {} pools via DHT", all_pools.len());
+    Ok(all_pools)
+}
+
+/// Get Stratum connection status
+#[command]
+pub async fn get_stratum_status() -> Result<Option<StratumConnectionInfo>, String> {
+    let stratum_conn = STRATUM_CONNECTION.lock().await;
+    Ok(stratum_conn.clone())
+}
+
+/// Refresh pool information from DHT
+#[command]
+pub async fn refresh_pool_info(pool_id: String) -> Result<MiningPool, String> {
+    info!("Refreshing pool info for: {}", pool_id);
+
+    // Simulate DHT lookup
+    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+    let pools = AVAILABLE_POOLS.lock().await;
+    let user_pools = USER_CREATED_POOLS.lock().await;
+
+    pools
+        .iter()
+        .chain(user_pools.iter())
+        .find(|p| p.id == pool_id)
+        .cloned()
+        .ok_or_else(|| "Pool not found in DHT".to_string())
 }

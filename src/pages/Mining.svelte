@@ -6,7 +6,7 @@
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
   import type { MiningHistoryPoint } from '$lib/stores';
-  import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw } from 'lucide-svelte'
+  import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw, Network } from 'lucide-svelte'
   import { onDestroy, onMount, getContext } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { etcAccount, miningState } from '$lib/stores'
@@ -202,6 +202,7 @@
     created_by?: string;
     worker?: string;
     password?: string;
+    discovered_via_p2p?: boolean; // Added for P2P pool discovery tracking
   }
 
   interface PoolStats {
@@ -219,6 +220,15 @@
     pool: MiningPool;
     stats: PoolStats;
     joined_at: number;
+  }
+
+  interface ShareSubmission {
+    pool_id: string;
+    miner_address: string;
+    nonce: string;
+    hash: string;
+    difficulty: number;
+    timestamp: number;
   }
 
   // Pool state
@@ -368,6 +378,57 @@
         await updateCpuTemperature();
       }
     }, 1000) as unknown as number;
+
+    // Expose pool functions to window for debugging/testing
+    // Always expose these functions, regardless of Tauri environment
+    try {
+      console.log('🔧 Setting up window.poolDebug...');
+      (window as any).poolDebug = {
+        // Legacy functions
+        discoverPools,
+        connectStratum,
+        submitShare,
+        calculatePayout,
+        updatePoolHashrate,
+        queryDHTForPools,
+        announcePoolToDHT,
+        getDetailedPoolStats,
+        
+        // P2P functions (prefixed)
+        p2pAnnouncePool,
+        p2pDiscoverPools,
+        p2pSubmitShare,
+        p2pGetPoolShares,
+        p2pBecomeCoordinator,
+        p2pFindCoordinator,
+        p2pIsCoordinator,
+        p2pResignCoordinator,
+        
+        // Convenient aliases for testing
+        announcePool: p2pAnnouncePool,
+        discoverPoolsP2P: p2pDiscoverPools,
+        submitShareP2P: p2pSubmitShare,
+        getPoolShares: p2pGetPoolShares,
+        becomeCoordinator: p2pBecomeCoordinator,
+        findCoordinator: p2pFindCoordinator,
+        isCoordinator: p2pIsCoordinator,
+        resignCoordinator: p2pResignCoordinator,
+        
+        // DHT helper functions
+        getPeerId: async () => await invoke('get_dht_peer_id'),
+        getPeerCount: async () => await invoke('get_dht_peer_count'),
+        getConnectedPeers: async () => await invoke('get_dht_connected_peers'),
+        
+        // Tauri invoke (for advanced users)
+        invoke: invoke,
+      };
+      console.log('✅ Pool debug functions available at window.poolDebug');
+      console.log('💡 Use: window.poolDebug.announcePool(pool)');
+      console.log('💡 DHT helpers: getPeerId(), getPeerCount(), getConnectedPeers()');
+      console.log('💡 Available functions:', Object.keys((window as any).poolDebug).join(', '));
+    } catch (error) {
+      console.error('❌ Failed to set up window.poolDebug:', error);
+    }
   })  
   
   async function checkGethStatus() {
@@ -708,6 +769,15 @@
       
       showCreatePool = false;
       
+      // Announce pool to P2P network (DHT)
+      try {
+        await p2pAnnouncePool(createdPool);
+        console.log('✅ Pool announced to P2P network');
+      } catch (e) {
+        console.warn('⚠️ Failed to announce pool to P2P network:', e);
+        // Don't fail the entire operation if P2P announcement fails
+      }
+      
       // Automatically join the created pool
       await joinPool(createdPool);
     } catch (e) {
@@ -717,6 +787,7 @@
 
   // Pool stats updates
   let poolStatsInterval: number | null = null;
+  let p2pShareSyncInterval: number | null = null;
   
   function startPoolStatsUpdates() {
     if (poolStatsInterval) return;
@@ -737,12 +808,210 @@
         console.error('Failed to update pool stats:', e);
       }
     }, 5000) as unknown as number; // Update every 5 seconds
+    
+    // If pool was discovered via P2P, sync shares from network
+    if (currentPool?.pool?.discovered_via_p2p && !p2pShareSyncInterval) {
+      console.log('🔄 Starting P2P share sync for pool:', currentPool.pool.id);
+      p2pShareSyncInterval = setInterval(async () => {
+        if (!currentPool?.pool?.id) return;
+        
+        try {
+          // Get recent shares from P2P network (last hour)
+          const since = Math.floor(Date.now() / 1000) - 3600;
+          const shares = await p2pGetPoolShares(currentPool.pool.id, since);
+          if (shares.length > 0) {
+            console.log(`🔄 Synced ${shares.length} shares from P2P network`);
+          }
+        } catch (e) {
+          console.error('Failed to sync P2P shares:', e);
+        }
+      }, 30000) as unknown as number; // Sync every 30 seconds
+    }
   }
   
   function stopPoolStatsUpdates() {
     if (poolStatsInterval) {
       clearInterval(poolStatsInterval);
       poolStatsInterval = null;
+    }
+    if (p2pShareSyncInterval) {
+      clearInterval(p2pShareSyncInterval);
+      p2pShareSyncInterval = null;
+    }
+  }
+
+  // ============================================================================
+  // ENHANCED POOL FEATURES - Stratum & DHT Integration
+  // ============================================================================
+
+  async function connectStratum(pool: MiningPool) {
+    if (!$etcAccount) {
+      poolError = 'Please create or import an account first.';
+      return;
+    }
+    
+    try {
+      // Parse pool URL to extract host and port
+      const urlMatch = pool.url.match(/^(?:stratum\+tcp:\/\/)?([^:]+):(\d+)$/);
+      if (!urlMatch) {
+        throw new Error('Invalid pool URL format');
+      }
+      
+      const [, host, port] = urlMatch;
+      const workerName = `${$etcAccount.address.slice(0, 10)}.worker1`;
+      
+      await invoke('connect_stratum_pool', {
+        poolUrl: host,
+        poolPort: parseInt(port),
+        workerName,
+        password: 'x'
+      });
+      
+      console.log('✅ Connected to Stratum pool:', pool.name);
+    } catch (e) {
+      console.error('❌ Stratum connection error:', e);
+      poolError = String(e);
+    }
+  }
+
+  async function submitShare(nonce: number, hash: string, difficulty: number) {
+    if (!$etcAccount || !currentPool) return;
+    
+    try {
+      const accepted = await invoke('submit_mining_share', {
+        minerAddress: $etcAccount.address,
+        nonce,
+        hash,
+        difficulty
+      });
+      
+      if (accepted) {
+        console.log('✅ Share accepted by pool');
+      } else {
+        console.log('❌ Share rejected by pool');
+      }
+    } catch (e) {
+      console.error('Failed to submit share:', e);
+    }
+  }
+
+  async function calculatePayout() {
+    if (!$etcAccount || !currentPool) return;
+    
+    try {
+      let payout = 0;
+      
+      if (currentPool.pool.payment_method === 'PPLNS') {
+        payout = await invoke('calculate_pplns_payout', {
+          minerAddress: $etcAccount.address,
+          blockReward: 2.0,
+          nShares: 100
+        }) as number;
+      } else if (currentPool.pool.payment_method === 'PPS') {
+        payout = await invoke('calculate_pps_payout', {
+          minerAddress: $etcAccount.address,
+          blockReward: 2.0
+        }) as number;
+      }
+      
+      console.log(`💰 Estimated payout: ${payout} Chiral`);
+      return payout;
+    } catch (e) {
+      console.error('Failed to calculate payout:', e);
+      return 0;
+    }
+  }
+
+  async function updatePoolHashrate() {
+    if (!$etcAccount || !currentPool) return;
+    
+    try {
+      const hashRateNum = parseHashRate($miningState.hashRate);
+      await invoke('update_pool_hashrate', {
+        minerAddress: $etcAccount.address,
+        hashrate: hashRateNum
+      });
+    } catch (e) {
+      console.error('Failed to update pool hashrate:', e);
+    }
+  }
+
+  async function queryDHTForPools(regionFilter?: string) {
+    isDiscovering = true;
+    poolError = '';
+    
+    try {
+      console.log('🔍 Querying DHT for pools...');
+      const pools = await invoke('query_dht_for_pools', {
+        regionFilter
+      }) as MiningPool[];
+      
+      console.log('✅ Found pools via DHT:', pools.length);
+      availablePools = pools;
+      showPoolList = true;
+    } catch (e) {
+      console.error('❌ DHT query error:', e);
+      poolError = String(e);
+    } finally {
+      isDiscovering = false;
+    }
+  }
+
+  async function announcePoolToDHT(pool: MiningPool) {
+    try {
+      await invoke('announce_pool_to_dht', { pool });
+      console.log('✅ Pool announced to DHT network');
+    } catch (e) {
+      console.error('Failed to announce pool:', e);
+      poolError = String(e);
+    }
+  }
+
+  async function getDetailedPoolStats(poolId: string) {
+    try {
+      const stats = await invoke('get_detailed_pool_stats', {
+        poolId
+      }) as Record<string, any>;
+      
+      console.log('📊 Detailed pool stats:', stats);
+      return stats;
+    } catch (e) {
+      console.error('Failed to get detailed stats:', e);
+      return null;
+    }
+  }
+
+  // Enhanced pool discovery with DHT
+  async function discoverPoolsEnhanced() {
+    if (!$etcAccount) {
+      poolError = 'Please create or import an account first.';
+      return;
+    }
+    
+    isDiscovering = true;
+    poolError = '';
+    
+    try {
+      // Query both local cache and DHT network
+      const [localPools, dhtPools] = await Promise.all([
+        invoke('discover_mining_pools') as Promise<MiningPool[]>,
+        invoke('query_dht_for_pools', {}) as Promise<MiningPool[]>
+      ]);
+      
+      // Merge and deduplicate pools
+      const poolMap = new Map<string, MiningPool>();
+      [...localPools, ...dhtPools].forEach(pool => {
+        poolMap.set(pool.id, pool);
+      });
+      
+      availablePools = Array.from(poolMap.values());
+      console.log('✅ Discovered pools:', availablePools.length);
+      showPoolList = true;
+    } catch (e) {
+      console.error('❌ Enhanced pool discovery error:', e);
+      poolError = String(e);
+    } finally {
+      isDiscovering = false;
     }
   }
 
@@ -855,6 +1124,128 @@
       password: ''
     };
     showPoolManager = false;
+  }
+
+  // ============================================================================
+  // P2P POOL FUNCTIONS - Real peer-to-peer pool integration with DHT
+  // ============================================================================
+
+  // Announce a pool to the P2P network via DHT
+  async function p2pAnnouncePool(pool: MiningPool) {
+    try {
+      await invoke('p2p_announce_pool', { pool });
+      console.log('✅ Pool announced to P2P network:', pool.id);
+      return true;
+    } catch (e) {
+      console.error('❌ Failed to announce pool:', e);
+      poolError = String(e);
+      return false;
+    }
+  }
+
+  // Discover pools from P2P network
+  async function p2pDiscoverPools(poolId?: string) {
+    isDiscovering = true;
+    poolError = '';
+    
+    try {
+      const pools = await invoke('p2p_discover_pools', { 
+        poolId: poolId || null 
+      }) as MiningPool[];
+      
+      // Mark pools as P2P-discovered
+      const p2pPools = pools.map(pool => ({
+        ...pool,
+        discovered_via_p2p: true
+      }));
+      
+      console.log('✅ Discovered P2P pools:', p2pPools.length);
+      availablePools = p2pPools;
+      showPoolList = true;
+      return p2pPools;
+    } catch (e) {
+      console.error('❌ Failed to discover P2P pools:', e);
+      poolError = String(e);
+      return [];
+    } finally {
+      isDiscovering = false;
+    }
+  }
+
+  // Submit a mining share to the P2P pool
+  async function p2pSubmitShare(share: ShareSubmission): Promise<boolean> {
+    try {
+      await invoke('p2p_submit_share', { share });
+      console.log('✅ Share submitted to P2P pool');
+      return true;
+    } catch (e) {
+      console.error('❌ Failed to submit share:', e);
+      return false;
+    }
+  }
+
+  // Get shares for a pool from P2P network
+  async function p2pGetPoolShares(poolId: string, since?: number): Promise<ShareSubmission[]> {
+    try {
+      const shares = await invoke('p2p_get_shares_for_pool', {
+        poolId,
+        since: since || null
+      }) as ShareSubmission[];
+      console.log('✅ Retrieved pool shares:', shares);
+      return shares;
+    } catch (e) {
+      console.error('❌ Failed to get pool shares:', e);
+      return [];
+    }
+  }
+
+  // Become a pool coordinator
+  async function p2pBecomeCoordinator(poolId: string): Promise<boolean> {
+    try {
+      const success = await invoke('p2p_become_coordinator', { poolId }) as boolean;
+      if (success) {
+        console.log('✅ Became pool coordinator for:', poolId);
+      }
+      return success;
+    } catch (e) {
+      console.error('❌ Failed to become coordinator:', e);
+      return false;
+    }
+  }
+
+  // Find the coordinator for a pool
+  async function p2pFindCoordinator(poolId: string): Promise<string | null> {
+    try {
+      const coordinator = await invoke('p2p_find_coordinator', { poolId }) as string | null;
+      console.log('✅ Pool coordinator:', coordinator || 'None');
+      return coordinator;
+    } catch (e) {
+      console.error('❌ Failed to find coordinator:', e);
+      return null;
+    }
+  }
+
+  // Check if we are a coordinator
+  async function p2pIsCoordinator(): Promise<boolean> {
+    try {
+      const isCoord = await invoke('p2p_is_coordinator') as boolean;
+      return isCoord;
+    } catch (e) {
+      console.error('❌ Failed to check coordinator status:', e);
+      return false;
+    }
+  }
+
+  // Resign from coordinator role
+  async function p2pResignCoordinator(): Promise<boolean> {
+    try {
+      await invoke('p2p_resign_coordinator');
+      console.log('✅ Resigned from coordinator role');
+      return true;
+    } catch (e) {
+      console.error('❌ Failed to resign as coordinator:', e);
+      return false;
+    }
   }
 
   // Define pools variable as an alias for availablePools for compatibility
@@ -1105,14 +1496,18 @@
           <div class="flex items-center justify-between">
             <h3 class="text-lg font-semibold">{$t('mining.decentralizedPools')}</h3>
             <div class="flex gap-2">
-              <Button variant="outline" size="sm" on:click={discoverPools} disabled={isDiscovering || $miningState.isMining}>
+              <Button variant="outline" size="sm" on:click={discoverPoolsEnhanced} disabled={isDiscovering || $miningState.isMining}>
                 {#if isDiscovering}
                   <RefreshCw class="h-4 w-4 mr-2 animate-spin" />
                   {$t('mining.discovering')}
                 {:else}
                   <RefreshCw class="h-4 w-4 mr-2" />
-                  {$t('mining.discoverPools')}
+                  {$t('mining.discoverPools')} (DHT)
                 {/if}
+              </Button>
+              <Button variant="outline" size="sm" on:click={() => p2pDiscoverPools()} disabled={isDiscovering || $miningState.isMining}>
+                <Network class="h-4 w-4 mr-2" />
+                P2P Pools
               </Button>
               <Button variant="secondary" size="sm" on:click={() => showCreatePool = true} disabled={$miningState.isMining}>
                 <Coins class="h-4 w-4 mr-2" />
@@ -1848,6 +2243,12 @@
                         {pool.status}
                       </Badge>
                       <Badge variant="secondary">{pool.region}</Badge>
+                      {#if pool.discovered_via_p2p}
+                        <Badge variant="default" class="bg-purple-500">
+                          <Network class="h-3 w-3 mr-1" />
+                          P2P
+                        </Badge>
+                      {/if}
                     </div>
                     
                     <p class="text-sm text-muted-foreground mb-3">{pool.description}</p>

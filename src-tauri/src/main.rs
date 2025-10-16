@@ -22,6 +22,7 @@ mod multi_source_download;
 pub mod net;
 mod peer_selection;
 mod pool;
+mod pool_p2p;
 mod proxy_latency;
 mod stream_auth;
 mod webrtc_service;
@@ -1219,8 +1220,11 @@ async fn start_dht_node(
 
     {
         let mut dht_guard = state.dht.lock().await;
-        *dht_guard = Some(dht_arc);
+        *dht_guard = Some(dht_arc.clone());
     }
+
+    // Initialize P2P Pool Manager with the DHT service
+    pool_p2p::init_p2p_pool_manager(dht_arc.clone()).await;
 
     Ok(peer_id)
 }
@@ -4116,6 +4120,26 @@ fn main() {
             pool::get_current_pool_info,
             pool::get_pool_stats,
             pool::update_pool_discovery,
+            pool::connect_stratum_pool,
+            pool::disconnect_stratum_pool,
+            pool::submit_mining_share,
+            pool::calculate_pplns_payout,
+            pool::calculate_pps_payout,
+            pool::update_pool_hashrate,
+            pool::get_detailed_pool_stats,
+            pool::announce_pool_to_dht,
+            pool::query_dht_for_pools,
+            pool::get_stratum_status,
+            pool::refresh_pool_info,
+            pool_p2p::p2p_announce_pool,
+            pool_p2p::p2p_discover_pools,
+            pool_p2p::p2p_submit_share,
+            pool_p2p::p2p_get_shares_for_pool,
+            pool_p2p::p2p_become_coordinator,
+            pool_p2p::p2p_find_coordinator,
+            pool_p2p::p2p_list_local_pools,
+            pool_p2p::p2p_is_coordinator,
+            pool_p2p::p2p_resign_coordinator,
             get_disk_space,
             send_chiral_transaction,
             queue_transaction,
