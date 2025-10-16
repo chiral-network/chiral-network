@@ -91,7 +91,11 @@
   $: lastCheckedLabel = lastChecked
     ? tr('upload.storage.lastChecked', {
         values: {
-          time: lastChecked.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          time: new Intl.DateTimeFormat(undefined, {
+            hour: '2-digit',
+            minute: '2-digit',
+            timeZoneName: 'short'
+          }).format(lastChecked)
         }
       })
     : null
