@@ -64,6 +64,7 @@
   let storageError: string | null = null
   let lastChecked: Date | null = null
   let isUploading = false
+  let enableRemote = false
 
   // Encrypted sharing state
   let useEncryptedSharing = false
@@ -767,6 +768,11 @@
                   {$t('upload.supportedFormatsDesktop')}
                 {/if}
               </p>
+
+              <label class="text-sm">
+                  <input type="checkbox" bind:checked={enableRemote} />
+                  Enable Remote
+              </label>
             {/if}
           </div>
         </div>
