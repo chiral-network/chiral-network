@@ -725,7 +725,7 @@ async fn start_dht_node(
 
     // Disable autonat by default to prevent warnings when no servers are available
     // Users can explicitly enable it when needed
-    let auto_enabled = enable_autonat.unwrap_or(false);
+    let auto_enabled = enable_autonat.unwrap_or(true);
     let probe_interval = autonat_probe_interval_secs.map(Duration::from_secs);
     let autonat_server_list = autonat_servers.unwrap_or_default();
 
@@ -740,21 +740,32 @@ async fn start_dht_node(
         ft_guard.as_ref().cloned()
     };
 
+    // --- Hotfix: Disable AutoRelay on bootstrap nodes (and via env var)
+    let mut final_enable_autorelay = enable_autorelay.unwrap_or(true);
+    if is_bootstrap.unwrap_or(false) {
+        final_enable_autorelay = false;
+        tracing::info!("AutoRelay disabled on bootstrap (hotfix).");
+    }
+    if std::env::var("CHIRAL_DISABLE_AUTORELAY").ok().as_deref() == Some("1") {
+        final_enable_autorelay = false;
+        tracing::info!("AutoRelay disabled via env CHIRAL_DISABLE_AUTORELAY=1");
+    }
+
     let dht_service = DhtService::new(
         port,
         bootstrap_nodes,
         None,
         is_bootstrap.unwrap_or(false),
-        auto_enabled,
+        /* enable AutoNAT by default for WAN */ auto_enabled,
         probe_interval,
         autonat_server_list,
         final_proxy_address,
         file_transfer_service,
         chunk_size_kb,
         cache_size_mb,
-        enable_autorelay.unwrap_or(false),
+        /* enable AutoRelay (after hotfix) */ final_enable_autorelay,
         preferred_relays.unwrap_or_default(),
-        false, // enable_relay_server - disabled by default
+        is_bootstrap.unwrap_or(false), // enable_relay_server only on bootstrap
     )
     .await
     .map_err(|e| format!("Failed to start DHT: {}", e))?;
