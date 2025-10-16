@@ -71,6 +71,28 @@ const EXPECTED_PROTOCOL_VERSION: &str = "/chiral/1.0.0";
 const MAX_MULTIHASH_LENGHT: usize = 64;
 pub const RAW_CODEC: u64 = 0x55;
 
+/// Extracts a set of unique, searchable keywords from a filename.
+fn extract_keywords(file_name: &str) -> Vec<String> {
+    // 1. Sanitize: remove the file extension and convert to lowercase.
+    let name_without_ext = std::path::Path::new(file_name)
+        .file_stem()
+        .unwrap_or_default()
+        .to_str()
+        .unwrap_or_default()
+        .to_lowercase();
+
+    // 2. Split the name into words based on common non-alphanumeric delimiters.
+    let keywords: std::collections::HashSet<String> = name_without_ext
+        .split(|c: char| !c.is_alphanumeric())
+        // 3. Filter out empty strings and common short words (e.g., "a", "of").
+        .filter(|s| !s.is_empty() && s.len() > 2)
+        .map(String::from)
+        .collect(); // Using a HashSet automatically handles duplicates.
+
+    // 4. Return the unique keywords as a Vec.
+    keywords.into_iter().collect()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileMetadata {
@@ -1480,6 +1502,29 @@ async fn run_dht_node(
                                 error!("failed to register as provider for file {}: {}", metadata.merkle_root, e);
                                 let _ = event_tx.send(DhtEvent::Error(format!("failed to register as provider: {}", e))).await;
                             }
+                        }
+                        // Task 1: Keyword Extraction
+                        let keywords = extract_keywords(&metadata.file_name);
+                        info!(
+                            "Extracted {} keywords for file '{}': {:?}",
+                            keywords.len(),
+                            metadata.file_name,
+                            keywords
+                        );
+                        // Task 2: DHT Indexing
+                        // TODO: implement the "read-modify-write" logic inside this loop.
+                        for keyword in keywords {
+                            let index_key_str = format!("idx:{}", keyword);
+                            let _index_key = kad::RecordKey::new(&index_key_str);
+
+                            // TODO:
+                            // 1. Call swarm.behaviour_mut().kademlia.get_record(index_key.clone())
+                            // 2. In the KademliaEvent handler for GetRecordOk, deserialize the value (a list of hashes).
+                            // 3. Add the new metadata.merkle_root to the list.
+                            // 4. Serialize the updated list.
+                            // 5. Create a new Record and call swarm.behaviour_mut().kademlia.put_record(...).
+                            
+                            info!("TODO - Register keyword '{}' with file hash '{}'", keyword, metadata.merkle_root);
                         }
                         let _ = event_tx.send(DhtEvent::PublishedFile(metadata)).await;
                     }
