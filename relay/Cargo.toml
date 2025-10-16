@@ -28,6 +28,9 @@ rand = "0.8"
 async-trait = "0.1"
 async-std = { version = "1.12", features = ["attributes"] }
 web-time = "1.1"
+tokio-tungstenite = "0.21"
+sha2 = "0.10"
+hex = "0.4"
 
 [profile.dev]
 incremental = true
