@@ -161,6 +161,7 @@ struct DhtBehaviour {
 pub enum DhtCommand {
     PublishFile(FileMetadata),
     SearchFile(String),
+    SearchFileByCid(String),
     DownloadFile(FileMetadata),
     ConnectPeer(String),
     ConnectToPeerById(PeerId),
@@ -1298,6 +1299,14 @@ async fn run_dht_node(
                         let key = kad::RecordKey::new(&file_hash.as_bytes());
                         let query_id = swarm.behaviour_mut().kademlia.get_record(key);
                         info!("Searching for file: {} (query: {:?})", file_hash, query_id);
+                    }
+                    Some(DhtCommand::SearchFileByCid(cid_str)) => {
+                        if let Ok(cid) = Cid::try_from(cid_str.clone()) {
+                            swarm.behaviour_mut().kademlia.get_providers(kad::RecordKey::new(&cid.to_bytes()));
+                            info!("Searching for providers of CID: {}", cid_str);
+                        } else {
+                            error!("Invalid CID provided for search: {}", cid_str);
+                        }
                     }
                     Some(DhtCommand::ConnectPeer(addr)) => {
                         info!("Attempting to connect to: {}", addr);
