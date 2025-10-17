@@ -444,7 +444,8 @@
     "item": {
       "from": "来自",
       "to": "发送至"
-    }
+    },
+    "searchPlaceholder": "按地址、描述或ID搜索..."
   },
   "fees": {
     "low": "低",
@@ -627,7 +628,8 @@
     "amount": {
       "invalid": "请输入大于0的有效数量。",
       "min": "数量必须至少为 {min} Chiral。",
-      "insufficient": "余额不足：缺少 {more} Chiral。"
+      "insufficient": "余额不足：缺少 {more} Chiral。",
+      "insufficientWithFee": "资金不足。总计 {total} Chiral (金额 + 费用) 超过您的余额 {balance} Chiral。"
     },
     "exportFailed": "导出失败。请重试。",
     "createAccount": "无法创建账户: {error}"
