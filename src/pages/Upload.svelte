@@ -499,8 +499,6 @@
           addedCount++;
           showToast(`${fileName} uploaded as v${metadata.version} (new file)`, 'success');
 
-          console.log(metadata)
-
           // Publish file metadata to DHT network for discovery
           try {
             // await dhtService.publishFile(metadata);

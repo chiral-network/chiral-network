@@ -1263,17 +1263,17 @@ async fn get_cpu_temperature() -> Option<f32> {
         let smooth_temperature = |raw_temp: f32| -> f32 {
             let now = Instant::now();
             let mut history = temp_history_mutex.lock().unwrap();
-            
+
             // Add current reading
             history.push((now, raw_temp));
-            
+
             // Keep only last 5 readings within 30 seconds
             history.retain(|(time, _)| now.duration_since(*time).as_secs() < 30);
             if history.len() > 5 {
                 let excess = history.len() - 5;
                 history.drain(0..excess);
             }
-            
+
             // Return smoothed temperature (weighted average, recent readings have more weight)
             if history.len() == 1 {
                 raw_temp
@@ -1331,7 +1331,7 @@ async fn get_cpu_temperature() -> Option<f32> {
         // Final fallback: return None when sensors are unavailable
         // Only log the info message once to avoid spamming logs
         static SENSOR_WARNING_LOGGED: OnceLock<()> = OnceLock::new();
-        
+
         SENSOR_WARNING_LOGGED.get_or_init(|| {
             info!("Hardware temperature sensors not accessible on this system. Temperature monitoring disabled.");
         });
@@ -1365,7 +1365,7 @@ fn try_temperature_method(method: &TemperatureMethod) -> Option<f32> {
                     c.temperature()
                 })
                 .sum();
-            
+
             if core_count > 0 {
                 let avg_temp = sum / core_count as f32;
                 if avg_temp > 0.0 && avg_temp < 150.0 {
@@ -1572,11 +1572,11 @@ fn get_linux_temperature_advanced() -> Option<(f32, TemperatureMethod)> {
 #[cfg(target_os = "windows")]
 fn get_windows_temperature() -> Option<f32> {
     use std::sync::OnceLock;
-    
+
     static LAST_LOG_STATE: OnceLock<std::sync::Mutex<bool>> = OnceLock::new();
-    
+
     // Try multiple WMI methods for better compatibility
-    
+
     // Method 1: Try HighPrecisionTemperature (newer Windows versions)
     if let Ok(output) = Command::new("powershell")
         .args([
@@ -1604,7 +1604,7 @@ fn get_windows_temperature() -> Option<f32> {
             }
         }
     }
-    
+
     // Method 2: Try CurrentTemperature (older Windows versions)
     if let Ok(output) = Command::new("powershell")
         .args([
@@ -1658,7 +1658,7 @@ fn get_windows_temperature() -> Option<f32> {
             }
         }
     }
-    
+
     // Log only once when no sensor is found
     let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
     let mut logged = log_state.lock().unwrap();
@@ -1666,7 +1666,7 @@ fn get_windows_temperature() -> Option<f32> {
         info!("⚠️ No WMI temperature sensors detected. Temperature monitoring disabled.");
         *logged = true;
     }
-    
+
     None
 }
 
@@ -1756,6 +1756,41 @@ async fn start_file_transfer_service(
     }
 
     Ok(())
+}
+
+#[tauri::command]
+async fn upload_file_to_network(
+    state: State<'_, AppState>,
+    file_path: String,
+) -> Result<(), String> {
+    // Get the active account address
+    let account = get_active_account(&state).await?;
+
+    // Get the private key from state
+    let private_key = {
+        let key_guard = state.active_account_private_key.lock().await;
+        key_guard
+            .clone()
+            .ok_or("No private key available. Please log in again.")?
+    };
+
+    let ft = {
+        let ft_guard = state.file_transfer.lock().await;
+        ft_guard.as_ref().cloned()
+    };
+
+    if let Some(ft) = ft {
+        // Upload the file
+        let file_name = file_path.split('/').last().unwrap_or(&file_path);
+
+        ft.upload_file_with_account(file_path.clone(), file_name.to_string(), Some(account), Some(private_key))
+            .await
+            .map_err(|e| format!("Failed to upload file: {}", e))?;
+
+        Ok(())
+    } else {
+        Err("File transfer service is not running".to_string())
+    }
 }
 
 #[tauri::command]
@@ -3109,7 +3144,7 @@ async fn select_peers_with_strategy(
         .into_iter()
         .filter(|peer| !blacklisted_peers.contains(peer))
         .collect();
-    
+
     let dht_guard = state.dht.lock().await;
     if let Some(ref dht) = *dht_guard {
         Ok(dht
@@ -3553,6 +3588,7 @@ fn main() {
             send_dht_message,
             start_file_transfer_service,
             download_file_from_network,
+            upload_file_to_network,
             download_blocks_from_network,
             start_multi_source_download,
             cancel_multi_source_download,
@@ -3959,7 +3995,7 @@ async fn upload_and_publish_file(
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         // Use prepare_versioned_metadata to handle version incrementing and parent_hash
         let mime_type = detect_mime_type_from_filename(&file_name).unwrap_or_else(|| "application/octet-stream".to_string());
         let metadata = dht
@@ -3977,7 +4013,7 @@ async fn upload_and_publish_file(
             .await?;
 
         let version = metadata.version.unwrap_or(1);
-        
+
         // Store file data locally for seeding (CRITICAL FIX)
         let ft = {
             let ft_guard = state.file_transfer.lock().await;
@@ -3988,11 +4024,11 @@ async fn upload_and_publish_file(
             let file_data = tokio::fs::read(&file_path)
                 .await
                 .map_err(|e| format!("Failed to read file for local storage: {}", e))?;
-            
+
             ft.store_file_data(manifest.merkle_root.clone(), file_name.clone(), file_data)
                 .await; // Store with Merkle root as key
         }
-        
+
         dht.publish_file(metadata).await?;
         version
     } else {
