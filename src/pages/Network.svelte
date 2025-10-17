@@ -691,6 +691,20 @@
         return;
       }
 
+      // Check if peer is already connected
+      const isAlreadyConnected = $peers.some(peer =>
+        peer.id === peerAddress ||
+        peer.address === peerAddress ||
+        peer.address.includes(peerAddress) ||
+        peerAddress.includes(peer.id)
+      );
+
+      if (isAlreadyConnected) {
+        showToast('Peer is already connected', 'info');
+        newPeerAddress = '';
+        return;
+      }
+
       try {
         showToast('Connecting to peer via DHT...', 'info');
         const currentPeerCount = $peers.length;
@@ -1879,16 +1893,18 @@
                         {#each peer.addresses as addr}
                           <div class="flex items-center justify-between gap-2">
                             <span class="text-xs font-mono break-all">{addr}</span>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              on:click={() => {
-                                newPeerAddress = addr
-                                showToast($t('network.peerDiscovery.peerAddedToInput'), 'success')
-                              }}
-                            >
-                              {$t('network.peerDiscovery.add')}
-                            </Button>
+                            {#if addr.includes('/p2p/')}
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                on:click={() => {
+                                  newPeerAddress = addr
+                                  showToast($t('network.peerDiscovery.peerAddedToInput'), 'success')
+                                }}
+                              >
+                                {$t('network.peerDiscovery.add')}
+                              </Button>
+                            {/if}
                           </div>
                         {/each}
                       </div>
