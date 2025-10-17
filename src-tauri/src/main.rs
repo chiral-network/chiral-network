@@ -32,11 +32,13 @@ use crate::commands::proxy::{
     disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
     proxy_echo, proxy_remove, ProxyNode,
 };
+use async_std::path::Path as async_path;
 use chiral_network::stream_auth::{
     AuthMessage, HmacKeyExchangeConfirmation, HmacKeyExchangeRequest, HmacKeyExchangeResponse,
     StreamAuthService,
 };
 use dht::{DhtEvent, DhtMetricsSnapshot, DhtService, FileMetadata};
+use directories::ProjectDirs;
 use ethereum::{
     create_new_account, get_account_from_private_key, get_balance, get_block_number, get_hashrate,
     get_mined_blocks_count, get_mining_logs, get_mining_performance, get_mining_status,
@@ -55,6 +57,7 @@ use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex as StdMutex;
 use std::{
     io::{BufRead, BufReader},
     sync::Arc,
@@ -388,14 +391,20 @@ async fn get_file_versions_by_name(
     state: State<'_, AppState>,
     file_name: String,
 ) -> Result<Vec<FileMetadata>, String> {
-    info!("🚀 Tauri command: get_file_versions_by_name called with: {}", file_name);
-    
+    info!(
+        "🚀 Tauri command: get_file_versions_by_name called with: {}",
+        file_name
+    );
+
     let dht = { state.dht.lock().await.as_ref().cloned() };
     if let Some(dht) = dht {
         info!("✅ DHT service found, calling get_versions_by_file_name");
         let result = (*dht).get_versions_by_file_name(file_name).await;
         match &result {
-            Ok(versions) => info!("🎉 Tauri command: Successfully returned {} versions", versions.len()),
+            Ok(versions) => info!(
+                "🎉 Tauri command: Successfully returned {} versions",
+                versions.len()
+            ),
             Err(e) => info!("❌ Tauri command: Error occurred: {}", e),
         }
         result
@@ -408,7 +417,7 @@ async fn get_file_versions_by_name(
 #[tauri::command]
 async fn test_backend_connection(state: State<'_, AppState>) -> Result<String, String> {
     info!("🧪 Testing backend connection...");
-    
+
     let dht = { state.dht.lock().await.as_ref().cloned() };
     if let Some(dht) = dht {
         info!("✅ DHT service is available");
@@ -774,6 +783,9 @@ async fn start_dht_node(
         tracing::info!("AutoRelay disabled via env CHIRAL_DISABLE_AUTORELAY=1");
     }
 
+    let proj_dirs = ProjectDirs::from("com", "chiral-network", "chiral-network")
+        .ok_or("Failed to get project directories")?;
+    let blockstore_db_path = proj_dirs.data_dir().join("blockstore_db");
     let dht_service = DhtService::new(
         port,
         bootstrap_nodes,
@@ -789,6 +801,7 @@ async fn start_dht_node(
         /* enable AutoRelay (after hotfix) */ final_enable_autorelay,
         preferred_relays.unwrap_or_default(),
         is_bootstrap.unwrap_or(false), // enable_relay_server only on bootstrap
+        Some(async_path::new(blockstore_db_path.as_os_str())),
     )
     .await
     .map_err(|e| format!("Failed to start DHT: {}", e))?;
@@ -1830,9 +1843,14 @@ async fn upload_file_to_network(
         // Upload the file
         let file_name = file_path.split('/').last().unwrap_or(&file_path);
 
-        ft.upload_file_with_account(file_path.clone(), file_name.to_string(), Some(account), Some(private_key))
-            .await
-            .map_err(|e| format!("Failed to upload file: {}", e))?;
+        ft.upload_file_with_account(
+            file_path.clone(),
+            file_name.to_string(),
+            Some(account),
+            Some(private_key),
+        )
+        .await
+        .map_err(|e| format!("Failed to upload file: {}", e))?;
 
         // Get the file hash by reading the file and calculating it
         let file_data = tokio::fs::read(&file_path)
@@ -4137,6 +4155,151 @@ async fn upload_and_publish_file(
         version,
     })
 }
+
+#[tauri::command]
+async fn totoro_upload_and_publish_file(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    file_path: String,
+) -> Result<UploadResult, String> {
+    // 1. Process file with ChunkManager (encrypt, chunk, build Merkle tree)
+    // let manifest = encrypt_file_for_recipient(
+    //     app.clone(),
+    //     state.clone(),
+    //     file_path.clone(),
+    //     recipient_public_key.clone(),
+    // )
+    // .await?;
+
+    // 2. Get file name (use provided name or extract from path)
+    let file_name = std::path::Path::new(&file_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    let file_size: u64 = manifest.chunks.iter().map(|c| c.size as u64).sum();
+
+    // 3. Get peer ID from DHT
+    let peer_id = {
+        let dht_guard = state.dht.lock().await;
+        if let Some(dht) = dht_guard.as_ref() {
+            dht.get_peer_id().await
+        } else {
+            "unknown".to_string()
+        }
+    };
+
+    // 4. Publish to DHT with versioning support
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    let version = if let Some(dht) = dht {
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // Use prepare_versioned_metadata to handle version incrementing and parent_hash
+        let mime_type = detect_mime_type_from_filename(&file_name)
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+        let metadata = dht
+            .prepare_versioned_metadata(
+                manifest.merkle_root.clone(),
+                file_name.clone(),
+                file_size,
+                vec![], // Empty - chunks already stored
+                created_at,
+                Some(mime_type),
+                true, // is_encrypted
+                Some("AES-256-GCM".to_string()),
+                None, // key_fingerprint
+            )
+            .await?;
+
+        let version = metadata.version.unwrap_or(1);
+
+        // Store file data locally for seeding (CRITICAL FIX)
+        let ft = {
+            let ft_guard = state.file_transfer.lock().await;
+            ft_guard.as_ref().cloned()
+        };
+        if let Some(ft) = ft {
+            // Read the original file data to store locally
+            let file_data = tokio::fs::read(&file_path)
+                .await
+                .map_err(|e| format!("Failed to read file for local storage: {}", e))?;
+
+            ft.store_file_data(manifest.merkle_root.clone(), file_name.clone(), file_data)
+                .await;
+        }
+
+        dht.publish_file(metadata).await?;
+        version
+    } else {
+        1 // Default to v1 if DHT not running
+    };
+
+    // 5. Return metadata to frontend
+    Ok(UploadResult {
+        merkle_root: manifest.merkle_root,
+        file_name,
+        file_size,
+        is_encrypted: true,
+        peer_id,
+        version,
+    })
+}
+
+// async fn break_into_chunks(
+//     app: tauri::AppHandle,
+//     state: State<'_, AppState>,
+//     file_path: String,
+// ) -> Result<FileManifestForJs, String> {
+//     // Get the app data directory for chunk storage
+//     let app_data_dir = app
+//         .path()
+//         .app_data_dir()
+//         .map_err(|e| format!("Could not get app data directory: {}", e))?;
+//     let chunk_storage_path = app_data_dir.join("chunk_storage");
+
+//     // Use the active user's own public key
+//     let private_key_hex = state
+//         .active_account_private_key
+//         .lock()
+//         .await
+//         .clone()
+//         .ok_or("No account is currently active. Please log in.")?;
+//     let pk_bytes = hex::decode(private_key_hex.trim_start_matches("0x"))
+//         .map_err(|_| "Invalid private key format".to_string())?;
+//     let secret_key = StaticSecret::from(
+//         <[u8; 32]>::try_from(pk_bytes).map_err(|_| "Private key is not 32 bytes")?,
+//     );
+//     PublicKey::from(&secret_key);
+
+//     // Run the encryption in a blocking task to avoid blocking the async runtime
+//     tokio::task::spawn_blocking(move || {
+//         // Initialize ChunkManager with proper app data directory
+//         let manager = ChunkManager::new(chunk_storage_path);
+
+//         // Call the existing backend function to perform the encryption with recipient's public key
+//         let manifest = manager.chunk_and_encrypt_file(Path::new(&file_path), &recipient_pk)?;
+
+//         // Serialize the key bundle to a JSON string so it can be sent to the frontend easily.
+//         let bundle_json =
+//             serde_json::to_string(&manifest.encrypted_key_bundle).map_err(|e| e.to_string())?;
+
+//         Ok(FileManifestForJs {
+//             merkle_root: manifest.merkle_root,
+//             chunks: manifest.chunks,
+//             encrypted_key_bundle: bundle_json,
+//         })
+//     })
+//     .await
+//     .map_err(|e| format!("Encryption task failed: {}", e))?
+// }
 
 #[tauri::command]
 async fn has_active_account(state: State<'_, AppState>) -> Result<bool, String> {
