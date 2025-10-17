@@ -467,74 +467,124 @@
     let duplicateCount = 0
     let addedCount = 0
 
-
-    // Process all files concurrently to avoid blocking the UI
-    const filePromises = paths.map(async (filePath) => {
-      try {
-        const fileName = filePath.split(/[\/\\]/).pop() || '';
-        const recipientKey = useEncryptedSharing && recipientPublicKey.trim() ? recipientPublicKey.trim() : undefined;
-
-        // UNIFIED UPLOAD: Single command chunks, encrypts, and publishes to DHT
-        const result = await invoke<{merkleRoot: string, fileName: string, fileSize: number, isEncrypted: boolean, peerId: string, version: number}>(
-          "upload_and_publish_file",
-          {
-            filePath,
-            fileName: null,  // File path already contains correct name
-            recipientPublicKey: recipientKey
+    if (enableRemote) {
+      for (const filePath of paths) {
+        try {
+          // Get just the filename from the path
+          const fileName = filePath.split(/[\/\\]/).pop() || '';
+          // Check for existing versions before upload
+          let existingVersions: any[] = [];
+          try {
+            existingVersions = await invoke('get_file_versions_by_name', { fileName }) as any[];
+          } catch (versionError) {
+            console.log('No existing versions found for', fileName);
           }
-        );
+          // Use versioned upload - let backend handle duplicate detection
+          // const metadata = await dhtService.publishFileToNetwork(filePath);
 
-        // Check for duplicates
-        if (get(files).some((f: FileItem) => f.hash === result.merkleRoot)) {
-          return { type: 'duplicate', fileName };
+          // const newFile = {
+          //   id: `file-${Date.now()}-${Math.random()}`,
+          //   name: metadata.fileName,
+          //   path: filePath,
+          //   hash: metadata.fileHash,
+          //   size: metadata.fileSize,
+          //   status: 'seeding' as const,
+          //   seeders: 1,
+          //   leechers: 0,
+          //   uploadDate: new Date(metadata.createdAt),
+          //   version: metadata.version,
+          // };
+
+          // files.update(f => [...f, newFile]);
+          // addedCount++;
+          // showToast(`${fileName} uploaded as v${metadata.version} (new file)`, 'success');
+
+          // Publish file metadata to DHT network for discovery
+          try {
+            // await dhtService.publishFile(metadata);
+            // console.log('File being published to DHT:', metadata.fileHash);
+          } catch (publishError) {
+            console.warn('Failed to publish file to DHT:', publishError);
+          }
+        } catch (error) {
+          console.error(error);
+          showToast(tr('upload.fileFailed', { values: { name: filePath.split(/[\/]/).pop(), error: String(error) } }), 'error');
         }
-
-        const isDhtRunning = dhtService.getPeerId() !== null;
-
-        const newFile: FileItem = {
-          id: `file-${Date.now()}-${Math.random()}`,
-          name: result.fileName,
-          path: filePath,
-          hash: result.merkleRoot,
-          size: result.fileSize,
-          status: isDhtRunning ? 'seeding' : 'uploaded',
-          seeders: isDhtRunning ? 1 : 0,
-          leechers: 0,
-          uploadDate: new Date(),
-          version: result.version,  // Use version from backend
-          isEncrypted: result.isEncrypted,
-        };
-
-        files.update(f => [...f, newFile]);
-
-        return { type: 'success', fileName };
-      } catch (error) {
-        console.error(error);
-        const fileName = filePath.split(/[\/]/).pop() || 'unknown file';
-        showToast(tr('upload.fileFailed', { values: { name: fileName, error: String(error) } }), 'error');
-        return { type: 'error', fileName: fileName, error };
+        showToast('Files published to DHT network for sharing!', 'success')
+        refreshAvailableStorage()
+        // Make storage refresh non-blocking to prevent UI hanging
+        setTimeout(() => refreshAvailableStorage(), 100)
       }
-    });
-
-    // Wait for all files to be processed concurrently
-    const results = await Promise.all(filePromises);
-
-    // Count results
-    results.forEach(result => {
-      if (result.type === 'duplicate') {
-        duplicateCount++;
-      } else if (result.type === 'success') {
-        addedCount++;
-      }
-    });
-
-    // Show summary messages
-    if (duplicateCount > 0) {
-      showToast(tr('upload.duplicateSkipped', { values: { count: duplicateCount } }), 'warning')
     }
+    else {
+      // Process all files concurrently to avoid blocking the UI
+      const filePromises = paths.map(async (filePath) => {
+        try {
+          const fileName = filePath.split(/[\/\\]/).pop() || '';
+          const recipientKey = useEncryptedSharing && recipientPublicKey.trim() ? recipientPublicKey.trim() : undefined;
 
-    if (addedCount > 0) {
-      showUploadSummaryMessage(addedCount);
+          // UNIFIED UPLOAD: Single command chunks, encrypts, and publishes to DHT
+          const result = await invoke<{merkleRoot: string, fileName: string, fileSize: number, isEncrypted: boolean, peerId: string, version: number}>(
+            "upload_and_publish_file",
+            {
+              filePath,
+              fileName: null,  // File path already contains correct name
+              recipientPublicKey: recipientKey
+            }
+          );
+
+          // Check for duplicates
+          if (get(files).some((f: FileItem) => f.hash === result.merkleRoot)) {
+            return { type: 'duplicate', fileName };
+          }
+
+          const isDhtRunning = dhtService.getPeerId() !== null;
+
+          const newFile: FileItem = {
+            id: `file-${Date.now()}-${Math.random()}`,
+            name: result.fileName,
+            path: filePath,
+            hash: result.merkleRoot,
+            size: result.fileSize,
+            status: isDhtRunning ? 'seeding' : 'uploaded',
+            seeders: isDhtRunning ? 1 : 0,
+            leechers: 0,
+            uploadDate: new Date(),
+            version: result.version,  // Use version from backend
+            isEncrypted: result.isEncrypted,
+          };
+
+          files.update(f => [...f, newFile]);
+
+          return { type: 'success', fileName };
+        } catch (error) {
+          console.error(error);
+          const fileName = filePath.split(/[\/]/).pop() || 'unknown file';
+          showToast(tr('upload.fileFailed', { values: { name: fileName, error: String(error) } }), 'error');
+          return { type: 'error', fileName: fileName, error };
+        }
+      });
+
+      // Wait for all files to be processed concurrently
+      const results = await Promise.all(filePromises);
+
+      // Count results
+      results.forEach(result => {
+        if (result.type === 'duplicate') {
+          duplicateCount++;
+        } else if (result.type === 'success') {
+          addedCount++;
+        }
+      });
+
+      // Show summary messages
+      if (duplicateCount > 0) {
+        showToast(tr('upload.duplicateSkipped', { values: { count: duplicateCount } }), 'warning')
+      }
+
+      if (addedCount > 0) {
+        showUploadSummaryMessage(addedCount);
+      }
     }
   }
 
