@@ -1787,7 +1787,43 @@ async fn upload_file_to_network(
             .await
             .map_err(|e| format!("Failed to upload file: {}", e))?;
 
-        Ok(())
+        // Get the file hash by reading the file and calculating it
+        let file_data = tokio::fs::read(&file_path)
+            .await
+            .map_err(|e| format!("Failed to read file: {}", e))?;
+        let file_hash = file_transfer::FileTransferService::calculate_file_hash(&file_data);
+
+        // Also publish to DHT if it's running
+        let dht = {
+            let dht_guard = state.dht.lock().await;
+            dht_guard.as_ref().cloned()
+        };
+
+        if let Some(dht) = dht {
+            let metadata = FileMetadata {
+                merkle_root: file_hash.clone(),
+                is_root: true,
+                file_name: file_name.to_string(),
+                file_size: file_data.len() as u64,
+                file_data: file_data.clone(),
+                seeders: vec![],
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+                mime_type: None,
+                is_encrypted: false,
+                encryption_method: None,
+                key_fingerprint: None,
+                parent_hash: None,
+                version: Some(1),
+                cids: None,
+            };
+
+            Ok(())
+        } else {
+            Err("DHT Service not running.".to_string())
+        }
     } else {
         Err("File transfer service is not running".to_string())
     }
