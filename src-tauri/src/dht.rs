@@ -21,8 +21,14 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio_util::compat::TokioAsyncReadCompatExt;
 use tracing::{debug, error, info, warn};
 
+use crate::encryption::EncryptedAesKeyBundle;
+use crate::manager::ChunkManager;
 use crate::peer_selection::{PeerMetrics, PeerSelectionService, SelectionStrategy};
 use crate::webrtc_service::{get_webrtc_service, FileChunk};
+use aes_gcm::aead::{Aead, AeadCore, OsRng};
+use aes_gcm::{Aes256Gcm, Key, KeyInit};
+use rand::RngCore;
+use x25519_dalek::{PublicKey, StaticSecret};
 use std::io::{self};
 use tokio_socks::tcp::Socks5Stream;
 
@@ -926,10 +932,24 @@ async fn run_dht_node(
                             // Store the Merkle root before processing
                             let original_merkle_root = metadata.merkle_root.clone();
 
+                            let chunk_manager = ChunkManager::new(std::path::PathBuf::from("."));
+                            let mut key_bytes = [0u8; 32];
+                            OsRng.fill_bytes(&mut key_bytes);
+                            let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
+
                             let blocks = split_into_blocks(&metadata.file_data, chunk_size);
                             let mut block_cids = Vec::new();
                             for (idx, block) in blocks.iter().enumerate() {
-                                let cid = match block.cid() {
+                                let encrypted_chunk = match chunk_manager.encrypt_chunk(block.data(), &key) {
+                                    Ok(c) => c,
+                                    Err(e) => {
+                                        error!("failed to encrypt chunk: {}", e);
+                                        let _ = event_tx.send(DhtEvent::Error(format!("failed to encrypt chunk: {}", e))).await;
+                                        return;
+                                    }
+                                };
+                                let encrypted_block = ByteBlock(encrypted_chunk);
+                                let cid = match encrypted_block.cid() {
                                     Ok(c) => c,
                                     Err(e) => {
                                         error!("failed to get cid for block: {}", e);
@@ -937,9 +957,9 @@ async fn run_dht_node(
                                         return;
                                     }
                                 };
-                                println!("block {} size={} cid={}", idx, block.data().len(), cid);
+                                println!("block {} size={} cid={}", idx, encrypted_block.data().len(), cid);
 
-                                match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(cid.clone(), block.data().to_vec())                          {
+                                match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(cid.clone(), encrypted_block.data().to_vec())                          {
                                     Ok(_) => {},
                                     Err(e) => {
                                         error!("failed to store block {}: {}", cid, e);
@@ -1302,7 +1322,18 @@ async fn run_dht_node(
                                     // This is a regular data block
                                     match queries.get(&query_id) {
                                         Some(index) => {
-                                            downloaded_chunks.insert(*index as usize, data.clone());
+                                            let chunk_manager = ChunkManager::new(std::path::PathBuf::from("."));
+                                            let mut key_bytes = [0u8; 32];
+                                            let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
+                                            let decrypted_chunk = match chunk_manager.decrypt_chunk(&data, &key) {
+                                                Ok(c) => c,
+                                                Err(e) => {
+                                                    error!("failed to decrypt chunk: {}", e);
+                                                    let _ = event_tx.send(DhtEvent::Error(format!("failed to decrypt chunk: {}", e))).await;
+                                                    return;
+                                                }
+                                            };
+                                            downloaded_chunks.insert(*index as usize, decrypted_chunk.clone());
                                             queries.remove(&query_id);
                                             if queries.is_empty() {
                                                 info!("all requested cids have been downloaded.");

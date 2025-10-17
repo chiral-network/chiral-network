@@ -172,7 +172,7 @@ impl ChunkManager {
     }
 
     // This function now returns the nonce and ciphertext combined for easier storage
-    fn encrypt_chunk(&self, data: &[u8], key: &Key<Aes256Gcm>) -> Result<Vec<u8>, String> {
+    pub fn encrypt_chunk(&self, data: &[u8], key: &Key<Aes256Gcm>) -> Result<Vec<u8>, String> {
         let cipher = Aes256Gcm::new(key);
         let nonce = Aes256Gcm::generate_nonce(&mut OsRng); // Generate a unique nonce for each chunk
         let ciphertext = cipher.encrypt(&nonce, data).map_err(|e| e.to_string())?;
