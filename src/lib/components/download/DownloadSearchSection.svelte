@@ -13,6 +13,8 @@
   import type { FileMetadata } from '$lib/dht';
   import SearchResultCard from './SearchResultCard.svelte';
   import { dhtSearchHistory, type SearchHistoryEntry, type SearchStatus } from '$lib/stores/searchHistory';
+  import PeerSelectionModal, { type PeerInfo } from './PeerSelectionModal.svelte';
+  import PeerSelectionService from '$lib/services/peerSelectionService';
 
   type ToastType = 'success' | 'error' | 'info' | 'warning';
   type ToastPayload = { message: string; type?: ToastType; duration?: number };
@@ -20,7 +22,7 @@
   const dispatch = createEventDispatcher<{ download: FileMetadata; message: ToastPayload }>();
   const tr = (key: string, params?: Record<string, unknown>) => (get(t) as any)(key, params);
 
-  const SEARCH_TIMEOUT_MS = 2_000; // Very aggressive timeout to prevent hanging
+  const SEARCH_TIMEOUT_MS = 30_000; // 30 seconds for DHT searches to find peers
 
   let searchHash = '';
   let searchMode = 'hash'; // 'hash' or 'name'
@@ -34,6 +36,12 @@
   let activeHistoryId: string | null = null;
   let versionResults: any[] = [];
   let showHistoryDropdown = false;
+
+  // Peer selection modal state
+  let showPeerSelectionModal = false;
+  let selectedFile: FileMetadata | null = null;
+  let peerSelectionMode: 'auto' | 'manual' = 'auto';
+  let availablePeers: PeerInfo[] = [];
 
   const unsubscribe = dhtSearchHistory.subscribe((entries) => {
     historyEntries = entries;
@@ -240,28 +248,9 @@
           }
         }
       } else {
-        // First, check local files for the hash (immediate local seed)
-        const localMatch = get(files).find(f => f.hash === trimmed || f.name === trimmed);
-        if (localMatch) {
-          const metadata: FileMetadata = {
-            fileHash: localMatch.hash,
-            fileName: localMatch.name,
-            fileSize: localMatch.size || 0,
-            seeders: [ 'local_peer' ],
-            createdAt: localMatch.uploadDate ? localMatch.uploadDate.getTime() : Date.now(),
-            isEncrypted: !!localMatch.isEncrypted,
-            manifest: localMatch.manifest ? JSON.stringify(localMatch.manifest) : undefined,
-          };
-
-          latestMetadata = metadata;
-          latestStatus = 'found';
-          const entry = dhtSearchHistory.addPending(trimmed);
-          activeHistoryId = entry.id;
-          dhtSearchHistory.updateEntry(entry.id, { status: 'found', metadata, elapsedMs: Math.round(performance.now() - startedAt) });
-          pushMessage(tr('download.search.status.foundNotification', { values: { name: metadata.fileName } }), 'success');
-          isSearching = false;
-          return;
-        }
+        // Skip local file lookup - always search DHT for peer information
+        // This ensures we get proper seeder lists for peer selection
+        console.log('🔍 Searching DHT for file hash:', trimmed);
 
         // Original hash search
         const entry = dhtSearchHistory.addPending(trimmed);
@@ -356,8 +345,8 @@
       version: version.version
     };
 
-    dispatch('download', metadata);
-    pushMessage(`Starting download of ${version.file_name} v${version.version}`, 'info', 3000);
+    // Show peer selection modal instead of direct download
+    await handleFileDownload(metadata);
   }
 
   function statusIcon(status: string) {
@@ -400,6 +389,92 @@
     if (!target.closest('.search-input-container')) {
       showHistoryDropdown = false;
     }
+  }
+
+  // Handle file download - show peer selection modal first
+  async function handleFileDownload(metadata: FileMetadata) {
+    // Check if there are any seeders
+    if (!metadata.seeders || metadata.seeders.length === 0) {
+      pushMessage('No seeders available for this file', 'warning');
+      dispatch('download', metadata);
+      return;
+    }
+
+    selectedFile = metadata;
+
+    // Fetch peer metrics for each seeder
+    try {
+      const allMetrics = await PeerSelectionService.getPeerMetrics();
+
+      availablePeers = metadata.seeders.map(seederId => {
+        const metrics = allMetrics.find(m => m.peer_id === seederId);
+
+        return {
+          peerId: seederId,
+          latency_ms: metrics?.latency_ms,
+          bandwidth_kbps: metrics?.bandwidth_kbps,
+          reliability_score: metrics?.reliability_score ?? 0.5,
+          price_per_mb: 0.001,  // Default price, could come from metadata in future
+          selected: true,  // All selected by default
+          percentage: Math.round(100 / metadata.seeders.length)  // Equal split
+        };
+      });
+
+      showPeerSelectionModal = true;
+    } catch (error) {
+      console.error('Failed to fetch peer metrics:', error);
+      // Fall back to direct download without peer selection
+      pushMessage('Failed to load peer selection, proceeding with default download', 'warning');
+      dispatch('download', metadata);
+    }
+  }
+
+  // Confirm peer selection and start download
+  async function confirmPeerSelection() {
+    if (!selectedFile) return;
+
+    let selectedPeers: string[];
+
+    if (peerSelectionMode === 'auto') {
+      // Auto-select best peers
+      selectedPeers = await PeerSelectionService.getPeersForParallelDownload(
+        selectedFile.seeders,
+        selectedFile.fileSize,
+        3,  // Max 3 peers
+        selectedFile.isEncrypted
+      );
+    } else {
+      // Manual selection - use user's choices
+      selectedPeers = availablePeers
+        .filter(p => p.selected)
+        .map(p => p.peerId);
+    }
+
+    // Create metadata with selected peers
+    const fileWithSelectedPeers: FileMetadata & { peerAllocation?: any[] } = {
+      ...selectedFile,
+      seeders: selectedPeers,  // Override with selected peers
+      peerAllocation: peerSelectionMode === 'manual'
+        ? availablePeers.filter(p => p.selected).map(p => ({
+            peerId: p.peerId,
+            percentage: p.percentage
+          }))
+        : undefined  // Auto mode lets backend decide
+    };
+
+    // Dispatch to parent (Download.svelte)
+    dispatch('download', fileWithSelectedPeers);
+
+    // Close modal and reset state
+    showPeerSelectionModal = false;
+    selectedFile = null;
+    pushMessage(`Starting download with ${selectedPeers.length} selected peer${selectedPeers.length === 1 ? '' : 's'}`, 'info', 3000);
+  }
+
+  // Cancel peer selection
+  function cancelPeerSelection() {
+    showPeerSelectionModal = false;
+    selectedFile = null;
   }
 </script>
 
@@ -565,7 +640,7 @@
               <SearchResultCard
                 metadata={latestMetadata}
                 on:copy={handleCopy}
-                on:download={event => dispatch('download', event.detail)}
+                on:download={event => handleFileDownload(event.detail)}
               />
               <p class="text-xs text-muted-foreground">
                 {tr('download.search.status.completedIn', { values: { seconds: (lastSearchDuration / 1000).toFixed(1) } })}
@@ -591,3 +666,14 @@
     {/if}
   </div>
 </Card>
+
+<!-- Peer Selection Modal -->
+<PeerSelectionModal
+  show={showPeerSelectionModal}
+  fileName={selectedFile?.fileName || ''}
+  fileSize={selectedFile?.fileSize || 0}
+  bind:peers={availablePeers}
+  bind:mode={peerSelectionMode}
+  on:confirm={confirmPeerSelection}
+  on:cancel={cancelPeerSelection}
+/>
