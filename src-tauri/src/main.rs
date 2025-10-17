@@ -21,7 +21,6 @@ mod pool;
 mod proxy_latency;
 mod stream_auth;
 mod webrtc_service;
-use std::sync::Mutex as StdMutex;
 
 use crate::commands::auth::{
     cleanup_expired_proxy_auth_tokens, generate_proxy_auth_token, revoke_proxy_auth_token,
@@ -4137,103 +4136,6 @@ async fn upload_and_publish_file(
 
             ft.store_file_data(manifest.merkle_root.clone(), file_name.clone(), file_data)
                 .await; // Store with Merkle root as key
-        }
-
-        dht.publish_file(metadata).await?;
-        version
-    } else {
-        1 // Default to v1 if DHT not running
-    };
-
-    // 5. Return metadata to frontend
-    Ok(UploadResult {
-        merkle_root: manifest.merkle_root,
-        file_name,
-        file_size,
-        is_encrypted: true,
-        peer_id,
-        version,
-    })
-}
-
-#[tauri::command]
-async fn totoro_upload_and_publish_file(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    file_path: String,
-) -> Result<UploadResult, String> {
-    // 1. Process file with ChunkManager (encrypt, chunk, build Merkle tree)
-    // let manifest = encrypt_file_for_recipient(
-    //     app.clone(),
-    //     state.clone(),
-    //     file_path.clone(),
-    //     recipient_public_key.clone(),
-    // )
-    // .await?;
-
-    // 2. Get file name (use provided name or extract from path)
-    let file_name = std::path::Path::new(&file_path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unknown")
-        .to_string();
-
-    let file_size: u64 = manifest.chunks.iter().map(|c| c.size as u64).sum();
-
-    // 3. Get peer ID from DHT
-    let peer_id = {
-        let dht_guard = state.dht.lock().await;
-        if let Some(dht) = dht_guard.as_ref() {
-            dht.get_peer_id().await
-        } else {
-            "unknown".to_string()
-        }
-    };
-
-    // 4. Publish to DHT with versioning support
-    let dht = {
-        let dht_guard = state.dht.lock().await;
-        dht_guard.as_ref().cloned()
-    };
-
-    let version = if let Some(dht) = dht {
-        let created_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        // Use prepare_versioned_metadata to handle version incrementing and parent_hash
-        let mime_type = detect_mime_type_from_filename(&file_name)
-            .unwrap_or_else(|| "application/octet-stream".to_string());
-        let metadata = dht
-            .prepare_versioned_metadata(
-                manifest.merkle_root.clone(),
-                file_name.clone(),
-                file_size,
-                vec![], // Empty - chunks already stored
-                created_at,
-                Some(mime_type),
-                true, // is_encrypted
-                Some("AES-256-GCM".to_string()),
-                None, // key_fingerprint
-            )
-            .await?;
-
-        let version = metadata.version.unwrap_or(1);
-
-        // Store file data locally for seeding (CRITICAL FIX)
-        let ft = {
-            let ft_guard = state.file_transfer.lock().await;
-            ft_guard.as_ref().cloned()
-        };
-        if let Some(ft) = ft {
-            // Read the original file data to store locally
-            let file_data = tokio::fs::read(&file_path)
-                .await
-                .map_err(|e| format!("Failed to read file for local storage: {}", e))?;
-
-            ft.store_file_data(manifest.merkle_root.clone(), file_name.clone(), file_data)
-                .await;
         }
 
         dht.publish_file(metadata).await?;

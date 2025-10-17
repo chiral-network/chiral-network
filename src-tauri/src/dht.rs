@@ -171,7 +171,7 @@ struct ReachabilityRecord {
 struct DhtBehaviour {
     kademlia: Kademlia<MemoryStore>,
     identify: identify::Behaviour,
-    mdns: Mdns,
+    mdns: toggle::Toggle<Mdns>,
     bitswap: beetswap::Behaviour<MAX_MULTIHASH_LENGHT, RedbBlockstore>,
     ping: ping::Behaviour,
     proxy_rr: rr::Behaviour<ProxyCodec>,
@@ -184,7 +184,10 @@ struct DhtBehaviour {
 }
 #[derive(Debug)]
 pub enum DhtCommand {
-    PublishFile(FileMetadata),
+    PublishFile {
+        metadata: FileMetadata,
+        response_tx: oneshot::Sender<FileMetadata>,
+    },
     SearchFile(String),
     DownloadFile(FileMetadata),
     ConnectPeer(String),
@@ -1377,10 +1380,6 @@ async fn run_dht_node(
 
     'outer: loop {
         tokio::select! {
-            _= dht_maintenance_interval.tick() => {
-                info!("Triggering periodic DHT maintenanace: Kademlia bootstrap and Record Refresh.");
-                let _ = swarm.behaviour_mut().kademlia.bootstrap();
-            }
             cmd = cmd_rx.recv() => {
                 match cmd {
                     Some(DhtCommand::Shutdown(ack)) => {
@@ -1388,7 +1387,7 @@ async fn run_dht_node(
                         shutdown_ack = Some(ack);
                         break 'outer;
                     }
-                    Some(DhtCommand::PublishFile(mut metadata)) => {
+                    Some(DhtCommand::PublishFile { mut metadata, response_tx }) => {
                         // If file_data is NOT empty (non-encrypted files or inline data),
                         // create blocks, generate a Merkle root, and a root CID.
                         if !metadata.file_data.is_empty() {
@@ -1447,7 +1446,9 @@ async fn run_dht_node(
 
                             // The file_hash is the Merkle Root. The root_cid is for retrieval.
                             metadata.merkle_root = hex::encode(merkle_root);
-                            metadata.cids = Some(vec![root_cid]); // Store the root CID for bitswap retrieval
+                            // like the idea of only storing the root block, then peers giving list of needed CIDs when root block is asked for
+                            // however a bit complex to implement...
+                            metadata.cids = Some(block_cids); // Store all CIDs for bitswap retrieval
                             metadata.file_data.clear(); // Don't store full data in DHT record
 
                             println!("Publishing file with root CID: {} (merkle_root: {:?})",
@@ -1536,7 +1537,10 @@ async fn run_dht_node(
 
                             info!("TODO - Register keyword '{}' with file hash '{}'", keyword, metadata.merkle_root);
                         }
-                        let _ = event_tx.send(DhtEvent::PublishedFile(metadata)).await;
+                        // notify frontend
+                        let _ = event_tx.send(DhtEvent::PublishedFile(metadata.clone())).await;
+                        // store in file_uploaded_cache
+                        let _ = response_tx.send(metadata.clone());
                     }
                     Some(DhtCommand::DownloadFile(file_metadata)) =>{
                         // Get root CID from file hash
@@ -3377,8 +3381,12 @@ impl DhtService {
         let chunk_size = chunk_size_kb.unwrap_or(256) * 1024; // Default 256 KB
         let cache_size = cache_size_mb.unwrap_or(1024); // Default 1024 MB
         let blockstore = if let Some(path) = blockstore_db_path {
+            if let Some(path_str) = path.to_str() {
+                info!("Using blockstore from disk, {}", path_str);
+            }
             Arc::new(RedbBlockstore::open(path).await?)
         } else {
+            info!("Using in memory blockstore");
             Arc::new(RedbBlockstore::in_memory()?)
         };
 
@@ -3484,6 +3492,7 @@ impl DhtService {
         let (relay_transport, relay_client_behaviour) = relay::client::new(local_peer_id);
         let autonat_client_toggle = toggle::Toggle::from(autonat_client_behaviour);
         let autonat_server_toggle = toggle::Toggle::from(autonat_server_behaviour);
+        let mdns_toggle = toggle::Toggle::from(mdns_opt);
 
         // DCUtR requires relay to be enabled
         let dcutr_behaviour = if enable_autonat {
@@ -3509,7 +3518,7 @@ impl DhtService {
         let mut behaviour = Some(DhtBehaviour {
             kademlia,
             identify,
-            mdns: toggle::Toggle::from(mdns_opt),
+            mdns: mdns_toggle,
             bitswap,
             ping: Ping::new(ping::Config::new()),
             proxy_rr,
@@ -3744,15 +3753,22 @@ impl DhtService {
     }
 
     pub async fn publish_file(&self, metadata: FileMetadata) -> Result<(), String> {
-        self.file_metadata_cache
-            .lock()
-            .await
-            .insert(metadata.merkle_root.clone(), metadata.clone());
+        let (response_tx, response_rx) = oneshot::channel();
+
         self.cmd_tx
-            .send(DhtCommand::PublishFile(metadata))
+            .send(DhtCommand::PublishFile {
+                metadata,
+                response_tx,
+            })
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+
+        let cid_populated_metadata = response_rx.await.map_err(|e| e.to_string())?;
+
+        self.cache_remote_file(&cid_populated_metadata).await;
+        Ok(())
     }
+
     pub async fn stop_publishing_file(&self, file_hash: String) -> Result<(), String> {
         self.cmd_tx
             .send(DhtCommand::StopPublish(file_hash))
