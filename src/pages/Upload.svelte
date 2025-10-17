@@ -480,24 +480,26 @@
             console.log('No existing versions found for', fileName);
           }
           // Use versioned upload - let backend handle duplicate detection
-          // const metadata = await dhtService.publishFileToNetwork(filePath);
+          const metadata = await dhtService.publishFileToNetwork(filePath);
 
-          // const newFile = {
-          //   id: `file-${Date.now()}-${Math.random()}`,
-          //   name: metadata.fileName,
-          //   path: filePath,
-          //   hash: metadata.fileHash,
-          //   size: metadata.fileSize,
-          //   status: 'seeding' as const,
-          //   seeders: 1,
-          //   leechers: 0,
-          //   uploadDate: new Date(metadata.createdAt),
-          //   version: metadata.version,
-          // };
+          const newFile = {
+            id: `file-${Date.now()}-${Math.random()}`,
+            name: metadata.fileName,
+            path: filePath,
+            hash: metadata.fileHash,
+            size: metadata.fileSize,
+            status: 'seeding' as const,
+            seeders: 1,
+            leechers: 0,
+            uploadDate: new Date(metadata.createdAt),
+            version: metadata.version,
+          };
 
-          // files.update(f => [...f, newFile]);
-          // addedCount++;
-          // showToast(`${fileName} uploaded as v${metadata.version} (new file)`, 'success');
+          files.update(f => [...f, newFile]);
+          addedCount++;
+          showToast(`${fileName} uploaded as v${metadata.version} (new file)`, 'success');
+
+          console.log(metadata)
 
           // Publish file metadata to DHT network for discovery
           try {

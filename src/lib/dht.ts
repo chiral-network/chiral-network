@@ -189,6 +189,31 @@ export class DhtService {
     }
   }
 
+  async publishFileToNetwork(filePath: string): Promise<FileMetadata> {
+    try {
+      // Start listening for the published_file event
+      const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {
+        const unlistenPromise = listen<FileMetadata>(
+          "published_file",
+          (event) => {
+            resolve(event.payload);
+            // Unsubscribe once we got the event
+            unlistenPromise.then((unlistenFn) => unlistenFn());
+          }
+        );
+      });
+
+      // Trigger the backend upload
+      await invoke("upload_file_to_network", { filePath });
+
+      // Wait until the event arrives
+      return await metadataPromise;
+    } catch (error) {
+      console.error("Failed to publish file:", error);
+      throw error;
+    }
+  }
+
   async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
     try {
       console.log("Initiating download for file:", fileMetadata.fileHash);
