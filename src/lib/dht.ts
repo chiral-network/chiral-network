@@ -46,6 +46,8 @@ export interface FileMetadata {
   keyFingerprint?: string;
   version?: number;
   manifest?: string;
+  isRoot?: boolean;
+  cids?: string[];
 }
 
 export interface FileManifestForJs {
@@ -272,6 +274,10 @@ export class DhtService {
       });
 
       // Trigger the backend upload
+      fileMetadata.merkleRoot = fileMetadata.fileHash;
+      fileMetadata.fileData = [];
+      fileMetadata.isRoot = true;
+      console.log(fileMetadata);
       await invoke("download_blocks_from_network", { fileMetadata });
 
       // Wait until the event arrives

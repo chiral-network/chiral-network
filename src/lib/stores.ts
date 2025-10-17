@@ -36,6 +36,7 @@ export interface FileItem {
   isEncrypted?: boolean;
   manifest?: any;
   path?: string;
+  cids?: string[];
 }
 
 export interface ProxyNode {

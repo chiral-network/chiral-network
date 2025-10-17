@@ -251,6 +251,7 @@
             createdAt: localMatch.uploadDate ? localMatch.uploadDate.getTime() : Date.now(),
             isEncrypted: !!localMatch.isEncrypted,
             manifest: localMatch.manifest ? JSON.stringify(localMatch.manifest) : undefined,
+            cids: localMatch.cids
           };
 
           latestMetadata = metadata;
