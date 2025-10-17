@@ -59,9 +59,10 @@
     }
   }
 
-  function confirmDecryptAndQueue() {
+  async function confirmDecryptAndQueue() {
     showDecryptDialog = false;
-    dispatch('download', metadata);
+    await dhtService.downloadFile(metadata);
+    // dispatch('download', metadata);
   }
 
   function cancelDecryptDialog() {
