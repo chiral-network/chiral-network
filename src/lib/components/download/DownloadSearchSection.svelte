@@ -21,7 +21,7 @@
   const tr = (key: string, params?: Record<string, unknown>) => (get(t) as any)(key, params);
 
   const SEARCH_TIMEOUT_MS = 2_000; // Very aggressive timeout to prevent hanging
-  export let is_bitswap: boolean = false;
+  export let isBitswap: boolean = false;
   let searchHash = '';
   let searchMode = 'hash'; // 'hash' or 'name'
   let isSearching = false;
@@ -242,7 +242,7 @@
       } else {
         // First, check local files for the hash (immediate local seed)
         const localMatch = get(files).find(f => f.hash === trimmed || f.name === trimmed);
-        if (localMatch && !is_bitswap) {
+        if (localMatch && !isBitswap) {
           const metadata: FileMetadata = {
             fileHash: localMatch.hash,
             fileName: localMatch.name,
@@ -567,6 +567,7 @@
                 metadata={latestMetadata}
                 on:copy={handleCopy}
                 on:download={event => dispatch('download', event.detail)}
+                isBitswap={isBitswap}
               />
               <p class="text-xs text-muted-foreground">
                 {tr('download.search.status.completedIn', { values: { seconds: (lastSearchDuration / 1000).toFixed(1) } })}

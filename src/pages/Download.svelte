@@ -285,20 +285,20 @@
     }
   }
   // Commented out - not currently used but kept for future reference
-  async function saveRawData(fileName: string, data: Uint8Array) {
-    try {
-      const { save } = await import('@tauri-apps/plugin-dialog');
-      const filePath = await save({ defaultPath: fileName });
-      if (filePath) {
-        const { writeFile } = await import('@tauri-apps/plugin-fs');
-        await writeFile(filePath, new Uint8Array(data));
-        showNotification(`Successfully saved "${fileName}"`, 'success');
-      }
-    } catch (error) {
-      console.error('Failed to save file:', error);
-      showNotification(`Error saving "${fileName}"`, 'error');
-    }
-  }
+  // async function saveRawData(fileName: string, data: Uint8Array) {
+  //   try {
+  //     const { save } = await import('@tauri-apps/plugin-dialog');
+  //     const filePath = await save({ defaultPath: fileName });
+  //     if (filePath) {
+  //       const { writeFile } = await import('@tauri-apps/plugin-fs');
+  //       await writeFile(filePath, new Uint8Array(data));
+  //       showNotification(`Successfully saved "${fileName}"`, 'success');
+  //     }
+  //   } catch (error) {
+  //     console.error('Failed to save file:', error);
+  //     showNotification(`Error saving "${fileName}"`, 'error');
+  //   }
+  // }
 
   function handleSearchMessage(event: CustomEvent<{ message: string; type?: 'success' | 'error' | 'info' | 'warning'; duration?: number }>) {
     const { message, type = 'info', duration = 4000 } = event.detail
@@ -308,13 +308,9 @@
   async function handleSearchDownload(metadata: FileMetadata) {
     const allFiles = [...$downloadQueue]
     const existingFile = allFiles.find((file) => file.hash === metadata.fileHash)
-    // Uncomment below if you need to save raw data for testing
+    
     if (selectedProtocol === 'Bitswap') {
-      console.log("🔍 DEBUG: Saving raw file data for Bitswap download:", metadata.fileName);
-          const fileName = metadata.fileName;
-          const fileData = new Uint8Array(metadata.fileData ?? []);
-          saveRawData(fileName, fileData);
-          return
+      return;
     }
 
     if (existingFile) {
@@ -988,7 +984,7 @@
     <DownloadSearchSection
       on:download={(event) => handleSearchDownload(event.detail)}
       on:message={handleSearchMessage}
-      is_bitswap={selectedProtocol === 'Bitswap'}
+      isBitswap={selectedProtocol === 'Bitswap'}
     />
   {/if}
 
