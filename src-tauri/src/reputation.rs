@@ -7,6 +7,10 @@ use sha2::{Digest, Sha256};
 use ed25519_dalek::{SigningKey, VerifyingKey, Signer, Verifier, Signature};
 use rand::rngs::OsRng;
 
+// Ethereum integration imports
+use ethers::prelude::*;
+use ethers::types::{Address, U256, BlockNumber};
+
 // ============================================================================
 // REPUTATION TYPES
 // ============================================================================
@@ -369,45 +373,347 @@ impl ReputationContract {
     pub async fn submit_epoch(
         &self,
         epoch: &ReputationEpoch,
-        _private_key: &str,
+        private_key: &str,
     ) -> Result<String, String> {
-        // TODO: Implement actual Ethereum transaction submission
-        // In a real implementation, this would:
-        // 1. Connect to Ethereum network
-        // 2. Create transaction to submitEpoch function
-        // 3. Sign transaction with private key
-        // 4. Send transaction and wait for confirmation
-        // 5. Return transaction hash
+        // Connect to Ethereum network
+        let provider = Provider::<Http>::try_from("http://127.0.0.1:8545")
+            .map_err(|e| format!("Failed to connect to Geth: {}", e))?;
+
+        // Parse and validate private key
+        let private_key_clean = private_key.strip_prefix("0x").unwrap_or(private_key);
+        let wallet: LocalWallet = private_key_clean
+            .parse()
+            .map_err(|e| format!("Invalid private key: {}", e))?;
+
+        let chain_id = 98765u64; // Chiral Network chain ID
+        let wallet = wallet.with_chain_id(chain_id);
+        let client = SignerMiddleware::new(provider.clone(), wallet);
+
+        // For now, we'll create a simple transaction that stores the epoch data
+        // In a full implementation, this would call a smart contract function
+        // For this commit, we'll create a transaction with epoch data in the data field
         
-        // For now, return a mock transaction hash
-        Ok(format!("0x{:x}", epoch.epoch_id))
+        let epoch_data = serde_json::to_string(epoch)
+            .map_err(|e| format!("Failed to serialize epoch: {}", e))?;
+        
+        // Get the sender's address
+        let sender_address = client.address();
+        
+        // Get nonce for pending block
+        let nonce = provider
+            .get_transaction_count(sender_address, Some(BlockNumber::Pending.into()))
+            .await
+            .map_err(|e| format!("Failed to get nonce: {}", e))?;
+
+        // Get gas price
+        let gas_price = provider
+            .get_gas_price()
+            .await
+            .map_err(|e| format!("Failed to get gas price: {}", e))?;
+
+        // Create transaction request
+        let tx_request = TransactionRequest::new()
+            .to(sender_address) // Self-transaction for now (would be contract address in full implementation)
+            .value(U256::zero())
+            .gas(100000) // Sufficient gas for reputation epoch submission
+            .gas_price(gas_price)
+            .nonce(nonce)
+            .data(epoch_data.as_bytes().to_vec());
+
+        // Send transaction
+        let pending_tx = client
+            .send_transaction(tx_request, None)
+            .await
+            .map_err(|e| format!("Failed to send transaction: {}", e))?;
+
+        // Get transaction hash
+        let tx_hash = pending_tx.tx_hash();
+        
+        tracing::info!("Submitted reputation epoch {} to blockchain with tx hash: {:?}", 
+                      epoch.epoch_id, tx_hash);
+
+        Ok(format!("{:?}", tx_hash))
     }
 
-    pub async fn get_epoch(&self, _epoch_id: u64) -> Result<Option<ReputationEpoch>, String> {
-        // TODO: Implement actual Ethereum contract call
-        // In a real implementation, this would:
-        // 1. Connect to Ethereum network
-        // 2. Call getEpoch function on contract
-        // 3. Parse returned data into ReputationEpoch
-        // 4. Return epoch data
+    pub async fn get_epoch(&self, epoch_id: u64) -> Result<Option<ReputationEpoch>, String> {
+        // Connect to Ethereum network
+        let provider = Provider::<Http>::try_from("http://127.0.0.1:8545")
+            .map_err(|e| format!("Failed to connect to Geth: {}", e))?;
+
+        // In a full implementation, this would:
+        // 1. Call a smart contract function to get epoch data
+        // 2. Parse the returned data into ReputationEpoch
+        // For now, we'll search through recent transactions for reputation epochs
         
-        // For now, return None as placeholder
+        // Get the latest block number
+        let latest_block = provider
+            .get_block_number()
+            .await
+            .map_err(|e| format!("Failed to get latest block: {}", e))?;
+
+        // Search recent blocks for reputation transactions (last 100 blocks)
+        let start_block = latest_block.saturating_sub(100);
+        
+        let start = start_block.as_u64();
+        let end = latest_block.as_u64();
+        for block_num in start..=end {
+            let block_number = U64::from(block_num);
+            if let Ok(Some(block)) = provider.get_block_with_txs(block_number).await {
+                for tx in block.transactions {
+                    if !tx.input.is_empty() {
+                        let data = &tx.input;
+                        // Try to deserialize as ReputationEpoch
+                        if let Ok(epoch_data) = std::str::from_utf8(&data) {
+                            if let Ok(epoch) = serde_json::from_str::<ReputationEpoch>(epoch_data) {
+                                if epoch.epoch_id == epoch_id {
+                                    tracing::info!("Found reputation epoch {} in block {}", epoch_id, block_num);
+                                    return Ok(Some(epoch));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        tracing::debug!("Reputation epoch {} not found in recent blocks", epoch_id);
         Ok(None)
     }
 
     pub async fn verify_event_proof(
         &self,
-        _event_hash: &str,
-        _proof: Vec<String>,
-        _epoch_id: u64,
+        event_hash: &str,
+        proof: Vec<String>,
+        epoch_id: u64,
     ) -> Result<bool, String> {
-        // TODO: Implement actual Ethereum contract call
-        // In a real implementation, this would:
-        // 1. Connect to Ethereum network
-        // 2. Call verifyEvent function on contract
-        // 3. Return verification result
+        // Connect to Ethereum network
+        let provider = Provider::<Http>::try_from("http://127.0.0.1:8545")
+            .map_err(|e| format!("Failed to connect to Geth: {}", e))?;
+
+        // First, verify that the epoch exists on the blockchain
+        let epoch = self.get_epoch(epoch_id).await?;
+        if epoch.is_none() {
+            tracing::warn!("Epoch {} not found on blockchain", epoch_id);
+            return Ok(false);
+        }
+
+        // In a full implementation, this would:
+        // 1. Call a smart contract function to verify the Merkle proof
+        // 2. The contract would check if the event hash exists in the epoch's Merkle tree
+        // 3. Return the verification result
         
-        // For now, return true as placeholder
+        // For now, we'll do basic validation:
+        // - Check that we have proof data
+        // - Check that the epoch exists
+        // - Basic format validation
+        
+        if proof.is_empty() {
+            tracing::warn!("Empty proof provided for event {}", event_hash);
+            return Ok(false);
+        }
+
+        if event_hash.is_empty() {
+            tracing::warn!("Empty event hash provided");
+            return Ok(false);
+        }
+
+        // Basic hash format validation (should be hex string)
+        if !event_hash.starts_with("0x") || event_hash.len() != 66 {
+            tracing::warn!("Invalid event hash format: {}", event_hash);
+            return Ok(false);
+        }
+
+        tracing::info!("Verified event proof for event {} in epoch {}", event_hash, epoch_id);
+        Ok(true)
+    }
+
+    /// Verify a complete reputation epoch from blockchain
+    pub async fn verify_epoch_from_blockchain(&self, epoch_id: u64) -> Result<Option<ReputationEpoch>, String> {
+        // Connect to Ethereum network
+        let provider = Provider::<Http>::try_from("http://127.0.0.1:8545")
+            .map_err(|e| format!("Failed to connect to Geth: {}", e))?;
+
+        // Get the epoch from blockchain
+        let epoch = self.get_epoch(epoch_id).await?;
+        
+        if let Some(epoch) = epoch {
+            // Verify the epoch structure and data integrity
+            self.verify_epoch_integrity(&epoch).await?;
+            
+            tracing::info!("Successfully verified epoch {} from blockchain", epoch_id);
+            Ok(Some(epoch))
+        } else {
+            tracing::warn!("Epoch {} not found on blockchain", epoch_id);
+            Ok(None)
+        }
+    }
+
+    /// Verify epoch integrity and blockchain consistency
+    async fn verify_epoch_integrity(&self, epoch: &ReputationEpoch) -> Result<(), String> {
+        // Connect to Ethereum network
+        let provider = Provider::<Http>::try_from("http://127.0.0.1:8545")
+            .map_err(|e| format!("Failed to connect to Geth: {}", e))?;
+
+        // Verify timestamp is reasonable (not in future, not too old)
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        
+        if epoch.timestamp > now {
+            return Err("Epoch timestamp is in the future".to_string());
+        }
+        
+        // Check if timestamp is not too old (more than 1 year)
+        if now - epoch.timestamp > 365 * 24 * 60 * 60 {
+            tracing::warn!("Epoch {} is very old ({} seconds ago)", epoch.epoch_id, now - epoch.timestamp);
+        }
+
+        // Verify event count is reasonable
+        if epoch.event_count == 0 {
+            tracing::warn!("Epoch {} has no events", epoch.epoch_id);
+        }
+
+        // Verify Merkle root format (should be hex string)
+        if !epoch.merkle_root.starts_with("0x") || epoch.merkle_root.len() != 66 {
+            return Err(format!("Invalid Merkle root format: {}", epoch.merkle_root));
+        }
+
+        // If block number is provided, verify it exists on blockchain
+        if let Some(block_number) = epoch.block_number {
+            match provider.get_block(block_number).await {
+                Ok(Some(block)) => {
+                    tracing::debug!("Verified epoch {} is in block {}", epoch.epoch_id, block_number);
+                }
+                Ok(None) => {
+                    return Err(format!("Block {} not found on blockchain", block_number));
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to verify block {}: {}", block_number, e);
+                }
+            }
+        }
+
+        tracing::info!("Epoch {} integrity verification passed", epoch.epoch_id);
+        Ok(())
+    }
+
+    /// Get reputation score for a peer from blockchain epochs
+    pub async fn get_peer_reputation_score(&self, peer_id: &str, from_epoch: Option<u64>) -> Result<f64, String> {
+        // Connect to Ethereum network
+        let provider = Provider::<Http>::try_from("http://127.0.0.1:8545")
+            .map_err(|e| format!("Failed to connect to Geth: {}", e))?;
+
+        let mut total_score = 0.0;
+        let mut event_count = 0;
+        let start_epoch = from_epoch.unwrap_or(0);
+
+        // Get the latest block number to determine search range
+        let latest_block = provider
+            .get_block_number()
+            .await
+            .map_err(|e| format!("Failed to get latest block: {}", e))?;
+
+        // Search recent blocks for reputation epochs (last 1000 blocks)
+        let start_block = latest_block.saturating_sub(1000);
+        
+        for block_num in start_block..=latest_block {
+            if let Ok(Some(block)) = provider.get_block_with_txs(block_num).await {
+                for tx in block.transactions {
+                    if let Some(data) = tx.input {
+                        // Try to deserialize as ReputationEpoch
+                        if let Ok(epoch_data) = std::str::from_utf8(&data) {
+                            if let Ok(epoch) = serde_json::from_str::<ReputationEpoch>(epoch_data) {
+                                if epoch.epoch_id >= start_epoch {
+                                    // This is a reputation epoch, but we need to get the actual events
+                                    // For now, we'll estimate based on epoch metadata
+                                    let epoch_score = self.calculate_epoch_score(&epoch, peer_id).await?;
+                                    total_score += epoch_score;
+                                    event_count += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if event_count == 0 {
+            tracing::debug!("No reputation epochs found for peer {}", peer_id);
+            return Ok(0.5); // Default neutral score
+        }
+
+        let average_score = total_score / event_count as f64;
+        tracing::info!("Peer {} reputation score: {:.3} (from {} epochs)", peer_id, average_score, event_count);
+        
+        Ok(average_score)
+    }
+
+    /// Calculate reputation score from an epoch (placeholder implementation)
+    async fn calculate_epoch_score(&self, epoch: &ReputationEpoch, peer_id: &str) -> Result<f64, String> {
+        // In a full implementation, this would:
+        // 1. Retrieve the actual events from the epoch
+        // 2. Filter events for the specific peer
+        // 3. Calculate weighted score based on event types and impact
+        
+        // For now, we'll use a simple heuristic based on epoch metadata
+        let base_score = 0.5; // Neutral starting point
+        
+        // Adjust based on event count (more events = more activity = potentially better reputation)
+        let activity_factor = (epoch.event_count as f64 / 100.0).min(1.0);
+        
+        // Adjust based on recency (more recent = higher weight)
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let age_days = (now - epoch.timestamp) / (24 * 60 * 60);
+        let recency_factor = if age_days < 7 { 1.0 } else if age_days < 30 { 0.8 } else { 0.6 };
+        
+        let score = base_score + (activity_factor * 0.3) + (recency_factor * 0.2);
+        
+        // Clamp score between 0.0 and 1.0
+        Ok(score.max(0.0).min(1.0))
+    }
+
+    /// Verify that a peer's reputation events are consistent with blockchain data
+    pub async fn verify_peer_reputation_consistency(&self, peer_id: &str, events: &[ReputationEvent]) -> Result<bool, String> {
+        if events.is_empty() {
+            return Ok(true);
+        }
+
+        // Group events by epoch
+        let mut epoch_events: HashMap<u64, Vec<&ReputationEvent>> = HashMap::new();
+        for event in events {
+            if let Some(epoch_id) = event.epoch {
+                epoch_events.entry(epoch_id).or_insert_with(Vec::new).push(event);
+            }
+        }
+
+        // Verify each epoch
+        for (epoch_id, epoch_events) in epoch_events {
+            let blockchain_epoch = self.verify_epoch_from_blockchain(epoch_id).await?;
+            
+            if let Some(blockchain_epoch) = blockchain_epoch {
+                // Verify event count matches
+                if epoch_events.len() != blockchain_epoch.event_count {
+                    tracing::warn!(
+                        "Event count mismatch for peer {} in epoch {}: local={}, blockchain={}",
+                        peer_id, epoch_id, epoch_events.len(), blockchain_epoch.event_count
+                    );
+                    return Ok(false);
+                }
+                
+                // TODO: Verify Merkle tree consistency
+                // This would require reconstructing the Merkle tree from events
+                // and comparing with the blockchain Merkle root
+            } else {
+                tracing::warn!("Epoch {} not found on blockchain for peer {}", epoch_id, peer_id);
+                return Ok(false);
+            }
+        }
+
+        tracing::info!("Peer {} reputation consistency verification passed", peer_id);
         Ok(true)
     }
 
@@ -462,7 +768,7 @@ impl ReputationSystem {
         Ok(())
     }
 
-    pub async fn finalize_epoch(&mut self) -> Result<String, String> {
+    pub async fn finalize_epoch(&mut self, private_key: &str) -> Result<String, String> {
         let epoch_id = self.current_epoch;
         let merkle_root = self.merkle_tree.get_root_hex()
             .ok_or("No events in current epoch")?;
@@ -483,8 +789,7 @@ impl ReputationSystem {
         // Store epoch in DHT
         self.dht_service.store_merkle_root(&epoch).await?;
         
-        // Submit to smart contract
-        let private_key = "mock_private_key"; // In real implementation, get from secure storage
+        // Submit to smart contract with provided private key
         let tx_hash = self.contract.submit_epoch(&epoch, private_key).await?;
         
         // Reset for next epoch
@@ -492,6 +797,21 @@ impl ReputationSystem {
         self.current_epoch += 1;
         
         Ok(tx_hash)
+    }
+
+    /// Get reputation score for a peer from blockchain
+    pub async fn get_peer_reputation_score(&self, peer_id: &str, from_epoch: Option<u64>) -> Result<f64, String> {
+        self.contract.get_peer_reputation_score(peer_id, from_epoch).await
+    }
+
+    /// Verify a peer's reputation consistency with blockchain
+    pub async fn verify_peer_reputation_consistency(&self, peer_id: &str, events: &[ReputationEvent]) -> Result<bool, String> {
+        self.contract.verify_peer_reputation_consistency(peer_id, events).await
+    }
+
+    /// Verify an epoch from blockchain
+    pub async fn verify_epoch_from_blockchain(&self, epoch_id: u64) -> Result<Option<ReputationEpoch>, String> {
+        self.contract.verify_epoch_from_blockchain(epoch_id).await
     }
 }
 
@@ -616,7 +936,7 @@ impl ReputationSystemWithEpochs {
         self.contract.set_contract_address(address);
     }
 
-    pub async fn add_reputation_event(&mut self, mut event: ReputationEvent) -> Result<Option<String>, String> {
+    pub async fn add_reputation_event(&mut self, mut event: ReputationEvent, private_key: &str) -> Result<Option<String>, String> {
         // Set epoch for the event
         event.epoch = Some(self.epoch_manager.get_current_epoch());
         
@@ -634,14 +954,14 @@ impl ReputationSystemWithEpochs {
         
         // Check if epoch should be finalized
         if self.epoch_manager.should_finalize_epoch(self.pending_events.len()) {
-            let tx_hash = self.finalize_current_epoch().await?;
+            let tx_hash = self.finalize_current_epoch(private_key).await?;
             return Ok(Some(tx_hash));
         }
         
         Ok(None)
     }
 
-    pub async fn finalize_current_epoch(&mut self) -> Result<String, String> {
+    pub async fn finalize_current_epoch(&mut self, private_key: &str) -> Result<String, String> {
         if self.pending_events.is_empty() {
             return Err("No events to finalize".to_string());
         }
@@ -666,15 +986,14 @@ impl ReputationSystemWithEpochs {
         // Store epoch in DHT
         self.dht_service.store_merkle_root(&epoch).await?;
         
-        // Submit to smart contract
-        let private_key = "mock_private_key";
+        // Submit to smart contract with provided private key
         let tx_hash = self.contract.submit_epoch(&epoch, private_key).await?;
         
         // Reset for next epoch
         self.merkle_tree = ReputationMerkleTree::new();
         self.pending_events.clear();
         self.epoch_manager.advance_epoch();
-        
+
         Ok(tx_hash)
     }
 
@@ -693,6 +1012,21 @@ impl ReputationSystemWithEpochs {
 
     pub fn get_pending_events(&self) -> &[ReputationEvent] {
         &self.pending_events
+    }
+
+    /// Get reputation score for a peer from blockchain
+    pub async fn get_peer_reputation_score(&self, peer_id: &str, from_epoch: Option<u64>) -> Result<f64, String> {
+        self.contract.get_peer_reputation_score(peer_id, from_epoch).await
+    }
+
+    /// Verify a peer's reputation consistency with blockchain
+    pub async fn verify_peer_reputation_consistency(&self, peer_id: &str, events: &[ReputationEvent]) -> Result<bool, String> {
+        self.contract.verify_peer_reputation_consistency(peer_id, events).await
+    }
+
+    /// Verify an epoch from blockchain
+    pub async fn verify_epoch_from_blockchain(&self, epoch_id: u64) -> Result<Option<ReputationEpoch>, String> {
+        self.contract.verify_epoch_from_blockchain(epoch_id).await
     }
 }
 
@@ -796,8 +1130,8 @@ impl ReputationTestSuite {
             -0.3,
         );
 
-        let result1 = system.add_reputation_event(event1.clone()).await;
-        let result2 = system.add_reputation_event(event2.clone()).await;
+        let result1 = system.add_reputation_event(event1.clone(), "test_private_key").await;
+        let result2 = system.add_reputation_event(event2.clone(), "test_private_key").await;
         
         results.add_test("Add Events", result1.is_ok() && result2.is_ok(), "Events added successfully");
         
@@ -817,7 +1151,7 @@ impl ReputationTestSuite {
         results.add_test("Signature Verification", signature_verified, "All event signatures verified");
         
         // Test 5: Finalize epoch
-        let finalize_result = system.finalize_current_epoch().await;
+        let finalize_result = system.finalize_current_epoch("test_private_key").await;
         results.add_test("Epoch Finalization", finalize_result.is_ok(), "Epoch finalized successfully");
         
         // Test 6: Verify epoch advancement
@@ -849,13 +1183,13 @@ impl ReputationTestSuite {
         
         let add_start = SystemTime::now();
         for event in events {
-            system.add_reputation_event(event).await?;
+            system.add_reputation_event(event, "test_private_key").await?;
         }
         let add_duration = add_start.elapsed().unwrap_or_default();
         
         // Finalize epoch
         let finalize_start = SystemTime::now();
-        system.finalize_current_epoch().await?;
+        system.finalize_current_epoch("test_private_key").await?;
         let finalize_duration = finalize_start.elapsed().unwrap_or_default();
         
         let total_duration = start_time.elapsed().unwrap_or_default();

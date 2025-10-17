@@ -3279,6 +3279,7 @@ pub struct DhtService {
     search_counter: Arc<AtomicU64>,
     proxy_mgr: ProxyMgr,
     peer_selection: Arc<Mutex<PeerSelectionService>>,
+    reputation_system: Option<Arc<tokio::sync::Mutex<ReputationSystem>>>,
     file_metadata_cache: Arc<Mutex<HashMap<String, FileMetadata>>>,
     received_chunks: Arc<Mutex<HashMap<String, HashMap<u32, FileChunk>>>>,
     file_transfer_service: Option<Arc<FileTransferService>>,

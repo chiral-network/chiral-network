@@ -1,21 +1,26 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';
-  import { TrustLevel, type PeerReputation, type ReputationAnalytics } from '$lib/types/reputation';
+  import { TrustLevel, type PeerReputation, type ReputationAnalytics, type BlockchainReputationAnalytics } from '$lib/types/reputation';
   import ReputationCard from '$lib/components/ReputationCard.svelte';
   import ReputationAnalyticsComponent from '$lib/components/ReputationAnalytics.svelte';
+  import BlockchainReputationAnalyticsComponent from '$lib/components/BlockchainReputationAnalytics.svelte';
   import Card from '$lib/components/ui/card.svelte';
   import Button from '$lib/components/ui/button.svelte';
   import PeerSelectionService, { type PeerMetrics as BackendPeerMetrics } from '$lib/services/peerSelectionService';
+  import { BlockchainReputationService } from '$lib/services/blockchainReputationService';
   import { invoke } from '@tauri-apps/api/core';
 
   // State
   let peers: PeerReputation[] = [];
   let analytics: ReputationAnalytics;
+  let blockchainAnalytics: BlockchainReputationAnalytics;
   let sortBy: 'score' | 'interactions' | 'lastSeen' = 'score';
   let searchQuery = '';
   let isLoading = true;
   let showAnalytics = true;
+  let showBlockchainAnalytics = true;
+  let showBlockchainReputation = true;
   let currentPage = 1;
   const peersPerPage = 8;
 
@@ -107,7 +112,8 @@
             storageOffered: 0,
             filesShared: 0,
             encryptionSupported: !!m.encryption_support
-          }
+          },
+          blockchainReputation: BlockchainReputationService.createMockBlockchainReputationData(m.peer_id)
         };
       });
 
@@ -131,6 +137,9 @@
       };
 
       peers = mappedPeers;
+
+      // Load blockchain analytics
+      blockchainAnalytics = BlockchainReputationService.createMockBlockchainReputationAnalytics();
     } catch (e) {
       console.error('Failed to load peer metrics', e);
       peers = [];
@@ -147,6 +156,13 @@
           [TrustLevel.Low]: 0,
           [TrustLevel.Unknown]: 0,
         },
+      };
+      blockchainAnalytics = {
+        totalVerifiedPeers: 0,
+        averageBlockchainScore: 0,
+        recentEpochs: [],
+        verificationSuccessRate: 0,
+        blockchainConnectivityStatus: 'Disconnected'
       };
     }
   }
@@ -240,6 +256,12 @@
           <Button on:click={() => showAnalytics = !showAnalytics} variant="outline" class="w-full sm:w-auto">
             {showAnalytics ? $t('reputation.hideAnalytics') : $t('reputation.showAnalytics')}
           </Button>
+  <Button on:click={() => showBlockchainAnalytics = !showBlockchainAnalytics} variant="outline" class="w-full sm:w-auto">
+    {showBlockchainAnalytics ? 'Hide Blockchain Analytics' : 'Show Blockchain Analytics'}
+  </Button>
+  <Button on:click={() => showBlockchainReputation = !showBlockchainReputation} variant="outline" class="w-full sm:w-auto">
+    {showBlockchainReputation ? 'Hide Blockchain Reputation' : 'Show Blockchain Reputation'}
+  </Button>
         </div>
       </div>
     </div>
@@ -257,6 +279,13 @@
       {#if showAnalytics && analytics}
         <div class="mb-8">
           <ReputationAnalyticsComponent {analytics} />
+        </div>
+      {/if}
+
+      <!-- Blockchain Analytics Section -->
+      {#if showBlockchainAnalytics && blockchainAnalytics}
+        <div class="mb-8">
+          <BlockchainReputationAnalyticsComponent analytics={blockchainAnalytics} />
         </div>
       {/if}
 
@@ -364,7 +393,7 @@
       {:else}
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
           {#each paginatedPeers as peer (peer.peerId)}
-            <ReputationCard {peer} />
+            <ReputationCard {peer} {showBlockchainReputation} />
           {/each}
         </div>
 

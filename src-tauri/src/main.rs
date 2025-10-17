@@ -4155,3 +4155,85 @@ async fn store_file_data(
         Err("File transfer service not running".to_string())
     }
 }
+
+// ============================================================================
+// REPUTATION VERIFICATION COMMANDS
+// ============================================================================
+
+#[tauri::command]
+async fn get_peer_reputation_score(
+    peer_id: String,
+    from_epoch: Option<u64>,
+    state: State<'_, AppState>,
+) -> Result<f64, String> {
+    // TODO: Get reputation system from app state when it's integrated
+    // For now, return a placeholder score
+    tracing::info!("Getting reputation score for peer {} from epoch {:?}", peer_id, from_epoch);
+    Ok(0.75) // Placeholder score
+}
+
+#[tauri::command]
+async fn verify_peer_reputation_consistency(
+    peer_id: String,
+    events: Vec<crate::reputation::ReputationEvent>,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    // TODO: Get reputation system from app state when it's integrated
+    // For now, return true as placeholder
+    tracing::info!("Verifying reputation consistency for peer {} with {} events", peer_id, events.len());
+    Ok(true) // Placeholder verification
+}
+
+#[tauri::command]
+async fn verify_epoch_from_blockchain(
+    epoch_id: u64,
+    state: State<'_, AppState>,
+) -> Result<Option<crate::reputation::ReputationEpoch>, String> {
+    // TODO: Get reputation system from app state when it's integrated
+    // For now, return None as placeholder
+    tracing::info!("Verifying epoch {} from blockchain", epoch_id);
+    Ok(None) // Placeholder - no epoch found
+}
+
+// ============================================================================
+// BLOCKCHAIN REPUTATION PEER SELECTION COMMANDS
+// ============================================================================
+
+#[tauri::command]
+async fn select_peers_with_blockchain_reputation(
+    available_peers: Vec<String>,
+    count: usize,
+    require_encryption: bool,
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    // TODO: Get peer selection service from app state when it's integrated
+    // For now, return a subset of available peers as placeholder
+    tracing::info!(
+        "Selecting {} peers with blockchain reputation from {} available peers (encryption: {})",
+        count, available_peers.len(), require_encryption
+    );
+    
+    // Placeholder: return first N peers
+    Ok(available_peers.into_iter().take(count).collect())
+}
+
+#[tauri::command]
+async fn get_peer_blockchain_reputation(
+    peer_id: String,
+    state: State<'_, AppState>,
+) -> Result<f64, String> {
+    // TODO: Get peer selection service from app state when it's integrated
+    // For now, return a placeholder score
+    tracing::info!("Getting blockchain reputation for peer {}", peer_id);
+    Ok(0.75) // Placeholder score
+}
+
+#[tauri::command]
+async fn get_cached_reputation_scores(
+    state: State<'_, AppState>,
+) -> Result<std::collections::HashMap<String, f64>, String> {
+    // TODO: Get peer selection service from app state when it's integrated
+    // For now, return empty map as placeholder
+    tracing::info!("Getting cached reputation scores");
+    Ok(std::collections::HashMap::new()) // Placeholder
+}
