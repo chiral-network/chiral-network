@@ -8,6 +8,7 @@
   import { formatRelativeTime, toHumanReadableSize } from '$lib/utils';
   import { files } from '$lib/stores';
   import { get } from 'svelte/store';
+  import { showToast } from '$lib/toast';
 
   const dispatch = createEventDispatcher<{ download: FileMetadata; copy: string }>();
 
@@ -59,6 +60,9 @@
       if (isBitswap) {
         console.log("🔍 DEBUG: Initiating Bitswap download for file:", metadata.fileName);
         await dhtService.downloadFile(metadata);
+        showToast(
+          `The file "${metadata.fileName}" has been added to your download folder via Bitswap.`,
+        );
       }
       else {
         console.log("🔍 DEBUG: Initiating WebRTC download for file:", metadata.fileName);
@@ -72,7 +76,11 @@
     await dhtService.downloadFile(metadata);
       if (isBitswap) {
         console.log("🔍 DEBUG: Initiating Bitswap download for file:", metadata.fileName);
+      
         await dhtService.downloadFile(metadata);
+        showToast(
+          `The file "${metadata.fileName}" has been added to your download folder via Bitswap.`,
+        );
       }
       else {
         console.log("🔍 DEBUG: Initiating WebRTC download for file:", metadata.fileName);
