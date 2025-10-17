@@ -693,13 +693,21 @@
 
       try {
         showToast('Connecting to peer via DHT...', 'info');
+        const currentPeerCount = $peers.length;
         await invoke('connect_to_peer', { peerAddress });
-        showToast('Successfully connected to peer!', 'success');
 
-        // Clear input on successful connection
+        // Clear input
         newPeerAddress = '';
 
-        // Peer list will auto-update via polling within ~5 seconds
+        // Wait a moment and check if the peer was actually added
+        setTimeout(async () => {
+          await refreshConnectedPeers();
+          if ($peers.length > currentPeerCount) {
+            showToast('Connection Success!', 'success');
+          } else {
+            showToast('Connection failed. Peer may be unreachable or address invalid.', 'error');
+          }
+        }, 2000);
       } catch (error) {
         console.error('Failed to connect to peer:', error);
         showToast('Failed to connect to peer: ' + error, 'error');
