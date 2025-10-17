@@ -1281,6 +1281,10 @@ async fn run_dht_node(
     let mut relay_cooldown: HashMap<PeerId, Instant> = HashMap::new();
     let mut last_tried_relay: Option<PeerId> = None;
 
+    let mut queries: HashMap<beetswap::QueryId, u32> = HashMap::new();
+    let mut downloaded_chunks: HashMap<usize, Vec<u8>> = HashMap::new();
+    let mut current_metadata: Option<FileMetadata> = None;
+
     #[derive(Debug, Clone, Copy)]
     enum RelayErrClass { Permanent, Transient }
 
@@ -1530,24 +1534,17 @@ async fn run_dht_node(
                         let _ = event_tx.send(DhtEvent::PublishedFile(metadata)).await;
                     }
                     Some(DhtCommand::DownloadFile(file_metadata)) =>{
-                        // Get root CID from file hash
-                        let root_cid_result = file_metadata.cids.as_ref()
-                            .and_then(|cids| cids.first())
-                            .ok_or_else(|| {
-                                let msg = format!("No root CID found for file with Merkle root: {}", file_metadata.merkle_root);
-                                error!("{}", msg);
-                                msg
-                            });
-
-                        let root_cid = match root_cid_result {
-                            Ok(cid) => cid.clone(),
-                            Err(e) => { let _ = event_tx.send(DhtEvent::Error(e)).await; continue; }
-                        };
-                        // Request the root block which contains the CIDs
-                        let root_query_id = swarm.behaviour_mut().bitswap.get(&root_cid);
-
-                        // Store the root query ID to handle when we get the root block
-                        root_query_mapping.lock().await.insert(root_query_id, file_metadata);
+                        // currently only able to process one download at a time
+                        current_metadata = Some(file_metadata.clone());
+                        if let Some(cids) = &file_metadata.cids {
+                            for (i, cid) in cids.iter().enumerate() {
+                                let query_id = swarm.behaviour_mut().bitswap.get(cid);
+                                queries.insert(query_id, i as u32);
+                            }
+                        } else {
+                            error!("No CIDs found in file metadata");
+                            let _ = event_tx.send(DhtEvent::Error("No CIDs found in file metadata".to_string())).await;
+                        }
                     }
 
                     Some(DhtCommand::StopPublish(file_hash)) => {
@@ -2011,83 +2008,30 @@ async fn run_dht_node(
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) => match bitswap {
                         beetswap::Event::GetQueryResponse { query_id, data } => {
-                            // Check if this is a root block query first
-                            if let Some(metadata) = root_query_mapping.lock().await.remove(&query_id) {
-                                // This is the root block containing CIDs - parse and request all data blocks
-                                if let Ok(cids) = serde_json::from_slice::<Vec<Cid>>(&data) {
-                                    info!("Received root block for file {} with {} CIDs", metadata.merkle_root, cids.len());
-
-                                    // Create queries map for this file's data blocks
-                                    let mut file_queries = HashMap::new();
-
-                                    for (i, cid) in cids.iter().enumerate() {
-                                        let block_query_id = swarm.behaviour_mut().bitswap.get(cid);
-                                        file_queries.insert(block_query_id, i as u32);
-                                    }
-
-                                    // Create active download tracking for this file
-                                    let active_download = ActiveDownload {
-                                        metadata: metadata.clone(),
-                                        queries: file_queries,
-                                        downloaded_chunks: HashMap::new(),
-                                    };
-
-                                    // Store the active download
-                                    active_downloads.lock().await.insert(metadata.merkle_root.clone(), active_download);
-
-                                    info!("Started tracking download for file {} with {} chunks", metadata.merkle_root, cids.len());
-                                } else {
-                                    error!("Failed to parse root block as CIDs array for file {}", metadata.merkle_root);
-                                }
-                            } else {
-                                // This is a data block query - find the corresponding file and handle it
-                                let mut completed_downloads = Vec::new();
-
-                                // Check all active downloads for this query_id
-                                {
-                                    let mut active_downloads_guard = active_downloads.lock().await;
-                                    for (file_hash, active_download) in active_downloads_guard.iter_mut() {
-                                        if let Some(chunk_index) = active_download.queries.remove(&query_id) {
-                                            // This query belongs to this file - store the chunk
-                                            active_download.downloaded_chunks.insert(chunk_index, data.clone());
-
-                                            // Check if all chunks for this file are downloaded
-                                            if active_download.queries.is_empty() {
-                                                info!("All chunks downloaded for file {}", file_hash);
-
-                                                // Reassemble the file
-                                                let mut file_data = Vec::new();
-                                                for i in 0..active_download.downloaded_chunks.len() as u32 {
-                                    if let Some(chunk) = active_download.downloaded_chunks.get(&(i as u32)) {
-                                                        file_data.extend_from_slice(chunk);
-                                                    }
-                                                }
-
-                                                // Create the completed metadata
-                                                let mut completed_metadata = active_download.metadata.clone();
-                                                completed_metadata.file_data = file_data;
-
-                                                completed_downloads.push(completed_metadata);
-                                            }
-                                            break;
+                            // Handle successful Bitswap response
+                            match queries.get(&query_id) {
+                                Some(index) => {
+                                    downloaded_chunks.insert(*index as usize, data.clone());
+                                    queries.remove(&query_id);
+                                    if queries.is_empty() {
+                                        info!("all requested cids have been downloaded.");
+                                        // reassemble file from downloaded chunks
+                                        let mut file = Vec::new();
+                                        for i in 0..=downloaded_chunks.len()-1 {
+                                            file.extend_from_slice(&downloaded_chunks.remove(&i).unwrap());
                                         }
+                                        if let Some(metadata) = current_metadata.as_mut() {
+                                                metadata.file_data = file; // OK, file_data is Vec<u8>
+                                            }
+                                        if let Some(metadata) = current_metadata.take() {
+                                            let _ = event_tx.send(DhtEvent::DownloadedFile(metadata)).await;
+                                        }
+                                        downloaded_chunks.clear();
+                                        current_metadata = None;
                                     }
                                 }
-
-                                // Send completion events for finished downloads
-                                for metadata in completed_downloads {
-                                    let _ = event_tx.send(DhtEvent::DownloadedFile(metadata)).await;
+                                None => {
                                 }
-                            }
-
-                            info!("Bitswap query {:?} succeeded - received {} bytes", query_id, data.len());
-
-                            // Process the received data - this is a file chunk that was requested
-                            // Parse the chunk data and assemble the complete file
-                            if let Some(ref ft_service) = file_transfer_service {
-                                process_bitswap_chunk(&query_id, &data, &event_tx, &received_chunks, ft_service).await;
-                            } else {
-                                warn!("File transfer service not available, cannot process Bitswap chunk");
                             }
                         }
                         beetswap::Event::GetQueryError { query_id, error } => {

@@ -285,20 +285,20 @@
     }
   }
   // Commented out - not currently used but kept for future reference
-  // async function saveRawData(fileName: string, data: Uint8Array) {
-  //   try {
-  //     const { save } = await import('@tauri-apps/plugin-dialog');
-  //     const filePath = await save({ defaultPath: fileName });
-  //     if (filePath) {
-  //       const { writeFile } = await import('@tauri-apps/plugin-fs');
-  //       await writeFile(filePath, new Uint8Array(data));
-  //       showNotification(`Successfully saved "${fileName}"`, 'success');
-  //     }
-  //   } catch (error) {
-  //     console.error('Failed to save file:', error);
-  //     showNotification(`Error saving "${fileName}"`, 'error');
-  //   }
-  // }
+  async function saveRawData(fileName: string, data: Uint8Array) {
+    try {
+      const { save } = await import('@tauri-apps/plugin-dialog');
+      const filePath = await save({ defaultPath: fileName });
+      if (filePath) {
+        const { writeFile } = await import('@tauri-apps/plugin-fs');
+        await writeFile(filePath, new Uint8Array(data));
+        showNotification(`Successfully saved "${fileName}"`, 'success');
+      }
+    } catch (error) {
+      console.error('Failed to save file:', error);
+      showNotification(`Error saving "${fileName}"`, 'error');
+    }
+  }
 
   function handleSearchMessage(event: CustomEvent<{ message: string; type?: 'success' | 'error' | 'info' | 'warning'; duration?: number }>) {
     const { message, type = 'info', duration = 4000 } = event.detail
@@ -309,9 +309,13 @@
     const allFiles = [...$downloadQueue]
     const existingFile = allFiles.find((file) => file.hash === metadata.fileHash)
     // Uncomment below if you need to save raw data for testing
-    // const fileName = metadata.fileName;
-    // const fileData = new Uint8Array(metadata.fileData ?? []);
-    // saveRawData(fileName, fileData);
+    if (selectedProtocol === 'Bitswap') {
+      console.log("🔍 DEBUG: Saving raw file data for Bitswap download:", metadata.fileName);
+          const fileName = metadata.fileName;
+          const fileData = new Uint8Array(metadata.fileData ?? []);
+          saveRawData(fileName, fileData);
+          return
+    }
 
     if (existingFile) {
       let statusMessage = ''
@@ -943,7 +947,7 @@
   {#if !hasSelectedProtocol}
    <Card>
       <div class="p-6">
-        <h2 class="text-2xl font-bold mb-6 text-center">{$t('upload.selectProtocol')}</h2>
+        <h2 class="text-2xl font-bold mb-6 text-center">{$t('download.selectProtocol')}</h2>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-2xl mx-auto">
           <!-- WebRTC Option -->
           <button
