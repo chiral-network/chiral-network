@@ -1072,8 +1072,8 @@ async fn run_dht_node(
     relay_candidates: HashSet<String>,
     chunk_size: usize,
 ) {
-    let mut dht_maintenance_interval = tokio::time::interval(Duration::from_secs(30 * 60)); 
-    dht_maintenance_interval.tick().await; 
+    let mut dht_maintenance_interval = tokio::time::interval(Duration::from_secs(30 * 60));
+    dht_maintenance_interval.tick().await;
     // Periodic bootstrap interval
 
     /// Creates a proper circuit relay address for connecting through a relay peer
@@ -1215,6 +1215,7 @@ async fn run_dht_node(
 
                         // Store minimal metadata in DHT
                         let dht_metadata = serde_json::json!({
+                            "file_hash":metadata.merkle_root,
                             "merkle_root": metadata.merkle_root,
                             "file_name": metadata.file_name,
                             "file_size": metadata.file_size,

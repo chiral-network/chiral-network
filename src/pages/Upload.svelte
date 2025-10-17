@@ -486,7 +486,7 @@
             id: `file-${Date.now()}-${Math.random()}`,
             name: metadata.fileName,
             path: filePath,
-            hash: metadata.fileHash,
+            hash: metadata.merkleRoot || "",
             size: metadata.fileSize,
             status: 'seeding' as const,
             seeders: 1,
@@ -499,21 +499,11 @@
           addedCount++;
           showToast(`${fileName} uploaded as v${metadata.version} (new file)`, 'success');
 
-          // Publish file metadata to DHT network for discovery
-          try {
-            // await dhtService.publishFile(metadata);
-            // console.log('File being published to DHT:', metadata.fileHash);
-          } catch (publishError) {
-            console.warn('Failed to publish file to DHT:', publishError);
-          }
+          return { type: 'success', fileName };
         } catch (error) {
           console.error(error);
           showToast(tr('upload.fileFailed', { values: { name: filePath.split(/[\/]/).pop(), error: String(error) } }), 'error');
         }
-        showToast('Files published to DHT network for sharing!', 'success')
-        refreshAvailableStorage()
-        // Make storage refresh non-blocking to prevent UI hanging
-        setTimeout(() => refreshAvailableStorage(), 100)
       }
     }
     else {

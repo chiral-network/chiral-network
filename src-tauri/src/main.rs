@@ -1820,6 +1820,11 @@ async fn upload_file_to_network(
                 cids: None,
             };
 
+            match dht.publish_file(metadata.clone()).await {
+                Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
+                Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
+            };
+
             Ok(())
         } else {
             Err("DHT Service not running.".to_string())
