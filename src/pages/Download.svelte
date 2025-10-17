@@ -988,6 +988,7 @@
     <DownloadSearchSection
       on:download={(event) => handleSearchDownload(event.detail)}
       on:message={handleSearchMessage}
+      is_bitswap={selectedProtocol === 'Bitswap'}
     />
   {/if}
 

@@ -21,7 +21,7 @@
   const tr = (key: string, params?: Record<string, unknown>) => (get(t) as any)(key, params);
 
   const SEARCH_TIMEOUT_MS = 2_000; // Very aggressive timeout to prevent hanging
-
+  export let is_bitswap: boolean = false;
   let searchHash = '';
   let searchMode = 'hash'; // 'hash' or 'name'
   let isSearching = false;
@@ -242,7 +242,7 @@
       } else {
         // First, check local files for the hash (immediate local seed)
         const localMatch = get(files).find(f => f.hash === trimmed || f.name === trimmed);
-        if (localMatch) {
+        if (localMatch && !is_bitswap) {
           const metadata: FileMetadata = {
             fileHash: localMatch.hash,
             fileName: localMatch.name,

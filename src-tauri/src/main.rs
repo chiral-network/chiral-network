@@ -2380,6 +2380,14 @@ async fn cancel_streaming_upload(
 }
 
 #[tauri::command]
+async fn write_file(path: String, contents: Vec<u8>) -> Result<(), String> {
+    tokio::fs::write(&path, contents)
+        .await
+        .map_err(|e| format!("Failed to write file: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn get_file_transfer_events(state: State<'_, AppState>) -> Result<Vec<String>, String> {
     let ft = {
         let ft_guard = state.file_transfer.lock().await;
@@ -3704,6 +3712,7 @@ fn main() {
             get_proxy_optimization_status,
             download_file_multi_source,
             get_file_transfer_events,
+            write_file,
             get_download_metrics,
             encrypt_file_with_password,
             decrypt_file_with_password,

@@ -51,11 +51,12 @@
     });
   }
 
-  function handleDownload() {
+  async function handleDownload() {
     if (isSeeding) {
       showDecryptDialog = true;
     } else {
-      dispatch('download', metadata);
+      await dhtService.downloadFile(metadata);
+      // dispatch('download', metadata);
     }
   }
 
