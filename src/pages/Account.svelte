@@ -224,7 +224,12 @@
         isAmountValid = false;
         sendAmount = 0;
       } else if (inputValue + estimatedFeeNumeric > $wallet.balance) {
-        validationWarning = tr('errors.amount.insufficientWithFee', { values: { more: (inputValue + estimatedFeeNumeric - $wallet.balance).toFixed(2) } });
+        validationWarning = tr('errors.amount.insufficientWithFee', {
+          values: {
+            total: (inputValue + estimatedFeeNumeric).toFixed(2),
+            balance: $wallet.balance.toFixed(2)
+          }
+        });
         isAmountValid = false;
         sendAmount = 0;
       } else {

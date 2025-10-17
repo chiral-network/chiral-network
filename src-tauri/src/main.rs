@@ -23,14 +23,14 @@ mod stream_auth;
 mod webrtc_service;
 use std::sync::Mutex as StdMutex;
 
+use crate::commands::auth::{
+    cleanup_expired_proxy_auth_tokens, generate_proxy_auth_token, revoke_proxy_auth_token,
+    validate_proxy_auth_token,
+};
 use crate::commands::bootstrap::get_bootstrap_nodes_command;
 use crate::commands::proxy::{
-    disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect,
-    proxy_disconnect, proxy_echo, proxy_remove, ProxyNode,
-};
-use crate::commands::auth::{
-    generate_proxy_auth_token, validate_proxy_auth_token, revoke_proxy_auth_token,
-    cleanup_expired_proxy_auth_tokens,
+    disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
+    proxy_echo, proxy_remove, ProxyNode,
 };
 use chiral_network::stream_auth::{
     AuthMessage, HmacKeyExchangeConfirmation, HmacKeyExchangeRequest, HmacKeyExchangeResponse,
@@ -72,16 +72,13 @@ use tracing::{error, info, warn};
 use webrtc_service::{WebRTCFileRequest, WebRTCService};
 
 use crate::manager::ChunkManager; // Import the ChunkManager
-// For key encoding
+                                  // For key encoding
 use blockstore::block::Block;
 use x25519_dalek::{PublicKey, StaticSecret}; // For key handling
 
 /// Detect MIME type from file extension
 fn detect_mime_type_from_filename(filename: &str) -> Option<String> {
-    let extension = filename
-        .rsplit('.')
-        .next()?
-        .to_lowercase();
+    let extension = filename.rsplit('.').next()?.to_lowercase();
 
     match extension.as_str() {
         // Images
@@ -113,11 +110,17 @@ fn detect_mime_type_from_filename(filename: &str) -> Option<String> {
         // Documents
         "pdf" => Some("application/pdf".to_string()),
         "doc" => Some("application/msword".to_string()),
-        "docx" => Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document".to_string()),
+        "docx" => Some(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document".to_string(),
+        ),
         "xls" => Some("application/vnd.ms-excel".to_string()),
-        "xlsx" => Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string()),
+        "xlsx" => {
+            Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string())
+        }
         "ppt" => Some("application/vnd.ms-powerpoint".to_string()),
-        "pptx" => Some("application/vnd.openxmlformats-officedocument.presentationml.presentation".to_string()),
+        "pptx" => Some(
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation".to_string(),
+        ),
         "txt" => Some("text/plain".to_string()),
         "rtf" => Some("application/rtf".to_string()),
 
@@ -385,10 +388,33 @@ async fn get_file_versions_by_name(
     state: State<'_, AppState>,
     file_name: String,
 ) -> Result<Vec<FileMetadata>, String> {
+    info!("🚀 Tauri command: get_file_versions_by_name called with: {}", file_name);
+    
     let dht = { state.dht.lock().await.as_ref().cloned() };
     if let Some(dht) = dht {
-        (*dht).get_versions_by_file_name(file_name).await
+        info!("✅ DHT service found, calling get_versions_by_file_name");
+        let result = (*dht).get_versions_by_file_name(file_name).await;
+        match &result {
+            Ok(versions) => info!("🎉 Tauri command: Successfully returned {} versions", versions.len()),
+            Err(e) => info!("❌ Tauri command: Error occurred: {}", e),
+        }
+        result
     } else {
+        info!("❌ Tauri command: DHT not running");
+        Err("DHT not running".into())
+    }
+}
+
+#[tauri::command]
+async fn test_backend_connection(state: State<'_, AppState>) -> Result<String, String> {
+    info!("🧪 Testing backend connection...");
+    
+    let dht = { state.dht.lock().await.as_ref().cloned() };
+    if let Some(dht) = dht {
+        info!("✅ DHT service is available");
+        Ok("DHT service is running".to_string())
+    } else {
+        info!("❌ DHT service is not available");
         Err("DHT not running".into())
     }
 }
@@ -722,7 +748,7 @@ async fn start_dht_node(
 
     // Disable autonat by default to prevent warnings when no servers are available
     // Users can explicitly enable it when needed
-    let auto_enabled = enable_autonat.unwrap_or(false);
+    let auto_enabled = enable_autonat.unwrap_or(true);
     let probe_interval = autonat_probe_interval_secs.map(Duration::from_secs);
     let autonat_server_list = autonat_servers.unwrap_or_default();
 
@@ -737,21 +763,32 @@ async fn start_dht_node(
         ft_guard.as_ref().cloned()
     };
 
+    // --- Hotfix: Disable AutoRelay on bootstrap nodes (and via env var)
+    let mut final_enable_autorelay = enable_autorelay.unwrap_or(true);
+    if is_bootstrap.unwrap_or(false) {
+        final_enable_autorelay = false;
+        tracing::info!("AutoRelay disabled on bootstrap (hotfix).");
+    }
+    if std::env::var("CHIRAL_DISABLE_AUTORELAY").ok().as_deref() == Some("1") {
+        final_enable_autorelay = false;
+        tracing::info!("AutoRelay disabled via env CHIRAL_DISABLE_AUTORELAY=1");
+    }
+
     let dht_service = DhtService::new(
         port,
         bootstrap_nodes,
         None,
         is_bootstrap.unwrap_or(false),
-        auto_enabled,
+        /* enable AutoNAT by default for WAN */ auto_enabled,
         probe_interval,
         autonat_server_list,
         final_proxy_address,
         file_transfer_service,
         chunk_size_kb,
         cache_size_mb,
-        enable_autorelay.unwrap_or(false),
+        /* enable AutoRelay (after hotfix) */ final_enable_autorelay,
         preferred_relays.unwrap_or_default(),
-        false, // enable_relay_server - disabled by default
+        is_bootstrap.unwrap_or(false), // enable_relay_server only on bootstrap
     )
     .await
     .map_err(|e| format!("Failed to start DHT: {}", e))?;
@@ -1405,8 +1442,6 @@ fn try_temperature_method(method: &TemperatureMethod) -> Option<f32> {
     }
 }
 
-
-
 #[cfg(target_os = "linux")]
 fn get_linux_sensors_temperature() -> Option<f32> {
     // Try sensors command (most reliable and matches user expectations)
@@ -1480,7 +1515,10 @@ fn get_linux_temperature_advanced() -> Option<(f32, TemperatureMethod)> {
                     if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
                         let temp_celsius = temp_millidegrees as f32 / 1000.0;
                         if temp_celsius > 0.0 && temp_celsius < 150.0 {
-                            return Some((temp_celsius, TemperatureMethod::LinuxThermalZone(thermal_path)));
+                            return Some((
+                                temp_celsius,
+                                TemperatureMethod::LinuxThermalZone(thermal_path),
+                            ));
                         }
                     }
                 }
@@ -1502,7 +1540,10 @@ fn get_linux_temperature_advanced() -> Option<(f32, TemperatureMethod)> {
                     if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
                         let temp_celsius = temp_millidegrees as f32 / 1000.0;
                         if temp_celsius > 0.0 && temp_celsius < 150.0 {
-                            return Some((temp_celsius, TemperatureMethod::LinuxThermalZone(thermal_path)));
+                            return Some((
+                                temp_celsius,
+                                TemperatureMethod::LinuxThermalZone(thermal_path),
+                            ));
                         }
                     }
                 }
@@ -1531,7 +1572,10 @@ fn get_linux_temperature_advanced() -> Option<(f32, TemperatureMethod)> {
                         if let Ok(temp_millidegrees) = temp_str.trim().parse::<i32>() {
                             let temp_celsius = temp_millidegrees as f32 / 1000.0;
                             if temp_celsius > 0.0 && temp_celsius < 150.0 {
-                                return Some((temp_celsius, TemperatureMethod::LinuxHwmon(temp_path)));
+                                return Some((
+                                    temp_celsius,
+                                    TemperatureMethod::LinuxHwmon(temp_path),
+                                ));
                             }
                         }
                     }
@@ -1557,7 +1601,10 @@ fn get_linux_temperature_advanced() -> Option<(f32, TemperatureMethod)> {
                             let temp_celsius = temp_millidegrees as f32 / 1000.0;
                             if temp_celsius > 0.0 && temp_celsius < 150.0 {
                                 let path_str = path.to_string_lossy().to_string();
-                                return Some((temp_celsius, TemperatureMethod::LinuxHwmon(path_str)));
+                                return Some((
+                                    temp_celsius,
+                                    TemperatureMethod::LinuxHwmon(path_str),
+                                ));
                             }
                         }
                     }
@@ -2525,7 +2572,9 @@ async fn update_proxy_latency(
     };
 
     if let Some(multi_source_service) = ms {
-        multi_source_service.update_proxy_latency(proxy_id, latency_ms).await;
+        multi_source_service
+            .update_proxy_latency(proxy_id, latency_ms)
+            .await;
         Ok(())
     } else {
         Err("Multi-source download service not available for proxy latency update".to_string())
@@ -3668,6 +3717,7 @@ fn main() {
             cleanup_inactive_peers,
             upload_versioned_file,
             get_file_versions_by_name,
+            test_backend_connection,
             establish_webrtc_connection,
             send_webrtc_file_request,
             get_webrtc_connection_status,
@@ -4038,7 +4088,8 @@ async fn upload_and_publish_file(
             .as_secs();
 
         // Use prepare_versioned_metadata to handle version incrementing and parent_hash
-        let mime_type = detect_mime_type_from_filename(&file_name).unwrap_or_else(|| "application/octet-stream".to_string());
+        let mime_type = detect_mime_type_from_filename(&file_name)
+            .unwrap_or_else(|| "application/octet-stream".to_string());
         let metadata = dht
             .prepare_versioned_metadata(
                 manifest.merkle_root.clone(), // This is the Merkle root
@@ -4047,9 +4098,9 @@ async fn upload_and_publish_file(
                 vec![], // Empty - chunks already stored
                 created_at,
                 Some(mime_type),
-                true, // is_encrypted
+                true,                            // is_encrypted
                 Some("AES-256-GCM".to_string()), // Encryption method
-                None, // key_fingerprint (deprecated)
+                None,                            // key_fingerprint (deprecated)
             )
             .await?;
 
@@ -4156,7 +4207,7 @@ async fn get_file_data(state: State<'_, AppState>, file_hash: String) -> Result<
             .get_file_data(&file_hash)
             .await
             .ok_or("File not found".to_string())?;
-        use base64::{Engine as _, engine::general_purpose};
+        use base64::{engine::general_purpose, Engine as _};
         Ok(general_purpose::STANDARD.encode(&data))
     } else {
         Err("File transfer service not running".to_string())

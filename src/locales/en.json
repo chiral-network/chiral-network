@@ -413,6 +413,7 @@
   "language.spanish": "Español",
   "language.chinese": "中文",
   "language.korean": "한국어",
+  "language.russian": "Русский",
   "nav": {
     "menu": "Menu",
     "download": "Download",
@@ -536,7 +537,8 @@
     "item": {
       "from": "From",
       "to": "To"
-    }
+    },
+    "searchPlaceholder": "Search by address, description, or ID..."
   },
   "keystore": {
     "title": "Save to Local Keystore",
@@ -710,7 +712,8 @@
     "amount": {
       "invalid": "Please enter a valid amount greater than 0.",
       "min": "Amount must be at least {min} Chiral.",
-      "insufficient": "Insufficient balance - Need {more} more Chiral."
+      "insufficient": "Insufficient balance - Need {more} more Chiral.",
+      "insufficientWithFee": "Insufficient funds. Total of {total} Chiral (amount + fee) exceeds your balance of {balance} Chiral."
     },
     "exportFailed": "Export failed. Please try again.",
     "createAccount": "Failed to create account: {error}"

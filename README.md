@@ -69,6 +69,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 
 - ✅ **SOCKS5 Proxy Support**: Route P2P traffic through SOCKS5 proxies for privacy
 - ✅ **Circuit Relay v2**: Automatic relay reservation for NAT traversal
+- ✅ **Relay Server Mode**: Enable your node to act as a relay server for NAT'd peers
 - ✅ **AutoNAT v2**: Automatic reachability detection (Public/Private/Unknown)
 - ✅ **Relay Health Monitoring**: Track relay connection status and performance
 - ✅ **Custom Relay Nodes**: Add trusted relay nodes manually
@@ -86,7 +87,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 - ✅ **End-to-End Encryption**: AES-256-GCM encryption with PBKDF2 key derivation (can be enabled in Settings)
 - ✅ **Wallet Security**: Secure credential management with HD wallets
 - ✅ **Stream Authentication**: HMAC-based cryptographic verification of data integrity during file transfers
-- ❌ **Anonymous Routing**: Hide your IP from other peers (no IP hiding or anonymization implemented)
+- ✅ **Anonymous Routing**: Tunnel traffic through trusted relays/SOCKS5 proxies when anonymous mode is enabled so your IP stays hidden
 - ✅ **No Commercial Tracking**: No marketplace means no transaction tracking
 
 ### 7. Mining & Network Security
@@ -103,11 +104,11 @@ This implementation synthesizes concepts from multiple design teams, focusing on
 - ✅ **Storage Management**: Configure storage location and limits
 - ✅ **Network Configuration**: Set bandwidth limits and connection parameters
 - ✅ **Advanced Bandwidth Scheduling**: Set different bandwidth limits for specific times and days
-- ✅ **Privacy Controls**: Mandatory encryption, proxy support, and anonymous mode (anonymous mode not implemented)
+- ✅ **Privacy Controls**: Mandatory encryption, proxy support, and anonymous mode with safety defaults when hiding your IP
 - ✅ **Notification Preferences**: Customize alerts and notifications
 - ✅ **Advanced Options**: Fine-tune DHT, chunk size, and cache settings (configurable through UI)
 - ✅ **Import/Export**: Backup and restore settings
-- ✅ **Multi-language Support**: English, Spanish, Chinese, Korean
+- ✅ **Multi-language Support**: English, Spanish, Chinese, Korean, Russian
 
 ## NAT Traversal & Network Reachability
 
@@ -145,6 +146,7 @@ This implementation synthesizes concepts from multiple design teams, focusing on
    - Custom AutoNAT servers textarea (multiaddr format)
    - AutoRelay toggle for Circuit Relay v2
    - Preferred relay nodes textarea (multiaddr format)
+   - **Relay Server toggle** - Enable your node to act as a relay server for other peers
    - All settings persist to localStorage
 
 2. **Real-Time Reachability Display**
@@ -154,6 +156,15 @@ This implementation synthesizes concepts from multiple design teams, focusing on
    - Reachability history table with timestamps
    - Last probe time and state change tracking
    - AutoNAT enabled/disabled indicator
+
+3. **Relay Server Mode** (User-Configurable)
+   - Simple checkbox toggle in Settings → Network Settings
+   - Enable your node to accept relay reservations from NAT'd peers
+   - Help establish circuits for peers behind restrictive NATs
+   - Earn reputation points for your node
+   - Uses bandwidth when actively relaying connections
+   - Can be disabled at any time without affecting relay client functionality
+   - Disabled by default (users must opt-in)
 
 #### ✅ Public Relay Infrastructure (Recently Implemented)
 
@@ -344,9 +355,10 @@ npm run test:watch
 
 1. Keep application running to support network
 2. Configure proxy nodes for privacy
-3. Enable mining to earn rewards
-4. Monitor your contributions in Analytics
-5. Maintain good peer reputation
+3. **Enable relay server** (Settings → Network → Enable Relay Server) to help NAT'd peers connect
+4. Enable mining to earn rewards
+5. Monitor your contributions in Analytics
+6. Maintain good peer reputation
 
 ### Mining for Rewards
 
@@ -404,7 +416,7 @@ npm run test:watch
 - ✅ Analytics dashboard with real metrics
 - ✅ CPU mining with pool support
 - ✅ Comprehensive settings management
-- ✅ Multi-language support (EN, ES, ZH, KO)
+- ✅ Multi-language support (EN, ES, ZH, KO, RU)
 
 ### Phase 2: P2P Network Infrastructure (Completed)
 
@@ -429,6 +441,7 @@ npm run test:watch
 - ✅ **File Versioning System**: Track and manage multiple versions of files
 - ✅ **Advanced Bandwidth Scheduling**: Time-based bandwidth limits with day-of-week rules
 - ✅ **GUI NAT Configuration**: Settings UI for AutoNAT, AutoRelay, and relay preferences
+- ✅ **Relay Server Toggle**: User-configurable relay server mode in Settings UI
 - ✅ **Public Relay Infrastructure**: Dedicated relay daemon with deployment scripts
 - [ ] **Selective Sync Capabilities**: Choose which files to download
 

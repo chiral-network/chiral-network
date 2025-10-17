@@ -293,6 +293,7 @@
   "language.spanish": "Español",
   "language.chinese": "中文",
   "language.korean": "한국어",
+  "language.russian": "Русский",
   "nav": {
     "menu": "Menú",
     "download": "Descargar",
@@ -443,7 +444,8 @@
     "item": {
       "from": "De",
       "to": "Para"
-    }
+    },
+    "searchPlaceholder": "Buscar por dirección, descripción o ID..."
   },
   "keystore": {
     "title": "Guardar en almacén local",
@@ -617,7 +619,8 @@
     "amount": {
       "invalid": "Introduce una cantidad válida mayor que 0.",
       "min": "La cantidad debe ser al menos {min} Chiral.",
-      "insufficient": "Saldo insuficiente: faltan {more} Chiral."
+      "insufficient": "Saldo insuficiente: faltan {more} Chiral.",
+      "insufficientWithFee": "Fondos insuficientes. El total de {total} Chiral (cantidad + tarifa) excede su saldo de {balance} Chiral."
     },
     "exportFailed": "La exportación falló. Inténtalo de nuevo.",
     "createAccount": "No se pudo crear la cuenta: {error}"
