@@ -60,8 +60,8 @@
       if (isBitswap) {
         console.log("🔍 DEBUG: Initiating Bitswap download for file:", metadata.fileName);
         await dhtService.downloadFile(metadata);
-                showToast(
-    `The file "${metadata.fileName}" has been added to your download folder via Bitswap.`,
+        showToast(
+          `The file "${metadata.fileName}" has been added to your download folder via Bitswap.`,
         );
       }
       else {
@@ -76,6 +76,7 @@
     await dhtService.downloadFile(metadata);
       if (isBitswap) {
         console.log("🔍 DEBUG: Initiating Bitswap download for file:", metadata.fileName);
+      
         await dhtService.downloadFile(metadata);
         showToast(
           `The file "${metadata.fileName}" has been added to your download folder via Bitswap.`,
