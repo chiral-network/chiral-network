@@ -175,6 +175,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         args.autonat_server.clone(),
         args.socks5_proxy,
         file_transfer_service.clone(),
+        None, // chunk_manager
         None, // chunk_size_kb: use default
         None, // cache_size_mb: use default
         final_enable_autorelay,
@@ -239,6 +240,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             encryption_method: None,
             key_fingerprint: None,
             parent_hash: None,
+            encrypted_key_bundle: None,
             version: Some(1),
             cids: None,
             is_root: true,

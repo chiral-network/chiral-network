@@ -69,7 +69,8 @@ use tauri::{
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use tokio::time::{timeout as tokio_timeout, Duration as TokioDuration};
 use totp_rs::{Algorithm, Secret, TOTP};
-use tracing::{error, info, warn};
+use chrono;
+use tracing::{error, info, warn, debug};
 use webrtc_service::{WebRTCFileRequest, WebRTCService};
 
 use crate::manager::ChunkManager; // Import the ChunkManager
@@ -527,6 +528,7 @@ async fn upload_versioned_file(
                 file_data.clone(),
                 created_at,
                 mime_type,
+                None, // encrypted_key_bundle
                 is_encrypted,
                 encryption_method,
                 key_fingerprint,
@@ -769,6 +771,15 @@ async fn start_dht_node(
         ft_guard.as_ref().cloned()
     };
 
+    // Create a ChunkManager instance
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Could not get app data directory: {}", e))?;
+    let chunk_storage_path = app_data_dir.join("chunk_storage");
+    let chunk_manager = Arc::new(ChunkManager::new(chunk_storage_path));
+
+
     // --- Hotfix: Disable AutoRelay on bootstrap nodes (and via env var)
     let mut final_enable_autorelay = enable_autorelay.unwrap_or(true);
     if is_bootstrap.unwrap_or(false) {
@@ -790,6 +801,7 @@ async fn start_dht_node(
         autonat_server_list,
         final_proxy_address,
         file_transfer_service,
+        Some(chunk_manager), // Pass the chunk manager
         chunk_size_kb,
         cache_size_mb,
         /* enable AutoRelay (after hotfix) */ final_enable_autorelay,
@@ -1751,7 +1763,7 @@ async fn start_file_transfer_service(
     }
 
     // Initialize WebRTC service with file transfer service
-    let webrtc_service = WebRTCService::new(ft_arc.clone(), state.keystore.clone())
+    let webrtc_service = WebRTCService::new(app.app_handle().clone(), ft_arc.clone(), state.keystore.clone())
         .await
         .map_err(|e| format!("Failed to start WebRTC service: {}", e))?;
 
@@ -2246,6 +2258,7 @@ async fn upload_file_chunk(
             key_fingerprint: None,
             parent_hash: None,
             version: Some(1),
+            encrypted_key_bundle: None,
             cids: Some(vec![root_cid.clone()]), // The root CID for retrieval
             is_root: true,
         };
@@ -3686,6 +3699,7 @@ fn main() {
             revoke_proxy_auth_token,
             cleanup_expired_proxy_auth_tokens,
             get_file_data,
+            send_chat_message,
             store_file_data,
             start_proof_of_storage_watcher,
             stop_proof_of_storage_watcher
@@ -4037,6 +4051,7 @@ async fn upload_and_publish_file(
                 vec![], // Empty - chunks already stored
                 created_at,
                 Some(mime_type),
+                None, // encrypted_key_bundle
                 true,                            // is_encrypted
                 Some("AES-256-GCM".to_string()), // Encryption method
                 None,                            // key_fingerprint (deprecated)
@@ -4151,6 +4166,62 @@ async fn get_file_data(state: State<'_, AppState>, file_hash: String) -> Result<
     } else {
         Err("File transfer service not running".to_string())
     }
+}
+
+#[derive(serde::Serialize, Clone)]
+struct ChatMessageForFrontend {
+    from_peer_id: String,
+    message_id: String,
+    encrypted_payload: Vec<u8>,
+    timestamp: u64,
+    signature: Vec<u8>,
+}
+
+/// Sends an E2EE chat message to a peer.
+#[tauri::command]
+async fn send_chat_message(
+    state: State<'_, AppState>,
+    recipient_peer_id: String,
+    encrypted_payload: Vec<u8>,
+    signature: Vec<u8>,
+) -> Result<(), String> {
+    debug!("send_chat_message called for peer: {}", recipient_peer_id);
+    let webrtc = state.webrtc.lock().await.as_ref().cloned()
+        .ok_or("WebRTC service not running")?;
+
+    // 1. Check if a WebRTC connection already exists.
+    if !webrtc.get_connection_status(&recipient_peer_id).await {
+        debug!("No existing WebRTC connection to {}. Attempting to establish one.", recipient_peer_id);
+        let dht = state.dht.lock().await.as_ref().cloned()
+            .ok_or("DHT service not running")?;
+
+        dht.connect_to_peer_by_id(recipient_peer_id.clone()).await?;
+
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
+        if !webrtc.get_connection_status(&recipient_peer_id).await {
+            error!("Failed to establish WebRTC connection with peer {} after 5s.", recipient_peer_id);
+            return Err("Failed to establish WebRTC connection with peer.".to_string());
+        }
+        debug!("WebRTC connection to {} established successfully.", recipient_peer_id);
+    }
+
+    // 3. Construct the message payload.
+    let chat_message = webrtc_service::WebRTCChatMessage {
+        message_id: format!("msg_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()),
+        encrypted_payload,
+        timestamp: chrono::Utc::now().timestamp() as u64,
+        signature,
+    };
+    let message = webrtc_service::WebRTCMessage::ChatMessage(chat_message);
+    let message_bytes = serde_json::to_vec(&message).map_err(|e| format!("Failed to serialize chat message: {}", e))?;
+    debug!("Sending chat message to {}", recipient_peer_id);
+    // Correctly serialize the message to a string before sending via send_text
+    let message_str = serde_json::to_string(&message)
+        .map_err(|e| format!("Failed to serialize chat message to string: {}", e))?;
+
+    // Assuming send_data is a method that sends text. If it sends bytes, use message_bytes.
+    webrtc.send_data(&recipient_peer_id, message_bytes).await
 }
 
 #[tauri::command]
