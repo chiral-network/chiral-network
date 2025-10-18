@@ -18,7 +18,7 @@ use relay::client::Event as RelayClientEvent;
 use rs_merkle::{Hasher, MerkleTree};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::{collections::{HashMap, HashSet, VecDeque}, path::PathBuf};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -2099,19 +2099,50 @@ async fn run_dht_node(
                                         file_queries.insert(block_query_id, i as u32);
                                     }
 
-                                    // Create active download tracking for this file
-                                    let active_download = ActiveDownload {
-                                        metadata: metadata.clone(),
-                                        queries: file_queries,
-                                        downloaded_chunks: HashMap::new(),
+                                    // Calculate chunk size based on file size and number of chunks
+                                    let total_chunks = cids.len() as u64;
+                                    let chunk_size = if total_chunks > 0 {
+                                        (metadata.file_size + total_chunks - 1) / total_chunks // Ceiling division
+                                    } else {
+                                        0
                                     };
 
-                                    // Store the active download
-                                    active_downloads.lock().await.insert(metadata.merkle_root.clone(), active_download);
+                                    // Pre-calculate chunk offsets
+                                    let chunk_offsets: Vec<u64> = (0..total_chunks)
+                                        .map(|i| i * chunk_size)
+                                        .collect();
 
-                                    info!("Started tracking download for file {} with {} chunks", metadata.merkle_root, cids.len());
+                                    // Create temp directory
+                                    let temp_dir = PathBuf::from("./downloads/temp");
+                                    if let Err(e) = std::fs::create_dir_all(&temp_dir) {
+                                        error!("Failed to create temp directory: {}", e);
+                                        continue;
+                                    }
+
+                                    // Create active download with memory-mapped file
+                                    match ActiveDownload::new(
+                                        metadata.clone(),
+                                        file_queries,
+                                        &temp_dir,
+                                        metadata.file_size,
+                                        chunk_offsets,
+                                    ) {
+                                        Ok(active_download) => {
+                                            active_downloads.lock().await.insert(
+                                                metadata.merkle_root.clone(),
+                                                active_download
+                                            );
+                                            info!("Started tracking download for file {} with {} chunks (chunk_size: {} bytes)", 
+                                                metadata.merkle_root, cids.len(), chunk_size);
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to create memory-mapped file for {}: {}", 
+                                                metadata.merkle_root, e);
+                                        }
+                                    }
                                 } else {
-                                    error!("Failed to parse root block as CIDs array for file {}", metadata.merkle_root);
+                                    error!("Failed to parse root block as CIDs array for file {}", 
+                                        metadata.merkle_root);
                                 }
                             } else {
                                 // This is a data block query - find the corresponding file and handle it
@@ -2120,48 +2151,59 @@ async fn run_dht_node(
                                 // Check all active downloads for this query_id
                                 {
                                     let mut active_downloads_guard = active_downloads.lock().await;
+                                    
                                     for (file_hash, active_download) in active_downloads_guard.iter_mut() {
                                         if let Some(chunk_index) = active_download.queries.remove(&query_id) {
-                                            // This query belongs to this file - store the chunk
-                                            active_download.downloaded_chunks.insert(chunk_index, data.clone());
+                                            // This query belongs to this file - write the chunk to disk
+                                            let offset = active_download.chunk_offsets
+                                                .get(chunk_index as usize)
+                                                .copied()
+                                                .unwrap_or(0);
+                                            
+                                            match active_download.write_chunk(chunk_index, &data, offset) {
+                                                Ok(_) => {
+                                                    info!("Wrote chunk {}/{} for file {} ({} bytes)", 
+                                                        chunk_index + 1, 
+                                                        active_download.total_chunks, 
+                                                        file_hash, 
+                                                        data.len());
+                                                }
+                                                Err(e) => {
+                                                    error!("Failed to write chunk {} to disk for file {}: {}", 
+                                                        chunk_index, file_hash, e);
+                                                    break;
+                                                }
+                                            }
 
                                             // Check if all chunks for this file are downloaded
-                                            if active_download.queries.is_empty() {
+                                            if active_download.is_complete() {
                                                 info!("All chunks downloaded for file {}", file_hash);
 
-                                                // Reassemble the file
-                                                let mut completed_metadata = active_download.metadata.clone();
-
-                                                if completed_metadata.is_encrypted {
-                                                    if let Some(bundle) = &completed_metadata.encrypted_key_bundle {
-                                                        let mut encrypted_chunks = Vec::new();
-                                                        for i in 0..active_download.downloaded_chunks.len() as u32 {
-                                                            if let Some(chunk) = active_download.downloaded_chunks.get(&i) {
-                                                                encrypted_chunks.push(chunk.clone());
-                                                            }
-                                                        }
-                                                        // chunk_manager not defined
-                                                        // match chunk_manager.reassemble_and_decrypt_data(&encrypted_chunks, bundle) {
-                                                        //     Ok(decrypted_data) => completed_metadata.file_data = decrypted_data,
-                                                        //     Err(e) => error!("Decryption failed for {}: {}", file_hash, e),
-                                                        // }
-                                                    }
-                                                } else {
-                                                    let mut file_data = Vec::new();
-                                                    for i in 0..active_download.downloaded_chunks.len() as u32 {
-                                                        if let Some(chunk) = active_download.downloaded_chunks.get(&i) {
-                                                            file_data.extend_from_slice(chunk);
-                                                        }
-                                                    }
-                                                    completed_metadata.file_data = file_data;
+                                                // Flush the memory map to ensure all data is written
+                                                if let Err(e) = active_download.flush() {
+                                                    error!("Failed to flush memory map for {}: {}", file_hash, e);
+                                                    break;
                                                 }
 
-                                                // If the file was encrypted, the file_data is a set of encrypted chunks.
-                                                // We don't decrypt here. We pass the full metadata to the event handler,
-                                                // which can then decide to trigger decryption.
-                                                // The `DownloadedFile` event now carries all necessary info.
+                                                // Read the complete file from disk
+                                                match active_download.read_complete_file() {
+                                                    Ok(file_data) => {
+                                                        let mut completed_metadata = active_download.metadata.clone();
+                                                        
+                                                        if completed_metadata.is_encrypted {
+                                                            // Store encrypted data as-is
+                                                            // Decryption will be handled by the consumer of DownloadedFile event
+                                                            completed_metadata.file_data = file_data;
+                                                        } else {
+                                                            completed_metadata.file_data = file_data;
+                                                        }
 
-                                                completed_downloads.push(completed_metadata);
+                                                        completed_downloads.push(completed_metadata);
+                                                    }
+                                                    Err(e) => {
+                                                        error!("Failed to read complete file {}: {}", file_hash, e);
+                                                    }
+                                                }
                                             }
                                             break;
                                         }
@@ -2170,19 +2212,19 @@ async fn run_dht_node(
 
                                 // Send completion events for finished downloads
                                 for metadata in completed_downloads {
-                                    // let _ = event_tx.send(DhtEvent::DownloadedFile(metadata)).await;
-                                    // The file is downloaded, but if it's encrypted, it's not yet usable.
-                                    // The `DownloadedFile` event now acts as a signal that the raw,
-                                    // possibly encrypted, data is ready. The consumer of this event
-                                    // (e.g., a service in main.rs) will be responsible for decryption.
-                                    // info!("Downloaded all blocks for file {}. Emitting DownloadedFile event.", metadata.merkle_root);
+                                    info!("Downloaded all blocks for file {}. Emitting DownloadedFile event.", 
+                                        metadata.merkle_root);
+                                    
                                     let _ = event_tx.send(DhtEvent::DownloadedFile(metadata.clone())).await;
 
-                                    // Also remove from active downloads
-                                    active_downloads.lock().await.remove(&metadata.merkle_root);
+                                    // Remove from active downloads and cleanup temp file
+                                    if let Some(download) = active_downloads.lock().await.remove(&metadata.merkle_root) {
+                                        download.cleanup();
+                                    }
                                 }
                             }
                         }
+                        
                         beetswap::Event::GetQueryError { query_id, error } => {
                             // Handle Bitswap query error
                             warn!("Bitswap query {:?} failed: {:?}", query_id, error);
@@ -3429,13 +3471,120 @@ pub struct DhtService {
     get_providers_queries: Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>,
     chunk_size: usize,
 }
-
-/// Tracks an active file download with its associated queries and chunks
-#[derive(Debug, Clone)]
+use memmap2::MmapMut;
+use std::fs::OpenOptions;
+/// Tracks an active file download with disk-based storage using memory-mapped files
+#[derive(Debug)]
 struct ActiveDownload {
     metadata: FileMetadata,
-    queries: HashMap<beetswap::QueryId, u32>, // query_id -> chunk_index
-    downloaded_chunks: HashMap<u32, Vec<u8>>, // chunk_index -> data
+    queries: HashMap<beetswap::QueryId, u32>,
+    temp_file_path: PathBuf, // This works because PathBuf is already imported
+    mmap: Arc<std::sync::Mutex<MmapMut>>,
+    received_chunks: Arc<std::sync::Mutex<HashSet<u32>>>,
+    total_chunks: u32,
+    chunk_offsets: Vec<u64>,
+}
+
+impl ActiveDownload {
+    fn new(
+        metadata: FileMetadata,
+        queries: HashMap<beetswap::QueryId, u32>,
+        temp_dir: &PathBuf,
+        total_size: u64,
+        chunk_offsets: Vec<u64>,
+    ) -> std::io::Result<Self> {
+        let total_chunks = queries.len() as u32;
+        let temp_file_path = temp_dir.join(format!("{}.tmp", metadata.merkle_root));
+
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&temp_file_path)?;
+
+        file.set_len(total_size)?;
+
+        let mmap = unsafe { MmapMut::map_mut(&file)? };
+
+        Ok(Self {
+            metadata,
+            queries,
+            temp_file_path,
+            mmap: Arc::new(std::sync::Mutex::new(mmap)),
+            received_chunks: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            total_chunks,
+            chunk_offsets,
+        })
+    }
+
+    fn write_chunk(&self, chunk_index: u32, data: &[u8], offset: u64) -> std::io::Result<()> {
+        let mut mmap = self.mmap.lock().unwrap();
+        let start = offset as usize;
+        let end = start + data.len();
+
+        if end > mmap.len() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("Chunk {} would exceed file bounds", chunk_index),
+            ));
+        }
+
+        mmap[start..end].copy_from_slice(data);
+        self.received_chunks.lock().unwrap().insert(chunk_index);
+
+        Ok(())
+    }
+
+    fn is_complete(&self) -> bool {
+        self.queries.is_empty()
+            && self.received_chunks.lock().unwrap().len() == self.total_chunks as usize
+    }
+
+    fn flush(&self) -> std::io::Result<()> {
+        self.mmap.lock().unwrap().flush()
+    }
+
+    fn read_complete_file(&self) -> std::io::Result<Vec<u8>> {
+        let mmap = self.mmap.lock().unwrap();
+        Ok(mmap.to_vec())
+    }
+
+    fn cleanup(&self) {
+        if let Err(e) = std::fs::remove_file(&self.temp_file_path) {
+            eprintln!("Failed to cleanup temp file {:?}: {}", self.temp_file_path, e);
+        }
+    }
+
+    fn progress(&self) -> f32 {
+        let received = self.received_chunks.lock().unwrap().len() as f32;
+        received / self.total_chunks as f32
+    }
+
+    fn chunks_received(&self) -> usize {
+        self.received_chunks.lock().unwrap().len()
+    }
+}
+
+impl Clone for ActiveDownload {
+    fn clone(&self) -> Self {
+        Self {
+            metadata: self.metadata.clone(),
+            queries: self.queries.clone(),
+            temp_file_path: self.temp_file_path.clone(),
+            mmap: Arc::clone(&self.mmap),
+            received_chunks: Arc::clone(&self.received_chunks),
+            total_chunks: self.total_chunks,
+            chunk_offsets: self.chunk_offsets.clone(),
+        }
+    }
+}
+
+impl Drop for ActiveDownload {
+    fn drop(&mut self) {
+        if Arc::strong_count(&self.mmap) == 1 {
+            self.cleanup();
+        }
+    }
 }
 
 impl DhtService {
