@@ -295,6 +295,7 @@ impl ReputationDhtService {
             key_fingerprint: None,
             version: Some(1),
             parent_hash: None,
+            encrypted_key_bundle: None,
             cids: None, // Not needed for reputation events
             is_root: true,
         };
@@ -337,6 +338,7 @@ impl ReputationDhtService {
             key_fingerprint: None,
             version: Some(1),
             parent_hash: None,
+            encrypted_key_bundle: None,
             cids: None, // Not needed for merkle roots
             is_root: true,
         };

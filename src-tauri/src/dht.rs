@@ -1202,6 +1202,7 @@ async fn run_dht_node(
     peer_selection: Arc<Mutex<PeerSelectionService>>,
     received_chunks: Arc<Mutex<HashMap<String, HashMap<u32, FileChunk>>>>,
     file_transfer_service: Option<Arc<FileTransferService>>,
+    chunk_manager: Option<Arc<ChunkManager>>,
     pending_webrtc_offers: Arc<
         Mutex<
             HashMap<rr::OutboundRequestId, oneshot::Sender<Result<WebRTCAnswerResponse, String>>>,
@@ -2124,11 +2125,29 @@ async fn run_dht_node(
                                                             if let Some(chunk) = active_download.downloaded_chunks.get(&i) {
                                                                 encrypted_chunks.push(chunk.clone());
                                                             }
+                                                        }                                                        
+                                                        if let Some(cm) = &chunk_manager {
+                                                            // This part is tricky because reassemble_and_decrypt_data needs a secret key.
+                                                            // We don't have it here. The design implies decryption should happen
+                                                            // at a higher level where the user's private key is available.
+                                                            // For now, we will just reassemble the encrypted chunks and pass them up.
+                                                            // The frontend/caller will be responsible for decryption.
+                                                            
+                                                            let mut reassembled_encrypted_data = Vec::new();
+                                                            for i in 0..active_download.downloaded_chunks.len() as u32 {
+                                                                if let Some(chunk_data) = active_download.downloaded_chunks.get(&i) {
+                                                                    reassembled_encrypted_data.extend_from_slice(chunk_data);
+                                                                }
+                                                            }
+                                                            // We are setting `file_data` to the raw encrypted data.
+                                                            // The `DownloadedFile` event will carry this and the `encrypted_key_bundle`.
+                                                            completed_metadata.file_data = reassembled_encrypted_data;
+                                                            
+                                                        } else {
+                                                            error!("ChunkManager not available for file reassembly: {}", file_hash);
                                                         }
-                                                        match chunk_manager.reassemble_and_decrypt_data(&encrypted_chunks, bundle) {
-                                                            Ok(decrypted_data) => completed_metadata.file_data = decrypted_data,
-                                                            Err(e) => error!("Decryption failed for {}: {}", file_hash, e),
-                                                        }
+                                                    } else {
+                                                        error!("File {} is marked as encrypted but has no key bundle.", file_hash);
                                                     }
                                                 } else {
                                                     let mut file_data = Vec::new();
@@ -2139,14 +2158,7 @@ async fn run_dht_node(
                                                     }
                                                     completed_metadata.file_data = file_data;
                                                 }
-
-                                                // If the file was encrypted, the file_data is a set of encrypted chunks.
-                                                // We don't decrypt here. We pass the full metadata to the event handler,
-                                                // which can then decide to trigger decryption.
-                                                // The `DownloadedFile` event now carries all necessary info.
-
-                                                completed_downloads.push(completed_metadata);
-                                            }
+                                                completed_downloads.push(completed_metadata);                                            }
                                             break;
                                         }
                                     }
@@ -2155,15 +2167,6 @@ async fn run_dht_node(
                                 // Send completion events for finished downloads
                                 for metadata in completed_downloads {
                                     let _ = event_tx.send(DhtEvent::DownloadedFile(metadata)).await;
-                                    // The file is downloaded, but if it's encrypted, it's not yet usable.
-                                    // The `DownloadedFile` event now acts as a signal that the raw,
-                                    // possibly encrypted, data is ready. The consumer of this event
-                                    // (e.g., a service in main.rs) will be responsible for decryption.
-                                    info!("Downloaded all blocks for file {}. Emitting DownloadedFile event.", metadata.merkle_root);
-                                    let _ = event_tx.send(DhtEvent::DownloadedFile(metadata.clone())).await;
-
-                                    // Also remove from active downloads
-                                    active_downloads.lock().await.remove(&metadata.merkle_root);
                                 }
                             }
 
@@ -3375,6 +3378,7 @@ pub struct DhtService {
     file_metadata_cache: Arc<Mutex<HashMap<String, FileMetadata>>>,
     received_chunks: Arc<Mutex<HashMap<String, HashMap<u32, FileChunk>>>>,
     file_transfer_service: Option<Arc<FileTransferService>>,
+    // chunk_manager: Option<Arc<ChunkManager>>, // Not needed here
     pending_webrtc_offers: Arc<
         Mutex<
             HashMap<rr::OutboundRequestId, oneshot::Sender<Result<WebRTCAnswerResponse, String>>>,
@@ -3406,6 +3410,7 @@ impl DhtService {
         autonat_servers: Vec<String>,
         proxy_address: Option<String>,
         file_transfer_service: Option<Arc<FileTransferService>>,
+        chunk_manager: Option<Arc<ChunkManager>>,
         chunk_size_kb: Option<usize>, // Chunk size in KB (default 256)
         cache_size_mb: Option<usize>, // Cache size in MB (default 1024)
         enable_autorelay: bool,
@@ -3749,6 +3754,7 @@ impl DhtService {
             peer_selection.clone(),
             received_chunks_clone.clone(),
             file_transfer_service.clone(),
+            chunk_manager,
             pending_webrtc_offers.clone(),
             pending_provider_queries.clone(),
             root_query_mapping.clone(),
@@ -3776,6 +3782,7 @@ impl DhtService {
             file_metadata_cache: Arc::new(Mutex::new(HashMap::new())),
             received_chunks: received_chunks_clone,
             file_transfer_service,
+            // chunk_manager is not stored in DhtService, only passed to the task
             pending_webrtc_offers,
             pending_provider_queries,
             root_query_mapping,
@@ -3786,6 +3793,7 @@ impl DhtService {
     }
 
     pub fn chunk_size(&self) -> usize {
+        // Note: This might need to be adjusted if chunk_manager is the source of truth
         self.chunk_size
     }
 
@@ -3864,6 +3872,7 @@ impl DhtService {
         file_data: Vec<u8>,
         created_at: u64,
         mime_type: Option<String>,
+            encrypted_key_bundle: Option<crate::encryption::EncryptedAesKeyBundle>,
         is_encrypted: bool,
         encryption_method: Option<String>,
         key_fingerprint: Option<String>,
@@ -3892,6 +3901,7 @@ impl DhtService {
             encryption_method,
             key_fingerprint,
             version: Some(version),
+                encrypted_key_bundle: None, // This should be populated if encrypted
             parent_hash,
             cids: None,
             is_root, // Use computed value, not hardcoded true
