@@ -931,6 +931,8 @@
     "hideAnalytics": "Hide Analytics",
     "showAnalytics": "Show Analytics",
     "loading": "Loading reputation data...",
+    "viewPeers": "Peer Reputation",
+    "viewRelays": "Relay Leaderboard",
     "searchPeers": "Search Peers",
     "searchPlaceholder": "Search by peer ID...",
     "filters": "Filters",
@@ -993,6 +995,28 @@
       "StorageOffered": "Storage Offered",
       "MaliciousBehaviorReport": "Malicious Behavior Report",
       "FileShared": "File Shared"
+    }
+  },
+  "relay": {
+    "leaderboard": {
+      "title": "Top Relay Servers",
+      "subtitle": "Reputation-based ranking of relay nodes",
+      "refresh": "Refresh",
+      "refreshing": "Refreshing...",
+      "loading": "Loading relay reputation data...",
+      "rank": "Rank",
+      "peerId": "Peer ID",
+      "score": "Score",
+      "circuits": "Circuits",
+      "bandwidth": "Bandwidth",
+      "uptime": "Uptime",
+      "points": "pts",
+      "lastSeen": "last seen",
+      "totalRelays": "Total Relays",
+      "badgedRelays": "Badged Relays",
+      "totalCircuits": "Total Circuits",
+      "noRelays": "No Relay Servers Found",
+      "noRelaysDesc": "Start running a relay server to appear on the leaderboard"
     }
   },
   "upload": {

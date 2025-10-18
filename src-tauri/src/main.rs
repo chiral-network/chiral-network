@@ -1255,6 +1255,21 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                 DhtEvent::FileDownloaded { file_hash } => {
                     format!("file_downloaded:{}", file_hash)
                 }
+                DhtEvent::ReputationEvent {
+                    peer_id,
+                    event_type,
+                    impact,
+                    data,
+                } => {
+                    let json = serde_json::to_string(&serde_json::json!({
+                        "peer_id": peer_id,
+                        "event_type": event_type,
+                        "impact": impact,
+                        "data": data,
+                    }))
+                    .unwrap_or_else(|_| "{}".to_string());
+                    format!("reputation_event:{}", json)
+                }
             })
             .collect();
         Ok(mapped)
@@ -3688,7 +3703,8 @@ fn main() {
             get_file_data,
             store_file_data,
             start_proof_of_storage_watcher,
-            stop_proof_of_storage_watcher
+            stop_proof_of_storage_watcher,
+            get_relay_reputation_stats
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -4436,4 +4452,49 @@ mod tests {
     }
 
     // Add more tests for other functions/modules as needed
+
+#[derive(Debug, Serialize, Deserialize)]
+struct RelayReputationStats {
+    total_relays: usize,
+    top_relays: Vec<RelayNodeStats>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct RelayNodeStats {
+    peer_id: String,
+    reputation_score: f64,
+    reservations_accepted: u64,
+    circuits_established: u64,
+    circuits_successful: u64,
+    total_events: u64,
+    last_seen: u64,
+}
+
+#[tauri::command]
+async fn get_relay_reputation_stats(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<RelayReputationStats, String> {
+    // This is a placeholder implementation
+    // In a full implementation, this would aggregate reputation events
+    // from the DHT event stream and calculate statistics
+
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    if dht.is_none() {
+        return Ok(RelayReputationStats {
+            total_relays: 0,
+            top_relays: vec![],
+        });
+    }
+
+    // TODO: Implement aggregation of ReputationEvents from DHT event stream
+    // For now, return empty stats
+    Ok(RelayReputationStats {
+        total_relays: 0,
+        top_relays: vec![],
+    })
 }

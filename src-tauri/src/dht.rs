@@ -35,6 +35,7 @@ use std::task::{Context, Poll};
 // Import the missing types
 use crate::manager::ChunkManager;
 use crate::file_transfer::FileTransferService;
+use crate::reputation::{EventType as ReputationEventType, ReputationEvent};
 use std::error::Error;
 
 // Trait alias to abstract over async I/O types used by proxy transport
@@ -281,6 +282,12 @@ pub enum DhtEvent {
     BitswapError {
         query_id: String,
         error: String,
+    },
+    ReputationEvent {
+        peer_id: String,
+        event_type: String,
+        impact: f64,
+        data: serde_json::Value,
     },
 }
 
@@ -2042,15 +2049,79 @@ async fn run_dht_node(
                                         src_peer_id
                                     )))
                                     .await;
+
+                                // Emit reputation event
+                                let _ = event_tx
+                                    .send(DhtEvent::ReputationEvent {
+                                        peer_id: src_peer_id.to_string(),
+                                        event_type: "RelayReservationAccepted".to_string(),
+                                        impact: 5.0,
+                                        data: serde_json::json!({
+                                            "timestamp": SystemTime::now()
+                                                .duration_since(UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs(),
+                                        }),
+                                    })
+                                    .await;
                             }
                             RelayEvent::ReservationReqDenied { src_peer_id, .. } => {
                                 debug!("🔁 Relay server: Denied reservation from {}", src_peer_id);
+
+                                // Emit reputation event
+                                let _ = event_tx
+                                    .send(DhtEvent::ReputationEvent {
+                                        peer_id: src_peer_id.to_string(),
+                                        event_type: "RelayRefused".to_string(),
+                                        impact: -2.0,
+                                        data: serde_json::json!({
+                                            "reason": "reservation_denied",
+                                            "timestamp": SystemTime::now()
+                                                .duration_since(UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs(),
+                                        }),
+                                    })
+                                    .await;
                             }
                             RelayEvent::ReservationTimedOut { src_peer_id } => {
                                 debug!("🔁 Relay server: Reservation timed out for {}", src_peer_id);
+
+                                // Emit reputation event
+                                let _ = event_tx
+                                    .send(DhtEvent::ReputationEvent {
+                                        peer_id: src_peer_id.to_string(),
+                                        event_type: "RelayTimeout".to_string(),
+                                        impact: -10.0,
+                                        data: serde_json::json!({
+                                            "reason": "reservation_timeout",
+                                            "timestamp": SystemTime::now()
+                                                .duration_since(UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs(),
+                                        }),
+                                    })
+                                    .await;
                             }
                             RelayEvent::CircuitReqDenied { src_peer_id, dst_peer_id, .. } => {
                                 debug!("🔁 Relay server: Denied circuit from {} to {}", src_peer_id, dst_peer_id);
+
+                                // Emit reputation event
+                                let _ = event_tx
+                                    .send(DhtEvent::ReputationEvent {
+                                        peer_id: src_peer_id.to_string(),
+                                        event_type: "RelayRefused".to_string(),
+                                        impact: -2.0,
+                                        data: serde_json::json!({
+                                            "reason": "circuit_denied",
+                                            "dst_peer_id": dst_peer_id.to_string(),
+                                            "timestamp": SystemTime::now()
+                                                .duration_since(UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs(),
+                                        }),
+                                    })
+                                    .await;
                             }
                             RelayEvent::CircuitReqAccepted { src_peer_id, dst_peer_id, .. } => {
                                 info!("🔁 Relay server: Established circuit from {} to {}", src_peer_id, dst_peer_id);
@@ -2060,9 +2131,41 @@ async fn run_dht_node(
                                         src_peer_id, dst_peer_id
                                     )))
                                     .await;
+
+                                // Emit reputation event
+                                let _ = event_tx
+                                    .send(DhtEvent::ReputationEvent {
+                                        peer_id: src_peer_id.to_string(),
+                                        event_type: "RelayCircuitEstablished".to_string(),
+                                        impact: 10.0,
+                                        data: serde_json::json!({
+                                            "dst_peer_id": dst_peer_id.to_string(),
+                                            "timestamp": SystemTime::now()
+                                                .duration_since(UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs(),
+                                        }),
+                                    })
+                                    .await;
                             }
                             RelayEvent::CircuitClosed { src_peer_id, dst_peer_id, .. } => {
                                 debug!("🔁 Relay server: Circuit closed between {} and {}", src_peer_id, dst_peer_id);
+
+                                // Emit reputation event
+                                let _ = event_tx
+                                    .send(DhtEvent::ReputationEvent {
+                                        peer_id: src_peer_id.to_string(),
+                                        event_type: "RelayCircuitSuccessful".to_string(),
+                                        impact: 15.0,
+                                        data: serde_json::json!({
+                                            "dst_peer_id": dst_peer_id.to_string(),
+                                            "timestamp": SystemTime::now()
+                                                .duration_since(UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs(),
+                                        }),
+                                    })
+                                    .await;
                             }
                             // Handle deprecated relay events (libp2p handles logging internally)
                             _ => {}
