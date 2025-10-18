@@ -227,6 +227,9 @@ struct AppState {
 
     // Relay reputation statistics storage
     relay_reputation: Arc<Mutex<std::collections::HashMap<String, RelayNodeStats>>>,
+
+    // Relay node aliases (peer_id -> alias)
+    relay_aliases: Arc<Mutex<std::collections::HashMap<String, String>>>,
 }
 
 #[tauri::command]
@@ -940,6 +943,7 @@ async fn start_dht_node(
                         let mut stats = relay_reputation_arc.lock().await;
                         let entry = stats.entry(peer_id.clone()).or_insert(RelayNodeStats {
                             peer_id: peer_id.clone(),
+                            alias: None,
                             reputation_score: 0.0,
                             reservations_accepted: 0,
                             circuits_established: 0,
@@ -3629,6 +3633,9 @@ fn main() {
 
             // Relay reputation statistics
             relay_reputation: Arc::new(Mutex::new(std::collections::HashMap::new())),
+
+            // Relay aliases
+            relay_aliases: Arc::new(Mutex::new(std::collections::HashMap::new())),
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
@@ -3758,7 +3765,9 @@ fn main() {
             store_file_data,
             start_proof_of_storage_watcher,
             stop_proof_of_storage_watcher,
-            get_relay_reputation_stats
+            get_relay_reputation_stats,
+            set_relay_alias,
+            get_relay_alias
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -4517,6 +4526,7 @@ struct RelayReputationStats {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RelayNodeStats {
     peer_id: String,
+    alias: Option<String>,
     reputation_score: f64,
     reservations_accepted: u64,
     circuits_established: u64,
@@ -4532,11 +4542,20 @@ async fn get_relay_reputation_stats(
 ) -> Result<RelayReputationStats, String> {
     // Read from relay reputation storage
     let stats_map = state.relay_reputation.lock().await;
+    let aliases_map = state.relay_aliases.lock().await;
 
     let max_relays = limit.unwrap_or(100);
 
-    // Convert HashMap to Vec and sort by reputation score (descending)
-    let mut all_relays: Vec<RelayNodeStats> = stats_map.values().cloned().collect();
+    // Convert HashMap to Vec, populate aliases, and sort by reputation score (descending)
+    let mut all_relays: Vec<RelayNodeStats> = stats_map
+        .values()
+        .map(|stats| {
+            let mut stats_with_alias = stats.clone();
+            stats_with_alias.alias = aliases_map.get(&stats.peer_id).cloned();
+            stats_with_alias
+        })
+        .collect();
+
     all_relays.sort_by(|a, b| {
         b.reputation_score
             .partial_cmp(&a.reputation_score)
@@ -4551,4 +4570,30 @@ async fn get_relay_reputation_stats(
         total_relays,
         top_relays,
     })
+}
+
+#[tauri::command]
+async fn set_relay_alias(
+    state: State<'_, AppState>,
+    peer_id: String,
+    alias: String,
+) -> Result<(), String> {
+    let mut aliases = state.relay_aliases.lock().await;
+
+    if alias.trim().is_empty() {
+        aliases.remove(&peer_id);
+    } else {
+        aliases.insert(peer_id, alias.trim().to_string());
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_relay_alias(
+    state: State<'_, AppState>,
+    peer_id: String,
+) -> Result<Option<String>, String> {
+    let aliases = state.relay_aliases.lock().await;
+    Ok(aliases.get(&peer_id).cloned())
 }

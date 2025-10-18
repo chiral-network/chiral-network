@@ -7,6 +7,7 @@
 
   interface RelayNodeStats {
     peer_id: string;
+    alias: string | null;
     reputation_score: number;
     reservations_accepted: number;
     circuits_established: number;
@@ -23,6 +24,10 @@
   let stats: RelayReputationStats | null = null;
   let isLoading = true;
   let limit = 100;
+
+  // Alias editing state
+  let editingPeerId: string | null = null;
+  let editingAlias: string = '';
 
   function getBadge(score: number): { name: string; color: string; emoji: string } {
     if (score >= 1000) return { name: 'Diamond Relay', color: 'text-blue-400', emoji: '💎' };
@@ -55,6 +60,27 @@
       stats = { total_relays: 0, top_relays: [] };
     } finally {
       isLoading = false;
+    }
+  }
+
+  function startEditingAlias(peerId: string, currentAlias: string | null) {
+    editingPeerId = peerId;
+    editingAlias = currentAlias || '';
+  }
+
+  function cancelEditingAlias() {
+    editingPeerId = null;
+    editingAlias = '';
+  }
+
+  async function saveAlias(peerId: string) {
+    try {
+      await invoke('set_relay_alias', { peerId, alias: editingAlias });
+      // Reload stats to show the new alias
+      await loadStats();
+      cancelEditingAlias();
+    } catch (error) {
+      console.error('Failed to save alias:', error);
     }
   }
 
@@ -116,13 +142,57 @@
             {/if}
           </div>
 
-          <!-- Peer ID with Badge -->
+          <!-- Peer ID with Badge and Alias -->
           <div class="col-span-2">
-            <div class="flex items-center gap-2">
-              <span class="font-mono text-sm text-gray-900">{formatPeerId(relay.peer_id)}</span>
-              <span class="text-lg" title={badge.name}>{badge.emoji}</span>
-            </div>
-            <div class="text-xs {badge.color} font-medium">{badge.name}</div>
+            {#if editingPeerId === relay.peer_id}
+              <!-- Editing alias -->
+              <div class="flex items-center gap-1">
+                <input
+                  type="text"
+                  bind:value={editingAlias}
+                  placeholder="Enter alias..."
+                  class="px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  on:keydown={(e) => {
+                    if (e.key === 'Enter') saveAlias(relay.peer_id);
+                    if (e.key === 'Escape') cancelEditingAlias();
+                  }}
+                  autofocus
+                />
+                <button
+                  on:click={() => saveAlias(relay.peer_id)}
+                  class="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
+                >
+                  ✓
+                </button>
+                <button
+                  on:click={cancelEditingAlias}
+                  class="px-2 py-1 text-xs bg-gray-400 text-white rounded hover:bg-gray-500"
+                >
+                  ✕
+                </button>
+              </div>
+            {:else}
+              <!-- Display alias or peer ID -->
+              <div class="flex items-center gap-2">
+                <div class="flex-1">
+                  {#if relay.alias}
+                    <div class="font-semibold text-gray-900">{relay.alias}</div>
+                    <div class="font-mono text-xs text-gray-500">{formatPeerId(relay.peer_id)}</div>
+                  {:else}
+                    <div class="font-mono text-sm text-gray-900">{formatPeerId(relay.peer_id)}</div>
+                  {/if}
+                </div>
+                <span class="text-lg" title={badge.name}>{badge.emoji}</span>
+                <button
+                  on:click={() => startEditingAlias(relay.peer_id, relay.alias)}
+                  class="text-gray-400 hover:text-blue-600 text-sm"
+                  title="Edit alias"
+                >
+                  ✏️
+                </button>
+              </div>
+              <div class="text-xs {badge.color} font-medium">{badge.name}</div>
+            {/if}
           </div>
 
           <!-- Score -->
