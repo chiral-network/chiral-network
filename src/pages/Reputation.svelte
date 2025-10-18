@@ -4,14 +4,12 @@
   import { TrustLevel, type PeerReputation, type ReputationAnalytics } from '$lib/types/reputation';
   import ReputationCard from '$lib/components/ReputationCard.svelte';
   import ReputationAnalyticsComponent from '$lib/components/ReputationAnalytics.svelte';
-  import RelayReputationLeaderboard from '$lib/components/RelayReputationLeaderboard.svelte';
   import Card from '$lib/components/ui/card.svelte';
   import Button from '$lib/components/ui/button.svelte';
   import PeerSelectionService, { type PeerMetrics as BackendPeerMetrics } from '$lib/services/peerSelectionService';
   import { invoke } from '@tauri-apps/api/core';
 
   // State
-  let view: 'peers' | 'relays' = 'peers';
   let peers: PeerReputation[] = [];
   let analytics: ReputationAnalytics;
   let sortBy: 'score' | 'interactions' | 'lastSeen' = 'score';
@@ -239,37 +237,14 @@
           <Button on:click={refreshData} disabled={isLoading} variant="outline" class="w-full sm:w-auto">
             {isLoading ? $t('reputation.refreshing') : $t('reputation.refreshData')}
           </Button>
-          {#if view === 'peers'}
-            <Button on:click={() => showAnalytics = !showAnalytics} variant="outline" class="w-full sm:w-auto">
-              {showAnalytics ? $t('reputation.hideAnalytics') : $t('reputation.showAnalytics')}
-            </Button>
-          {/if}
+          <Button on:click={() => showAnalytics = !showAnalytics} variant="outline" class="w-full sm:w-auto">
+            {showAnalytics ? $t('reputation.hideAnalytics') : $t('reputation.showAnalytics')}
+          </Button>
         </div>
-      </div>
-
-      <!-- View Toggle -->
-      <div class="mt-6 flex gap-2">
-        <Button
-          on:click={() => view = 'peers'}
-          variant={view === 'peers' ? 'default' : 'outline'}
-          class="flex-1 sm:flex-none"
-        >
-          {$t('reputation.viewPeers')}
-        </Button>
-        <Button
-          on:click={() => view = 'relays'}
-          variant={view === 'relays' ? 'default' : 'outline'}
-          class="flex-1 sm:flex-none"
-        >
-          {$t('reputation.viewRelays')}
-        </Button>
       </div>
     </div>
 
-    {#if view === 'relays'}
-      <!-- Relay Reputation Leaderboard -->
-      <RelayReputationLeaderboard />
-    {:else if isLoading}
+    {#if isLoading}
       <!-- Loading State -->
       <div class="flex items-center justify-center py-12">
         <div class="text-center">
