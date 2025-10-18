@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 use tracing::{debug, warn};
 use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret};
 
@@ -12,7 +13,7 @@ type HmacSha256 = Hmac<Sha256>;
 
 /// Stream authentication for data integrity verification
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StreamAuth {
+pub struct StreamAuth{
     /// Session ID for this transfer
     pub session_id: String,
     /// HMAC key for stream authentication
@@ -106,7 +107,8 @@ pub struct HmacKeyExchangeConfirmation {
 }
 
 /// Key exchange state tracking
-pub struct KeyExchangeState {
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub struct KeyExchangeState{
     pub exchange_id: String,
     pub initiator_peer_id: String,
     pub target_peer_id: String,
@@ -114,7 +116,9 @@ pub struct KeyExchangeState {
     pub initiator_public_key: PublicKey,
     pub initiator_secret: Option<EphemeralSecret>,
     pub responder_public_key: Option<PublicKey>,
+    #[zeroize(skip)] // This key is shared, but we'll clear it manually when the session ends.
     pub derived_hmac_key: Option<Vec<u8>>,
+    #[zeroize(skip)] // This is not sensitive data, no need to zeroize.
     pub state: ExchangeState,
     pub created_at: u64,
     pub expires_at: u64,
