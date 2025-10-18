@@ -992,6 +992,7 @@ impl DhtMetricsSnapshot {
             observed_addrs,
             reachability_history,
             autonat_enabled,
+            // AutoRelay metrics
             autorelay_enabled,
             active_relay_peer_id,
             relay_reservation_status,
@@ -999,6 +1000,7 @@ impl DhtMetricsSnapshot {
             last_reservation_failure,
             reservation_renewals,
             reservation_evictions,
+            // DCUtR metrics
             dcutr_enabled,
             dcutr_hole_punch_attempts,
             dcutr_hole_punch_successes,
@@ -3288,10 +3290,10 @@ pub struct DhtService {
         >,
     >,
     pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
-    root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>>, // Track root query IDs for file downloads
-    active_downloads: Arc<Mutex<HashMap<String, ActiveDownload>>>, // Track active file downloads
-    get_providers_queries: Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>, // Track GetProviders query_id -> (file_hash, start_time) mapping
-    chunk_size: usize, // Configurable chunk size in bytes
+    root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>>,
+    active_downloads: Arc<Mutex<HashMap<String, ActiveDownload>>>,
+    get_providers_queries: Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>,
+    chunk_size: usize,
 }
 
 /// Tracks an active file download with its associated queries and chunks
