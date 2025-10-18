@@ -1,4 +1,104 @@
-use crate::manager::Sha256Hasher;
+use crate::encryption::EncryptedAesKeyBundle;
+use x25519_dalek::PublicKey;
+
+// ... DhtCommand enum
+#[derive(Debug)]
+pub enum DhtCommand {
+    // ... existing commands
+    RequestFileAccess {
+        seeder: PeerId,
+        merkle_root: String,
+        recipient_public_key: PublicKey,
+        sender: oneshot::Sender<Result<EncryptedAesKeyBundle, String>>,
+    },
+}
+
+// ... DhtBehaviour struct
+#[derive(NetworkBehaviour)]
+struct DhtBehaviour {
+    // ... existing behaviours
+    key_request: rr::Behaviour<KeyRequestCodec>,
+}
+
+// ... after WebRTCSignalingCodec
+// ------ Key Request Protocol Implementation ------
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyRequestProtocol;
+
+impl AsRef<str> for KeyRequestProtocol {
+    fn as_ref(&self) -> &str {
+        "/chiral/key-request/1.0.0"
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct KeyRequestCodec;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct KeyRequest {
+    pub merkle_root: String,
+    #[serde(with = "serde_bytes")]
+    pub recipient_public_key: Vec<u8>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct KeyResponse {
+    pub encrypted_bundle: Option<EncryptedAesKeyBundle>,
+    pub error: Option<String>,
+}
+
+#[async_trait::async_trait]
+impl rr::Codec for KeyRequestCodec {
+    type Protocol = KeyRequestProtocol;
+    type Request = KeyRequest;
+    type Response = KeyResponse;
+
+    async fn read_request<T>(&mut self, _: &Self::Protocol, io: &mut T) -> std::io::Result<Self::Request>
+    where
+        T: FAsyncRead + Unpin + Send,
+    {
+        let data = read_framed(io).await?;
+        serde_json::from_slice(&data).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    }
+
+    async fn read_response<T>(&mut self, _: &Self::Protocol, io: &mut T) -> std::io::Result<Self::Response>
+    where
+        T: FAsyncRead + Unpin + Send,
+    {
+        let data = read_framed(io).await?;
+        serde_json::from_slice(&data).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    }
+
+    async fn write_request<T>(&mut self, _: &Self::Protocol, io: &mut T, request: Self::Request) -> std::io::Result<()>
+    where
+        T: FAsyncWrite + Unpin + Send,
+    {
+        let data = serde_json::to_vec(&request).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        write_framed(io, data).await
+    }
+
+    async fn write_response<T>(&mut self, _: &Self::Protocol, io: &mut T, response: Self::Response) -> std::io::Result<()>
+    where
+        T: FAsyncWrite + Unpin + Send,
+    {
+        let data = serde_json::to_vec(&response).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        write_framed(io, data).await
+    }
+}
+
+// ... in DhtBehaviourEvent enum
+#[derive(Debug)]
+enum DhtBehaviourEvent {
+    // ...
+    KeyRequest(rr::Event<KeyRequest, KeyResponse>),
+}
+
+// ... in DhtBehaviour impl
+impl From<rr::Event<KeyRequest, KeyResponse>> for DhtBehaviourEvent {
+    fn from(event: rr::Event<KeyRequest, KeyResponse>) -> Self {
+        DhtBehaviourEvent::KeyRequest(event)
+    }
+}
 use async_trait::async_trait;
 use blockstore::{
     block::{Block, CidError},
@@ -2118,18 +2218,16 @@ async fn run_dht_node(
                                                 let mut completed_metadata = active_download.metadata.clone();
 
                                                 if completed_metadata.is_encrypted {
-                                                    if let Some(bundle) = &completed_metadata.encrypted_key_bundle {
-                                                        let mut encrypted_chunks = Vec::new();
-                                                        for i in 0..active_download.downloaded_chunks.len() as u32 {
-                                                            if let Some(chunk) = active_download.downloaded_chunks.get(&i) {
-                                                                encrypted_chunks.push(chunk.clone());
-                                                            }
-                                                        }
-                                                        match chunk_manager.reassemble_and_decrypt_data(&encrypted_chunks, bundle) {
-                                                            Ok(decrypted_data) => completed_metadata.file_data = decrypted_data,
-                                                            Err(e) => error!("Decryption failed for {}: {}", file_hash, e),
+                                                    // Per the design, decryption should be handled by the caller of the DHT service,
+                                                    // which holds the user's secret key. Here, we just reassemble the
+                                                    // encrypted chunks in the correct order.
+                                                    let mut reassembled_encrypted_data = Vec::new();
+                                                    for i in 0..active_download.downloaded_chunks.len() as u32 {
+                                                        if let Some(chunk_data) = active_download.downloaded_chunks.get(&i) {
+                                                            reassembled_encrypted_data.extend_from_slice(chunk_data);
                                                         }
                                                     }
+                                                    completed_metadata.file_data = reassembled_encrypted_data;
                                                 } else {
                                                     let mut file_data = Vec::new();
                                                     for i in 0..active_download.downloaded_chunks.len() as u32 {
