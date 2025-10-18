@@ -444,7 +444,8 @@
     "item": {
       "from": "보낸 사람",
       "to": "받는 사람"
-    }
+    },
+    "searchPlaceholder": "주소, 설명 또는 ID로 검색..."
   },
   "fees": {
     "low": "낮음",
@@ -603,7 +604,8 @@
     "amount": {
       "invalid": "0보다 큰 올바른 금액을 입력하세요.",
       "min": "금액은 최소 {min} Chiral이어야 합니다.",
-      "insufficient": "잔액이 부족합니다 — {more} Chiral이 더 필요합니다."
+      "insufficient": "잔액이 부족합니다 — {more} Chiral이 더 필요합니다.",
+      "insufficientWithFee": "자금이 부족합니다. 총 {total} Chiral (금액 + 수수료)이 잔액 {balance} Chiral을 초과합니다."
     },
     "exportFailed": "내보내기에 실패했습니다. 다시 시도하세요.",
     "createAccount": "계정 생성 실패: {error}"

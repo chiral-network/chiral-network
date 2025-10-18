@@ -1075,6 +1075,7 @@ dependencies = [
  "hex",
  "hkdf",
  "hmac",
+ "if-addrs",
  "lazy_static",
  "libp2p",
  "multihash-codetable",

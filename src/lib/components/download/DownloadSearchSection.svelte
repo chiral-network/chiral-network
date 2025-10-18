@@ -20,7 +20,7 @@
   const dispatch = createEventDispatcher<{ download: FileMetadata; message: ToastPayload }>();
   const tr = (key: string, params?: Record<string, unknown>) => (get(t) as any)(key, params);
 
-  const SEARCH_TIMEOUT_MS = 12_000;
+  const SEARCH_TIMEOUT_MS = 2_000; // Very aggressive timeout to prevent hanging
 
   let searchHash = '';
   let searchMode = 'merkle_hash'; // 'merkle_hash' or 'cid'
@@ -132,20 +132,112 @@
         // This mode is now deprecated in favor of Merkle Hash and CID
         pushMessage('Searching for file versions...', 'info', 2000);
 
-        // Import invoke function for backend calls
-        const { invoke } = await import("@tauri-apps/api/core");
+        try {
+          // Import invoke function for backend calls
+          const { invoke } = await import("@tauri-apps/api/core");
 
-        const versions = await invoke('get_file_versions_by_name', { fileName: trimmed }) as any[];
-        const elapsed = Math.round(performance.now() - startedAt);
-        lastSearchDuration = elapsed;
+          console.log('🔍 Starting search for file versions with name:', trimmed);
+          console.log('⏱️ Search timeout set to:', SEARCH_TIMEOUT_MS, 'ms');
+          console.log('📡 About to call invoke with get_file_versions_by_name');
+          
+          // Test if invoke is working at all
+          console.log('🧪 Testing invoke function availability...');
+          
+          // Test backend connection first
+          try {
+            console.log('🔌 Testing backend connection...');
+            const connectionTest = await invoke('test_backend_connection') as string;
+            console.log('✅ Backend connection test result:', connectionTest);
+          } catch (connectionError) {
+            console.error('❌ Backend connection test failed:', connectionError);
+            throw new Error(`Backend connection failed: ${connectionError}`);
+          }
+          
+          // Try a simpler approach - check local files first
+          console.log('🔍 Checking local files first...');
+          const localFiles = get(files);
+          const localMatches = localFiles.filter(f => f.name === trimmed);
+          if (localMatches.length > 0) {
+            console.log('✅ Found local files:', localMatches.length);
+            versionResults = localMatches.map(file => ({
+              fileHash: file.hash,
+              fileName: file.name,
+              fileSize: file.size,
+              version: file.version || 1,
+              createdAt: file.uploadDate ? Math.floor(file.uploadDate.getTime() / 1000) : Date.now() / 1000,
+              seeders: [],
+              is_encrypted: file.isEncrypted || false
+            })).sort((a, b) => b.version - a.version);
+            
+            latestStatus = 'found';
+            pushMessage(`Found ${versionResults.length} local version(s) of "${trimmed}"`, 'success');
+            return;
+          }
+          
+          // Add timeout for name search with multiple fallback mechanisms
+          const searchPromise = invoke('get_file_versions_by_name', { fileName: trimmed }) as Promise<any[]>;
+          const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => {
+              console.log('⏰ Search timeout reached!');
+              reject(new Error('Search timeout'));
+            }, SEARCH_TIMEOUT_MS)
+          );
+          
+          console.log('🏁 Starting Promise.race between search and timeout');
+          console.log('⏱️ Current time:', new Date().toISOString());
+          
+          // Add a progress indicator
+          const progressInterval = setInterval(() => {
+            console.log('⏳ Search still in progress...');
+          }, 500);
+          
+          // Add a force-complete mechanism
+          const forceCompleteTimeout = setTimeout(() => {
+            console.log('🚨 Force completing search due to background network issues');
+            clearInterval(progressInterval);
+            // Force the search to complete even if there are background issues
+            latestStatus = 'not_found';
+            searchError = 'Search completed but may have background network issues';
+            pushMessage('Search completed with potential network issues. Try again if needed.', 'warning', 6000);
+            isSearching = false;
+          }, SEARCH_TIMEOUT_MS + 1000);
+          
+          try {
+            const versions = await Promise.race([searchPromise, timeoutPromise]) as any[];
+            clearTimeout(forceCompleteTimeout);
+            clearInterval(progressInterval);
+            console.log('✅ Search results received:', versions);
+            console.log('⏱️ Search completed in:', Math.round(performance.now() - startedAt), 'ms');
+            
+            const elapsed = Math.round(performance.now() - startedAt);
+            lastSearchDuration = elapsed;
 
-        if (versions && versions.length > 0) {
-          versionResults = versions.sort((a, b) => b.version - a.version); // Sort by version descending
-          latestStatus = 'found';
-          pushMessage(`Found ${versions.length} version(s) of "${trimmed}"`, 'success');
-        } else {
-          latestStatus = 'not_found';
-          pushMessage(`No versions found for "${trimmed}"`, 'warning', 6000);
+            if (versions && versions.length > 0) {
+              versionResults = versions.sort((a, b) => b.version - a.version); // Sort by version descending
+              latestStatus = 'found';
+              pushMessage(`Found ${versions.length} version(s) of "${trimmed}"`, 'success');
+            } else {
+              latestStatus = 'not_found';
+              pushMessage(`No versions found for "${trimmed}"`, 'warning', 6000);
+            }
+          } catch (error) {
+            clearTimeout(forceCompleteTimeout);
+            clearInterval(progressInterval);
+            throw error;
+          }
+        } catch (nameSearchError) {
+          console.error('❌ Search by name failed:', nameSearchError);
+          latestStatus = 'error';
+          const errorMessage = nameSearchError instanceof Error ? nameSearchError.message : 'Search failed';
+          searchError = errorMessage;
+          
+          if (errorMessage === 'Search timeout') {
+            pushMessage(`Search timed out after ${SEARCH_TIMEOUT_MS / 1000} seconds. Try again or use hash search.`, 'error', 8000);
+          } else if (errorMessage.includes('DHT not running')) {
+            pushMessage('DHT service is not running. Please restart the application.', 'error', 8000);
+          } else {
+            pushMessage(`Search failed: ${errorMessage}`, 'error', 6000);
+          }
         }
       } else if (searchMode === 'cid') {
         const entry = dhtSearchHistory.addPending(trimmed);
@@ -233,7 +325,11 @@
       console.error('Search failed:', error);
       pushMessage(`${tr('download.search.status.errorNotification')}: ${message}`, 'error', 6000);
     } finally {
-      isSearching = false;
+      // Ensure isSearching is always set to false
+      setTimeout(() => {
+        isSearching = false;
+        console.log('🔒 Forced isSearching to false');
+      }, 100);
     }
   }
 
