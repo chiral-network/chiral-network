@@ -3,7 +3,7 @@
   import Card from '$lib/components/ui/card.svelte';
   import Button from '$lib/components/ui/button.svelte';
   import Badge from '$lib/components/ui/badge.svelte';
-  import { Server, Zap, TrendingUp, DollarSign, Clock, X } from 'lucide-svelte';
+  import { Server, Zap, TrendingUp, DollarSign, Clock, X, Download } from 'lucide-svelte';
   import { toHumanReadableSize } from '$lib/utils';
 
   export let show = false;
@@ -110,7 +110,7 @@
             <span>•</span>
             <span>{toHumanReadableSize(fileSize)}</span>
             <span>•</span>
-            <Badge class="bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300">
+            <Badge variant="secondary">
               {peers.length} {peers.length === 1 ? 'Peer' : 'Peers'} Available
             </Badge>
           </div>
@@ -137,29 +137,29 @@
 
         <!-- Auto Mode Description -->
         {#if mode === 'auto'}
-          <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg border border-blue-200 dark:border-blue-800 space-y-3">
-            <p class="text-sm text-blue-900 dark:text-blue-100">
+          <div class="bg-muted/30 p-4 rounded-lg border space-y-3">
+            <p class="text-sm">
               <span class="font-semibold">Smart Selection:</span> The system automatically chose the best peers
               based on speed, reliability, and cost.
             </p>
 
             {#if autoSelectionInfo && autoSelectionInfo.length > 0}
               <div class="space-y-2">
-                <p class="text-xs font-semibold text-blue-800 dark:text-blue-200 uppercase tracking-wide">
+                <p class="text-xs font-semibold text-foreground/70 uppercase tracking-wide">
                   Selection Reasoning:
                 </p>
                 {#each autoSelectionInfo as info, index}
                   {@const peer = peers.find(p => p.peerId === info.peerId)}
                   {#if peer}
-                    <div class="bg-white/60 dark:bg-gray-900/40 p-3 rounded-md border border-blue-200 dark:border-blue-700">
+                    <div class="bg-card p-3 rounded-md border">
                       <div class="flex items-center justify-between mb-2">
                         <div class="flex items-center gap-2">
-                          <Badge class="bg-blue-600 text-white text-xs">
+                          <Badge variant="default" class="text-xs">
                             Peer {index + 1}
                           </Badge>
-                          <code class="text-xs font-mono">{info.peerId.slice(0, 12)}...</code>
+                          <code class="text-xs font-mono text-muted-foreground">{info.peerId.slice(0, 12)}...</code>
                         </div>
-                        <div class="text-xs font-semibold text-blue-700 dark:text-blue-300">
+                        <div class="text-xs font-semibold">
                           Score: {info.score.toFixed(3)}
                         </div>
                       </div>
@@ -186,10 +186,10 @@
                         </div>
                       </div>
 
-                      <div class="mt-2 pt-2 border-t border-blue-200 dark:border-blue-700">
+                      <div class="mt-2 pt-2 border-t">
                         <div class="flex items-center justify-between text-xs">
                           <span class="text-muted-foreground">Target Allocation:</span>
-                          <span class="font-bold text-blue-700 dark:text-blue-300">{peer.percentage}%</span>
+                          <span class="font-bold">{peer.percentage}%</span>
                         </div>
                       </div>
                     </div>
@@ -197,7 +197,7 @@
                 {/each}
               </div>
 
-              <p class="text-xs text-blue-800 dark:text-blue-200 mt-2">
+              <p class="text-xs text-muted-foreground mt-2">
                 💡 Allocation percentages are weighted by peer quality scores. Better peers receive higher allocations.
               </p>
             {/if}
@@ -332,7 +332,7 @@
             on:click={handleConfirm}
             disabled={mode === 'manual' && (!isValidAllocation || selectedPeerCount === 0)}
           >
-            <Server class="h-4 w-4 mr-2" />
+            <Download class="h-4 w-4 mr-2" />
             Start Download ({selectedPeerCount} {selectedPeerCount === 1 ? 'peer' : 'peers'})
           </Button>
         </div>
