@@ -28,7 +28,7 @@ tauri-plugin-store = "2"
 secp256k1 = { version = "0.24", features = ["serde", "rand-std"] }
 rand = { version = "0.8", features = ["std_rng"] }
 totp-rs = { version = "5.7.0", features = ["otpauth"] }
-ethers = "2.0"
+ethers = { version = "2.0", features = ["ws", "rustls"] }
 hex = "0.4"
 sha3 = "0.10"
 sha2 = "0.10"
