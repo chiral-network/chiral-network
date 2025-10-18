@@ -71,7 +71,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev \
             libglib2.0-dev pkg-config build-essential libgtk-3-dev curl libssl-dev \
-            libayatana-appindicator3-dev librsvg2-dev
+            libayatana-appindicator3-dev librsvg2-dev 
+      
+      - name: Compile Backend 
+        run: cd src-tauri && cargo build --release # Will make sure non compiling builds fail
 
       - name: Build backend and run all tests
         run: cd src-tauri && cargo test --release --no-fail-fast
