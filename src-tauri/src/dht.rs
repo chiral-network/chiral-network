@@ -33,6 +33,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 // Import the missing types
+use crate::manager::ChunkManager;
 use crate::file_transfer::FileTransferService;
 use std::error::Error;
 
@@ -116,6 +117,8 @@ pub struct FileMetadata {
     pub parent_hash: Option<String>,
     /// The root CID(s) for retrieving the file from Bitswap. Usually one.
     pub cids: Option<Vec<Cid>>,
+    /// For encrypted files, this contains the encrypted AES key and other info.
+    pub encrypted_key_bundle: Option<crate::encryption::EncryptedAesKeyBundle>,
     pub is_root: bool,
 }
 
@@ -215,6 +218,11 @@ pub enum DhtCommand {
     StoreBlock {
         cid: Cid,
         data: Vec<u8>,
+    },
+    StoreBlocks {
+        blocks: Vec<(Cid, Vec<u8>)>,
+        root_cid: Cid,
+        metadata: FileMetadata,
     },
 }
 
@@ -1466,6 +1474,7 @@ async fn run_dht_node(
                             "version": metadata.version,
                             "parent_hash": metadata.parent_hash,
                             "cids": metadata.cids, // The root CID for Bitswap
+                            "encrypted_key_bundle": metadata.encrypted_key_bundle,
                         });
 
                         let dht_record_data = match serde_json::to_vec(&dht_metadata) {
@@ -1528,6 +1537,55 @@ async fn run_dht_node(
                             
                             info!("TODO - Register keyword '{}' with file hash '{}'", keyword, metadata.merkle_root);
                         }
+                        let _ = event_tx.send(DhtEvent::PublishedFile(metadata)).await;
+                    }
+                    Some(DhtCommand::StoreBlocks { blocks, root_cid, mut metadata }) => {
+                        // 1. Store all encrypted data blocks in bitswap
+                        for (cid, data) in blocks {
+                            if let Err(e) = swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(cid.clone(), data) {
+                                error!("Failed to store encrypted block {} in bitswap: {}", cid, e);
+                                let _ = event_tx.send(DhtEvent::Error(format!("Failed to store block {}: {}", cid, e))).await;
+                                continue 'outer; // Abort this publish operation
+                            }
+                        }
+
+                        // 2. Update metadata with the root CID
+                        metadata.cids = Some(vec![root_cid]);
+
+                        // 3. Create and publish the DHT record pointing to the file
+                        let dht_metadata = serde_json::json!({
+                            "merkle_root": metadata.merkle_root,
+                            "file_name": metadata.file_name,
+                            "file_size": metadata.file_size,
+                            "created_at": metadata.created_at,
+                            "mime_type": metadata.mime_type,
+                            "is_encrypted": metadata.is_encrypted,
+                            "encryption_method": metadata.encryption_method,
+                            "cids": metadata.cids,
+                            "encrypted_key_bundle": metadata.encrypted_key_bundle,
+                            "version": metadata.version,
+                            "parent_hash": metadata.parent_hash,
+                        });
+
+                        let record_value = serde_json::to_vec(&dht_metadata).map_err(|e| e.to_string()).unwrap();
+                        let record = Record {
+                            key: kad::RecordKey::new(&metadata.merkle_root.as_bytes()),
+                            value: record_value,
+                            publisher: Some(peer_id),
+                            expires: None,
+                        };
+
+                        if let Err(e) = swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One) {
+                            error!("Failed to put record for encrypted file {}: {}", metadata.merkle_root, e);
+                        }
+
+                        // 4. Announce self as provider
+                        let provider_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
+                        if let Err(e) = swarm.behaviour_mut().kademlia.start_providing(provider_key) {
+                            error!("Failed to start providing encrypted file {}: {}", metadata.merkle_root, e);
+                        }
+
+                        info!("Successfully published and started providing encrypted file: {}", metadata.merkle_root);
                         let _ = event_tx.send(DhtEvent::PublishedFile(metadata)).await;
                     }
                     Some(DhtCommand::DownloadFile(file_metadata)) =>{
@@ -2057,16 +2115,35 @@ async fn run_dht_node(
                                                 info!("All chunks downloaded for file {}", file_hash);
 
                                                 // Reassemble the file
-                                                let mut file_data = Vec::new();
-                                                for i in 0..active_download.downloaded_chunks.len() as u32 {
-                                    if let Some(chunk) = active_download.downloaded_chunks.get(&(i as u32)) {
-                                                        file_data.extend_from_slice(chunk);
+                                                let mut completed_metadata = active_download.metadata.clone();
+
+                                                if completed_metadata.is_encrypted {
+                                                    if let Some(bundle) = &completed_metadata.encrypted_key_bundle {
+                                                        let mut encrypted_chunks = Vec::new();
+                                                        for i in 0..active_download.downloaded_chunks.len() as u32 {
+                                                            if let Some(chunk) = active_download.downloaded_chunks.get(&i) {
+                                                                encrypted_chunks.push(chunk.clone());
+                                                            }
+                                                        }
+                                                        match chunk_manager.reassemble_and_decrypt_data(&encrypted_chunks, bundle) {
+                                                            Ok(decrypted_data) => completed_metadata.file_data = decrypted_data,
+                                                            Err(e) => error!("Decryption failed for {}: {}", file_hash, e),
+                                                        }
                                                     }
+                                                } else {
+                                                    let mut file_data = Vec::new();
+                                                    for i in 0..active_download.downloaded_chunks.len() as u32 {
+                                                        if let Some(chunk) = active_download.downloaded_chunks.get(&i) {
+                                                            file_data.extend_from_slice(chunk);
+                                                        }
+                                                    }
+                                                    completed_metadata.file_data = file_data;
                                                 }
 
-                                                // Create the completed metadata
-                                                let mut completed_metadata = active_download.metadata.clone();
-                                                completed_metadata.file_data = file_data;
+                                                // If the file was encrypted, the file_data is a set of encrypted chunks.
+                                                // We don't decrypt here. We pass the full metadata to the event handler,
+                                                // which can then decide to trigger decryption.
+                                                // The `DownloadedFile` event now carries all necessary info.
 
                                                 completed_downloads.push(completed_metadata);
                                             }
@@ -2078,6 +2155,15 @@ async fn run_dht_node(
                                 // Send completion events for finished downloads
                                 for metadata in completed_downloads {
                                     let _ = event_tx.send(DhtEvent::DownloadedFile(metadata)).await;
+                                    // The file is downloaded, but if it's encrypted, it's not yet usable.
+                                    // The `DownloadedFile` event now acts as a signal that the raw,
+                                    // possibly encrypted, data is ready. The consumer of this event
+                                    // (e.g., a service in main.rs) will be responsible for decryption.
+                                    info!("Downloaded all blocks for file {}. Emitting DownloadedFile event.", metadata.merkle_root);
+                                    let _ = event_tx.send(DhtEvent::DownloadedFile(metadata.clone())).await;
+
+                                    // Also remove from active downloads
+                                    active_downloads.lock().await.remove(&metadata.merkle_root);
                                 }
                             }
 
@@ -2587,6 +2673,11 @@ async fn handle_kademlia_event(
                                         .map(|s| s.to_string()),
                                     cids: metadata_json.get("cids").and_then(|v| {
                                         serde_json::from_value::<Option<Vec<Cid>>>(v.clone())
+                                            .unwrap_or(None)
+                                    }),
+                                    encrypted_key_bundle: metadata_json.get("encryptedKeyBundle").and_then(|v| {
+                                        // The field name is camelCase in the JSON
+                                        serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone())
                                             .unwrap_or(None)
                                     }),
                                     is_root: metadata_json
@@ -3810,6 +3901,27 @@ impl DhtService {
     pub async fn download_file(&self, file_metadata: FileMetadata) -> Result<(), String> {
         self.cmd_tx
             .send(DhtCommand::DownloadFile(file_metadata))
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    pub async fn publish_encrypted_file(
+        &self,
+        metadata: FileMetadata,
+        blocks: Vec<(Cid, Vec<u8>)>,
+    ) -> Result<(), String> {
+        // The root CID is the CID of the list of block CIDs.
+        // This needs to be computed before calling the command.
+        let block_cids: Vec<Cid> = blocks.iter().map(|(cid, _)| cid.clone()).collect();
+        let root_block_data = serde_json::to_vec(&block_cids).map_err(|e| e.to_string())?;
+        let root_cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&root_block_data));
+
+        self.cmd_tx
+            .send(DhtCommand::StoreBlocks {
+                blocks,
+                root_cid,
+                metadata,
+            })
             .await
             .map_err(|e| e.to_string())
     }
