@@ -220,6 +220,9 @@ struct AppState {
     // Stream authentication service
     stream_auth: Arc<Mutex<StreamAuthService>>,
 
+    // New field for storing canonical AES keys for files being seeded
+    canonical_aes_keys: Arc<Mutex<std::collections::HashMap<String, [u8; 32]>>>,
+
     // Proof-of-Storage watcher background handle and contract address
     // make these clonable so we can .clone() and move into spawned tasks
     proof_watcher: Arc<Mutex<Option<JoinHandle<()>>>>,
@@ -3556,6 +3559,9 @@ fn main() {
             // Initialize stream authentication
             stream_auth: Arc::new(Mutex::new(StreamAuthService::new())),
 
+            // Initialize the new map for AES keys
+            canonical_aes_keys: Arc::new(Mutex::new(std::collections::HashMap::new())),
+
             // Proof-of-Storage watcher background handle and contract address
             // make these clonable so we can .clone() and move into spawned tasks
             proof_watcher: Arc::new(Mutex::new(None)),
@@ -3667,8 +3673,7 @@ fn main() {
             get_contribution_history,
             reset_analytics,
             save_temp_file_for_upload,
-            encrypt_file_for_self_upload,
-            encrypt_file_for_recipient,
+            request_file_access,
             upload_and_publish_file,
             decrypt_and_reassemble_file,
             create_auth_session,
@@ -3963,6 +3968,35 @@ async fn encrypt_file_for_recipient(
     .map_err(|e| format!("Encryption task failed: {}", e))?
 }
 
+#[tauri::command]
+asyn fn request_file_access(
+    state: State<'_, AppState>,
+    seeder_peer_id: String,
+    merkle_root: String,
+) -> Result<String, String> {
+    let dht = state.dht.lock().await.as_ref().cloned().ok_or("DHT not running")?;
+
+    // 1. Get own public key
+    let private_key_hex = state
+        .active_account_private_key
+        .lock()
+        .await
+        .clone()
+        .ok_or("No active account to derive public key from.")?;
+    let pk_bytes = hex::decode(private_key_hex.trim_start_matches("0x")).map_err(|_| "Invalid private key format")?;
+    let secret_key = StaticSecret::from(<[u8; 32]>::try_from(pk_bytes).map_err(|_| "Private key is not 32 bytes")?);
+    let public_key = PublicKey::from(&secret_key);
+
+    // 2. Parse seeder peer id
+    let seeder = seeder_peer_id.parse().map_err(|_| "Invalid seeder peer ID")?;
+
+    // 3. Call the new DHT service method
+    let bundle = dht.request_aes_key(seeder, merkle_root, public_key).await?;
+
+    // 4. Serialize the bundle to send to the frontend
+    serde_json::to_string(&bundle).map_err(|e| e.to_string())
+}
+
 /// Unified upload command: processes file with ChunkManager and auto-publishes to DHT
 /// Returns file metadata for frontend use
 #[derive(serde::Serialize)]
@@ -3982,18 +4016,31 @@ async fn upload_and_publish_file(
     state: State<'_, AppState>,
     file_path: String,
     file_name: Option<String>,
-    recipient_public_key: Option<String>,
 ) -> Result<UploadResult, String> {
-    // 1. Process file with ChunkManager (encrypt, chunk, build Merkle tree)
-    let manifest = encrypt_file_for_recipient(
-        app.clone(),
-        state.clone(),
-        file_path.clone(),
-        recipient_public_key.clone(),
-    )
-    .await?;
+    // This command now performs canonical encryption and publishes a key-agnostic manifest.
+    // The AES key is stored locally for sharing with authorized peers upon request.
 
-    // 2. Get file name (use provided name or extract from path)
+    // 1. Get app data dir for chunk storage
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let chunk_storage_path = app_data_dir.join("chunk_storage");
+
+    // 2. Perform canonical encryption in a blocking task
+    let (manifest, canonical_aes_key) = tokio::task::spawn_blocking(move || {
+        let manager = ChunkManager::new(chunk_storage_path);
+        let result = manager.chunk_and_encrypt_file_canonical(Path::new(&file_path))?;
+        Ok::<(manager::FileManifest, [u8; 32]), String>((result.manifest, result.canonical_aes_key))
+    }).await.map_err(|e| e.to_string())??;
+
+    let merkle_root = manifest.merkle_root.clone();
+
+    // 3. Store the canonical AES key in AppState, mapped by its Merkle root
+    {
+        let mut keys = state.canonical_aes_keys.lock().await;
+        keys.insert(merkle_root.clone(), canonical_aes_key);
+        info!("Stored canonical AES key for merkle root: {}", merkle_root);
+    }
+
+    // 4. Get file name and size
     let file_name = file_name.unwrap_or_else(|| {
         std::path::Path::new(&file_path)
             .file_name()
@@ -4001,74 +4048,45 @@ async fn upload_and_publish_file(
             .unwrap_or("unknown")
             .to_string()
     });
-
     let file_size: u64 = manifest.chunks.iter().map(|c| c.size as u64).sum();
 
-    // 3. Get peer ID from DHT
-    let peer_id = {
-        let dht_guard = state.dht.lock().await;
-        if let Some(dht) = dht_guard.as_ref() {
-            dht.get_peer_id().await
-        } else {
-            "unknown".to_string()
-        }
-    };
+    // 5. Get peer ID from DHT
+    let dht = state.dht.lock().await.as_ref().cloned().ok_or("DHT not running")?;
+    let peer_id = dht.get_peer_id().await;
 
-    // 4. Publish to DHT with versioning support
-    let dht = {
-        let dht_guard = state.dht.lock().await; // Use the Merkle root as the file hash
-        dht_guard.as_ref().cloned()
-    };
-
-    let version = if let Some(dht) = dht {
+    // 6. Publish key-agnostic metadata to DHT
+    let version = {
         let created_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
 
-        // Use prepare_versioned_metadata to handle version incrementing and parent_hash
-        let mime_type = detect_mime_type_from_filename(&file_name)
-            .unwrap_or_else(|| "application/octet-stream".to_string());
-        let metadata = dht
-            .prepare_versioned_metadata(
-                manifest.merkle_root.clone(), // This is the Merkle root
+        let mime_type = detect_mime_type_from_filename(&file_name);
+        let mut metadata = dht.prepare_versioned_metadata(
+                merkle_root.clone(),
                 file_name.clone(),
                 file_size,
-                vec![], // Empty - chunks already stored
+                vec![], // data is already chunked and stored
                 created_at,
-                Some(mime_type),
-                true,                            // is_encrypted
-                Some("AES-256-GCM".to_string()), // Encryption method
-                None,                            // key_fingerprint (deprecated)
-            )
-            .await?;
+                mime_type,
+                true, // is_encrypted
+                Some("AES-256-GCM".to_string()),
+                None, // key_fingerprint
+            ).await?;
+
+        // This is important: we publish without any key bundle.
+        metadata.encrypted_key_bundle = None;
 
         let version = metadata.version.unwrap_or(1);
-
-        // Store file data locally for seeding (CRITICAL FIX)
-        let ft = {
-            let ft_guard = state.file_transfer.lock().await;
-            ft_guard.as_ref().cloned()
-        };
-        if let Some(ft) = ft {
-            // Read the original file data to store locally
-            let file_data = tokio::fs::read(&file_path)
-                .await
-                .map_err(|e| format!("Failed to read file for local storage: {}", e))?;
-
-            ft.store_file_data(manifest.merkle_root.clone(), file_name.clone(), file_data)
-                .await; // Store with Merkle root as key
-        }
-
         dht.publish_file(metadata).await?;
         version
-    } else {
-        1 // Default to v1 if DHT not running
     };
 
-    // 5. Return metadata to frontend
+    info!("Published key-agnostic metadata for merkle root: {}", merkle_root);
+
+    // 7. Return metadata to frontend
     Ok(UploadResult {
-        merkle_root: manifest.merkle_root,
+        merkle_root,
         file_name,
         file_size,
         is_encrypted: true,
