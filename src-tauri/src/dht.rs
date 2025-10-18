@@ -3471,14 +3471,23 @@ impl DhtService {
         let cache_size = cache_size_mb.unwrap_or(1024); // Default 1024 MB
         let blockstore = if let Some(path) = blockstore_db_path {
             if let Some(path_str) = path.to_str() {
-                info!("Using blockstore from disk, {}", path_str);
+                info!("Attempting to use blockstore from disk: {}", path_str);
             }
-            Arc::new(RedbBlockstore::open(path).await?)
+
+            match RedbBlockstore::open(path).await {
+                Ok(store) => {
+                    info!("Successfully opened blockstore from disk");
+                    Arc::new(store)
+                }
+                Err(e) => {
+                    warn!("Failed to open blockstore from disk ({}), falling back to in-memory storage", e);
+                    Arc::new(RedbBlockstore::in_memory()?)
+                }
+            }
         } else {
-            info!("Using in memory blockstore");
+            info!("Using in-memory blockstore");
             Arc::new(RedbBlockstore::in_memory()?)
         };
-
         // Generate a new keypair for this node
         // If a secret is provided, derive a stable 32-byte seed via SHA-256(secret)
         // Otherwise, generate a fresh random key.
