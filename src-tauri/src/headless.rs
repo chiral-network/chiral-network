@@ -245,6 +245,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             version: Some(1),
             cids: None,
             is_root: true,
+            encrypted_key_bundle: None,
         };
 
         dht_service.publish_file(example_metadata).await?;

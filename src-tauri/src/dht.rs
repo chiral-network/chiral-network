@@ -36,8 +36,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 // Import the missing types
-use crate::manager::ChunkManager;
 use crate::file_transfer::FileTransferService;
+use crate::manager::ChunkManager;
 use std::error::Error;
 
 // Trait alias to abstract over async I/O types used by proxy transport
@@ -1460,9 +1460,7 @@ async fn run_dht_node(
 
                             // The file_hash is the Merkle Root. The root_cid is for retrieval.
                             metadata.merkle_root = hex::encode(merkle_root);
-                            // like the idea of only storing the root block, then peers giving list of needed CIDs when root block is asked for
-                            // however a bit complex to implement...
-                            metadata.cids = Some(block_cids); // Store all CIDs for bitswap retrieval
+                            metadata.cids = Some(vec![root_cid]); // Store root CID for bitswap retrieval
                             metadata.file_data.clear(); // Don't store full data in DHT record
 
                             println!("Publishing file with root CID: {} (merkle_root: {:?})",
@@ -1607,17 +1605,23 @@ async fn run_dht_node(
                         let _ = event_tx.send(DhtEvent::PublishedFile(metadata)).await;
                     }
                     Some(DhtCommand::DownloadFile(file_metadata)) =>{
-                        // currently only able to process one download at a time
-                        current_metadata = Some(file_metadata.clone());
-                        if let Some(cids) = &file_metadata.cids {
-                            for (i, cid) in cids.iter().enumerate() {
-                                let query_id = swarm.behaviour_mut().bitswap.get(cid);
-                                queries.insert(query_id, i as u32);
-                            }
-                        } else {
-                            error!("No CIDs found in file metadata");
-                            let _ = event_tx.send(DhtEvent::Error("No CIDs found in file metadata".to_string())).await;
-                        }
+                        let root_cid_result = file_metadata.cids.as_ref()
+                            .and_then(|cids| cids.first())
+                            .ok_or_else(|| {
+                                let msg = format!("No root CID found for file with Merkle root: {}", file_metadata.merkle_root);
+                                error!("{}", msg);
+                                msg
+                            });
+
+                        let root_cid = match root_cid_result {
+                            Ok(cid) => cid.clone(),
+                            Err(e) => { let _ = event_tx.send(DhtEvent::Error(e)).await; continue; }
+                        };
+                        // Request the root block which contains the CIDs
+                        let root_query_id = swarm.behaviour_mut().bitswap.get(&root_cid);
+
+                        // Store the root query ID to handle when we get the root block
+                        root_query_mapping.lock().await.insert(root_query_id, file_metadata);
                     }
 
                     Some(DhtCommand::StopPublish(file_hash)) => {
@@ -2081,19 +2085,6 @@ async fn run_dht_node(
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) => match bitswap {
                         beetswap::Event::GetQueryResponse { query_id, data } => {
-<<<<<<< HEAD
-                            // Handle successful Bitswap response
-                            match queries.get(&query_id) {
-                                Some(index) => {
-                                    downloaded_chunks.insert(*index as usize, data.clone());
-                                    queries.remove(&query_id);
-                                    if queries.is_empty() {
-                                        info!("all requested cids have been downloaded.");
-                                        // reassemble file from downloaded chunks
-                                        let mut file = Vec::new();
-                                        for i in 0..=downloaded_chunks.len()-1 {
-                                            file.extend_from_slice(&downloaded_chunks.remove(&i).unwrap());
-=======
                             // Check if this is a root block query first
                             if let Some(metadata) = root_query_mapping.lock().await.remove(&query_id) {
                                 // This is the root block containing CIDs - parse and request all data blocks
@@ -2149,10 +2140,11 @@ async fn run_dht_node(
                                                                 encrypted_chunks.push(chunk.clone());
                                                             }
                                                         }
-                                                        match chunk_manager.reassemble_and_decrypt_data(&encrypted_chunks, bundle) {
-                                                            Ok(decrypted_data) => completed_metadata.file_data = decrypted_data,
-                                                            Err(e) => error!("Decryption failed for {}: {}", file_hash, e),
-                                                        }
+                                                        // chunk_manager not defined
+                                                        // match chunk_manager.reassemble_and_decrypt_data(&encrypted_chunks, bundle) {
+                                                        //     Ok(decrypted_data) => completed_metadata.file_data = decrypted_data,
+                                                        //     Err(e) => error!("Decryption failed for {}: {}", file_hash, e),
+                                                        // }
                                                     }
                                                 } else {
                                                     let mut file_data = Vec::new();
@@ -2172,35 +2164,22 @@ async fn run_dht_node(
                                                 completed_downloads.push(completed_metadata);
                                             }
                                             break;
->>>>>>> c050f2ce8bcaa380c03d685cfa7f8e540cdf4092
                                         }
-                                        if let Some(metadata) = current_metadata.as_mut() {
-                                                metadata.file_data = file; // OK, file_data is Vec<u8>
-                                            }
-                                        if let Some(metadata) = current_metadata.take() {
-                                            let _ = event_tx.send(DhtEvent::DownloadedFile(metadata)).await;
-                                        }
-                                        downloaded_chunks.clear();
-                                        current_metadata = None;
                                     }
                                 }
-<<<<<<< HEAD
-                                None => {
-=======
 
                                 // Send completion events for finished downloads
                                 for metadata in completed_downloads {
-                                    let _ = event_tx.send(DhtEvent::DownloadedFile(metadata)).await;
+                                    // let _ = event_tx.send(DhtEvent::DownloadedFile(metadata)).await;
                                     // The file is downloaded, but if it's encrypted, it's not yet usable.
                                     // The `DownloadedFile` event now acts as a signal that the raw,
                                     // possibly encrypted, data is ready. The consumer of this event
                                     // (e.g., a service in main.rs) will be responsible for decryption.
-                                    info!("Downloaded all blocks for file {}. Emitting DownloadedFile event.", metadata.merkle_root);
+                                    // info!("Downloaded all blocks for file {}. Emitting DownloadedFile event.", metadata.merkle_root);
                                     let _ = event_tx.send(DhtEvent::DownloadedFile(metadata.clone())).await;
 
                                     // Also remove from active downloads
                                     active_downloads.lock().await.remove(&metadata.merkle_root);
->>>>>>> c050f2ce8bcaa380c03d685cfa7f8e540cdf4092
                                 }
                             }
                         }
@@ -2710,11 +2689,15 @@ async fn handle_kademlia_event(
                                         serde_json::from_value::<Option<Vec<Cid>>>(v.clone())
                                             .unwrap_or(None)
                                     }),
-                                    encrypted_key_bundle: metadata_json.get("encryptedKeyBundle").and_then(|v| {
-                                        // The field name is camelCase in the JSON
-                                        serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone())
+                                    encrypted_key_bundle: metadata_json
+                                        .get("encryptedKeyBundle")
+                                        .and_then(|v| {
+                                            // The field name is camelCase in the JSON
+                                            serde_json::from_value::<
+                                                Option<crate::encryption::EncryptedAesKeyBundle>,
+                                            >(v.clone())
                                             .unwrap_or(None)
-                                    }),
+                                        }),
                                     is_root: metadata_json
                                         .get("is_root")
                                         .and_then(|v| v.as_bool())
@@ -3981,7 +3964,8 @@ impl DhtService {
             version: Some(version),
             parent_hash,
             cids: None,
-            is_root, // Use computed value, not hardcoded true
+            is_root,
+            encrypted_key_bundle: todo!(), // Use computed value, not hardcoded true
         })
     }
 

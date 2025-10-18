@@ -1212,6 +1212,9 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                     "file_published:{}:{}:{}", // Use merkle_root as the primary identifier
                     meta.merkle_root, meta.file_name, meta.file_size
                 ),
+                DhtEvent::DownloadedFile(file_metadata) => {
+                    format!("Downloaded File {}", file_metadata.file_name)
+                }
                 DhtEvent::FileNotFound(hash) => format!("file_not_found:{}", hash),
                 DhtEvent::Error(err) => format!("error:{}", err),
                 DhtEvent::Info(msg) => format!("info:{}", msg),
@@ -1887,6 +1890,7 @@ async fn upload_file_to_network(
                 parent_hash: None,
                 version: Some(1),
                 cids: None,
+                encrypted_key_bundle: None,
             };
 
             match dht.publish_file(metadata.clone()).await {
@@ -2339,6 +2343,7 @@ async fn upload_file_chunk(
             version: Some(1),
             cids: Some(vec![root_cid.clone()]), // The root CID for retrieval
             is_root: true,
+            encrypted_key_bundle: None,
         };
 
         // Store complete file data locally for seeding
