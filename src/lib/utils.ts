@@ -92,18 +92,34 @@ const RELATIVE_FORMATTER = new Intl.RelativeTimeFormat(undefined, {
   numeric: "auto",
 });
 
-export function formatRelativeTime(date: Date): string {
-  const timestamp = date instanceof Date ? date.getTime() : Number.NaN;
+export function formatRelativeTime(input: Date | number): string {
+  // normalize input into a milliseconds timestamp
+  let timestampMs: number;
 
-  if (!Number.isFinite(timestamp)) {
+  if (input instanceof Date) {
+    timestampMs = input.getTime();
+  } else if (typeof input === "number" && Number.isFinite(input)) {
+    // Heuristic: if the number looks like seconds (<= 1e12) treat as seconds and convert
+    // If it already looks like ms (> 1e12) keep as-is.
+    timestampMs = input < 1e12 ? input * 1000 : input;
+  } else {
+    return RELATIVE_FORMATTER.format(0, "second");
+  }
+
+  if (!Number.isFinite(timestampMs)) {
     return RELATIVE_FORMATTER.format(0, "second");
   }
 
   const now = Date.now();
-  const diffMs = timestamp - now;
+  let diffMs = timestampMs - now;
 
-  if (!Number.isFinite(diffMs)) {
-    return RELATIVE_FORMATTER.format(0, "second");
+  // If diff is absurdly large (e.g. unit confusion), try the alternate scale once
+  const hundredYearsMs = 100 * YEAR;
+  if (Math.abs(diffMs) > hundredYearsMs) {
+    const alt = timestampMs < 1e12 ? timestampMs * 1000 : Math.floor(timestampMs / 1000);
+    if (Number.isFinite(alt) && Math.abs(alt - now) < Math.abs(diffMs)) {
+      diffMs = alt - now;
+    }
   }
 
   const absDiff = Math.abs(diffMs);
