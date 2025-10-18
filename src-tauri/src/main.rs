@@ -224,6 +224,9 @@ struct AppState {
     // make these clonable so we can .clone() and move into spawned tasks
     proof_watcher: Arc<Mutex<Option<JoinHandle<()>>>>,
     proof_contract_address: Arc<Mutex<Option<String>>>,
+
+    // Relay reputation statistics storage
+    relay_reputation: Arc<Mutex<std::collections::HashMap<String, RelayNodeStats>>>,
 }
 
 #[tauri::command]
@@ -807,6 +810,7 @@ async fn start_dht_node(
     // Spawn the event pump
     let app_handle = app.clone();
     let proxies_arc = state.proxies.clone();
+    let relay_reputation_arc = state.relay_reputation.clone();
     let dht_clone_for_pump = dht_arc.clone();
 
     tokio::spawn(async move {
@@ -925,6 +929,52 @@ async fn start_dht_node(
                     DhtEvent::FileDiscovered(metadata) => {
                         let payload = serde_json::json!(metadata);
                         let _ = app_handle.emit("found_file", payload);
+                    }
+                    DhtEvent::ReputationEvent {
+                        peer_id,
+                        event_type,
+                        impact,
+                        data,
+                    } => {
+                        // Update relay reputation statistics
+                        let mut stats = relay_reputation_arc.lock().await;
+                        let entry = stats.entry(peer_id.clone()).or_insert(RelayNodeStats {
+                            peer_id: peer_id.clone(),
+                            reputation_score: 0.0,
+                            reservations_accepted: 0,
+                            circuits_established: 0,
+                            circuits_successful: 0,
+                            total_events: 0,
+                            last_seen: 0,
+                        });
+
+                        // Update statistics based on event type
+                        entry.reputation_score += impact;
+                        entry.total_events += 1;
+                        entry.last_seen = data.get("timestamp")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or_else(|| {
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_secs()
+                            });
+
+                        match event_type.as_str() {
+                            "RelayReservationAccepted" => entry.reservations_accepted += 1,
+                            "RelayCircuitEstablished" => entry.circuits_established += 1,
+                            "RelayCircuitSuccessful" => entry.circuits_successful += 1,
+                            _ => {}
+                        }
+
+                        // Emit event to frontend
+                        let payload = serde_json::json!({
+                            "peerId": peer_id,
+                            "eventType": event_type,
+                            "impact": impact,
+                            "data": data,
+                        });
+                        let _ = app_handle.emit("relay_reputation_event", payload);
                     }
                     _ => {}
                 }
@@ -3576,6 +3626,9 @@ fn main() {
             // make these clonable so we can .clone() and move into spawned tasks
             proof_watcher: Arc::new(Mutex::new(None)),
             proof_contract_address: Arc::new(Mutex::new(None)),
+
+            // Relay reputation statistics
+            relay_reputation: Arc::new(Mutex::new(std::collections::HashMap::new())),
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
@@ -4461,7 +4514,7 @@ struct RelayReputationStats {
     top_relays: Vec<RelayNodeStats>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct RelayNodeStats {
     peer_id: String,
     reputation_score: f64,
@@ -4477,26 +4530,25 @@ async fn get_relay_reputation_stats(
     state: State<'_, AppState>,
     limit: Option<usize>,
 ) -> Result<RelayReputationStats, String> {
-    // This is a placeholder implementation
-    // In a full implementation, this would aggregate reputation events
-    // from the DHT event stream and calculate statistics
+    // Read from relay reputation storage
+    let stats_map = state.relay_reputation.lock().await;
 
-    let dht = {
-        let dht_guard = state.dht.lock().await;
-        dht_guard.as_ref().cloned()
-    };
+    let max_relays = limit.unwrap_or(100);
 
-    if dht.is_none() {
-        return Ok(RelayReputationStats {
-            total_relays: 0,
-            top_relays: vec![],
-        });
-    }
+    // Convert HashMap to Vec and sort by reputation score (descending)
+    let mut all_relays: Vec<RelayNodeStats> = stats_map.values().cloned().collect();
+    all_relays.sort_by(|a, b| {
+        b.reputation_score
+            .partial_cmp(&a.reputation_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
-    // TODO: Implement aggregation of ReputationEvents from DHT event stream
-    // For now, return empty stats
+    // Take top N relays
+    let top_relays = all_relays.into_iter().take(max_relays).collect();
+    let total_relays = stats_map.len();
+
     Ok(RelayReputationStats {
-        total_relays: 0,
-        top_relays: vec![],
+        total_relays,
+        top_relays,
     })
 }
