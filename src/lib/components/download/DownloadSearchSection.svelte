@@ -42,6 +42,7 @@
   let selectedFile: FileMetadata | null = null;
   let peerSelectionMode: 'auto' | 'manual' = 'auto';
   let availablePeers: PeerInfo[] = [];
+  let autoSelectionInfo: Array<{peerId: string; score: number; metrics: any}> | null = null;
 
   const unsubscribe = dhtSearchHistory.subscribe((entries) => {
     historyEntries = entries;
@@ -401,6 +402,7 @@
     }
 
     selectedFile = metadata;
+    autoSelectionInfo = null;  // Clear previous auto-selection info
 
     // Fetch peer metrics for each seeder
     try {
@@ -420,6 +422,11 @@
         };
       });
 
+      // If in auto mode, pre-calculate the selection for transparency
+      if (peerSelectionMode === 'auto') {
+        await calculateAutoSelection(metadata, allMetrics);
+      }
+
       showPeerSelectionModal = true;
     } catch (error) {
       console.error('Failed to fetch peer metrics:', error);
@@ -429,37 +436,108 @@
     }
   }
 
+  // Calculate auto-selection for transparency display
+  async function calculateAutoSelection(metadata: FileMetadata, allMetrics: any[]) {
+    try {
+      // Auto-select best peers using backend algorithm
+      const autoPeers = await PeerSelectionService.getPeersForParallelDownload(
+        metadata.seeders,
+        metadata.fileSize,
+        3,  // Max 3 peers
+        metadata.isEncrypted
+      );
+
+      // Get metrics for selected peers
+      const selectedMetrics = autoPeers.map(peerId =>
+        allMetrics.find(m => m.peer_id === peerId)
+      ).filter(m => m !== undefined);
+
+      if (selectedMetrics.length > 0) {
+        // Calculate composite scores for each peer
+        const peerScores = selectedMetrics.map(m => ({
+          peerId: m!.peer_id,
+          score: PeerSelectionService.compositeScoreFromMetrics(m!)
+        }));
+
+        // Calculate total score
+        const totalScore = peerScores.reduce((sum, p) => sum + p.score, 0);
+
+        // Store selection info for transparency display
+        autoSelectionInfo = peerScores.map((p, index) => ({
+          peerId: p.peerId,
+          score: p.score,
+          metrics: selectedMetrics[index]!
+        }));
+
+        // Update availablePeers with score-weighted percentages
+        availablePeers = availablePeers.map(peer => {
+          const peerScore = peerScores.find(ps => ps.peerId === peer.peerId);
+          if (peerScore) {
+            const percentage = Math.round((peerScore.score / totalScore) * 100);
+            return {
+              ...peer,
+              selected: true,
+              percentage
+            };
+          }
+          return {
+            ...peer,
+            selected: false,
+            percentage: 0
+          };
+        });
+
+        // Adjust for rounding to ensure selected peers total 100%
+        const selectedPeers = availablePeers.filter(p => p.selected);
+        const totalPercentage = selectedPeers.reduce((sum, p) => sum + p.percentage, 0);
+        if (totalPercentage !== 100 && selectedPeers.length > 0) {
+          selectedPeers[0].percentage += (100 - totalPercentage);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to calculate auto-selection:', error);
+    }
+  }
+
   // Confirm peer selection and start download
   async function confirmPeerSelection() {
     if (!selectedFile) return;
 
-    let selectedPeers: string[];
+    // Get selected peers and their allocations from availablePeers
+    const selectedPeers = availablePeers
+      .filter(p => p.selected)
+      .map(p => p.peerId);
 
-    if (peerSelectionMode === 'auto') {
-      // Auto-select best peers
-      selectedPeers = await PeerSelectionService.getPeersForParallelDownload(
-        selectedFile.seeders,
-        selectedFile.fileSize,
-        3,  // Max 3 peers
-        selectedFile.isEncrypted
+    const peerAllocation = availablePeers
+      .filter(p => p.selected)
+      .map(p => ({
+        peerId: p.peerId,
+        percentage: p.percentage
+      }));
+
+    // Log transparency info for auto-selection
+    if (peerSelectionMode === 'auto' && autoSelectionInfo) {
+      autoSelectionInfo.forEach((info, index) => {
+        console.log(`📊 Auto-selected peer ${index + 1}:`, {
+          peerId: info.peerId.slice(0, 12),
+          score: info.score.toFixed(3),
+          allocation: `${availablePeers.find(p => p.peerId === info.peerId)?.percentage}%`,
+          metrics: info.metrics
+        });
+      });
+
+      pushMessage(
+        `Auto-selected ${selectedPeers.length} peers with score-weighted distribution`,
+        'success',
+        3000
       );
-    } else {
-      // Manual selection - use user's choices
-      selectedPeers = availablePeers
-        .filter(p => p.selected)
-        .map(p => p.peerId);
     }
 
-    // Create metadata with selected peers
+    // Create metadata with selected peers and allocation
     const fileWithSelectedPeers: FileMetadata & { peerAllocation?: any[] } = {
       ...selectedFile,
       seeders: selectedPeers,  // Override with selected peers
-      peerAllocation: peerSelectionMode === 'manual'
-        ? availablePeers.filter(p => p.selected).map(p => ({
-            peerId: p.peerId,
-            percentage: p.percentage
-          }))
-        : undefined  // Auto mode lets backend decide
+      peerAllocation
     };
 
     // Dispatch to parent (Download.svelte)
@@ -674,6 +752,7 @@
   fileSize={selectedFile?.fileSize || 0}
   bind:peers={availablePeers}
   bind:mode={peerSelectionMode}
+  autoSelectionInfo={autoSelectionInfo}
   on:confirm={confirmPeerSelection}
   on:cancel={cancelPeerSelection}
 />
