@@ -2262,6 +2262,7 @@ async fn upload_file_chunk(
             parent_hash: None,
             version: Some(1),
             cids: Some(vec![root_cid.clone()]), // The root CID for retrieval
+            encrypted_key_bundle: None,
             is_root: true,
         };
 
@@ -4452,6 +4453,7 @@ mod tests {
     }
 
     // Add more tests for other functions/modules as needed
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct RelayReputationStats {

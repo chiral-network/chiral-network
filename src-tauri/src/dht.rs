@@ -33,23 +33,20 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 // Import the missing types
-use crate::manager::ChunkManager;
 use crate::file_transfer::FileTransferService;
-use crate::reputation::{EventType as ReputationEventType, ReputationEvent};
 use std::error::Error;
 
 // Trait alias to abstract over async I/O types used by proxy transport
 pub trait AsyncIo: FAsyncRead + FAsyncWrite + Unpin + Send {}
 impl<T: FAsyncRead + FAsyncWrite + Unpin + Send> AsyncIo for T {}
 
-use libp2p::core::upgrade::Version;
 use libp2p::{
     autonat::v2,
     core::{
         muxing::StreamMuxerBox,
         // FIXED E0432: ListenerEvent is removed, only import what is available.
         transport::{
-            choice::OrTransport, Boxed, DialOpts, ListenerId, Transport, TransportError,
+            Boxed, DialOpts, ListenerId, Transport, TransportError,
             TransportEvent,
         },
     },
@@ -61,12 +58,10 @@ use libp2p::{
         Event as KademliaEvent, GetRecordOk, Mode, PutRecordOk, QueryResult, Record,
     },
     mdns::{tokio::Behaviour as Mdns, Event as MdnsEvent},
-    noise,
     ping::{self, Behaviour as Ping, Event as PingEvent},
     relay, request_response as rr,
     swarm::{behaviour::toggle, NetworkBehaviour, SwarmEvent},
-    tcp, Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
-    quic, yamux
+    Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
 };
 use rand::rngs::OsRng;
 const EXPECTED_PROTOCOL_VERSION: &str = "/chiral/1.0.0";
@@ -2220,28 +2215,14 @@ async fn run_dht_node(
                                                 // Reassemble the file
                                                 let mut completed_metadata = active_download.metadata.clone();
 
-                                                if completed_metadata.is_encrypted {
-                                                    if let Some(bundle) = &completed_metadata.encrypted_key_bundle {
-                                                        let mut encrypted_chunks = Vec::new();
-                                                        for i in 0..active_download.downloaded_chunks.len() as u32 {
-                                                            if let Some(chunk) = active_download.downloaded_chunks.get(&i) {
-                                                                encrypted_chunks.push(chunk.clone());
-                                                            }
-                                                        }
-                                                        match chunk_manager.reassemble_and_decrypt_data(&encrypted_chunks, bundle) {
-                                                            Ok(decrypted_data) => completed_metadata.file_data = decrypted_data,
-                                                            Err(e) => error!("Decryption failed for {}: {}", file_hash, e),
-                                                        }
+                                                // Assemble chunks in order (whether encrypted or not)
+                                                let mut file_data = Vec::new();
+                                                for i in 0..active_download.downloaded_chunks.len() as u32 {
+                                                    if let Some(chunk) = active_download.downloaded_chunks.get(&i) {
+                                                        file_data.extend_from_slice(chunk);
                                                     }
-                                                } else {
-                                                    let mut file_data = Vec::new();
-                                                    for i in 0..active_download.downloaded_chunks.len() as u32 {
-                                                        if let Some(chunk) = active_download.downloaded_chunks.get(&i) {
-                                                            file_data.extend_from_slice(chunk);
-                                                        }
-                                                    }
-                                                    completed_metadata.file_data = file_data;
                                                 }
+                                                completed_metadata.file_data = file_data;
 
                                                 // If the file was encrypted, the file_data is a set of encrypted chunks.
                                                 // We don't decrypt here. We pass the full metadata to the event handler,
@@ -2257,16 +2238,17 @@ async fn run_dht_node(
 
                                 // Send completion events for finished downloads
                                 for metadata in completed_downloads {
-                                    let _ = event_tx.send(DhtEvent::DownloadedFile(metadata)).await;
                                     // The file is downloaded, but if it's encrypted, it's not yet usable.
                                     // The `DownloadedFile` event now acts as a signal that the raw,
                                     // possibly encrypted, data is ready. The consumer of this event
                                     // (e.g., a service in main.rs) will be responsible for decryption.
                                     info!("Downloaded all blocks for file {}. Emitting DownloadedFile event.", metadata.merkle_root);
-                                    let _ = event_tx.send(DhtEvent::DownloadedFile(metadata.clone())).await;
 
-                                    // Also remove from active downloads
-                                    active_downloads.lock().await.remove(&metadata.merkle_root);
+                                    // Remove from active downloads before sending
+                                    let merkle_root = metadata.merkle_root.clone();
+                                    active_downloads.lock().await.remove(&merkle_root);
+
+                                    let _ = event_tx.send(DhtEvent::DownloadedFile(metadata)).await;
                                 }
                             }
 
@@ -3997,6 +3979,7 @@ impl DhtService {
             version: Some(version),
             parent_hash,
             cids: None,
+            encrypted_key_bundle: None,
             is_root, // Use computed value, not hardcoded true
         })
     }

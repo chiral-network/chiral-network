@@ -344,6 +344,7 @@ impl ReputationDhtService {
             version: Some(1),
             parent_hash: None,
             cids: None, // Not needed for reputation events
+            encrypted_key_bundle: None,
             is_root: true,
         };
 
@@ -386,6 +387,7 @@ impl ReputationDhtService {
             version: Some(1),
             parent_hash: None,
             cids: None, // Not needed for merkle roots
+            encrypted_key_bundle: None,
             is_root: true,
         };
 

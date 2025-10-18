@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use tokio::fs;
+use base64::{Engine as _, engine::general_purpose};
 
 // ECIES imports for key encryption
 use hkdf::Hkdf;
@@ -440,7 +441,7 @@ pub fn sign_message(
     let signature = sender_signing_key.sign(message);
 
     Ok(SignedMessage {
-        message: base64::encode(message),
+        message: general_purpose::STANDARD.encode(message),
         signer_public_key: hex::encode(sender_signing_key.verifying_key().as_bytes()),
         signature: hex::encode(signature.to_bytes()),
     })
@@ -456,7 +457,7 @@ pub fn sign_message(
 /// Returns an `Err` if any part of the bundle is malformed.
 pub fn verify_message(signed_message: &SignedMessage) -> Result<bool, String> {
     // 1. Decode the data from the bundle.
-    let message_bytes = base64::decode(&signed_message.message)
+    let message_bytes = general_purpose::STANDARD.decode(&signed_message.message)
         .map_err(|e| format!("Invalid base64 message: {}", e))?;
 
     let public_key_bytes: [u8; 32] = hex::decode(&signed_message.signer_public_key)
@@ -635,7 +636,7 @@ mod tests {
 
         // 5. Negative test: tampered message should fail verification.
         let mut tampered_bundle = signed_message.clone();
-        tampered_bundle.message = base64::encode(b"This is a tampered message!");
+        tampered_bundle.message = general_purpose::STANDARD.encode(b"This is a tampered message!");
         let is_tampered_valid = verify_message(&tampered_bundle).unwrap();
         assert!(!is_tampered_valid, "Signature for tampered message should be invalid");
     }
