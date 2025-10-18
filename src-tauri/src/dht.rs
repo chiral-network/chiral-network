@@ -1,5 +1,6 @@
 use crate::manager::Sha256Hasher;
 use async_trait::async_trait;
+use ethers::prelude::*;
 use blockstore::{
     block::{Block, CidError},
     InMemoryBlockstore,
@@ -4557,7 +4558,6 @@ impl DhtService {
         &self,
         file_root_hex: String,
         chunk_index: u64,
-        dht_service: Arc<DhtService>,
     ) -> Result<(), String> {
         info!(
             "Generating proof for file root {} and chunk index {}",
@@ -4583,7 +4583,7 @@ impl DhtService {
             .map_err(|e| format!("Failed to generate Merkle proof: {}", e))?;
 
         // 4. Submit proof to the smart contract.
-        self.submit_to_contract(&file_root_hex, proof, chunk_data)
+        self.submit_to_contract(&file_root_hex, proof, chunk_data, chunk_index)
             .await
             .map_err(|e| format!("Failed to submit proof to contract: {}", e))?;
 
@@ -4657,14 +4657,59 @@ impl DhtService {
         file_root: &str,
         proof: Vec<[u8; 32]>,
         chunk_data: Vec<u8>,
+        chunk_index: u64,
     ) -> Result<(), String> {
-        // TODO: Replace with actual contract call using ethers-rs and a signer from the keystore.
-        // let contract = ...; // Get contract instance with signer
-        // contract.method("verifyProof", (file_root, proof, chunk_data)).send().await;
         info!("Submitting proof for file root {} to smart contract...", file_root);
-        // Simulate network delay
-        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-        info!("Proof submission successful (simulated).");
+
+        // This is a simplified example. In a real app, you would get the provider,
+        // contract address, and signer from the AppState or configuration.
+        let provider = Provider::<Http>::try_from("http://127.0.0.1:8545")
+            .map_err(|e| format!("Failed to create provider: {}", e))?;
+        let client = Arc::new(provider);
+
+        // This private key is for demonstration. In a real app, you would retrieve
+        // this securely from the AppState's keystore/active_account_private_key.
+        let wallet: LocalWallet = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+            .parse()
+            .map_err(|e| format!("Failed to parse private key: {}", e))?;
+        let signer = SignerMiddleware::new(client.clone(), wallet.with_chain_id(98765u64));
+
+        // The contract address needs to be known. This would come from AppState.
+        let contract_address: Address = "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+            .parse()
+            .map_err(|e| format!("Failed to parse contract address: {}", e))?;
+
+        // Define the contract ABI for the `verifyProof` function.
+        // In a larger project, you would use `abigen!` to generate this from the contract JSON.
+        abigen!(
+            ProofOfStorage,
+            r#"[
+                function verifyProof(bytes32 fileRoot, bytes32[] calldata proof, bytes calldata chunkData, uint256 chunkIndex) external view returns (bool)
+            ]"#,
+        );
+
+        let contract = ProofOfStorage::new(contract_address, Arc::new(signer));
+
+        // Prepare arguments for the contract call
+        let root_bytes: [u8; 32] = hex::decode(file_root)
+            .map_err(|e| format!("Invalid file root hex: {}", e))?
+            .try_into()
+            .map_err(|_| "File root is not 32 bytes".to_string())?;
+
+        // Call the contract's `verifyProof` method.
+        // Note: `verifyProof` is a `view` function, so we use `.call()` which doesn't create a transaction.
+        // If it were a state-changing function, we would use `.send()`.
+        let is_valid = contract
+            .verify_proof(root_bytes, proof, chunk_data.into(), chunk_index.into())
+            .call()
+            .await
+            .map_err(|e| format!("Contract call failed: {}", e))?;
+
+        info!("Proof verification result from contract: {}", is_valid);
+        if !is_valid {
+            return Err("Proof was rejected by the smart contract.".to_string());
+        }
+
         Ok(())
     }
 }
