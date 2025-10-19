@@ -15,9 +15,9 @@
   import { dhtService } from '$lib/dht';
   import Label from '$lib/components/ui/label.svelte';
   import Input from '$lib/components/ui/input.svelte';
+  import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore';
 
-  const tr = (k: string, params?: Record<string, any>): string => (get(t) as (key: string, params?: any) => string)(k, params)
-  // Check if running in Tauri environment
+  const tr = (k: string, params?: Record<string, any>): string => (get(t) as (key: string, params?: any) => string)(k, params)// Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
   // Enhanced file type detection with icons
@@ -64,12 +64,17 @@
   let storageError: string | null = null
   let lastChecked: Date | null = null
   let isUploading = false
-  let selectedProtocol: 'WebRTC' | 'Bitswap' | null = null
-  let hasSelectedProtocol = false
+  
+  // Protocol selection state
+  $: selectedProtocol = $protocolStore
+  $: hasSelectedProtocol = selectedProtocol !== null
 
   function handleProtocolSelect(protocol: 'WebRTC' | 'Bitswap') {
-    selectedProtocol = protocol
-    hasSelectedProtocol = true
+    protocolStore.set(protocol)
+  }
+
+  function changeProtocol() {
+    protocolStore.reset()
   }
 
   // Encrypted sharing state
@@ -794,6 +799,31 @@
   {:else}
     <Card>
       <div class="space-y-4" role="region">
+          <!-- Protocol Indicator and Switcher -->
+        <div class="flex items-center justify-between p-4 bg-muted/50 rounded-lg">
+          <div class="flex items-center gap-3">
+            <div class="flex items-center justify-center w-10 h-10 bg-gradient-to-br from-blue-500/10 to-blue-500/5 rounded-lg border border-blue-500/20">
+              {#if selectedProtocol === 'WebRTC'}
+                <Globe class="h-5 w-5 text-blue-600" />
+              {:else}
+                <Blocks class="h-5 w-5 text-blue-600" />
+              {/if}
+            </div>
+            <div>
+              <p class="text-sm font-semibold">{$t('upload.currentProtocol')}: {selectedProtocol}</p>
+              <p class="text-xs text-muted-foreground">
+                {selectedProtocol === 'WebRTC' ? $t('upload.webrtcDescription') : $t('upload.bitswapDescription')}
+              </p>
+            </div>
+          </div>
+          <button
+            on:click={changeProtocol}
+            class="inline-flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium border border-input bg-background hover:bg-muted transition-colors"
+          >
+            <RefreshCw class="h-4 w-4 mr-2" />
+            {$t('upload.changeProtocol')}
+          </button>
+        </div>
         <div class="space-y-4">
           <!-- Drag & Drop Indicator -->
           {#if $files.filter(f => f.status === 'seeding' || f.status === 'uploaded').length === 0}

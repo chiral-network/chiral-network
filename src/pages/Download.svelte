@@ -5,7 +5,7 @@
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
-  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation, Globe, Blocks } from 'lucide-svelte'
+  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation, Globe, Blocks, RefreshCw } from 'lucide-svelte'  
   import { files, downloadQueue, activeTransfers } from '$lib/stores'
   import { dhtService } from '$lib/dht'
   import DownloadSearchSection from '$lib/components/download/DownloadSearchSection.svelte'
@@ -18,21 +18,23 @@
   import { MultiSourceDownloadService, type MultiSourceProgress } from '$lib/services/multiSourceDownloadService'
   import { listen } from '@tauri-apps/api/event'
   import PeerSelectionService from '$lib/services/peerSelectionService'
-
+import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
 
   import { invoke }  from '@tauri-apps/api/core';
 
   const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params)
 
-  // Protocol selection state
-  let selectedProtocol: 'WebRTC' | 'Bitswap';
-  let hasSelectedProtocol = false
+ // Protocol selection state
+  $: selectedProtocol = $protocolStore
+  $: hasSelectedProtocol = selectedProtocol !== null
 
   function handleProtocolSelect(protocol: 'WebRTC' | 'Bitswap') {
-    selectedProtocol = protocol
-    hasSelectedProtocol = true
+    protocolStore.set(protocol)
   }
 
+  function changeProtocol() {
+    protocolStore.reset()
+  }
   onMount(() => {
     initDownloadTelemetry()
 
@@ -1041,6 +1043,33 @@
       on:message={handleSearchMessage}
       isBitswap={selectedProtocol === 'Bitswap'}
     />
+    <!-- Protocol Indicator and Switcher -->
+    <Card class="p-4">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="flex items-center justify-center w-10 h-10 bg-gradient-to-br from-blue-500/10 to-blue-500/5 rounded-lg border border-blue-500/20">
+            {#if selectedProtocol === 'WebRTC'}
+              <Globe class="h-5 w-5 text-blue-600" />
+            {:else}
+              <Blocks class="h-5 w-5 text-blue-600" />
+            {/if}
+          </div>
+          <div>
+            <p class="text-sm font-semibold">{$t('download.currentProtocol')}: {selectedProtocol}</p>
+            <p class="text-xs text-muted-foreground">
+              {selectedProtocol === 'WebRTC' ? $t('upload.webrtcDescription') : $t('upload.bitswapDescription')}
+            </p>
+          </div>
+        </div>
+        <button
+          on:click={changeProtocol}
+          class="inline-flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium border border-input bg-background hover:bg-muted transition-colors"
+        >
+          <RefreshCw class="h-4 w-4 mr-2" />
+          {$t('download.changeProtocol')}
+        </button>
+      </div>
+    </Card>
   {/if}
 
   <!-- Unified Downloads List -->

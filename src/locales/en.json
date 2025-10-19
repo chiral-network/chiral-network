@@ -32,7 +32,9 @@
       "notFound": "Chiral node binary not found",
       "prompt": "Download the Core-Geth binary to run a local node",
       "button": "Download Chiral Node (~50 MB)",
-      "starting": "Starting download..."
+      "starting": "Starting download...",
+      "currentProtocol": "Current Protocol",
+      "changeProtocol": "Change Protocol"
     },
     "startingNode": "Starting Chiral node...",
     "pleaseWait": "Please wait, this may take a moment.",
@@ -1042,7 +1044,11 @@
       "publicKeyHint": "Enter the recipient's X25519 public key (hex format, 64 characters). The file will be encrypted so only they can decrypt it. Leave empty to encrypt for yourself.",
       "invalidPublicKey": "⚠️ Invalid public key format. Must be 64 hexadecimal characters.",
       "encryptedBadge": "Encrypted"
-    }
+    },
+    "currentProtocol": "Current Protocol",
+    "changeProtocol": "Change Protocol",
+    "webrtcDescription": "Fast peer-to-peer transfers using WebRTC",
+    "bitswapDescription": "IPFS-compatible block exchange protocol"
   },
   "bandwidthScheduling": {
     "title": "Bandwidth Scheduling",
