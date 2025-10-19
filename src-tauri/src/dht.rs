@@ -1,6 +1,7 @@
 use crate::manager::Sha256Hasher;
 use async_std::path::Path;
 use async_trait::async_trait;
+use ethers::prelude::*;
 use blockstore::{
     block::{Block, CidError},
     Blockstore, InMemoryBlockstore, RedbBlockstore,
@@ -241,6 +242,7 @@ pub enum DhtCommand {
         response_tx: oneshot::Sender<FileMetadata>,
     },
     SearchFile(String),
+    SearchFileByCid(String),
     DownloadFile(FileMetadata),
     ConnectPeer(String),
     ConnectToPeerById(PeerId),
@@ -530,6 +532,14 @@ struct PendingSearch {
 struct PendingProviderQuery {
     id: u64,
     sender: oneshot::Sender<Result<Vec<String>, String>>,
+}
+
+/// Tracks pending keyword indexing operations for the read-modify-write pattern
+#[derive(Debug, Clone)]
+struct PendingKeywordIndex {
+    keyword: String,
+    file_hash: String,
+    peer_id: PeerId,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1273,6 +1283,7 @@ async fn run_dht_node(
     get_providers_queries: Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>,
     seeder_heartbeats_cache: Arc<Mutex<HashMap<String, FileHeartbeatCacheEntry>>>,
     pending_heartbeat_updates: Arc<Mutex<HashSet<String>>>,
+    pending_keyword_indexes: Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>>,
     is_bootstrap: bool,
     enable_autorelay: bool,
     relay_candidates: HashSet<String>,
@@ -1718,19 +1729,29 @@ async fn run_dht_node(
                             keywords
                         );
                         // Task 2: DHT Indexing
-                        // TODO: implement the "read-modify-write" logic inside this loop.
+                        // Implement the "read-modify-write" logic for each keyword
                         for keyword in keywords {
                             let index_key_str = format!("idx:{}", keyword);
-                            let _index_key = kad::RecordKey::new(&index_key_str);
+                            let index_key = kad::RecordKey::new(&index_key_str);
 
-                            // TODO:
-                            // 1. Call swarm.behaviour_mut().kademlia.get_record(index_key.clone())
-                            // 2. In the KademliaEvent handler for GetRecordOk, deserialize the value (a list of hashes).
-                            // 3. Add the new metadata.merkle_root to the list.
-                            // 4. Serialize the updated list.
-                            // 5. Create a new Record and call swarm.behaviour_mut().kademlia.put_record(...).
+                            // Step 1: Initiate a get_record query for this keyword
+                            // The response will be handled in the KademliaEvent handler
+                            let query_id = swarm.behaviour_mut().kademlia.get_record(index_key.clone());
 
-                            info!("TODO - Register keyword '{}' with file hash '{}'", keyword, metadata.merkle_root);
+                            // Track this query so we can handle it when the response comes back
+                            let pending_index = PendingKeywordIndex {
+                                keyword: keyword.clone(),
+                                file_hash: metadata.merkle_root.clone(),
+                                peer_id,
+                            };
+                            pending_keyword_indexes.lock().await.insert(query_id, pending_index);
+
+                            info!(
+                                "Initiated keyword indexing for '{}' with file hash '{}' (query: {:?})",
+                                keyword,
+                                metadata.merkle_root,
+                                query_id
+                            );
                         }
                         // notify frontend
                         let _ = event_tx.send(DhtEvent::PublishedFile(metadata.clone())).await;
@@ -1808,6 +1829,39 @@ async fn run_dht_node(
                         let provider_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
                         if let Err(e) = swarm.behaviour_mut().kademlia.start_providing(provider_key) {
                             error!("Failed to start providing encrypted file {}: {}", metadata.merkle_root, e);
+                        }
+
+                        // 5. Keyword Extraction and Indexing (same as PublishFile)
+                        let keywords = extract_keywords(&metadata.file_name);
+                        info!(
+                            "Extracted {} keywords for encrypted file '{}': {:?}",
+                            keywords.len(),
+                            metadata.file_name,
+                            keywords
+                        );
+
+                        // Index each keyword in the DHT
+                        for keyword in keywords {
+                            let index_key_str = format!("idx:{}", keyword);
+                            let index_key = kad::RecordKey::new(&index_key_str);
+
+                            // Initiate a get_record query for this keyword
+                            let query_id = swarm.behaviour_mut().kademlia.get_record(index_key.clone());
+
+                            // Track this query for the read-modify-write pattern
+                            let pending_index = PendingKeywordIndex {
+                                keyword: keyword.clone(),
+                                file_hash: metadata.merkle_root.clone(),
+                                peer_id,
+                            };
+                            pending_keyword_indexes.lock().await.insert(query_id, pending_index);
+
+                            info!(
+                                "Initiated keyword indexing for '{}' with encrypted file hash '{}' (query: {:?})",
+                                keyword,
+                                metadata.merkle_root,
+                                query_id
+                            );
                         }
 
                         info!("Successfully published and started providing encrypted file: {}", metadata.merkle_root);
@@ -1976,6 +2030,11 @@ async fn run_dht_node(
                         let key = kad::RecordKey::new(&file_hash.as_bytes());
                         let query_id = swarm.behaviour_mut().kademlia.get_record(key);
                         info!("Searching for file: {} (query: {:?})", file_hash, query_id);
+                    }
+                    Some(DhtCommand::SearchFileByCid(cid_str)) => {
+                        let key = kad::RecordKey::new(&cid_str.as_bytes());
+                        let query_id = swarm.behaviour_mut().kademlia.get_record(key);
+                        info!("Searching for file by CID: {} (query: {:?})", cid_str, query_id);
                     }
                     Some(DhtCommand::SetPrivacyProxies { addresses }) => {
                         info!("Updating privacy proxy targets ({} addresses)", addresses.len());
@@ -2309,6 +2368,7 @@ async fn run_dht_node(
                             &get_providers_queries,
                             &seeder_heartbeats_cache,
                             &pending_heartbeat_updates,
+                            &pending_keyword_indexes,
                         )
                         .await;
                     }
@@ -2484,12 +2544,22 @@ async fn run_dht_node(
                                                             if let Some(chunk) = active_download.downloaded_chunks.get(&i) {
                                                                 encrypted_chunks.push(chunk.clone());
                                                             }
+                                                        }                                                        
+                                                        // This part requires the user's private key for decryption.
+                                                        // Since we don't have it here, we will pass the encrypted data
+                                                        // to the frontend and let it trigger the decryption.
+                                                        // For now, we'll just assemble the encrypted chunks.
+                                                        let mut assembled_encrypted_data = Vec::new();
+                                                        for i in 0..active_download.downloaded_chunks.len() as u32 {
+                                                            if let Some(chunk) = active_download.downloaded_chunks.get(&i) {
+                                                                assembled_encrypted_data.extend_from_slice(chunk);
+                                                            }
                                                         }
-                                                        // chunk_manager not defined
-                                                        // match chunk_manager.reassemble_and_decrypt_data(&encrypted_chunks, bundle) {
-                                                        //     Ok(decrypted_data) => completed_metadata.file_data = decrypted_data,
-                                                        //     Err(e) => error!("Decryption failed for {}: {}", file_hash, e),
-                                                        // }
+                                                        completed_metadata.file_data = assembled_encrypted_data;
+                                                        /* match chunk_manager.reassemble_and_decrypt_data(&encrypted_chunks, bundle) {
+                                                            Ok(decrypted_data) => completed_metadata.file_data = decrypted_data,
+                                                            Err(e) => error!("Decryption failed for {}: {}", file_hash, e),
+                                                        } */
                                                     }
                                                 } else {
                                                     let mut file_data = Vec::new();
@@ -2515,14 +2585,13 @@ async fn run_dht_node(
 
                                 // Send completion events for finished downloads
                                 for metadata in completed_downloads {
-                                    // let _ = event_tx.send(DhtEvent::DownloadedFile(metadata)).await;
                                     // The file is downloaded, but if it's encrypted, it's not yet usable.
                                     // The `DownloadedFile` event now acts as a signal that the raw,
                                     // possibly encrypted, data is ready. The consumer of this event
                                     // (e.g., a service in main.rs) will be responsible for decryption.
                                     // info!("Downloaded all blocks for file {}. Emitting DownloadedFile event.", metadata.merkle_root);
                                     let _ = event_tx.send(DhtEvent::DownloadedFile(metadata.clone())).await;
-
+                                    
                                     // Also remove from active downloads
                                     active_downloads.lock().await.remove(&metadata.merkle_root);
                                 }
@@ -3052,6 +3121,7 @@ async fn handle_kademlia_event(
     get_providers_queries: &Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>,
     seeder_heartbeats_cache: &Arc<Mutex<HashMap<String, FileHeartbeatCacheEntry>>>,
     pending_heartbeat_updates: &Arc<Mutex<HashSet<String>>>,
+    pending_keyword_indexes: &Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>>,
 ) {
     match event {
         KademliaEvent::RoutingUpdated { peer, .. } => {
@@ -3075,12 +3145,55 @@ async fn handle_kademlia_event(
                 debug!("✅ Kad RoutablePeer accepted: {} -> {}", peer, address);
             }
         }
-        KademliaEvent::OutboundQueryProgressed { result, .. } => {
+        KademliaEvent::OutboundQueryProgressed { result, id, .. } => {
             match result {
                 QueryResult::GetRecord(Ok(ok)) => match ok {
                     GetRecordOk::FoundRecord(peer_record) => {
+                        // Check if this is a keyword indexing query (read part of read-modify-write)
+                        if let Some(pending_index) = pending_keyword_indexes.lock().await.remove(&id) {
+                            // This is a keyword index record - deserialize the list of file hashes
+                            let mut file_hashes: Vec<String> = if let Ok(hashes) = serde_json::from_slice(&peer_record.record.value) {
+                                hashes
+                            } else {
+                                Vec::new()
+                            };
+
+                            // Add this file's hash to the list if not already present
+                            if !file_hashes.contains(&pending_index.file_hash) {
+                                file_hashes.push(pending_index.file_hash.clone());
+                            }
+
+                            // Serialize the updated list
+                            if let Ok(updated_value) = serde_json::to_vec(&file_hashes) {
+                                let index_key_str = format!("idx:{}", pending_index.keyword);
+                                let index_key = kad::RecordKey::new(&index_key_str);
+
+                                // Create and publish the updated record (write part of read-modify-write)
+                                let record = Record {
+                                    key: index_key,
+                                    value: updated_value,
+                                    publisher: Some(pending_index.peer_id),
+                                    expires: None,
+                                };
+
+                                match swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One) {
+                                    Ok(_) => {
+                                        info!(
+                                            "Successfully indexed keyword '{}' with file hash '{}'",
+                                            pending_index.keyword, pending_index.file_hash
+                                        );
+                                    }
+                                    Err(e) => {
+                                        error!(
+                                            "Failed to publish keyword index for '{}': {}",
+                                            pending_index.keyword, e
+                                        );
+                                    }
+                                }
+                            }
+                        }
                         // Try to parse DHT record as essential metadata JSON
-                        if let Ok(metadata_json) =
+                        else if let Ok(metadata_json) =
                             serde_json::from_slice::<serde_json::Value>(&peer_record.record.value)
                         {
                             // Construct FileMetadata from the JSON
@@ -3319,18 +3432,71 @@ async fn handle_kademlia_event(
                 },
                 QueryResult::GetRecord(Err(err)) => {
                     warn!("GetRecord error: {:?}", err);
-                    // If the error includes the key, emit FileNotFound
-                    if let kad::GetRecordError::NotFound { key, .. } = err {
-                        let file_hash = String::from_utf8_lossy(key.as_ref()).to_string();
-                        let _ = event_tx
-                            .send(DhtEvent::FileNotFound(file_hash.clone()))
+                    // Check if this is a keyword indexing query that failed because the keyword doesn't exist yet
+                    if let kad::GetRecordError::NotFound { key, .. } = &err {
+                        // Try to find a matching pending keyword index query
+                        let mut pending_indexes = pending_keyword_indexes.lock().await;
+                        let mut found_pending = None;
+
+                        // Since we don't have the query_id in the error, we need to match by key
+                        // Look for any pending index where the key matches
+                        for (query_id, pending_index) in pending_indexes.iter() {
+                            let index_key_str = format!("idx:{}", pending_index.keyword);
+                            let index_key = kad::RecordKey::new(&index_key_str);
+                            if index_key.as_ref() == key.as_ref() {
+                                found_pending = Some((*query_id, pending_index.clone()));
+                                break;
+                            }
+                        }
+
+                        if let Some((query_id, pending_index)) = found_pending {
+                            // Remove from pending
+                            pending_indexes.remove(&query_id);
+                            drop(pending_indexes); // Release the lock
+
+                            // This is a new keyword - create the first index entry
+                            let file_hashes = vec![pending_index.file_hash.clone()];
+
+                            if let Ok(initial_value) = serde_json::to_vec(&file_hashes) {
+                                let index_key_str = format!("idx:{}", pending_index.keyword);
+                                let index_key = kad::RecordKey::new(&index_key_str);
+
+                                // Create and publish the new record
+                                let record = Record {
+                                    key: index_key,
+                                    value: initial_value,
+                                    publisher: Some(pending_index.peer_id),
+                                    expires: None,
+                                };
+
+                                match swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One) {
+                                    Ok(_) => {
+                                        info!(
+                                            "Successfully created new keyword index for '{}' with file hash '{}'",
+                                            pending_index.keyword, pending_index.file_hash
+                                        );
+                                    }
+                                    Err(e) => {
+                                        error!(
+                                            "Failed to create keyword index for '{}': {}",
+                                            pending_index.keyword, e
+                                        );
+                                    }
+                                }
+                            }
+                        } else {
+                            // This is a regular file search that failed
+                            let file_hash = String::from_utf8_lossy(key.as_ref()).to_string();
+                            let _ = event_tx
+                                .send(DhtEvent::FileNotFound(file_hash.clone()))
+                                .await;
+                            notify_pending_searches(
+                                pending_searches,
+                                &file_hash,
+                                SearchResponse::NotFound,
+                            )
                             .await;
-                        notify_pending_searches(
-                            pending_searches,
-                            &file_hash,
-                            SearchResponse::NotFound,
-                        )
-                        .await;
+                        }
                     }
                 }
                 QueryResult::PutRecord(Ok(PutRecordOk { key })) => {
@@ -4387,6 +4553,8 @@ impl DhtService {
             Arc::new(Mutex::new(HashMap::new()));
         let pending_heartbeat_updates: Arc<Mutex<HashSet<String>>> =
             Arc::new(Mutex::new(HashSet::new()));
+        let pending_keyword_indexes: Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>> =
+            Arc::new(Mutex::new(HashMap::new()));
 
         {
             let mut guard = metrics.lock().await;
@@ -4419,6 +4587,7 @@ impl DhtService {
             get_providers_queries_local.clone(),
             seeder_heartbeats_cache.clone(),
             pending_heartbeat_updates.clone(),
+            pending_keyword_indexes.clone(),
             is_bootstrap,
             final_enable_autorelay,
             relay_candidates,
@@ -4665,6 +4834,7 @@ impl DhtService {
             encryption_method,
             key_fingerprint,
             version: Some(version),
+            encrypted_key_bundle: None,
             parent_hash,
             cids: None,
             is_root,
@@ -5337,6 +5507,167 @@ impl DhtService {
                 "type": "privacy_routing_disabled"
             }),
         });
+
+        Ok(())
+    }
+
+    /// Generates a proof for a given file chunk and submits it to the blockchain.
+    /// This function is called by the blockchain listener upon receiving a challenge.
+    pub async fn generate_and_submit_proof(
+        &self,
+        file_root_hex: String,
+        chunk_index: u64,
+    ) -> Result<(), String> {
+        info!(
+            "Generating proof for file root {} and chunk index {}",
+            file_root_hex, chunk_index
+        );
+
+        // 1. Locate the file manifest from the local cache.
+        let manifest = self
+            .get_manifest_from_cache(&file_root_hex)
+            .await
+            .ok_or_else(|| format!("File manifest not found for root: {}", file_root_hex))?;
+
+        // 2. Locate the requested file chunk data.
+        let chunk_data = self
+            .get_chunk_data(&file_root_hex, chunk_index as usize)
+            .await
+            .map_err(|e| format!("Failed to locate chunk: {}", e))?;
+
+        // 3. Generate Merkle proof for that chunk.
+        let proof = self
+            .get_merkle_proof(&manifest, chunk_index as usize)
+            .await
+            .map_err(|e| format!("Failed to generate Merkle proof: {}", e))?;
+
+        // 4. Submit proof to the smart contract.
+        self.submit_to_contract(&file_root_hex, proof, chunk_data, chunk_index)
+            .await
+            .map_err(|e| format!("Failed to submit proof to contract: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Retrieves a file's manifest from the local cache.
+    async fn get_manifest_from_cache(&self, file_root_hex: &str) -> Option<FileMetadata> {
+        let cache = self.file_metadata_cache.lock().await;
+        cache.get(file_root_hex).cloned()
+    }
+
+    /// Retrieves the original, unencrypted chunk data from local storage.
+    /// This assumes the `FileTransferService` provides access to the underlying storage.
+    async fn get_chunk_data(&self, file_root_hex: &str, chunk_index: usize) -> Result<Vec<u8>, String> {
+        if let Some(ft_service) = &self.file_transfer_service {
+            let file_data = ft_service
+                .get_file_data(file_root_hex)
+                .await
+                .ok_or_else(|| format!("File data not found for root {}", file_root_hex))?;
+
+            let chunk_size = self.chunk_size();
+            let start = chunk_index * chunk_size;
+            let end = (start + chunk_size).min(file_data.len());
+
+            if start >= file_data.len() {
+                return Err(format!("Chunk index {} is out of bounds", chunk_index));
+            }
+
+            Ok(file_data[start..end].to_vec())
+        } else {
+            Err("FileTransferService is not available".to_string())
+        }
+    }
+
+    /// Generates a Merkle proof for a specific chunk index.
+    async fn get_merkle_proof(
+        &self,
+        manifest: &FileMetadata,
+        chunk_index: usize,
+    ) -> Result<Vec<[u8; 32]>, String> {
+        // This requires re-calculating the original chunk hashes to build the tree.
+        // A more optimized version would store the hashes in the manifest.
+        if let Some(ft_service) = &self.file_transfer_service {
+            let file_data = ft_service
+                .get_file_data(&manifest.merkle_root)
+                .await
+                .ok_or_else(|| format!("File data not found for root {}", manifest.merkle_root))?;
+
+            let chunk_size = self.chunk_size();
+            let original_chunk_hashes: Vec<[u8; 32]> = file_data
+                .chunks(chunk_size)
+                .map(Sha256Hasher::hash)
+                .collect();
+
+            if chunk_index >= original_chunk_hashes.len() {
+                return Err(format!("Chunk index {} out of bounds for proof generation", chunk_index));
+            }
+
+            let tree = MerkleTree::<Sha256Hasher>::from_leaves(&original_chunk_hashes);
+            let proof = tree.proof(&[chunk_index]);
+            Ok(proof.proof_hashes().to_vec())
+        } else {
+            Err("FileTransferService is not available".to_string())
+        }
+    }
+
+    /// Placeholder for submitting the proof to the smart contract.
+    async fn submit_to_contract(
+        &self,
+        file_root: &str,
+        proof: Vec<[u8; 32]>,
+        chunk_data: Vec<u8>,
+        chunk_index: u64,
+    ) -> Result<(), String> {
+        info!("Submitting proof for file root {} to smart contract...", file_root);
+
+        // This is a simplified example. In a real app, you would get the provider,
+        // contract address, and signer from the AppState or configuration.
+        let provider = Provider::<Http>::try_from("http://127.0.0.1:8545")
+            .map_err(|e| format!("Failed to create provider: {}", e))?;
+        let client = Arc::new(provider);
+
+        // This private key is for demonstration. In a real app, you would retrieve
+        // this securely from the AppState's keystore/active_account_private_key.
+        let wallet: LocalWallet = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+            .parse()
+            .map_err(|e| format!("Failed to parse private key: {}", e))?;
+        let signer = SignerMiddleware::new(client.clone(), wallet.with_chain_id(98765u64));
+
+        // The contract address needs to be known. This would come from AppState.
+        let contract_address: Address = "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+            .parse()
+            .map_err(|e| format!("Failed to parse contract address: {}", e))?;
+
+        // Define the contract ABI for the `verifyProof` function.
+        // In a larger project, you would use `abigen!` to generate this from the contract JSON.
+        abigen!(
+            ProofOfStorage,
+            r#"[
+                function verifyProof(bytes32 fileRoot, bytes32[] calldata proof, bytes calldata chunkData, uint256 chunkIndex) external view returns (bool)
+            ]"#,
+        );
+
+        let contract = ProofOfStorage::new(contract_address, Arc::new(signer));
+
+        // Prepare arguments for the contract call
+        let root_bytes: [u8; 32] = hex::decode(file_root)
+            .map_err(|e| format!("Invalid file root hex: {}", e))?
+            .try_into()
+            .map_err(|_| "File root is not 32 bytes".to_string())?;
+
+        // Call the contract's `verifyProof` method.
+        // Note: `verifyProof` is a `view` function, so we use `.call()` which doesn't create a transaction.
+        // If it were a state-changing function, we would use `.send()`.
+        let is_valid = contract
+            .verify_proof(root_bytes, proof, chunk_data.into(), chunk_index.into())
+            .call()
+            .await
+            .map_err(|e| format!("Contract call failed: {}", e))?;
+
+        info!("Proof verification result from contract: {}", is_valid);
+        if !is_valid {
+            return Err("Proof was rejected by the smart contract.".to_string());
+        }
 
         Ok(())
     }

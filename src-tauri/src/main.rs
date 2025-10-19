@@ -6,6 +6,7 @@
 pub mod commands;
 
 pub mod analytics;
+mod blockchain_listener;
 mod dht;
 mod encryption;
 mod ethereum;
@@ -31,8 +32,7 @@ use crate::commands::proxy::{
     disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
     proxy_echo, proxy_remove, ProxyNode,
 };
-use async_std::path::Path as async_path;
-use chiral_network::stream_auth::{
+use crate::stream_auth::{
     AuthMessage, HmacKeyExchangeConfirmation, HmacKeyExchangeRequest, HmacKeyExchangeResponse,
     StreamAuthService,
 };
@@ -40,7 +40,7 @@ use dht::{DhtEvent, DhtMetricsSnapshot, DhtService, FileMetadata};
 use directories::ProjectDirs;
 use ethereum::{
     create_new_account, get_account_from_private_key, get_balance, get_block_number, get_hashrate,
-    get_mined_blocks_count, get_mining_logs, get_mining_performance, get_mining_status,
+    get_mined_blocks_count, get_mining_logs, get_mining_performance, get_mining_status, // Assuming you have a file_handler module
     get_network_difficulty, get_network_hashrate, get_peer_count, get_recent_mined_blocks,
     start_mining, stop_mining, EthAccount, GethProcess, MinedBlock,
 };
@@ -2342,6 +2342,7 @@ async fn upload_file_chunk(
             parent_hash: None,
             version: Some(1),
             cids: Some(vec![root_cid.clone()]), // The root CID for retrieval
+            encrypted_key_bundle: None,
             is_root: true,
             encrypted_key_bundle: None,
         };
@@ -3675,7 +3676,7 @@ fn main() {
             proxy_auth_tokens: Arc::new(Mutex::new(std::collections::HashMap::new())),
 
             // Initialize stream authentication
-            stream_auth: Arc::new(Mutex::new(StreamAuthService::new())),
+            stream_auth: Arc::new(Mutex::new(crate::stream_auth::StreamAuthService::new())),
 
             // Proof-of-Storage watcher background handle and contract address
             // make these clonable so we can .clone() and move into spawned tasks
@@ -4363,196 +4364,62 @@ async fn store_file_data(
 #[tauri::command]
 async fn start_proof_of_storage_watcher(
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
     contract_address: String,
-    poll_interval_secs: Option<u64>,
-    response_timeout_secs: Option<u64>,
+    ws_url: String,
 ) -> Result<(), String> {
     // Basic validation
     if contract_address.trim().is_empty() {
         return Err("contract_address cannot be empty".into());
     }
+    if ws_url.trim().is_empty() {
+        return Err("ws_url cannot be empty".into());
+    }
 
-    // Store contract address in app state for other parts of the app to read
+    // Store contract address in app state
     {
         let mut addr = state.proof_contract_address.lock().await;
         *addr = Some(contract_address.clone());
     }
 
-    // If a watcher is already running, stop it first
+    // Ensure any previous watcher is stopped
     stop_proof_of_storage_watcher(state.clone()).await.ok();
 
-    // Spawn background watcher
-    let poll_interval = TokioDuration::from_secs(poll_interval_secs.unwrap_or(10));
-    let response_timeout = TokioDuration::from_secs(response_timeout_secs.unwrap_or(15));
-
-    let ft_arc = {
-        let ft_guard = state.file_transfer.lock().await;
-        ft_guard.as_ref().cloned()
+    // The DHT service is required for the listener to locate file chunks.
+    let dht_service = {
+        state
+            .dht
+            .lock()
+            .await
+            .as_ref()
+            .cloned()
+            .ok_or("DHT service is not running. Cannot start proof watcher.")?
     };
 
-    // Clone relevant Arcs to move into task
-    let proof_contract_address_arc = state.proof_contract_address.clone();
-    // Need to confirm usage of clone
-    // let app_state_clone = state.inner().clone();
-    let app_state_clone = state.inner();
-
     let handle = tokio::spawn(async move {
-        // Simple backoff mechanism on errors
-        let mut backoff = TokioDuration::from_secs(1);
-
-        loop {
-            // Read the configured contract address
-            let contract_opt = { proof_contract_address_arc.lock().await.clone() };
-            if contract_opt.is_none() {
-                tracing::info!("Proof watcher: no contract configured; exiting watcher loop.");
-                break;
-            }
-            let contract = contract_opt.unwrap();
-
-            // TODO: Replace the following placeholder with a real blockchain subscription
-            // Approach A: subscribe to events if your ethereum module exposes a listener
-            // Approach B: poll an RPC / ethers provider for new "ChallengeIssued" events
-            //
-            // For now we call a placeholder `fetch_pending_challenges(contract)` that you should
-            // implement in your `ethereum` module and return Vec<ChallengeEvent>.
-            let challenges_result: Result<Vec<ChallengeEvent>, String> = {
-                // Placeholder - if you have 'ethereum::fetch_pending_challenges', call it here:
-                // ethereum::fetch_pending_challenges(&contract).await.map_err(|e| e.to_string())
-                //
-                // Otherwise implement the fetch inside your ethereum module and call it here.
-                Err("fetch_pending_challenges not implemented - please wire your ethereum subscription here".to_string())
-            };
-
-            match challenges_result {
-                Ok(challenges) => {
-                    backoff = TokioDuration::from_secs(1); // reset backoff on success
-                    for challenge in challenges.into_iter() {
-                        let challenge_id = challenge.challenge_id.clone();
-                        tracing::info!("Proof watcher: received challenge {:?}", challenge);
-
-                        // Spawn a per-challenge handler with timeout for generating & submitting proof
-                        let ft_local = ft_arc.clone();
-                        let contract_clone = contract.clone();
-                        let resp_timeout = response_timeout;
-                        tokio::spawn(async move {
-                            // Wrap the full handling in a timeout.
-                            let res = tokio_timeout(resp_timeout, async {
-                                // 1) Locate requested chunk data (TODO: integrate with FileTransferService/ChunkManager)
-                                // Example stub-call — replace with your real API:
-                                // let chunk_data = ft_local.get_chunk(&challenge.merkle_root, challenge.chunk_index).await?;
-                                //
-                                // Or use ChunkManager to retrieve / reassemble chunk bytes.
-
-                                let chunk_data_result: Result<Vec<u8>, String> =
-                                    Err("get_chunk not implemented - please plug your ChunkManager/FileTransferService API".to_string());
-
-                                let chunk_data = match chunk_data_result {
-                                    Ok(c) => c,
-                                    Err(e) => {
-                                        tracing::error!("Failed to fetch chunk for challenge {}: {}", challenge_id, e);
-                                        return Err::<(), String>(e);
-                                    }
-                                };
-
-                                // 2) Generate Merkle proof for the chunk (TODO: call your Merkle helper)
-                                // Expected: produce a Vec<[u8; 32]> or similar proof along with index/total
-                                let merkle_proof_result: Result<MerkleProof, String> =
-                                    Err("generate_merkle_proof not implemented - please integrate your Merkle helper".to_string());
-
-                                let merkle_proof = match merkle_proof_result {
-                                    Ok(p) => p,
-                                    Err(e) => {
-                                        tracing::error!("Failed to generate merkle proof for {}: {}", challenge_id, e);
-                                        return Err::<(), String>(e);
-                                    }
-                                };
-
-                                // 3) Submit proof to smart contract (verifyProof(fileRoot, proof, chunkData))
-                                // TODO: call your ethereum module function that invokes contract method `verifyProof`
-                                // Example stub:
-                                // let tx_hash = ethereum::submit_proof(&contract_clone, &challenge.merkle_root, &merkle_proof, &chunk_data).await?;
-                                let submit_result: Result<String, String> =
-                                    Err("submit_proof not implemented - please integrate ethereum::submit_proof".to_string());
-
-                                match submit_result {
-                                    Ok(tx) => {
-                                        tracing::info!("Submitted proof for challenge {} tx={}", challenge_id, tx);
-                                        Ok::<(), String>(())
-                                    }
-                                    Err(e) => {
-                                        tracing::error!("Failed to submit proof for {}: {}", challenge_id, e);
-                                        Err(e)
-                                    }
-                                }
-                            }).await;
-
-                            match res {
-                                Ok(Ok(_)) => {
-                                    tracing::info!(
-                                        "Challenge {} handled successfully",
-                                        challenge_id
-                                    );
-                                }
-                                Ok(Err(e)) => {
-                                    // The handler returned an error (but within timeout)
-                                    tracing::error!(
-                                        "Error handling challenge {}: {}",
-                                        challenge_id,
-                                        e
-                                    );
-                                }
-                                Err(_) => {
-                                    // The entire proof handling timed out
-                                    tracing::warn!(
-                                        "Timeout while handling challenge {} ({}s)",
-                                        challenge_id,
-                                        resp_timeout.as_secs()
-                                    );
-                                    // TODO: Optionally notify contract of failure or emit event into UI
-                                }
-                            }
-                        });
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Proof watcher poll failed: {} (backoff {}s)",
-                        e,
-                        backoff.as_secs()
-                    );
-                    tokio::time::sleep(backoff).await;
-                    backoff = std::cmp::min(backoff * 2, TokioDuration::from_secs(300));
-                    // cap backoff
-                }
-            }
-
-            // Sleep until next poll cycle
-            tokio::time::sleep(poll_interval).await;
+        tracing::info!("Starting proof-of-storage watcher...");
+        // The listener will run until the contract address is cleared or an error occurs.
+        if let Err(e) =
+            blockchain_listener::run_blockchain_listener(ws_url, contract_address, dht_service)
+                .await
+        {
+            tracing::error!("Proof-of-storage watcher failed: {}", e);
+            // Emit an event to the frontend to notify the user of the failure.
+            let _ = app.emit(
+                "proof_watcher_error",
+                format!("Watcher failed: {}", e.to_string()),
+            );
         }
-
         tracing::info!("Proof watcher task exiting");
     });
 
-    // Store the handle in AppState so it can be stopped later
+    // Store the handle in AppState to manage its lifecycle
     {
         let mut guard = state.proof_watcher.lock().await;
         *guard = Some(handle);
     }
 
     Ok(())
-}
-
-// Define a small struct representing a challenge event coming from the chain.
-// Adjust fields to match your smart contract event definition.
-#[derive(Debug, Clone)]
-struct ChallengeEvent {
-    pub challenge_id: String,
-    pub merkle_root: String,
-    pub chunk_index: u32,
-    pub total_chunks: u32,
-    pub requester: Option<String>,
-    pub issued_at_unix: u64,
-    pub deadline_unix: Option<u64>,
 }
 
 // MerkleProof placeholder type - replace with your actual proof representation.
@@ -4566,7 +4433,7 @@ struct MerkleProof {
 
 #[tauri::command]
 async fn stop_proof_of_storage_watcher(state: State<'_, AppState>) -> Result<(), String> {
-    // Clear configured contract address
+    // Clear the configured contract address, which signals the listener loop to exit.
     {
         let mut addr = state.proof_contract_address.lock().await;
         *addr = None;
@@ -4579,14 +4446,12 @@ async fn stop_proof_of_storage_watcher(state: State<'_, AppState>) -> Result<(),
     };
 
     if let Some(handle) = maybe_handle {
-        // Ask the task to stop by dropping the contract address above; give it a chance to wind down.
-        // Also abort if it doesn't stop in a short amount of time.
         tracing::info!("Stopping Proof-of-Storage watcher...");
-        let abort_wait = TokioDuration::from_secs(5);
+        // Abort the task to ensure it stops immediately.
         handle.abort();
-        // best-effort: await join (not strictly necessary)
-        match tokio::time::timeout(abort_wait, handle).await {
-            Ok(_) => tracing::info!("Proof watcher stopped"),
+        // Awaiting the aborted handle can confirm it's terminated.
+        match tokio::time::timeout(TokioDuration::from_secs(2), handle).await {
+            Ok(_) => tracing::info!("Proof watcher task successfully joined."),
             Err(_) => tracing::warn!("Proof watcher abort timed out"),
         }
     } else {
