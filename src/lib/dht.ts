@@ -244,7 +244,15 @@ export class DhtService {
       }
       resolvedStoragePath += "/" + fileMetadata.fileName;
 
-      // Write file to disk
+      // Trigger the backend upload
+      fileMetadata.merkleRoot = fileMetadata.fileHash;
+      fileMetadata.fileData = [];
+      fileMetadata.isRoot = true;
+      console.log(fileMetadata);
+      await invoke("download_blocks_from_network", {
+        fileMetadata,
+        downloadPath: resolvedStoragePath,
+      });
       const metadataPromise = new Promise<FileMetadata>((resolve) => {
         const unlistenPromise = listen<FileMetadata>(
           "file_content",
@@ -257,16 +265,6 @@ export class DhtService {
             unlistenPromise.then((unlistenFn) => unlistenFn());
           }
         );
-      });
-
-      // Trigger the backend upload
-      fileMetadata.merkleRoot = fileMetadata.fileHash;
-      fileMetadata.fileData = [];
-      fileMetadata.isRoot = true;
-      console.log(fileMetadata);
-      await invoke("download_blocks_from_network", {
-        fileMetadata,
-        downloadPath: resolvedStoragePath,
       });
 
       // Wait until the event arrives

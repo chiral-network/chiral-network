@@ -1914,17 +1914,16 @@ async fn download_blocks_from_network(
     file_metadata: FileMetadata,
     download_path: String,
 ) -> Result<(), String> {
-    {
-        let dht = {
-            let dht_guard = state.dht.lock().await;
-            dht_guard.as_ref().cloned()
-        };
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
 
-        if let Some(dht) = dht {
-            dht.download_file(file_metadata,download_path).await
-        } else {
-            Err("DHT node is not running".to_string())
-        }
+    if let Some(dht) = dht {
+        info!("calling dht download_file");
+        dht.download_file(file_metadata, download_path).await
+    } else {
+        Err("DHT node is not running".to_string())
     }
 }
 
