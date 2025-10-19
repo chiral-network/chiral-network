@@ -304,11 +304,11 @@ impl ReputationDhtService {
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
-            version: Some(1),
             parent_hash: None,
             cids: None, // Not needed for reputation events
-            is_root: true,
+            version: Some(1),
             encrypted_key_bundle: None,
+            is_root: true,
             ..Default::default()
         };
 
@@ -355,11 +355,11 @@ impl ReputationDhtService {
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
-            version: Some(1),
             parent_hash: None,
             cids: None, // Not needed for merkle roots
-            is_root: true,
+            version: Some(1),
             encrypted_key_bundle: None,
+            is_root: true,
             ..Default::default()
         };
 

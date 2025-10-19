@@ -17,6 +17,9 @@
   import { initDownloadTelemetry, disposeDownloadTelemetry } from '$lib/downloadTelemetry'
   import { MultiSourceDownloadService, type MultiSourceProgress } from '$lib/services/multiSourceDownloadService'
   import { listen } from '@tauri-apps/api/event'
+  import PeerSelectionService from '$lib/services/peerSelectionService'
+
+
   import { invoke }  from '@tauri-apps/api/core';
 
   const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params)
@@ -736,6 +739,7 @@
 
         if (multiSourceEnabled && seeders.length >= 2 && fileToDownload && fileToDownload.size > 1024 * 1024) {
           // Use multi-source download for files > 1MB with multiple seeders
+          const downloadStartTime = Date.now();
           try {
             showNotification(`Starting multi-source download from ${seeders.length} peers...`, 'info');
 
@@ -747,15 +751,44 @@
               fileToDownload.hash,
               outputPath,
               {
-                maxPeers: maxPeersPerDownload
+                maxPeers: maxPeersPerDownload,
+                selectedPeers: seeders,  // Pass selected peers from peer selection modal
+                peerAllocation: (fileToDownload as any).peerAllocation  // Pass manual allocation if available
               }
             );
 
             // The progress updates will be handled by the event listeners in onMount
             activeSimulations.delete(fileId);
 
+            // Record transfer success metrics for each peer
+            const downloadDuration = Date.now() - downloadStartTime;
+            for (const peerId of seeders) {
+              try {
+                await PeerSelectionService.recordTransferSuccess(
+                  peerId,
+                  fileToDownload.size,
+                  downloadDuration
+                );
+              } catch (error) {
+                console.error(`Failed to record success for peer ${peerId}:`, error);
+              }
+            }
+
           } catch (error) {
             console.error('Multi-source download failed, falling back to P2P:', error);
+
+            // Record transfer failures for each peer
+            for (const peerId of seeders) {
+              try {
+                await PeerSelectionService.recordTransferFailure(
+                  peerId,
+                  error instanceof Error ? error.message : 'Multi-source download failed'
+                );
+              } catch (recordError) {
+                console.error(`Failed to record failure for peer ${peerId}:`, recordError);
+              }
+            }
+
             // Fall back to single-peer P2P download
             await fallbackToP2PDownload();
           }
@@ -786,12 +819,15 @@
               throw new Error('File metadata is not available');
             }
 
+            // Track download start time for metrics
+            const p2pStartTime = Date.now();
+
             // Initiate P2P download with file saving
             const transferId = await p2pFileTransferService.initiateDownloadWithSave(
               fileMetadata,
               seeders,
               outputPath || undefined,
-              (transfer) => {
+              async (transfer) => {
                 // Update UI with transfer progress
                 files.update(f => f.map(file => {
                   if (file.id === fileId) {
@@ -809,11 +845,30 @@
                   return file;
                 }));
 
-                // Show notification on completion or failure
+                // Show notification and record metrics on completion or failure
                 if (transfer.status === 'completed' && fileToDownload) {
                   showNotification(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
+
+                  // Record success metrics for each peer
+                  const duration = Date.now() - p2pStartTime;
+                  for (const peerId of seeders) {
+                    try {
+                      await PeerSelectionService.recordTransferSuccess(peerId, fileToDownload.size, duration);
+                    } catch (error) {
+                      console.error(`Failed to record P2P success for peer ${peerId}:`, error);
+                    }
+                  }
                 } else if (transfer.status === 'failed' && fileToDownload) {
                   showNotification(tr('download.notifications.downloadFailed', { values: { name: fileToDownload.name } }), 'error');
+
+                  // Record failure metrics for each peer
+                  for (const peerId of seeders) {
+                    try {
+                      await PeerSelectionService.recordTransferFailure(peerId, 'P2P download failed');
+                    } catch (error) {
+                      console.error(`Failed to record P2P failure for peer ${peerId}:`, error);
+                    }
+                  }
                 }
               }
             );

@@ -32,6 +32,8 @@ export interface MultiSourceDownloadOptions {
   maxPeers?: number;
   chunkSize?: number;
   preferMultiSource?: boolean;
+  selectedPeers?: string[];  // Explicitly selected peers from peer selection modal
+  peerAllocation?: Array<{peerId: string; percentage: number}>;  // Manual chunk allocation
 }
 
 export class MultiSourceDownloadService {
@@ -40,15 +42,17 @@ export class MultiSourceDownloadService {
    * Start a multi-source download for a file
    */
   static async startDownload(
-    fileHash: string, 
-    outputPath: string, 
+    fileHash: string,
+    outputPath: string,
     options?: MultiSourceDownloadOptions
   ): Promise<string> {
     return invoke('start_multi_source_download', {
       fileHash,
       outputPath,
       maxPeers: options?.maxPeers,
-      chunkSize: options?.chunkSize
+      chunkSize: options?.chunkSize,
+      selectedPeers: options?.selectedPeers,
+      peerAllocation: options?.peerAllocation
     });
   }
 
