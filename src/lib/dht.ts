@@ -231,47 +231,41 @@ export class DhtService {
     try {
       console.log("Initiating download for file:", fileMetadata.fileHash);
       // Start listening for the published_file event
+      const stored = localStorage.getItem("chiralSettings");
+      let storagePath = "."; // Default fallback
+
+      if (stored) {
+        try {
+          const loadedSettings: AppSettings = JSON.parse(stored);
+          storagePath = loadedSettings.storagePath;
+        } catch (e) {
+          console.error("Failed to load settings:", e);
+        }
+      }
+      // Construct full file path
+      let resolvedStoragePath = storagePath;
+
+      if (storagePath.startsWith("~")) {
+        const home = await homeDir();
+        resolvedStoragePath = storagePath.replace("~", home);
+      }
+      resolvedStoragePath += "/" + fileMetadata.fileName;
+
+      // Trigger the backend upload
+      fileMetadata.merkleRoot = fileMetadata.fileHash;
+      fileMetadata.fileData = [];
+      fileMetadata.isRoot = true;
+      console.log(fileMetadata);
+      await invoke("download_blocks_from_network", {
+        fileMetadata,
+        downloadPath: resolvedStoragePath,
+      });
       const metadataPromise = new Promise<FileMetadata>((resolve) => {
         const unlistenPromise = listen<FileMetadata>(
           "file_content",
           async (event) => {
             console.log("Received file content event:", event.payload);
-            const stored = localStorage.getItem("chiralSettings");
-            let storagePath = "."; // Default fallback
-
-            if (stored) {
-              try {
-                const loadedSettings: AppSettings = JSON.parse(stored);
-                storagePath = loadedSettings.storagePath;
-              } catch (e) {
-                console.error("Failed to load settings:", e);
-              }
-            }
-            if (event.payload.fileData) {
-              //
-              // Construct full file path
-              let resolvedStoragePath = storagePath;
-
-              if (storagePath.startsWith("~")) {
-                const home = await homeDir();
-                resolvedStoragePath = storagePath.replace("~", home);
-              }
-              resolvedStoragePath += "/" + event.payload.fileName;
-              // Convert to Uint8Array if needed
-              const fileData =
-                event.payload.fileData instanceof Uint8Array
-                  ? event.payload.fileData
-                  : new Uint8Array(event.payload.fileData);
-
-              // Write file to disk
-              console.log(`File saved to: ${resolvedStoragePath}`);
-
-              await invoke("write_file", {
-                path: resolvedStoragePath,
-                contents: Array.from(fileData),
-              });
-              console.log(`File saved to: ${resolvedStoragePath}`);
-            }
+            console.log(`File saved to: ${resolvedStoragePath}`);
 
             resolve(event.payload);
             // Unsubscribe once we got the event
@@ -279,13 +273,6 @@ export class DhtService {
           }
         );
       });
-
-      // Trigger the backend upload
-      fileMetadata.merkleRoot = fileMetadata.fileHash;
-      fileMetadata.fileData = [];
-      fileMetadata.isRoot = true;
-      console.log(fileMetadata);
-      await invoke("download_blocks_from_network", { fileMetadata });
 
       // Wait until the event arrives
       return await metadataPromise;

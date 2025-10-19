@@ -309,6 +309,7 @@ impl ReputationDhtService {
             version: Some(1),
             encrypted_key_bundle: None,
             is_root: true,
+            ..Default::default()
         };
 
         dht_service.publish_file(metadata).await
@@ -359,6 +360,7 @@ impl ReputationDhtService {
             version: Some(1),
             encrypted_key_bundle: None,
             is_root: true,
+            ..Default::default()
         };
 
         dht_service.publish_file(metadata).await
