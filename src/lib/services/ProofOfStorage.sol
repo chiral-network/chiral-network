@@ -52,6 +52,13 @@ contract ProofOfStorage {
      */
     event ChallengeIssued(bytes32 indexed fileRoot, uint256 chunkIndex);
 
+    /**
+     * @dev Emitted when a proof is successfully verified.
+     * @param fileRoot The Merkle root of the file for which the proof was verified.
+     * @param provider The address that submitted the valid proof.
+     */
+    event ProofVerified(bytes32 indexed fileRoot, address indexed provider);
+
     // --- Constructor ---
 
     /**
@@ -108,5 +115,46 @@ contract ProofOfStorage {
         lastChallengeBlock[_fileRoot] = block.number;
 
         emit ChallengeIssued(_fileRoot, randomChunkIndex);
+    }
+
+    /**
+     * @dev Verifies a Merkle proof for a given file chunk.
+     * This function is called by a storage provider in response to a challenge.
+     * @param _fileRoot The Merkle root of the file being proven.
+     * @param _proof A dynamic array of sibling hashes in the Merkle tree.
+     * @param _chunkData The raw data of the challenged chunk.
+     * @param _chunkIndex The index of the challenged chunk.
+     * @return A boolean indicating if the proof is valid.
+     */
+    function verifyProof(
+        bytes32 _fileRoot,
+        bytes32[] calldata _proof,
+        bytes calldata _chunkData,
+        uint256 _chunkIndex
+    ) external view returns (bool) {
+        require(files[_fileRoot].exists, "File not registered");
+
+        // 1. Hash the provided chunk data to get the leaf hash.
+        bytes32 leafHash = keccak256(_chunkData);
+
+        // 2. Iteratively compute the Merkle root from the leaf and the proof.
+        bytes32 computedRoot = leafHash;
+        uint256 proofIndex = _chunkIndex;
+
+        for (uint256 i = 0; i < _proof.length; i++) {
+            bytes32 sibling = _proof[i];
+            if (proofIndex % 2 == 0) {
+                // If the current index is even, hash it with the sibling on the right.
+                computedRoot = keccak256(abi.encodePacked(computedRoot, sibling));
+            } else {
+                // If the current index is odd, hash it with the sibling on the left.
+                computedRoot = keccak256(abi.encodePacked(sibling, computedRoot));
+            }
+            // Move up to the next level of the tree.
+            proofIndex /= 2;
+        }
+
+        // 3. Compare the computed root with the registered file root.
+        return computedRoot == _fileRoot;
     }
 }

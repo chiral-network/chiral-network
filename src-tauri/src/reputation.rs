@@ -352,12 +352,12 @@ impl ReputationDhtService {
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
-            version: Some(1),
             parent_hash: None,
             cids: None, // Not needed for reputation events
+            version: Some(1),
             encrypted_key_bundle: None,
             is_root: true,
-            encrypted_key_bundle: None,
+            ..Default::default()
         };
 
         dht_service.publish_file(metadata).await
@@ -403,12 +403,12 @@ impl ReputationDhtService {
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
-            version: Some(1),
             parent_hash: None,
             cids: None, // Not needed for merkle roots
+            version: Some(1),
             encrypted_key_bundle: None,
             is_root: true,
-            encrypted_key_bundle: None,
+            ..Default::default()
         };
 
         dht_service.publish_file(metadata).await

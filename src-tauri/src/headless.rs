@@ -177,6 +177,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         args.autonat_server.clone(),
         args.socks5_proxy,
         file_transfer_service.clone(),
+        None, // chunk_manager
         None, // chunk_size_kb: use default
         None, // cache_size_mb: use default
         final_enable_autorelay,
@@ -247,6 +248,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             encrypted_key_bundle: None,
             is_root: true,
             encrypted_key_bundle: None,
+            ..Default::default()
         };
 
         dht_service.publish_file(example_metadata).await?;
