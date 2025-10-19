@@ -1,6 +1,7 @@
 use crate::manager::Sha256Hasher;
 use async_std::path::Path;
 use async_trait::async_trait;
+use ethers::prelude::*;
 use blockstore::{
     block::{Block, CidError},
     Blockstore, InMemoryBlockstore, RedbBlockstore,
@@ -2140,12 +2141,22 @@ async fn run_dht_node(
                                                             if let Some(chunk) = active_download.downloaded_chunks.get(&i) {
                                                                 encrypted_chunks.push(chunk.clone());
                                                             }
+                                                        }                                                        
+                                                        // This part requires the user's private key for decryption.
+                                                        // Since we don't have it here, we will pass the encrypted data
+                                                        // to the frontend and let it trigger the decryption.
+                                                        // For now, we'll just assemble the encrypted chunks.
+                                                        let mut assembled_encrypted_data = Vec::new();
+                                                        for i in 0..active_download.downloaded_chunks.len() as u32 {
+                                                            if let Some(chunk) = active_download.downloaded_chunks.get(&i) {
+                                                                assembled_encrypted_data.extend_from_slice(chunk);
+                                                            }
                                                         }
-                                                        // chunk_manager not defined
-                                                        // match chunk_manager.reassemble_and_decrypt_data(&encrypted_chunks, bundle) {
-                                                        //     Ok(decrypted_data) => completed_metadata.file_data = decrypted_data,
-                                                        //     Err(e) => error!("Decryption failed for {}: {}", file_hash, e),
-                                                        // }
+                                                        completed_metadata.file_data = assembled_encrypted_data;
+                                                        /* match chunk_manager.reassemble_and_decrypt_data(&encrypted_chunks, bundle) {
+                                                            Ok(decrypted_data) => completed_metadata.file_data = decrypted_data,
+                                                            Err(e) => error!("Decryption failed for {}: {}", file_hash, e),
+                                                        } */
                                                     }
                                                 } else {
                                                     let mut file_data = Vec::new();
@@ -2171,14 +2182,13 @@ async fn run_dht_node(
 
                                 // Send completion events for finished downloads
                                 for metadata in completed_downloads {
-                                    // let _ = event_tx.send(DhtEvent::DownloadedFile(metadata)).await;
                                     // The file is downloaded, but if it's encrypted, it's not yet usable.
                                     // The `DownloadedFile` event now acts as a signal that the raw,
                                     // possibly encrypted, data is ready. The consumer of this event
                                     // (e.g., a service in main.rs) will be responsible for decryption.
                                     // info!("Downloaded all blocks for file {}. Emitting DownloadedFile event.", metadata.merkle_root);
                                     let _ = event_tx.send(DhtEvent::DownloadedFile(metadata.clone())).await;
-
+                                    
                                     // Also remove from active downloads
                                     active_downloads.lock().await.remove(&metadata.merkle_root);
                                 }
@@ -3972,6 +3982,7 @@ impl DhtService {
             encryption_method,
             key_fingerprint,
             version: Some(version),
+            encrypted_key_bundle: None,
             parent_hash,
             cids: None,
             is_root,
@@ -4617,6 +4628,167 @@ impl DhtService {
                 "type": "privacy_routing_disabled"
             }),
         });
+
+        Ok(())
+    }
+
+    /// Generates a proof for a given file chunk and submits it to the blockchain.
+    /// This function is called by the blockchain listener upon receiving a challenge.
+    pub async fn generate_and_submit_proof(
+        &self,
+        file_root_hex: String,
+        chunk_index: u64,
+    ) -> Result<(), String> {
+        info!(
+            "Generating proof for file root {} and chunk index {}",
+            file_root_hex, chunk_index
+        );
+
+        // 1. Locate the file manifest from the local cache.
+        let manifest = self
+            .get_manifest_from_cache(&file_root_hex)
+            .await
+            .ok_or_else(|| format!("File manifest not found for root: {}", file_root_hex))?;
+
+        // 2. Locate the requested file chunk data.
+        let chunk_data = self
+            .get_chunk_data(&file_root_hex, chunk_index as usize)
+            .await
+            .map_err(|e| format!("Failed to locate chunk: {}", e))?;
+
+        // 3. Generate Merkle proof for that chunk.
+        let proof = self
+            .get_merkle_proof(&manifest, chunk_index as usize)
+            .await
+            .map_err(|e| format!("Failed to generate Merkle proof: {}", e))?;
+
+        // 4. Submit proof to the smart contract.
+        self.submit_to_contract(&file_root_hex, proof, chunk_data, chunk_index)
+            .await
+            .map_err(|e| format!("Failed to submit proof to contract: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Retrieves a file's manifest from the local cache.
+    async fn get_manifest_from_cache(&self, file_root_hex: &str) -> Option<FileMetadata> {
+        let cache = self.file_metadata_cache.lock().await;
+        cache.get(file_root_hex).cloned()
+    }
+
+    /// Retrieves the original, unencrypted chunk data from local storage.
+    /// This assumes the `FileTransferService` provides access to the underlying storage.
+    async fn get_chunk_data(&self, file_root_hex: &str, chunk_index: usize) -> Result<Vec<u8>, String> {
+        if let Some(ft_service) = &self.file_transfer_service {
+            let file_data = ft_service
+                .get_file_data(file_root_hex)
+                .await
+                .ok_or_else(|| format!("File data not found for root {}", file_root_hex))?;
+
+            let chunk_size = self.chunk_size();
+            let start = chunk_index * chunk_size;
+            let end = (start + chunk_size).min(file_data.len());
+
+            if start >= file_data.len() {
+                return Err(format!("Chunk index {} is out of bounds", chunk_index));
+            }
+
+            Ok(file_data[start..end].to_vec())
+        } else {
+            Err("FileTransferService is not available".to_string())
+        }
+    }
+
+    /// Generates a Merkle proof for a specific chunk index.
+    async fn get_merkle_proof(
+        &self,
+        manifest: &FileMetadata,
+        chunk_index: usize,
+    ) -> Result<Vec<[u8; 32]>, String> {
+        // This requires re-calculating the original chunk hashes to build the tree.
+        // A more optimized version would store the hashes in the manifest.
+        if let Some(ft_service) = &self.file_transfer_service {
+            let file_data = ft_service
+                .get_file_data(&manifest.merkle_root)
+                .await
+                .ok_or_else(|| format!("File data not found for root {}", manifest.merkle_root))?;
+
+            let chunk_size = self.chunk_size();
+            let original_chunk_hashes: Vec<[u8; 32]> = file_data
+                .chunks(chunk_size)
+                .map(Sha256Hasher::hash)
+                .collect();
+
+            if chunk_index >= original_chunk_hashes.len() {
+                return Err(format!("Chunk index {} out of bounds for proof generation", chunk_index));
+            }
+
+            let tree = MerkleTree::<Sha256Hasher>::from_leaves(&original_chunk_hashes);
+            let proof = tree.proof(&[chunk_index]);
+            Ok(proof.proof_hashes().to_vec())
+        } else {
+            Err("FileTransferService is not available".to_string())
+        }
+    }
+
+    /// Placeholder for submitting the proof to the smart contract.
+    async fn submit_to_contract(
+        &self,
+        file_root: &str,
+        proof: Vec<[u8; 32]>,
+        chunk_data: Vec<u8>,
+        chunk_index: u64,
+    ) -> Result<(), String> {
+        info!("Submitting proof for file root {} to smart contract...", file_root);
+
+        // This is a simplified example. In a real app, you would get the provider,
+        // contract address, and signer from the AppState or configuration.
+        let provider = Provider::<Http>::try_from("http://127.0.0.1:8545")
+            .map_err(|e| format!("Failed to create provider: {}", e))?;
+        let client = Arc::new(provider);
+
+        // This private key is for demonstration. In a real app, you would retrieve
+        // this securely from the AppState's keystore/active_account_private_key.
+        let wallet: LocalWallet = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+            .parse()
+            .map_err(|e| format!("Failed to parse private key: {}", e))?;
+        let signer = SignerMiddleware::new(client.clone(), wallet.with_chain_id(98765u64));
+
+        // The contract address needs to be known. This would come from AppState.
+        let contract_address: Address = "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+            .parse()
+            .map_err(|e| format!("Failed to parse contract address: {}", e))?;
+
+        // Define the contract ABI for the `verifyProof` function.
+        // In a larger project, you would use `abigen!` to generate this from the contract JSON.
+        abigen!(
+            ProofOfStorage,
+            r#"[
+                function verifyProof(bytes32 fileRoot, bytes32[] calldata proof, bytes calldata chunkData, uint256 chunkIndex) external view returns (bool)
+            ]"#,
+        );
+
+        let contract = ProofOfStorage::new(contract_address, Arc::new(signer));
+
+        // Prepare arguments for the contract call
+        let root_bytes: [u8; 32] = hex::decode(file_root)
+            .map_err(|e| format!("Invalid file root hex: {}", e))?
+            .try_into()
+            .map_err(|_| "File root is not 32 bytes".to_string())?;
+
+        // Call the contract's `verifyProof` method.
+        // Note: `verifyProof` is a `view` function, so we use `.call()` which doesn't create a transaction.
+        // If it were a state-changing function, we would use `.send()`.
+        let is_valid = contract
+            .verify_proof(root_bytes, proof, chunk_data.into(), chunk_index.into())
+            .call()
+            .await
+            .map_err(|e| format!("Contract call failed: {}", e))?;
+
+        info!("Proof verification result from contract: {}", is_valid);
+        if !is_valid {
+            return Err("Proof was rejected by the smart contract.".to_string());
+        }
 
         Ok(())
     }

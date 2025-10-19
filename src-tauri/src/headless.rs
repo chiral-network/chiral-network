@@ -242,6 +242,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             encryption_method: None,
             key_fingerprint: None,
             parent_hash: None,
+            encrypted_key_bundle: None,
             version: Some(1),
             cids: None,
             is_root: true,
