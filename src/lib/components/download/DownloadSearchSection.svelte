@@ -17,15 +17,16 @@
   import PeerSelectionService from '$lib/services/peerSelectionService';
 
   type ToastType = 'success' | 'error' | 'info' | 'warning';
-  type ToastPayload = { message: string; type?: ToastType; duration?: number };
+  type ToastPayload = { message: string; type?: ToastType; duration?: number; };
 
   const dispatch = createEventDispatcher<{ download: FileMetadata; message: ToastPayload }>();
   const tr = (key: string, params?: Record<string, unknown>) => (get(t) as any)(key, params);
 
-  const SEARCH_TIMEOUT_MS = 30_000; // 30 seconds for DHT searches to find peers
+  const SEARCH_TIMEOUT_MS = 10_000; // 10 seconds for DHT searches to find peers
+  export let isBitswap: boolean = false;
 
   let searchHash = '';
-  let searchMode = 'hash'; // 'hash' or 'name'
+  let searchMode = 'merkle_hash'; // 'merkle_hash' or 'cid'
   let isSearching = false;
   let hasSearched = false;
   let latestStatus: SearchStatus = 'pending';
@@ -138,7 +139,7 @@
 
     try {
       if (searchMode === 'name') {
-        // Search for file versions by name
+        // This mode is now deprecated in favor of Merkle Hash and CID
         pushMessage('Searching for file versions...', 'info', 2000);
 
         try {
@@ -248,6 +249,16 @@
             pushMessage(`Search failed: ${errorMessage}`, 'error', 6000);
           }
         }
+      } else if (searchMode === 'cid') {
+        const entry = dhtSearchHistory.addPending(trimmed);
+        activeHistoryId = entry.id;
+        pushMessage('Searching for providers by CID...', 'info', 2000);
+        await dhtService.searchFileByCid(trimmed);
+        // The result will come via a `found_file` event, which is handled by the search history store.
+        // We just need to wait and see.
+        setTimeout(() => {
+          isSearching = false;
+        }, SEARCH_TIMEOUT_MS);
       } else {
         // Skip local file lookup - always search DHT for peer information
         // This ensures we get proper seeder lists for peer selection
@@ -566,18 +577,10 @@
 
       <!-- Search Mode Switcher -->
       <div class="flex gap-2 mb-3">
-        <button
-          on:click={() => { searchMode = 'hash'; versionResults = []; }}
-          class="px-3 py-1 text-sm rounded-md border transition-colors {searchMode === 'hash' ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/50 hover:bg-muted border-border'}"
-        >
-          {tr('download.searchByHash')}
-        </button>
-        <button
-          on:click={() => { searchMode = 'name'; latestMetadata = null; }}
-          class="px-3 py-1 text-sm rounded-md border transition-colors {searchMode === 'name' ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/50 hover:bg-muted border-border'}"
-        >
-          {tr('download.searchByName')}
-        </button>
+        <select bind:value={searchMode} class="px-3 py-1 text-sm rounded-md border transition-colors bg-muted/50 hover:bg-muted border-border">
+            <option value="merkle_hash">Search by Merkle Hash</option>
+            <option value="cid">Search by CID</option>
+        </select>
       </div>
 
       <div class="flex flex-col sm:flex-row gap-3">
@@ -585,7 +588,7 @@
           <Input
             id="hash-input"
             bind:value={searchHash}
-            placeholder={searchMode === 'hash' ? tr('download.placeholder') : tr('download.search.namePlaceholder')}
+            placeholder={searchMode === 'merkle_hash' ? 'Enter Merkle Hash...' : 'Enter CID...'}
             class="pr-20 h-10"
             on:focus={toggleHistoryDropdown}
           />
@@ -663,7 +666,7 @@
           class="h-10 px-6"
         >
           <Search class="h-4 w-4 mr-2" />
-          {isSearching ? tr('download.search.status.searching') : (searchMode === 'name' ? tr('download.search.searchVersions') : tr('download.search.button'))}
+          {isSearching ? tr('download.search.status.searching') : tr('download.search.button')}
         </Button>
       </div>
     </div>
@@ -718,16 +721,19 @@
               <SearchResultCard
                 metadata={latestMetadata}
                 on:copy={handleCopy}
-                on:download={event => handleFileDownload(event.detail)}
+                on:download={event => dispatch('download', event.detail)}
+                isBitswap={isBitswap}
               />
               <p class="text-xs text-muted-foreground">
                 {tr('download.search.status.completedIn', { values: { seconds: (lastSearchDuration / 1000).toFixed(1) } })}
               </p>
             {:else if latestStatus === 'not_found'}
               <div class="text-center py-8">
-                <p class="text-sm text-muted-foreground">
-                  {searchMode === 'name' ? `No versions found for "${searchHash}"` : tr('download.search.status.notFoundDetail')}
-                </p>
+                {#if searchError}
+                   <p class="text-sm text-red-500">{searchError}</p>
+                {:else}
+                   <p class="text-sm text-muted-foreground">{tr('download.search.status.notFoundDetail')}</p>
+                {/if}
               </div>
             {:else if latestStatus === 'error'}
               <div class="text-center py-8">
@@ -736,7 +742,7 @@
               </div>
             {:else}
               <div class="rounded-md border border-dashed border-muted p-5 text-sm text-muted-foreground text-center">
-                {searchMode === 'name' ? 'Enter a file name to search for versions' : tr('download.search.status.placeholder')}
+                {tr('download.search.status.placeholder')}
               </div>
             {/if}
         </div>

@@ -5,7 +5,7 @@
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
-  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation } from 'lucide-svelte'
+  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation, Globe, Blocks } from 'lucide-svelte'
   import { files, downloadQueue, activeTransfers } from '$lib/stores'
   import { dhtService } from '$lib/dht'
   import DownloadSearchSection from '$lib/components/download/DownloadSearchSection.svelte'
@@ -22,18 +22,26 @@
 
   import { invoke }  from '@tauri-apps/api/core';
 
-  
   const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params)
+
+  // Protocol selection state
+  let selectedProtocol: 'WebRTC' | 'Bitswap';
+  let hasSelectedProtocol = false
+
+  function handleProtocolSelect(protocol: 'WebRTC' | 'Bitswap') {
+    selectedProtocol = protocol
+    hasSelectedProtocol = true
+  }
 
   onMount(() => {
     initDownloadTelemetry()
-    
+
     // Listen for multi-source download events
     const setupEventListeners = async () => {
       try {
         const unlistenProgress = await listen('multi_source_progress_update', (event) => {
           const progress = event.payload as MultiSourceProgress
-          
+
           // Find the corresponding file and update its progress
           files.update(f => f.map(file => {
             if (file.hash === progress.fileHash) {
@@ -48,14 +56,14 @@
             }
             return file;
           }));
-          
+
           multiSourceProgress.set(progress.fileHash, progress)
           multiSourceProgress = multiSourceProgress // Trigger reactivity
         })
 
         const unlistenCompleted = await listen('multi_source_download_completed', (event) => {
           const data = event.payload as any
-          
+
           // Update file status to completed
           files.update(f => f.map(file => {
             if (file.hash === data.file_hash) {
@@ -68,7 +76,7 @@
             }
             return file;
           }));
-          
+
           multiSourceProgress.delete(data.file_hash)
           multiSourceProgress = multiSourceProgress
           showNotification(`Multi-source download completed: ${data.file_name}`, 'success')
@@ -81,7 +89,7 @@
 
         const unlistenFailed = await listen('multi_source_download_failed', (event) => {
           const data = event.payload as any
-          
+
           // Update file status to failed
           files.update(f => f.map(file => {
             if (file.hash === data.file_hash) {
@@ -92,7 +100,7 @@
             }
             return file;
           }));
-          
+
           multiSourceProgress.delete(data.file_hash)
           multiSourceProgress = multiSourceProgress
           showNotification(`Multi-source download failed: ${data.error}`, 'error')
@@ -110,7 +118,7 @@
         return () => {} // Return empty cleanup function
       }
     }
-    
+
     setupEventListeners()
   })
 
@@ -303,10 +311,10 @@
   async function handleSearchDownload(metadata: FileMetadata) {
     const allFiles = [...$downloadQueue]
     const existingFile = allFiles.find((file) => file.hash === metadata.fileHash)
-    // Uncomment below if you need to save raw data for testing
-    // const fileName = metadata.fileName;
-    // const fileData = new Uint8Array(metadata.fileData ?? []);
-    // saveRawData(fileName, fileData);
+    
+    if (selectedProtocol === 'Bitswap') {
+      return;
+    }
 
     if (existingFile) {
       let statusMessage = ''
@@ -644,15 +652,15 @@
 
         // If the local copy is available and we're running in Tauri, copy directly to outputPath
         const localPeerIdNow = dhtService.getPeerId ? dhtService.getPeerId() : null;
-       
+
         if (outputPath && (localPeerIdNow || seeders.includes('local_peer'))) {
           try {
-            
+
             let hash = fileToDownload.hash
             console.log("🔍 DEBUG: Attempting to get file data for hash:", hash);
             const base64Data = await invoke('get_file_data', { fileHash: hash }) as string;
             console.log("✅ DEBUG: Retrieved base64 data length:", base64Data.length);
-            
+
             // Convert base64 to Uint8Array
             let data_ = new Uint8Array(0); // Default empty array
             if (base64Data && base64Data.length > 0) {
@@ -665,7 +673,7 @@
             } else {
               console.warn("No file data found for hash:", hash);
             }
-            
+
             console.log("Final data array length:", data_.length);
 
             // Write the file data to the output path
@@ -694,14 +702,14 @@
 
       // Show "automatically started" message now that download is proceeding
       showNotification(tr('download.notifications.autostart'), 'info');
-        
+
        if (fileToDownload.isEncrypted && fileToDownload.manifest) {
         // 1. Download all the required encrypted chunks using the P2P service.
         //    This new function will handle fetching multiple chunks in parallel.
         showNotification(`Downloading encrypted chunks for "${fileToDownload.name}"...`, 'info');
-        
+
         const { p2pFileTransferService } = await import('$lib/services/p2pFileTransfer');
-        
+
 
         await p2pFileTransferService.downloadEncryptedChunks(
           fileToDownload.manifest,
@@ -728,7 +736,7 @@
       } else {
         // Check if we should use multi-source download
         const seeders = fileToDownload.seederAddresses || [];
-        
+
         if (multiSourceEnabled && seeders.length >= 2 && fileToDownload && fileToDownload.size > 1024 * 1024) {
           // Use multi-source download for files > 1MB with multiple seeders
           const downloadStartTime = Date.now();
@@ -986,10 +994,55 @@
     <p class="text-muted-foreground mt-2">{$t('download.subtitle')}</p>
   </div>
 
-  <DownloadSearchSection
-    on:download={(event) => handleSearchDownload(event.detail)}
-    on:message={handleSearchMessage}
-  />
+  <!-- Protocol Selection -->
+  {#if !hasSelectedProtocol}
+   <Card>
+      <div class="p-6">
+        <h2 class="text-2xl font-bold mb-6 text-center">{$t('download.selectProtocol')}</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-2xl mx-auto">
+          <!-- WebRTC Option -->
+          <button
+            class="p-6 border-2 rounded-lg hover:border-blue-500 transition-colors duration-200 flex flex-col items-center gap-4 {selectedProtocol === 'WebRTC' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700'}"
+            on:click={() => handleProtocolSelect('WebRTC')}
+          >
+            <div class="w-16 h-16 flex items-center justify-center bg-blue-100 rounded-full">
+              <Globe class="w-8 h-8 text-blue-600" />
+            </div>
+            <div class="text-center">
+              <h3 class="text-lg font-semibold mb-2">WebRTC</h3>
+              <p class="text-sm text-gray-600 dark:text-gray-400">
+                {$t('upload.webrtcDescription')}
+              </p>
+            </div>
+          </button>
+
+          <!-- Bitswap Option -->
+          <button
+            class="p-6 border-2 rounded-lg hover:border-blue-500 transition-colors duration-200 flex flex-col items-center gap-4 {selectedProtocol === 'Bitswap' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700'}"
+            on:click={() => handleProtocolSelect('Bitswap')}
+          >
+            <div class="w-16 h-16 flex items-center justify-center bg-blue-100 rounded-full">
+              <Blocks class="w-8 h-8 text-blue-600" />
+            </div>
+            <div class="text-center">
+              <h3 class="text-lg font-semibold mb-2">Bitswap</h3>
+              <p class="text-sm text-gray-600 dark:text-gray-400">
+                {$t('upload.bitswapDescription')}
+              </p>
+            </div>
+          </button>
+        </div>
+      </div>
+    </Card>
+
+  {:else}
+    <DownloadSearchSection
+      on:download={(event) => handleSearchDownload(event.detail)}
+      on:message={handleSearchMessage}
+      isBitswap={selectedProtocol === 'Bitswap'}
+    />
+  {/if}
+
   <!-- Unified Downloads List -->
   <Card class="p-6">
     <!-- Header Section -->
@@ -1363,7 +1416,7 @@
                         <div class="flex items-center gap-2 text-xs">
                           <span class="w-20 truncate">{peerAssignment.peerId.slice(0, 8)}...</span>
                           <div class="flex-1 bg-muted rounded-full h-1">
-                            <div 
+                            <div
                               class="bg-purple-500 h-1 rounded-full transition-all duration-300"
                               style="width: {peerAssignment.status === 'Completed' ? 100 : peerAssignment.status === 'Downloading' ? 50 : 0}%"
                             ></div>
