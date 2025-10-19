@@ -4144,7 +4144,6 @@ impl DhtService {
             parent_hash,
             cids: None,
             is_root,
-            encrypted_key_bundle: todo!(), // Use computed value, not hardcoded true
         })
     }
 

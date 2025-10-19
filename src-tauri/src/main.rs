@@ -806,7 +806,7 @@ async fn start_dht_node(
         /* enable AutoRelay (after hotfix) */ final_enable_autorelay,
         preferred_relays.unwrap_or_default(),
         is_bootstrap.unwrap_or(false), // enable_relay_server only on bootstrap
-        Some(async_path::new(blockstore_db_path.as_os_str())),
+        Some(async_std::path::Path::new(blockstore_db_path.as_os_str())),
     )
     .await
     .map_err(|e| format!("Failed to start DHT: {}", e))?;
@@ -2344,7 +2344,6 @@ async fn upload_file_chunk(
             cids: Some(vec![root_cid.clone()]), // The root CID for retrieval
             encrypted_key_bundle: None,
             is_root: true,
-            encrypted_key_bundle: None,
         };
 
         // Store complete file data locally for seeding
