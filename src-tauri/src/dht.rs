@@ -1,11 +1,11 @@
 use crate::manager::Sha256Hasher;
 use async_std::path::Path;
 use async_trait::async_trait;
-use ethers::prelude::*;
 use blockstore::{
     block::{Block, CidError},
     InMemoryBlockstore, RedbBlockstore,
 };
+use ethers::prelude::*;
 use tokio::task::{spawn_blocking, JoinHandle};
 
 pub use cid::Cid;
@@ -78,6 +78,7 @@ pub const RAW_CODEC: u64 = 0x55;
 const FILE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 /// File seeder TTL – if no heartbeat lands within this window, drop the entry.
 const FILE_HEARTBEAT_TTL: Duration = Duration::from_secs(60);
+pub struct PendingKeywordIndex;
 
 /// Extracts a set of unique, searchable keywords from a filename.
 fn extract_keywords(file_name: &str) -> Vec<String> {
@@ -1285,9 +1286,9 @@ async fn run_dht_node(
 ) {
     let mut dht_maintenance_interval = tokio::time::interval(Duration::from_secs(30 * 60));
     dht_maintenance_interval.tick().await;
-     // fast heartbeat-driven updater: run at FILE_HEARTBEAT_INTERVAL to keep provider records fresh
-   let mut heartbeat_maintenance_interval = tokio::time::interval(FILE_HEARTBEAT_INTERVAL);
-   heartbeat_maintenance_interval.tick().await;
+    // fast heartbeat-driven updater: run at FILE_HEARTBEAT_INTERVAL to keep provider records fresh
+    let mut heartbeat_maintenance_interval = tokio::time::interval(FILE_HEARTBEAT_INTERVAL);
+    heartbeat_maintenance_interval.tick().await;
     // Periodic bootstrap interval
 
     /// Creates a proper circuit relay address for connecting through a relay peer
@@ -1552,7 +1553,7 @@ async fn run_dht_node(
                             }
                         }
             }
-        
+
             cmd = cmd_rx.recv() => {
                 match cmd {
                     Some(DhtCommand::Shutdown(ack)) => {
@@ -2501,14 +2502,14 @@ async fn run_dht_node(
                                                             if let Some(chunk) = active_download.downloaded_chunks.get(&i) {
                                                                 encrypted_chunks.push(chunk.clone());
                                                             }
-                                                        }                                                        
+                                                        }
                                                         if let Some(cm) = &chunk_manager {
                                                             // This part is tricky because reassemble_and_decrypt_data needs a secret key.
                                                             // We don't have it here. The design implies decryption should happen
                                                             // at a higher level where the user's private key is available.
                                                             // For now, we will just reassemble the encrypted chunks and pass them up.
                                                             // The frontend/caller will be responsible for decryption.
-                                                            
+
                                                             let mut reassembled_encrypted_data = Vec::new();
                                                             for i in 0..active_download.downloaded_chunks.len() as u32 {
                                                                 if let Some(chunk_data) = active_download.downloaded_chunks.get(&i) {
@@ -2518,7 +2519,7 @@ async fn run_dht_node(
                                                             // We are setting `file_data` to the raw encrypted data.
                                                             // The `DownloadedFile` event will carry this and the `encrypted_key_bundle`.
                                                             completed_metadata.file_data = reassembled_encrypted_data;
-                                                            
+
                                                         } else {
                                                             error!("ChunkManager not available for file reassembly: {}", file_hash);
                                                         }
@@ -2548,7 +2549,7 @@ async fn run_dht_node(
                                     // (e.g., a service in main.rs) will be responsible for decryption.
                                     // info!("Downloaded all blocks for file {}. Emitting DownloadedFile event.", metadata.merkle_root);
                                     let _ = event_tx.send(DhtEvent::DownloadedFile(metadata.clone())).await;
-                                    
+
                                     // Also remove from active downloads
                                     active_downloads.lock().await.remove(&metadata.merkle_root);
                                 }
@@ -4672,7 +4673,7 @@ impl DhtService {
         file_data: Vec<u8>,
         created_at: u64,
         mime_type: Option<String>,
-            encrypted_key_bundle: Option<crate::encryption::EncryptedAesKeyBundle>,
+        encrypted_key_bundle: Option<crate::encryption::EncryptedAesKeyBundle>,
         is_encrypted: bool,
         encryption_method: Option<String>,
         key_fingerprint: Option<String>,
@@ -5218,8 +5219,8 @@ impl DhtService {
                     .map(serde_json::Value::String)
                     .collect(),
             );
-            entry.metadata["seederHeartbeats"] =
-                serde_json::to_value(&entry.heartbeats).unwrap_or_else(|_| serde_json::Value::Array(vec![]));
+            entry.metadata["seederHeartbeats"] = serde_json::to_value(&entry.heartbeats)
+                .unwrap_or_else(|_| serde_json::Value::Array(vec![]));
 
             let peers = heartbeats_to_peer_list(&entry.heartbeats);
             if !peers.is_empty() {
@@ -5423,7 +5424,11 @@ impl DhtService {
 
     /// Retrieves the original, unencrypted chunk data from local storage.
     /// This assumes the `FileTransferService` provides access to the underlying storage.
-    async fn get_chunk_data(&self, file_root_hex: &str, chunk_index: usize) -> Result<Vec<u8>, String> {
+    async fn get_chunk_data(
+        &self,
+        file_root_hex: &str,
+        chunk_index: usize,
+    ) -> Result<Vec<u8>, String> {
         if let Some(ft_service) = &self.file_transfer_service {
             let file_data = ft_service
                 .get_file_data(file_root_hex)
@@ -5465,7 +5470,10 @@ impl DhtService {
                 .collect();
 
             if chunk_index >= original_chunk_hashes.len() {
-                return Err(format!("Chunk index {} out of bounds for proof generation", chunk_index));
+                return Err(format!(
+                    "Chunk index {} out of bounds for proof generation",
+                    chunk_index
+                ));
             }
 
             let tree = MerkleTree::<Sha256Hasher>::from_leaves(&original_chunk_hashes);
@@ -5484,7 +5492,10 @@ impl DhtService {
         chunk_data: Vec<u8>,
         chunk_index: u64,
     ) -> Result<(), String> {
-        info!("Submitting proof for file root {} to smart contract...", file_root);
+        info!(
+            "Submitting proof for file root {} to smart contract...",
+            file_root
+        );
 
         // This is a simplified example. In a real app, you would get the provider,
         // contract address, and signer from the AppState or configuration.
@@ -5494,9 +5505,10 @@ impl DhtService {
 
         // This private key is for demonstration. In a real app, you would retrieve
         // this securely from the AppState's keystore/active_account_private_key.
-        let wallet: LocalWallet = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-            .parse()
-            .map_err(|e| format!("Failed to parse private key: {}", e))?;
+        let wallet: LocalWallet =
+            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+                .parse()
+                .map_err(|e| format!("Failed to parse private key: {}", e))?;
         let signer = SignerMiddleware::new(client.clone(), wallet.with_chain_id(98765u64));
 
         // The contract address needs to be known. This would come from AppState.
