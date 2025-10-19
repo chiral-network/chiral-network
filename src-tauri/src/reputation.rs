@@ -36,6 +36,54 @@ pub enum EventType {
     StorageOffered,
     MaliciousBehaviorReport,
     FileShared,
+    // Relay server events
+    RelayReservationAccepted,
+    RelayCircuitEstablished,
+    RelayCircuitSuccessful,
+    RelayBandwidthProvided,
+    RelayUptime,
+    RelayRefused,
+    RelayTimeout,
+    RelayMaliciousBehavior,
+}
+
+impl EventType {
+    pub fn default_impact(&self) -> f64 {
+        match self {
+            EventType::FileTransferSuccess => 10.0,
+            EventType::FileTransferFailure => -5.0,
+            EventType::PaymentSuccess => 15.0,
+            EventType::PaymentFailure => -10.0,
+            EventType::ConnectionEstablished => 5.0,
+            EventType::ConnectionLost => -2.0,
+            EventType::DhtQueryAnswered => 3.0,
+            EventType::StorageOffered => 8.0,
+            EventType::MaliciousBehaviorReport => -50.0,
+            EventType::FileShared => 5.0,
+            EventType::RelayReservationAccepted => 5.0,
+            EventType::RelayCircuitEstablished => 10.0,
+            EventType::RelayCircuitSuccessful => 15.0,
+            EventType::RelayBandwidthProvided => 1.0,
+            EventType::RelayUptime => 5.0,
+            EventType::RelayRefused => -2.0,
+            EventType::RelayTimeout => -10.0,
+            EventType::RelayMaliciousBehavior => -100.0,
+        }
+    }
+
+    pub fn is_relay_event(&self) -> bool {
+        matches!(
+            self,
+            EventType::RelayReservationAccepted
+                | EventType::RelayCircuitEstablished
+                | EventType::RelayCircuitSuccessful
+                | EventType::RelayBandwidthProvided
+                | EventType::RelayUptime
+                | EventType::RelayRefused
+                | EventType::RelayTimeout
+                | EventType::RelayMaliciousBehavior
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
