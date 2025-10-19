@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use ethers::prelude::*;
 use blockstore::{
     block::{Block, CidError},
-    Blockstore, InMemoryBlockstore, RedbBlockstore,
+    InMemoryBlockstore, RedbBlockstore,
 };
 use tokio::task::{spawn_blocking, JoinHandle};
 
