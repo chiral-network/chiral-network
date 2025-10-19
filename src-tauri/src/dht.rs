@@ -481,6 +481,14 @@ struct PendingProviderQuery {
     sender: oneshot::Sender<Result<Vec<String>, String>>,
 }
 
+/// Tracks pending keyword indexing operations for the read-modify-write pattern
+#[derive(Debug, Clone)]
+struct PendingKeywordIndex {
+    keyword: String,
+    file_hash: String,
+    peer_id: PeerId,
+}
+
 #[derive(Debug, Clone, Default)]
 struct DhtMetrics {
     last_bootstrap: Option<SystemTime>,
@@ -1220,6 +1228,7 @@ async fn run_dht_node(
     root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>>,
     active_downloads: Arc<Mutex<HashMap<String, ActiveDownload>>>,
     get_providers_queries: Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>,
+    pending_keyword_indexes: Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>>,
     is_bootstrap: bool,
     enable_autorelay: bool,
     relay_candidates: HashSet<String>,
@@ -1537,19 +1546,29 @@ async fn run_dht_node(
                             keywords
                         );
                         // Task 2: DHT Indexing
-                        // TODO: implement the "read-modify-write" logic inside this loop.
+                        // Implement the "read-modify-write" logic for each keyword
                         for keyword in keywords {
                             let index_key_str = format!("idx:{}", keyword);
-                            let _index_key = kad::RecordKey::new(&index_key_str);
+                            let index_key = kad::RecordKey::new(&index_key_str);
 
-                            // TODO:
-                            // 1. Call swarm.behaviour_mut().kademlia.get_record(index_key.clone())
-                            // 2. In the KademliaEvent handler for GetRecordOk, deserialize the value (a list of hashes).
-                            // 3. Add the new metadata.merkle_root to the list.
-                            // 4. Serialize the updated list.
-                            // 5. Create a new Record and call swarm.behaviour_mut().kademlia.put_record(...).
+                            // Step 1: Initiate a get_record query for this keyword
+                            // The response will be handled in the KademliaEvent handler
+                            let query_id = swarm.behaviour_mut().kademlia.get_record(index_key.clone());
 
-                            info!("TODO - Register keyword '{}' with file hash '{}'", keyword, metadata.merkle_root);
+                            // Track this query so we can handle it when the response comes back
+                            let pending_index = PendingKeywordIndex {
+                                keyword: keyword.clone(),
+                                file_hash: metadata.merkle_root.clone(),
+                                peer_id,
+                            };
+                            pending_keyword_indexes.lock().await.insert(query_id, pending_index);
+
+                            info!(
+                                "Initiated keyword indexing for '{}' with file hash '{}' (query: {:?})",
+                                keyword,
+                                metadata.merkle_root,
+                                query_id
+                            );
                         }
                         // notify frontend
                         let _ = event_tx.send(DhtEvent::PublishedFile(metadata.clone())).await;
@@ -1602,6 +1621,39 @@ async fn run_dht_node(
                             error!("Failed to start providing encrypted file {}: {}", metadata.merkle_root, e);
                         }
 
+                        // 5. Keyword Extraction and Indexing (same as PublishFile)
+                        let keywords = extract_keywords(&metadata.file_name);
+                        info!(
+                            "Extracted {} keywords for encrypted file '{}': {:?}",
+                            keywords.len(),
+                            metadata.file_name,
+                            keywords
+                        );
+
+                        // Index each keyword in the DHT
+                        for keyword in keywords {
+                            let index_key_str = format!("idx:{}", keyword);
+                            let index_key = kad::RecordKey::new(&index_key_str);
+
+                            // Initiate a get_record query for this keyword
+                            let query_id = swarm.behaviour_mut().kademlia.get_record(index_key.clone());
+
+                            // Track this query for the read-modify-write pattern
+                            let pending_index = PendingKeywordIndex {
+                                keyword: keyword.clone(),
+                                file_hash: metadata.merkle_root.clone(),
+                                peer_id,
+                            };
+                            pending_keyword_indexes.lock().await.insert(query_id, pending_index);
+
+                            info!(
+                                "Initiated keyword indexing for '{}' with encrypted file hash '{}' (query: {:?})",
+                                keyword,
+                                metadata.merkle_root,
+                                query_id
+                            );
+                        }
+
                         info!("Successfully published and started providing encrypted file: {}", metadata.merkle_root);
                         let _ = event_tx.send(DhtEvent::PublishedFile(metadata)).await;
                     }
@@ -1635,6 +1687,11 @@ async fn run_dht_node(
                         let key = kad::RecordKey::new(&file_hash.as_bytes());
                         let query_id = swarm.behaviour_mut().kademlia.get_record(key);
                         info!("Searching for file: {} (query: {:?})", file_hash, query_id);
+                    }
+                    Some(DhtCommand::SearchFileByCid(cid_str)) => {
+                        let key = kad::RecordKey::new(&cid_str.as_bytes());
+                        let query_id = swarm.behaviour_mut().kademlia.get_record(key);
+                        info!("Searching for file by CID: {} (query: {:?})", cid_str, query_id);
                     }
                     Some(DhtCommand::SetPrivacyProxies { addresses }) => {
                         info!("Updating privacy proxy targets ({} addresses)", addresses.len());
@@ -1965,6 +2022,7 @@ async fn run_dht_node(
                             &pending_searches,
                             &pending_provider_queries,
                             &get_providers_queries,
+                            &pending_keyword_indexes,
                         )
                         .await;
                     }
@@ -2608,6 +2666,7 @@ async fn handle_kademlia_event(
     pending_searches: &Arc<Mutex<HashMap<String, Vec<PendingSearch>>>>,
     pending_provider_queries: &Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
     get_providers_queries: &Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>,
+    pending_keyword_indexes: &Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>>,
 ) {
     match event {
         KademliaEvent::RoutingUpdated { peer, .. } => {
@@ -2631,12 +2690,55 @@ async fn handle_kademlia_event(
                 debug!("✅ Kad RoutablePeer accepted: {} -> {}", peer, address);
             }
         }
-        KademliaEvent::OutboundQueryProgressed { result, .. } => {
+        KademliaEvent::OutboundQueryProgressed { result, id, .. } => {
             match result {
                 QueryResult::GetRecord(Ok(ok)) => match ok {
                     GetRecordOk::FoundRecord(peer_record) => {
+                        // Check if this is a keyword indexing query (read part of read-modify-write)
+                        if let Some(pending_index) = pending_keyword_indexes.lock().await.remove(&id) {
+                            // This is a keyword index record - deserialize the list of file hashes
+                            let mut file_hashes: Vec<String> = if let Ok(hashes) = serde_json::from_slice(&peer_record.record.value) {
+                                hashes
+                            } else {
+                                Vec::new()
+                            };
+
+                            // Add this file's hash to the list if not already present
+                            if !file_hashes.contains(&pending_index.file_hash) {
+                                file_hashes.push(pending_index.file_hash.clone());
+                            }
+
+                            // Serialize the updated list
+                            if let Ok(updated_value) = serde_json::to_vec(&file_hashes) {
+                                let index_key_str = format!("idx:{}", pending_index.keyword);
+                                let index_key = kad::RecordKey::new(&index_key_str);
+
+                                // Create and publish the updated record (write part of read-modify-write)
+                                let record = Record {
+                                    key: index_key,
+                                    value: updated_value,
+                                    publisher: Some(pending_index.peer_id),
+                                    expires: None,
+                                };
+
+                                match swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One) {
+                                    Ok(_) => {
+                                        info!(
+                                            "Successfully indexed keyword '{}' with file hash '{}'",
+                                            pending_index.keyword, pending_index.file_hash
+                                        );
+                                    }
+                                    Err(e) => {
+                                        error!(
+                                            "Failed to publish keyword index for '{}': {}",
+                                            pending_index.keyword, e
+                                        );
+                                    }
+                                }
+                            }
+                        }
                         // Try to parse DHT record as essential metadata JSON
-                        if let Ok(metadata_json) =
+                        else if let Ok(metadata_json) =
                             serde_json::from_slice::<serde_json::Value>(&peer_record.record.value)
                         {
                             // Construct FileMetadata from the JSON
@@ -2733,18 +2835,71 @@ async fn handle_kademlia_event(
                 },
                 QueryResult::GetRecord(Err(err)) => {
                     warn!("GetRecord error: {:?}", err);
-                    // If the error includes the key, emit FileNotFound
-                    if let kad::GetRecordError::NotFound { key, .. } = err {
-                        let file_hash = String::from_utf8_lossy(key.as_ref()).to_string();
-                        let _ = event_tx
-                            .send(DhtEvent::FileNotFound(file_hash.clone()))
+                    // Check if this is a keyword indexing query that failed because the keyword doesn't exist yet
+                    if let kad::GetRecordError::NotFound { key, .. } = &err {
+                        // Try to find a matching pending keyword index query
+                        let mut pending_indexes = pending_keyword_indexes.lock().await;
+                        let mut found_pending = None;
+
+                        // Since we don't have the query_id in the error, we need to match by key
+                        // Look for any pending index where the key matches
+                        for (query_id, pending_index) in pending_indexes.iter() {
+                            let index_key_str = format!("idx:{}", pending_index.keyword);
+                            let index_key = kad::RecordKey::new(&index_key_str);
+                            if index_key.as_ref() == key.as_ref() {
+                                found_pending = Some((*query_id, pending_index.clone()));
+                                break;
+                            }
+                        }
+
+                        if let Some((query_id, pending_index)) = found_pending {
+                            // Remove from pending
+                            pending_indexes.remove(&query_id);
+                            drop(pending_indexes); // Release the lock
+
+                            // This is a new keyword - create the first index entry
+                            let file_hashes = vec![pending_index.file_hash.clone()];
+
+                            if let Ok(initial_value) = serde_json::to_vec(&file_hashes) {
+                                let index_key_str = format!("idx:{}", pending_index.keyword);
+                                let index_key = kad::RecordKey::new(&index_key_str);
+
+                                // Create and publish the new record
+                                let record = Record {
+                                    key: index_key,
+                                    value: initial_value,
+                                    publisher: Some(pending_index.peer_id),
+                                    expires: None,
+                                };
+
+                                match swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One) {
+                                    Ok(_) => {
+                                        info!(
+                                            "Successfully created new keyword index for '{}' with file hash '{}'",
+                                            pending_index.keyword, pending_index.file_hash
+                                        );
+                                    }
+                                    Err(e) => {
+                                        error!(
+                                            "Failed to create keyword index for '{}': {}",
+                                            pending_index.keyword, e
+                                        );
+                                    }
+                                }
+                            }
+                        } else {
+                            // This is a regular file search that failed
+                            let file_hash = String::from_utf8_lossy(key.as_ref()).to_string();
+                            let _ = event_tx
+                                .send(DhtEvent::FileNotFound(file_hash.clone()))
+                                .await;
+                            notify_pending_searches(
+                                pending_searches,
+                                &file_hash,
+                                SearchResponse::NotFound,
+                            )
                             .await;
-                        notify_pending_searches(
-                            pending_searches,
-                            &file_hash,
-                            SearchResponse::NotFound,
-                        )
-                        .await;
+                        }
                     }
                 }
                 QueryResult::PutRecord(Ok(PutRecordOk { key })) => {
@@ -3786,6 +3941,8 @@ impl DhtService {
         let get_providers_queries_local: Arc<
             Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>,
         > = Arc::new(Mutex::new(HashMap::new()));
+        let pending_keyword_indexes: Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>> =
+            Arc::new(Mutex::new(HashMap::new()));
 
         {
             let mut guard = metrics.lock().await;
@@ -3816,6 +3973,7 @@ impl DhtService {
             root_query_mapping.clone(),
             active_downloads.clone(),
             get_providers_queries_local.clone(),
+            pending_keyword_indexes.clone(),
             is_bootstrap,
             final_enable_autorelay,
             relay_candidates,
