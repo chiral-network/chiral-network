@@ -7,6 +7,8 @@ use aes_gcm::aead::Aead;
 use aes_gcm::{AeadCore, KeyInit};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tokio_util::bytes::Bytes;
+use tauri::Emitter;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -31,6 +33,14 @@ pub struct WebRTCFileRequest {
     pub file_size: u64,
     pub requester_peer_id: String,
     pub recipient_public_key: Option<String>, // For encrypted transfers
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebRTCChatMessage {
+    pub message_id: String,
+    pub encrypted_payload: Vec<u8>, // The E2EE message from your crypto layer
+    pub timestamp: u64,
+    pub signature: Vec<u8>, // Signature of the payload to verify authenticity
 }
 
 /// Sent by a downloader to request the full file manifest.
@@ -172,12 +182,13 @@ pub enum WebRTCEvent {
 
 /// A new enum to wrap different message types for clarity.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(tag = "type")]
 pub enum WebRTCMessage {
     FileRequest(WebRTCFileRequest),
     ManifestRequest(WebRTCManifestRequest),
     ManifestResponse(WebRTCManifestResponse),
     FileChunk(FileChunk),
+    ChatMessage(WebRTCChatMessage),
 }
 
 pub struct WebRTCService {
@@ -186,6 +197,7 @@ pub struct WebRTCService {
     event_rx: Arc<Mutex<mpsc::Receiver<WebRTCEvent>>>,
     connections: Arc<Mutex<HashMap<String, PeerConnection>>>,
     file_transfer_service: Arc<FileTransferService>,
+    app_handle: tauri::AppHandle,
     keystore: Arc<Mutex<Keystore>>,
     active_private_key: Arc<Mutex<Option<String>>>,
     stream_auth: Arc<Mutex<StreamAuthService>>, // Stream authentication
@@ -193,6 +205,7 @@ pub struct WebRTCService {
 
 impl WebRTCService {
     pub async fn new(
+        app_handle: tauri::AppHandle,
         file_transfer_service: Arc<FileTransferService>,
         keystore: Arc<Mutex<Keystore>>,
     ) -> Result<Self, String> {
@@ -204,6 +217,7 @@ impl WebRTCService {
         // Spawn the WebRTC service task
         let stream_auth = Arc::new(Mutex::new(StreamAuthService::new()));
         tokio::spawn(Self::run_webrtc_service(
+            app_handle.clone(),
             cmd_rx,
             event_tx.clone(),
             connections.clone(),
@@ -218,6 +232,7 @@ impl WebRTCService {
             event_tx,
             event_rx: Arc::new(Mutex::new(event_rx)),
             connections,
+            app_handle,
             file_transfer_service,
             keystore,
             active_private_key,
@@ -232,6 +247,7 @@ impl WebRTCService {
     }
 
     async fn run_webrtc_service(
+        app_handle: tauri::AppHandle,
         mut cmd_rx: mpsc::Receiver<WebRTCCommand>,
         event_tx: mpsc::Sender<WebRTCEvent>,
         connections: Arc<Mutex<HashMap<String, PeerConnection>>>,
@@ -244,6 +260,7 @@ impl WebRTCService {
             match cmd {
                 WebRTCCommand::EstablishConnection { peer_id, offer } => {
                     Self::handle_establish_connection(
+                        &app_handle,
                         &peer_id,
                         &offer,
                         &event_tx,
@@ -298,6 +315,7 @@ impl WebRTCService {
     }
 
     async fn handle_establish_connection(
+        app_handle: &tauri::AppHandle,
         peer_id: &str,
         offer_sdp: &str,
         event_tx: &mpsc::Sender<WebRTCEvent>,
@@ -355,6 +373,7 @@ impl WebRTCService {
         let active_private_key_clone = Arc::new(active_private_key.clone());
         let stream_auth_clone = stream_auth.clone();
 
+        let app_handle_clone = app_handle.clone();
         data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
             let event_tx = event_tx_clone.clone();
             let peer_id = peer_id_clone.clone();
@@ -364,6 +383,7 @@ impl WebRTCService {
             let active_private_key = active_private_key_clone.clone();
             let stream_auth = stream_auth_clone.clone();
 
+            let app_handle_for_task = app_handle_clone.clone();
             Box::pin(async move {
                 Self::handle_data_channel_message(
                     &peer_id,
@@ -374,6 +394,7 @@ impl WebRTCService {
                     &keystore,
                     &active_private_key,
                     &stream_auth,
+                    app_handle_for_task,
                 )
                 .await;
             })
@@ -673,6 +694,7 @@ impl WebRTCService {
         keystore: &Arc<Mutex<Keystore>>,
         active_private_key: &Arc<Mutex<Option<String>>>,
         stream_auth: &Arc<Mutex<StreamAuthService>>,
+        app_handle: tauri::AppHandle,
     ) {
         if let Ok(text) = std::str::from_utf8(&msg.data) {
             // Try to parse as FileChunk
@@ -860,6 +882,14 @@ impl WebRTCService {
                             stream_auth,
                         )
                         .await;
+                    }
+                    WebRTCMessage::ChatMessage(chat_message) => {
+                        info!("Received chat message {} from peer {}", chat_message.message_id, peer_id);
+                        // Just forward the entire message to the frontend.
+                        // The frontend will be responsible for decryption.
+                        if let Err(e) = app_handle.emit("incoming_chat_message", chat_message) {
+                            error!("Failed to emit incoming_chat_message event: {}", e);
+                        }
                     }
                 }
             }
@@ -1224,6 +1254,7 @@ impl WebRTCService {
         let active_private_key_clone = Arc::new(self.active_private_key.clone());
         let stream_auth_clone = Arc::new(self.stream_auth.clone());
 
+        let app_handle_clone = self.app_handle.clone();
         data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
             let event_tx = event_tx_clone.clone();
             let peer_id = peer_id_clone.clone();
@@ -1233,6 +1264,7 @@ impl WebRTCService {
             let active_private_key = active_private_key_clone.clone();
             let stream_auth = stream_auth_clone.clone();
 
+            let app_handle_for_task = app_handle_clone.clone();
             Box::pin(async move {
                 Self::handle_data_channel_message(
                     &peer_id,
@@ -1243,6 +1275,7 @@ impl WebRTCService {
                     &keystore,
                     &active_private_key,
                     &stream_auth,
+                    app_handle_for_task,
                 )
                 .await;
             })
@@ -1389,6 +1422,7 @@ impl WebRTCService {
         let active_private_key_clone = Arc::new(self.active_private_key.clone());
         let stream_auth_clone = Arc::new(self.stream_auth.clone());
 
+        let app_handle_clone = self.app_handle.clone();
         data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
             let event_tx = event_tx_clone.clone();
             let peer_id = peer_id_clone.clone();
@@ -1398,6 +1432,7 @@ impl WebRTCService {
             let active_private_key = active_private_key_clone.clone();
             let stream_auth = stream_auth_clone.clone();
 
+            let app_handle_for_task = app_handle_clone.clone();
             Box::pin(async move {
                 Self::handle_data_channel_message(
                     &peer_id,
@@ -1408,6 +1443,7 @@ impl WebRTCService {
                     &keystore,
                     &active_private_key,
                     &stream_auth,
+                    app_handle_for_task,
                 )
                 .await;
             })
@@ -1527,6 +1563,25 @@ impl WebRTCService {
             .send(WebRTCCommand::SendFileRequest { peer_id, request })
             .await
             .map_err(|e| e.to_string())
+    }
+
+    pub async fn send_data(
+        &self,
+        peer_id: &str,
+        data: Vec<u8>,
+    ) -> Result<(), String> {
+        let conns = self.connections.lock().await;
+        if let Some(connection) = conns.get(peer_id) {
+            if let Some(dc) = &connection.data_channel {
+                let bytes_data = Bytes::from(data);
+                dc.send(&bytes_data).await.map_err(|e| e.to_string())?;
+                Ok(())
+            } else {
+                Err("Data channel not available".to_string())
+            }
+        } else {
+            Err("Peer connection not found".to_string())
+        }
     }
 
     pub async fn send_file_chunk(&self, peer_id: String, chunk: FileChunk) -> Result<(), String> {
@@ -1677,11 +1732,12 @@ lazy_static! {
 
 pub async fn init_webrtc_service(
     file_transfer_service: Arc<FileTransferService>,
+    app_handle: tauri::AppHandle,
     keystore: Arc<Mutex<Keystore>>,
 ) -> Result<(), String> {
     let mut service = WEBRTC_SERVICE.lock().await;
     if service.is_none() {
-        let webrtc_service = WebRTCService::new(file_transfer_service, keystore).await?;
+        let webrtc_service = WebRTCService::new(app_handle, file_transfer_service, keystore).await?;
         *service = Some(Arc::new(webrtc_service));
     }
     Ok(())
