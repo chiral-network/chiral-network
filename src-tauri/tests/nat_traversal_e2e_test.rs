@@ -36,6 +36,7 @@ fn create_test_file(hash: &str, name: &str, size: u64) -> FileMetadata {
         parent_hash: None,
         cids: None,
         is_root: true,
+        ..Default::default()
     }
 }
 

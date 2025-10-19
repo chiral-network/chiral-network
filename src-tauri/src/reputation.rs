@@ -309,6 +309,7 @@ impl ReputationDhtService {
             cids: None, // Not needed for reputation events
             is_root: true,
             encrypted_key_bundle: None,
+            ..Default::default()
         };
 
         dht_service.publish_file(metadata).await
@@ -359,6 +360,7 @@ impl ReputationDhtService {
             cids: None, // Not needed for merkle roots
             is_root: true,
             encrypted_key_bundle: None,
+            ..Default::default()
         };
 
         dht_service.publish_file(metadata).await

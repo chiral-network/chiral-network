@@ -6,6 +6,7 @@ use blockstore::{
     Blockstore, InMemoryBlockstore, RedbBlockstore,
 };
 use tokio::task::spawn_blocking;
+use async_std::fs;
 
 pub use cid::Cid;
 use futures::future::{BoxFuture, FutureExt};
@@ -18,7 +19,7 @@ use relay::client::Event as RelayClientEvent;
 use rs_merkle::{Hasher, MerkleTree};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{collections::{HashMap, HashSet, VecDeque}, path::PathBuf};
+use std::{collections::{HashMap, HashSet, VecDeque}, path::PathBuf, str::FromStr};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -96,7 +97,7 @@ fn extract_keywords(file_name: &str) -> Vec<String> {
     keywords.into_iter().collect()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct FileMetadata {
     /// The Merkle root of the original file chunks, used as the primary identifier for integrity.
@@ -122,6 +123,7 @@ pub struct FileMetadata {
     /// For encrypted files, this contains the encrypted AES key and other info.
     pub encrypted_key_bundle: Option<crate::encryption::EncryptedAesKeyBundle>,
     pub is_root: bool,
+    pub download_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -192,7 +194,7 @@ pub enum DhtCommand {
         response_tx: oneshot::Sender<FileMetadata>,
     },
     SearchFile(String),
-    DownloadFile(FileMetadata),
+    DownloadFile(FileMetadata, String),
     ConnectPeer(String),
     ConnectToPeerById(PeerId),
     DisconnectPeer(PeerId),
@@ -1604,7 +1606,7 @@ async fn run_dht_node(
                         info!("Successfully published and started providing encrypted file: {}", metadata.merkle_root);
                         let _ = event_tx.send(DhtEvent::PublishedFile(metadata)).await;
                     }
-                    Some(DhtCommand::DownloadFile(file_metadata)) =>{
+                    Some(DhtCommand::DownloadFile(mut file_metadata, download_path)) =>{
                         let root_cid_result = file_metadata.cids.as_ref()
                             .and_then(|cids| cids.first())
                             .ok_or_else(|| {
@@ -1620,6 +1622,7 @@ async fn run_dht_node(
                         // Request the root block which contains the CIDs
                         let root_query_id = swarm.behaviour_mut().bitswap.get(&root_cid);
 
+                        file_metadata.download_path = Some(download_path);
                         // Store the root query ID to handle when we get the root block
                         root_query_mapping.lock().await.insert(root_query_id, file_metadata);
                     }
@@ -2085,88 +2088,113 @@ async fn run_dht_node(
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) => match bitswap {
                         beetswap::Event::GetQueryResponse { query_id, data } => {
+                            info!("Received GetQueryResponse for query_id: {:?}, data size: {} bytes", query_id, data.len());
+                            
                             // Check if this is a root block query first
                             if let Some(metadata) = root_query_mapping.lock().await.remove(&query_id) {
+                                info!("This is a ROOT BLOCK for file: {}", metadata.merkle_root);
+                                
                                 // This is the root block containing CIDs - parse and request all data blocks
-                                if let Ok(cids) = serde_json::from_slice::<Vec<Cid>>(&data) {
-                                    info!("Received root block for file {} with {} CIDs", metadata.merkle_root, cids.len());
+                                match serde_json::from_slice::<Vec<Cid>>(&data) {
+                                    Ok(cids) => {
+                                        info!("Successfully parsed {} CIDs from root block", cids.len());
 
-                                    // Create queries map for this file's data blocks
-                                    let mut file_queries = HashMap::new();
+                                        // Create queries map for this file's data blocks
+                                        let mut file_queries = HashMap::new();
 
-                                    for (i, cid) in cids.iter().enumerate() {
-                                        let block_query_id = swarm.behaviour_mut().bitswap.get(cid);
-                                        file_queries.insert(block_query_id, i as u32);
-                                    }
-
-                                    // Calculate chunk size based on file size and number of chunks
-                                    let total_chunks = cids.len() as u64;
-                                    let chunk_size = if total_chunks > 0 {
-                                        (metadata.file_size + total_chunks - 1) / total_chunks // Ceiling division
-                                    } else {
-                                        0
-                                    };
-
-                                    // Pre-calculate chunk offsets
-                                    let chunk_offsets: Vec<u64> = (0..total_chunks)
-                                        .map(|i| i * chunk_size)
-                                        .collect();
-
-                                    // Create temp directory
-                                    let temp_dir = PathBuf::from("./downloads/temp");
-                                    if let Err(e) = std::fs::create_dir_all(&temp_dir) {
-                                        error!("Failed to create temp directory: {}", e);
-                                        continue;
-                                    }
-
-                                    // Create active download with memory-mapped file
-                                    match ActiveDownload::new(
-                                        metadata.clone(),
-                                        file_queries,
-                                        &temp_dir,
-                                        metadata.file_size,
-                                        chunk_offsets,
-                                    ) {
-                                        Ok(active_download) => {
-                                            active_downloads.lock().await.insert(
-                                                metadata.merkle_root.clone(),
-                                                active_download
-                                            );
-                                            info!("Started tracking download for file {} with {} chunks (chunk_size: {} bytes)", 
-                                                metadata.merkle_root, cids.len(), chunk_size);
+                                        for (i, cid) in cids.iter().enumerate() {
+                                            info!("Requesting chunk {} with CID: {}", i, cid);
+                                            let block_query_id = swarm.behaviour_mut().bitswap.get(cid);
+                                            file_queries.insert(block_query_id, i as u32);
                                         }
-                                        Err(e) => {
-                                            error!("Failed to create memory-mapped file for {}: {}", 
-                                                metadata.merkle_root, e);
+
+                                        // Calculate chunk size based on file size and number of chunks
+                                        let total_chunks = cids.len() as u64;
+                                        // assume 256kb
+                                        let chunk_size = 256 * 1024;
+
+                                        info!("Calculated chunk size: {} bytes (file_size: {}, chunks: {})", 
+                                            chunk_size, metadata.file_size, total_chunks);
+
+                                        // Pre-calculate chunk offsets
+                                        let chunk_offsets: Vec<u64> = (0..total_chunks)
+                                            .map(|i| i * chunk_size)
+                                            .collect();
+
+                                        info!("Chunk offsets: {:?}", chunk_offsets);
+
+                                        info!("About to create ActiveDownload for file: {}", metadata.merkle_root);
+                                        let download_path = PathBuf::from_str(metadata.download_path.as_ref().expect("Error: download_path not defined"));
+                                        let download_path = match download_path {
+                                            Ok(path) => get_available_download_path(path).await,
+                                            Err(e) => {
+                                                error!("Invalid download path for file {}: {}", metadata.merkle_root, e);
+                                                return;
+                                            }
+                                        };
+
+                                        // Create active download with memory-mapped file
+                                        match ActiveDownload::new(
+                                            metadata.clone(),
+                                            file_queries,
+                                            &download_path,
+                                            metadata.file_size,
+                                            chunk_offsets,
+                                        ) {
+                                            Ok(active_download) => {
+                                                info!("Successfully created ActiveDownload");
+                                                active_downloads.lock().await.insert(
+                                                    metadata.merkle_root.clone(),
+                                                    active_download
+                                                );
+                                                info!("Inserted into active_downloads map. Started tracking download for file {} with {} chunks (chunk_size: {} bytes)", 
+                                                    metadata.merkle_root, cids.len(), chunk_size);
+                                            }
+                                            Err(e) => {
+                                                error!("FAILED to create memory-mapped file for {}: {}", 
+                                                    metadata.merkle_root, e);
+                                            }
                                         }
                                     }
-                                } else {
-                                    error!("Failed to parse root block as CIDs array for file {}", 
-                                        metadata.merkle_root);
+                                    Err(e) => {
+                                        error!("Failed to parse root block as CIDs array for file {}: {}", 
+                                            metadata.merkle_root, e);
+                                    }
                                 }
                             } else {
                                 // This is a data block query - find the corresponding file and handle it
+                                info!("This is a DATA CHUNK (size: {} bytes)", data.len());
+                                
                                 let mut completed_downloads = Vec::new();
 
                                 // Check all active downloads for this query_id
                                 {
                                     let mut active_downloads_guard = active_downloads.lock().await;
+                                    info!("Checking {} active downloads", active_downloads_guard.len());
                                     
+                                    let mut found = false;
                                     for (file_hash, active_download) in active_downloads_guard.iter_mut() {
                                         if let Some(chunk_index) = active_download.queries.remove(&query_id) {
+                                            found = true;
+                                            info!("Found matching download for file: {}, chunk_index: {}", file_hash, chunk_index);
+                                            
                                             // This query belongs to this file - write the chunk to disk
                                             let offset = active_download.chunk_offsets
                                                 .get(chunk_index as usize)
                                                 .copied()
-                                                .unwrap_or(0);
+                                                .unwrap_or_else(|| {
+                                                    error!("No offset found for chunk_index: {}", chunk_index);
+                                                    0
+                                                });
+                                            
+                                            info!("Writing chunk {} at offset {} (data size: {})", chunk_index, offset, data.len());
                                             
                                             match active_download.write_chunk(chunk_index, &data, offset) {
                                                 Ok(_) => {
-                                                    info!("Wrote chunk {}/{} for file {} ({} bytes)", 
+                                                    info!("Successfully wrote chunk {}/{} for file {}", 
                                                         chunk_index + 1, 
                                                         active_download.total_chunks, 
-                                                        file_hash, 
-                                                        data.len());
+                                                        file_hash);
                                                 }
                                                 Err(e) => {
                                                     error!("Failed to write chunk {} to disk for file {}: {}", 
@@ -2175,56 +2203,49 @@ async fn run_dht_node(
                                                 }
                                             }
 
-                                            // Check if all chunks for this file are downloaded
+                                           // In the "all chunks downloaded" section:
                                             if active_download.is_complete() {
                                                 info!("All chunks downloaded for file {}", file_hash);
 
-                                                // Flush the memory map to ensure all data is written
-                                                if let Err(e) = active_download.flush() {
-                                                    error!("Failed to flush memory map for {}: {}", file_hash, e);
-                                                    break;
-                                                }
-
-                                                // Read the complete file from disk
-                                                match active_download.read_complete_file() {
-                                                    Ok(file_data) => {
-                                                        let mut completed_metadata = active_download.metadata.clone();
-                                                        
-                                                        if completed_metadata.is_encrypted {
-                                                            // Store encrypted data as-is
-                                                            // Decryption will be handled by the consumer of DownloadedFile event
-                                                            completed_metadata.file_data = file_data;
-                                                        } else {
-                                                            completed_metadata.file_data = file_data;
-                                                        }
-
-                                                        completed_downloads.push(completed_metadata);
+                                                // Flush and finalize the file (rename .tmp to final name)
+                                                info!("Finalizing file...");
+                                                match active_download.finalize() {
+                                                    Ok(_) => {
+                                                        info!("Successfully finalized file");
                                                     }
                                                     Err(e) => {
-                                                        error!("Failed to read complete file {}: {}", file_hash, e);
+                                                        error!("Failed to finalize file {}: {}", file_hash, e);
+                                                        break;
                                                     }
                                                 }
+                                                // no longer storing file data in completed metadata because file is being written directly to disk
+                                                let mut completed_metadata = active_download.metadata.clone();
+                                                completed_downloads.push(completed_metadata);
                                             }
                                             break;
                                         }
                                     }
+                                    
+                                    if !found {
+                                        warn!("Received chunk for unknown query_id: {:?}", query_id);
+                                    }
                                 }
 
                                 // Send completion events for finished downloads
+                             // Send completion events for finished downloads
                                 for metadata in completed_downloads {
-                                    info!("Downloaded all blocks for file {}. Emitting DownloadedFile event.", 
-                                        metadata.merkle_root);
+                                    info!("Emitting DownloadedFile event for: {}", metadata.merkle_root);
                                     
-                                    let _ = event_tx.send(DhtEvent::DownloadedFile(metadata.clone())).await;
-
-                                    // Remove from active downloads and cleanup temp file
-                                    if let Some(download) = active_downloads.lock().await.remove(&metadata.merkle_root) {
-                                        download.cleanup();
+                                    if let Err(e) = event_tx.send(DhtEvent::DownloadedFile(metadata.clone())).await {
+                                        error!("Failed to send DownloadedFile event: {}", e);
                                     }
+
+                                    // Just remove from active downloads - file is already finalized
+                                    info!("Removing from active_downloads...");
+                                    active_downloads.lock().await.remove(&metadata.merkle_root);
                                 }
                             }
                         }
-                        
                         beetswap::Event::GetQueryError { query_id, error } => {
                             // Handle Bitswap query error
                             warn!("Bitswap query {:?} failed: {:?}", query_id, error);
@@ -2744,6 +2765,7 @@ async fn handle_kademlia_event(
                                         .get("is_root")
                                         .and_then(|v| v.as_bool())
                                         .unwrap_or(true),
+                                    ..Default::default()
                                 };
 
                                 let notify_metadata = metadata.clone();
@@ -3473,12 +3495,14 @@ pub struct DhtService {
 }
 use memmap2::MmapMut;
 use std::fs::OpenOptions;
-/// Tracks an active file download with disk-based storage using memory-mapped files
+
+
 #[derive(Debug)]
 struct ActiveDownload {
     metadata: FileMetadata,
     queries: HashMap<beetswap::QueryId, u32>,
-    temp_file_path: PathBuf, // This works because PathBuf is already imported
+    temp_file_path: PathBuf,      // Path with .tmp suffix
+    final_file_path: PathBuf,      // Final path without .tmp
     mmap: Arc<std::sync::Mutex<MmapMut>>,
     received_chunks: Arc<std::sync::Mutex<HashSet<u32>>>,
     total_chunks: u32,
@@ -3489,12 +3513,19 @@ impl ActiveDownload {
     fn new(
         metadata: FileMetadata,
         queries: HashMap<beetswap::QueryId, u32>,
-        temp_dir: &PathBuf,
+        download_dir: &PathBuf,
         total_size: u64,
         chunk_offsets: Vec<u64>,
     ) -> std::io::Result<Self> {
         let total_chunks = queries.len() as u32;
-        let temp_file_path = temp_dir.join(format!("{}.tmp", metadata.merkle_root));
+        
+        // Create final filename based on the actual file name
+        // let final_file_path = download_dir.join(&metadata.file_name);
+        let final_file_path = download_dir.clone();
+        // Create temporary filename with .tmp suffix
+        let temp_file_path = download_dir.with_extension("tmp");
+        info!("Creating temp file at: {:?}", temp_file_path);
+        info!("Will rename to: {:?} when complete", final_file_path);
 
         let file = OpenOptions::new()
             .read(true)
@@ -3510,6 +3541,7 @@ impl ActiveDownload {
             metadata,
             queries,
             temp_file_path,
+            final_file_path,
             mmap: Arc::new(std::sync::Mutex::new(mmap)),
             received_chunks: Arc::new(std::sync::Mutex::new(HashSet::new())),
             total_chunks,
@@ -3549,9 +3581,31 @@ impl ActiveDownload {
         Ok(mmap.to_vec())
     }
 
+    /// Finalize the download by renaming .tmp file to final filename
+    fn finalize(&self) -> std::io::Result<()> {
+        // First, flush to ensure all data is written
+        self.flush()?;
+        
+        // Drop the mmap to release the file handle
+        drop(self.mmap.lock().unwrap());
+        
+        info!("Renaming {:?} to {:?}", self.temp_file_path, self.final_file_path);
+        
+        // Rename the temp file to the final file
+        std::fs::rename(&self.temp_file_path, &self.final_file_path)?;
+        
+        info!("Successfully finalized file: {:?}", self.final_file_path);
+        Ok(())
+    }
+
+    /// Clean up temp file (only call if download fails/is cancelled)
     fn cleanup(&self) {
-        if let Err(e) = std::fs::remove_file(&self.temp_file_path) {
-            eprintln!("Failed to cleanup temp file {:?}: {}", self.temp_file_path, e);
+        if self.temp_file_path.exists() {
+            if let Err(e) = std::fs::remove_file(&self.temp_file_path) {
+                error!("Failed to cleanup temp file {:?}: {}", self.temp_file_path, e);
+            } else {
+                info!("Cleaned up temp file: {:?}", self.temp_file_path);
+            }
         }
     }
 
@@ -3571,6 +3625,7 @@ impl Clone for ActiveDownload {
             metadata: self.metadata.clone(),
             queries: self.queries.clone(),
             temp_file_path: self.temp_file_path.clone(),
+            final_file_path: self.final_file_path.clone(),
             mmap: Arc::clone(&self.mmap),
             received_chunks: Arc::clone(&self.received_chunks),
             total_chunks: self.total_chunks,
@@ -3581,12 +3636,12 @@ impl Clone for ActiveDownload {
 
 impl Drop for ActiveDownload {
     fn drop(&mut self) {
+        // Only cleanup temp file if this is the last reference and file wasn't finalized
         if Arc::strong_count(&self.mmap) == 1 {
             self.cleanup();
         }
     }
 }
-
 impl DhtService {
     pub async fn new(
         port: u16,
@@ -4123,13 +4178,13 @@ impl DhtService {
             parent_hash,
             cids: None,
             is_root,
-            encrypted_key_bundle: todo!(), // Use computed value, not hardcoded true
+            ..Default::default()
         })
     }
 
-    pub async fn download_file(&self, file_metadata: FileMetadata) -> Result<(), String> {
+    pub async fn download_file(&self, file_metadata: FileMetadata, download_path:String) -> Result<(), String> {
         self.cmd_tx
-            .send(DhtCommand::DownloadFile(file_metadata))
+            .send(DhtCommand::DownloadFile(file_metadata, download_path))
             .await
             .map_err(|e| e.to_string())
     }
@@ -4983,6 +5038,56 @@ pub fn split_into_blocks(bytes: &[u8], chunk_size: usize) -> Vec<ByteBlock> {
         i = end;
     }
     blocks
+}
+
+async fn get_available_download_path(path: PathBuf) -> PathBuf {
+    // Helper function to get the temp file path
+    let get_temp_path = |p: &PathBuf| -> PathBuf {
+        p.with_extension(
+            format!("{}.tmp", 
+                p.extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+            )
+        )
+    };
+    
+    // Check if both the final path and temp path are available
+    let temp_path = get_temp_path(&path);
+    let path_exists = fs::metadata(&path).await.is_ok();
+    let temp_exists = fs::metadata(&temp_path).await.is_ok();
+    
+    if !path_exists && !temp_exists {
+        return path;
+    }
+    
+    let parent = path.parent().unwrap_or(Path::new(".").into());
+    let stem = path.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("file");
+    let extension = path.extension()
+        .and_then(|s| s.to_str());
+    
+    let mut counter = 1;
+    loop {
+        let new_name = match extension {
+            Some(ext) => format!("{} ({}).{}", stem, counter, ext),
+            None => format!("{} ({})", stem, counter),
+        };
+        
+        let new_path = parent.join(new_name);
+        let new_temp_path = get_temp_path(&new_path);
+        
+        // Check if both the final path and temp path are available
+        let new_path_exists = fs::metadata(&new_path).await.is_ok();
+        let new_temp_exists = fs::metadata(&new_temp_path).await.is_ok();
+        
+        if !new_path_exists && !new_temp_exists {
+            return new_path;
+        }
+        
+        counter += 1;
+    }
 }
 
 #[cfg(test)]

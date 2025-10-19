@@ -1891,6 +1891,7 @@ async fn upload_file_to_network(
                 version: Some(1),
                 cids: None,
                 encrypted_key_bundle: None,
+                ..Default::default()
             };
 
             match dht.publish_file(metadata.clone()).await {
@@ -1911,6 +1912,7 @@ async fn upload_file_to_network(
 async fn download_blocks_from_network(
     state: State<'_, AppState>,
     file_metadata: FileMetadata,
+    download_path: String,
 ) -> Result<(), String> {
     {
         let dht = {
@@ -1919,7 +1921,7 @@ async fn download_blocks_from_network(
         };
 
         if let Some(dht) = dht {
-            dht.download_file(file_metadata).await
+            dht.download_file(file_metadata,download_path).await
         } else {
             Err("DHT node is not running".to_string())
         }
@@ -2344,6 +2346,7 @@ async fn upload_file_chunk(
             cids: Some(vec![root_cid.clone()]), // The root CID for retrieval
             is_root: true,
             encrypted_key_bundle: None,
+            ..Default::default()
         };
 
         // Store complete file data locally for seeding
