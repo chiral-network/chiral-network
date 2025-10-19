@@ -187,6 +187,7 @@ struct DhtBehaviour {
 pub enum DhtCommand {
     PublishFile(FileMetadata),
     SearchFile(String),
+    SearchFileByCid(String),
     DownloadFile(FileMetadata),
     ConnectPeer(String),
     ConnectToPeerById(PeerId),
