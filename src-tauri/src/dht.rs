@@ -1281,6 +1281,9 @@ async fn run_dht_node(
 ) {
     let mut dht_maintenance_interval = tokio::time::interval(Duration::from_secs(30 * 60));
     dht_maintenance_interval.tick().await;
+     // fast heartbeat-driven updater: run at FILE_HEARTBEAT_INTERVAL to keep provider records fresh
+   let mut heartbeat_maintenance_interval = tokio::time::interval(FILE_HEARTBEAT_INTERVAL);
+   heartbeat_maintenance_interval.tick().await;
     // Periodic bootstrap interval
 
     /// Creates a proper circuit relay address for connecting through a relay peer
@@ -1448,6 +1451,104 @@ async fn run_dht_node(
 
     'outer: loop {
         tokio::select! {
+            // periodic maintenance tick - prune expired seeder heartbeats and update DHT
+            // Fast heartbeat tick — refresh DHT records for files this node is actively seeding
+            _ = heartbeat_maintenance_interval.tick() => {
+                let now = unix_timestamp();
+                let my_id = peer_id.to_string();
+                let mut updated_records: Vec<(String, Vec<u8>)> = Vec::new();
+
+                {
+                    let mut cache = seeder_heartbeats_cache.lock().await;
+                    for (file_hash, entry) in cache.iter_mut() {
+                        // Prune expired entries first
+                        entry.heartbeats = prune_heartbeats(entry.heartbeats.clone(), now);
+
+                        // Only refresh records if this node is listed as a seeder
+                        if entry.heartbeats.iter().any(|hb| hb.peer_id == my_id) {
+                            // ensure our own heartbeat is up-to-date in cache
+                            for hb in entry.heartbeats.iter_mut() {
+                                if hb.peer_id == my_id {
+                                    hb.last_heartbeat = now;
+                                    hb.expires_at = now.saturating_add(FILE_HEARTBEAT_TTL.as_secs());
+                                }
+                            }
+
+                            // update metadata fields
+                            let seeder_strings = heartbeats_to_peer_list(&entry.heartbeats);
+                            entry.metadata["seeders"] = serde_json::Value::Array(
+                                seeder_strings
+                                    .iter()
+                                    .cloned()
+                                    .map(serde_json::Value::String)
+                                    .collect(),
+                            );
+                            entry.metadata["seederHeartbeats"] =
+                                serde_json::to_value(&entry.heartbeats)
+                                    .unwrap_or_else(|_| serde_json::Value::Array(vec![]));
+
+                            if let Ok(bytes) = serde_json::to_vec(&entry.metadata) {
+                                updated_records.push((file_hash.clone(), bytes));
+                            }
+                        }
+                    }
+                } // release cache lock
+
+                // Perform DHT updates for seeder heartbeats (non-blocking best-effort)
+                        // Push updated records to Kademlia for each updated file
+                        for (file_hash, bytes) in updated_records {
+                            let key = kad::RecordKey::new(&file_hash.as_bytes());
+                            let record = Record {
+                                key: key.clone(),
+                                value: bytes.clone(),
+                                publisher: Some(peer_id.clone()),
+                                expires: None,
+                            };
+                            if let Err(e) =
+                                swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One)
+                            {
+                                warn!("Failed to refresh DHT record after disconnect for {}: {}", file_hash, e);
+                            } else {
+                                debug!("Refreshed DHT record for {} after peer {} disconnected", file_hash, peer_id);
+                            }
+
+                            // notify UI with updated metadata so frontend refreshes immediately
+                            if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                                if let (Some(merkle_root), Some(file_name), Some(file_size), Some(created_at)) = (
+                                    json_val.get("merkle_root").and_then(|v| v.as_str()),
+                                    json_val.get("file_name").and_then(|v| v.as_str()),
+                                    json_val.get("file_size").and_then(|v| v.as_u64()),
+                                    json_val.get("created_at").and_then(|v| v.as_u64()),
+                                ) {
+                                    let seeders = json_val
+                                        .get("seeders")
+                                        .and_then(|v| v.as_array())
+                                        .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                                        .unwrap_or_default();
+
+                                    let metadata = FileMetadata {
+                                        merkle_root: merkle_root.to_string(),
+                                        file_name: file_name.to_string(),
+                                        file_size,
+                                        file_data: Vec::new(),
+                                        seeders,
+                                        created_at,
+                                        mime_type: json_val.get("mime_type").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                        is_encrypted: json_val.get("is_encrypted").and_then(|v| v.as_bool()).unwrap_or(false),
+                                        encryption_method: json_val.get("encryption_method").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                        key_fingerprint: json_val.get("key_fingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                        version: json_val.get("version").and_then(|v| v.as_u64()).map(|u| u as u32),
+                                        parent_hash: json_val.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                        cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
+                                        encrypted_key_bundle: json_val.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
+                                        is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
+                                    };
+                                    let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
+                                }
+                            }
+                        }
+            }
+        
             cmd = cmd_rx.recv() => {
                 match cmd {
                     Some(DhtCommand::Shutdown(ack)) => {
@@ -1740,10 +1841,38 @@ async fn run_dht_node(
                             file_hash, removed
                         );
 
+                        // Ask Kademlia to stop providing this file (so provider records are removed)
                         swarm
                             .behaviour_mut()
                             .kademlia
                             .stop_providing(&key);
+
+                        // Also proactively publish an updated DHT record with no seeders so remote nodes
+                        // that fetch the JSON record see that there are no seeders immediately.
+                        // Build minimal "empty" metadata
+                        let empty_meta = serde_json::json!({
+                            "merkle_root": file_hash,
+                            "file_name": serde_json::Value::Null,
+                            "file_size": 0u64,
+                            "created_at": unix_timestamp(),
+                            "seeders": Vec::<String>::new(),
+                            "seederHeartbeats": Vec::<SeederHeartbeat>::new()
+                        });
+                        if let Ok(bytes) = serde_json::to_vec(&empty_meta) {
+                            let record = Record {
+                                key: kad::RecordKey::new(&file_hash.as_bytes()),
+                                value: bytes,
+                                publisher: Some(peer_id.clone()),
+                                expires: None,
+                            };
+                            if let Err(e) =
+                                swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One)
+                            {
+                                warn!("Failed to publish empty record for {}: {}", file_hash, e);
+                            } else {
+                                debug!("Published empty seeder record for {}", file_hash);
+                            }
+                        }
 
                         seeder_heartbeats_cache.lock().await.remove(&file_hash);
                         pending_heartbeat_updates
@@ -2539,7 +2668,7 @@ async fn run_dht_node(
                             })
                             .await;
                     }
-                    SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
+                     SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
                         warn!("❌ DISCONNECTED from peer: {}", peer_id);
                         warn!("   Cause: {:?}", cause);
 
@@ -2548,7 +2677,104 @@ async fn run_dht_node(
                             peers.remove(&peer_id);
                             peers.len()
                         };
+
+                        // Remove proxy state
                         proxy_mgr.lock().await.remove_all(&peer_id);
+
+                        // Immediately remove disconnected peer from seeder heartbeat cache
+                        let pid_str = peer_id.to_string();
+                        let mut updated_records: Vec<(String, Vec<u8>)> = Vec::new();
+                        {
+                            let mut cache = seeder_heartbeats_cache.lock().await;
+                            let now = unix_timestamp();
+                            let mut to_remove_keys: Vec<String> = Vec::new();
+                            for (file_hash, entry) in cache.iter_mut() {
+                                let before = entry.heartbeats.len();
+                                // remove any heartbeats for this peer
+                                entry.heartbeats.retain(|hb| hb.peer_id != pid_str);
+
+                                // prune expired while we're here
+                                entry.heartbeats = prune_heartbeats(entry.heartbeats.clone(), now);
+
+                                if entry.heartbeats.len() != before {
+                                    // update metadata fields
+                                    let seeder_strings = heartbeats_to_peer_list(&entry.heartbeats);
+                                    entry.metadata["seeders"] = serde_json::Value::Array(
+                                        seeder_strings
+                                            .iter()
+                                            .cloned()
+                                            .map(serde_json::Value::String)
+                                            .collect(),
+                                    );
+                                    entry.metadata["seederHeartbeats"] =
+                                        serde_json::to_value(&entry.heartbeats)
+                                            .unwrap_or_else(|_| serde_json::Value::Array(vec![]));
+
+                                    // If no seeders left we can drop the cache entry (and optionally stop providing)
+                                    if entry.heartbeats.is_empty() {
+                                        to_remove_keys.push(file_hash.clone());
+                                    } else if let Ok(bytes) = serde_json::to_vec(&entry.metadata) {
+                                        updated_records.push((file_hash.clone(), bytes));
+                                    }
+                                }
+                            }
+                            for k in to_remove_keys {
+                                cache.remove(&k);
+                            }
+                        } // release cache lock
+
+                        // Push updated records to Kademlia for each updated file
+                        for (file_hash, bytes) in updated_records {
+                            let key = kad::RecordKey::new(&file_hash.as_bytes());
+                            let record = Record {
+                                key: key.clone(),
+                                value: bytes.clone(),
+                                publisher: Some(peer_id.clone()),
+                                expires: None,
+                            };
+                            if let Err(e) =
+                                swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One)
+                            {
+                                warn!("Failed to refresh DHT record after disconnect for {}: {}", file_hash, e);
+                            } else {
+                                debug!("Refreshed DHT record for {} after peer {} disconnected", file_hash, peer_id);
+                            }
+
+                            // notify UI with updated metadata so frontend refreshes immediately
+                            if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                                if let (Some(merkle_root), Some(file_name), Some(file_size), Some(created_at)) = (
+                                    json_val.get("merkle_root").and_then(|v| v.as_str()),
+                                    json_val.get("file_name").and_then(|v| v.as_str()),
+                                    json_val.get("file_size").and_then(|v| v.as_u64()),
+                                    json_val.get("created_at").and_then(|v| v.as_u64()),
+                                ) {
+                                    let seeders = json_val
+                                        .get("seeders")
+                                        .and_then(|v| v.as_array())
+                                        .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                                        .unwrap_or_default();
+
+                                    let metadata = FileMetadata {
+                                        merkle_root: merkle_root.to_string(),
+                                        file_name: file_name.to_string(),
+                                        file_size,
+                                        file_data: Vec::new(),
+                                        seeders,
+                                        created_at,
+                                        mime_type: json_val.get("mime_type").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                        is_encrypted: json_val.get("is_encrypted").and_then(|v| v.as_bool()).unwrap_or(false),
+                                        encryption_method: json_val.get("encryption_method").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                        key_fingerprint: json_val.get("key_fingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                        version: json_val.get("version").and_then(|v| v.as_u64()).map(|u| u as u32),
+                                        parent_hash: json_val.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                        cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
+                                        encrypted_key_bundle: json_val.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
+                                        is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
+                                    };
+                                    let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
+                                }
+                            }
+                        }
                         info!("   Remaining connected peers: {}", peers_count);
                         let _ = event_tx
                             .send(DhtEvent::PeerDisconnected {
@@ -4945,6 +5171,28 @@ impl DhtService {
 
     /// Get seeders for a specific file (searches DHT for providers)
     pub async fn get_seeders_for_file(&self, file_hash: &str) -> Vec<String> {
+        // Fast path: consult local heartbeat cache and prune expired entries
+        let now = unix_timestamp();
+        if let Some(entry) = self.seeder_heartbeats_cache.lock().await.get_mut(file_hash) {
+            entry.heartbeats = prune_heartbeats(entry.heartbeats.clone(), now);
+            entry.metadata["seeders"] = serde_json::Value::Array(
+                heartbeats_to_peer_list(&entry.heartbeats)
+                    .iter()
+                    .cloned()
+                    .map(serde_json::Value::String)
+                    .collect(),
+            );
+            entry.metadata["seederHeartbeats"] =
+                serde_json::to_value(&entry.heartbeats).unwrap_or_else(|_| serde_json::Value::Array(vec![]));
+
+            let peers = heartbeats_to_peer_list(&entry.heartbeats);
+            if !peers.is_empty() {
+                // return the pruned local view immediately to keep UI responsive/fresh
+                return peers;
+            }
+            // otherwise fall back to querying the DHT providers
+        }
+
         // Send command to DHT task to query provider records for this file
         let (tx, rx) = oneshot::channel();
 
@@ -4968,6 +5216,7 @@ impl DhtService {
                     providers.len(),
                     file_hash
                 );
+                // Optionally filter unreachable providers here (try connect/ping) before returning.
                 providers
             }
             Ok(Ok(Err(e))) => {
