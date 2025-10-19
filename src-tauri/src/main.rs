@@ -2776,6 +2776,23 @@ async fn search_file_metadata(
 }
 
 #[tauri::command]
+async fn get_file_seeders(
+    state: State<'_, AppState>,
+    file_hash: String,
+) -> Result<Vec<String>, String> {
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    if let Some(dht_service) = dht {
+        Ok(dht_service.get_seeders_for_file(&file_hash).await)
+    } else {
+        Err("DHT node is not running".to_string())
+    }
+}
+
+#[tauri::command]
 async fn get_available_storage() -> f64 {
     use std::time::Duration;
     use tokio::time::timeout;
@@ -3721,6 +3738,7 @@ fn main() {
             stop_dht_node,
             stop_publishing_file,
             search_file_metadata,
+            get_file_seeders,
             connect_to_peer,
             get_dht_events,
             detect_locale,
