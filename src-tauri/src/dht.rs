@@ -1223,7 +1223,7 @@ async fn run_dht_node(
     >,
     pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
     root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>>,
-    active_downloads: Arc<Mutex<HashMap<String, ActiveDownload>>>,
+    active_downloads: Arc<Mutex<HashMap<String, Arc<Mutex<ActiveDownload>>>>>,
     get_providers_queries: Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>,
     is_bootstrap: bool,
     enable_autorelay: bool,
@@ -2132,28 +2132,37 @@ async fn run_dht_node(
                                             }
                                         };
 
-                                        // Create active download with memory-mapped file
-                                        match ActiveDownload::new(
-                                            metadata.clone(),
-                                            file_queries,
-                                            &download_path,
-                                            metadata.file_size,
-                                            chunk_offsets,
-                                        ) {
-                                            Ok(active_download) => {
-                                                info!("Successfully created ActiveDownload");
-                                                active_downloads.lock().await.insert(
-                                                    metadata.merkle_root.clone(),
-                                                    active_download
-                                                );
-                                                info!("Inserted into active_downloads map. Started tracking download for file {} with {} chunks (chunk_size: {} bytes)",
-                                                    metadata.merkle_root, cids.len(), chunk_size);
-                                            }
-                                            Err(e) => {
-                                                error!("FAILED to create memory-mapped file for {}: {}",
-                                                    metadata.merkle_root, e);
-                                            }
-                                        }
+                                    // Create active download with memory-mapped file
+                            match ActiveDownload::new(
+                                metadata.clone(),
+                                file_queries,
+                                &download_path,
+                                metadata.file_size,
+                                chunk_offsets,
+                            ) {
+                                Ok(active_download) => {
+                                    let active_download = Arc::new(tokio::sync::Mutex::new(active_download));
+
+                                    info!("Successfully created ActiveDownload");
+
+                                    active_downloads.lock().await.insert(
+                                        metadata.merkle_root.clone(),
+                                        Arc::clone(&active_download),
+                                    );
+
+                                    info!(
+                                        "Inserted into active_downloads map. Started tracking download for file {} with {} chunks (chunk_size: {} bytes)",
+                                        metadata.merkle_root, cids.len(), chunk_size
+                                    );
+                                }
+                                Err(e) => {
+                                    error!(
+                                        "FAILED to create memory-mapped file for {}: {}",
+                                        metadata.merkle_root, e
+                                    );
+                                }
+                            }
+
                                     }
                                     Err(e) => {
                                         error!("Failed to parse root block as CIDs array for file {}: {}",
@@ -2170,7 +2179,8 @@ async fn run_dht_node(
                                     let mut active_downloads_guard = active_downloads.lock().await;
 
                                     let mut found = false;
-                                    for (file_hash, active_download) in active_downloads_guard.iter_mut() {
+                                    for (file_hash, active_download_lock) in active_downloads_guard.iter_mut() {
+                                        let mut active_download = active_download_lock.lock().await;
                                         if let Some(chunk_index) = active_download.queries.remove(&query_id) {
                                             found = true;
 
@@ -2249,7 +2259,8 @@ async fn run_dht_node(
                                 let mut active_downloads_guard = active_downloads.lock().await;
                                 let mut failed_files = Vec::new();
 
-                                for (file_hash, active_download) in active_downloads_guard.iter_mut() {
+                                for (file_hash, active_download_lock) in active_downloads_guard.iter_mut() {
+                                        let mut active_download = active_download_lock.lock().await;
                                     if active_download.queries.remove(&query_id).is_some() {
                                         warn!("Query {:?} failed for file {}, removing from active downloads", query_id, file_hash);
                                         failed_files.push(file_hash.clone());
@@ -3483,7 +3494,7 @@ pub struct DhtService {
     >,
     pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
     root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>>,
-    active_downloads: Arc<Mutex<HashMap<String, ActiveDownload>>>,
+    active_downloads: Arc<Mutex<HashMap<String, Arc<Mutex<ActiveDownload>>>>>,
     get_providers_queries: Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>,
     chunk_size: usize,
 }
@@ -3983,7 +3994,7 @@ impl DhtService {
             Arc::new(Mutex::new(HashMap::new()));
         let root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>> =
             Arc::new(Mutex::new(HashMap::new()));
-        let active_downloads: Arc<Mutex<HashMap<String, ActiveDownload>>> =
+        let active_downloads: Arc<Mutex<HashMap<String, Arc<Mutex<ActiveDownload>>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let get_providers_queries_local: Arc<
             Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>,
