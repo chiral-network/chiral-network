@@ -499,7 +499,8 @@
             hash: metadata.merkleRoot || "",
             size: metadata.fileSize,
             status: 'seeding' as const,
-            seeders: 1,
+            seeders: metadata.seeders?.length ?? 0,
+            seederAddresses: metadata.seeders ?? [],
             leechers: 0,
             uploadDate: new Date(metadata.createdAt),
             version: metadata.version,
@@ -539,6 +540,8 @@
           }
 
           const isDhtRunning = dhtService.getPeerId() !== null;
+          const localSeeder = result.peerId || dhtService.getPeerId() || undefined;
+          const seederAddresses = isDhtRunning && localSeeder ? [localSeeder] : [];
 
           const newFile: FileItem = {
             id: `file-${Date.now()}-${Math.random()}`,
@@ -547,7 +550,8 @@
             hash: result.merkleRoot,
             size: result.fileSize,
             status: isDhtRunning ? 'seeding' : 'uploaded',
-            seeders: isDhtRunning ? 1 : 0,
+            seeders: seederAddresses.length,
+            seederAddresses,
             leechers: 0,
             uploadDate: new Date(),
             version: result.version,  // Use version from backend
