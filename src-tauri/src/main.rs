@@ -801,7 +801,10 @@ async fn start_dht_node(
 
     let proj_dirs = ProjectDirs::from("com", "chiral-network", "chiral-network")
         .ok_or("Failed to get project directories")?;
+    // Create the async_std::path::Path here so we can pass a reference to it.
     let blockstore_db_path = proj_dirs.data_dir().join("blockstore_db");
+    let async_blockstore_path = async_std::path::Path::new(blockstore_db_path.as_os_str());
+
     let dht_service = DhtService::new(
         port,
         bootstrap_nodes,
@@ -818,7 +821,7 @@ async fn start_dht_node(
         /* enable AutoRelay (after hotfix) */ final_enable_autorelay,
         preferred_relays.unwrap_or_default(),
         is_bootstrap.unwrap_or(false), // enable_relay_server only on bootstrap
-        Some(async_path::new(blockstore_db_path.as_os_str())),
+        Some(&async_blockstore_path),
     )
     .await
     .map_err(|e| format!("Failed to start DHT: {}", e))?;
@@ -2351,11 +2354,9 @@ async fn upload_file_chunk(
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
-            parent_hash: None,
             version: Some(1),
-            encrypted_key_bundle: None,
             cids: Some(vec![root_cid.clone()]), // The root CID for retrieval
-            encrypted_key_bundle: None,
+            parent_hash: None,
             is_root: true,
             encrypted_key_bundle: None,
         };
