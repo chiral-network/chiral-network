@@ -292,6 +292,46 @@ impl ChunkManager {
         result
     }
 
+    /// Decrypts and reassembles chunks into an in-memory byte vector.
+    pub fn reassemble_and_decrypt_data<S: DiffieHellman>(
+        &self,
+        chunks: &[ChunkInfo],
+        encrypted_key_bundle: &Option<EncryptedAesKeyBundle>,
+        recipient_secret_key: S,
+    ) -> Result<Vec<u8>, String> {
+        let key_bytes = match encrypted_key_bundle {
+            Some(bundle) => decrypt_aes_key(bundle, recipient_secret_key)?,
+            None => return Err("No encryption key bundle provided for encrypted file".to_string()),
+        };
+        let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
+
+        let mut file_data = Vec::new();
+
+        for chunk_info in chunks {
+            // Read the encrypted chunk from storage
+            let encrypted_chunk = self.read_chunk(&chunk_info.encrypted_hash).map_err(|e| {
+                format!("Failed to read encrypted chunk {}: {}", chunk_info.index, e)
+            })?;
+
+            // Decrypt the chunk
+            let mut decrypted_data = self.decrypt_chunk(&encrypted_chunk, &key)?;
+            decrypted_data.truncate(chunk_info.size);
+
+            // Verify that the decrypted data matches the original hash
+            let calculated_hash_hex = hex::encode(Sha256Hasher::hash(&decrypted_data));
+            if calculated_hash_hex != chunk_info.hash {
+                return Err(format!(
+                    "Hash mismatch for chunk {}. Data may be corrupt. Expected: {}, Got: {}",
+                    chunk_info.index, chunk_info.hash, calculated_hash_hex
+                ));
+            }
+
+            file_data.extend_from_slice(&decrypted_data);
+        }
+
+        Ok(file_data)
+    }
+
     pub fn hash_file(&self, file_path: &Path) -> Result<String, Error> {
         let mut file = File::open(file_path)?;
         let mut hasher = sha2::Sha256::default();

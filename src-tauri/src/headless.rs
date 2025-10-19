@@ -144,7 +144,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         None
     };
     // ---- finalize AutoRelay flag (bootstrap OFF + ENV OFF)
-   let mut final_enable_autorelay = !args.disable_autorelay;
+    let mut final_enable_autorelay = !args.disable_autorelay;
     if args.is_bootstrap {
         final_enable_autorelay = false;
         info!("AutoRelay disabled on bootstrap (hotfix).");
@@ -155,14 +155,16 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
     }
     if final_enable_autorelay {
         if !args.relay.is_empty() {
-            info!("AutoRelay enabled with {} preferred relays", args.relay.len());
+            info!(
+                "AutoRelay enabled with {} preferred relays",
+                args.relay.len()
+            );
         } else {
             info!("AutoRelay enabled, will discover relays from bootstrap nodes");
         }
     } else {
         info!("AutoRelay disabled");
     }
-
 
     // Start DHT node
     let dht_service = DhtService::new(
@@ -180,6 +182,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         final_enable_autorelay,
         args.relay.clone(),
         args.is_bootstrap, // enable_relay_server on bootstrap
+        None,
     )
     .await?;
     let peer_id = dht_service.get_peer_id().await;
@@ -239,9 +242,11 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             encryption_method: None,
             key_fingerprint: None,
             parent_hash: None,
+            encrypted_key_bundle: None,
             version: Some(1),
             cids: None,
             is_root: true,
+            encrypted_key_bundle: None,
         };
 
         dht_service.publish_file(example_metadata).await?;

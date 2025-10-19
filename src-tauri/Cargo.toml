@@ -28,7 +28,7 @@ tauri-plugin-store = "2"
 secp256k1 = { version = "0.24", features = ["serde", "rand-std"] }
 rand = { version = "0.8", features = ["std_rng"] }
 totp-rs = { version = "5.7.0", features = ["otpauth"] }
-ethers = "2.0"
+ethers = { version = "2.0", features = ["ws", "rustls"] }
 hex = "0.4"
 sha3 = "0.10"
 sha2 = "0.10"
@@ -69,7 +69,7 @@ tokio-socks = "0.5"
 beetswap = { git = "https://github.com/totoro-ming-lin/beetswap.git", branch = "older-version" }
 multihash-codetable = { version = "0.1", features = ["blake3", "sha2", "sha3"] }
 cid = { version = "0.11.1", features = ["serde-codec"] }
-blockstore = "0.7.0"
+blockstore = { version = "0.7.0", features = ["redb"] }
 
 # WebRTC dependencies for P2P file transfers
 webrtc = "0.10"

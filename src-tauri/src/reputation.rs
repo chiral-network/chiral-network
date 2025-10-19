@@ -1,11 +1,11 @@
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use rand::rngs::OsRng;
+use rs_merkle::{Hasher, MerkleTree};
 use serde::{Deserialize, Serialize};
-use std::time::{SystemTime, UNIX_EPOCH};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
-use rs_merkle::{Hasher, MerkleTree};
-use sha2::{Digest, Sha256};
-use ed25519_dalek::{SigningKey, VerifyingKey, Signer, Verifier, Signature};
-use rand::rngs::OsRng;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 // ============================================================================
 // REPUTATION TYPES
@@ -151,8 +151,8 @@ impl ReputationMerkleTree {
             "impact": event.impact,
         });
 
-        let serialized = serde_json::to_vec(&event_data)
-            .map_err(|e| format!("Serialization error: {}", e))?;
+        let serialized =
+            serde_json::to_vec(&event_data).map_err(|e| format!("Serialization error: {}", e))?;
 
         Ok(Sha256Hasher::hash(&serialized))
     }
@@ -171,8 +171,11 @@ impl NodeKeyManager {
     pub fn new() -> Self {
         let signing_key = SigningKey::generate(&mut OsRng);
         let peer_id = hex::encode(signing_key.verifying_key().to_bytes());
-        
-        Self { signing_key, peer_id }
+
+        Self {
+            signing_key,
+            peer_id,
+        }
     }
 
     pub fn get_peer_id(&self) -> &str {
@@ -183,9 +186,12 @@ impl NodeKeyManager {
         self.signing_key.verifying_key()
     }
 
-    pub fn sign_reputation_event(&self, mut event: ReputationEvent) -> Result<ReputationEvent, String> {
+    pub fn sign_reputation_event(
+        &self,
+        mut event: ReputationEvent,
+    ) -> Result<ReputationEvent, String> {
         event.rater_peer_id = self.peer_id.clone();
-        
+
         let signable_data = serde_json::json!({
             "id": event.id,
             "peer_id": event.peer_id,
@@ -198,14 +204,18 @@ impl NodeKeyManager {
 
         let serialized = serde_json::to_vec(&signable_data)
             .map_err(|e| format!("Serialization error: {}", e))?;
-        
+
         let signature = self.signing_key.sign(&serialized);
         event.signature = hex::encode(signature.to_bytes());
-        
+
         Ok(event)
     }
 
-    pub fn verify_reputation_event(&self, event: &ReputationEvent, verifying_key: &VerifyingKey) -> Result<bool, String> {
+    pub fn verify_reputation_event(
+        &self,
+        event: &ReputationEvent,
+        verifying_key: &VerifyingKey,
+    ) -> Result<bool, String> {
         let signable_data = serde_json::json!({
             "id": event.id,
             "peer_id": event.peer_id,
@@ -218,15 +228,16 @@ impl NodeKeyManager {
 
         let serialized = serde_json::to_vec(&signable_data)
             .map_err(|e| format!("Serialization error: {}", e))?;
-        
+
         let signature_bytes = hex::decode(&event.signature)
             .map_err(|e| format!("Invalid signature format: {}", e))?;
-        
-        let signature_bytes_array: [u8; 64] = signature_bytes.try_into()
+
+        let signature_bytes_array: [u8; 64] = signature_bytes
+            .try_into()
             .map_err(|_| "Invalid signature length")?;
-        
+
         let signature = Signature::from_bytes(&signature_bytes_array);
-        
+
         Ok(verifying_key.verify(&serialized, &signature).is_ok())
     }
 }
@@ -261,9 +272,7 @@ pub struct ReputationDhtService {
 
 impl ReputationDhtService {
     pub fn new() -> Self {
-        Self {
-            dht_service: None,
-        }
+        Self { dht_service: None }
     }
 
     pub fn set_dht_service(&mut self, dht_service: Arc<crate::dht::DhtService>) {
@@ -271,15 +280,17 @@ impl ReputationDhtService {
     }
 
     pub async fn store_reputation_event(&self, event: &ReputationEvent) -> Result<(), String> {
-        let dht_service = self.dht_service.as_ref()
+        let dht_service = self
+            .dht_service
+            .as_ref()
             .ok_or("DHT service not initialized")?;
 
         // Create a unique key for this reputation event
         let key = format!("reputation:{}:{}", event.peer_id, event.id);
-        
+
         // Serialize the event
-        let serialized = serde_json::to_vec(event)
-            .map_err(|e| format!("Serialization error: {}", e))?;
+        let serialized =
+            serde_json::to_vec(event).map_err(|e| format!("Serialization error: {}", e))?;
 
         // Store in DHT (using existing file metadata structure as template)
         let metadata = crate::dht::FileMetadata {
@@ -294,35 +305,44 @@ impl ReputationDhtService {
             encryption_method: None,
             key_fingerprint: None,
             version: Some(1),
+            encrypted_key_bundle: None,
             parent_hash: None,
             cids: None, // Not needed for reputation events
             is_root: true,
+            encrypted_key_bundle: None,
         };
 
         dht_service.publish_file(metadata).await
     }
 
-    pub async fn retrieve_reputation_events(&self, peer_id: &str) -> Result<Vec<ReputationEvent>, String> {
-        let dht_service = self.dht_service.as_ref()
+    pub async fn retrieve_reputation_events(
+        &self,
+        peer_id: &str,
+    ) -> Result<Vec<ReputationEvent>, String> {
+        let dht_service = self
+            .dht_service
+            .as_ref()
             .ok_or("DHT service not initialized")?;
 
         // Search for reputation events for this peer
         let search_key = format!("reputation:{}", peer_id);
         dht_service.search_file(search_key).await?;
 
-        // TODO: Need to handle the search results and deserialize the events. 
+        // TODO: Need to handle the search results and deserialize the events.
         // For now, return empty vector as placeholder.
         Ok(vec![])
     }
 
     pub async fn store_merkle_root(&self, epoch: &ReputationEpoch) -> Result<(), String> {
-        let dht_service = self.dht_service.as_ref()
+        let dht_service = self
+            .dht_service
+            .as_ref()
             .ok_or("DHT service not initialized")?;
 
         let key = format!("merkle_root:{}", epoch.epoch_id);
-        
-        let serialized = serde_json::to_vec(epoch)
-            .map_err(|e| format!("Serialization error: {}", e))?;
+
+        let serialized =
+            serde_json::to_vec(epoch).map_err(|e| format!("Serialization error: {}", e))?;
 
         let metadata = crate::dht::FileMetadata {
             merkle_root: epoch.merkle_root.clone(),
@@ -336,9 +356,11 @@ impl ReputationDhtService {
             encryption_method: None,
             key_fingerprint: None,
             version: Some(1),
+            encrypted_key_bundle: None,
             parent_hash: None,
             cids: None, // Not needed for merkle roots
             is_root: true,
+            encrypted_key_bundle: None,
         };
 
         dht_service.publish_file(metadata).await
@@ -378,7 +400,7 @@ impl ReputationContract {
         // 3. Sign transaction with private key
         // 4. Send transaction and wait for confirmation
         // 5. Return transaction hash
-        
+
         // For now, return a mock transaction hash
         Ok(format!("0x{:x}", epoch.epoch_id))
     }
@@ -390,7 +412,7 @@ impl ReputationContract {
         // 2. Call getEpoch function on contract
         // 3. Parse returned data into ReputationEpoch
         // 4. Return epoch data
-        
+
         // For now, return None as placeholder
         Ok(None)
     }
@@ -406,7 +428,7 @@ impl ReputationContract {
         // 1. Connect to Ethereum network
         // 2. Call verifyEvent function on contract
         // 3. Return verification result
-        
+
         // For now, return true as placeholder
         Ok(true)
     }
@@ -452,22 +474,24 @@ impl ReputationSystem {
     pub async fn add_reputation_event(&mut self, mut event: ReputationEvent) -> Result<(), String> {
         // Sign the event
         event = self.key_manager.sign_reputation_event(event)?;
-        
+
         // Add to Merkle tree
         self.merkle_tree.add_event(event.clone())?;
-        
+
         // Store in DHT
         self.dht_service.store_reputation_event(&event).await?;
-        
+
         Ok(())
     }
 
     pub async fn finalize_epoch(&mut self) -> Result<String, String> {
         let epoch_id = self.current_epoch;
-        let merkle_root = self.merkle_tree.get_root_hex()
+        let merkle_root = self
+            .merkle_tree
+            .get_root_hex()
             .ok_or("No events in current epoch")?;
         let event_count = self.merkle_tree.get_events().len();
-        
+
         let epoch = ReputationEpoch {
             epoch_id,
             merkle_root,
@@ -482,15 +506,15 @@ impl ReputationSystem {
 
         // Store epoch in DHT
         self.dht_service.store_merkle_root(&epoch).await?;
-        
+
         // Submit to smart contract
         let private_key = "mock_private_key"; // In real implementation, get from secure storage
         let tx_hash = self.contract.submit_epoch(&epoch, private_key).await?;
-        
+
         // Reset for next epoch
         self.merkle_tree = ReputationMerkleTree::new();
         self.current_epoch += 1;
-        
+
         Ok(tx_hash)
     }
 }
@@ -513,7 +537,7 @@ impl EpochManager {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-            
+
         Self {
             current_epoch: 0,
             epoch_duration_seconds,
@@ -577,7 +601,7 @@ impl EpochManager {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        
+
         let elapsed = now - self.last_epoch_time;
         if elapsed >= self.epoch_duration_seconds {
             0
@@ -616,28 +640,34 @@ impl ReputationSystemWithEpochs {
         self.contract.set_contract_address(address);
     }
 
-    pub async fn add_reputation_event(&mut self, mut event: ReputationEvent) -> Result<Option<String>, String> {
+    pub async fn add_reputation_event(
+        &mut self,
+        mut event: ReputationEvent,
+    ) -> Result<Option<String>, String> {
         // Set epoch for the event
         event.epoch = Some(self.epoch_manager.get_current_epoch());
-        
+
         // Sign the event
         event = self.key_manager.sign_reputation_event(event)?;
-        
+
         // Add to pending events
         self.pending_events.push(event.clone());
-        
+
         // Add to Merkle tree
         self.merkle_tree.add_event(event.clone())?;
-        
+
         // Store in DHT
         self.dht_service.store_reputation_event(&event).await?;
-        
+
         // Check if epoch should be finalized
-        if self.epoch_manager.should_finalize_epoch(self.pending_events.len()) {
+        if self
+            .epoch_manager
+            .should_finalize_epoch(self.pending_events.len())
+        {
             let tx_hash = self.finalize_current_epoch().await?;
             return Ok(Some(tx_hash));
         }
-        
+
         Ok(None)
     }
 
@@ -647,10 +677,12 @@ impl ReputationSystemWithEpochs {
         }
 
         let epoch_id = self.epoch_manager.get_current_epoch();
-        let merkle_root = self.merkle_tree.get_root_hex()
+        let merkle_root = self
+            .merkle_tree
+            .get_root_hex()
             .ok_or("Failed to get Merkle root")?;
         let event_count = self.pending_events.len();
-        
+
         let epoch = ReputationEpoch {
             epoch_id,
             merkle_root,
@@ -665,16 +697,16 @@ impl ReputationSystemWithEpochs {
 
         // Store epoch in DHT
         self.dht_service.store_merkle_root(&epoch).await?;
-        
+
         // Submit to smart contract
         let private_key = "mock_private_key";
         let tx_hash = self.contract.submit_epoch(&epoch, private_key).await?;
-        
+
         // Reset for next epoch
         self.merkle_tree = ReputationMerkleTree::new();
         self.pending_events.clear();
         self.epoch_manager.advance_epoch();
-        
+
         Ok(tx_hash)
     }
 
@@ -721,7 +753,10 @@ impl ReputationVerifier {
             let temp_manager = NodeKeyManager::new();
             temp_manager.verify_reputation_event(event, verifying_key)
         } else {
-            Err(format!("Public key not found for peer: {}", event.rater_peer_id))
+            Err(format!(
+                "Public key not found for peer: {}",
+                event.rater_peer_id
+            ))
         }
     }
 
@@ -736,12 +771,16 @@ impl ReputationVerifier {
         // 1. Recreate the event hash
         // 2. Verify the Merkle proof against the root
         // 3. Return verification result
-        
+
         // For now, return true as placeholder
         Ok(true)
     }
 
-    pub fn verify_epoch_integrity(&self, epoch: &ReputationEpoch, events: &[ReputationEvent]) -> Result<bool, String> {
+    pub fn verify_epoch_integrity(
+        &self,
+        epoch: &ReputationEpoch,
+        events: &[ReputationEvent],
+    ) -> Result<bool, String> {
         // Verify that all events belong to this epoch
         for event in events {
             if event.epoch != Some(epoch.epoch_id) {
@@ -772,11 +811,15 @@ impl ReputationTestSuite {
 
     pub async fn run_integration_test(&mut self) -> Result<TestResults, String> {
         let mut results = TestResults::new();
-        
+
         // Test 1: Create reputation system with epochs
         let mut system = ReputationSystemWithEpochs::new(98765, 60, 5); // 1 minute, 5 events max
-        results.add_test("System Creation", true, "ReputationSystemWithEpochs created successfully");
-        
+        results.add_test(
+            "System Creation",
+            true,
+            "ReputationSystemWithEpochs created successfully",
+        );
+
         // Test 2: Add reputation events
         let event1 = ReputationEvent::new(
             "test-event-1".to_string(),
@@ -786,7 +829,7 @@ impl ReputationTestSuite {
             serde_json::json!({"test": "data1"}),
             0.5,
         );
-        
+
         let event2 = ReputationEvent::new(
             "test-event-2".to_string(),
             "peer-2".to_string(),
@@ -798,13 +841,21 @@ impl ReputationTestSuite {
 
         let result1 = system.add_reputation_event(event1.clone()).await;
         let result2 = system.add_reputation_event(event2.clone()).await;
-        
-        results.add_test("Add Events", result1.is_ok() && result2.is_ok(), "Events added successfully");
-        
+
+        results.add_test(
+            "Add Events",
+            result1.is_ok() && result2.is_ok(),
+            "Events added successfully",
+        );
+
         // Test 3: Verify events are pending
         let pending_count = system.get_pending_events().len();
-        results.add_test("Pending Events", pending_count == 2, &format!("Expected 2 pending events, got {}", pending_count));
-        
+        results.add_test(
+            "Pending Events",
+            pending_count == 2,
+            &format!("Expected 2 pending events, got {}", pending_count),
+        );
+
         // Test 4: Verify event signatures
         let events = system.get_pending_events();
         let mut signature_verified = true;
@@ -814,25 +865,40 @@ impl ReputationTestSuite {
                 break;
             }
         }
-        results.add_test("Signature Verification", signature_verified, "All event signatures verified");
-        
+        results.add_test(
+            "Signature Verification",
+            signature_verified,
+            "All event signatures verified",
+        );
+
         // Test 5: Finalize epoch
         let finalize_result = system.finalize_current_epoch().await;
-        results.add_test("Epoch Finalization", finalize_result.is_ok(), "Epoch finalized successfully");
-        
+        results.add_test(
+            "Epoch Finalization",
+            finalize_result.is_ok(),
+            "Epoch finalized successfully",
+        );
+
         // Test 6: Verify epoch advancement
         let (current_epoch, pending, _, _) = system.get_epoch_status();
-        results.add_test("Epoch Advancement", current_epoch == 1 && pending == 0, "Epoch advanced and cleared");
-        
+        results.add_test(
+            "Epoch Advancement",
+            current_epoch == 1 && pending == 0,
+            "Epoch advanced and cleared",
+        );
+
         Ok(results)
     }
 
-    pub async fn run_performance_test(&mut self, event_count: usize) -> Result<PerformanceResults, String> {
+    pub async fn run_performance_test(
+        &mut self,
+        event_count: usize,
+    ) -> Result<PerformanceResults, String> {
         let start_time = SystemTime::now();
-        
+
         // Create system
         let mut system = ReputationSystemWithEpochs::new(98765, 3600, event_count + 1);
-        
+
         // Add events
         let mut events = Vec::new();
         for i in 0..event_count {
@@ -846,20 +912,20 @@ impl ReputationTestSuite {
             );
             events.push(event);
         }
-        
+
         let add_start = SystemTime::now();
         for event in events {
             system.add_reputation_event(event).await?;
         }
         let add_duration = add_start.elapsed().unwrap_or_default();
-        
+
         // Finalize epoch
         let finalize_start = SystemTime::now();
         system.finalize_current_epoch().await?;
         let finalize_duration = finalize_start.elapsed().unwrap_or_default();
-        
+
         let total_duration = start_time.elapsed().unwrap_or_default();
-        
+
         Ok(PerformanceResults {
             event_count,
             add_duration_ms: add_duration.as_millis() as u64,
@@ -908,7 +974,7 @@ impl TestResults {
             passed,
             message: message.to_string(),
         });
-        
+
         if passed {
             self.passed += 1;
         } else {
@@ -946,7 +1012,7 @@ mod tests {
     #[test]
     fn test_merkle_tree_operations() {
         let mut tree = ReputationMerkleTree::new();
-        
+
         let event1 = ReputationEvent::new(
             "event-1".to_string(),
             "peer-1".to_string(),
@@ -993,7 +1059,7 @@ mod tests {
     fn test_ed25519_signing_and_verification() {
         let key_manager = NodeKeyManager::new();
         let peer_id = key_manager.get_peer_id().to_string();
-        
+
         let event = ReputationEvent::new(
             "test-event".to_string(),
             "target-peer".to_string(),
@@ -1010,7 +1076,9 @@ mod tests {
 
         // Verify the event
         let verifying_key = key_manager.get_verifying_key();
-        let is_valid = key_manager.verify_reputation_event(&signed_event, &verifying_key).unwrap();
+        let is_valid = key_manager
+            .verify_reputation_event(&signed_event, &verifying_key)
+            .unwrap();
         assert!(is_valid);
     }
 
@@ -1023,11 +1091,11 @@ mod tests {
 
         // Add peer key
         cache.add_peer_key(peer_id.clone(), verifying_key);
-        
+
         // Retrieve peer key
         let retrieved_key = cache.get_peer_key(&peer_id);
         assert!(retrieved_key.is_some());
-        
+
         // Test with non-existent peer
         let non_existent = cache.get_peer_key("non-existent");
         assert!(non_existent.is_none());
@@ -1069,7 +1137,10 @@ mod tests {
     fn test_reputation_contract_address() {
         let mut contract = ReputationContract::new(98765);
         contract.set_contract_address("0x1234567890abcdef".to_string());
-        assert_eq!(contract.get_contract_address().unwrap(), "0x1234567890abcdef");
+        assert_eq!(
+            contract.get_contract_address().unwrap(),
+            "0x1234567890abcdef"
+        );
     }
 
     #[test]
@@ -1083,14 +1154,17 @@ mod tests {
     fn test_reputation_system_contract_address() {
         let mut system = ReputationSystem::new(98765);
         system.set_contract_address("0xabcdef1234567890".to_string());
-        assert_eq!(system.contract.get_contract_address().unwrap(), "0xabcdef1234567890");
+        assert_eq!(
+            system.contract.get_contract_address().unwrap(),
+            "0xabcdef1234567890"
+        );
     }
 
     #[test]
     fn test_epoch_manager_creation() {
         let manager = EpochManager::new(3600, 100); // 1 hour, 100 events max
         let (current_epoch, duration, max_events, auto_anchor) = manager.get_epoch_info();
-        
+
         assert_eq!(current_epoch, 0);
         assert_eq!(duration, 3600);
         assert_eq!(max_events, 100);
@@ -1100,10 +1174,10 @@ mod tests {
     #[test]
     fn test_epoch_manager_should_finalize() {
         let manager = EpochManager::new(1, 5); // 1 second, 5 events max
-        
+
         // Should not finalize with few events
         assert!(!manager.should_finalize_epoch(3));
-        
+
         // Should finalize when event count limit reached
         assert!(manager.should_finalize_epoch(5));
         assert!(manager.should_finalize_epoch(10));
@@ -1113,10 +1187,10 @@ mod tests {
     fn test_epoch_manager_advance() {
         let mut manager = EpochManager::new(3600, 100);
         assert_eq!(manager.get_current_epoch(), 0);
-        
+
         manager.advance_epoch();
         assert_eq!(manager.get_current_epoch(), 1);
-        
+
         manager.advance_epoch();
         assert_eq!(manager.get_current_epoch(), 2);
     }
@@ -1125,10 +1199,10 @@ mod tests {
     fn test_epoch_manager_auto_anchor() {
         let mut manager = EpochManager::new(3600, 100);
         assert!(manager.auto_anchor_enabled);
-        
+
         manager.set_auto_anchor(false);
         assert!(!manager.auto_anchor_enabled);
-        
+
         // Should not finalize when auto-anchor is disabled
         assert!(!manager.should_finalize_epoch(1000));
     }
@@ -1137,7 +1211,7 @@ mod tests {
     fn test_reputation_system_with_epochs_creation() {
         let system = ReputationSystemWithEpochs::new(98765, 3600, 100);
         let (epoch, pending, time_left, auto_anchor) = system.get_epoch_status();
-        
+
         assert_eq!(epoch, 0);
         assert_eq!(pending, 0);
         assert!(time_left <= 3600);
@@ -1147,11 +1221,11 @@ mod tests {
     #[test]
     fn test_reputation_system_with_epochs_auto_anchor() {
         let mut system = ReputationSystemWithEpochs::new(98765, 1, 2); // 1 second, 2 events max
-        
+
         system.set_auto_anchor(false);
         let (_, _, _, auto_anchor) = system.get_epoch_status();
         assert!(!auto_anchor);
-        
+
         system.set_auto_anchor(true);
         let (_, _, _, auto_anchor) = system.get_epoch_status();
         assert!(auto_anchor);
@@ -1177,9 +1251,9 @@ mod tests {
         let key_manager = NodeKeyManager::new();
         let peer_id = "test-peer".to_string();
         let verifying_key = key_manager.get_verifying_key();
-        
+
         verifier.add_peer_key(peer_id.clone(), verifying_key);
-        
+
         // Should be able to retrieve the key
         assert!(verifier.key_cache.get_peer_key(&peer_id).is_some());
     }
@@ -1187,7 +1261,7 @@ mod tests {
     #[test]
     fn test_reputation_verifier_epoch_integrity() {
         let verifier = ReputationVerifier::new();
-        
+
         let epoch = ReputationEpoch {
             epoch_id: 1,
             merkle_root: "test-root".to_string(),
@@ -1199,7 +1273,7 @@ mod tests {
             event_count: 2,
             submitter: "test-submitter".to_string(),
         };
-        
+
         let events = vec![
             ReputationEvent::new(
                 "event-1".to_string(),
@@ -1218,13 +1292,13 @@ mod tests {
                 -0.3,
             ),
         ];
-        
+
         // Set epoch for events
         let mut events_with_epoch = events;
         for event in &mut events_with_epoch {
             event.epoch = Some(1);
         }
-        
+
         let result = verifier.verify_epoch_integrity(&epoch, &events_with_epoch);
         assert!(result.is_ok());
         assert!(result.unwrap());
@@ -1243,10 +1317,10 @@ mod tests {
         assert_eq!(results.passed, 0);
         assert_eq!(results.failed, 0);
         assert!(results.is_success());
-        
+
         results.add_test("Test 1", true, "Test passed");
         results.add_test("Test 2", false, "Test failed");
-        
+
         assert_eq!(results.passed, 1);
         assert_eq!(results.failed, 1);
         assert!(!results.is_success());
@@ -1261,7 +1335,7 @@ mod tests {
             total_duration_ms: 60,
             events_per_second: 1666,
         };
-        
+
         assert_eq!(results.event_count, 100);
         assert_eq!(results.add_duration_ms, 50);
         assert_eq!(results.finalize_duration_ms, 10);
