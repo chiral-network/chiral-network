@@ -60,6 +60,7 @@ async fn test_autonat_detection() {
         false,                        // enable_autorelay
         Vec::new(),                   // preferred_relays
         false,                        // enable_relay_server
+        None,
     )
     .await;
 

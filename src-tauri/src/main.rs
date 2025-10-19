@@ -21,7 +21,6 @@ mod pool;
 mod proxy_latency;
 mod stream_auth;
 mod webrtc_service;
-use std::sync::Mutex as StdMutex;
 
 use crate::commands::auth::{
     cleanup_expired_proxy_auth_tokens, generate_proxy_auth_token, revoke_proxy_auth_token,
@@ -32,11 +31,13 @@ use crate::commands::proxy::{
     disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
     proxy_echo, proxy_remove, ProxyNode,
 };
+use async_std::path::Path as async_path;
 use chiral_network::stream_auth::{
     AuthMessage, HmacKeyExchangeConfirmation, HmacKeyExchangeRequest, HmacKeyExchangeResponse,
     StreamAuthService,
 };
 use dht::{DhtEvent, DhtMetricsSnapshot, DhtService, FileMetadata};
+use directories::ProjectDirs;
 use ethereum::{
     create_new_account, get_account_from_private_key, get_balance, get_block_number, get_hashrate,
     get_mined_blocks_count, get_mining_logs, get_mining_performance, get_mining_status,
@@ -55,6 +56,7 @@ use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex as StdMutex;
 use std::{
     io::{BufRead, BufReader},
     sync::Arc,
@@ -66,8 +68,8 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State,
 };
-use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use tokio::time::{timeout as tokio_timeout, Duration as TokioDuration};
+use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{error, info, warn};
 use webrtc_service::{WebRTCFileRequest, WebRTCService};
@@ -400,14 +402,20 @@ async fn get_file_versions_by_name(
     state: State<'_, AppState>,
     file_name: String,
 ) -> Result<Vec<FileMetadata>, String> {
-    info!("🚀 Tauri command: get_file_versions_by_name called with: {}", file_name);
-    
+    info!(
+        "🚀 Tauri command: get_file_versions_by_name called with: {}",
+        file_name
+    );
+
     let dht = { state.dht.lock().await.as_ref().cloned() };
     if let Some(dht) = dht {
         info!("✅ DHT service found, calling get_versions_by_file_name");
         let result = (*dht).get_versions_by_file_name(file_name).await;
         match &result {
-            Ok(versions) => info!("🎉 Tauri command: Successfully returned {} versions", versions.len()),
+            Ok(versions) => info!(
+                "🎉 Tauri command: Successfully returned {} versions",
+                versions.len()
+            ),
             Err(e) => info!("❌ Tauri command: Error occurred: {}", e),
         }
         result
@@ -420,7 +428,7 @@ async fn get_file_versions_by_name(
 #[tauri::command]
 async fn test_backend_connection(state: State<'_, AppState>) -> Result<String, String> {
     info!("🧪 Testing backend connection...");
-    
+
     let dht = { state.dht.lock().await.as_ref().cloned() };
     if let Some(dht) = dht {
         info!("✅ DHT service is available");
@@ -787,9 +795,9 @@ async fn start_dht_node(
         tracing::info!("AutoRelay disabled via env CHIRAL_DISABLE_AUTORELAY=1");
     }
 
-    // Handle enable_relay_server: default to true for bootstrap nodes, false otherwise
-    let final_enable_relay_server = enable_relay_server.unwrap_or_else(|| is_bootstrap.unwrap_or(false));
-
+    let proj_dirs = ProjectDirs::from("com", "chiral-network", "chiral-network")
+        .ok_or("Failed to get project directories")?;
+    let blockstore_db_path = proj_dirs.data_dir().join("blockstore_db");
     let dht_service = DhtService::new(
         port,
         bootstrap_nodes,
@@ -804,7 +812,8 @@ async fn start_dht_node(
         cache_size_mb,
         /* enable AutoRelay (after hotfix) */ final_enable_autorelay,
         preferred_relays.unwrap_or_default(),
-        final_enable_relay_server, // User-configurable relay server
+        is_bootstrap.unwrap_or(false), // enable_relay_server only on bootstrap
+        Some(async_path::new(blockstore_db_path.as_os_str())),
     )
     .await
     .map_err(|e| format!("Failed to start DHT: {}", e))?;
@@ -1254,11 +1263,13 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                     let payload = serde_json::to_string(&meta).unwrap_or_else(|_| "{}".to_string());
                     format!("file_discovered:{}", payload)
                 }
-                DhtEvent::DownloadedFile(_) => "file_downloaded".to_string(),
                 DhtEvent::PublishedFile(meta) => format!(
                     "file_published:{}:{}:{}", // Use merkle_root as the primary identifier
                     meta.merkle_root, meta.file_name, meta.file_size
                 ),
+                DhtEvent::DownloadedFile(file_metadata) => {
+                    format!("Downloaded File {}", file_metadata.file_name)
+                }
                 DhtEvent::FileNotFound(hash) => format!("file_not_found:{}", hash),
                 DhtEvent::Error(err) => format!("error:{}", err),
                 DhtEvent::Info(msg) => format!("info:{}", msg),
@@ -1885,6 +1896,88 @@ async fn start_file_transfer_service(
 }
 
 #[tauri::command]
+async fn upload_file_to_network(
+    state: State<'_, AppState>,
+    file_path: String,
+) -> Result<(), String> {
+    // Get the active account address
+    let account = get_active_account(&state).await?;
+
+    // Get the private key from state
+    let private_key = {
+        let key_guard = state.active_account_private_key.lock().await;
+        key_guard
+            .clone()
+            .ok_or("No private key available. Please log in again.")?
+    };
+
+    let ft = {
+        let ft_guard = state.file_transfer.lock().await;
+        ft_guard.as_ref().cloned()
+    };
+
+    if let Some(ft) = ft {
+        // Upload the file
+        let file_name = file_path.split('/').last().unwrap_or(&file_path);
+
+        ft.upload_file_with_account(
+            file_path.clone(),
+            file_name.to_string(),
+            Some(account),
+            Some(private_key),
+        )
+        .await
+        .map_err(|e| format!("Failed to upload file: {}", e))?;
+
+        // Get the file hash by reading the file and calculating it
+        let file_data = tokio::fs::read(&file_path)
+            .await
+            .map_err(|e| format!("Failed to read file: {}", e))?;
+        let file_hash = file_transfer::FileTransferService::calculate_file_hash(&file_data);
+
+        // Also publish to DHT if it's running
+        let dht = {
+            let dht_guard = state.dht.lock().await;
+            dht_guard.as_ref().cloned()
+        };
+
+        if let Some(dht) = dht {
+            let metadata = FileMetadata {
+                merkle_root: file_hash.clone(),
+                is_root: true,
+                file_name: file_name.to_string(),
+                file_size: file_data.len() as u64,
+                file_data: file_data.clone(),
+                seeders: vec![],
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+                mime_type: None,
+                is_encrypted: false,
+                encryption_method: None,
+                key_fingerprint: None,
+                parent_hash: None,
+                version: Some(1),
+                cids: None,
+                encrypted_key_bundle: None,
+            };
+
+            match dht.publish_file(metadata.clone()).await {
+                Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
+                Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
+            };
+
+            Ok(())
+        } else {
+            Err("DHT Service not running.".to_string())
+        }
+    } else {
+        Err("File transfer service is not running".to_string())
+    }
+}
+
+#[tauri::command]
 async fn download_blocks_from_network(
     state: State<'_, AppState>,
     file_metadata: FileMetadata,
@@ -2120,8 +2213,7 @@ async fn download_file_from_network(
                 }
                 Err(e) => {
                     warn!("DHT search failed: {}", e);
-                   
-                   
+
                     return Err(format!("DHT search failed: {}", e));
                 }
             }
@@ -2322,6 +2414,7 @@ async fn upload_file_chunk(
             cids: Some(vec![root_cid.clone()]), // The root CID for retrieval
             encrypted_key_bundle: None,
             is_root: true,
+            encrypted_key_bundle: None,
         };
 
         // Store complete file data locally for seeding
@@ -2365,6 +2458,14 @@ async fn cancel_streaming_upload(
 ) -> Result<(), String> {
     let mut upload_sessions = state.upload_sessions.lock().await;
     upload_sessions.remove(&upload_id);
+    Ok(())
+}
+
+#[tauri::command]
+async fn write_file(path: String, contents: Vec<u8>) -> Result<(), String> {
+    tokio::fs::write(&path, contents)
+        .await
+        .map_err(|e| format!("Failed to write file: {}", e))?;
     Ok(())
 }
 
@@ -3693,6 +3794,7 @@ fn main() {
             send_dht_message,
             start_file_transfer_service,
             download_file_from_network,
+            upload_file_to_network,
             download_blocks_from_network,
             start_multi_source_download,
             cancel_multi_source_download,
@@ -3701,6 +3803,7 @@ fn main() {
             get_proxy_optimization_status,
             download_file_multi_source,
             get_file_transfer_events,
+            write_file,
             get_download_metrics,
             encrypt_file_with_password,
             decrypt_file_with_password,
@@ -4160,6 +4263,54 @@ async fn upload_and_publish_file(
     })
 }
 
+// async fn break_into_chunks(
+//     app: tauri::AppHandle,
+//     state: State<'_, AppState>,
+//     file_path: String,
+// ) -> Result<FileManifestForJs, String> {
+//     // Get the app data directory for chunk storage
+//     let app_data_dir = app
+//         .path()
+//         .app_data_dir()
+//         .map_err(|e| format!("Could not get app data directory: {}", e))?;
+//     let chunk_storage_path = app_data_dir.join("chunk_storage");
+
+//     // Use the active user's own public key
+//     let private_key_hex = state
+//         .active_account_private_key
+//         .lock()
+//         .await
+//         .clone()
+//         .ok_or("No account is currently active. Please log in.")?;
+//     let pk_bytes = hex::decode(private_key_hex.trim_start_matches("0x"))
+//         .map_err(|_| "Invalid private key format".to_string())?;
+//     let secret_key = StaticSecret::from(
+//         <[u8; 32]>::try_from(pk_bytes).map_err(|_| "Private key is not 32 bytes")?,
+//     );
+//     PublicKey::from(&secret_key);
+
+//     // Run the encryption in a blocking task to avoid blocking the async runtime
+//     tokio::task::spawn_blocking(move || {
+//         // Initialize ChunkManager with proper app data directory
+//         let manager = ChunkManager::new(chunk_storage_path);
+
+//         // Call the existing backend function to perform the encryption with recipient's public key
+//         let manifest = manager.chunk_and_encrypt_file(Path::new(&file_path), &recipient_pk)?;
+
+//         // Serialize the key bundle to a JSON string so it can be sent to the frontend easily.
+//         let bundle_json =
+//             serde_json::to_string(&manifest.encrypted_key_bundle).map_err(|e| e.to_string())?;
+
+//         Ok(FileManifestForJs {
+//             merkle_root: manifest.merkle_root,
+//             chunks: manifest.chunks,
+//             encrypted_key_bundle: bundle_json,
+//         })
+//     })
+//     .await
+//     .map_err(|e| format!("Encryption task failed: {}", e))?
+// }
+
 #[tauri::command]
 async fn has_active_account(state: State<'_, AppState>) -> Result<bool, String> {
     Ok(state.active_account.lock().await.is_some())
@@ -4399,15 +4550,26 @@ async fn start_proof_of_storage_watcher(
 
                             match res {
                                 Ok(Ok(_)) => {
-                                    tracing::info!("Challenge {} handled successfully", challenge_id);
+                                    tracing::info!(
+                                        "Challenge {} handled successfully",
+                                        challenge_id
+                                    );
                                 }
                                 Ok(Err(e)) => {
                                     // The handler returned an error (but within timeout)
-                                    tracing::error!("Error handling challenge {}: {}", challenge_id, e);
+                                    tracing::error!(
+                                        "Error handling challenge {}: {}",
+                                        challenge_id,
+                                        e
+                                    );
                                 }
                                 Err(_) => {
                                     // The entire proof handling timed out
-                                    tracing::warn!("Timeout while handling challenge {} ({}s)", challenge_id, resp_timeout.as_secs());
+                                    tracing::warn!(
+                                        "Timeout while handling challenge {} ({}s)",
+                                        challenge_id,
+                                        resp_timeout.as_secs()
+                                    );
                                     // TODO: Optionally notify contract of failure or emit event into UI
                                 }
                             }
@@ -4415,9 +4577,14 @@ async fn start_proof_of_storage_watcher(
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("Proof watcher poll failed: {} (backoff {}s)", e, backoff.as_secs());
+                    tracing::warn!(
+                        "Proof watcher poll failed: {} (backoff {}s)",
+                        e,
+                        backoff.as_secs()
+                    );
                     tokio::time::sleep(backoff).await;
-                    backoff = std::cmp::min(backoff * 2, TokioDuration::from_secs(300)); // cap backoff
+                    backoff = std::cmp::min(backoff * 2, TokioDuration::from_secs(300));
+                    // cap backoff
                 }
             }
 
