@@ -1,44 +1,27 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { Mail, Send, Search } from "lucide-svelte";
+  import { Mail, Send, Search, RefreshCw } from "lucide-svelte";
   import Button from "$lib/components/ui/button.svelte";
   import Input from "$lib/components/ui/input.svelte";
   import { t } from "svelte-i18n";
+  import { invoke } from "@tauri-apps/api/core";
+  import { formatDistanceToNow } from 'date-fns';
 
-  let conversations = [
-    {
-      id: 1,
-      name: "Person A",
-      lastMessage: "See you tomorrow!",
-      timestamp: "10:45 AM",
-      unread: 2,
-      avatar: "/avatars/alice.png",
-    },
-    {
-      id: 2,
-      name: "Person B",
-      lastMessage: "Sounds good.",
-      timestamp: "Yesterday",
-      unread: 0,
-      avatar: "/avatars/bob.png",
-    },
-    {
-      id: 3,
-      name: "Person C",
-      lastMessage: "Can you send me the file?",
-      timestamp: "2 days ago",
-      unread: 0,
-      avatar: "/avatars/charlie.png",
-    },
-  ];
+  type Peer = {
+    peerId: string;
+    address: string;
+    lastSeen: number;
+  };
 
-  let selectedConversationId: number | null = null;
+  let conversations: Peer[] = [];
+  let selectedPeerId: string | null = null;
   let messages = [];
   let newMessage = "";
   let messageContainer: HTMLElement;
+  let isLoadingPeers = false;
 
-  function selectConversation(id: number) {
-    selectedConversationId = id;
+  function selectConversation(peerId: string) {
+    selectedPeerId = peerId;
     messages = [
       { from: "them", text: "Hey, how is it going?" },
       { from: "me", text: "Pretty good, working on the new messaging feature." },
@@ -64,10 +47,30 @@
     }
   }
 
-  onMount(() => {
-    if (conversations.length > 0) {
-      selectConversation(conversations[0].id);
+  async function fetchPeers() {
+    isLoadingPeers = true;
+    try {
+      const peers: Peer[] = await invoke("get_peer_metrics");
+      // Sort peers by last seen, most recent first
+      peers.sort((a, b) => b.lastSeen - a.lastSeen);
+      conversations = peers;
+
+      // If no conversation is selected, or the selected one is no longer in the list, select the first one.
+      if (conversations.length > 0 && (!selectedPeerId || !conversations.some(p => p.peerId === selectedPeerId))) {
+        selectConversation(conversations[0].peerId);
+      } else if (conversations.length === 0) {
+        selectedPeerId = null;
+      }
+    } catch (error) {
+      console.error("Failed to fetch peers:", error);
+      // You could show a toast notification here
+    } finally {
+      isLoadingPeers = false;
     }
+  }
+
+  onMount(() => {
+    fetchPeers();
   });
 </script>
 
@@ -82,11 +85,13 @@
   <div class="flex flex-1 min-h-0 border rounded-lg bg-card text-card-foreground overflow-hidden">
     <!-- Conversation List -->
     <div class="w-1/3 border-r flex flex-col">
-      <div class="p-4 border-b bg-card">
-        <h2 class="text-lg font-semibold flex items-center gap-2">
-          <Mail class="h-5 w-5 text-muted-foreground" />
-          {$t('messages.conversations', { default: 'Conversations' })}
-        </h2>
+      <div class="p-4 border-b bg-card flex justify-between items-center">
+        <h2 class="text-lg font-semibold flex items-center gap-2">{$t('messages.conversations', { default: 'Contacts' })}</h2>
+        <Button variant="ghost" size="icon" on:click={fetchPeers} disabled={isLoadingPeers} aria-label="Refresh peer list">
+          <RefreshCw class="h-4 w-4 {isLoadingPeers ? 'animate-spin' : ''}" />
+        </Button>
+      </div>
+      <div class="p-4 border-b">
         <div class="relative mt-3">
           <Search class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input placeholder={$t('messages.searchPlaceholder', { default: 'Search contacts...' })} class="pl-9" />
@@ -95,27 +100,28 @@
       <div class="overflow-y-auto flex-1">
         {#each conversations as conv}
           <div
-            class="p-4 cursor-pointer hover:bg-muted/50 border-b transition-colors flex items-center gap-3 {selectedConversationId === conv.id ? 'bg-muted' : ''}"
-            on:click={() => selectConversation(conv.id)}
-            on:keydown={(e) => e.key === 'Enter' && selectConversation(conv.id)}
+            class="p-4 cursor-pointer hover:bg-muted/50 border-b transition-colors flex items-center gap-3 {selectedPeerId === conv.peerId ? 'bg-muted' : ''}"
+            on:click={() => selectConversation(conv.peerId)}
+            on:keydown={(e) => e.key === 'Enter' && selectConversation(conv.peerId)}
             role="button"
             tabindex="0"
           >
             <div class="relative flex-shrink-0">
               <div class="h-12 w-12 rounded-full bg-muted flex items-center justify-center text-lg font-semibold">
-                {conv.name.charAt(0)}
+                {conv.peerId.slice(-2, -1).toUpperCase()}
               </div>
             </div>
             <div class="flex-1 min-w-0">
               <div class="flex justify-between items-center mb-1">
-                <p class="font-semibold truncate">{conv.name}</p>
-                <p class="text-xs text-muted-foreground flex-shrink-0 ml-2">{conv.timestamp}</p>
+                <p class="font-semibold truncate" title={conv.peerId}>
+                  Peer <span class="font-mono text-sm">{conv.peerId.slice(0, 8)}...{conv.peerId.slice(-4)}</span>
+                </p>
+                <p class="text-xs text-muted-foreground flex-shrink-0 ml-2">{formatDistanceToNow(new Date(conv.lastSeen * 1000), { addSuffix: true })}</p>
               </div>
               <div class="flex justify-between items-center">
-                <p class="text-sm text-muted-foreground truncate flex-1">{conv.lastMessage}</p>
-                {#if conv.unread > 0}
-                  <span class="ml-2 text-xs bg-primary text-primary-foreground rounded-full px-2 py-0.5 font-medium flex-shrink-0">{conv.unread}</span>
-                {/if}
+                <p class="text-sm text-muted-foreground truncate flex-1" title={conv.address}>
+                  {conv.address.split('/p2p/')[0]}
+                </p>
               </div>
             </div>
           </div>
@@ -124,15 +130,17 @@
     </div>
 
     <!-- Message View -->
-    <div class="w-2/3 flex flex-col bg-background">
-      {#if selectedConversationId}
+    <div class="w-2/3 flex flex-col bg-background text-card-foreground">
+      {#if selectedPeerId}
         <!-- Chat Header -->
         <div class="p-4 border-b bg-card flex items-center gap-3">
           <div class="h-10 w-10 rounded-full bg-muted flex items-center justify-center font-semibold">
-            {conversations.find(c => c.id === selectedConversationId)?.name.charAt(0)}
+            {selectedPeerId.slice(-2, -1).toUpperCase()}
           </div>
           <div>
-            <p class="font-semibold">{conversations.find(c => c.id === selectedConversationId)?.name}</p>
+            <p class="font-semibold" title={selectedPeerId}>
+              Peer <span class="font-mono text-sm">{selectedPeerId.slice(0, 12)}...{selectedPeerId.slice(-6)}</span>
+            </p>
             <p class="text-xs text-muted-foreground">End-to-end encrypted</p>
           </div>
         </div>
