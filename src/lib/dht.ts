@@ -46,6 +46,8 @@ export interface FileMetadata {
   keyFingerprint?: string;
   version?: number;
   manifest?: string;
+  isRoot?: boolean;
+  cids?: string[];
 }
 
 export interface FileManifestForJs {
@@ -193,6 +195,31 @@ export class DhtService {
     }
   }
 
+  async publishFileToNetwork(filePath: string): Promise<FileMetadata> {
+    try {
+      // Start listening for the published_file event
+      const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {
+        const unlistenPromise = listen<FileMetadata>(
+          "published_file",
+          (event) => {
+            resolve(event.payload);
+            // Unsubscribe once we got the event
+            unlistenPromise.then((unlistenFn) => unlistenFn());
+          }
+        );
+      });
+
+      // Trigger the backend upload
+      await invoke("upload_file_to_network", { filePath });
+
+      // Wait until the event arrives
+      return await metadataPromise;
+    } catch (error) {
+      console.error("Failed to publish file:", error);
+      throw error;
+    }
+  }
+
   async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
     try {
       console.log("Initiating download for file:", fileMetadata.fileHash);
@@ -247,6 +274,10 @@ export class DhtService {
       });
 
       // Trigger the backend upload
+      fileMetadata.merkleRoot = fileMetadata.fileHash;
+      fileMetadata.fileData = [];
+      fileMetadata.isRoot = true;
+      console.log(fileMetadata);
       await invoke("download_blocks_from_network", { fileMetadata });
 
       // Wait until the event arrives
@@ -270,6 +301,21 @@ export class DhtService {
       throw error;
     }
   }
+
+  async searchFileByCid(cid: string): Promise<void> {
+    if (!this.peerId) {
+      throw new Error("DHT not started");
+    }
+
+    try {
+      await invoke("search_file_by_cid", { cidStr: cid });
+      console.log("Searching for file by CID:", cid);
+    } catch (error) {
+      console.error("Failed to search file by CID:", error);
+      throw error;
+    }
+  }
+
 
   async connectPeer(peerAddress: string): Promise<void> {
     // Note: We check peerId to ensure DHT was started, but the actual error
