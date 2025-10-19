@@ -3722,18 +3722,13 @@ impl DhtService {
             swarm.add_external_address(ma);
         }
 
-        // Connect to bootstrap nodes (unreachable addresses filtered)
+        // Connect to bootstrap nodes
+        // NOTE: Bootstrap nodes are explicitly configured, so we trust them
+        // and don't filter based on reachability (important for relay servers and local testing)
         let mut successful_connections = 0;
         let total_bootstrap_nodes = bootstrap_nodes.len();
         for bootstrap_addr in &bootstrap_nodes {
             if let Ok(addr) = bootstrap_addr.parse::<Multiaddr>() {
-
-                // WAN Mode: skip unroutable bootstrap addresses
-                let wan_mode = enable_autonat || enable_autorelay;
-                if !ma_plausibly_reachable(&addr) {
-                    warn!("⏭️  Skipping unreachable bootstrap addr: {}", addr);
-                    continue;
-                }
                 match swarm.dial(addr.clone()) {
                     Ok(_) => {
                         successful_connections += 1;
@@ -4760,14 +4755,6 @@ fn multiaddr_to_ip(addr: &Multiaddr) -> Option<IpAddr> {
     None
 }
 
-fn is_private_or_loopback_v4(ip: Ipv4Addr) -> bool {
-    let o = ip.octets();
-    o[0] == 10
-        || (o[0] == 172 && (16..=31).contains(&o[1]))
-        || (o[0] == 192 && o[1] == 168)
-        || o[0] == 127
-}
-
 fn ipv4_in_same_subnet(target: Ipv4Addr, iface_ip: Ipv4Addr, iface_mask: Ipv4Addr) -> bool {
     let t = u32::from(target);
     let i = u32::from(iface_ip);
@@ -4778,7 +4765,7 @@ fn ipv4_in_same_subnet(target: Ipv4Addr, iface_ip: Ipv4Addr, iface_mask: Ipv4Add
 /// If multiaddr can be plausibly reached from this machine
 /// - Relay paths (p2p-circuit) are allowed
 /// - IPv4 loopback (127.0.0.1) is allowed (local testing)
-/// - For WAN intent, only public IPv4 or same subnet are allowed
+/// - For WAN intent, only public IPv4 addresses are allowed (not private ranges)
 fn ma_plausibly_reachable(ma: &Multiaddr) -> bool {
     // Relay paths are allowed
     if ma.iter().any(|p| matches!(p, Protocol::P2pCircuit)) {
@@ -4786,7 +4773,12 @@ fn ma_plausibly_reachable(ma: &Multiaddr) -> bool {
     }
     // Only consider IPv4 (IPv6 can be added if needed)
     if let Some(Protocol::Ip4(v4)) = ma.iter().find(|p| matches!(p, Protocol::Ip4(_))) {
-        return !is_private_or_loopback_v4(v4);
+        // Allow loopback for local testing
+        if v4.is_loopback() {
+            return true;
+        }
+        // Allow public addresses, reject private
+        return !v4.is_private();
     }
     false
 }

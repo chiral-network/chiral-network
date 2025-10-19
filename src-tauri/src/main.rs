@@ -750,6 +750,7 @@ async fn start_dht_node(
     // New optional relay controls
     enable_autorelay: Option<bool>,
     preferred_relays: Option<Vec<String>>,
+    enable_relay_server: Option<bool>,
 ) -> Result<String, String> {
     {
         let dht_guard = state.dht.lock().await;
@@ -786,6 +787,9 @@ async fn start_dht_node(
         tracing::info!("AutoRelay disabled via env CHIRAL_DISABLE_AUTORELAY=1");
     }
 
+    // Handle enable_relay_server: default to true for bootstrap nodes, false otherwise
+    let final_enable_relay_server = enable_relay_server.unwrap_or_else(|| is_bootstrap.unwrap_or(false));
+
     let dht_service = DhtService::new(
         port,
         bootstrap_nodes,
@@ -800,7 +804,7 @@ async fn start_dht_node(
         cache_size_mb,
         /* enable AutoRelay (after hotfix) */ final_enable_autorelay,
         preferred_relays.unwrap_or_default(),
-        is_bootstrap.unwrap_or(false), // enable_relay_server only on bootstrap
+        final_enable_relay_server, // User-configurable relay server
     )
     .await
     .map_err(|e| format!("Failed to start DHT: {}", e))?;
