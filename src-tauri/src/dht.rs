@@ -1993,12 +1993,6 @@ async fn run_dht_node(
                         let query_id = swarm.behaviour_mut().kademlia.get_record(key);
                         info!("Searching for file: {} (query: {:?})", file_hash, query_id);
                     }
-                    Some(DhtCommand::SearchFileByCid(cid_str)) => {
-                        // Search for file metadata by CID
-                        let key = kad::RecordKey::new(&cid_str.as_bytes());
-                        let query_id = swarm.behaviour_mut().kademlia.get_record(key);
-                        info!("Searching for file by CID: {} (query: {:?})", cid_str, query_id);
-                    }
                     Some(DhtCommand::SetPrivacyProxies { addresses }) => {
                         info!("Updating privacy proxy targets ({} addresses)", addresses.len());
 
@@ -5082,6 +5076,7 @@ impl DhtService {
             parent_hash,
             cids: None,
             is_root,
+            download_path: None,
         })
     }
 
@@ -6106,6 +6101,15 @@ fn extract_multiaddr_from_error_str(s: &str) -> Option<Multiaddr> {
         return cand.parse::<Multiaddr>().ok();
     }
     None
+}
+
+/// Check if an IPv4 address is private or loopback
+fn is_private_or_loopback_v4(ip: Ipv4Addr) -> bool {
+    let o = ip.octets();
+    o[0] == 10
+        || (o[0] == 172 && (16..=31).contains(&o[1]))
+        || (o[0] == 192 && o[1] == 168)
+        || o[0] == 127
 }
 
 async fn record_identify_push_metrics(metrics: &Arc<Mutex<DhtMetrics>>, info: &identify::Info) {
