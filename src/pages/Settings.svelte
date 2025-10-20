@@ -85,7 +85,7 @@
     bandwidthSchedules: [],
   };
   let localSettings: AppSettings = JSON.parse(JSON.stringify(get(settings)));
-  let savedSettings: AppSettings = JSON.parse(JSON.stringify(get(settings)));
+  let savedSettings: AppSettings = JSON.parse(JSON.stringify(localSettings));
   let hasChanges = false;
   let fileInputEl: HTMLInputElement | null = null;
   let selectedLanguage: string | undefined = undefined;
@@ -476,7 +476,7 @@
     settings.set({ ...defaultSettings, ...loadedSettings });
     // Update local state from the store after loading
     localSettings = JSON.parse(JSON.stringify(get(settings)));
-    savedSettings = JSON.parse(JSON.stringify(get(settings))); 
+    savedSettings = JSON.parse(JSON.stringify(localSettings)); 
   } catch (e) {
     console.error("Failed to load settings:", e);
   }
@@ -1402,7 +1402,7 @@ function sectionMatches(section: string, query: string) {
         variant="outline"
         size="xs"
         disabled={!hasChanges}
-        on:click={() => (localSettings = { ...savedSettings })}
+        on:click={() => (localSettings = JSON.parse(JSON.stringify(savedSettings)))}
         class={`transition-colors duration-200 ${!hasChanges ? "cursor-not-allowed opacity-50" : ""}`}
       >
         {$t("actions.cancel")}
