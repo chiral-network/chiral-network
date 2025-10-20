@@ -36,13 +36,28 @@ use crate::stream_auth::{
     AuthMessage, HmacKeyExchangeConfirmation, HmacKeyExchangeRequest, HmacKeyExchangeResponse,
     StreamAuthService,
 };
+use chrono;
 use dht::{DhtEvent, DhtMetricsSnapshot, DhtService, FileMetadata};
 use directories::ProjectDirs;
 use ethereum::{
-    create_new_account, get_account_from_private_key, get_balance, get_block_number, get_hashrate,
-    get_mined_blocks_count, get_mining_logs, get_mining_performance, get_mining_status, // Assuming you have a file_handler module
-    get_network_difficulty, get_network_hashrate, get_peer_count, get_recent_mined_blocks,
-    start_mining, stop_mining, EthAccount, GethProcess, MinedBlock,
+    create_new_account,
+    get_account_from_private_key,
+    get_balance,
+    get_block_number,
+    get_hashrate,
+    get_mined_blocks_count,
+    get_mining_logs,
+    get_mining_performance,
+    get_mining_status, // Assuming you have a file_handler module
+    get_network_difficulty,
+    get_network_hashrate,
+    get_peer_count,
+    get_recent_mined_blocks,
+    start_mining,
+    stop_mining,
+    EthAccount,
+    GethProcess,
+    MinedBlock,
 };
 use file_transfer::{DownloadMetricsSnapshot, FileTransferEvent, FileTransferService};
 use fs2::available_space;
@@ -71,8 +86,7 @@ use tauri::{
 use tokio::time::{timeout as tokio_timeout, Duration as TokioDuration};
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use totp_rs::{Algorithm, Secret, TOTP};
-use chrono;
-use tracing::{error, info, warn, debug};
+use tracing::{debug, error, info, warn};
 use webrtc_service::{WebRTCFileRequest, WebRTCService};
 
 use crate::manager::ChunkManager; // Import the ChunkManager
@@ -794,7 +808,6 @@ async fn start_dht_node(
     let chunk_storage_path = app_data_dir.join("chunk_storage");
     let chunk_manager = Arc::new(ChunkManager::new(chunk_storage_path));
 
-
     // --- Hotfix: Disable AutoRelay on bootstrap nodes (and via env var)
     let mut final_enable_autorelay = enable_autorelay.unwrap_or(true);
     if is_bootstrap.unwrap_or(false) {
@@ -983,7 +996,8 @@ async fn start_dht_node(
                         // Update statistics based on event type
                         entry.reputation_score += impact;
                         entry.total_events += 1;
-                        entry.last_seen = data.get("timestamp")
+                        entry.last_seen = data
+                            .get("timestamp")
                             .and_then(|v| v.as_u64())
                             .unwrap_or_else(|| {
                                 std::time::SystemTime::now()
@@ -1850,9 +1864,13 @@ async fn start_file_transfer_service(
     }
 
     // Initialize WebRTC service with file transfer service
-    let webrtc_service = WebRTCService::new(app.app_handle().clone(), ft_arc.clone(), state.keystore.clone())
-        .await
-        .map_err(|e| format!("Failed to start WebRTC service: {}", e))?;
+    let webrtc_service = WebRTCService::new(
+        app.app_handle().clone(),
+        ft_arc.clone(),
+        state.keystore.clone(),
+    )
+    .await
+    .map_err(|e| format!("Failed to start WebRTC service: {}", e))?;
 
     let webrtc_arc = Arc::new(webrtc_service);
     {
@@ -2430,7 +2448,6 @@ async fn upload_file_chunk(
             encrypted_key_bundle: None,
             parent_hash: None,
             is_root: true,
-            encrypted_key_bundle: None,
             ..Default::default()
         };
 
@@ -4259,7 +4276,7 @@ async fn upload_and_publish_file(
                 vec![], // Empty - chunks already stored
                 created_at,
                 Some(mime_type),
-                None, // encrypted_key_bundle
+                None,                            // encrypted_key_bundle
                 true,                            // is_encrypted
                 Some("AES-256-GCM".to_string()), // Encryption method
                 None,                            // key_fingerprint (deprecated)
@@ -4442,13 +4459,26 @@ async fn send_chat_message(
     signature: Vec<u8>,
 ) -> Result<(), String> {
     debug!("send_chat_message called for peer: {}", recipient_peer_id);
-    let webrtc = state.webrtc.lock().await.as_ref().cloned()
+    let webrtc = state
+        .webrtc
+        .lock()
+        .await
+        .as_ref()
+        .cloned()
         .ok_or("WebRTC service not running")?;
 
     // 1. Check if a WebRTC connection already exists.
     if !webrtc.get_connection_status(&recipient_peer_id).await {
-        debug!("No existing WebRTC connection to {}. Attempting to establish one.", recipient_peer_id);
-        let dht = state.dht.lock().await.as_ref().cloned()
+        debug!(
+            "No existing WebRTC connection to {}. Attempting to establish one.",
+            recipient_peer_id
+        );
+        let dht = state
+            .dht
+            .lock()
+            .await
+            .as_ref()
+            .cloned()
             .ok_or("DHT service not running")?;
 
         dht.connect_to_peer_by_id(recipient_peer_id.clone()).await?;
@@ -4456,21 +4486,31 @@ async fn send_chat_message(
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 
         if !webrtc.get_connection_status(&recipient_peer_id).await {
-            error!("Failed to establish WebRTC connection with peer {} after 5s.", recipient_peer_id);
+            error!(
+                "Failed to establish WebRTC connection with peer {} after 5s.",
+                recipient_peer_id
+            );
             return Err("Failed to establish WebRTC connection with peer.".to_string());
         }
-        debug!("WebRTC connection to {} established successfully.", recipient_peer_id);
+        debug!(
+            "WebRTC connection to {} established successfully.",
+            recipient_peer_id
+        );
     }
 
     // 3. Construct the message payload.
     let chat_message = webrtc_service::WebRTCChatMessage {
-        message_id: format!("msg_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()),
+        message_id: format!(
+            "msg_{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ),
         encrypted_payload,
         timestamp: chrono::Utc::now().timestamp() as u64,
         signature,
     };
     let message = webrtc_service::WebRTCMessage::ChatMessage(chat_message);
-    let message_bytes = serde_json::to_vec(&message).map_err(|e| format!("Failed to serialize chat message: {}", e))?;
+    let message_bytes = serde_json::to_vec(&message)
+        .map_err(|e| format!("Failed to serialize chat message: {}", e))?;
     debug!("Sending chat message to {}", recipient_peer_id);
     // Correctly serialize the message to a string before sending via send_text
     let message_str = serde_json::to_string(&message)
