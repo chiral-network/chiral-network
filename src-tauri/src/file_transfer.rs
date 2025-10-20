@@ -726,8 +726,8 @@ impl FileTransferService {
         ) {
             // Check if this bundle is for this user by comparing public keys
             if metadata.recipient_public_key.as_ref().map(|s| s.as_str()) == Some(user_pk) {
-                let private_key_bytes = hex::decode(private_key_hex.trim_start_matches("0x"))
-                    .ok()?;
+                let private_key_bytes =
+                    hex::decode(private_key_hex.trim_start_matches("0x")).ok()?;
                 let private_key_array: [u8; 32] = private_key_bytes.try_into().ok()?;
                 let private_key = StaticSecret::from(private_key_array);
 

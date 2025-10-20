@@ -175,7 +175,9 @@ impl MultiSourceDownloadService {
         Self {
             dht_service,
             webrtc_service,
-            proxy_latency_service: Some(Arc::new(Mutex::new(crate::proxy_latency::ProxyLatencyService::new()))),
+            proxy_latency_service: Some(Arc::new(Mutex::new(
+                crate::proxy_latency::ProxyLatencyService::new(),
+            ))),
             active_downloads: Arc::new(RwLock::new(HashMap::new())),
             event_tx,
             event_rx: Arc::new(Mutex::new(event_rx)),
@@ -1000,7 +1002,7 @@ impl MultiSourceDownloadService {
             let service = proxy_service.lock().await;
             let enabled = service.should_use_proxy_routing();
             let best_proxy = service.get_best_proxy();
-            
+
             serde_json::json!({
                 "enabled": enabled,
                 "best_proxy": best_proxy,

@@ -1,6 +1,6 @@
 <script lang="ts">
     import './styles/globals.css'
-    import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Mail } from 'lucide-svelte'
+    import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Mail, Server } from 'lucide-svelte'
     import UploadPage from './pages/Upload.svelte'
     import DownloadPage from './pages/Download.svelte'
     import ProxyPage from './pages/Proxy.svelte'
@@ -11,6 +11,7 @@
     import MiningPage from './pages/Mining.svelte'
     import ReputationPage from './pages/Reputation.svelte'
     import MessagesPage from './pages/Messages.svelte'
+    import RelayPage from './pages/Relay.svelte'
     import NotFound from './pages/NotFound.svelte'
     import ProxySelfTest from './routes/proxy-self-test.svelte'
     import { networkStatus, settings, userLocation } from './lib/stores'
@@ -158,6 +159,7 @@
         { id: 'upload', label: $t('nav.upload'), icon: Upload },
         { id: 'messages', label: 'Messages', icon: Mail },
         { id: 'network', label: $t('nav.network'), icon: Globe },
+        { id: 'relay', label: $t('nav.relay'), icon: Server },
         { id: 'mining', label: $t('nav.mining'), icon: Cpu },
         { id: 'proxy', label: $t('nav.proxy'), icon: Shield },
         { id: 'analytics', label: $t('nav.analytics'), icon: BarChart3 },
@@ -190,6 +192,10 @@
       {
         path: "network",
         component: NetworkPage
+      },
+      {
+        path: "relay",
+        component: RelayPage
       },
       {
         path: "mining",
