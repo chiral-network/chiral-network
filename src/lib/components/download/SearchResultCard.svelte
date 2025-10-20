@@ -73,8 +73,7 @@
 
   async function confirmDecryptAndQueue() {
     showDecryptDialog = false;
-    await dhtService.downloadFile(metadata);
-      if (isBitswap) {
+    if (isBitswap) {
         console.log("🔍 DEBUG: Initiating Bitswap download for file:", metadata.fileName);
       
         await dhtService.downloadFile(metadata);

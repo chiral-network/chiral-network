@@ -1,4 +1,5 @@
 use crate::manager::Sha256Hasher;
+use async_std::fs;
 use async_std::path::Path;
 use async_trait::async_trait;
 use blockstore::{
@@ -19,11 +20,15 @@ use relay::client::Event as RelayClientEvent;
 use rs_merkle::{Hasher, MerkleTree};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    path::PathBuf,
+    str::FromStr,
+};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio_util::compat::TokioAsyncReadCompatExt;
 use tracing::{debug, error, info, trace, warn};
@@ -45,16 +50,12 @@ use std::error::Error;
 pub trait AsyncIo: FAsyncRead + FAsyncWrite + Unpin + Send {}
 impl<T: FAsyncRead + FAsyncWrite + Unpin + Send> AsyncIo for T {}
 
-use libp2p::core::upgrade::Version;
 use libp2p::{
     autonat::v2,
     core::{
         muxing::StreamMuxerBox,
         // FIXED E0432: ListenerEvent is removed, only import what is available.
-        transport::{
-            choice::OrTransport, Boxed, DialOpts, ListenerId, Transport, TransportError,
-            TransportEvent,
-        },
+        transport::{Boxed, DialOpts, ListenerId, Transport, TransportError, TransportEvent},
     },
     dcutr,
     identify::{self, Event as IdentifyEvent},
@@ -64,7 +65,6 @@ use libp2p::{
         Event as KademliaEvent, GetRecordOk, Mode, PutRecordOk, QueryResult, Record,
     },
     mdns::{tokio::Behaviour as Mdns, Event as MdnsEvent},
-    noise,
     ping::{self, Behaviour as Ping, Event as PingEvent},
     quic, relay, request_response as rr,
     swarm::{behaviour::toggle, NetworkBehaviour, SwarmEvent},
@@ -102,7 +102,7 @@ fn extract_keywords(file_name: &str) -> Vec<String> {
     keywords.into_iter().collect()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct FileMetadata {
     /// The Merkle root of the original file chunks, used as the primary identifier for integrity.
@@ -128,6 +128,7 @@ pub struct FileMetadata {
     /// For encrypted files, this contains the encrypted AES key and other info.
     pub encrypted_key_bundle: Option<crate::encryption::EncryptedAesKeyBundle>,
     pub is_root: bool,
+    pub download_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -243,8 +244,7 @@ pub enum DhtCommand {
         response_tx: oneshot::Sender<FileMetadata>,
     },
     SearchFile(String),
-    SearchFileByCid(String),
-    DownloadFile(FileMetadata),
+    DownloadFile(FileMetadata, String),
     ConnectPeer(String),
     ConnectToPeerById(PeerId),
     DisconnectPeer(PeerId),
@@ -341,6 +341,12 @@ pub enum DhtEvent {
     BitswapError {
         query_id: String,
         error: String,
+    },
+    ReputationEvent {
+        peer_id: String,
+        event_type: String,
+        impact: f64,
+        data: serde_json::Value,
     },
 }
 
@@ -1273,7 +1279,7 @@ async fn run_dht_node(
     >,
     pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
     root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>>,
-    active_downloads: Arc<Mutex<HashMap<String, ActiveDownload>>>,
+    active_downloads: Arc<Mutex<HashMap<String, Arc<Mutex<ActiveDownload>>>>>,
     get_providers_queries: Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>,
     seeder_heartbeats_cache: Arc<Mutex<HashMap<String, FileHeartbeatCacheEntry>>>,
     pending_heartbeat_updates: Arc<Mutex<HashSet<String>>>,
@@ -1547,6 +1553,7 @@ async fn run_dht_node(
                                         cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
                                         encrypted_key_bundle: json_val.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
                                         is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
+                                        ..Default::default()
                                     };
                                     let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
                                 }
@@ -1818,7 +1825,7 @@ async fn run_dht_node(
                         info!("Successfully published and started providing encrypted file: {}", metadata.merkle_root);
                         let _ = event_tx.send(DhtEvent::PublishedFile(metadata)).await;
                     }
-                    Some(DhtCommand::DownloadFile(file_metadata)) =>{
+                    Some(DhtCommand::DownloadFile(mut file_metadata, download_path)) =>{
                         let root_cid_result = file_metadata.cids.as_ref()
                             .and_then(|cids| cids.first())
                             .ok_or_else(|| {
@@ -1834,7 +1841,9 @@ async fn run_dht_node(
                         // Request the root block which contains the CIDs
                         let root_query_id = swarm.behaviour_mut().bitswap.get(&root_cid);
 
+                        file_metadata.download_path = Some(download_path);
                         // Store the root query ID to handle when we get the root block
+                        info!("INSERTING INTO ROOT QUERY MAPPING");
                         root_query_mapping.lock().await.insert(root_query_id, file_metadata);
                     }
 
@@ -1982,18 +1991,18 @@ async fn run_dht_node(
                         let query_id = swarm.behaviour_mut().kademlia.get_record(key);
                         info!("Searching for file: {} (query: {:?})", file_hash, query_id);
                     }
-                    Some(DhtCommand::SearchFileByCid(cid_str)) => {
-                        match cid_str.parse::<Cid>() {
-                            Ok(cid) => {
-                                let key = kad::RecordKey::new(&cid.to_bytes());
-                                let query_id = swarm.behaviour_mut().kademlia.get_record(key);
-                                info!("Searching for file by CID: {} (query: {:?})", cid_str, query_id);
-                            }
-                            Err(e) => {
-                                error!("Invalid CID format for search: {}. Error: {}", cid_str, e);
-                            }
-                        }
-                    }
+                    // Some(DhtCommand::SearchFileByCid(cid_str)) => {
+                    //     match cid_str.parse::<Cid>() {
+                    //         Ok(cid) => {
+                    //             let key = kad::RecordKey::new(&cid.to_bytes());
+                    //             let query_id = swarm.behaviour_mut().kademlia.get_record(key);
+                    //             info!("Searching for file by CID: {} (query: {:?})", cid_str, query_id);
+                    //         }
+                    //         Err(e) => {
+                    //             error!("Invalid CID format for search: {}. Error: {}", cid_str, e);
+                    //         }
+                    //     }
+                    // }
                     Some(DhtCommand::SetPrivacyProxies { addresses }) => {
                         info!("Updating privacy proxy targets ({} addresses)", addresses.len());
 
@@ -2420,15 +2429,79 @@ async fn run_dht_node(
                                         src_peer_id
                                     )))
                                     .await;
+
+                                // Emit reputation event
+                                let _ = event_tx
+                                    .send(DhtEvent::ReputationEvent {
+                                        peer_id: src_peer_id.to_string(),
+                                        event_type: "RelayReservationAccepted".to_string(),
+                                        impact: 5.0,
+                                        data: serde_json::json!({
+                                            "timestamp": SystemTime::now()
+                                                .duration_since(UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs(),
+                                        }),
+                                    })
+                                    .await;
                             }
                             RelayEvent::ReservationReqDenied { src_peer_id, .. } => {
                                 debug!("🔁 Relay server: Denied reservation from {}", src_peer_id);
+
+                                // Emit reputation event
+                                let _ = event_tx
+                                    .send(DhtEvent::ReputationEvent {
+                                        peer_id: src_peer_id.to_string(),
+                                        event_type: "RelayRefused".to_string(),
+                                        impact: -2.0,
+                                        data: serde_json::json!({
+                                            "reason": "reservation_denied",
+                                            "timestamp": SystemTime::now()
+                                                .duration_since(UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs(),
+                                        }),
+                                    })
+                                    .await;
                             }
                             RelayEvent::ReservationTimedOut { src_peer_id } => {
                                 debug!("🔁 Relay server: Reservation timed out for {}", src_peer_id);
+
+                                // Emit reputation event
+                                let _ = event_tx
+                                    .send(DhtEvent::ReputationEvent {
+                                        peer_id: src_peer_id.to_string(),
+                                        event_type: "RelayTimeout".to_string(),
+                                        impact: -10.0,
+                                        data: serde_json::json!({
+                                            "reason": "reservation_timeout",
+                                            "timestamp": SystemTime::now()
+                                                .duration_since(UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs(),
+                                        }),
+                                    })
+                                    .await;
                             }
                             RelayEvent::CircuitReqDenied { src_peer_id, dst_peer_id, .. } => {
                                 debug!("🔁 Relay server: Denied circuit from {} to {}", src_peer_id, dst_peer_id);
+
+                                // Emit reputation event
+                                let _ = event_tx
+                                    .send(DhtEvent::ReputationEvent {
+                                        peer_id: src_peer_id.to_string(),
+                                        event_type: "RelayRefused".to_string(),
+                                        impact: -2.0,
+                                        data: serde_json::json!({
+                                            "reason": "circuit_denied",
+                                            "dst_peer_id": dst_peer_id.to_string(),
+                                            "timestamp": SystemTime::now()
+                                                .duration_since(UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs(),
+                                        }),
+                                    })
+                                    .await;
                             }
                             RelayEvent::CircuitReqAccepted { src_peer_id, dst_peer_id, .. } => {
                                 info!("🔁 Relay server: Established circuit from {} to {}", src_peer_id, dst_peer_id);
@@ -2438,9 +2511,41 @@ async fn run_dht_node(
                                         src_peer_id, dst_peer_id
                                     )))
                                     .await;
+
+                                // Emit reputation event
+                                let _ = event_tx
+                                    .send(DhtEvent::ReputationEvent {
+                                        peer_id: src_peer_id.to_string(),
+                                        event_type: "RelayCircuitEstablished".to_string(),
+                                        impact: 10.0,
+                                        data: serde_json::json!({
+                                            "dst_peer_id": dst_peer_id.to_string(),
+                                            "timestamp": SystemTime::now()
+                                                .duration_since(UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs(),
+                                        }),
+                                    })
+                                    .await;
                             }
                             RelayEvent::CircuitClosed { src_peer_id, dst_peer_id, .. } => {
                                 debug!("🔁 Relay server: Circuit closed between {} and {}", src_peer_id, dst_peer_id);
+
+                                // Emit reputation event
+                                let _ = event_tx
+                                    .send(DhtEvent::ReputationEvent {
+                                        peer_id: src_peer_id.to_string(),
+                                        event_type: "RelayCircuitSuccessful".to_string(),
+                                        impact: 15.0,
+                                        data: serde_json::json!({
+                                            "dst_peer_id": dst_peer_id.to_string(),
+                                            "timestamp": SystemTime::now()
+                                                .duration_since(UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs(),
+                                        }),
+                                    })
+                                    .await;
                             }
                             // Handle deprecated relay events (libp2p handles logging internally)
                             _ => {}
@@ -2448,109 +2553,160 @@ async fn run_dht_node(
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) => match bitswap {
                         beetswap::Event::GetQueryResponse { query_id, data } => {
+
                             // Check if this is a root block query first
                             if let Some(metadata) = root_query_mapping.lock().await.remove(&query_id) {
+                                info!("This is a ROOT BLOCK for file: {}", metadata.merkle_root);
+
                                 // This is the root block containing CIDs - parse and request all data blocks
-                                if let Ok(cids) = serde_json::from_slice::<Vec<Cid>>(&data) {
-                                    info!("Received root block for file {} with {} CIDs", metadata.merkle_root, cids.len());
+                                match serde_json::from_slice::<Vec<Cid>>(&data) {
+                                    Ok(cids) => {
 
-                                    // Create queries map for this file's data blocks
-                                    let mut file_queries = HashMap::new();
+                                        // Create queries map for this file's data blocks
+                                        let mut file_queries = HashMap::new();
 
-                                    for (i, cid) in cids.iter().enumerate() {
-                                        let block_query_id = swarm.behaviour_mut().bitswap.get(cid);
-                                        file_queries.insert(block_query_id, i as u32);
+                                        for (i, cid) in cids.iter().enumerate() {
+                                            let block_query_id = swarm.behaviour_mut().bitswap.get(cid);
+                                            file_queries.insert(block_query_id, i as u32);
+                                        }
+
+                                        // Calculate chunk size based on file size and number of chunks
+                                        let total_chunks = cids.len() as u64;
+                                        // assume 256kb
+                                        let chunk_size = 256 * 1024;
+
+                                        // Pre-calculate chunk offsets
+                                        let chunk_offsets: Vec<u64> = (0..total_chunks)
+                                            .map(|i| i * chunk_size)
+                                            .collect();
+
+                                        info!("Chunk offsets: {:?}", chunk_offsets);
+
+                                        info!("About to create ActiveDownload for file: {}", metadata.merkle_root);
+                                        let download_path = PathBuf::from_str(metadata.download_path.as_ref().expect("Error: download_path not defined"));
+                                        let download_path = match download_path {
+                                            Ok(path) => get_available_download_path(path).await,
+                                            Err(e) => {
+                                                error!("Invalid download path for file {}: {}", metadata.merkle_root, e);
+                                                return;
+                                            }
+                                        };
+
+                                    // Create active download with memory-mapped file
+                            match ActiveDownload::new(
+                                metadata.clone(),
+                                file_queries,
+                                &download_path,
+                                metadata.file_size,
+                                chunk_offsets,
+                            ) {
+                                Ok(active_download) => {
+                                    let active_download = Arc::new(tokio::sync::Mutex::new(active_download));
+
+                                    info!("Successfully created ActiveDownload");
+
+                                    active_downloads.lock().await.insert(
+                                        metadata.merkle_root.clone(),
+                                        Arc::clone(&active_download),
+                                    );
+
+                                    info!(
+                                        "Inserted into active_downloads map. Started tracking download for file {} with {} chunks (chunk_size: {} bytes)",
+                                        metadata.merkle_root, cids.len(), chunk_size
+                                    );
+                                }
+                                Err(e) => {
+                                    error!(
+                                        "FAILED to create memory-mapped file for {}: {}",
+                                        metadata.merkle_root, e
+                                    );
+                                }
+                            }
+
                                     }
-
-                                    // Create active download tracking for this file
-                                    let active_download = ActiveDownload {
-                                        metadata: metadata.clone(),
-                                        queries: file_queries,
-                                        downloaded_chunks: HashMap::new(),
-                                    };
-
-                                    // Store the active download
-                                    active_downloads.lock().await.insert(metadata.merkle_root.clone(), active_download);
-
-                                    info!("Started tracking download for file {} with {} chunks", metadata.merkle_root, cids.len());
-                                } else {
-                                    error!("Failed to parse root block as CIDs array for file {}", metadata.merkle_root);
+                                    Err(e) => {
+                                        error!("Failed to parse root block as CIDs array for file {}: {}",
+                                            metadata.merkle_root, e);
+                                    }
                                 }
                             } else {
                                 // This is a data block query - find the corresponding file and handle it
+
                                 let mut completed_downloads = Vec::new();
 
                                 // Check all active downloads for this query_id
                                 {
                                     let mut active_downloads_guard = active_downloads.lock().await;
-                                    for (file_hash, active_download) in active_downloads_guard.iter_mut() {
+
+                                    let mut found = false;
+                                    for (file_hash, active_download_lock) in active_downloads_guard.iter_mut() {
+                                        let mut active_download = active_download_lock.lock().await;
                                         if let Some(chunk_index) = active_download.queries.remove(&query_id) {
-                                            // This query belongs to this file - store the chunk
-                                            active_download.downloaded_chunks.insert(chunk_index, data.clone());
+                                            found = true;
 
-                                            // Check if all chunks for this file are downloaded
-                                            if active_download.queries.is_empty() {
-                                                info!("All chunks downloaded for file {}", file_hash);
+                                            // This query belongs to this file - write the chunk to disk
+                                            let offset = active_download.chunk_offsets
+                                                .get(chunk_index as usize)
+                                                .copied()
+                                                .unwrap_or_else(|| {
+                                                    error!("No offset found for chunk_index: {}", chunk_index);
+                                                    0
+                                                });
 
-                                                // Reassemble the file
-                                                let mut completed_metadata = active_download.metadata.clone();
 
-                                                if completed_metadata.is_encrypted {
-                                                    if let Some(bundle) = &completed_metadata.encrypted_key_bundle {
-                                                        let mut encrypted_chunks = Vec::new();
-                                                        for i in 0..active_download.downloaded_chunks.len() as u32 {
-                                                            if let Some(chunk) = active_download.downloaded_chunks.get(&i) {
-                                                                encrypted_chunks.push(chunk.clone());
-                                                            }
-                                                        }
-                                                        if let Some(cm) = &chunk_manager {
-                                                            // This part is tricky because reassemble_and_decrypt_data needs a secret key.
-                                                            // We don't have it here. The design implies decryption should happen
-                                                            // at a higher level where the user's private key is available.
-                                                            // For now, we will just reassemble the encrypted chunks and pass them up.
-                                                            // The frontend/caller will be responsible for decryption.
-
-                                                            let mut reassembled_encrypted_data = Vec::new();
-                                                            for i in 0..active_download.downloaded_chunks.len() as u32 {
-                                                                if let Some(chunk_data) = active_download.downloaded_chunks.get(&i) {
-                                                                    reassembled_encrypted_data.extend_from_slice(chunk_data);
-                                                                }
-                                                            }
-                                                            // We are setting `file_data` to the raw encrypted data.
-                                                            // The `DownloadedFile` event will carry this and the `encrypted_key_bundle`.
-                                                            completed_metadata.file_data = reassembled_encrypted_data;
-
-                                                        } else {
-                                                            error!("ChunkManager not available for file reassembly: {}", file_hash);
-                                                        }
-                                                    } else {
-                                                        error!("File {} is marked as encrypted but has no key bundle.", file_hash);
-                                                    }
-                                                } else {
-                                                    let mut file_data = Vec::new();
-                                                    for i in 0..active_download.downloaded_chunks.len() as u32 {
-                                                        if let Some(chunk) = active_download.downloaded_chunks.get(&i) {
-                                                            file_data.extend_from_slice(chunk);
-                                                        }
-                                                    }
-                                                    completed_metadata.file_data = file_data;
+                                            match active_download.write_chunk(chunk_index, &data, offset) {
+                                                Ok(_) => {
+                                                    info!("Successfully wrote chunk {}/{} for file {}",
+                                                        chunk_index + 1,
+                                                        active_download.total_chunks,
+                                                        file_hash);
                                                 }
-                                                completed_downloads.push(completed_metadata);                                            }
+                                                Err(e) => {
+                                                    error!("Failed to write chunk {} to disk for file {}: {}",
+                                                        chunk_index, file_hash, e);
+                                                    break;
+                                                }
+                                            }
+
+                                           // In the "all chunks downloaded" section:
+                                            if active_download.is_complete() {
+                                                // Flush and finalize the file (rename .tmp to final name)
+                                                // No need to check for encryption at this level, handle decryption
+                                                // inside DownloadedFile event or some other handler above this level.
+                                                info!("Finalizing file...");
+                                                match active_download.finalize() {
+                                                    Ok(_) => {
+                                                        info!("Successfully finalized file");
+                                                    }
+                                                    Err(e) => {
+                                                        error!("Failed to finalize file {}: {}", file_hash, e);
+                                                        break;
+                                                    }
+                                                }
+                                                // no longer storing file data in completed metadata because file is being written directly to disk
+                                                let completed_metadata = active_download.metadata.clone();
+                                                completed_downloads.push(completed_metadata);
+                                            }
                                             break;
                                         }
+                                    }
+
+                                    if !found {
+                                        warn!("Received chunk for unknown query_id: {:?}", query_id);
                                     }
                                 }
 
                                 // Send completion events for finished downloads
+                             // Send completion events for finished downloads
                                 for metadata in completed_downloads {
-                                    // The file is downloaded, but if it's encrypted, it's not yet usable.
-                                    // The `DownloadedFile` event now acts as a signal that the raw,
-                                    // possibly encrypted, data is ready. The consumer of this event
-                                    // (e.g., a service in main.rs) will be responsible for decryption.
-                                    // info!("Downloaded all blocks for file {}. Emitting DownloadedFile event.", metadata.merkle_root);
-                                    let _ = event_tx.send(DhtEvent::DownloadedFile(metadata.clone())).await;
+                                    info!("Emitting DownloadedFile event for: {}", metadata.merkle_root);
 
-                                    // Also remove from active downloads
+                                    if let Err(e) = event_tx.send(DhtEvent::DownloadedFile(metadata.clone())).await {
+                                        error!("Failed to send DownloadedFile event: {}", e);
+                                    }
+
+                                    // Just remove from active downloads - file is already finalized
+                                    info!("Removing from active_downloads...");
                                     active_downloads.lock().await.remove(&metadata.merkle_root);
                                 }
                             }
@@ -2564,7 +2720,8 @@ async fn run_dht_node(
                                 let mut active_downloads_guard = active_downloads.lock().await;
                                 let mut failed_files = Vec::new();
 
-                                for (file_hash, active_download) in active_downloads_guard.iter_mut() {
+                                for (file_hash, active_download_lock) in active_downloads_guard.iter_mut() {
+                                        let mut active_download = active_download_lock.lock().await;
                                     if active_download.queries.remove(&query_id).is_some() {
                                         warn!("Query {:?} failed for file {}, removing from active downloads", query_id, file_hash);
                                         failed_files.push(file_hash.clone());
@@ -2797,6 +2954,7 @@ async fn run_dht_node(
                                         cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
                                         encrypted_key_bundle: json_val.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
                                         is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
+                                        ..Default::default()
                                     };
                                     let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
                                 }
@@ -3317,6 +3475,7 @@ async fn handle_kademlia_event(
                                         .get("is_root")
                                         .and_then(|v| v.as_bool())
                                         .unwrap_or(true),
+                                    ..Default::default()
                                 };
 
                                 let notify_metadata = metadata.clone();
@@ -4041,22 +4200,167 @@ pub struct DhtService {
     >,
     pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
     root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>>,
-    active_downloads: Arc<Mutex<HashMap<String, ActiveDownload>>>,
+    active_downloads: Arc<Mutex<HashMap<String, Arc<Mutex<ActiveDownload>>>>>,
     get_providers_queries: Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>,
     chunk_size: usize,
     file_heartbeat_state: Arc<Mutex<HashMap<String, FileHeartbeatState>>>,
     seeder_heartbeats_cache: Arc<Mutex<HashMap<String, FileHeartbeatCacheEntry>>>,
     pending_heartbeat_updates: Arc<Mutex<HashSet<String>>>,
 }
+use memmap2::MmapMut;
+use std::fs::OpenOptions;
 
-/// Tracks an active file download with its associated queries and chunks
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct ActiveDownload {
     metadata: FileMetadata,
-    queries: HashMap<beetswap::QueryId, u32>, // query_id -> chunk_index
-    downloaded_chunks: HashMap<u32, Vec<u8>>, // chunk_index -> data
+    queries: HashMap<beetswap::QueryId, u32>,
+    temp_file_path: PathBuf,  // Path with .tmp suffix
+    final_file_path: PathBuf, // Final path without .tmp
+    mmap: Arc<std::sync::Mutex<MmapMut>>,
+    received_chunks: Arc<std::sync::Mutex<HashSet<u32>>>,
+    total_chunks: u32,
+    chunk_offsets: Vec<u64>,
 }
 
+impl ActiveDownload {
+    fn new(
+        metadata: FileMetadata,
+        queries: HashMap<beetswap::QueryId, u32>,
+        download_dir: &PathBuf,
+        total_size: u64,
+        chunk_offsets: Vec<u64>,
+    ) -> std::io::Result<Self> {
+        let total_chunks = queries.len() as u32;
+
+        // Create final filename based on the actual file name
+        // let final_file_path = download_dir.join(&metadata.file_name);
+        let final_file_path = download_dir.clone();
+        // Create temporary filename with .tmp suffix
+        let temp_file_path = download_dir.with_extension("tmp");
+        info!("Creating temp file at: {:?}", temp_file_path);
+        info!("Will rename to: {:?} when complete", final_file_path);
+
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&temp_file_path)?;
+
+        file.set_len(total_size)?;
+
+        let mmap = unsafe { MmapMut::map_mut(&file)? };
+
+        Ok(Self {
+            metadata,
+            queries,
+            temp_file_path,
+            final_file_path,
+            mmap: Arc::new(std::sync::Mutex::new(mmap)),
+            received_chunks: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            total_chunks,
+            chunk_offsets,
+        })
+    }
+
+    fn write_chunk(&self, chunk_index: u32, data: &[u8], offset: u64) -> std::io::Result<()> {
+        let mut mmap = self.mmap.lock().unwrap();
+        let start = offset as usize;
+        let end = start + data.len();
+
+        if end > mmap.len() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("Chunk {} would exceed file bounds", chunk_index),
+            ));
+        }
+
+        mmap[start..end].copy_from_slice(data);
+        self.received_chunks.lock().unwrap().insert(chunk_index);
+
+        Ok(())
+    }
+
+    fn is_complete(&self) -> bool {
+        self.queries.is_empty()
+            && self.received_chunks.lock().unwrap().len() == self.total_chunks as usize
+    }
+
+    fn flush(&self) -> std::io::Result<()> {
+        self.mmap.lock().unwrap().flush()
+    }
+
+    fn read_complete_file(&self) -> std::io::Result<Vec<u8>> {
+        let mmap = self.mmap.lock().unwrap();
+        Ok(mmap.to_vec())
+    }
+
+    /// Finalize the download by renaming .tmp file to final filename
+    fn finalize(&self) -> std::io::Result<()> {
+        // First, flush to ensure all data is written
+        self.flush()?;
+
+        // Drop the mmap to release the file handle
+        drop(self.mmap.lock().unwrap());
+
+        info!(
+            "Renaming {:?} to {:?}",
+            self.temp_file_path, self.final_file_path
+        );
+
+        // Rename the temp file to the final file
+        std::fs::rename(&self.temp_file_path, &self.final_file_path)?;
+
+        info!("Successfully finalized file: {:?}", self.final_file_path);
+        Ok(())
+    }
+
+    /// Clean up temp file (only call if download fails/is cancelled)
+    fn cleanup(&self) {
+        if self.temp_file_path.exists() {
+            if let Err(e) = std::fs::remove_file(&self.temp_file_path) {
+                error!(
+                    "Failed to cleanup temp file {:?}: {}",
+                    self.temp_file_path, e
+                );
+            } else {
+                info!("Cleaned up temp file: {:?}", self.temp_file_path);
+            }
+        }
+    }
+
+    fn progress(&self) -> f32 {
+        let received = self.received_chunks.lock().unwrap().len() as f32;
+        received / self.total_chunks as f32
+    }
+
+    fn chunks_received(&self) -> usize {
+        self.received_chunks.lock().unwrap().len()
+    }
+}
+
+impl Clone for ActiveDownload {
+    fn clone(&self) -> Self {
+        Self {
+            metadata: self.metadata.clone(),
+            queries: self.queries.clone(),
+            temp_file_path: self.temp_file_path.clone(),
+            final_file_path: self.final_file_path.clone(),
+            mmap: Arc::clone(&self.mmap),
+            received_chunks: Arc::clone(&self.received_chunks),
+            total_chunks: self.total_chunks,
+            chunk_offsets: self.chunk_offsets.clone(),
+        }
+    }
+}
+
+impl Drop for ActiveDownload {
+    fn drop(&mut self) {
+        // Only cleanup temp file if this is the last reference and file wasn't finalized
+        if Arc::strong_count(&self.mmap) == 1 {
+            self.cleanup();
+        }
+    }
+}
 #[derive(Debug)]
 struct FileHeartbeatState {
     /// Handle to the periodic heartbeat task so we can cancel it when seeding stops.
@@ -4325,7 +4629,9 @@ impl DhtService {
             swarm.add_external_address(ma);
         }
 
-        // Connect to bootstrap nodes (unreachable addresses filtered)
+        // Connect to bootstrap nodes
+        // NOTE: Bootstrap nodes are explicitly configured, so we trust them
+        // and don't filter based on reachability (important for relay servers and local testing)
         let mut successful_connections = 0;
         let total_bootstrap_nodes = bootstrap_nodes.len();
         for bootstrap_addr in &bootstrap_nodes {
@@ -4406,7 +4712,7 @@ impl DhtService {
             Arc::new(Mutex::new(HashMap::new()));
         let root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>> =
             Arc::new(Mutex::new(HashMap::new()));
-        let active_downloads: Arc<Mutex<HashMap<String, ActiveDownload>>> =
+        let active_downloads: Arc<Mutex<HashMap<String, Arc<Mutex<ActiveDownload>>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let get_providers_queries_local: Arc<
             Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>,
@@ -4706,12 +5012,17 @@ impl DhtService {
             parent_hash,
             cids: None,
             is_root,
+            ..Default::default()
         })
     }
 
-    pub async fn download_file(&self, file_metadata: FileMetadata) -> Result<(), String> {
+    pub async fn download_file(
+        &self,
+        file_metadata: FileMetadata,
+        download_path: String,
+    ) -> Result<(), String> {
         self.cmd_tx
-            .send(DhtCommand::DownloadFile(file_metadata))
+            .send(DhtCommand::DownloadFile(file_metadata, download_path))
             .await
             .map_err(|e| e.to_string())
     }
@@ -5684,14 +5995,6 @@ fn multiaddr_to_ip(addr: &Multiaddr) -> Option<IpAddr> {
     None
 }
 
-fn is_private_or_loopback_v4(ip: Ipv4Addr) -> bool {
-    let o = ip.octets();
-    o[0] == 10
-        || (o[0] == 172 && (16..=31).contains(&o[1]))
-        || (o[0] == 192 && o[1] == 168)
-        || o[0] == 127
-}
-
 fn ipv4_in_same_subnet(target: Ipv4Addr, iface_ip: Ipv4Addr, iface_mask: Ipv4Addr) -> bool {
     let t = u32::from(target);
     let i = u32::from(iface_ip);
@@ -5702,7 +6005,7 @@ fn ipv4_in_same_subnet(target: Ipv4Addr, iface_ip: Ipv4Addr, iface_mask: Ipv4Add
 /// If multiaddr can be plausibly reached from this machine
 /// - Relay paths (p2p-circuit) are allowed
 /// - IPv4 loopback (127.0.0.1) is allowed (local testing)
-/// - For WAN intent, only public IPv4 or same subnet are allowed
+/// - For WAN intent, only public IPv4 addresses are allowed (not private ranges)
 fn ma_plausibly_reachable(ma: &Multiaddr) -> bool {
     // Relay paths are allowed
     if ma.iter().any(|p| matches!(p, Protocol::P2pCircuit)) {
@@ -5710,7 +6013,12 @@ fn ma_plausibly_reachable(ma: &Multiaddr) -> bool {
     }
     // Only consider IPv4 (IPv6 can be added if needed)
     if let Some(Protocol::Ip4(v4)) = ma.iter().find(|p| matches!(p, Protocol::Ip4(_))) {
-        return !is_private_or_loopback_v4(v4);
+        // Allow loopback for local testing
+        if v4.is_loopback() {
+            return true;
+        }
+        // Allow public addresses, reject private
+        return !v4.is_private();
     }
     false
 }
@@ -5764,6 +6072,50 @@ pub fn split_into_blocks(bytes: &[u8], chunk_size: usize) -> Vec<ByteBlock> {
         i = end;
     }
     blocks
+}
+
+async fn get_available_download_path(path: PathBuf) -> PathBuf {
+    // Helper function to get the temp file path
+    let get_temp_path = |p: &PathBuf| -> PathBuf {
+        p.with_extension(format!(
+            "{}.tmp",
+            p.extension().and_then(|s| s.to_str()).unwrap_or("")
+        ))
+    };
+
+    // Check if both the final path and temp path are available
+    let temp_path = get_temp_path(&path);
+    let path_exists = fs::metadata(&path).await.is_ok();
+    let temp_exists = fs::metadata(&temp_path).await.is_ok();
+
+    if !path_exists && !temp_exists {
+        return path;
+    }
+
+    let parent = path.parent().unwrap_or(Path::new(".").into());
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+    let extension = path.extension().and_then(|s| s.to_str());
+
+    let mut counter = 1;
+    loop {
+        let new_name = match extension {
+            Some(ext) => format!("{} ({}).{}", stem, counter, ext),
+            None => format!("{} ({})", stem, counter),
+        };
+
+        let new_path = parent.join(new_name);
+        let new_temp_path = get_temp_path(&new_path);
+
+        // Check if both the final path and temp path are available
+        let new_path_exists = fs::metadata(&new_path).await.is_ok();
+        let new_temp_exists = fs::metadata(&new_temp_path).await.is_ok();
+
+        if !new_path_exists && !new_temp_exists {
+            return new_path;
+        }
+
+        counter += 1;
+    }
 }
 
 #[cfg(test)]
