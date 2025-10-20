@@ -2448,7 +2448,7 @@ async fn upload_file_chunk(
             encrypted_key_bundle: None,
             parent_hash: None,
             is_root: true,
-            ..Default::default()
+            download_path: None,
         };
 
         // Store complete file data locally for seeding
