@@ -4,9 +4,11 @@
   import { invoke } from '@tauri-apps/api/core';
   import { settings } from '$lib/stores';
   import { dhtService } from '$lib/dht';
+  import { relayErrorService } from '$lib/services/relayErrorService';
   import Card from '$lib/components/ui/card.svelte';
   import Button from '$lib/components/ui/button.svelte';
   import Label from '$lib/components/ui/label.svelte';
+  import RelayErrorMonitor from '$lib/components/RelayErrorMonitor.svelte';
   import { Wifi, WifiOff, Server, Settings as SettingsIcon } from 'lucide-svelte';
 
   // Relay server status
@@ -129,8 +131,32 @@
     saveSettings();
   }
 
-  onMount(() => {
-    loadSettings();
+  onMount(async () => {
+    await loadSettings();
+
+    // Initialize relay error service with preferred relays
+    const preferredRelays = preferredRelaysText
+      .split('\n')
+      .map((r) => r.trim())
+      .filter((r) => r.length > 0);
+
+    if (preferredRelays.length > 0 || autoRelayEnabled) {
+      await relayErrorService.initialize(preferredRelays, autoRelayEnabled);
+
+      // Attempt to connect to best relay if AutoRelay is enabled
+      if (autoRelayEnabled && dhtIsRunning) {
+        try {
+          const result = await relayErrorService.connectToRelay();
+          if (result.success) {
+            console.log('Successfully connected to relay via error service');
+          } else {
+            console.warn('Failed to connect to relay:', result.error);
+          }
+        } catch (error) {
+          console.error('Error connecting to relay:', error);
+        }
+      }
+    }
   });
 </script>
 
@@ -268,4 +294,12 @@
       </div>
     </Card>
   </div>
+
+  <!-- Relay Error Monitor -->
+  {#if autoRelayEnabled && dhtIsRunning}
+    <div class="mt-6">
+      <h2 class="text-2xl font-bold text-gray-900 mb-4">Relay Health & Monitoring</h2>
+      <RelayErrorMonitor />
+    </div>
+  {/if}
 </div>

@@ -96,6 +96,17 @@ export interface DhtHealth {
   lastReservationFailure: number | null;
   reservationRenewals: number;
   reservationEvictions: number;
+  // Extended relay error tracking
+  relayConnectionAttempts: number;
+  relayConnectionSuccesses: number;
+  relayConnectionFailures: number;
+  lastRelayError: string | null;
+  lastRelayErrorType: string | null;
+  lastRelayErrorAt: number | null;
+  activeRelayCount: number;
+  totalRelaysInPool: number;
+  relayHealthScore: number; // Average health score of all relays
+  lastReservationRenewal: number | null;
   // DCUtR hole-punching metrics
   dcutrEnabled: boolean;
   dcutrHolePunchAttempts: number;
