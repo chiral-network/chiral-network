@@ -64,6 +64,7 @@
     enableAutorelay: true,
     preferredRelays: [],
     enableRelayServer: false,
+    autoStartDht: false,
     anonymousMode: false,
     shareAnalytics: true,
 
@@ -97,7 +98,6 @@
 
   // NAT & privacy configuration text bindings
   let autonatServersText = '';
-  let preferredRelaysText = '';
   let trustedProxyText = '';
 
   const locationOptions = GEO_REGIONS
@@ -116,7 +116,6 @@
 
   // Initialize configuration text from arrays
   $: autonatServersText = localSettings.autonatServers?.join('\n') || '';
-  $: preferredRelaysText = localSettings.preferredRelays?.join('\n') || '';
   $: trustedProxyText = localSettings.trustedProxyRelays?.join('\n') || '';
 
   const privacyModeOptions = [
@@ -455,13 +454,6 @@
 
   function updateAutonatServers() {
     localSettings.autonatServers = autonatServersText
-      .split('\n')
-      .map(s => s.trim())
-      .filter(s => s.length > 0);
-  }
-
-  function updatePreferredRelays() {
-    localSettings.preferredRelays = preferredRelaysText
       .split('\n')
       .map(s => s.trim())
       .filter(s => s.length > 0);
@@ -854,26 +846,18 @@ function sectionMatches(section: string, query: string) {
           <div class="flex items-center gap-2">
             <input
               type="checkbox"
-              id="enable-autorelay"
-              bind:checked={localSettings.enableAutorelay}
+              id="auto-start-dht"
+              bind:checked={localSettings.autoStartDht}
             />
-            <Label for="enable-autorelay" class="cursor-pointer">
-              {$t("settings.autorelay.enable")}
+            <Label for="auto-start-dht" class="cursor-pointer">
+              Auto-start Network on App Launch
             </Label>
           </div>
 
-          {#if localSettings.enableAutorelay}
-            <div class="space-y-2 ml-6">
-              <Label for="preferred-relays">{$t("settings.autorelay.relays")}</Label>
-              <textarea
-                id="preferred-relays"
-                bind:value={localSettings.preferredRelays}
-                placeholder="/ip4/147.75.80.110/tcp/4001/p2p/QmNnooDu..."
-                rows="3"
-                class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
-              ></textarea>
-              <p class="text-xs text-muted-foreground">
-                {$t("settings.autorelay.description")}
+          {#if localSettings.autoStartDht}
+            <div class="ml-6 p-3 bg-blue-50 rounded-md border border-blue-200">
+              <p class="text-xs text-blue-900">
+                The DHT network will automatically start when you open the application, so you don't have to manually start it each time.
               </p>
             </div>
           {/if}
@@ -1236,37 +1220,6 @@ function sectionMatches(section: string, query: string) {
               ></textarea>
               <p class="text-xs text-muted-foreground mt-1">
                 Leave empty to use bootstrap nodes
-              </p>
-            </div>
-          {/if}
-        </div>
-
-        <!-- AutoRelay Configuration -->
-        <div class="space-y-3 border-t pt-3">
-          <div class="flex items-center gap-2">
-            <input
-              type="checkbox"
-              id="enable-autorelay"
-              bind:checked={localSettings.enableAutorelay}
-            />
-            <Label for="enable-autorelay" class="cursor-pointer">
-              Enable Circuit Relay v2 (AutoRelay)
-            </Label>
-          </div>
-
-          {#if localSettings.enableAutorelay}
-            <div>
-              <Label for="preferred-relays">Preferred Relay Nodes (optional)</Label>
-              <textarea
-                id="preferred-relays"
-                bind:value={preferredRelaysText}
-                on:blur={updatePreferredRelays}
-                placeholder="/ip4/relay.example.com/tcp/4001/p2p/QmRelayId&#10;One multiaddr per line"
-                rows="3"
-                class="w-full px-3 py-2 border rounded-md text-sm"
-              ></textarea>
-              <p class="text-xs text-muted-foreground mt-1">
-                Leave empty to use bootstrap nodes as relays
               </p>
             </div>
           {/if}

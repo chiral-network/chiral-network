@@ -32,7 +32,12 @@ impl ProxyLatencyService {
     }
 
     /// Update latency information for a proxy
-    pub fn update_proxy_latency(&mut self, proxy_id: String, latency_ms: Option<u64>, status: ProxyStatus) {
+    pub fn update_proxy_latency(
+        &mut self,
+        proxy_id: String,
+        latency_ms: Option<u64>,
+        status: ProxyStatus,
+    ) {
         let info = ProxyLatencyInfo {
             proxy_id: proxy_id.clone(),
             // TODO: Fetch actual address from proxy management
@@ -59,11 +64,12 @@ impl ProxyLatencyService {
 
     /// Get all online proxies sorted by latency
     pub fn get_proxies_by_latency(&self) -> Vec<&ProxyLatencyInfo> {
-        let mut proxies: Vec<_> = self.proxy_latencies
+        let mut proxies: Vec<_> = self
+            .proxy_latencies
             .values()
             .filter(|info| matches!(info.status, ProxyStatus::Online))
             .collect();
-        
+
         proxies.sort_by_key(|info| info.latency_ms.unwrap_or(u64::MAX));
         proxies
     }
@@ -84,7 +90,7 @@ impl ProxyLatencyService {
                     (max_acceptable_latency - latency as f64).max(0.0) / max_acceptable_latency
                 }
                 (ProxyStatus::Online, None) => 0.5, // Unknown latency but online
-                _ => 0.0, // Offline or error
+                _ => 0.0,                           // Offline or error
             }
         } else {
             0.0 // No info available
