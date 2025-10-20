@@ -37,6 +37,9 @@ export interface FileItem {
   manifest?: any;
   path?: string;
   cids?: string[];
+  downloadedChunks?: number[];
+  totalChunks?: number;
+  downloadStartTime?: number;
 }
 
 export interface ProxyNode {
@@ -449,9 +452,9 @@ export const settings = writable<AppSettings>({
   enableAutonat: true, // Enable AutoNAT by default
   autonatProbeInterval: 30, // 30 seconds default
   autonatServers: [], // Use bootstrap nodes by default
-  enableAutorelay: false, // Enable AutoRelay by default (disabled until configured)
+  enableAutorelay: true, // Enable AutoRelay by default
   preferredRelays: [], // Use bootstrap nodes as relays by default
-  enableRelayServer: false, // Disabled by default - user must opt-in
+  enableRelayServer: true, // Enabled by default - helps strengthen the network
   autoStartDht: false, // Disabled by default - user must opt-in
   anonymousMode: false,
   shareAnalytics: true,

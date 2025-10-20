@@ -1022,6 +1022,15 @@ async fn start_dht_node(
                         });
                         let _ = app_handle.emit("relay_reputation_event", payload);
                     }
+                    DhtEvent::BitswapChunkDownloaded { file_hash, chunk_index, total_chunks, chunk_size } => {
+                        let payload = serde_json::json!({
+                            "fileHash": file_hash,
+                            "chunkIndex": chunk_index,
+                            "totalChunks": total_chunks,
+                            "chunkSize": chunk_size,
+                        });
+                        let _ = app_handle.emit("bitswap_chunk_downloaded", payload);
+                    },
                     _ => {}
                 }
             }
@@ -1353,6 +1362,9 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                 DhtEvent::FileDownloaded { file_hash } => {
                     format!("file_downloaded:{}", file_hash)
                 }
+                DhtEvent::BitswapChunkDownloaded { file_hash, chunk_index, total_chunks, chunk_size } => {
+                    format!("bitswap_chunk_downloaded:{}:{}:{}:{}", file_hash, chunk_index, total_chunks, chunk_size)
+                },
                 DhtEvent::ReputationEvent {
                     peer_id,
                     event_type,
@@ -2448,7 +2460,7 @@ async fn upload_file_chunk(
             encrypted_key_bundle: None,
             parent_hash: None,
             is_root: true,
-            ..Default::default()
+            download_path: None,
         };
 
         // Store complete file data locally for seeding

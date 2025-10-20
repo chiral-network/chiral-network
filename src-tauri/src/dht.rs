@@ -348,6 +348,12 @@ pub enum DhtEvent {
         impact: f64,
         data: serde_json::Value,
     },
+    BitswapChunkDownloaded {
+        file_hash: String,
+        chunk_index: u32,
+        total_chunks: u32,
+        chunk_size: usize,
+    },
 }
 
 struct RelayState {
@@ -1290,6 +1296,8 @@ async fn run_dht_node(
     chunk_size: usize,
     bootstrap_peer_ids: HashSet<PeerId>,
 ) {
+    // Track peers that support relay (discovered via identify protocol)
+    let relay_capable_peers: Arc<Mutex<HashMap<PeerId, Vec<Multiaddr>>>> = Arc::new(Mutex::new(HashMap::new()));
     let mut dht_maintenance_interval = tokio::time::interval(Duration::from_secs(30 * 60));
     dht_maintenance_interval.tick().await;
     // fast heartbeat-driven updater: run at FILE_HEARTBEAT_INTERVAL to keep provider records fresh
@@ -1991,18 +1999,6 @@ async fn run_dht_node(
                         let query_id = swarm.behaviour_mut().kademlia.get_record(key);
                         info!("Searching for file: {} (query: {:?})", file_hash, query_id);
                     }
-                    // Some(DhtCommand::SearchFileByCid(cid_str)) => {
-                    //     match cid_str.parse::<Cid>() {
-                    //         Ok(cid) => {
-                    //             let key = kad::RecordKey::new(&cid.to_bytes());
-                    //             let query_id = swarm.behaviour_mut().kademlia.get_record(key);
-                    //             info!("Searching for file by CID: {} (query: {:?})", cid_str, query_id);
-                    //         }
-                    //         Err(e) => {
-                    //             error!("Invalid CID format for search: {}. Error: {}", cid_str, e);
-                    //         }
-                    //     }
-                    // }
                     Some(DhtCommand::SetPrivacyProxies { addresses }) => {
                         info!("Updating privacy proxy targets ({} addresses)", addresses.len());
 
@@ -2079,6 +2075,64 @@ async fn run_dht_node(
                             });
 
                             if let Some(peer_id) = maybe_peer_id.clone() {
+                                // Check if the address contains a private IP
+                                let has_private_ip = multiaddr.iter().any(|p| {
+                                    if let Protocol::Ip4(ipv4) = p {
+                                        is_private_or_loopback_v4(ipv4)
+                                    } else {
+                                        false
+                                    }
+                                });
+
+                                // If private IP detected, try relay connection via any relay-capable peer
+                                if has_private_ip {
+                                    info!("🔍 Detected private IP address in {}", multiaddr);
+
+                                    // Get list of relay-capable peers we've discovered
+                                    let relay_peers = relay_capable_peers.lock().await;
+
+                                    if !relay_peers.is_empty() {
+                                        info!("🔄 Found {} relay-capable peers, attempting relay connection", relay_peers.len());
+
+                                        // Try to use the first available relay-capable peer
+                                        // Clone the data we need before dropping the lock
+                                        let relay_option = relay_peers.iter().next().map(|(id, addrs)| {
+                                            (*id, addrs.first().cloned())
+                                        });
+
+                                        drop(relay_peers); // Release lock before dialing
+
+                                        if let Some((relay_peer_id, Some(relay_addr))) = relay_option {
+                                            info!("📡 Attempting to connect to {} via relay peer {}", peer_id, relay_peer_id);
+
+                                            // Build proper circuit relay address
+                                            // Format: /ip4/{relay_ip}/tcp/{relay_port}/p2p/{relay_peer_id}/p2p-circuit/p2p/{target_peer_id}
+                                            let mut circuit_addr = relay_addr.clone();
+                                            circuit_addr.push(Protocol::P2pCircuit);
+                                            circuit_addr.push(Protocol::P2p(peer_id));
+
+                                            info!("  Using relay circuit address: {}", circuit_addr);
+
+                                            match swarm.dial(circuit_addr.clone()) {
+                                                Ok(_) => {
+                                                    info!("✓ Relay connection requested successfully");
+                                                    let _ = event_tx.send(DhtEvent::Info(format!(
+                                                        "Connecting to private network peer {} via relay {}", peer_id, relay_peer_id
+                                                    ))).await;
+                                                    continue; // Skip direct dial, use relay only
+                                                }
+                                                Err(e) => {
+                                                    warn!("Relay connection failed: {}, falling back to direct dial", e);
+                                                    // Fall through to direct dial attempt
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        drop(relay_peers); // Release lock
+                                        info!("⚠️ No relay-capable peers discovered yet. Trying direct connection.");
+                                        info!("   Tip: Enable 'Relay Server' in Settings to help others connect!");
+                                    }
+                                }
                                 {
                                     let mut mgr = proxy_mgr.lock().await;
                                     mgr.set_target(peer_id.clone());
@@ -2348,6 +2402,7 @@ async fn run_dht_node(
                             enable_autorelay,
                             &relay_candidates,
                             &proxy_mgr,
+                            relay_capable_peers.clone(),
                         )
                         .await;
                     }
@@ -2631,7 +2686,7 @@ async fn run_dht_node(
                                 }
                             } else {
                                 // This is a data block query - find the corresponding file and handle it
-
+                                
                                 let mut completed_downloads = Vec::new();
 
                                 // Check all active downloads for this query_id
@@ -2660,6 +2715,13 @@ async fn run_dht_node(
                                                         chunk_index + 1,
                                                         active_download.total_chunks,
                                                         file_hash);
+
+                                                    let _ = event_tx.send(DhtEvent::BitswapChunkDownloaded {
+                                                        file_hash: file_hash.clone(),
+                                                        chunk_index,
+                                                        total_chunks: active_download.total_chunks,
+                                                        chunk_size: data.len(),
+                                                    }).await;
                                                 }
                                                 Err(e) => {
                                                     error!("Failed to write chunk {} to disk for file {}: {}",
@@ -3698,17 +3760,32 @@ async fn handle_identify_event(
     enable_autorelay: bool,
     relay_candidates: &HashSet<String>,
     proxy_mgr: &ProxyMgr,
+    relay_capable_peers: Arc<Mutex<HashMap<PeerId, Vec<Multiaddr>>>>,
 ) {
     match event {
         IdentifyEvent::Received { peer_id, info, .. } => {
             let hop_proto = "/libp2p/circuit/relay/0.2.0/hop";
-            if info.protocols.iter().any(|p| p.as_ref() == hop_proto) {
-                info!("🛰️ Relay HOP is advertised by this node (server enabled).");
-            } else {
-                warn!(
-                    "🛰️ Relay HOP is NOT advertised. Check enable_relay_server and cargo features."
-                );
+            let supports_relay = info.protocols.iter().any(|p| p.as_ref() == hop_proto);
+
+            if supports_relay {
+                info!("🛰️ Peer {} supports relay (HOP protocol advertised)", peer_id);
+
+                // Store this peer as relay-capable with its listen addresses
+                let reachable_addrs: Vec<Multiaddr> = info.listen_addrs.iter()
+                    .filter(|addr| ma_plausibly_reachable(addr))
+                    .cloned()
+                    .collect();
+
+                if !reachable_addrs.is_empty() {
+                    let mut relay_peers = relay_capable_peers.lock().await;
+                    relay_peers.insert(peer_id, reachable_addrs.clone());
+                    info!("✅ Added {} to relay-capable peers list ({} addresses)", peer_id, reachable_addrs.len());
+                    for (i, addr) in reachable_addrs.iter().enumerate().take(3) {
+                        info!("   Relay address {}: {}", i + 1, addr);
+                    }
+                }
             }
+
             let listen_addrs = info.listen_addrs.clone();
 
             // identify::Event::Received { peer_id, info, .. } => { ... }
@@ -5012,7 +5089,7 @@ impl DhtService {
             parent_hash,
             cids: None,
             is_root,
-            ..Default::default()
+            download_path: None,
         })
     }
 
@@ -6037,6 +6114,15 @@ fn extract_multiaddr_from_error_str(s: &str) -> Option<Multiaddr> {
         return cand.parse::<Multiaddr>().ok();
     }
     None
+}
+
+/// Check if an IPv4 address is private or loopback
+fn is_private_or_loopback_v4(ip: Ipv4Addr) -> bool {
+    let o = ip.octets();
+    o[0] == 10
+        || (o[0] == 172 && (16..=31).contains(&o[1]))
+        || (o[0] == 192 && o[1] == 168)
+        || o[0] == 127
 }
 
 async fn record_identify_push_metrics(metrics: &Arc<Mutex<DhtMetrics>>, info: &identify::Info) {
