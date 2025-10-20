@@ -106,12 +106,52 @@
           showNotification(`Multi-source download failed: ${data.error}`, 'error')
         })
 
+        const unlistenBitswapProgress = await listen('bitswap_chunk_downloaded', (event) => {
+          const progress = event.payload as {
+                fileHash: string;
+                chunkIndex: number;
+                totalChunks: number;
+                chunkSize: number;
+            };
+
+            files.update(f => f.map(file => {
+                if (file.hash === progress.fileHash) {
+                    const percentage = (progress.chunkIndex + 1) / progress.totalChunks * 100;
+                    console.log(`Bitswap download progress for ${file.name}: ${percentage.toFixed(2)}%`);
+                    return {
+                        ...file,
+                        progress: percentage,
+                        status: 'downloading' as const,
+                    };
+                }
+                return file;
+            }));
+        });
+
+        const unlistenDownloadCompleted = await listen('file_content', (event) => {
+            const metadata = event.payload as any;
+            files.update(f => f.map(file => {
+                if (file.hash === metadata.merkleRoot) {
+                    return {
+                        ...file,
+                        status: 'completed' as const,
+                        progress: 100,
+                        downloadPath: metadata.downloadPath
+                    };
+                }
+                return file;
+            }));
+        });
+
+
         // Cleanup listeners on destroy
         return () => {
           unlistenProgress()
           unlistenCompleted()
           unlistenStarted()
           unlistenFailed()
+          unlistenBitswapProgress()
+          unlistenDownloadCompleted()
         }
       } catch (error) {
         console.error('Failed to setup event listeners:', error)

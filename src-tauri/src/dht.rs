@@ -348,6 +348,12 @@ pub enum DhtEvent {
         impact: f64,
         data: serde_json::Value,
     },
+    BitswapChunkDownloaded {
+        file_hash: String,
+        chunk_index: u32,
+        total_chunks: u32,
+        chunk_size: usize,
+    },
 }
 
 struct RelayState {
@@ -2631,7 +2637,7 @@ async fn run_dht_node(
                                 }
                             } else {
                                 // This is a data block query - find the corresponding file and handle it
-
+                                
                                 let mut completed_downloads = Vec::new();
 
                                 // Check all active downloads for this query_id
@@ -2660,6 +2666,13 @@ async fn run_dht_node(
                                                         chunk_index + 1,
                                                         active_download.total_chunks,
                                                         file_hash);
+
+                                                    let _ = event_tx.send(DhtEvent::BitswapChunkDownloaded {
+                                                        file_hash: file_hash.clone(),
+                                                        chunk_index,
+                                                        total_chunks: active_download.total_chunks,
+                                                        chunk_size: data.len(),
+                                                    }).await;
                                                 }
                                                 Err(e) => {
                                                     error!("Failed to write chunk {} to disk for file {}: {}",
