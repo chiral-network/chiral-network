@@ -57,6 +57,7 @@
     if (isSeeding) {
       showDecryptDialog = true;
     } else {
+      dispatch("download", metadata);
       if (isBitswap) {
         console.log("🔍 DEBUG: Initiating Bitswap download for file:", metadata.fileName);
         await dhtService.downloadFile(metadata);
@@ -66,7 +67,6 @@
       }
       else {
         console.log("🔍 DEBUG: Initiating WebRTC download for file:", metadata.fileName);
-        dispatch('download', metadata);
       }
     }
   }
@@ -75,7 +75,6 @@
     showDecryptDialog = false;
     if (isBitswap) {
         console.log("🔍 DEBUG: Initiating Bitswap download for file:", metadata.fileName);
-      
         await dhtService.downloadFile(metadata);
         showToast(
           `The file "${metadata.fileName}" has been added to your download folder via Bitswap.`,

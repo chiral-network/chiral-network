@@ -37,6 +37,9 @@ export interface FileItem {
   manifest?: any;
   path?: string;
   cids?: string[];
+  downloadedChunks?: number[];
+  totalChunks?: number;
+  downloadStartTime?: number;
 }
 
 export interface ProxyNode {
