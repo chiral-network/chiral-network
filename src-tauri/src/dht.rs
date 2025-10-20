@@ -2108,6 +2108,12 @@ async fn run_dht_node(
                                             // Build proper circuit relay address
                                             // Format: /ip4/{relay_ip}/tcp/{relay_port}/p2p/{relay_peer_id}/p2p-circuit/p2p/{target_peer_id}
                                             let mut circuit_addr = relay_addr.clone();
+
+                                            // Ensure the relay address includes the relay peer ID
+                                            if !circuit_addr.iter().any(|p| matches!(p, Protocol::P2p(_))) {
+                                                circuit_addr.push(Protocol::P2p(relay_peer_id));
+                                            }
+
                                             circuit_addr.push(Protocol::P2pCircuit);
                                             circuit_addr.push(Protocol::P2p(peer_id));
 
@@ -5232,6 +5238,28 @@ impl DhtService {
 
     pub async fn get_peer_id(&self) -> String {
         self.peer_id.clone()
+    }
+
+    /// Get multiaddresses for this node (including the peer ID)
+    pub async fn get_multiaddresses(&self) -> Vec<String> {
+        let metrics = self.metrics.lock().await;
+        let peer_id = &self.peer_id;
+
+        metrics.listen_addrs
+            .iter()
+            .filter(|addr| {
+                // Filter out loopback addresses
+                !addr.contains("127.0.0.1") && !addr.contains("::1")
+            })
+            .map(|addr| {
+                // Add peer ID if not already present
+                if addr.contains("/p2p/") {
+                    addr.clone()
+                } else {
+                    format!("{}/p2p/{}", addr, peer_id)
+                }
+            })
+            .collect()
     }
 
     pub async fn get_peer_count(&self) -> usize {

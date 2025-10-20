@@ -3939,7 +3939,8 @@ fn main() {
             stop_proof_of_storage_watcher,
             get_relay_reputation_stats,
             set_relay_alias,
-            get_relay_alias
+            get_relay_alias,
+            get_multiaddresses
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -4776,4 +4777,14 @@ async fn get_relay_alias(
 ) -> Result<Option<String>, String> {
     let aliases = state.relay_aliases.lock().await;
     Ok(aliases.get(&peer_id).cloned())
+}
+
+#[tauri::command]
+async fn get_multiaddresses(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let dht_guard = state.dht.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        Ok(dht.get_multiaddresses().await)
+    } else {
+        Ok(Vec::new())
+    }
 }
