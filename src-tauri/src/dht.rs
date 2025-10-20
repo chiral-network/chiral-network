@@ -55,10 +55,7 @@ use libp2p::{
     core::{
         muxing::StreamMuxerBox,
         // FIXED E0432: ListenerEvent is removed, only import what is available.
-        transport::{
-            Boxed, DialOpts, ListenerId, Transport, TransportError,
-            TransportEvent,
-        },
+        transport::{Boxed, DialOpts, ListenerId, Transport, TransportError, TransportEvent},
     },
     dcutr,
     identify::{self, Event as IdentifyEvent},
