@@ -1542,7 +1542,7 @@
               <p class="text-sm text-muted-foreground">{$t('network.dht.listenAddresses')}</p>
               {#each publicMultiaddrs as fullAddr}
                 <div class="bg-muted/40 rounded-lg px-3 py-2">
-                  <div class="flex items-start justify-between gap-2">
+                  <div class="flex items-center justify-between gap-2">
                     <p class="text-xs font-mono break-all flex-1">{fullAddr}</p>
                     <Button
                       variant="outline"
