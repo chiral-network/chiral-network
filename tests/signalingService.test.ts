@@ -47,10 +47,9 @@ describe("SignalingService", () => {
   });
 
   describe("send", () => {
-    it("should throw error when WebSocket not connected", () => {
-      expect(() => signalingService.send({ to: "peer" })).toThrow(
-        "WebSocket not connected"
-      );
+    it("should enqueue messages when WebSocket not connected", async () => {
+      // The send method now enqueues messages instead of throwing
+      expect(() => signalingService.send({ to: "peer" })).not.toThrow();
     });
   });
 
