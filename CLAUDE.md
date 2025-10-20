@@ -523,7 +523,9 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
 
 ## What NOT to Implement
 
-**Never add these features:**
+### Commercial & Piracy-Enabling Features
+
+**Never add:**
 - Global file search/discovery (could enable piracy)
 - Price fields or payment systems
 - File marketplace or trading
@@ -532,6 +534,28 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
 - Advertising systems
 - Analytics that could track users
 - Centralized market servers
+
+### VPN & General Anonymity Network Features
+
+**We are NOT building a VPN or anonymity network:**
+- ❌ VPN service functionality
+- ❌ General internet traffic routing (only P2P file transfer traffic)
+- ❌ Exit node functionality (no routing of non-P2P traffic)
+- ❌ Anonymous browsing capabilities
+- ❌ Full anonymity network features
+- ❌ Traffic mixing/onion routing
+
+**What we DO support** (limited to file sharing):
+- ✅ SOCKS5 proxy support (use existing proxies like Tor)
+- ✅ Circuit Relay v2 (for NAT traversal, not anonymity)
+- ✅ File encryption (protect file content)
+- ✅ Anonymous mode (hide IP during P2P file transfers only)
+
+**Why?**
+1. Legal compliance - VPN/anonymity networks attract regulatory scrutiny
+2. Resource focus - Different expertise and infrastructure required
+3. Liability concerns - General traffic routing creates legal risks
+4. Mission clarity - We're a file sharing platform, not a privacy network
 
 ## Deployment
 
