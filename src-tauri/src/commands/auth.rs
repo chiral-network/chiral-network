@@ -40,7 +40,10 @@ pub(crate) async fn generate_proxy_auth_token(
     // Clean up expired tokens
     cleanup_expired_tokens(&mut store);
 
-    info!("Generated proxy auth token for {} (expires in {} hours)", proxy_address, expiry_hours);
+    info!(
+        "Generated proxy auth token for {} (expires in {} hours)",
+        proxy_address, expiry_hours
+    );
 
     Ok(serde_json::json!({
         "token": token,

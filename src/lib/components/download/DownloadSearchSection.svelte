@@ -13,17 +13,20 @@
   import type { FileMetadata } from '$lib/dht';
   import SearchResultCard from './SearchResultCard.svelte';
   import { dhtSearchHistory, type SearchHistoryEntry, type SearchStatus } from '$lib/stores/searchHistory';
+  import PeerSelectionModal, { type PeerInfo } from './PeerSelectionModal.svelte';
+  import PeerSelectionService from '$lib/services/peerSelectionService';
 
   type ToastType = 'success' | 'error' | 'info' | 'warning';
-  type ToastPayload = { message: string; type?: ToastType; duration?: number };
+  type ToastPayload = { message: string; type?: ToastType; duration?: number; };
 
   const dispatch = createEventDispatcher<{ download: FileMetadata; message: ToastPayload }>();
   const tr = (key: string, params?: Record<string, unknown>) => (get(t) as any)(key, params);
 
-  const SEARCH_TIMEOUT_MS = 2_000; // Very aggressive timeout to prevent hanging
+  const SEARCH_TIMEOUT_MS = 10_000; // 10 seconds for DHT searches to find peers
+  export let isBitswap: boolean = false;
 
   let searchHash = '';
-  let searchMode = 'hash'; // 'hash' or 'name'
+  let searchMode = 'merkle_hash'; // 'merkle_hash' or 'cid'
   let isSearching = false;
   let hasSearched = false;
   let latestStatus: SearchStatus = 'pending';
@@ -34,6 +37,13 @@
   let activeHistoryId: string | null = null;
   let versionResults: any[] = [];
   let showHistoryDropdown = false;
+
+  // Peer selection modal state
+  let showPeerSelectionModal = false;
+  let selectedFile: FileMetadata | null = null;
+  let peerSelectionMode: 'auto' | 'manual' = 'auto';
+  let availablePeers: PeerInfo[] = [];
+  let autoSelectionInfo: Array<{peerId: string; score: number; metrics: any}> | null = null;
 
   const unsubscribe = dhtSearchHistory.subscribe((entries) => {
     historyEntries = entries;
@@ -129,7 +139,7 @@
 
     try {
       if (searchMode === 'name') {
-        // Search for file versions by name
+        // This mode is now deprecated in favor of Merkle Hash and CID
         pushMessage('Searching for file versions...', 'info', 2000);
 
         try {
@@ -239,29 +249,20 @@
             pushMessage(`Search failed: ${errorMessage}`, 'error', 6000);
           }
         }
-      } else {
-        // First, check local files for the hash (immediate local seed)
-        const localMatch = get(files).find(f => f.hash === trimmed || f.name === trimmed);
-        if (localMatch) {
-          const metadata: FileMetadata = {
-            fileHash: localMatch.hash,
-            fileName: localMatch.name,
-            fileSize: localMatch.size || 0,
-            seeders: [ 'local_peer' ],
-            createdAt: localMatch.uploadDate ? localMatch.uploadDate.getTime() : Date.now(),
-            isEncrypted: !!localMatch.isEncrypted,
-            manifest: localMatch.manifest ? JSON.stringify(localMatch.manifest) : undefined,
-          };
-
-          latestMetadata = metadata;
-          latestStatus = 'found';
-          const entry = dhtSearchHistory.addPending(trimmed);
-          activeHistoryId = entry.id;
-          dhtSearchHistory.updateEntry(entry.id, { status: 'found', metadata, elapsedMs: Math.round(performance.now() - startedAt) });
-          pushMessage(tr('download.search.status.foundNotification', { values: { name: metadata.fileName } }), 'success');
+      } else if (searchMode === 'cid') {
+        const entry = dhtSearchHistory.addPending(trimmed);
+        activeHistoryId = entry.id;
+        pushMessage('Searching for providers by CID...', 'info', 2000);
+        await dhtService.searchFileByCid(trimmed);
+        // The result will come via a `found_file` event, which is handled by the search history store.
+        // We just need to wait and see.
+        setTimeout(() => {
           isSearching = false;
-          return;
-        }
+        }, SEARCH_TIMEOUT_MS);
+      } else {
+        // Skip local file lookup - always search DHT for peer information
+        // This ensures we get proper seeder lists for peer selection
+        console.log('🔍 Searching DHT for file hash:', trimmed);
 
         // Original hash search
         const entry = dhtSearchHistory.addPending(trimmed);
@@ -356,8 +357,8 @@
       version: version.version
     };
 
-    dispatch('download', metadata);
-    pushMessage(`Starting download of ${version.file_name} v${version.version}`, 'info', 3000);
+    // Show peer selection modal instead of direct download
+    await handleFileDownload(metadata);
   }
 
   function statusIcon(status: string) {
@@ -401,6 +402,169 @@
       showHistoryDropdown = false;
     }
   }
+
+  // Handle file download - show peer selection modal first
+  async function handleFileDownload(metadata: FileMetadata) {
+    // Check if there are any seeders
+    if (!metadata.seeders || metadata.seeders.length === 0) {
+      pushMessage('No seeders available for this file', 'warning');
+      dispatch('download', metadata);
+      return;
+    }
+
+    selectedFile = metadata;
+    autoSelectionInfo = null;  // Clear previous auto-selection info
+
+    // Fetch peer metrics for each seeder
+    try {
+      const allMetrics = await PeerSelectionService.getPeerMetrics();
+
+      availablePeers = metadata.seeders.map(seederId => {
+        const metrics = allMetrics.find(m => m.peer_id === seederId);
+
+        return {
+          peerId: seederId,
+          latency_ms: metrics?.latency_ms,
+          bandwidth_kbps: metrics?.bandwidth_kbps,
+          reliability_score: metrics?.reliability_score ?? 0.5,
+          price_per_mb: 0.001,  // Default price, could come from metadata in future
+          selected: true,  // All selected by default
+          percentage: Math.round(100 / metadata.seeders.length)  // Equal split
+        };
+      });
+
+      // If in auto mode, pre-calculate the selection for transparency
+      if (peerSelectionMode === 'auto') {
+        await calculateAutoSelection(metadata, allMetrics);
+      }
+
+      showPeerSelectionModal = true;
+    } catch (error) {
+      console.error('Failed to fetch peer metrics:', error);
+      // Fall back to direct download without peer selection
+      pushMessage('Failed to load peer selection, proceeding with default download', 'warning');
+      dispatch('download', metadata);
+    }
+  }
+
+  // Calculate auto-selection for transparency display
+  async function calculateAutoSelection(metadata: FileMetadata, allMetrics: any[]) {
+    try {
+      // Auto-select best peers using backend algorithm
+      const autoPeers = await PeerSelectionService.getPeersForParallelDownload(
+        metadata.seeders,
+        metadata.fileSize,
+        3,  // Max 3 peers
+        metadata.isEncrypted
+      );
+
+      // Get metrics for selected peers
+      const selectedMetrics = autoPeers.map(peerId =>
+        allMetrics.find(m => m.peer_id === peerId)
+      ).filter(m => m !== undefined);
+
+      if (selectedMetrics.length > 0) {
+        // Calculate composite scores for each peer
+        const peerScores = selectedMetrics.map(m => ({
+          peerId: m!.peer_id,
+          score: PeerSelectionService.compositeScoreFromMetrics(m!)
+        }));
+
+        // Calculate total score
+        const totalScore = peerScores.reduce((sum, p) => sum + p.score, 0);
+
+        // Store selection info for transparency display
+        autoSelectionInfo = peerScores.map((p, index) => ({
+          peerId: p.peerId,
+          score: p.score,
+          metrics: selectedMetrics[index]!
+        }));
+
+        // Update availablePeers with score-weighted percentages
+        availablePeers = availablePeers.map(peer => {
+          const peerScore = peerScores.find(ps => ps.peerId === peer.peerId);
+          if (peerScore) {
+            const percentage = Math.round((peerScore.score / totalScore) * 100);
+            return {
+              ...peer,
+              selected: true,
+              percentage
+            };
+          }
+          return {
+            ...peer,
+            selected: false,
+            percentage: 0
+          };
+        });
+
+        // Adjust for rounding to ensure selected peers total 100%
+        const selectedPeers = availablePeers.filter(p => p.selected);
+        const totalPercentage = selectedPeers.reduce((sum, p) => sum + p.percentage, 0);
+        if (totalPercentage !== 100 && selectedPeers.length > 0) {
+          selectedPeers[0].percentage += (100 - totalPercentage);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to calculate auto-selection:', error);
+    }
+  }
+
+  // Confirm peer selection and start download
+  async function confirmPeerSelection() {
+    if (!selectedFile) return;
+
+    // Get selected peers and their allocations from availablePeers
+    const selectedPeers = availablePeers
+      .filter(p => p.selected)
+      .map(p => p.peerId);
+
+    const peerAllocation = availablePeers
+      .filter(p => p.selected)
+      .map(p => ({
+        peerId: p.peerId,
+        percentage: p.percentage
+      }));
+
+    // Log transparency info for auto-selection
+    if (peerSelectionMode === 'auto' && autoSelectionInfo) {
+      autoSelectionInfo.forEach((info, index) => {
+        console.log(`📊 Auto-selected peer ${index + 1}:`, {
+          peerId: info.peerId.slice(0, 12),
+          score: info.score.toFixed(3),
+          allocation: `${availablePeers.find(p => p.peerId === info.peerId)?.percentage}%`,
+          metrics: info.metrics
+        });
+      });
+
+      pushMessage(
+        `Auto-selected ${selectedPeers.length} peers with score-weighted distribution`,
+        'success',
+        3000
+      );
+    }
+
+    // Create metadata with selected peers and allocation
+    const fileWithSelectedPeers: FileMetadata & { peerAllocation?: any[] } = {
+      ...selectedFile,
+      seeders: selectedPeers,  // Override with selected peers
+      peerAllocation
+    };
+
+    // Dispatch to parent (Download.svelte)
+    dispatch('download', fileWithSelectedPeers);
+
+    // Close modal and reset state
+    showPeerSelectionModal = false;
+    selectedFile = null;
+    pushMessage(`Starting download with ${selectedPeers.length} selected peer${selectedPeers.length === 1 ? '' : 's'}`, 'info', 3000);
+  }
+
+  // Cancel peer selection
+  function cancelPeerSelection() {
+    showPeerSelectionModal = false;
+    selectedFile = null;
+  }
 </script>
 
 <Card class="p-6">
@@ -413,18 +577,10 @@
 
       <!-- Search Mode Switcher -->
       <div class="flex gap-2 mb-3">
-        <button
-          on:click={() => { searchMode = 'hash'; versionResults = []; }}
-          class="px-3 py-1 text-sm rounded-md border transition-colors {searchMode === 'hash' ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/50 hover:bg-muted border-border'}"
-        >
-          {tr('download.searchByHash')}
-        </button>
-        <button
-          on:click={() => { searchMode = 'name'; latestMetadata = null; }}
-          class="px-3 py-1 text-sm rounded-md border transition-colors {searchMode === 'name' ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/50 hover:bg-muted border-border'}"
-        >
-          {tr('download.searchByName')}
-        </button>
+        <select bind:value={searchMode} class="px-3 py-1 text-sm rounded-md border transition-colors bg-muted/50 hover:bg-muted border-border">
+            <option value="merkle_hash">Search by Merkle Hash</option>
+            <option value="cid">Search by CID</option>
+        </select>
       </div>
 
       <div class="flex flex-col sm:flex-row gap-3">
@@ -432,7 +588,7 @@
           <Input
             id="hash-input"
             bind:value={searchHash}
-            placeholder={searchMode === 'hash' ? tr('download.placeholder') : tr('download.search.namePlaceholder')}
+            placeholder={searchMode === 'merkle_hash' ? 'Enter Merkle Hash...' : 'Enter CID...'}
             class="pr-20 h-10"
             on:focus={toggleHistoryDropdown}
           />
@@ -510,7 +666,7 @@
           class="h-10 px-6"
         >
           <Search class="h-4 w-4 mr-2" />
-          {isSearching ? tr('download.search.status.searching') : (searchMode === 'name' ? tr('download.search.searchVersions') : tr('download.search.button'))}
+          {isSearching ? tr('download.search.status.searching') : tr('download.search.button')}
         </Button>
       </div>
     </div>
@@ -566,15 +722,18 @@
                 metadata={latestMetadata}
                 on:copy={handleCopy}
                 on:download={event => dispatch('download', event.detail)}
+                isBitswap={isBitswap}
               />
               <p class="text-xs text-muted-foreground">
                 {tr('download.search.status.completedIn', { values: { seconds: (lastSearchDuration / 1000).toFixed(1) } })}
               </p>
             {:else if latestStatus === 'not_found'}
               <div class="text-center py-8">
-                <p class="text-sm text-muted-foreground">
-                  {searchMode === 'name' ? `No versions found for "${searchHash}"` : tr('download.search.status.notFoundDetail')}
-                </p>
+                {#if searchError}
+                   <p class="text-sm text-red-500">{searchError}</p>
+                {:else}
+                   <p class="text-sm text-muted-foreground">{tr('download.search.status.notFoundDetail')}</p>
+                {/if}
               </div>
             {:else if latestStatus === 'error'}
               <div class="text-center py-8">
@@ -583,7 +742,7 @@
               </div>
             {:else}
               <div class="rounded-md border border-dashed border-muted p-5 text-sm text-muted-foreground text-center">
-                {searchMode === 'name' ? 'Enter a file name to search for versions' : tr('download.search.status.placeholder')}
+                {tr('download.search.status.placeholder')}
               </div>
             {/if}
         </div>
@@ -591,3 +750,15 @@
     {/if}
   </div>
 </Card>
+
+<!-- Peer Selection Modal -->
+<PeerSelectionModal
+  show={showPeerSelectionModal}
+  fileName={selectedFile?.fileName || ''}
+  fileSize={selectedFile?.fileSize || 0}
+  bind:peers={availablePeers}
+  bind:mode={peerSelectionMode}
+  autoSelectionInfo={autoSelectionInfo}
+  on:confirm={confirmPeerSelection}
+  on:cancel={cancelPeerSelection}
+/>
