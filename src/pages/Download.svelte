@@ -108,12 +108,102 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
           showNotification(`Multi-source download failed: ${data.error}`, 'error')
         })
 
+        const unlistenBitswapProgress = await listen('bitswap_chunk_downloaded', (event) => {
+          const progress = event.payload as {
+                fileHash: string;
+                chunkIndex: number;
+                totalChunks: number;
+                chunkSize: number;
+            };
+
+            files.update(f => f.map(file => {
+                if (file.hash === progress.fileHash) {
+                    const downloadedChunks = new Set(file.downloadedChunks || []);
+                    
+                    if (downloadedChunks.has(progress.chunkIndex)) {
+                        return file; // Already have this chunk, do nothing.
+                    }
+                    downloadedChunks.add(progress.chunkIndex);
+                    const newSize = downloadedChunks.size;
+
+                    let bitswapStartTime = file.downloadStartTime;
+                    if (newSize === 1) {
+                        // This is the first chunk, start the timer
+                        bitswapStartTime = Date.now();
+                    }
+
+                    let speed = file.speed || '0 B/s';
+                    let eta = file.eta || 'N/A';
+
+                    if (bitswapStartTime) {
+                        const elapsedTimeMs = Date.now() - bitswapStartTime;
+                        
+                        // We have downloaded `newSize - 1` chunks since the timer started.
+                        const downloadedBytesSinceStart = (newSize - 1) * progress.chunkSize;
+                        
+                        if (elapsedTimeMs > 500) { // Get a better average over a short time.
+                            const speedBytesPerSecond = downloadedBytesSinceStart > 0 ? (downloadedBytesSinceStart / elapsedTimeMs) * 1000 : 0;
+                            
+                            if (speedBytesPerSecond < 1000) {
+                                speed = `${speedBytesPerSecond.toFixed(0)} B/s`;
+                            } else if (speedBytesPerSecond < 1000 * 1000) {
+                                speed = `${(speedBytesPerSecond / 1000).toFixed(2)} KB/s`;
+                            } else {
+                                speed = `${(speedBytesPerSecond / (1000 * 1000)).toFixed(2)} MB/s`;
+                            }
+
+                            const remainingChunks = progress.totalChunks - newSize;
+                            if (speedBytesPerSecond > 0) {
+                                const remainingBytes = remainingChunks * progress.chunkSize;
+                                const etaSeconds = remainingBytes / speedBytesPerSecond;
+                                eta = `${Math.round(etaSeconds)}s`;
+                            } else {
+                                eta = 'N/A';
+                            }
+                        }
+                    }
+                    
+                    const percentage = (newSize / progress.totalChunks) * 100;
+                    
+                    return {
+                        ...file,
+                        progress: percentage,
+                        status: 'downloading' as const,
+                        downloadedChunks: Array.from(downloadedChunks),
+                        totalChunks: progress.totalChunks,
+                        downloadStartTime: bitswapStartTime,
+                        speed: speed,
+                        eta: eta,
+                    };
+                }
+                return file;
+            }));
+        });
+
+        const unlistenDownloadCompleted = await listen('file_content', (event) => {
+            const metadata = event.payload as any;
+            files.update(f => f.map(file => {
+                if (file.hash === metadata.merkleRoot) {
+                    return {
+                        ...file,
+                        status: 'completed' as const,
+                        progress: 100,
+                        downloadPath: metadata.downloadPath
+                    };
+                }
+                return file;
+            }));
+        });
+
+
         // Cleanup listeners on destroy
         return () => {
           unlistenProgress()
           unlistenCompleted()
           unlistenStarted()
           unlistenFailed()
+          unlistenBitswapProgress()
+          unlistenDownloadCompleted()
         }
       } catch (error) {
         console.error('Failed to setup event listeners:', error)
@@ -313,10 +403,6 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
   async function handleSearchDownload(metadata: FileMetadata) {
     const allFiles = [...$downloadQueue]
     const existingFile = allFiles.find((file) => file.hash === metadata.fileHash)
-    
-    if (selectedProtocol === 'Bitswap') {
-      return;
-    }
 
     if (existingFile) {
       let statusMessage = ''
@@ -493,6 +579,7 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
     $files.forEach(file => {
       if (file.status === 'downloading' && !activeSimulations.has(file.id)) {
         // Start simulation only if not already active
+        if (selectedProtocol!=='Bitswap')
         simulateDownloadProgress(file.id)
       }
     })
@@ -540,7 +627,10 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
       eta: 'N/A'      // Ensure eta property exists
     }
     files.update(f => [...f, downloadingFile])
-    simulateDownloadProgress(downloadingFile.id)
+    if (selectedProtocol!=="Bitswap"){
+      console.log('simulating download')
+        simulateDownloadProgress(downloadingFile.id)
+    }
   }
 
   function togglePause(fileId: string) {
@@ -914,7 +1004,6 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
       );
     }
   }
-
   function changePriority(fileId: string, priority: 'low' | 'normal' | 'high') {
     downloadQueue.update(queue => queue.map(file =>
       file.id === fileId ? { ...file, priority } : file
@@ -1431,11 +1520,25 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
                   </div>
                   <span class="text-foreground">{(file.progress || 0).toFixed(2)}%</span>
                 </div>
-                <Progress
-                  value={file.progress || 0}
-                  max={100}
-                  class="h-2 bg-border [&>div]:bg-green-500 w-full"
-                />
+                {#if selectedProtocol === 'Bitswap'}
+                  <div class="w-full bg-border rounded-full h-2 flex overflow-hidden" title={`Chunks: ${file.downloadedChunks?.length || 0} / ${file.totalChunks || '?'}`}>
+                    {#if file.totalChunks > 0}
+                      {@const chunkWidth = 100 / file.totalChunks}
+                      {#each Array.from({ length: file.totalChunks }) as _, i}
+                        <div
+                          class="h-2 {file.downloadedChunks?.includes(i) ? 'bg-green-500' : 'bg-transparent'}"
+                          style="width: {chunkWidth}%"
+                        ></div>
+                      {/each}
+                    {/if}
+                  </div>
+                {:else}
+                  <Progress
+                    value={file.progress || 0}
+                    max={100}
+                    class="h-2 bg-border [&>div]:bg-green-500 w-full"
+                  />
+                {/if}
                 {#if multiSourceProgress.has(file.hash)}
                   {@const msProgress = multiSourceProgress.get(file.hash)}
                   {#if msProgress && msProgress.peerAssignments.length > 0}
