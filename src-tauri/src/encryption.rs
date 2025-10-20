@@ -8,11 +8,12 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use tokio::fs;
+use base64::{Engine as _, engine::general_purpose};
 
 // ECIES imports for key encryption
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hkdf::Hkdf;
 use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret, StaticSecret};
-use ed25519_dalek::{Signature, Signer, Verifier, SigningKey, VerifyingKey};
 
 /// Encryption configuration and metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -401,7 +402,10 @@ pub fn decrypt_message<S: DiffieHellman>(
 
     // 2. Derive the same encryption key using the same process as encryption.
     let shared_secret = recipient_secret_key.diffie_hellman(&ephemeral_public_key);
-    let hk = Hkdf::<Sha256>::new(Some(ephemeral_public_key.as_bytes()), shared_secret.as_bytes());
+    let hk = Hkdf::<Sha256>::new(
+        Some(ephemeral_public_key.as_bytes()),
+        shared_secret.as_bytes(),
+    );
     let mut encryption_key = [0u8; 32];
     hk.expand(b"chiral-network-msg", &mut encryption_key)
         .map_err(|e| format!("HKDF expansion failed: {}", e))?;
@@ -440,7 +444,7 @@ pub fn sign_message(
     let signature = sender_signing_key.sign(message);
 
     Ok(SignedMessage {
-        message: base64::encode(message),
+        message: general_purpose::STANDARD.encode(message),
         signer_public_key: hex::encode(sender_signing_key.verifying_key().as_bytes()),
         signature: hex::encode(signature.to_bytes()),
     })
@@ -456,7 +460,7 @@ pub fn sign_message(
 /// Returns an `Err` if any part of the bundle is malformed.
 pub fn verify_message(signed_message: &SignedMessage) -> Result<bool, String> {
     // 1. Decode the data from the bundle.
-    let message_bytes = base64::decode(&signed_message.message)
+    let message_bytes = general_purpose::STANDARD.decode(&signed_message.message)
         .map_err(|e| format!("Invalid base64 message: {}", e))?;
 
     let public_key_bytes: [u8; 32] = hex::decode(&signed_message.signer_public_key)
@@ -474,11 +478,8 @@ pub fn verify_message(signed_message: &SignedMessage) -> Result<bool, String> {
 
     // 2. Verify the signature against the message.
     // The `verify` method will hash the message internally before checking.
-    Ok(signer_public_key
-        .verify(&message_bytes, &signature)
-        .is_ok())
+    Ok(signer_public_key.verify(&message_bytes, &signature).is_ok())
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -635,9 +636,12 @@ mod tests {
 
         // 5. Negative test: tampered message should fail verification.
         let mut tampered_bundle = signed_message.clone();
-        tampered_bundle.message = base64::encode(b"This is a tampered message!");
+        tampered_bundle.message = general_purpose::STANDARD.encode(b"This is a tampered message!");
         let is_tampered_valid = verify_message(&tampered_bundle).unwrap();
-        assert!(!is_tampered_valid, "Signature for tampered message should be invalid");
+        assert!(
+            !is_tampered_valid,
+            "Signature for tampered message should be invalid"
+        );
     }
 
     // Add E2E messaging tests. Marked #[ignore] so they don't run in normal CI
@@ -685,7 +689,9 @@ mod tests {
             "Encrypted message unexpectedly contains plaintext hex"
         );
         assert!(
-            !encrypted_bundle.ephemeral_public_key.contains(&original_hex),
+            !encrypted_bundle
+                .ephemeral_public_key
+                .contains(&original_hex),
             "Ephemeral public key unexpectedly contains plaintext hex"
         );
         assert!(
@@ -703,8 +709,8 @@ mod tests {
         let original_message = b"Message across unreliable network";
 
         // Sender encrypts
-        let encrypted_bundle = encrypt_message(original_message, &recipient_public)
-            .expect("encrypt");
+        let encrypted_bundle =
+            encrypt_message(original_message, &recipient_public).expect("encrypt");
 
         // Simulate message lost on first attempt
         sleep(Duration::from_millis(100)).await;
@@ -714,8 +720,8 @@ mod tests {
         sleep(Duration::from_millis(250)).await;
 
         // Recipient tries to decrypt after reconnect
-        let decrypted = decrypt_message(&encrypted_bundle, &recipient_secret)
-            .expect("decrypt after reconnect");
+        let decrypted =
+            decrypt_message(&encrypted_bundle, &recipient_secret).expect("decrypt after reconnect");
 
         assert_eq!(decrypted, original_message);
     }

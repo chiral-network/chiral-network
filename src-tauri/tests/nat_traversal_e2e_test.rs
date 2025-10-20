@@ -35,7 +35,9 @@ fn create_test_file(hash: &str, name: &str, size: u64) -> FileMetadata {
         version: Some(1),
         parent_hash: None,
         cids: None,
+        encrypted_key_bundle: None,
         is_root: true,
+        ..Default::default()
     }
 }
 
@@ -59,6 +61,7 @@ async fn test_autonat_detection() {
         false,                        // enable_autorelay
         Vec::new(),                   // preferred_relays
         false,                        // enable_relay_server
+        None,
     )
     .await;
 
