@@ -29,6 +29,7 @@ Welcome to the Chiral Network documentation. This directory contains comprehensi
 - [User Guide](user-guide.md) - End-user instructions for common tasks
 - [Developer Setup](developer-setup.md) - Environment setup and development tools
 - [Contributing Guide](contributing.md) - How to contribute to Chiral Network
+- [Roadmap](roadmap.md) - Project roadmap and future development plans
 
 ### Special Topics
 - [Proxy Self-Test](PROXY_SELF_TEST.md) - Proxy functionality testing guide
