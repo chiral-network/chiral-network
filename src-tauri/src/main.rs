@@ -36,13 +36,28 @@ use crate::stream_auth::{
     AuthMessage, HmacKeyExchangeConfirmation, HmacKeyExchangeRequest, HmacKeyExchangeResponse,
     StreamAuthService,
 };
+use chrono;
 use dht::{DhtEvent, DhtMetricsSnapshot, DhtService, FileMetadata};
 use directories::ProjectDirs;
 use ethereum::{
-    create_new_account, get_account_from_private_key, get_balance, get_block_number, get_hashrate,
-    get_mined_blocks_count, get_mining_logs, get_mining_performance, get_mining_status, // Assuming you have a file_handler module
-    get_network_difficulty, get_network_hashrate, get_peer_count, get_recent_mined_blocks,
-    start_mining, stop_mining, EthAccount, GethProcess, MinedBlock,
+    create_new_account,
+    get_account_from_private_key,
+    get_balance,
+    get_block_number,
+    get_hashrate,
+    get_mined_blocks_count,
+    get_mining_logs,
+    get_mining_performance,
+    get_mining_status, // Assuming you have a file_handler module
+    get_network_difficulty,
+    get_network_hashrate,
+    get_peer_count,
+    get_recent_mined_blocks,
+    start_mining,
+    stop_mining,
+    EthAccount,
+    GethProcess,
+    MinedBlock,
 };
 use file_transfer::{DownloadMetricsSnapshot, FileTransferEvent, FileTransferService};
 use fs2::available_space;
@@ -71,8 +86,7 @@ use tauri::{
 use tokio::time::{timeout as tokio_timeout, Duration as TokioDuration};
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use totp_rs::{Algorithm, Secret, TOTP};
-use chrono;
-use tracing::{error, info, warn, debug};
+use tracing::{debug, error, info, warn};
 use webrtc_service::{WebRTCFileRequest, WebRTCService};
 
 use crate::manager::ChunkManager; // Import the ChunkManager
@@ -227,6 +241,12 @@ struct AppState {
     // make these clonable so we can .clone() and move into spawned tasks
     proof_watcher: Arc<Mutex<Option<JoinHandle<()>>>>,
     proof_contract_address: Arc<Mutex<Option<String>>>,
+
+    // Relay reputation statistics storage
+    relay_reputation: Arc<Mutex<std::collections::HashMap<String, RelayNodeStats>>>,
+
+    // Relay node aliases (peer_id -> alias)
+    relay_aliases: Arc<Mutex<std::collections::HashMap<String, String>>>,
 }
 
 #[tauri::command]
@@ -754,6 +774,7 @@ async fn start_dht_node(
     // New optional relay controls
     enable_autorelay: Option<bool>,
     preferred_relays: Option<Vec<String>>,
+    enable_relay_server: Option<bool>,
 ) -> Result<String, String> {
     {
         let dht_guard = state.dht.lock().await;
@@ -786,7 +807,6 @@ async fn start_dht_node(
         .map_err(|e| format!("Could not get app data directory: {}", e))?;
     let chunk_storage_path = app_data_dir.join("chunk_storage");
     let chunk_manager = Arc::new(ChunkManager::new(chunk_storage_path));
-
 
     // --- Hotfix: Disable AutoRelay on bootstrap nodes (and via env var)
     let mut final_enable_autorelay = enable_autorelay.unwrap_or(true);
@@ -834,6 +854,7 @@ async fn start_dht_node(
     // Spawn the event pump
     let app_handle = app.clone();
     let proxies_arc = state.proxies.clone();
+    let relay_reputation_arc = state.relay_reputation.clone();
     let dht_clone_for_pump = dht_arc.clone();
 
     tokio::spawn(async move {
@@ -953,6 +974,63 @@ async fn start_dht_node(
                         let payload = serde_json::json!(metadata);
                         let _ = app_handle.emit("found_file", payload);
                     }
+                    DhtEvent::ReputationEvent {
+                        peer_id,
+                        event_type,
+                        impact,
+                        data,
+                    } => {
+                        // Update relay reputation statistics
+                        let mut stats = relay_reputation_arc.lock().await;
+                        let entry = stats.entry(peer_id.clone()).or_insert(RelayNodeStats {
+                            peer_id: peer_id.clone(),
+                            alias: None,
+                            reputation_score: 0.0,
+                            reservations_accepted: 0,
+                            circuits_established: 0,
+                            circuits_successful: 0,
+                            total_events: 0,
+                            last_seen: 0,
+                        });
+
+                        // Update statistics based on event type
+                        entry.reputation_score += impact;
+                        entry.total_events += 1;
+                        entry.last_seen = data
+                            .get("timestamp")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or_else(|| {
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_secs()
+                            });
+
+                        match event_type.as_str() {
+                            "RelayReservationAccepted" => entry.reservations_accepted += 1,
+                            "RelayCircuitEstablished" => entry.circuits_established += 1,
+                            "RelayCircuitSuccessful" => entry.circuits_successful += 1,
+                            _ => {}
+                        }
+
+                        // Emit event to frontend
+                        let payload = serde_json::json!({
+                            "peerId": peer_id,
+                            "eventType": event_type,
+                            "impact": impact,
+                            "data": data,
+                        });
+                        let _ = app_handle.emit("relay_reputation_event", payload);
+                    }
+                    DhtEvent::BitswapChunkDownloaded { file_hash, chunk_index, total_chunks, chunk_size } => {
+                        let payload = serde_json::json!({
+                            "fileHash": file_hash,
+                            "chunkIndex": chunk_index,
+                            "totalChunks": total_chunks,
+                            "chunkSize": chunk_size,
+                        });
+                        let _ = app_handle.emit("bitswap_chunk_downloaded", payload);
+                    },
                     _ => {}
                 }
             }
@@ -1283,6 +1361,24 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                 }
                 DhtEvent::FileDownloaded { file_hash } => {
                     format!("file_downloaded:{}", file_hash)
+                }
+                DhtEvent::BitswapChunkDownloaded { file_hash, chunk_index, total_chunks, chunk_size } => {
+                    format!("bitswap_chunk_downloaded:{}:{}:{}:{}", file_hash, chunk_index, total_chunks, chunk_size)
+                },
+                DhtEvent::ReputationEvent {
+                    peer_id,
+                    event_type,
+                    impact,
+                    data,
+                } => {
+                    let json = serde_json::to_string(&serde_json::json!({
+                        "peer_id": peer_id,
+                        "event_type": event_type,
+                        "impact": impact,
+                        "data": data,
+                    }))
+                    .unwrap_or_else(|_| "{}".to_string());
+                    format!("reputation_event:{}", json)
                 }
             })
             .collect();
@@ -1780,9 +1876,13 @@ async fn start_file_transfer_service(
     }
 
     // Initialize WebRTC service with file transfer service
-    let webrtc_service = WebRTCService::new(app.app_handle().clone(), ft_arc.clone(), state.keystore.clone())
-        .await
-        .map_err(|e| format!("Failed to start WebRTC service: {}", e))?;
+    let webrtc_service = WebRTCService::new(
+        app.app_handle().clone(),
+        ft_arc.clone(),
+        state.keystore.clone(),
+    )
+    .await
+    .map_err(|e| format!("Failed to start WebRTC service: {}", e))?;
 
     let webrtc_arc = Arc::new(webrtc_service);
     {
@@ -1906,6 +2006,7 @@ async fn upload_file_to_network(
                 version: Some(1),
                 cids: None,
                 encrypted_key_bundle: None,
+                ..Default::default()
             };
 
             match dht.publish_file(metadata.clone()).await {
@@ -1926,18 +2027,18 @@ async fn upload_file_to_network(
 async fn download_blocks_from_network(
     state: State<'_, AppState>,
     file_metadata: FileMetadata,
+    download_path: String,
 ) -> Result<(), String> {
-    {
-        let dht = {
-            let dht_guard = state.dht.lock().await;
-            dht_guard.as_ref().cloned()
-        };
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
 
-        if let Some(dht) = dht {
-            dht.download_file(file_metadata).await
-        } else {
-            Err("DHT node is not running".to_string())
-        }
+    if let Some(dht) = dht {
+        info!("calling dht download_file");
+        dht.download_file(file_metadata, download_path).await
+    } else {
+        Err("DHT node is not running".to_string())
     }
 }
 
@@ -2356,9 +2457,10 @@ async fn upload_file_chunk(
             key_fingerprint: None,
             version: Some(1),
             cids: Some(vec![root_cid.clone()]), // The root CID for retrieval
+            encrypted_key_bundle: None,
             parent_hash: None,
             is_root: true,
-            encrypted_key_bundle: None,
+            download_path: None,
         };
 
         // Store complete file data locally for seeding
@@ -2771,6 +2873,23 @@ async fn search_file_metadata(
     if let Some(dht) = dht {
         let timeout = timeout_ms.unwrap_or(10_000);
         dht.search_metadata(file_hash, timeout).await
+    } else {
+        Err("DHT node is not running".to_string())
+    }
+}
+
+#[tauri::command]
+async fn get_file_seeders(
+    state: State<'_, AppState>,
+    file_hash: String,
+) -> Result<Vec<String>, String> {
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    if let Some(dht_service) = dht {
+        Ok(dht_service.get_seeders_for_file(&file_hash).await)
     } else {
         Err("DHT node is not running".to_string())
     }
@@ -3679,6 +3798,12 @@ fn main() {
             // make these clonable so we can .clone() and move into spawned tasks
             proof_watcher: Arc::new(Mutex::new(None)),
             proof_contract_address: Arc::new(Mutex::new(None)),
+
+            // Relay reputation statistics
+            relay_reputation: Arc::new(Mutex::new(std::collections::HashMap::new())),
+
+            // Relay aliases
+            relay_aliases: Arc::new(Mutex::new(std::collections::HashMap::new())),
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
@@ -3722,6 +3847,7 @@ fn main() {
             stop_dht_node,
             stop_publishing_file,
             search_file_metadata,
+            get_file_seeders,
             connect_to_peer,
             get_dht_events,
             detect_locale,
@@ -3810,7 +3936,10 @@ fn main() {
             send_chat_message,
             store_file_data,
             start_proof_of_storage_watcher,
-            stop_proof_of_storage_watcher
+            stop_proof_of_storage_watcher,
+            get_relay_reputation_stats,
+            set_relay_alias,
+            get_relay_alias
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -4159,7 +4288,7 @@ async fn upload_and_publish_file(
                 vec![], // Empty - chunks already stored
                 created_at,
                 Some(mime_type),
-                None, // encrypted_key_bundle
+                None,                            // encrypted_key_bundle
                 true,                            // is_encrypted
                 Some("AES-256-GCM".to_string()), // Encryption method
                 None,                            // key_fingerprint (deprecated)
@@ -4342,13 +4471,26 @@ async fn send_chat_message(
     signature: Vec<u8>,
 ) -> Result<(), String> {
     debug!("send_chat_message called for peer: {}", recipient_peer_id);
-    let webrtc = state.webrtc.lock().await.as_ref().cloned()
+    let webrtc = state
+        .webrtc
+        .lock()
+        .await
+        .as_ref()
+        .cloned()
         .ok_or("WebRTC service not running")?;
 
     // 1. Check if a WebRTC connection already exists.
     if !webrtc.get_connection_status(&recipient_peer_id).await {
-        debug!("No existing WebRTC connection to {}. Attempting to establish one.", recipient_peer_id);
-        let dht = state.dht.lock().await.as_ref().cloned()
+        debug!(
+            "No existing WebRTC connection to {}. Attempting to establish one.",
+            recipient_peer_id
+        );
+        let dht = state
+            .dht
+            .lock()
+            .await
+            .as_ref()
+            .cloned()
             .ok_or("DHT service not running")?;
 
         dht.connect_to_peer_by_id(recipient_peer_id.clone()).await?;
@@ -4356,21 +4498,31 @@ async fn send_chat_message(
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 
         if !webrtc.get_connection_status(&recipient_peer_id).await {
-            error!("Failed to establish WebRTC connection with peer {} after 5s.", recipient_peer_id);
+            error!(
+                "Failed to establish WebRTC connection with peer {} after 5s.",
+                recipient_peer_id
+            );
             return Err("Failed to establish WebRTC connection with peer.".to_string());
         }
-        debug!("WebRTC connection to {} established successfully.", recipient_peer_id);
+        debug!(
+            "WebRTC connection to {} established successfully.",
+            recipient_peer_id
+        );
     }
 
     // 3. Construct the message payload.
     let chat_message = webrtc_service::WebRTCChatMessage {
-        message_id: format!("msg_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()),
+        message_id: format!(
+            "msg_{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ),
         encrypted_payload,
         timestamp: chrono::Utc::now().timestamp() as u64,
         signature,
     };
     let message = webrtc_service::WebRTCMessage::ChatMessage(chat_message);
-    let message_bytes = serde_json::to_vec(&message).map_err(|e| format!("Failed to serialize chat message: {}", e))?;
+    let message_bytes = serde_json::to_vec(&message)
+        .map_err(|e| format!("Failed to serialize chat message: {}", e))?;
     debug!("Sending chat message to {}", recipient_peer_id);
     // Correctly serialize the message to a string before sending via send_text
     let message_str = serde_json::to_string(&message)
@@ -4543,4 +4695,85 @@ mod tests {
     }
 
     // Add more tests for other functions/modules as needed
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct RelayReputationStats {
+    total_relays: usize,
+    top_relays: Vec<RelayNodeStats>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RelayNodeStats {
+    peer_id: String,
+    alias: Option<String>,
+    reputation_score: f64,
+    reservations_accepted: u64,
+    circuits_established: u64,
+    circuits_successful: u64,
+    total_events: u64,
+    last_seen: u64,
+}
+
+#[tauri::command]
+async fn get_relay_reputation_stats(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<RelayReputationStats, String> {
+    // Read from relay reputation storage
+    let stats_map = state.relay_reputation.lock().await;
+    let aliases_map = state.relay_aliases.lock().await;
+
+    let max_relays = limit.unwrap_or(100);
+
+    // Convert HashMap to Vec, populate aliases, and sort by reputation score (descending)
+    let mut all_relays: Vec<RelayNodeStats> = stats_map
+        .values()
+        .map(|stats| {
+            let mut stats_with_alias = stats.clone();
+            stats_with_alias.alias = aliases_map.get(&stats.peer_id).cloned();
+            stats_with_alias
+        })
+        .collect();
+
+    all_relays.sort_by(|a, b| {
+        b.reputation_score
+            .partial_cmp(&a.reputation_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Take top N relays
+    let top_relays = all_relays.into_iter().take(max_relays).collect();
+    let total_relays = stats_map.len();
+
+    Ok(RelayReputationStats {
+        total_relays,
+        top_relays,
+    })
+}
+
+#[tauri::command]
+async fn set_relay_alias(
+    state: State<'_, AppState>,
+    peer_id: String,
+    alias: String,
+) -> Result<(), String> {
+    let mut aliases = state.relay_aliases.lock().await;
+
+    if alias.trim().is_empty() {
+        aliases.remove(&peer_id);
+    } else {
+        aliases.insert(peer_id, alias.trim().to_string());
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_relay_alias(
+    state: State<'_, AppState>,
+    peer_id: String,
+) -> Result<Option<String>, String> {
+    let aliases = state.relay_aliases.lock().await;
+    Ok(aliases.get(&peer_id).cloned())
 }

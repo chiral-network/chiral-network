@@ -371,6 +371,7 @@
             autonatServers: $settings.autonatServers,
             enableAutorelay: $settings.enableAutorelay,
             preferredRelays: $settings.preferredRelays || [],
+            enableRelayServer: $settings.enableRelayServer,
             chunkSizeKb: $settings.chunkSize,
             cacheSizeMb: $settings.cacheSize,
           })
@@ -1095,6 +1096,13 @@
 
       // Also passively sync DHT state if it's already running
       await syncDhtStatusOnMount()
+
+      // Auto-start DHT if enabled in settings
+      if (isTauri && $settings.autoStartDht && dhtStatus === 'disconnected') {
+        console.log('Auto-starting DHT network...')
+        dhtEvents = [...dhtEvents, '🚀 Auto-starting network...']
+        await startDht()
+      }
 
       if (isTauri) {
         if (!peerDiscoveryUnsub) {

@@ -23,7 +23,6 @@ pub struct EthSignedMessage {
     pub signature: String,
 }
 
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AccountInfo {
     pub address: String,
@@ -1360,7 +1359,9 @@ pub async fn send_transaction(
 
 /// Fetches the full details of a block by its number.
 /// This is used by the blockchain indexer to get reward data.
-pub async fn get_block_details_by_number(block_number: u64) -> Result<Option<serde_json::Value>, String> {
+pub async fn get_block_details_by_number(
+    block_number: u64,
+) -> Result<Option<serde_json::Value>, String> {
     let client = reqwest::Client::new();
     let payload = serde_json::json!({
         "jsonrpc": "2.0",
