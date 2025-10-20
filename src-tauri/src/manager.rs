@@ -105,6 +105,12 @@ pub struct ChunkManager {
     storage_path: PathBuf,
 }
 
+/// The result of a canonical, one-time encryption of a file.
+pub struct CanonicalEncryptionResult {
+    pub manifest: FileManifest,
+    pub canonical_aes_key: [u8; 32],
+}
+
 impl ChunkManager {
     pub fn new(storage_path: PathBuf) -> Self {
         ChunkManager {
@@ -113,10 +119,21 @@ impl ChunkManager {
         }
     }
 
-    /// The result of a canonical, one-time encryption of a file.
-    pub struct CanonicalEncryptionResult {
-        pub manifest: FileManifest,
-        pub canonical_aes_key: [u8; 32],
+    pub fn chunk_and_encrypt_file(
+        &self,
+        file_path: &Path,
+        recipient_public_key: &PublicKey,
+    ) -> Result<FileManifest, String> {
+        let canonical_result = self.chunk_and_encrypt_file_canonical(file_path)?;
+        let mut manifest = canonical_result.manifest;
+        let canonical_aes_key = canonical_result.canonical_aes_key;
+
+        let encrypted_bundle =
+            encrypt_aes_key(&canonical_aes_key, recipient_public_key)?;
+
+        manifest.encrypted_key_bundle = Some(encrypted_bundle);
+
+        Ok(manifest)
     }
 
     /// Encrypts a file once with a new, canonical AES key.

@@ -3908,7 +3908,7 @@ fn main() {
             get_contribution_history,
             reset_analytics,
             save_temp_file_for_upload,
-            request_file_access,
+            //request_file_access,
             upload_and_publish_file,
             decrypt_and_reassemble_file,
             create_auth_session,
@@ -4183,8 +4183,21 @@ async fn encrypt_file_for_recipient(
         PublicKey::from(&secret_key)
     };
 
+    let private_key_hex = state
+        .active_account_private_key
+        .lock()
+        .await
+        .clone()
+        .ok_or("No account is currently active. Please log in.")?;
+
     // Run the encryption in a blocking task to avoid blocking the async runtime
     tokio::task::spawn_blocking(move || {
+        let pk_bytes = hex::decode(private_key_hex.trim_start_matches("0x"))
+            .map_err(|_| "Invalid private key format".to_string())?;
+        let secret_key = StaticSecret::from(
+            <[u8; 32]>::try_from(pk_bytes).map_err(|_| "Private key is not 32 bytes")?,
+        );
+
         // Initialize ChunkManager with proper app data directory
         let manager = ChunkManager::new(chunk_storage_path);
 
@@ -4207,34 +4220,34 @@ async fn encrypt_file_for_recipient(
     .map_err(|e| format!("Encryption task failed: {}", e))?
 }
 
-#[tauri::command]
-asyn fn request_file_access(
-    state: State<'_, AppState>,
-    seeder_peer_id: String,
-    merkle_root: String,
-) -> Result<String, String> {
-    let dht = state.dht.lock().await.as_ref().cloned().ok_or("DHT not running")?;
-
-    // 1. Get own public key
-    let private_key_hex = state
-        .active_account_private_key
-        .lock()
-        .await
-        .clone()
-        .ok_or("No active account to derive public key from.")?;
-    let pk_bytes = hex::decode(private_key_hex.trim_start_matches("0x")).map_err(|_| "Invalid private key format")?;
-    let secret_key = StaticSecret::from(<[u8; 32]>::try_from(pk_bytes).map_err(|_| "Private key is not 32 bytes")?);
-    let public_key = PublicKey::from(&secret_key);
-
-    // 2. Parse seeder peer id
-    let seeder = seeder_peer_id.parse().map_err(|_| "Invalid seeder peer ID")?;
-
-    // 3. Call the new DHT service method
-    let bundle = dht.request_aes_key(seeder, merkle_root, public_key).await?;
-
-    // 4. Serialize the bundle to send to the frontend
-    serde_json::to_string(&bundle).map_err(|e| e.to_string())
-}
+// #[tauri::command]
+// async fn request_file_access(
+//     state: State<'_, AppState>,
+//     seeder_peer_id: String,
+//     merkle_root: String,
+// ) -> Result<String, String> {
+//     let dht = state.dht.lock().await.as_ref().cloned().ok_or("DHT not running")?;
+//
+//     // 1. Get own public key
+//     let private_key_hex = state
+//         .active_account_private_key
+//         .lock()
+//         .await
+//         .clone()
+//         .ok_or("No active account to derive public key from.")?;
+//     let pk_bytes = hex::decode(private_key_hex.trim_start_matches("0x")).map_err(|_| "Invalid private key format")?;
+//     let secret_key = StaticSecret::from(<[u8; 32]>::try_from(pk_bytes).map_err(|_| "Private key is not 32 bytes")?);
+//     let public_key = PublicKey::from(&secret_key);
+//
+//     // 2. Parse seeder peer id
+//     let seeder = seeder_peer_id.parse().map_err(|_| "Invalid seeder peer ID")?;
+//
+//     // 3. Call the new DHT service method
+//     let bundle = dht.request_aes_key(seeder, merkle_root, public_key).await?;
+//
+//     // 4. Serialize the bundle to send to the frontend
+//     serde_json::to_string(&bundle).map_err(|e| e.to_string())
+// }
 
 /// Unified upload command: processes file with ChunkManager and auto-publishes to DHT
 /// Returns file metadata for frontend use
@@ -4264,9 +4277,10 @@ async fn upload_and_publish_file(
     let chunk_storage_path = app_data_dir.join("chunk_storage");
 
     // 2. Perform canonical encryption in a blocking task
+    let file_path_clone = file_path.clone();
     let (manifest, canonical_aes_key) = tokio::task::spawn_blocking(move || {
         let manager = ChunkManager::new(chunk_storage_path);
-        let result = manager.chunk_and_encrypt_file_canonical(Path::new(&file_path))?;
+        let result = manager.chunk_and_encrypt_file_canonical(Path::new(&file_path_clone))?;
         Ok::<(manager::FileManifest, [u8; 32]), String>((result.manifest, result.canonical_aes_key))
     }).await.map_err(|e| e.to_string())??;
 
@@ -4307,8 +4321,8 @@ async fn upload_and_publish_file(
                 file_size,
                 vec![], // data is already chunked and stored
                 created_at,
-<<<<<<< HEAD
                 mime_type,
+                None,                            // encrypted_key_bundle
                 true, // is_encrypted
                 Some("AES-256-GCM".to_string()),
                 None, // key_fingerprint
@@ -4316,15 +4330,6 @@ async fn upload_and_publish_file(
 
         // This is important: we publish without any key bundle.
         metadata.encrypted_key_bundle = None;
-=======
-                Some(mime_type),
-                None,                            // encrypted_key_bundle
-                true,                            // is_encrypted
-                Some("AES-256-GCM".to_string()), // Encryption method
-                None,                            // key_fingerprint (deprecated)
-            )
-            .await?;
->>>>>>> main
 
         let version = metadata.version.unwrap_or(1);
         dht.publish_file(metadata).await?;
