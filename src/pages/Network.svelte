@@ -372,6 +372,7 @@
             enableAutorelay: $settings.enableAutorelay,
             preferredRelays: $settings.preferredRelays || [],
             enableRelayServer: $settings.enableRelayServer,
+            relayServerAlias: $settings.relayServerAlias || '',
             chunkSizeKb: $settings.chunkSize,
             cacheSizeMb: $settings.cacheSize,
           })
