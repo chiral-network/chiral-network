@@ -84,8 +84,8 @@
     enableBandwidthScheduling: false,
     bandwidthSchedules: [],
   };
-  let localSettings: AppSettings = get(settings); 
-  let savedSettings: AppSettings = get(settings);
+  let localSettings: AppSettings = JSON.parse(JSON.stringify(get(settings)));
+  let savedSettings: AppSettings = JSON.parse(JSON.stringify(get(settings)));
   let hasChanges = false;
   let fileInputEl: HTMLInputElement | null = null;
   let selectedLanguage: string | undefined = undefined;
@@ -473,10 +473,10 @@
   try {
     const loadedSettings: AppSettings = JSON.parse(stored);
     // Set the store, which ensures it is available globally
-    settings.set({ ...defaultSettings, ...loadedSettings }); 
+    settings.set({ ...defaultSettings, ...loadedSettings });
     // Update local state from the store after loading
-    localSettings = get(settings); 
-    savedSettings = get(settings); 
+    localSettings = JSON.parse(JSON.stringify(get(settings)));
+    savedSettings = JSON.parse(JSON.stringify(get(settings))); 
   } catch (e) {
     console.error("Failed to load settings:", e);
   }
