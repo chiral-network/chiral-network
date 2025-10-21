@@ -194,19 +194,21 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
                 // Process payment for Bitswap download (only once per file)
                 console.log('💰 Bitswap download completed, processing payment...');
                 const paymentAmount = paymentService.calculateDownloadCost(completedFile.size);
-                const seederAddress = (completedFile.seederAddresses && completedFile.seederAddresses[0]) || $wallet.address;
+                const seederPeerId = completedFile.seederAddresses?.[0];
+                const seederWalletAddress = completedFile.uploaderAddress || seederPeerId || $wallet.address;
 
                 try {
                     const paymentResult = await paymentService.processDownloadPayment(
                         completedFile.hash,
                         completedFile.name,
                         completedFile.size,
-                        seederAddress
+                        seederWalletAddress,
+                        seederPeerId
                     );
 
                     if (paymentResult.success) {
                         paidFiles.add(completedFile.hash); // Mark as paid
-                        console.log(`✅ Bitswap payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederAddress}`);
+                        console.log(`✅ Bitswap payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
                         showNotification(
                             `Download complete! Paid ${paymentAmount.toFixed(4)} Chiral`,
                             'success'
@@ -550,7 +552,8 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
       priority: 'normal' as const,
       version: metadata.version, // Preserve version info if available
       seeders: metadata.seeders.length, // Convert array length to number
-      seederAddresses: metadata.seeders, // Store the actual seeder addresses
+      seederAddresses: metadata.seeders, // Store the actual seeder peer IDs
+      uploaderAddress: metadata.uploaderAddress, // Store uploader's wallet address
       // Pass encryption info to the download item
       isEncrypted: metadata.isEncrypted,
       manifest: metadata.manifest ? JSON.parse(metadata.manifest) : null,
@@ -992,17 +995,19 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
 
             // Process payment for local download (only if not already paid)
             if (!paidFiles.has(fileToDownload.hash)) {
-              const seederAddress = localPeerIdNow || seeders[0] || $wallet.address;
+              const seederPeerId = localPeerIdNow || seeders[0];
+              const seederWalletAddress = fileToDownload.uploaderAddress || seederPeerId || $wallet.address;
               const paymentResult = await paymentService.processDownloadPayment(
                 fileToDownload.hash,
                 fileToDownload.name,
                 fileToDownload.size,
-                seederAddress
+                seederWalletAddress,
+                seederPeerId
               );
 
               if (paymentResult.success) {
                 paidFiles.add(fileToDownload.hash); // Mark as paid
-                console.log(`✅ Payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederAddress}`);
+                console.log(`✅ Payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
                 showNotification(
                   `${tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } })} - Paid ${paymentAmount.toFixed(4)} Chiral`,
                   'success'
@@ -1059,17 +1064,19 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
 
         // 3. Process payment for encrypted download (only if not already paid)
         if (!paidFiles.has(fileToDownload.hash)) {
-          const seederAddress = seeders[0] || $wallet.address;
+          const seederPeerId = seeders[0];
+          const seederWalletAddress = fileToDownload.uploaderAddress || seederPeerId || $wallet.address;
           const paymentResult = await paymentService.processDownloadPayment(
             fileToDownload.hash,
             fileToDownload.name,
             fileToDownload.size,
-            seederAddress
+            seederWalletAddress,
+            seederPeerId
           );
 
           if (paymentResult.success) {
             paidFiles.add(fileToDownload.hash); // Mark as paid
-            console.log(`✅ Payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederAddress}`);
+            console.log(`✅ Payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
           } else {
             console.error('Payment failed:', paymentResult.error);
             showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
@@ -1112,17 +1119,19 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
 
             // Process payment for multi-source download (only if not already paid)
             if (!paidFiles.has(fileToDownload.hash)) {
-              const seederAddress = seeders[0] || $wallet.address;
+              const seederPeerId = seeders[0];
+              const seederWalletAddress = fileToDownload.uploaderAddress || seederPeerId || $wallet.address;
               const paymentResult = await paymentService.processDownloadPayment(
                 fileToDownload.hash,
                 fileToDownload.name,
                 fileToDownload.size,
-                seederAddress
+                seederWalletAddress,
+                seederPeerId
               );
 
               if (paymentResult.success) {
                 paidFiles.add(fileToDownload.hash); // Mark as paid
-                console.log(`✅ Multi-source payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederAddress}`);
+                console.log(`✅ Multi-source payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
                 showNotification(`Multi-source download completed! Paid ${paymentAmount.toFixed(4)} Chiral`, 'success');
               } else {
                 console.error('Multi-source payment failed:', paymentResult.error);
@@ -1219,17 +1228,19 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
                 if (transfer.status === 'completed' && fileToDownload) {
                   // Process payment for P2P download (only if not already paid)
                   if (!paidFiles.has(fileToDownload.hash)) {
-                    const seederAddress = seeders[0] || $wallet.address;
+                    const seederPeerId = seeders[0];
+                    const seederWalletAddress = fileToDownload.uploaderAddress || seederPeerId || $wallet.address;
                     const paymentResult = await paymentService.processDownloadPayment(
                       fileToDownload.hash,
                       fileToDownload.name,
                       fileToDownload.size,
-                      seederAddress
+                      seederWalletAddress,
+                      seederPeerId
                     );
 
                     if (paymentResult.success) {
                       paidFiles.add(fileToDownload.hash); // Mark as paid
-                      console.log(`✅ Payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederAddress}`);
+                      console.log(`✅ Payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
                       showNotification(
                         `${tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } })} - Paid ${paymentAmount.toFixed(4)} Chiral`,
                         'success'

@@ -106,7 +106,7 @@
     }
 
     try {
-      showToast('Processing payment...', 'info');
+      //showToast('Processing payment...', 'info');
       const txHash = await invoke('process_download_payment', {
         uploaderAddress: metadata.uploaderAddress,
         price: metadata.price

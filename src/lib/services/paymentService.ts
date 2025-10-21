@@ -70,6 +70,8 @@ export class PaymentService {
   private static initialized = false;
   private static processedPayments = new Set<string>(); // Track processed file hashes (for downloads)
   private static receivedPayments = new Set<string>(); // Track received payments (for uploads)
+  private static pollingInterval: number | null = null;
+  private static readonly POLL_INTERVAL_MS = 10000; // Poll every 10 seconds
 
   /**
    * Initialize payment service and load persisted data (only runs once)
@@ -120,12 +122,15 @@ export class PaymentService {
   /**
    * Process payment for a file download
    * This deducts from the downloader's balance and creates a transaction
+   * @param seederAddress - Wallet address of the seeder (0x...)
+   * @param seederPeerId - libp2p peer ID of the seeder
    */
   static async processDownloadPayment(
     fileHash: string,
     fileName: string,
     fileSize: number,
-    seederAddress: string
+    seederAddress: string,
+    seederPeerId?: string
   ): Promise<{ success: boolean; transactionId?: number; error?: string }> {
     try {
       // Check if this file has already been paid for
@@ -210,20 +215,21 @@ export class PaymentService {
       this.processedPayments.add(fileHash);
       console.log('✅ Marked file as paid:', fileHash);
 
-      // Notify backend about the payment - this will emit an event to the seeder
+      // Notify backend about the payment - this will send P2P message to the seeder
       try {
         await invoke('record_download_payment', {
           fileHash,
           fileName,
           fileSize,
-          seederAddress,
+          seederWalletAddress: seederAddress,
+          seederPeerId: seederPeerId || seederAddress, // Fallback to wallet address if no peer ID
           downloaderAddress: currentWallet.address || 'unknown',
           amount,
           transactionId
         });
-        console.log('✅ Backend notified of payment to seeder');
+        console.log('✅ Payment notification sent to seeder:', seederAddress);
       } catch (invokeError) {
-        console.warn('Failed to notify backend of payment:', invokeError);
+        console.warn('Failed to send payment notification:', invokeError);
         // Continue anyway - frontend state is updated
       }
 
@@ -395,6 +401,87 @@ export class PaymentService {
       valid: true,
       amount
     };
+  }
+
+  /**
+   * Start polling for payment notifications from the DHT
+   */
+  static startPaymentNotificationPolling(): void {
+    if (this.pollingInterval) {
+      console.log('⚠️ Payment notification polling already running');
+      return;
+    }
+
+    console.log('🔄 Starting payment notification polling...');
+
+    // Poll immediately
+    this.checkForPaymentNotifications();
+
+    // Then poll every 10 seconds
+    this.pollingInterval = window.setInterval(() => {
+      this.checkForPaymentNotifications();
+    }, this.POLL_INTERVAL_MS);
+  }
+
+  /**
+   * Stop polling for payment notifications
+   */
+  static stopPaymentNotificationPolling(): void {
+    if (this.pollingInterval) {
+      clearInterval(this.pollingInterval);
+      this.pollingInterval = null;
+      console.log('🛑 Stopped payment notification polling');
+    }
+  }
+
+  /**
+   * Check for payment notifications from the DHT
+   */
+  private static async checkForPaymentNotifications(): Promise<void> {
+    try {
+      const currentWallet = get(wallet);
+      if (!currentWallet.address) {
+        return; // No wallet address to check
+      }
+
+      const notifications = await invoke('check_payment_notifications', {
+        walletAddress: currentWallet.address
+      }) as any[];
+
+      if (notifications && notifications.length > 0) {
+        for (const notification of notifications) {
+          await this.handlePaymentNotification(notification);
+        }
+      }
+    } catch (error) {
+      // Silently handle errors - DHT might not be ready yet
+      console.debug('Payment notification check failed:', error);
+    }
+  }
+
+  /**
+   * Handle a payment notification from the DHT
+   */
+  private static async handlePaymentNotification(notification: any): Promise<void> {
+    try {
+      console.log('💰 Payment notification received:', notification);
+
+      // Credit the seeder's wallet
+      const result = await this.creditSeederPayment(
+        notification.file_hash,
+        notification.file_name,
+        notification.file_size,
+        notification.downloader_address
+      );
+
+      if (result.success) {
+        console.log('✅ Payment credited successfully');
+      } else {
+        console.warn('⚠️ Failed to credit payment:', result.error);
+      }
+    } catch (error) {
+      console.error('Error handling payment notification:', error);
+    }
   }
 }
 

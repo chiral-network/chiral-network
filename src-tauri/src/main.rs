@@ -416,36 +416,58 @@ async fn record_download_payment(
     file_hash: String,
     file_name: String,
     file_size: u64,
-    seeder_address: String,
+    seeder_wallet_address: String,
+    seeder_peer_id: String,
     downloader_address: String,
     amount: f64,
     transaction_id: u64,
+    state: State<'_, AppState>,
 ) -> Result<(), String> {
-    println!("📝 Download payment recorded: {} Chiral to {}", amount, seeder_address);
+    println!("📝 Download payment recorded: {} Chiral to wallet {} (peer: {})",
+             amount, seeder_wallet_address, seeder_peer_id);
 
-    // Emit event to notify seeder that they received a payment
-    #[derive(Clone, serde::Serialize)]
-    struct SeederPaymentNotification {
+    // Send P2P payment notification message to the seeder's peer
+    #[derive(Clone, serde::Serialize, serde::Deserialize)]
+    struct PaymentNotificationMessage {
         file_hash: String,
         file_name: String,
         file_size: u64,
         downloader_address: String,
+        seeder_wallet_address: String,
         amount: f64,
         transaction_id: u64,
     }
 
-    let notification = SeederPaymentNotification {
+    let payment_msg = PaymentNotificationMessage {
         file_hash,
         file_name,
         file_size,
         downloader_address,
+        seeder_wallet_address,
         amount,
         transaction_id,
     };
 
-    // Emit event that frontend will listen for
-    app.emit("seeder_payment_received", notification)
-        .map_err(|e| format!("Failed to emit seeder payment event: {}", e))?;
+    // Serialize the payment message
+    let payment_json = serde_json::to_string(&payment_msg)
+        .map_err(|e| format!("Failed to serialize payment message: {}", e))?;
+
+    // Send the payment notification via DHT
+    let dht_guard = state.dht_service.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        // Store payment notification in DHT with a special key
+        let payment_key = format!("payment_notification_{}", seeder_wallet_address);
+        dht.put_value(payment_key.clone(), payment_json.as_bytes().to_vec())
+            .await
+            .map_err(|e| format!("Failed to send payment notification: {}", e))?;
+
+        println!("✅ Payment notification sent to DHT for seeder: {}", seeder_wallet_address);
+
+        // Also emit local event in case both peers are in same process (for testing)
+        app.emit("seeder_payment_received", payment_msg.clone()).ok();
+    } else {
+        return Err("DHT service not initialized".to_string());
+    }
 
     Ok(())
 }
@@ -462,6 +484,40 @@ async fn record_seeder_payment(
     // Log the seeder payment receipt for analytics/audit purposes
     println!("💰 Seeder payment received: {} Chiral from {}", _amount, _downloader_address);
     Ok(())
+}
+
+#[tauri::command]
+async fn check_payment_notifications(
+    wallet_address: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let payment_key = format!("payment_notification_{}", wallet_address);
+
+    let dht_guard = state.dht_service.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        // Try to get payment notifications from DHT
+        match dht.get_value(payment_key.clone()).await {
+            Ok(value_bytes) => {
+                // Parse the JSON payment notification
+                let payment_json = String::from_utf8(value_bytes)
+                    .map_err(|e| format!("Failed to decode payment notification: {}", e))?;
+
+                let payment: serde_json::Value = serde_json::from_str(&payment_json)
+                    .map_err(|e| format!("Failed to parse payment notification: {}", e))?;
+
+                println!("💰 Found payment notification for wallet: {}", wallet_address);
+
+                // Return as array (might have multiple payments in the future)
+                Ok(vec![payment])
+            }
+            Err(_) => {
+                // No payment notifications found
+                Ok(vec![])
+            }
+        }
+    } else {
+        Err("DHT service not initialized".to_string())
+    }
 }
 
 #[tauri::command]
@@ -3926,6 +3982,7 @@ fn main() {
             process_download_payment,
             record_download_payment,
             record_seeder_payment,
+            check_payment_notifications,
             get_network_peer_count,
             start_geth_node,
             stop_geth_node,
