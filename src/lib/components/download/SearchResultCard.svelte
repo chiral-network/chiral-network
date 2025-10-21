@@ -9,7 +9,7 @@
   import { files, wallet } from '$lib/stores';
   import { get } from 'svelte/store';
   import { showToast } from '$lib/toast';
-  import { invoke } from '@tauri-apps/api/core';
+  import { paymentService } from '$lib/services/paymentService';
 
   const dispatch = createEventDispatcher<{ download: FileMetadata; copy: string }>();
 
@@ -100,18 +100,35 @@
   async function confirmPayment() {
     showPaymentConfirmDialog = false;
 
-    if (!metadata.uploaderAddress) {
-      showToast('Cannot process payment: uploader address not found', 'error');
+    if (!paymentService.isValidWalletAddress(metadata.uploaderAddress)) {
+      showToast('Cannot process payment: uploader wallet address is missing or invalid', 'error');
       return;
     }
 
     try {
-      //showToast('Processing payment...', 'info');
-      const txHash = await invoke('process_download_payment', {
-        uploaderAddress: metadata.uploaderAddress,
-        price: metadata.price
-      });
-      showToast(`Payment successful! Transaction: ${txHash.substring(0, 10)}...`, 'success');
+      const seederPeerId = metadata.seeders?.[0];
+      const paymentResult = await paymentService.processDownloadPayment(
+        metadata.fileHash,
+        metadata.fileName,
+        metadata.fileSize,
+        metadata.uploaderAddress,
+        seederPeerId
+      );
+
+      if (!paymentResult.success) {
+        const errorMessage = paymentResult.error || 'Unknown error';
+        showToast(`Payment failed: ${errorMessage}`, 'error');
+        return;
+      }
+
+      if (paymentResult.transactionHash) {
+        showToast(
+          `Payment successful! Transaction: ${paymentResult.transactionHash.substring(0, 10)}...`,
+          'success'
+        );
+      } else {
+        showToast('Payment successful!', 'success');
+      }
 
       // Refresh balance after payment to reflect the deduction
       await checkBalance();
@@ -119,7 +136,9 @@
       // Proceed with download after successful payment
       await proceedWithDownload();
     } catch (error: any) {
-      showToast(`Payment failed: ${error}`, 'error');
+      console.error('Payment processing failed:', error);
+      const message = error?.message || error?.toString() || 'Unknown error';
+      showToast(`Payment failed: ${message}`, 'error');
     }
   }
 

@@ -72,6 +72,7 @@ export class PaymentService {
   private static receivedPayments = new Set<string>(); // Track received payments (for uploads)
   private static pollingInterval: number | null = null;
   private static readonly POLL_INTERVAL_MS = 10000; // Poll every 10 seconds
+  private static readonly WALLET_ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
 
   /**
    * Initialize payment service and load persisted data (only runs once)
@@ -120,6 +121,16 @@ export class PaymentService {
   }
 
   /**
+   * Validate that a string is a hex-encoded Ethereum wallet address
+   */
+  static isValidWalletAddress(address?: string | null): boolean {
+    if (!address) {
+      return false;
+    }
+    return this.WALLET_ADDRESS_REGEX.test(address);
+  }
+
+  /**
    * Process payment for a file download
    * This deducts from the downloader's balance and creates a transaction
    * @param seederAddress - Wallet address of the seeder (0x...)
@@ -131,7 +142,7 @@ export class PaymentService {
     fileSize: number,
     seederAddress: string,
     seederPeerId?: string
-  ): Promise<{ success: boolean; transactionId?: number; error?: string }> {
+  ): Promise<{ success: boolean; transactionId?: number; transactionHash?: string; error?: string }> {
     try {
       // Check if this file has already been paid for
       if (this.processedPayments.has(fileHash)) {
@@ -144,6 +155,18 @@ export class PaymentService {
 
       const amount = this.calculateDownloadCost(fileSize);
 
+      if (!seederAddress || !this.WALLET_ADDRESS_REGEX.test(seederAddress)) {
+        console.error('❌ Invalid seeder wallet address for payment', {
+          seederAddress,
+          fileName,
+          fileHash
+        });
+        return {
+          success: false,
+          error: 'Invalid seeder wallet address'
+        };
+      }
+
       // Check if user has sufficient balance
       if (!this.hasSufficientBalance(amount)) {
         return {
@@ -155,6 +178,7 @@ export class PaymentService {
       // Get current wallet state
       const currentWallet = get(wallet);
       const currentTransactions = get(transactions);
+      let transactionHash = '';
 
       console.log('💰 Processing download payment:', {
         currentBalance: currentWallet.balance,
@@ -163,6 +187,29 @@ export class PaymentService {
         seederAddress,
         currentTransactionCount: currentTransactions.length
       });
+
+      try {
+        const result = await invoke<string>('process_download_payment', {
+          uploaderAddress: seederAddress,
+          price: amount
+        });
+        if (!result || typeof result !== 'string') {
+          throw new Error('Payment request did not return a transaction hash');
+        }
+        transactionHash = result;
+        console.log('🔗 On-chain payment submitted:', {
+          transactionHash,
+          seederAddress,
+          amount
+        });
+      } catch (chainError: any) {
+        const errorMessage = chainError?.message || chainError?.toString() || 'Failed to submit on-chain payment';
+        console.error('❌ Ethereum payment transaction failed:', chainError);
+        return {
+          success: false,
+          error: errorMessage
+        };
+      }
 
       // Generate unique transaction ID
       const transactionId = currentTransactions.length > 0
@@ -196,6 +243,7 @@ export class PaymentService {
         amount: amount,
         to: seederAddress,
         from: currentWallet.address,
+        txHash: transactionHash,
         date: new Date(),
         description: `Download: ${fileName}`,
         status: 'completed'
@@ -225,7 +273,8 @@ export class PaymentService {
           seederPeerId: seederPeerId || seederAddress, // Fallback to wallet address if no peer ID
           downloaderAddress: currentWallet.address || 'unknown',
           amount,
-          transactionId
+          transactionId,
+          transactionHash
         });
         console.log('✅ Payment notification sent to seeder:', seederAddress);
       } catch (invokeError) {
@@ -235,7 +284,8 @@ export class PaymentService {
 
       return {
         success: true,
-        transactionId
+        transactionId,
+        transactionHash
       };
     } catch (error) {
       console.error('Error processing download payment:', error);
@@ -254,7 +304,8 @@ export class PaymentService {
     fileHash: string,
     fileName: string,
     fileSize: number,
-    downloaderAddress: string
+    downloaderAddress: string,
+    transactionHash?: string
   ): Promise<{ success: boolean; transactionId?: number; error?: string }> {
     try {
       // Generate unique key for this payment receipt
@@ -298,6 +349,7 @@ export class PaymentService {
         amount: amount,
         from: downloaderAddress,
         to: currentWallet.address,
+        txHash: transactionHash,
         date: new Date(),
         description: `Upload payment: ${fileName}`,
         status: 'completed'
@@ -471,7 +523,8 @@ export class PaymentService {
         notification.file_hash,
         notification.file_name,
         notification.file_size,
-        notification.downloader_address
+        notification.downloader_address,
+        notification.transaction_hash
       );
 
       if (result.success) {

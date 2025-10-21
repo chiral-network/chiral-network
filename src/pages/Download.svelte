@@ -195,30 +195,41 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
                 console.log('💰 Bitswap download completed, processing payment...');
                 const paymentAmount = paymentService.calculateDownloadCost(completedFile.size);
                 const seederPeerId = completedFile.seederAddresses?.[0];
-                const seederWalletAddress = completedFile.uploaderAddress || seederPeerId || $wallet.address;
+                const seederWalletAddress = paymentService.isValidWalletAddress(completedFile.uploaderAddress)
+                    ? completedFile.uploaderAddress!
+                    : null;
 
-                try {
-                    const paymentResult = await paymentService.processDownloadPayment(
-                        completedFile.hash,
-                        completedFile.name,
-                        completedFile.size,
-                        seederWalletAddress,
-                        seederPeerId
-                    );
-
-                    if (paymentResult.success) {
-                        paidFiles.add(completedFile.hash); // Mark as paid
-                        console.log(`✅ Bitswap payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
-                        showNotification(
-                            `Download complete! Paid ${paymentAmount.toFixed(4)} Chiral`,
-                            'success'
+                if (!seederWalletAddress) {
+                    console.warn('Skipping Bitswap payment due to missing or invalid uploader wallet address', {
+                        file: completedFile.name,
+                        uploaderAddress: completedFile.uploaderAddress
+                    });
+                    showNotification('Payment skipped: missing uploader wallet address', 'warning');
+                } else {
+                    try {
+                        const paymentResult = await paymentService.processDownloadPayment(
+                            completedFile.hash,
+                            completedFile.name,
+                            completedFile.size,
+                            seederWalletAddress,
+                            seederPeerId
                         );
-                    } else {
-                        console.error('Bitswap payment failed:', paymentResult.error);
-                        showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
+
+                        if (paymentResult.success) {
+                            paidFiles.add(completedFile.hash); // Mark as paid
+                            console.log(`✅ Bitswap payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
+                            showNotification(
+                                `Download complete! Paid ${paymentAmount.toFixed(4)} Chiral`,
+                                'success'
+                            );
+                        } else {
+                            console.error('Bitswap payment failed:', paymentResult.error);
+                            showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
+                        }
+                    } catch (error) {
+                        console.error('Error processing Bitswap payment:', error);
+                        showNotification(`Payment failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'warning');
                     }
-                } catch (error) {
-                    console.error('Error processing Bitswap payment:', error);
                 }
             }
 
@@ -996,25 +1007,36 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
             // Process payment for local download (only if not already paid)
             if (!paidFiles.has(fileToDownload.hash)) {
               const seederPeerId = localPeerIdNow || seeders[0];
-              const seederWalletAddress = fileToDownload.uploaderAddress || seederPeerId || $wallet.address;
-              const paymentResult = await paymentService.processDownloadPayment(
-                fileToDownload.hash,
-                fileToDownload.name,
-                fileToDownload.size,
-                seederWalletAddress,
-                seederPeerId
-              );
+              const seederWalletAddress = paymentService.isValidWalletAddress(fileToDownload.uploaderAddress)
+                ? fileToDownload.uploaderAddress!
+                : null;
 
-              if (paymentResult.success) {
-                paidFiles.add(fileToDownload.hash); // Mark as paid
-                console.log(`✅ Payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
-                showNotification(
-                  `${tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } })} - Paid ${paymentAmount.toFixed(4)} Chiral`,
-                  'success'
-                );
+              if (!seederWalletAddress) {
+                console.warn('Skipping local copy payment due to missing or invalid uploader wallet address', {
+                  file: fileToDownload.name,
+                  uploaderAddress: fileToDownload.uploaderAddress
+                });
+                showNotification('Payment skipped: missing uploader wallet address', 'warning');
               } else {
-                console.error('Payment failed:', paymentResult.error);
-                showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
+                const paymentResult = await paymentService.processDownloadPayment(
+                  fileToDownload.hash,
+                  fileToDownload.name,
+                  fileToDownload.size,
+                  seederWalletAddress,
+                  seederPeerId
+                );
+
+                if (paymentResult.success) {
+                  paidFiles.add(fileToDownload.hash); // Mark as paid
+                  console.log(`✅ Payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
+                  showNotification(
+                    `${tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } })} - Paid ${paymentAmount.toFixed(4)} Chiral`,
+                    'success'
+                  );
+                } else {
+                  console.error('Payment failed:', paymentResult.error);
+                  showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
+                }
               }
             }
 
@@ -1065,21 +1087,32 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
         // 3. Process payment for encrypted download (only if not already paid)
         if (!paidFiles.has(fileToDownload.hash)) {
           const seederPeerId = seeders[0];
-          const seederWalletAddress = fileToDownload.uploaderAddress || seederPeerId || $wallet.address;
-          const paymentResult = await paymentService.processDownloadPayment(
-            fileToDownload.hash,
-            fileToDownload.name,
-            fileToDownload.size,
-            seederWalletAddress,
-            seederPeerId
-          );
+          const seederWalletAddress = paymentService.isValidWalletAddress(fileToDownload.uploaderAddress)
+            ? fileToDownload.uploaderAddress!
+            : null;
 
-          if (paymentResult.success) {
-            paidFiles.add(fileToDownload.hash); // Mark as paid
-            console.log(`✅ Payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
+          if (!seederWalletAddress) {
+            console.warn('Skipping encrypted download payment due to missing or invalid uploader wallet address', {
+              file: fileToDownload.name,
+              uploaderAddress: fileToDownload.uploaderAddress
+            });
+            showNotification('Payment skipped: missing uploader wallet address', 'warning');
           } else {
-            console.error('Payment failed:', paymentResult.error);
-            showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
+            const paymentResult = await paymentService.processDownloadPayment(
+              fileToDownload.hash,
+              fileToDownload.name,
+              fileToDownload.size,
+              seederWalletAddress,
+              seederPeerId
+            );
+
+            if (paymentResult.success) {
+              paidFiles.add(fileToDownload.hash); // Mark as paid
+              console.log(`✅ Payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
+            } else {
+              console.error('Payment failed:', paymentResult.error);
+              showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
+            }
           }
         }
 
@@ -1120,22 +1153,33 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
             // Process payment for multi-source download (only if not already paid)
             if (!paidFiles.has(fileToDownload.hash)) {
               const seederPeerId = seeders[0];
-              const seederWalletAddress = fileToDownload.uploaderAddress || seederPeerId || $wallet.address;
-              const paymentResult = await paymentService.processDownloadPayment(
-                fileToDownload.hash,
-                fileToDownload.name,
-                fileToDownload.size,
-                seederWalletAddress,
-                seederPeerId
-              );
+              const seederWalletAddress = paymentService.isValidWalletAddress(fileToDownload.uploaderAddress)
+                ? fileToDownload.uploaderAddress!
+                : null;
 
-              if (paymentResult.success) {
-                paidFiles.add(fileToDownload.hash); // Mark as paid
-                console.log(`✅ Multi-source payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
-                showNotification(`Multi-source download completed! Paid ${paymentAmount.toFixed(4)} Chiral`, 'success');
+              if (!seederWalletAddress) {
+                console.warn('Skipping multi-source payment due to missing or invalid uploader wallet address', {
+                  file: fileToDownload.name,
+                  uploaderAddress: fileToDownload.uploaderAddress
+                });
+                showNotification('Payment skipped: missing uploader wallet address', 'warning');
               } else {
-                console.error('Multi-source payment failed:', paymentResult.error);
-                showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
+                const paymentResult = await paymentService.processDownloadPayment(
+                  fileToDownload.hash,
+                  fileToDownload.name,
+                  fileToDownload.size,
+                  seederWalletAddress,
+                  seederPeerId
+                );
+
+                if (paymentResult.success) {
+                  paidFiles.add(fileToDownload.hash); // Mark as paid
+                  console.log(`✅ Multi-source payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
+                  showNotification(`Multi-source download completed! Paid ${paymentAmount.toFixed(4)} Chiral`, 'success');
+                } else {
+                  console.error('Multi-source payment failed:', paymentResult.error);
+                  showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
+                }
               }
             }
 
@@ -1229,26 +1273,37 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
                   // Process payment for P2P download (only if not already paid)
                   if (!paidFiles.has(fileToDownload.hash)) {
                     const seederPeerId = seeders[0];
-                    const seederWalletAddress = fileToDownload.uploaderAddress || seederPeerId || $wallet.address;
-                    const paymentResult = await paymentService.processDownloadPayment(
-                      fileToDownload.hash,
-                      fileToDownload.name,
-                      fileToDownload.size,
-                      seederWalletAddress,
-                      seederPeerId
-                    );
+                    const seederWalletAddress = paymentService.isValidWalletAddress(fileToDownload.uploaderAddress)
+                      ? fileToDownload.uploaderAddress!
+                      : null;
 
-                    if (paymentResult.success) {
-                      paidFiles.add(fileToDownload.hash); // Mark as paid
-                      console.log(`✅ Payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
-                      showNotification(
-                        `${tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } })} - Paid ${paymentAmount.toFixed(4)} Chiral`,
-                        'success'
-                      );
+                    if (!seederWalletAddress) {
+                      console.warn('Skipping P2P payment due to missing or invalid uploader wallet address', {
+                        file: fileToDownload.name,
+                        uploaderAddress: fileToDownload.uploaderAddress
+                      });
+                      showNotification('Payment skipped: missing uploader wallet address', 'warning');
                     } else {
-                      console.error('Payment failed:', paymentResult.error);
-                      showNotification(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
-                      showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
+                      const paymentResult = await paymentService.processDownloadPayment(
+                        fileToDownload.hash,
+                        fileToDownload.name,
+                        fileToDownload.size,
+                        seederWalletAddress,
+                        seederPeerId
+                      );
+
+                      if (paymentResult.success) {
+                        paidFiles.add(fileToDownload.hash); // Mark as paid
+                        console.log(`✅ Payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
+                        showNotification(
+                          `${tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } })} - Paid ${paymentAmount.toFixed(4)} Chiral`,
+                          'success'
+                        );
+                      } else {
+                        console.error('Payment failed:', paymentResult.error);
+                        showNotification(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
+                        showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
+                      }
                     }
                   }
 

@@ -421,10 +421,13 @@ async fn record_download_payment(
     downloader_address: String,
     amount: f64,
     transaction_id: u64,
+    transaction_hash: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    println!("📝 Download payment recorded: {} Chiral to wallet {} (peer: {})",
-             amount, seeder_wallet_address, seeder_peer_id);
+    println!(
+        "📝 Download payment recorded: {} Chiral to wallet {} (peer: {}) tx: {}",
+        amount, seeder_wallet_address, seeder_peer_id, transaction_hash
+    );
 
     // Send P2P payment notification message to the seeder's peer
     #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -436,6 +439,7 @@ async fn record_download_payment(
         seeder_wallet_address: String,
         amount: f64,
         transaction_id: u64,
+        transaction_hash: String,
     }
 
     let payment_msg = PaymentNotificationMessage {
@@ -446,6 +450,7 @@ async fn record_download_payment(
         seeder_wallet_address: seeder_wallet_address.clone(),
         amount,
         transaction_id,
+        transaction_hash: transaction_hash.clone(),
     };
 
     // Serialize the payment message
