@@ -130,6 +130,29 @@
         showToast('Payment successful!', 'success');
       }
 
+      // Send P2P payment notification to the uploader
+      // Get seeder peer ID from the first seeder in the list
+      const seederPeerId = metadata.seeders && metadata.seeders.length > 0 ? metadata.seeders[0] : null;
+      if (seederPeerId) {
+        try {
+          await invoke('record_download_payment', {
+            fileHash: metadata.fileHash,
+            fileName: metadata.fileName,
+            fileSize: metadata.fileSize,
+            seederWalletAddress: metadata.uploaderAddress,
+            seederPeerId: seederPeerId,
+            downloaderAddress: $wallet.address || 'unknown',
+            amount: metadata.price,
+            transactionId: Date.now() // Use timestamp as transaction ID
+          });
+          console.log('✅ Payment notification sent to uploader peer:', seederPeerId);
+        } catch (notificationError) {
+          console.warn('Failed to send payment notification (uploader will see it when blockchain syncs):', notificationError);
+        }
+      } else {
+        console.warn('No seeder peer ID available, uploader will see payment when blockchain syncs');
+      }
+
       // Refresh balance after payment to reflect the deduction
       await checkBalance();
 
