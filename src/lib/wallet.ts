@@ -186,88 +186,81 @@ export class WalletService {
     }
   }
 
-  async refreshBalance(): Promise<void> {
-    const account = get(etcAccount);
-    if (!account || !this.isTauri) {
-      return;
-    }
-  
-    try {
-      // Get block data that was already loaded from miningState
-      const currentMiningState = get(miningState);
-      const blocksMined = currentMiningState.recentBlocks?.length ?? 0;
-      
-      // Calculate total rewards (real block data was already fetched in refreshTransactions)
-      const totalEarned = blocksMined * 2;
-      
-      // Try to get balance from geth
-      let realBalance = 0;
-      try {
-        const balanceStr = await invoke('get_account_balance', { 
-          address: account.address 
-        }) as string;
-        realBalance = parseFloat(balanceStr);
-      } catch (e) {
-        console.warn('Could not get balance from geth:', e);
-      }
-  
-      // Calculate pending sent transactions
-      const pendingSent = get(transactions)
-        .filter((tx) => tx.status === 'pending' && tx.type === 'sent')
-        .reduce((sum, tx) => sum + tx.amount, 0);
-  
-      // If geth balance is 0 but we have mined blocks, use calculated balance
-      const actualBalance = realBalance > 0 ? realBalance : totalEarned;
-      const availableBalance = Math.max(0, actualBalance - pendingSent);
+    async refreshBalance(): Promise<void> {
+        const account = get(etcAccount);
+        if (!account || !this.isTauri) {
+            return;
+        }
 
-      // DON'T overwrite balance if it's already set from localStorage/payments
-      // Only update if this is the first time or if realBalance from geth is available
-      wallet.update((current) => {
-        // If we have a real geth balance, use it
-        if (realBalance > 0) {
-          return {
-            ...current,
-            balance: availableBalance,
-            actualBalance,
-          };
+        try {
+            // Get block data that was already loaded from miningState
+            const currentMiningState = get(miningState);
+            const blocksMined = currentMiningState.recentBlocks?.length ?? 0;
+
+            // Calculate total rewards (real block data was already fetched in refreshTransactions)
+            const totalEarned = blocksMined * 2;
+
+            // Try to get balance from geth
+            let realBalance = 0;
+            try {
+                const balanceStr = await invoke('get_account_balance', {
+                    address: account.address
+                }) as string;
+                realBalance = parseFloat(balanceStr);
+            } catch (e) {
+                console.warn('Could not get balance from geth:', e);
+            }
+
+            // Calculate total spent from completed sent transactions
+            const allTransactions = get(transactions);
+            const totalSpent = allTransactions
+                .filter((tx) => tx.status === 'completed' && tx.type === 'sent')
+                .reduce((sum, tx) => sum + tx.amount, 0);
+
+            // Calculate pending sent transactions
+            const pendingSent = allTransactions
+                .filter((tx) => tx.status === 'pending' && tx.type === 'sent')
+                .reduce((sum, tx) => sum + tx.amount, 0);
+
+            // Calculate the actual balance: totalEarned - totalSpent - pendingSent
+            // Use realBalance from geth if available, otherwise use calculated balance
+            const calculatedBalance = Math.max(0, totalEarned - totalSpent - pendingSent);
+            const actualBalance = realBalance > 0 ? realBalance : calculatedBalance;
+
+            // Always update the balance to reflect current state
+            wallet.update((current) => ({
+                ...current,
+                balance: actualBalance,
+                totalEarned,
+                totalSpent,
+                pendingTransactions: allTransactions.filter(tx => tx.status === 'pending').length,
+            }));
+
+            // Update pending transaction status if they've been confirmed
+            if (pendingSent > 0 && realBalance > 0) {
+                const expectedBalance = realBalance - pendingSent;
+                // If the real balance matches what we expect after pending txs, mark them as completed
+                if (Math.abs(realBalance - expectedBalance) < 0.01) {
+                    transactions.update((txs) =>
+                        txs.map((tx) =>
+                            tx.status === 'pending' && tx.type === 'sent'
+                                ? { ...tx, status: 'completed' as const }
+                                : tx
+                        )
+                    );
+                }
+            }
+
+            // Update mining state with real block data
+            miningState.update((state) => ({
+                ...state,
+                totalRewards: totalEarned,
+                blocksFound: blocksMined,
+            }));
+        } catch (error) {
+            console.error('Failed to refresh balance:', error);
         }
-        // Otherwise, keep the current balance (from localStorage/payments)
-        // Only set if current balance is 0 or undefined
-        if (current.balance === 0 || current.balance === undefined) {
-          return {
-            ...current,
-            balance: availableBalance,
-            actualBalance,
-          };
-        }
-        // Keep existing balance
-        return current;
-      });
-  
-      // Update pending transaction status
-      if (pendingSent > 0) {
-        const expectedBalance = actualBalance - pendingSent;
-        if (Math.abs(actualBalance - expectedBalance) < 0.01) {
-          transactions.update((txs) =>
-            txs.map((tx) =>
-              tx.status === 'pending' && tx.type === 'sent'
-                ? { ...tx, status: 'completed' as const }
-                : tx
-            )
-          );
-        }
-      }
-  
-      // Update mining state with real block data
-      miningState.update((state) => ({
-        ...state,
-        totalRewards: totalEarned,
-        blocksFound: blocksMined,
-      }));
-    } catch (error) {
-      console.error('Failed to refresh balance:', error);
     }
-  }
 
 
   async ensureGethRunning(): Promise<boolean> {
