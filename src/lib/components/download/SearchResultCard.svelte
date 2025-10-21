@@ -6,7 +6,7 @@
   import { createEventDispatcher, onMount } from 'svelte';
   import { dhtService, type FileMetadata } from '$lib/dht';
   import { formatRelativeTime, toHumanReadableSize } from '$lib/utils';
-  import { files } from '$lib/stores';
+  import { files, wallet } from '$lib/stores';
   import { get } from 'svelte/store';
   import { showToast } from '$lib/toast';
   import { invoke } from '@tauri-apps/api/core';
@@ -25,7 +25,9 @@
   let showDecryptDialog = false;
   let showDownloadConfirmDialog = false;
   let showPaymentConfirmDialog = false;
-  let userBalance = 0;
+
+  // Use reactive wallet balance from store
+  $: userBalance = $wallet.balance;
 
   function formatFileSize(bytes: number): string {
     return toHumanReadableSize(bytes);
@@ -146,18 +148,22 @@
     if (metadata.price && metadata.price > 0) {
       checkingBalance = true;
       try {
-        canAfford = await invoke('can_afford_download', { price: metadata.price });
-        // Also get the actual balance to display in modal
-        const balanceStr = await invoke('get_user_balance');
-        userBalance = parseFloat(balanceStr) || 0;
+        // Use wallet store balance instead of invoking backend
+        const currentBalance = get(wallet).balance;
+        canAfford = currentBalance >= metadata.price;
+        console.log('💰 Balance check:', { currentBalance, price: metadata.price, canAfford });
       } catch (error) {
         console.error('Failed to check balance:', error);
         canAfford = false;
-        userBalance = 0;
       } finally {
         checkingBalance = false;
       }
     }
+  }
+
+  // Reactive check for affordability when balance or price changes
+  $: if (metadata.price && metadata.price > 0) {
+    canAfford = $wallet.balance >= metadata.price;
   }
 
   // Check balance when component mounts
@@ -443,18 +449,18 @@
       <div class="space-y-4 mb-6">
         <div class="flex justify-between items-center p-3 bg-muted/50 rounded-lg">
           <span class="text-sm text-muted-foreground">Your Balance</span>
-          <span class="text-lg font-bold">{userBalance.toFixed(2)} Chiral</span>
+          <span class="text-lg font-bold">{userBalance.toFixed(8)} Chiral</span>
         </div>
 
         <div class="flex justify-between items-center p-3 bg-blue-500/10 rounded-lg border border-blue-500/30">
           <span class="text-sm text-muted-foreground">File Price</span>
-          <span class="text-lg font-bold text-blue-600">{metadata.price} Chiral</span>
+          <span class="text-lg font-bold text-blue-600">{(metadata.price || 0).toFixed(8)} Chiral</span>
         </div>
 
         <div class="flex justify-between items-center p-3 bg-muted/50 rounded-lg border-2 border-border">
           <span class="text-sm font-semibold">Balance After Purchase</span>
           <span class="text-lg font-bold {canAfford ? 'text-emerald-600' : 'text-red-600'}">
-            {(userBalance - (metadata.price || 0)).toFixed(2)} Chiral
+            {(userBalance - (metadata.price || 0)).toFixed(8)} Chiral
           </span>
         </div>
       </div>

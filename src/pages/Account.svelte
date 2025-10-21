@@ -141,43 +141,56 @@
   $: if ($etcAccount && isGethRunning) {
     fetchBalance()
   }
-  // Add this reactive statement after your other reactive statements (around line 170)
-  $: if ($etcAccount) {
-    const accountTransactions = $transactions.filter(tx => 
-      tx.from === 'Mining reward' || 
-      tx.description?.toLowerCase().includes('block reward') ||
-      tx.description === tr('transactions.manual') ||
-      tx.to?.toLowerCase() === $etcAccount.address.toLowerCase() ||
-      tx.from?.toLowerCase() === $etcAccount.address.toLowerCase()
-    );
-    if (accountTransactions.length !== $transactions.length) {
-      transactions.set(accountTransactions);
-    }
-}
+  // Note: Transaction filtering is handled by the display logic below
+  // All transactions in the store are shown in the history
 
-  // Derived filtered transactions
-  $: filteredTransactions = $transactions
-    .filter(tx => {
-      const matchesType = filterType === 'all' || tx.type === filterType;
-      const txDate = tx.date instanceof Date ? tx.date : new Date(tx.date);
-      const fromOk = !filterDateFrom || txDate >= new Date(filterDateFrom + 'T00:00:00'); // the start of day
-      const toOk = !filterDateTo || txDate <= new Date(filterDateTo + 'T23:59:59'); // and the end of day to include full date ranges
-      
-      // Search filter
-      const matchesSearch = !searchQuery || 
-        tx.description?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        tx.to?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        tx.from?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        tx.id.toString().includes(searchQuery);
-      
-      return matchesType && fromOk && toOk && matchesSearch;
-    })
-    .slice()
-    .sort((a, b) => {
-      const dateA = a.date instanceof Date ? a.date : new Date(a.date);
-      const dateB = b.date instanceof Date ? b.date : new Date(b.date);
-      return sortDescending ? dateB.getTime() - dateA.getTime() : dateA.getTime() - dateB.getTime();
-    });
+  // Derived filtered transactions with safety checks
+  $: filteredTransactions = (() => {
+    try {
+      if (!$transactions || !Array.isArray($transactions)) {
+        return [];
+      }
+
+      return $transactions
+        .filter(tx => {
+          if (!tx) return false;
+
+          const matchesType = filterType === 'all' || tx.type === filterType;
+
+          let txDate: Date;
+          try {
+            txDate = tx.date instanceof Date ? tx.date : new Date(tx.date);
+          } catch {
+            return false; // Skip invalid dates
+          }
+
+          const fromOk = !filterDateFrom || txDate >= new Date(filterDateFrom + 'T00:00:00');
+          const toOk = !filterDateTo || txDate <= new Date(filterDateTo + 'T23:59:59');
+
+          // Search filter with null checks
+          const matchesSearch = !searchQuery ||
+            tx.description?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            tx.to?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            tx.from?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            (tx.id && tx.id.toString().includes(searchQuery));
+
+          return matchesType && fromOk && toOk && matchesSearch;
+        })
+        .slice()
+        .sort((a, b) => {
+          try {
+            const dateA = a.date instanceof Date ? a.date : new Date(a.date);
+            const dateB = b.date instanceof Date ? b.date : new Date(b.date);
+            return sortDescending ? dateB.getTime() - dateA.getTime() : dateA.getTime() - dateB.getTime();
+          } catch {
+            return 0; // Keep original order if date comparison fails
+          }
+        });
+    } catch (error) {
+      console.error('Error filtering transactions:', error);
+      return [];
+    }
+  })();
 
   // Address validation
   $: {
@@ -1440,17 +1453,17 @@
         {:else}
         <div>
           <p class="text-sm text-muted-foreground">{$t('wallet.balance')}</p>
-          <p class="text-2xl font-bold">{$wallet.balance.toFixed(2)} Chiral</p>
+          <p class="text-2xl font-bold">{$wallet.balance.toFixed(8)} Chiral</p>
         </div>
         
             <div class="grid grid-cols-2 gap-4 mt-4">
           <div>
             <p class="text-xs text-muted-foreground">{$t('wallet.totalEarned')}</p>
-            <p class="text-sm font-medium text-green-600">+{$totalEarned.toFixed(2)} Chiral</p>
+            <p class="text-sm font-medium text-green-600">+{$totalEarned.toFixed(8)} Chiral</p>
           </div>
           <div>
             <p class="text-xs text-muted-foreground">{$t('wallet.totalSpent')}</p>
-            <p class="text-sm font-medium text-red-600">-{$totalSpent.toFixed(2)} Chiral</p>
+            <p class="text-sm font-medium text-red-600">-{$totalSpent.toFixed(8)} Chiral</p>
           </div>
         </div>
         

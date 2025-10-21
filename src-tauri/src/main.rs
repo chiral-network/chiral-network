@@ -411,6 +411,35 @@ async fn process_download_payment(
 }
 
 #[tauri::command]
+async fn record_download_payment(
+    _file_hash: String,
+    _file_name: String,
+    _file_size: u64,
+    _seeder_address: String,
+    _amount: f64,
+    _transaction_id: u64,
+) -> Result<(), String> {
+    // Log the payment transaction for analytics/audit purposes
+    // This is primarily handled in the frontend state, but could be persisted here
+    println!("📝 Download payment recorded: {} Chiral to {}", _amount, _seeder_address);
+    Ok(())
+}
+
+#[tauri::command]
+async fn record_seeder_payment(
+    _file_hash: String,
+    _file_name: String,
+    _file_size: u64,
+    _downloader_address: String,
+    _amount: f64,
+    _transaction_id: u64,
+) -> Result<(), String> {
+    // Log the seeder payment receipt for analytics/audit purposes
+    println!("💰 Seeder payment received: {} Chiral from {}", _amount, _downloader_address);
+    Ok(())
+}
+
+#[tauri::command]
 async fn get_network_peer_count() -> Result<u32, String> {
     get_peer_count().await
 }
@@ -3870,6 +3899,8 @@ fn main() {
             get_user_balance,
             can_afford_download,
             process_download_payment,
+            record_download_payment,
+            record_seeder_payment,
             get_network_peer_count,
             start_geth_node,
             stop_geth_node,

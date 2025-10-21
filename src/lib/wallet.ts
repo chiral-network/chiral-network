@@ -219,12 +219,30 @@ export class WalletService {
       // If geth balance is 0 but we have mined blocks, use calculated balance
       const actualBalance = realBalance > 0 ? realBalance : totalEarned;
       const availableBalance = Math.max(0, actualBalance - pendingSent);
-  
-      wallet.update((current) => ({
-        ...current,
-        balance: availableBalance,
-        actualBalance,
-      }));
+
+      // DON'T overwrite balance if it's already set from localStorage/payments
+      // Only update if this is the first time or if realBalance from geth is available
+      wallet.update((current) => {
+        // If we have a real geth balance, use it
+        if (realBalance > 0) {
+          return {
+            ...current,
+            balance: availableBalance,
+            actualBalance,
+          };
+        }
+        // Otherwise, keep the current balance (from localStorage/payments)
+        // Only set if current balance is 0 or undefined
+        if (current.balance === 0 || current.balance === undefined) {
+          return {
+            ...current,
+            balance: availableBalance,
+            actualBalance,
+          };
+        }
+        // Keep existing balance
+        return current;
+      });
   
       // Update pending transaction status
       if (pendingSent > 0) {

@@ -25,6 +25,7 @@
     import { fileService } from '$lib/services/fileService';
     import { bandwidthScheduler } from '$lib/services/bandwidthScheduler';
     import { detectUserRegion } from '$lib/services/geolocation';
+    import { paymentService } from '$lib/services/paymentService';
     // gets path name not entire url:
     // ex: http://locatlhost:1420/download -> /download
     
@@ -47,6 +48,9 @@
       let stopNetworkMonitoring: () => void = () => {};
 
       (async () => {
+        // Initialize payment service to load wallet and transactions
+        paymentService.initialize();
+
         // setup i18n
         await setupI18n();
         loading = false;
