@@ -1,5 +1,4 @@
 use ethers::prelude::*;
-use ethers::types::Signature;
 use rand::rngs::OsRng;
 use secp256k1::{PublicKey, Secp256k1, SecretKey};
 use serde::{Deserialize, Serialize};
