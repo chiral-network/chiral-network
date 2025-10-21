@@ -428,6 +428,8 @@ export interface AppSettings {
   autoUpdate: boolean;
   enableBandwidthScheduling: boolean;
   bandwidthSchedules: BandwidthScheduleEntry[];
+  enableFileLogging: boolean; // Enable file-based logging
+  maxLogSizeMB: number; // Maximum size of a single log file in MB
 }
 
 // Export the settings store
@@ -470,4 +472,6 @@ export const settings = writable<AppSettings>({
   autoUpdate: true,
   enableBandwidthScheduling: false,
   bandwidthSchedules: [],
+  enableFileLogging: false, // Disabled by default
+  maxLogSizeMB: 10, // 10 MB per log file by default
 });
