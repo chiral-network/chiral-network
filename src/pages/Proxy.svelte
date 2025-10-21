@@ -16,12 +16,19 @@
   let nodeToRemove: any = null
   const validAddressRegex = /^[a-zA-Z0-9.-]+:[0-9]{1,5}$/
   let statusFilter = 'all'
+  let sortBy: 'status' | 'latency' | 'bandwidth' = 'status'
   
   $: statusOptions = [
     { value: 'all', label: $t('All') },
     { value: 'online', label: $t('Online') },
     { value: 'offline', label: $t('Offline') },
     { value: 'connecting', label: $t('Connecting') }
+  ]
+
+  $: sortOptions = [
+    { value: 'status', label: $t('Sort by status') },
+    { value: 'latency', label: $t('Sort by latency') },
+    { value: 'bandwidth', label: $t('Sort by bandwidth') }
   ]
 
   $: filteredNodes = $proxyNodes.filter(node => {
@@ -33,8 +40,15 @@
 
   
   $: sortedNodes = [...filteredNodes].sort((a, b) => {
-      const statusOrder = { 'online': 1, 'connecting': 2, 'offline': 3 };
-      return statusOrder[a.status] - statusOrder[b.status];
+      if (sortBy === 'status') {
+        const statusOrder = { 'online': 1, 'connecting': 2, 'offline': 3 } as const
+        return (statusOrder as any)[a.status] - (statusOrder as any)[b.status]
+      }
+      if (sortBy === 'latency') {
+        return a.latency - b.latency // ascending: lower latency first
+      }
+      // bandwidth
+      return b.bandwidth - a.bandwidth // descending: higher bandwidth first
   });
 
   function addNode() {
@@ -225,15 +239,23 @@
   </Card>
   
   <Card class="p-6">
-    <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold">{$t('proxy.proxyNodes')}</h2>
-        <div class="w-40 flex-shrink-0">
-            <DropDown
-                bind:value={statusFilter}
-                options={statusOptions}
-            />
-        </div>
+  <div class="flex items-center justify-between mb-4 gap-3">
+    <h2 class="text-lg font-semibold">{$t('proxy.proxyNodes')}</h2>
+    <div class="flex items-center gap-2">
+      <div class="w-40">
+        <DropDown
+          bind:value={statusFilter}
+          options={statusOptions}
+        />
+      </div>
+      <div class="w-44">
+        <DropDown
+          bind:value={sortBy}
+          options={sortOptions}
+        />
+      </div>
     </div>
+  </div>
     <div class="space-y-3">
       {#each sortedNodes as node}
         <div class="p-4 bg-secondary rounded-lg">
