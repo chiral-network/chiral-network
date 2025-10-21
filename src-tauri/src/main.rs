@@ -443,7 +443,7 @@ async fn record_download_payment(
         file_name,
         file_size,
         downloader_address,
-        seeder_wallet_address,
+        seeder_wallet_address: seeder_wallet_address.clone(),
         amount,
         transaction_id,
     };
@@ -452,22 +452,17 @@ async fn record_download_payment(
     let payment_json = serde_json::to_string(&payment_msg)
         .map_err(|e| format!("Failed to serialize payment message: {}", e))?;
 
-    // Send the payment notification via DHT
-    let dht_guard = state.dht_service.lock().await;
-    if let Some(dht) = dht_guard.as_ref() {
-        // Store payment notification in DHT with a special key
-        let payment_key = format!("payment_notification_{}", seeder_wallet_address);
-        dht.put_value(payment_key.clone(), payment_json.as_bytes().to_vec())
-            .await
-            .map_err(|e| format!("Failed to send payment notification: {}", e))?;
+    // Emit local event for payment notification (works on same machine for testing)
+    app.emit("seeder_payment_received", payment_msg.clone())
+        .map_err(|e| format!("Failed to emit payment notification: {}", e))?;
 
-        println!("✅ Payment notification sent to DHT for seeder: {}", seeder_wallet_address);
+    println!("✅ Payment notification emitted for seeder: {}", seeder_wallet_address);
 
-        // Also emit local event in case both peers are in same process (for testing)
-        app.emit("seeder_payment_received", payment_msg.clone()).ok();
-    } else {
-        return Err("DHT service not initialized".to_string());
-    }
+    // TODO: For cross-peer payments, implement P2P message via libp2p
+    // This would require:
+    // 1. Finding the peer by their wallet address or peer ID
+    // 2. Sending a direct message via send_message_to_peer()
+    // 3. Setting up a message handler on the receiver side
 
     Ok(())
 }
@@ -488,36 +483,14 @@ async fn record_seeder_payment(
 
 #[tauri::command]
 async fn check_payment_notifications(
-    wallet_address: String,
-    state: State<'_, AppState>,
+    _wallet_address: String,
+    _state: State<'_, AppState>,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let payment_key = format!("payment_notification_{}", wallet_address);
-
-    let dht_guard = state.dht_service.lock().await;
-    if let Some(dht) = dht_guard.as_ref() {
-        // Try to get payment notifications from DHT
-        match dht.get_value(payment_key.clone()).await {
-            Ok(value_bytes) => {
-                // Parse the JSON payment notification
-                let payment_json = String::from_utf8(value_bytes)
-                    .map_err(|e| format!("Failed to decode payment notification: {}", e))?;
-
-                let payment: serde_json::Value = serde_json::from_str(&payment_json)
-                    .map_err(|e| format!("Failed to parse payment notification: {}", e))?;
-
-                println!("💰 Found payment notification for wallet: {}", wallet_address);
-
-                // Return as array (might have multiple payments in the future)
-                Ok(vec![payment])
-            }
-            Err(_) => {
-                // No payment notifications found
-                Ok(vec![])
-            }
-        }
-    } else {
-        Err("DHT service not initialized".to_string())
-    }
+    // NOTE: This command is kept for compatibility but not used anymore
+    // Payment notifications are now handled via local events (seeder_payment_received)
+    // For testing on same machine, the event system works fine
+    // For cross-peer payments, this would need to be implemented with P2P messaging
+    Ok(vec![])
 }
 
 #[tauri::command]

@@ -53,9 +53,31 @@
         // Initialize payment service to load wallet and transactions
         paymentService.initialize();
 
-        // Poll for payment notifications from DHT
+        // Listen for payment notifications from backend
         if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
-          paymentService.startPaymentNotificationPolling();
+          try {
+            const unlisten = await listen('seeder_payment_received', async (event: any) => {
+              const payload = event.payload;
+              console.log('💰 Seeder payment notification received:', payload);
+
+              // Credit the seeder's wallet
+              const result = await paymentService.creditSeederPayment(
+                payload.file_hash,
+                payload.file_name,
+                payload.file_size,
+                payload.downloader_address
+              );
+
+              if (result.success) {
+                console.log('✅ Seeder payment credited successfully');
+              } else {
+                console.error('❌ Failed to credit seeder payment:', result.error);
+              }
+            });
+            unlistenSeederPayment = unlisten;
+          } catch (error) {
+            console.error('Failed to setup payment listener:', error);
+          }
         }
 
         // setup i18n
@@ -134,7 +156,9 @@
         window.removeEventListener('popstate', onPop);
         stopNetworkMonitoring();
         bandwidthScheduler.stop();
-        paymentService.stopPaymentNotificationPolling();
+        if (unlistenSeederPayment) {
+          unlistenSeederPayment();
+        }
       };
     })
 
