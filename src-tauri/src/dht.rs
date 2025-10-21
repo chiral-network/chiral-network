@@ -75,9 +75,9 @@ const EXPECTED_PROTOCOL_VERSION: &str = "/chiral/1.0.0";
 const MAX_MULTIHASH_LENGHT: usize = 64;
 pub const RAW_CODEC: u64 = 0x55;
 /// Heartbeat interval (how often we refresh our provider entry).
-const FILE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+const FILE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15); // More frequent updates
 /// File seeder TTL – if no heartbeat lands within this window, drop the entry.
-const FILE_HEARTBEAT_TTL: Duration = Duration::from_secs(60);
+const FILE_HEARTBEAT_TTL: Duration = Duration::from_secs(90); // Longer TTL with grace period
 pub struct PendingKeywordIndex;
 
 /// Extracts a set of unique, searchable keywords from a filename.
@@ -155,6 +155,31 @@ fn unix_timestamp() -> u64 {
 fn merge_heartbeats(mut a: Vec<SeederHeartbeat>, mut b: Vec<SeederHeartbeat>) -> Vec<SeederHeartbeat> {
     let mut merged = Vec::new();
     let mut seen_peers = std::collections::HashSet::new();
+    let now = unix_timestamp();
+
+    // Create sets to track which peers appear in both vectors
+    let a_peers: HashSet<String> = a.iter().map(|hb| hb.peer_id.clone()).collect();
+    let b_peers: HashSet<String> = b.iter().map(|hb| hb.peer_id.clone()).collect();
+    let common_peers: HashSet<_> = a_peers.intersection(&b_peers).cloned().collect();
+
+    // Filter and collect entries in one pass instead of using retain
+    let filtered_a: Vec<_> = a.into_iter()
+        .filter(|hb| {
+            common_peers.contains(&hb.peer_id) || 
+            hb.expires_at > now.saturating_sub(30) // 30s grace period
+        })
+        .collect();
+
+    let filtered_b: Vec<_> = b.into_iter()
+        .filter(|hb| {
+            common_peers.contains(&hb.peer_id) || 
+            hb.expires_at > now.saturating_sub(30) // 30s grace period
+        })
+        .collect();
+
+    // Now work with the filtered vectors
+    a = filtered_a;
+    b = filtered_b;
 
     // Sort both vectors by peer_id for deterministic merging
     a.sort_by(|x, y| x.peer_id.cmp(&y.peer_id));
@@ -169,11 +194,24 @@ fn merge_heartbeats(mut a: Vec<SeederHeartbeat>, mut b: Vec<SeederHeartbeat>) ->
     while let (Some(a_entry), Some(b_entry)) = (&next_a, &next_b) {
         match a_entry.peer_id.cmp(&b_entry.peer_id) {
             std::cmp::Ordering::Equal => {
-                // Take the one with the latest heartbeat
-                let entry = if a_entry.last_heartbeat >= b_entry.last_heartbeat {
-                    a_entry.clone()
+                // For equal peer IDs, create a merged entry that:
+                // 1. Takes the most recent heartbeat timestamp
+                // 2. Uses the latest expiry time
+                // 3. Extends the expiry if it's an active seeder (recent heartbeat)
+                let latest_heartbeat = std::cmp::max(a_entry.last_heartbeat, b_entry.last_heartbeat);
+                let latest_expiry = std::cmp::max(a_entry.expires_at, b_entry.expires_at);
+                
+                // If this is an active seeder (recent heartbeat), extend its expiry
+                let new_expiry = if now.saturating_sub(latest_heartbeat) < FILE_HEARTBEAT_INTERVAL.as_secs() {
+                    now.saturating_add(FILE_HEARTBEAT_TTL.as_secs())
                 } else {
-                    b_entry.clone()
+                    latest_expiry
+                };
+                
+                let entry = SeederHeartbeat {
+                    peer_id: a_entry.peer_id.clone(),
+                    expires_at: new_expiry,
+                    last_heartbeat: latest_heartbeat,
                 };
                 
                 if !seen_peers.contains(&entry.peer_id) {
@@ -181,7 +219,6 @@ fn merge_heartbeats(mut a: Vec<SeederHeartbeat>, mut b: Vec<SeederHeartbeat>) ->
                     merged.push(entry);
                 }
                 
-                // Advance both iterators
                 next_a = a_iter.next();
                 next_b = b_iter.next();
             }
@@ -224,7 +261,10 @@ fn merge_heartbeats(mut a: Vec<SeederHeartbeat>, mut b: Vec<SeederHeartbeat>) ->
 }
 
 fn prune_heartbeats(mut entries: Vec<SeederHeartbeat>, now: u64) -> Vec<SeederHeartbeat> {
-    entries.retain(|hb| hb.expires_at > now);
+    // Add a more generous grace period to prevent premature pruning
+    // Use 30 seconds which is between the heartbeat interval (15s) and TTL (90s)
+    let prune_threshold = now.saturating_sub(30); // 30 second grace period
+    entries.retain(|hb| hb.expires_at > prune_threshold);
     entries.sort_by(|a, b| a.peer_id.cmp(&b.peer_id));
     entries
 }
@@ -1454,9 +1494,9 @@ async fn run_dht_node(
     let mut relay_cooldown: HashMap<PeerId, Instant> = HashMap::new();
     let mut last_tried_relay: Option<PeerId> = None;
 
-    let mut queries: HashMap<beetswap::QueryId, u32> = HashMap::new();
-    let mut downloaded_chunks: HashMap<usize, Vec<u8>> = HashMap::new();
-    let mut current_metadata: Option<FileMetadata> = None;
+    let queries: HashMap<beetswap::QueryId, u32> = HashMap::new();
+    let downloaded_chunks: HashMap<usize, Vec<u8>> = HashMap::new();
+    let current_metadata: Option<FileMetadata> = None;
 
     #[derive(Debug, Clone, Copy)]
     enum RelayErrClass {
@@ -1771,6 +1811,16 @@ async fn run_dht_node(
                             );
                         }
 
+                        let record_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
+                        {
+                            let mut pending = pending_heartbeat_updates.lock().await;
+                            pending.insert(metadata.merkle_root.clone());
+                        }
+                        swarm
+                            .behaviour_mut()
+                            .kademlia
+                            .get_record(record_key.clone());
+
                         let dht_record_data = match serde_json::to_vec(&dht_metadata) {
                             Ok(data) => data,
                             Err(e) => {
@@ -1779,9 +1829,8 @@ async fn run_dht_node(
                             }
                         };
 
-                        let key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
                         let record = Record {
-                                    key,
+                                    key: record_key.clone(),
                                     value: dht_record_data,
                                     publisher: Some(peer_id),
                                     expires: None,
@@ -1904,9 +1953,19 @@ async fn run_dht_node(
                             );
                         }
 
+                        let record_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
+                        {
+                            let mut pending = pending_heartbeat_updates.lock().await;
+                            pending.insert(metadata.merkle_root.clone());
+                        }
+                        swarm
+                            .behaviour_mut()
+                            .kademlia
+                            .get_record(record_key.clone());
+
                         let record_value = serde_json::to_vec(&dht_metadata).map_err(|e| e.to_string()).unwrap();
                         let record = Record {
-                            key: kad::RecordKey::new(&metadata.merkle_root.as_bytes()),
+                            key: record_key.clone(),
                             value: record_value,
                             publisher: Some(peer_id),
                             expires: None,
@@ -2044,23 +2103,37 @@ async fn run_dht_node(
                                 expires: None,
                             };
 
-                            match swarm
-                                .behaviour_mut()
-                                .kademlia
-                                .put_record(record, kad::Quorum::One)
-                            {
-                                Ok(query_id) => {
-                                    debug!(
-                                        "Refreshed heartbeat for {} (query id: {:?})",
-                                        file_hash, query_id
-                                    );
-                                }
-                                Err(e) => {
-                                    error!(
-                                        "Failed to update heartbeat record for {}: {}",
-                                        file_hash, e
-                                    );
-                                }
+                            // Determine appropriate quorum based on number of connected peers
+                        let connected_peers_count = connected_peers.lock().await.len();
+                        let min_replication_peers = 3; // Require at least 3 peers for stronger replication
+                        
+                        let quorum = if connected_peers_count >= min_replication_peers {
+                            debug!("Using Quorum::All for heartbeat update of {} ({} peers available)", 
+                                file_hash, connected_peers_count);
+                            kad::Quorum::All
+                        } else {
+                            debug!("Using Quorum::One for heartbeat update of {} (only {} peers available)", 
+                                file_hash, connected_peers_count);
+                            kad::Quorum::One
+                        };
+
+                        match swarm
+                            .behaviour_mut()
+                            .kademlia
+                            .put_record(record, quorum)
+                        {
+                            Ok(query_id) => {
+                                debug!(
+                                    "Refreshed heartbeat for {} with quorum {:?} (query id: {:?})",
+                                    file_hash, quorum, query_id
+                                );
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Failed to update heartbeat record for {}: {}",
+                                    file_hash, e
+                                );
+                            }
                             }
 
                             let provider_key = kad::RecordKey::new(&file_hash.as_bytes());
@@ -3498,26 +3571,58 @@ async fn handle_kademlia_event(
                                 }
 
                                 let active_heartbeats = prune_heartbeats(heartbeat_entries, now);
-                                let mut seeder_strings =
-                                    heartbeats_to_peer_list(&active_heartbeats);
+                                let active_seeders = heartbeats_to_peer_list(&active_heartbeats);
 
-                                if seeder_strings.is_empty() && !fallback_seeders.is_empty() {
-                                    seeder_strings = fallback_seeders.clone();
+                                let existing_entry = {
+                                    let cache = seeder_heartbeats_cache.lock().await;
+                                    cache.get(file_hash).cloned()
+                                };
+
+                                let merged_heartbeats = if let Some(entry) = existing_entry {
+                                    merge_heartbeats(entry.heartbeats, active_heartbeats.clone())
+                                } else {
+                                    active_heartbeats.clone()
+                                };
+
+                                let mut merged_seeders = heartbeats_to_peer_list(&merged_heartbeats);
+                                if merged_seeders.is_empty() && !fallback_seeders.is_empty() {
+                                    merged_seeders = fallback_seeders.clone();
+                                }
+
+                                let recorded_seeders_set: HashSet<String> =
+                                    active_seeders.into_iter().collect();
+                                let merged_seeders_set: HashSet<String> =
+                                    merged_seeders.iter().cloned().collect();
+
+                                let mut needs_publish = pending_refresh;
+                                if merged_seeders_set != recorded_seeders_set {
+                                    needs_publish = true;
                                 }
 
                                 let mut updated_metadata_json = metadata_json.clone();
                                 updated_metadata_json["seeders"] = serde_json::Value::Array(
-                                    seeder_strings
+                                    merged_seeders
                                         .iter()
                                         .cloned()
                                         .map(serde_json::Value::String)
                                         .collect(),
                                 );
                                 updated_metadata_json["seederHeartbeats"] =
-                                    serde_json::to_value(&active_heartbeats)
+                                    serde_json::to_value(&merged_heartbeats)
                                         .unwrap_or_else(|_| serde_json::Value::Array(vec![]));
 
-                                let serialized_refresh = if pending_refresh {
+                                {
+                                    let mut cache = seeder_heartbeats_cache.lock().await;
+                                    cache.insert(
+                                        file_hash.to_string(),
+                                        FileHeartbeatCacheEntry {
+                                            heartbeats: merged_heartbeats.clone(),
+                                            metadata: updated_metadata_json.clone(),
+                                        },
+                                    );
+                                }
+
+                                let serialized_refresh = if needs_publish {
                                     match serde_json::to_vec(&updated_metadata_json) {
                                         Ok(bytes) => Some(bytes),
                                         Err(e) => {
@@ -3531,17 +3636,6 @@ async fn handle_kademlia_event(
                                 } else {
                                     None
                                 };
-
-                                {
-                                    let mut cache = seeder_heartbeats_cache.lock().await;
-                                    cache.insert(
-                                        file_hash.to_string(),
-                                        FileHeartbeatCacheEntry {
-                                            heartbeats: active_heartbeats.clone(),
-                                            metadata: updated_metadata_json.clone(),
-                                        },
-                                    );
-                                }
 
                                 if let Some(bytes) = serialized_refresh {
                                     let key = kad::RecordKey::new(&file_hash.as_bytes());
@@ -3579,13 +3673,13 @@ async fn handle_kademlia_event(
                                     file_name: file_name.to_string(),
                                     file_size,
                                     file_data: Vec::new(), // Will be populated during download
-                                    seeders: if seeder_strings.is_empty() {
+                                    seeders: if merged_seeders.is_empty() {
                                         peer_from_record
                                             .clone()
                                             .into_iter()
                                             .collect::<Vec<String>>()
                                     } else {
-                                        seeder_strings
+                                        merged_seeders.clone()
                                     },
                                     created_at,
                                     mime_type: metadata_json
