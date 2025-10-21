@@ -14,6 +14,14 @@ Thank you for your interest in contributing to Chiral Network! This guide will h
 
 ## What Can You Contribute?
 
+### Design Documentation
+- Add major parts 
+- Fix critical issues
+- Add protocol specifications
+- Add examples and tutorials
+- Fix minor issues
+
+
 ### Code Contributions
 - Bug fixes
 - New features (aligned with project goals)
@@ -28,8 +36,7 @@ Thank you for your interest in contributing to Chiral Network! This guide will h
 - Translate to other languages
 - Write tutorials
 
-### Design
-- UI/UX improvements
+### UI/UX Improvements
 - Icons and graphics
 - Accessibility enhancements
 - Responsive design
@@ -40,13 +47,126 @@ Thank you for your interest in contributing to Chiral Network! This guide will h
 - Test on different platforms
 - Performance testing
 
+## Contribution Priorities
+
+**IMPORTANT**: We prioritize contributions based on impact and type. Please follow this priority order:
+
+### Quick Reference
+
+| Priority | Type | Examples | Review Speed |
+|----------|------|----------|--------------|
+| **1 🔴** | **Major Design/Docs** | Architecture decisions, protocol specs, API contracts | Thorough review required |
+| **2 🟠** | **Major Code/Critical Fixes** | Protocol implementations, security fixes, core features | Thorough review required |
+| **3 🟡** | **Minor Design/Docs** | Examples, tutorials, typos, clarifications | Faster review |
+| **4 🟢** | **Minor Code** | UI polish, code comments, small optimizations | Fastest review |
+
+### Priority 1: Major Design/Documentation Work (HIGHEST) 🔴
+- **Add major parts to design documentation**
+  - Architecture decisions and system design
+  - Protocol specifications and data flow diagrams
+  - Major new features in design phase
+  - API contracts and interfaces
+- **Fix critical issues in documentation**
+  - Incorrect architectural descriptions
+  - Misleading protocol specifications
+  - Security vulnerabilities in design
+  - Breaking inconsistencies across docs
+
+**Why highest priority?** Design decisions affect everything. Getting the design right before implementation saves significant rework and prevents architectural mistakes.
+
+### Priority 2: Major Code Work or Critical Code Fixes 🟠
+- **Add major parts to codebase**
+  - Core protocol implementations (HTTP, WebTorrent, BitTorrent, ed2k)
+  - Payment system integration
+  - DHT and P2P networking features
+  - Blockchain integration
+- **Fix critical code issues**
+  - Security vulnerabilities
+  - Data corruption bugs
+  - Payment calculation errors
+  - Network protocol breaking issues
+  - Crashes and system instability
+
+**Why high priority?** Major features and critical bugs directly impact functionality and user experience.
+
+### Priority 3: Minor Design/Documentation Improvements 🟡
+- **Add minor parts to documentation**
+  - Examples and tutorials
+  - Clarifications and additional details
+  - Diagrams and illustrations
+  - FAQ entries
+- **Fix small issues in documentation**
+  - Typos and grammar
+  - Formatting improvements
+  - Dead links
+  - Minor inconsistencies
+
+**Why medium priority?** Documentation improvements help users but don't block development.
+
+### Priority 4: Minor Code Improvements (LOWEST) 🟢
+- **Add minor features**
+  - UI polish and minor UX improvements
+  - Non-critical convenience features
+  - Additional logging and debugging aids
+  - Code comments and inline documentation
+- **Fix small code issues**
+  - Non-critical UI bugs
+  - Minor performance optimizations
+  - Code style and formatting
+  - Refactoring for readability
+
+**Why lower priority?** While valuable, these can be addressed after critical design and implementation work.
+
+### How to Choose What to Work On
+
+1. **Check the Roadmap**: See [roadmap.md](roadmap.md) for current phase priorities
+2. **Look for High-Priority Labels**: Issues labeled `priority: critical` or `priority: high`
+3. **Ask First**: For major work, create an issue to discuss design before coding
+4. **Design Before Code**: Always update documentation before implementing major features
+
+### Workflow for Major Contributions
+
+```
+1. Design Phase (Priority 1) 🔴
+   └─> Create issue → Discuss architecture → Update docs → Get approval
+
+2. Implementation Phase (Priority 2) 🟠
+   └─> Write code → Add tests → Update technical docs → Submit PR
+
+3. Polish Phase (Priority 3-4) 🟡🟢
+   └─> Add examples → Fix minor issues → Improve UX → Optimize
+```
+
+### Summary: Why This Priority Order?
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Priority 1 🔴: Design Right (Architecture First)       │
+│  ↓                                                       │
+│  Priority 2 🟠: Build Right (Implementation)            │
+│  ↓                                                       │
+│  Priority 3 🟡: Document Right (Examples/Clarity)       │
+│  ↓                                                       │
+│  Priority 4 🟢: Polish (UX/Performance)                 │
+└─────────────────────────────────────────────────────────┘
+
+Design mistakes are expensive to fix after implementation.
+Architecture docs guide all development decisions.
+Get the design right first, then build, then polish.
+```
+
+**Remember**:
+- ✅ Design before code (Priority 1 before Priority 2)
+- ✅ Critical before nice-to-have (Priority 1-2 before Priority 3-4)
+- ✅ Documentation updates required for all Priority 1-2 changes
+- ✅ Ask maintainers if unsure about priority level
+
 ## What NOT to Contribute
 
 **Please avoid**:
 - ❌ Centralized market features
 - ❌ Commercial tracking systems
 - ❌ Features that enable piracy
-- ❌ Price/payment systems
 - ❌ Global file search/discovery
 - ❌ Social features (likes, comments)
 
@@ -62,16 +182,28 @@ Follow the [Developer Setup Guide](developer-setup.md) to:
 
 ### 2. Find Something to Work On
 
-**Good First Issues**:
-- Look for issues labeled `good first issue`
-- Check `help wanted` label
-- Review documentation todos
+**Follow Priority Order** (see [Contribution Priorities](#contribution-priorities) above):
+1. **Priority 1** 🔴: Major design/documentation work
+2. **Priority 2** 🟠: Major code work or critical fixes
+3. **Priority 3** 🟡: Minor documentation improvements
+4. **Priority 4** 🟢: Minor code improvements
 
-**Areas Needing Help**:
-- Translation improvements
-- Test coverage
-- Documentation
-- Bug fixes
+**Good First Issues**:
+- Look for issues labeled `good first issue` (usually Priority 3-4)
+- Check `help wanted` label
+- Start with documentation (Priority 3) to learn the system
+
+**Current High-Priority Areas** (Check [roadmap.md](roadmap.md)):
+- Protocol documentation (Priority 1)
+- Multi-protocol implementation (Priority 2)
+- Critical bug fixes (Priority 2)
+- Architecture documentation updates (Priority 1)
+
+**Lower Priority Areas** (Good for newcomers):
+- Translation improvements (Priority 3-4)
+- Test coverage (Priority 4)
+- UI polish (Priority 4)
+- Code comments (Priority 4)
 
 ### 3. Create an Issue
 
@@ -81,8 +213,13 @@ Before starting work:
    - What you want to add/fix
    - Why it's needed
    - How you plan to implement it
+   - **Priority level** (1-4 based on contribution priorities)
 3. Wait for maintainer feedback
-4. Get approval before starting large changes
+4. **CRITICAL for Priority 1-2**: Get design approval before coding
+   - Discuss architecture in issue comments
+   - Update design documentation first
+   - Get maintainer sign-off on approach
+5. For Priority 3-4: Approval recommended but less critical
 
 ## Development Workflow
 
@@ -194,38 +331,73 @@ docs: improve installation instructions
 ### PR Description
 
 Include:
+- **Priority Level** (1-4) - Indicate contribution priority
 - **What** changed
 - **Why** it was needed
 - **How** it was implemented
 - **Testing** performed
+- **Documentation Updates** (especially for Priority 1-2)
 - **Screenshots** (for UI changes)
 - **Breaking changes** (if any)
 
-Example:
+Example (Priority 2 - Major Code Work):
 ```markdown
+## Priority
+Priority 2: Major code implementation (BitTorrent protocol support)
+
 ## What
-Adds bandwidth scheduling feature to Settings page
+Adds BitTorrent protocol support to the multi-protocol file transfer system
 
 ## Why
-Users requested ability to limit bandwidth during specific hours
+Required for Phase 3 roadmap - enables efficient swarming and compatibility with existing BitTorrent ecosystem
 
 ## How
-- Added BandwidthScheduleEntry interface
-- Created bandwidthScheduler service
-- Added UI components for schedule management
-- Integrated with existing bandwidth limits
+- Implemented BitTorrent protocol handler in ProtocolManager
+- Added piece exchange logic with peer selection
+- Integrated with existing DHT for peer discovery
+- Ensured protocol-agnostic payment settlement
+
+## Documentation Updates
+- [ ] Updated architecture.md with BitTorrent implementation details
+- [ ] Updated network-protocol.md with BitTorrent specifications
+- [ ] Added examples to implementation-guide.md
 
 ## Testing
-- [ ] Manual testing on macOS
-- [ ] Tested schedule activation/deactivation
-- [ ] Verified settings persistence
-- [ ] Added unit tests
+- [ ] Manual testing on macOS with multiple peers
+- [ ] Tested piece exchange with different chunk sizes
+- [ ] Verified payment settlement works correctly
+- [ ] Added unit tests for protocol handler
+- [ ] Tested interoperability with standard BitTorrent clients
 
-## Screenshots
-![Settings page](url-to-screenshot)
+## Breaking Changes
+None - backward compatible with existing HTTP/WebTorrent implementations
+```
+
+Example (Priority 3 - Minor Documentation):
+```markdown
+## Priority
+Priority 3: Minor documentation improvement
+
+## What
+Added examples and clarifications to NAT traversal documentation
+
+## Why
+Users reported confusion about Circuit Relay v2 configuration
+
+## How
+- Added step-by-step setup examples
+- Created troubleshooting section
+- Added diagrams for relay flow
+
+## Testing
+- [ ] Reviewed by technical writer
+- [ ] Verified all links work
+- [ ] Tested examples on fresh installation
 ```
 
 ### Review Process
+
+**Review Priority**: PRs are reviewed in priority order (Priority 1 → Priority 4)
 
 1. **Automated checks** must pass:
    - TypeScript compilation
@@ -233,11 +405,17 @@ Users requested ability to limit bandwidth during specific hours
    - Tests
    - Build
 
-2. **Code review** by maintainer:
-   - Code quality
-   - Adherence to guidelines
-   - Test coverage
-   - Documentation
+2. **Code review** by maintainer (Priority-specific):
+   - **Priority 1-2** (Design/Major Code):
+     - Architecture alignment with docs
+     - Design correctness
+     - Breaking change impact
+     - Documentation completeness
+     - Code quality and test coverage
+   - **Priority 3-4** (Minor improvements):
+     - Code quality
+     - Adherence to guidelines
+     - No regression introduced
 
 3. **Feedback** incorporation:
    - Address review comments
@@ -245,6 +423,8 @@ Users requested ability to limit bandwidth during specific hours
    - Push updates
 
 4. **Approval** and merge
+   - Priority 1-2 may require multiple maintainer reviews
+   - Priority 3-4 can be merged faster
 
 ## Code Style Guide
 
