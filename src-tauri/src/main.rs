@@ -456,13 +456,38 @@ async fn record_download_payment(
     app.emit("seeder_payment_received", payment_msg.clone())
         .map_err(|e| format!("Failed to emit payment notification: {}", e))?;
 
-    println!("✅ Payment notification emitted for seeder: {}", seeder_wallet_address);
+    println!("✅ Payment notification emitted locally for seeder: {}", seeder_wallet_address);
 
-    // TODO: For cross-peer payments, implement P2P message via libp2p
-    // This would require:
-    // 1. Finding the peer by their wallet address or peer ID
-    // 2. Sending a direct message via send_message_to_peer()
-    // 3. Setting up a message handler on the receiver side
+    // Send P2P payment notification to the seeder's peer
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    if let Some(dht) = dht {
+        // Convert payment message to JSON
+        let notification_json = serde_json::to_value(&payment_msg)
+            .map_err(|e| format!("Failed to serialize payment notification: {}", e))?;
+
+        // Wrap in a payment notification envelope so receiver can identify it
+        let wrapped_message = serde_json::json!({
+            "type": "payment_notification",
+            "payload": notification_json
+        });
+
+        // Send via DHT to the seeder's peer ID
+        match dht.send_message_to_peer(&seeder_peer_id, wrapped_message).await {
+            Ok(_) => {
+                println!("✅ P2P payment notification sent to peer: {}", seeder_peer_id);
+            }
+            Err(e) => {
+                // Don't fail the whole operation if P2P message fails
+                println!("⚠️ Failed to send P2P payment notification: {}. Seeder will see payment when they check blockchain.", e);
+            }
+        }
+    } else {
+        println!("⚠️ DHT not available, payment notification only sent locally");
+    }
 
     Ok(())
 }
@@ -1155,6 +1180,24 @@ async fn start_dht_node(
                         });
                         let _ = app_handle.emit("bitswap_chunk_downloaded", payload);
                     },
+                    DhtEvent::PaymentNotificationReceived { from_peer, payload } => {
+                        println!("💰 Payment notification received from peer {}: {:?}", from_peer, payload);
+                        // Convert payload to match the expected format for seeder_payment_received
+                        if let Ok(notification) = serde_json::from_value::<serde_json::Value>(payload.clone()) {
+                            let formatted_payload = serde_json::json!({
+                                "file_hash": notification.get("file_hash").and_then(|v| v.as_str()).unwrap_or(""),
+                                "file_name": notification.get("file_name").and_then(|v| v.as_str()).unwrap_or(""),
+                                "file_size": notification.get("file_size").and_then(|v| v.as_u64()).unwrap_or(0),
+                                "downloader_address": notification.get("downloader_address").and_then(|v| v.as_str()).unwrap_or(""),
+                                "seeder_wallet_address": notification.get("seeder_wallet_address").and_then(|v| v.as_str()).unwrap_or(""),
+                                "amount": notification.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                                "transaction_id": notification.get("transaction_id").and_then(|v| v.as_u64()).unwrap_or(0),
+                            });
+                            // Emit the same event that local payments use
+                            let _ = app_handle.emit("seeder_payment_received", formatted_payload);
+                            println!("✅ Payment notification forwarded to frontend");
+                        }
+                    },
                     _ => {}
                 }
             }
@@ -1488,6 +1531,9 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                 }
                 DhtEvent::BitswapChunkDownloaded { file_hash, chunk_index, total_chunks, chunk_size } => {
                     format!("bitswap_chunk_downloaded:{}:{}:{}:{}", file_hash, chunk_index, total_chunks, chunk_size)
+                },
+                DhtEvent::PaymentNotificationReceived { from_peer, payload } => {
+                    format!("payment_notification_received:{}:{:?}", from_peer, payload)
                 },
                 DhtEvent::ReputationEvent {
                     peer_id,

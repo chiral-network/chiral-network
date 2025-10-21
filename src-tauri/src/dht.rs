@@ -360,6 +360,10 @@ pub enum DhtEvent {
         total_chunks: u32,
         chunk_size: usize,
     },
+    PaymentNotificationReceived {
+        from_peer: String,
+        payload: serde_json::Value,
+    },
 }
 
 struct RelayState {
@@ -3150,7 +3154,23 @@ async fn run_dht_node(
                                     }).await;
                                     let EchoRequest(data) = request;
 
-                                    // 2) Showing received data to UI
+                                    // Check if this is a payment notification
+                                    if let Ok(json_str) = std::str::from_utf8(&data) {
+                                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
+                                            if parsed.get("type").and_then(|v| v.as_str()) == Some("payment_notification") {
+                                                // This is a payment notification, emit special event
+                                                if let Some(payload) = parsed.get("payload") {
+                                                    info!("💰 Received payment notification from peer {}: {:?}", peer, payload);
+                                                    let _ = event_tx.send(DhtEvent::PaymentNotificationReceived {
+                                                        from_peer: peer.to_string(),
+                                                        payload: payload.clone(),
+                                                    }).await;
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // 2) Showing received data to UI (for non-payment messages)
                                     let preview = std::str::from_utf8(&data).ok().map(|s| s.to_string());
                                     let _ = event_tx.send(DhtEvent::EchoReceived {
                                         from: peer.to_string(),
