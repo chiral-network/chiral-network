@@ -911,3 +911,7 @@ func main() {
 
 ## Testing
 Testing API documentation to be added here later.
+
+### Desktop Command Reference
+
+For Tauri command documentation (local desktop functionality), see the dedicated [Tauri Command Reference](tauri-commands.md).
