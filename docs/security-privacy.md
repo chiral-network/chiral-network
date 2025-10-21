@@ -301,25 +301,26 @@ Sign transaction with group:
 
 #### Internal Threats
 
-| Threat         | Impact             | Mitigation               |
-| -------------- | ------------------ | ------------------------ |
-| Malicious Node | Data corruption    | Redundancy, verification |
-| Free Riding    | Resource drain     | Incentive system         |
-| Collusion      | Network disruption | Reputation penalties     |
-| Data Mining    | Privacy breach     | Encryption, anonymity    |
+| Threat          | Impact             | Mitigation                       |
+| --------------- | ------------------ | -------------------------------- |
+| Malicious Peer  | Data corruption    | Redundancy, chunk verification   |
+| Free Riding     | Resource drain     | Payment incentive system         |
+| Peer Collusion  | Network disruption | Reputation penalties             |
+| Data Mining     | Privacy breach     | Encryption, anonymity            |
 
 ### Attack Scenarios
 
-#### Scenario 1: Storage Node Compromise
+#### Scenario 1: Peer Compromise
 
-**Attack:** Attacker gains control of storage node
-**Impact:** Access to encrypted chunks
+**Attack:** Attacker gains control of a peer node
+**Impact:** Access to encrypted chunks stored on that peer
 **Mitigation:**
 
-- Client-side encryption
-- Chunk distribution
+- Client-side encryption (chunks are encrypted)
+- Chunk distribution across multiple peers
 - Regular integrity checks
-- Node reputation system
+- Peer reputation system
+- **Note**: Compromising one peer only exposes encrypted chunks, not original files
 
 #### Scenario 2: Network Partition
 
