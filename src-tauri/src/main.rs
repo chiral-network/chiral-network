@@ -83,7 +83,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State,
 };
-use tokio::time::{Duration as TokioDuration};
+use tokio::time::Duration as TokioDuration;
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{debug, error, info, warn};
@@ -1022,7 +1022,12 @@ async fn start_dht_node(
                         });
                         let _ = app_handle.emit("relay_reputation_event", payload);
                     }
-                    DhtEvent::BitswapChunkDownloaded { file_hash, chunk_index, total_chunks, chunk_size } => {
+                    DhtEvent::BitswapChunkDownloaded {
+                        file_hash,
+                        chunk_index,
+                        total_chunks,
+                        chunk_size,
+                    } => {
                         let payload = serde_json::json!({
                             "fileHash": file_hash,
                             "chunkIndex": chunk_index,
@@ -1030,7 +1035,7 @@ async fn start_dht_node(
                             "chunkSize": chunk_size,
                         });
                         let _ = app_handle.emit("bitswap_chunk_downloaded", payload);
-                    },
+                    }
                     _ => {}
                 }
             }
@@ -1362,9 +1367,17 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                 DhtEvent::FileDownloaded { file_hash } => {
                     format!("file_downloaded:{}", file_hash)
                 }
-                DhtEvent::BitswapChunkDownloaded { file_hash, chunk_index, total_chunks, chunk_size } => {
-                    format!("bitswap_chunk_downloaded:{}:{}:{}:{}", file_hash, chunk_index, total_chunks, chunk_size)
-                },
+                DhtEvent::BitswapChunkDownloaded {
+                    file_hash,
+                    chunk_index,
+                    total_chunks,
+                    chunk_size,
+                } => {
+                    format!(
+                        "bitswap_chunk_downloaded:{}:{}:{}:{}",
+                        file_hash, chunk_index, total_chunks, chunk_size
+                    )
+                }
                 DhtEvent::ReputationEvent {
                     peer_id,
                     event_type,
@@ -1987,32 +2000,52 @@ async fn upload_file_to_network(
         };
 
         if let Some(dht) = dht {
-            let metadata = FileMetadata {
-                merkle_root: file_hash.clone(),
-                is_root: true,
-                file_name: file_name.to_string(),
-                file_size: file_data.len() as u64,
-                file_data: file_data.clone(),
-                seeders: vec![],
-                created_at: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
-                mime_type: None,
-                is_encrypted: false,
-                encryption_method: None,
-                key_fingerprint: None,
-                parent_hash: None,
-                version: Some(1),
-                cids: None,
-                encrypted_key_bundle: None,
-                ..Default::default()
-            };
+            // Prepare a timestamp for metadata
+            let created_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
 
-            match dht.publish_file(metadata.clone()).await {
-                Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
-                Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
-            };
+            // Use DHT helper to prepare versioned metadata so version and parent_hash are computed
+            match dht
+                .prepare_versioned_metadata(
+                    file_hash.clone(),
+                    file_name.to_string(),
+                    file_data.len() as u64,
+                    file_data.clone(),
+                    created_at,
+                    None,  // mime_type
+                    None,  // encrypted_key_bundle
+                    false, // is_encrypted
+                    None,  // encryption_method
+                    None,  // key_fingerprint
+                )
+                .await
+            {
+                Ok(metadata) => {
+                    // Store file data locally for seeding if file transfer service is available
+                    if let Some(ft) = ft {
+                        if let Err(e) = ft
+                            .store_file_data(
+                                file_hash.clone(),
+                                file_name.to_string(),
+                                file_data.clone(),
+                            )
+                            .await
+                        {
+                            warn!("Failed to store file data locally for seeding: {}", e);
+                        }
+                    }
+
+                    match dht.publish_file(metadata.clone()).await {
+                        Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
+                        Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
+                    };
+                }
+                Err(e) => {
+                    warn!("Failed to prepare versioned metadata: {}", e);
+                }
+            }
 
             Ok(())
         } else {
