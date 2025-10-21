@@ -46,7 +46,6 @@ Thank you for your interest in contributing to Chiral Network! This guide will h
 - ❌ Centralized market features
 - ❌ Commercial tracking systems
 - ❌ Features that enable piracy
-- ❌ Price/payment systems
 - ❌ Global file search/discovery
 - ❌ Social features (likes, comments)
 
