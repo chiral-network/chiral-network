@@ -5080,12 +5080,28 @@ impl DhtService {
             .get_latest_version_by_file_name(file_name.clone())
             .await?;
 
+        // When a latest version for the same filename exists, only increment the version
+        // if the merkle root (content identifier) is different. If the merkle root is
+        // identical we return the same version to avoid creating duplicate versions
+        // for the same content.
         let (version, parent_hash, is_root) = match latest {
-            Some(ref prev) => (
-                prev.version.map(|v| v + 1).unwrap_or(2),
-                Some(prev.merkle_root.clone()),
-                false, // not root if there was a previous version
-            ),
+            Some(ref prev) => {
+                if prev.merkle_root == file_hash {
+                    // Same content: keep same version and parent/is_root values
+                    (
+                        prev.version.unwrap_or(1),
+                        prev.parent_hash.clone(),
+                        prev.is_root,
+                    )
+                } else {
+                    // Different content: increment version and set parent to previous merkle root
+                    (
+                        prev.version.map(|v| v + 1).unwrap_or(2),
+                        Some(prev.merkle_root.clone()),
+                        false, // not root if there was a previous version
+                    )
+                }
+            }
             None => (1, None, true), // root if first version
         };
         Ok(FileMetadata {
