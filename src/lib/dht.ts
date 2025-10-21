@@ -48,6 +48,8 @@ export interface FileMetadata {
   manifest?: string;
   isRoot?: boolean;
   cids?: string[];
+  price?: number;
+  uploaderAddress?: string;
 }
 
 export interface FileManifestForJs {
@@ -195,7 +197,7 @@ export class DhtService {
     }
   }
 
-  async publishFileToNetwork(filePath: string): Promise<FileMetadata> {
+  async publishFileToNetwork(filePath: string, price?: number): Promise<FileMetadata> {
     try {
       // Start listening for the published_file event
       const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {
@@ -216,8 +218,11 @@ export class DhtService {
         );
       });
 
-      // Trigger the backend upload
-      await invoke("upload_file_to_network", { filePath });
+      // Trigger the backend upload with price
+      await invoke("upload_file_to_network", {
+        filePath,
+        price: price ?? null
+      });
 
       // Wait until the event arrives
       return await metadataPromise;
@@ -251,16 +256,9 @@ export class DhtService {
       }
       resolvedStoragePath += "/" + fileMetadata.fileName;
 
-      // Trigger the backend upload
-      fileMetadata.merkleRoot = fileMetadata.fileHash;
-      fileMetadata.fileData = [];
-      fileMetadata.isRoot = true;
-      console.log(fileMetadata);
-      await invoke("download_blocks_from_network", {
-        fileMetadata,
-        downloadPath: resolvedStoragePath,
-      });
-      const metadataPromise = new Promise<FileMetadata>((resolve) => {
+      // IMPORTANT: Set up the event listener BEFORE invoking the backend
+      // to avoid race condition where event fires before we're listening
+      const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {
         const unlistenPromise = listen<FileMetadata>(
           "file_content",
           async (event) => {
@@ -272,12 +270,31 @@ export class DhtService {
             unlistenPromise.then((unlistenFn) => unlistenFn());
           }
         );
+
+        // Add timeout to reject the promise if download takes too long
+        setTimeout(() => {
+          reject(new Error("Download timeout - no file_content event received"));
+          unlistenPromise.then((unlistenFn) => unlistenFn());
+        }, 300000); // 5 minute timeout
       });
+
+      // Trigger the backend download AFTER setting up the listener
+      fileMetadata.merkleRoot = fileMetadata.fileHash;
+      fileMetadata.fileData = [];
+      fileMetadata.isRoot = true;
+      console.log("Calling download_blocks_from_network with:", fileMetadata);
+
+      await invoke("download_blocks_from_network", {
+        fileMetadata,
+        downloadPath: resolvedStoragePath,
+      });
+
+      console.log("Backend download initiated, waiting for file_content event...");
 
       // Wait until the event arrives
       return await metadataPromise;
     } catch (error) {
-      console.error("Failed to publish file:", error);
+      console.error("Failed to download file:", error);
       throw error;
     }
   }
