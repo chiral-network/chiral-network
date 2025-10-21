@@ -6,43 +6,40 @@
   import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText } from 'lucide-svelte'
   import DropDown from "$lib/components/ui/dropDown.svelte";
   import { wallet, etcAccount, blacklist} from '$lib/stores' 
-  import { transactions, type Transaction } from '$lib/stores';
-  import { writable, derived } from 'svelte/store'
+  import { walletService } from '$lib/wallet';
+  import { transactions } from '$lib/stores';
+  import { derived } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
   import QRCode from 'qrcode'
   import { Html5QrcodeScanner as Html5QrcodeScannerClass } from 'html5-qrcode'
   import { tick } from 'svelte'
   import { onMount } from 'svelte'
+  import { fade, fly } from 'svelte/transition'
   import { t, locale } from 'svelte-i18n'
   import { showToast } from '$lib/toast'
   import { get } from 'svelte/store'
-  const tr = (k: string, params?: Record<string, any>) => get(t)(k, params)
+  import { totalEarned, totalSpent, miningState } from '$lib/stores';
+
+  const tr = (k: string, params?: Record<string, any>): string => (get(t) as (key: string, params?: any) => string)(k, params)
   
+  // SECURITY NOTE: Removed weak XOR obfuscation. Sensitive data should not be stored in frontend.
+  // Use proper secure storage mechanisms in the backend instead.
+
   // HD wallet imports
   import MnemonicWizard from '$lib/components/wallet/MnemonicWizard.svelte'
   import AccountList from '$lib/components/wallet/AccountList.svelte'
   // HD helpers are used within MnemonicWizard/AccountList components
 
   // Transaction components
-  import TransactionList from '$lib/components/TransactionList.svelte'
   import TransactionReceipt from '$lib/components/TransactionReceipt.svelte'
 
+  // Validation utilities
+  import { validatePrivateKeyFormat, RateLimiter } from '$lib/utils/validation'
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
   // Interfaces - Transaction is now defined in stores.ts
-
-  // interface Transaction {
-  //   id: number;
-  //   type: 'sent' | 'received';
-  //   amount: number;
-  //   to?: string;
-  //   from?: string;
-  //   date: Date;
-  //   description: string;
-  //   status: 'pending' | 'completed';
-  // }
 
   interface BlacklistEntry {
     chiral_address: string;
@@ -71,6 +68,13 @@
   let loadKeystorePassword = '';
   let isLoadingFromKeystore = false;
   let keystoreLoadMessage = '';
+  let rememberKeystorePassword = false;
+
+  // Rate limiter for keystore unlock (5 attempts per minute)
+  const keystoreRateLimiter = new RateLimiter(5, 60000);
+  let passwordStrength = '';
+  let isPasswordValid = false;
+  let passwordFeedback = '';
   
   // HD wallet state (frontend only)
   let showMnemonicWizard = false;
@@ -84,16 +88,22 @@
   let selectedTransaction: any = null;
   let showTransactionReceipt = false;
   
+  // 2FA State
+  // In a real app, this status should be loaded with the user's account data.
+  let is2faEnabled = false; 
+  let show2faSetupModal = false;
+  let show2faPromptModal = false;
+  let totpSetupInfo: { secret: string; qrCodeDataUrl: string } | null = null;
+  let totpVerificationCode = '';
+  let isVerifying2fa = false;
+  let actionToConfirm: (() => any) | null = null;
+  let totpActionCode = '';
+  let isVerifyingAction = false;
+  let twoFaErrorMessage = '';
+
+  let twoFaPassword = ''; // To hold password for 2FA operations
 
   let Html5QrcodeScanner: InstanceType<typeof Html5QrcodeScannerClass> | null = null;
-  
-  // Demo transactions - in real app these will be fetched from blockchain
-  // const transactions = writable<Transaction[]>([
-  //   { id: 1, type: 'received', amount: 50.5, from: '0x8765...4321', to: undefined, date: new Date('2024-03-15'), description: 'File purchase', status: 'completed' },
-  //   { id: 2, type: 'sent', amount: 10.25, to: '0x1234...5678', from: undefined, date: new Date('2024-03-14'), description: 'Proxy service', status: 'completed' },
-  //   { id: 3, type: 'received', amount: 100, from: '0xabcd...ef12', to: undefined, date: new Date('2024-03-13'), description: 'Upload reward', status: 'completed' },
-  //   { id: 4, type: 'sent', amount: 5.5, to: '0x9876...5432', from: undefined, date: new Date('2024-03-12'), description: 'File download', status: 'completed' },
-  // ]);
 
   // Enhanced validation states
   let validationWarning = '';
@@ -106,9 +116,6 @@
   let isBlacklistAddressValid = false;
 
 
-  // Copy feedback message
-  let copyMessage = '';
-  let privateKeyCopyMessage = '';
    
   // Export feedback message
   let exportMessage = '';
@@ -134,6 +141,19 @@
   $: if ($etcAccount && isGethRunning) {
     fetchBalance()
   }
+  // Add this reactive statement after your other reactive statements (around line 170)
+  $: if ($etcAccount) {
+    const accountTransactions = $transactions.filter(tx => 
+      tx.from === 'Mining reward' || 
+      tx.description?.toLowerCase().includes('block reward') ||
+      tx.description === tr('transactions.manual') ||
+      tx.to?.toLowerCase() === $etcAccount.address.toLowerCase() ||
+      tx.from?.toLowerCase() === $etcAccount.address.toLowerCase()
+    );
+    if (accountTransactions.length !== $transactions.length) {
+      transactions.set(accountTransactions);
+    }
+}
 
   // Derived filtered transactions
   $: filteredTransactions = $transactions
@@ -173,6 +193,9 @@
     } else if (!isValidAddress(recipientAddress)) {
       addressWarning = tr('errors.address.mustBeHex');
       isAddressValid = false;
+    } else if (isAddressBlacklisted(recipientAddress)) {
+      addressWarning = tr('errors.address.blacklisted');
+      isAddressValid = false;
     } else {
       addressWarning = '';
       isAddressValid = true;
@@ -201,7 +224,12 @@
         isAmountValid = false;
         sendAmount = 0;
       } else if (inputValue + estimatedFeeNumeric > $wallet.balance) {
-        validationWarning = tr('errors.amount.insufficientWithFee', { values: { more: (inputValue + estimatedFeeNumeric - $wallet.balance).toFixed(2) } });
+        validationWarning = tr('errors.amount.insufficientWithFee', {
+          values: {
+            total: (inputValue + estimatedFeeNumeric).toFixed(2),
+            balance: $wallet.balance.toFixed(2)
+          }
+        });
         isAmountValid = false;
         sendAmount = 0;
       } else {
@@ -209,6 +237,45 @@
         validationWarning = '';
         isAmountValid = true;
         sendAmount = inputValue;
+      }
+    }
+  }
+
+  // Add password validation logic
+  $: {
+    if (!keystorePassword) {
+      passwordStrength = '';
+      passwordFeedback = '';
+      isPasswordValid = false;
+    } else {
+      // Check password requirements
+      const hasMinLength = keystorePassword.length >= 8;
+      const hasUppercase = /[A-Z]/.test(keystorePassword);
+      const hasLowercase = /[a-z]/.test(keystorePassword);
+      const hasNumber = /[0-9]/.test(keystorePassword);
+      const hasSpecial = /[!@#$%^&*(),.?":{}|<>]/.test(keystorePassword);
+
+      // Calculate strength
+      let strength = 0;
+      if (hasMinLength) strength++;
+      if (hasUppercase) strength++;
+      if (hasLowercase) strength++;
+      if (hasNumber) strength++; 
+      if (hasSpecial) strength++;
+
+      // Set feedback based on strength
+      if (strength < 2) {
+        passwordStrength = 'weak';
+        passwordFeedback = tr('password.weak');
+        isPasswordValid = false;
+      } else if (strength < 4) {
+        passwordStrength = 'medium';
+        passwordFeedback = tr('password.medium');
+        isPasswordValid = false;
+      } else {
+        passwordStrength = 'strong';
+        passwordFeedback = tr('password.strong');
+        isPasswordValid = true;
       }
     }
   }
@@ -248,6 +315,11 @@
   // Prepare options for the DropDown component
   $: keystoreOptions = keystoreAccounts.map(acc => ({ value: acc, label: acc }));
 
+  // When logged out, if a keystore account is selected, try to load its saved password.
+  $: if (!$etcAccount && selectedKeystoreAccount) {
+    loadSavedPassword(selectedKeystoreAccount);
+  }
+
   // Enhanced address validation function
   function isValidAddress(address: string): boolean {
     // Check that everything after 0x is hexadecimal
@@ -257,90 +329,88 @@
     const hexRegex = /^[a-fA-F0-9]+$/;
     return hexRegex.test(hexPart);
   }
-  
+
+  // Add helper function to check blacklist
+  function isAddressBlacklisted(address: string): boolean {
+    return $blacklist.some(entry => 
+      entry.chiral_address.toLowerCase() === address.toLowerCase()
+    );
+  }
+
   function copyAddress() {
-  const addressToCopy = $etcAccount ? $etcAccount.address : $wallet.address;
-  navigator.clipboard.writeText(addressToCopy);
-  
-  
-  showToast('Address copied to clipboard!', 'success')
-  
-  
-}
+    const addressToCopy = $etcAccount ? $etcAccount.address : $wallet.address;
+    navigator.clipboard.writeText(addressToCopy);
+    
+    
+    showToast('Address copied to clipboard!', 'success')
+  }
 
   function copyPrivateKey() {
-    const privateKeyToCopy = $etcAccount ? $etcAccount.private_key : '';
-    if (privateKeyToCopy) {
-      navigator.clipboard.writeText(privateKeyToCopy);
-      privateKeyCopyMessage = tr('messages.copied');
-    }
-    else {
-      privateKeyCopyMessage = tr('messages.failed');
-    }
-    setTimeout(() => privateKeyCopyMessage = '', 1500);
+    with2FA(() => {
+      const privateKeyToCopy = $etcAccount ? $etcAccount.private_key : '';
+      if (privateKeyToCopy) {
+        navigator.clipboard.writeText(privateKeyToCopy);
+        showToast('Private key copied to clipboard!', 'success');
+      }
+      else {
+        showToast('No private key available', 'error');
+      }
+    });
   }
     
-  async function exportWallet() {
-    try {
-      const walletData = {
-        address: $etcAccount?.address,
-        privateKey: $etcAccount?.private_key,
-        balance: $wallet.balance,
-        totalEarned: $wallet.totalEarned,
-        totalSpent: $wallet.totalSpent,
-        pendingTransactions: $wallet.pendingTransactions,
-        exportDate: new Date().toISOString(),
-        version: "1.0"
-      };
-      
-      const dataStr = JSON.stringify(walletData, null, 2);
-      const dataBlob = new Blob([dataStr], { type: 'application/json' });
-      
-      // Check if the File System Access API is supported
-      if ('showSaveFilePicker' in window) {
-        try {
-          const fileHandle = await (window as any).showSaveFilePicker({
-            suggestedName: `chiral-wallet-export-${new Date().toISOString().split('T')[0]}.json`,
-            types: [{
-              description: 'JSON files',
-              accept: {
-                'application/json': ['.json'],
-              },
-            }],
-          });
-          
-          const writable = await fileHandle.createWritable();
-          await writable.write(dataBlob);
-          await writable.close();
+  function exportWallet() {
+    with2FA(async () => {
+      try {
+        const snapshot = await walletService.exportSnapshot({ includePrivateKey: true });
+        const dataStr = JSON.stringify(snapshot, null, 2);
+        const dataBlob = new Blob([dataStr], { type: 'application/json' });
+        
+        // Check if the File System Access API is supported
+        if ('showSaveFilePicker' in window) {
+          try {
+            const fileHandle = await (window as any).showSaveFilePicker({
+              suggestedName: `chiral-wallet-export-${new Date().toISOString().split('T')[0]}.json`,
+              types: [{
+                description: 'JSON files',
+                accept: {
+                  'application/json': ['.json'],
+                },
+              }],
+            });
+            
+            const writable = await fileHandle.createWritable();
+            await writable.write(dataBlob);
+            await writable.close();
+
+            exportMessage = tr('wallet.exportSuccess');
+          } catch (error: any) {
+            if (error.name !== 'AbortError') {
+              throw error;
+            }
+            // User cancelled, don't show error message
+            return;
+          }
+        } else {
+          // Fallback for browsers that don't support File System Access API
+          const url = URL.createObjectURL(dataBlob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `chiral-wallet-export-${new Date().toISOString().split('T')[0]}.json`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
 
           exportMessage = tr('wallet.exportSuccess');
-        } catch (error: any) {
-          if (error.name !== 'AbortError') {
-            throw error;
-          }
-          // User cancelled, don't show error message
-          return;
         }
-      } else {
-        // Fallback for browsers that don't support File System Access API
-        const url = URL.createObjectURL(dataBlob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `chiral-wallet-export-${new Date().toISOString().split('T')[0]}.json`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-
-        exportMessage = tr('wallet.exportSuccess');
+        
+        setTimeout(() => exportMessage = '', 3000);
+      } catch (error) {
+        console.error('Export failed:', error);
+        exportMessage = tr('errors.exportFailed');
+        setTimeout(() => exportMessage = '', 3000);
       }
-      
-      setTimeout(() => exportMessage = '', 3000);
-    } catch (error) {
-      console.error('Export failed:', error);
-      exportMessage = tr('errors.exportFailed');
-      setTimeout(() => exportMessage = '', 3000);
-    }
+    });
   }
   
   function handleSendClick() {
@@ -352,7 +422,7 @@
       return
     }
 
-    startCountdown()
+    with2FA(startCountdown);
   }
 
   function startCountdown() {
@@ -381,53 +451,35 @@
     showToast('Transaction cancelled', 'warning')
   }
 
-  function sendTransaction() {
-    if (!isAddressValid || !isAmountValid || !isAddressValid || sendAmount <= 0) return
+  async function sendTransaction() {
+    if (!isAddressValid || !isAmountValid || sendAmount <= 0) return
     
-    // Notify submission (mocked)
-    showToast('Transaction submitted', 'info')
-
-    // Simulate transaction
-    wallet.update(w => ({
-      ...w,
-      balance: w.balance - sendAmount,
-      pendingTransactions: w.pendingTransactions + 1,
-      totalSpent: w.totalSpent + sendAmount
-    }))
-
-    transactions.update(txs => [
-    {
-      id: Date.now(),
-      type: 'sent',
-      amount: sendAmount,
-      to: recipientAddress,
-      date: new Date(),
-      description: tr('transactions.manual'),
-      status: 'pending'
-    },
-    ...txs // prepend so latest is first
-  ])
-    
-    // Clear form
-    recipientAddress = ''
-    sendAmount = 0
-    rawAmountInput = ''
-    
-    // Simulate transaction completion
-    setTimeout(() => {
-      wallet.update(w => ({
-        ...w,
-        pendingTransactions: Math.max(0, w.pendingTransactions - 1)
-      }))
-      transactions.update(txs => txs.map(tx => tx.status === 'pending' ? { ...tx, status: 'completed' } : tx))
-      // Notify success (mocked)
-      showToast('Transaction confirmed', 'success')
-    }, 3000)
+    try {
+      showToast('Sending transaction...', 'info')
+      
+      await walletService.sendTransaction(recipientAddress, sendAmount)
+      
+      // Clear form
+      recipientAddress = ''
+      sendAmount = 0
+      rawAmountInput = ''
+      
+      showToast('Transaction submitted!', 'success')
+      
+      
+      
+    } catch (error) {
+      console.error('Transaction failed:', error)
+      showToast('Transaction failed: ' + String(error), 'error')
+      
+      // Refresh balance to get accurate state
+      await fetchBalance()
+    }
   }
-  
+
   function formatDate(date: Date): string {
     const loc = get(locale) || 'en-US'
-    return new Intl.DateTimeFormat(loc, { month: 'short', day: 'numeric', year: 'numeric' }).format(date)
+    return new Intl.DateTimeFormat(typeof loc === 'string' ? loc : 'en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(date)
   }
 
   function handleTransactionClick(tx: any) {
@@ -446,62 +498,22 @@
   // Ensure pendingCount is used (for linter)
   $: void $pendingCount;
 
-  let balanceInterval: number | undefined
-  
-  onMount(() => {
-    checkGethStatus()
-    loadKeystoreAccountsList();
+  onMount(async () => {
+    await walletService.initialize();
+    await loadKeystoreAccountsList();
 
-    // Set up periodic balance refresh every 10 seconds
-    balanceInterval = window.setInterval(() => {
-      if ($etcAccount && isGethRunning) {
-        fetchBalance()
-      }
-    }, 10000)
-
-    // Cleanup function
-    return () => {
-      if (balanceInterval) window.clearInterval(balanceInterval)
+    if ($etcAccount && isGethRunning) {
+      await walletService.refreshBalance();
+      await walletService.refreshTransactions();
     }
   })
 
-  async function checkGethStatus() {
-    try {
-      if (isTauri) {
-        isGethRunning = await invoke('is_geth_running') as boolean
-        // Fetch balance if account exists and geth is running
-        if ($etcAccount && isGethRunning) {
-          fetchBalance()
-        }
-      } else {
-        // Fallback for web environment - assume geth is not running
-        isGethRunning = false
-        console.log('Running in web mode - geth not available')
-      }
-    } catch (error) {
-      console.error('Failed to check geth status:', error)
-    }
-  }
-
   async function fetchBalance() {
-    if (!$etcAccount) return
-    
+    if (!isTauri || !isGethRunning || !$etcAccount) return
     try {
-      if (isTauri && isGethRunning) {
-        // Desktop app with local geth node - get real blockchain balance
-        const balance = await invoke('get_account_balance', { address: $etcAccount.address }) as string
-        wallet.update(w => ({ ...w, balance: parseFloat(balance) }))
-      } else if (isTauri && !isGethRunning) {
-        // Desktop app but geth not running - use stored balance
-        console.log('Geth not running - using stored balance')
-      } else {
-        // Web environment - For now, simulate balance updates for demo purposes
-        const simulatedBalance = $wallet.balance + Math.random() * 10 // Small random changes
-        wallet.update(w => ({ ...w, balance: Math.max(0, simulatedBalance) }))
-      }
+      await walletService.refreshBalance()
     } catch (error) {
       console.error('Failed to fetch balance:', error)
-      // Fallback to stored balance on error
     }
   }
 
@@ -509,32 +521,22 @@
   async function createChiralAccount() {
   isCreatingAccount = true
   try {
-    let account: { address: string, private_key: string, blacklist: Object[] }
+    const account = await walletService.createAccount()
 
-    if (isTauri) {
-      account = await invoke('create_chiral_account') as { address: string, private_key: string, blacklist: Object[] }
-    } else {
-      const demoAddress = '0x' + Math.random().toString(16).substr(2, 40)
-      const demoPrivateKey = '0x' + Math.random().toString(16).substr(2, 64)
-      const demoBlackList = [{node_id: 169245, name: "Jane"}]
-      account = {
-        address: demoAddress,
-        private_key: demoPrivateKey,
-        blacklist: demoBlackList
-      }
-      console.log('Running in web mode - using demo account')
-    }
-    
-    etcAccount.set(account)
     wallet.update(w => ({
       ...w,
-      address: account.address
+      address: account.address,
+      balance: 0,
+      pendingTransactions: 0
     }))
-    
+
+    transactions.set([])
+    blacklist.set([])   
+
     showToast('Account Created Successfully!', 'success')
     
     if (isGethRunning) {
-      await fetchBalance()
+      await walletService.refreshBalance()
     }
   } catch (error) {
     console.error('Failed to create Chiral account:', error)
@@ -545,12 +547,6 @@
   }
 }
 
-  async function setAccount(account: { address: string, private_key: string }) {
-    etcAccount.set(account);
-    wallet.update(w => ({ ...w, address: account.address }));
-    if (isGethRunning) { await fetchBalance(); }
-  }
-
   async function saveToKeystore() {
     if (!keystorePassword || !$etcAccount) return;
 
@@ -559,15 +555,9 @@
 
     try {
         if (isTauri) {
-            await invoke('save_account_to_keystore', {
-                address: $etcAccount.address,
-                privateKey: $etcAccount.private_key,
-                password: keystorePassword,
-            });
+            await walletService.saveToKeystore(keystorePassword);
             keystoreSaveMessage = tr('keystore.success');
         } else {
-            // Simulate for web
-            console.log('Simulating save to keystore with password:', keystorePassword);
             await new Promise(resolve => setTimeout(resolve, 1000));
             keystoreSaveMessage = tr('keystore.successSimulated');
         }
@@ -589,10 +579,8 @@
     await tick();
 
     // 3. This function runs when a QR code is successfully scanned
-    function onScanSuccess(decodedText: string, decodedResult: any) {
+    function onScanSuccess(decodedText: string, _decodedResult: any) {
       // Handle the scanned code
-      console.log(`Code matched = ${decodedText}`, decodedResult);
-      
       // Paste the address into the input field
       recipientAddress = decodedText;
       
@@ -627,42 +615,37 @@
 
   async function importChiralAccount() {
     if (!importPrivateKey) return
-    
+
+    // Validate private key format before attempting import
+    const validation = validatePrivateKeyFormat(importPrivateKey)
+    if (!validation.isValid) {
+      showToast(validation.error || 'Invalid private key format', 'error')
+      return
+    }
+
     isImportingAccount = true
     try {
-      let account: { address: string, private_key: string }
-      
-      if (isTauri) {
-        account = await invoke('import_chiral_account', { privateKey: importPrivateKey }) as { address: string, private_key: string }
-      } else {
-        const demoAddress = '0x' + Math.random().toString(16).substr(2, 40)
-        account = {
-          address: demoAddress,
-          private_key: importPrivateKey
-        }
-        console.log('Running in web mode - using provided private key')
-      }
-      
-      etcAccount.set(account)
+      const account = await walletService.importAccount(importPrivateKey)
       wallet.update(w => ({
         ...w,
-        address: account.address
+        address: account.address,
+
+        pendingTransactions: 0
       }))
-      await setAccount(account);
       importPrivateKey = ''
-      
-      
+
+
       showToast('Account imported successfully!', 'success')
-      
+
       if (isGethRunning) {
-        await fetchBalance()
+        await walletService.refreshBalance()
       }
     } catch (error) {
       console.error('Failed to import Chiral account:', error)
-      
-      
+
+
       showToast('Failed to import account: ' + String(error), 'error')
-      
+
       alert('Failed to import account: ' + error)
     } finally {
       isImportingAccount = false
@@ -742,79 +725,254 @@
 
   async function loadKeystoreAccountsList() {
     try {
-      if (isTauri) {
-        const accounts = await invoke('list_keystore_accounts') as string[];
-        keystoreAccounts = accounts;
-        if (accounts.length > 0) {
-          selectedKeystoreAccount = accounts[0];
-        }
+      if (!isTauri) return;
+      const accounts = await walletService.listKeystoreAccounts();
+      keystoreAccounts = accounts;
+      if (accounts.length > 0) {
+        selectedKeystoreAccount = accounts[0];
       }
     } catch (error) {
       console.error('Failed to list keystore accounts:', error);
     }
   }
 
+  function loadSavedPassword(address: string) {
+    try {
+      const savedPasswordsRaw = localStorage.getItem('chiral_keystore_passwords');
+      if (savedPasswordsRaw) {
+        const savedPasswords: Record<string, { pass: string, expires: number }> = JSON.parse(savedPasswordsRaw);
+        const saved = savedPasswords[address];
+        if (saved) {
+          const now = new Date().getTime();
+          if (now < saved.expires) {
+            loadKeystorePassword = saved.pass;
+            rememberKeystorePassword = true;
+          } else {
+            // Password expired, remove it
+            saveOrClearPassword(address, ''); // This will clear it if checkbox is unchecked
+          }
+        }
+        else {
+          // Clear if no password is saved for this account
+          loadKeystorePassword = '';
+          rememberKeystorePassword = false;
+        }
+      }
+    } catch (e) {
+      console.error("Failed to load saved password from localStorage", e);
+    }
+  }
+
   async function loadFromKeystore() {
     if (!selectedKeystoreAccount || !loadKeystorePassword) return;
+
+    // Rate limiting: prevent brute force attacks
+    if (!keystoreRateLimiter.checkLimit('keystore-unlock')) {
+      keystoreLoadMessage = 'Too many unlock attempts. Please wait 1 minute before trying again.';
+      setTimeout(() => keystoreLoadMessage = '', 4000);
+      return;
+    }
 
     isLoadingFromKeystore = true;
     keystoreLoadMessage = '';
 
     try {
         if (isTauri) {
-            // Send password to backend for decryption
-            const decryptedAccount = await invoke('load_account_from_keystore', {
-                address: selectedKeystoreAccount,
-                password: loadKeystorePassword,
-            }) as { 
-                address: string, 
-                private_key: string,
-            };
+            const account = await walletService.loadFromKeystore(selectedKeystoreAccount, loadKeystorePassword);
 
-            // Verify the decrypted address matches selected address
-            if (decryptedAccount.address.toLowerCase() !== selectedKeystoreAccount.toLowerCase()) {
+            if (account.address.toLowerCase() !== selectedKeystoreAccount.toLowerCase()) {
                 throw new Error(tr('keystore.load.addressMismatch'));
             }
 
-            // Update stores with decrypted account
-            etcAccount.set({
-                address: decryptedAccount.address,
-                private_key: decryptedAccount.private_key
-            });
+            // Success - reset rate limiter for this account
+            keystoreRateLimiter.reset('keystore-unlock');
 
-            // Update wallet store
+            saveOrClearPassword(selectedKeystoreAccount, loadKeystorePassword);
+
             wallet.update(w => ({
                 ...w,
-                address: decryptedAccount.address
+                address: account.address
             }));
-            await setAccount(decryptedAccount);
-            
+
             // Clear sensitive data
             loadKeystorePassword = '';
-            
-            // Fetch initial balance if geth is running
+
             if (isGethRunning) {
-                await fetchBalance();
+                await walletService.refreshBalance();
             }
-            
+
             keystoreLoadMessage = tr('keystore.load.success');
 
         } else {
             // Web demo mode simulation
-            console.log('Simulating keystore load in web mode');
+            // Save or clear the password from local storage based on the checkbox
+            saveOrClearPassword(selectedKeystoreAccount, loadKeystorePassword);
             await new Promise(resolve => setTimeout(resolve, 1000));
+            keystoreRateLimiter.reset('keystore-unlock'); // Reset on success in demo mode too
             keystoreLoadMessage = tr('keystore.load.successSimulated');
         }
-        
+
     } catch (error) {
         console.error('Failed to load from keystore:', error);
         keystoreLoadMessage = tr('keystore.load.error', { error: String(error) });
-        
+
         // Clear sensitive data on error
+        // Note: Rate limiter is NOT reset on failure - failed attempts count toward limit
         loadKeystorePassword = '';
     } finally {
         isLoadingFromKeystore = false;
         setTimeout(() => keystoreLoadMessage = '', 4000);
+    }
+  }
+
+  function saveOrClearPassword(address: string, password: string) {
+    try {
+      const savedPasswordsRaw = localStorage.getItem('chiral_keystore_passwords');
+      let savedPasswords = savedPasswordsRaw ? JSON.parse(savedPasswordsRaw) : {};
+  
+      if (rememberKeystorePassword) {
+        const expires = new Date().getTime() + 30 * 24 * 60 * 60 * 1000; // 30 days from now
+        savedPasswords[address] = { pass: password, expires };
+      } else {
+        delete savedPasswords[address];
+      }
+
+      localStorage.setItem('chiral_keystore_passwords', JSON.stringify(savedPasswords));
+    } catch (e) {
+      console.error("Failed to save password to localStorage", e);
+    }
+  }
+
+  // Reactive statement to check 2FA status when user logs in
+  $: if ($etcAccount && isTauri) {
+    check2faStatus();
+  }
+
+  async function check2faStatus() {
+    try {
+      is2faEnabled = await walletService.isTwoFactorEnabled();
+    } catch (error) {
+      console.error('Failed to check 2FA status:', error);
+      // is2faEnabled will remain false, which is a safe default.
+    }
+  }
+
+  // --- 2FA Functions ---
+
+  // This would be called by the "Enable 2FA" button
+  async function setup2FA() {
+    if (!isTauri) {
+      showToast('2FA is only available in the desktop app.', 'warning');
+      return;
+    }
+
+    try {
+      const setup = await walletService.generateTwoFactorSetup();
+      const qrCodeDataUrl = await QRCode.toDataURL(setup.otpauthUrl);
+
+      totpSetupInfo = { secret: setup.secret, qrCodeDataUrl };
+      show2faSetupModal = true;
+      totpVerificationCode = '';
+      twoFaErrorMessage = '';
+    } catch (err) {
+      console.error('Failed to setup 2FA:', err);
+      showToast('Failed to start 2FA setup: ' + String(err), 'error');
+    }
+  }
+
+  // Called from the setup modal to verify and enable 2FA
+  async function verifyAndEnable2FA() {
+    if (!totpSetupInfo || !totpVerificationCode) return;
+    isVerifying2fa = true;
+    twoFaErrorMessage = '';
+
+    try {
+      const success = await walletService.verifyAndEnableTwoFactor(
+        totpSetupInfo.secret,
+        totpVerificationCode,
+        twoFaPassword
+      );
+
+      if (success) {
+        is2faEnabled = true; 
+        show2faSetupModal = false;
+        showToast('Two-Factor Authentication has been enabled!', 'success');
+      } else {
+        // Don't clear password, but clear code
+        twoFaErrorMessage = 'Invalid code. Please try again.';
+        totpVerificationCode = '';
+      }
+    } catch (error) {
+      twoFaErrorMessage = String(error);
+    } finally {
+      isVerifying2fa = false;
+    }
+  }
+
+  // This is the main wrapper for protected actions
+  function with2FA(action: () => any) {
+    if (!is2faEnabled) {
+      action();
+      return;
+    }
+    
+    // If 2FA is enabled, show the prompt
+    actionToConfirm = action;
+    totpActionCode = '';
+    twoFaErrorMessage = '';
+    show2faPromptModal = true;
+  }
+
+  // Called from the 2FA prompt modal
+  async function confirmActionWith2FA() {
+    if (!actionToConfirm || !totpActionCode) return;
+    isVerifyingAction = true;
+    twoFaErrorMessage = '';
+
+    try {
+      const success = await walletService.verifyTwoFactor(totpActionCode, twoFaPassword);
+
+      if (success) {
+        show2faPromptModal = false;
+        actionToConfirm(); // Execute the original action
+      } else {
+        twoFaErrorMessage = 'Invalid code. Please try again.';
+        totpActionCode = ''; // Clear input on failure
+      }
+    } catch (error) {
+      twoFaErrorMessage = String(error);
+    } finally {
+      isVerifyingAction = false;
+      // Only clear the action if the modal was successfully closed
+      if (!show2faPromptModal) {
+        actionToConfirm = null;
+      }
+    }
+  }
+
+  // To disable 2FA (this action is also protected by 2FA)
+  function disable2FA() {
+    with2FA(async () => {
+      try { // The password is provided in the with2FA prompt
+        await walletService.disableTwoFactor(twoFaPassword);
+        is2faEnabled = false;
+        showToast('Two-Factor Authentication has been disabled.', 'warning');
+      } catch (error) {
+        console.error('Failed to disable 2FA:', error);
+        showToast('Failed to disable 2FA: ' + String(error), 'error');
+      }
+    });
+  }
+
+  function togglePrivateKeyVisibility() {
+    if (privateKeyVisible) {
+        // Hiding doesn't need 2FA
+        privateKeyVisible = false;
+    } else {
+        // Showing needs 2FA
+        with2FA(() => {
+            privateKeyVisible = true;
+        });
     }
   }
 
@@ -825,14 +983,36 @@
 
   
   //Guard add with validity check
-  function addBlacklistEntry() {
-    if (!isBlacklistFormValid) return;
-    const newEntry = { chiral_address: newBlacklistEntry.chiral_address, reason: newBlacklistEntry.reason, timestamp: new Date() };
-    blacklist.update(entries => [...entries, newEntry]);
-    // Clear input fields
-    newBlacklistEntry.chiral_address = "";
-    newBlacklistEntry.reason = "";
+  async function addBlacklistEntry() {
+  if (!isBlacklistFormValid) return;
+  
+  const newEntry = { 
+    chiral_address: newBlacklistEntry.chiral_address, 
+    reason: newBlacklistEntry.reason, 
+    timestamp: new Date() 
+  };
+  
+  // Add to store
+  blacklist.update(entries => [...entries, newEntry]);
+  
+  // Disconnect peer if currently connected
+  try {
+    await invoke('disconnect_peer', { 
+      peerId: newEntry.chiral_address 
+    });
+    console.log(`Disconnected blacklisted peer: ${newEntry.chiral_address}`);
+  } catch (error) {
+    // Peer not connected or already disconnected - this is fine
+    console.log('Peer not connected or already disconnected:', error);
   }
+  
+  // Clear form
+  newBlacklistEntry.chiral_address = "";
+  newBlacklistEntry.reason = "";
+  
+  // Show success message
+  showToast($t('account.blacklist.added'), 'success');
+}
 
   function removeBlacklistEntry(chiral_address: string) {
     if (confirm(tr('blacklist.confirm.remove', { address: chiral_address }))) {
@@ -991,28 +1171,66 @@
     rawAmountInput = $wallet.balance.toFixed(2);
   }
 
-  function logout() {
-    // Clear the account details from memory, effectively logging out
-    loadKeystoreAccountsList()
-    etcAccount.set(null);
-
-    // Reset wallet state to defaults
-    wallet.update(w => ({
-      ...w,
-      address: '',
-      balance: 0,
-      totalEarned: 0,
-      totalSpent: 0,
-      pendingTransactions: 0,
-    }));
-
-    // Clear any other sensitive state that might be in component memory
-    privateKeyVisible = false;
-    keystorePassword = '';
-    loadKeystorePassword = '';
-    importPrivateKey = '';
-
-    console.log('Session cleared, wallet locked.');
+  // async function handleLogout() {
+  //   if (isTauri) await invoke('logout');
+  //   logout();
+  // }
+  
+  // Update your handleLogout function
+  async function handleLogout() {
+    try {
+      // Stop mining if it's currently running
+      if ($miningState.isMining) {
+        await invoke('stop_miner');
+      }
+      
+      // Call backend logout to clear active account from app state
+      if (isTauri) {
+        await invoke('logout');
+      }
+      
+      // Clear the account store
+      etcAccount.set(null);
+      
+      // Clear wallet data - reset to 0 balance, not a default value
+      wallet.update((w: any) => ({
+        ...w,
+        address: "",
+        balance: 0, // Reset to 0 for logout
+        totalEarned: 0,
+        totalSpent: 0,
+        pendingTransactions: 0
+      }));
+      
+      // Clear mining state completely
+      miningState.update((state: any) => ({
+        ...state,
+        isMining: false,
+        hashRate: "0 H/s",
+        totalRewards: 0,
+        blocksFound: 0,
+        activeThreads: 0,
+        recentBlocks: [],
+        sessionStartTime: undefined
+      }));
+      
+      // Clear any stored session data from both localStorage and sessionStorage
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem('lastAccount');
+        localStorage.removeItem('miningSession');
+        // Clear all sessionStorage data for security
+        sessionStorage.clear();
+      }
+      
+      privateKeyVisible = false;
+      
+      // Show success message
+      showToast('Wallet locked and session cleared', 'success');
+      
+    } catch (error) {
+      console.error('Error during logout:', error);
+      showToast('Error during logout: ' + String(error), 'error');
+    }
   }
 
   async function generateAndShowQrCode(){
@@ -1036,6 +1254,45 @@
       alert('Could not generate the QR code.');
     }
   }
+
+  let sessionTimeout = 600; // seconds (10 minutes)
+  let sessionTimer: number | null = null;
+  let autoLockMessage = '';
+
+  function resetSessionTimer() {
+    if (sessionTimer) clearTimeout(sessionTimer);
+    sessionTimer = window.setTimeout(() => {
+      autoLockWallet();
+    }, sessionTimeout * 1000);
+  }
+
+  function autoLockWallet() {
+    handleLogout();
+    autoLockMessage = 'Wallet auto-locked due to inactivity.';
+    showToast(autoLockMessage, 'warning');
+    setTimeout(() => autoLockMessage = '', 5000);
+  }
+
+  // Listen for user activity to reset timer
+  function setupSessionTimeout() {
+    const events = ['mousemove', 'keydown', 'mousedown', 'touchstart'];
+    for (const ev of events) {
+      window.addEventListener(ev, resetSessionTimer);
+    }
+    resetSessionTimer();
+    return () => {
+      for (const ev of events) {
+        window.removeEventListener(ev, resetSessionTimer);
+      }
+      if (sessionTimer) clearTimeout(sessionTimer);
+    };
+  }
+
+  onMount(() => {
+    const cleanup = setupSessionTimeout();
+    return cleanup;
+  })
+
 </script>
 
 <div class="space-y-6">
@@ -1074,10 +1331,10 @@
             </Button>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <Button variant="outline" class="w-full" on:click={openCreateMnemonic}>
-                <KeyRound class="h-4 w-4 mr-2" /> Create via Recovery Phrase
+                <KeyRound class="h-4 w-4 mr-2" /> {$t('wallet.hd.create_via_phrase')}
               </Button>
               <Button variant="outline" class="w-full" on:click={openImportMnemonic}>
-                <Import class="h-4 w-4 mr-2" /> Import Recovery Phrase
+                <Import class="h-4 w-4 mr-2" /> {$t('wallet.hd.import_phrase')}
               </Button>
             </div>
             
@@ -1101,7 +1358,7 @@
                   title="Import private key from wallet JSON"
                 >
                   <FileText class="h-4 w-4 mr-2" />
-                  Load from Wallet
+                  {$t('wallet.hd.load_from_wallet')}
                 </Button>
               </div>
               <Button 
@@ -1150,6 +1407,17 @@
                       autocomplete="current-password"
                     />
                   </div>
+                  <div class="flex items-center space-x-2 mt-2">
+                    <input type="checkbox" id="remember-password" bind:checked={rememberKeystorePassword} />
+                    <label for="remember-password" class="text-sm font-medium leading-none text-muted-foreground cursor-pointer">
+                      {$t('keystore.load.savePassword')}
+                    </label>
+                  </div>
+                  {#if rememberKeystorePassword}
+                    <div class="text-xs text-orange-600 p-2 bg-orange-50 border border-orange-200 rounded-md mt-2">
+                      {$t('keystore.load.savePasswordWarning')}
+                    </div>
+                  {/if}
                   <Button
                     class="w-full"
                     variant="outline"
@@ -1170,7 +1438,6 @@
 
           </div>
         {:else}
-          <div>
         <div>
           <p class="text-sm text-muted-foreground">{$t('wallet.balance')}</p>
           <p class="text-2xl font-bold">{$wallet.balance.toFixed(2)} Chiral</p>
@@ -1179,11 +1446,11 @@
             <div class="grid grid-cols-2 gap-4 mt-4">
           <div>
             <p class="text-xs text-muted-foreground">{$t('wallet.totalEarned')}</p>
-            <p class="text-sm font-medium text-green-600">+{$wallet.totalEarned.toFixed(2)} Chiral</p>
+            <p class="text-sm font-medium text-green-600">+{$totalEarned.toFixed(2)} Chiral</p>
           </div>
           <div>
             <p class="text-xs text-muted-foreground">{$t('wallet.totalSpent')}</p>
-            <p class="text-sm font-medium text-red-600">-{$wallet.totalSpent.toFixed(2)} Chiral</p>
+            <p class="text-sm font-medium text-red-600">-{$totalSpent.toFixed(2)} Chiral</p>
           </div>
         </div>
         
@@ -1191,14 +1458,9 @@
               <p class="text-sm text-muted-foreground">{$t('wallet.address')}</p>
               <div class="flex items-center gap-2 mt-1">
                 <p class="font-mono text-sm">{$etcAccount.address.slice(0, 10)}...{$etcAccount.address.slice(-8)}</p>
-                <div class="relative">
-                  <Button size="sm" variant="outline" on:click={copyAddress} aria-label={$t('aria.copyAddress')}>
-                    <Copy class="h-3 w-3" />
-                  </Button>
-                  {#if copyMessage}
-                    <span class="absolute top-full left-1/2 transform -translate-x-1/2 text-xs text-green-600 mt-1 whitespace-nowrap">{copyMessage}</span>
-                  {/if}
-                </div>
+                <Button size="sm" variant="outline" on:click={copyAddress} aria-label={$t('aria.copyAddress')}>
+                  <Copy class="h-3 w-3" />
+                </Button>
                 <Button size="sm" variant="outline" on:click={generateAndShowQrCode} title={$t('tooltips.showQr')} aria-label={$t('aria.showQr')}>
                   <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5h3v3H5zM5 16h3v3H5zM16 5h3v3h-3zM16 16h3v3h-3zM10.5 5h3M10.5 19h3M5 10.5v3M19 10.5v3M10.5 10.5h3v3h-3z"/></svg>
                 </Button>
@@ -1237,31 +1499,27 @@
             
             <div class="mt-4">
               <p class="text-sm text-muted-foreground">{$t('wallet.privateKey')}</p>
-                <div class="flex gap-2 mt-1">
+                <div class="flex items-center gap-2 mt-1">
                   <Input
                     type="text"
                     value={privateKeyVisible ? $etcAccount.private_key : '•'.repeat($etcAccount.private_key.length)}
                     readonly
-                    class="flex-1 font-mono text-xs min-w-0"
+                    class="flex-1 font-mono text-xs min-w-0 h-9"
                   />
-                <div class="relative">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    on:click={copyPrivateKey}
-                    aria-label={$t('aria.copyPrivateKey')}
-                  >
-                    <Copy class="h-3 w-3" />
-                  </Button>
-                  {#if privateKeyCopyMessage}
-                    <span class="absolute top-full left-1/2 transform -translate-x-1/2 text-xs text-green-600 mt-1 whitespace-nowrap">{privateKeyCopyMessage}</span>
-                  {/if}
-                </div>
                 <Button
                   size="sm"
                   variant="outline"
-                  class="w-16"
-                  on:click={() => privateKeyVisible = !privateKeyVisible}
+                  on:click={copyPrivateKey}
+                  aria-label={$t('aria.copyPrivateKey')}
+                  class="h-9 px-3"
+                >
+                  <Copy class="h-3 w-3" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  class="w-16 h-9 px-3"
+                  on:click={togglePrivateKeyVisibility}
                 >
                   {privateKeyVisible ? $t('actions.hide') : $t('actions.show')}
                 </Button>
@@ -1274,35 +1532,15 @@
                 <Button type="button" variant="outline" on:click={exportWallet}>
                   {$t('wallet.export')}
                 </Button>
-                <Button type="button" variant="destructive" on:click={logout}>
+                <Button type="button" variant="destructive" on:click={handleLogout}>
                   {$t('actions.lockWallet')}
                 </Button>
               </div>
               {#if exportMessage}<p class="text-xs text-center mt-2 {exportMessage.includes('successfully') ? 'text-green-600' : 'text-red-600'}">{exportMessage}</p>{/if}
             </div>
-           </div>
          {/if}
       </div>
     </Card>
-
-    {#if hdMnemonic}
-      <Card class="p-6">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="text-lg font-semibold">HD Wallet</h2>
-          <div class="flex gap-2">
-            <Button variant="outline" on:click={openCreateMnemonic}>New</Button>
-            <Button variant="outline" on:click={openImportMnemonic}>Import</Button>
-          </div>
-        </div>
-        <p class="text-sm text-muted-foreground mb-4">Path m/44'/{98765}'/0'/0/*</p>
-        <AccountList
-          mnemonic={hdMnemonic}
-          passphrase={hdPassphrase}
-          accounts={hdAccounts}
-          onAccountsChange={onHDAccountsChange}
-        />
-      </Card>
-    {/if}
     
     {#if $etcAccount}
     <Card class="p-6">
@@ -1331,6 +1569,7 @@
               class="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8 p-0"
               on:click={scanQrCode}
               aria-label={$t('transfer.recipient.scanQr')}
+              title={$t('transfer.recipient.scanQr')}
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect><line x1="14" x2="14" y1="14" y2="21"></line><line x1="21" x2="21" y1="14" y2="21"></line><line x1="21" x2="14" y1="21" y2="21"></line></svg>
             </Button>
@@ -1427,11 +1666,7 @@
               <circle cx="12" cy="10" r="8" />
               <polyline points="12,6 12,10 16,14" />
             </svg>
-            {#if $pendingCount > 0}
-              {$t('transfer.pending.count', { values: { count: $pendingCount } })}
-            {:else}
-              {$t('transfer.pending.none')}
-            {/if}
+            {$t('transfer.pending.count', { values: { count: $pendingCount } })}
           </span>
         </Button>
         {#if showPending}
@@ -1457,6 +1692,24 @@
   </div>
 
   {#if $etcAccount}
+    {#if hdMnemonic}
+        <Card class="p-6">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-lg font-semibold">HD Wallet</h2>
+            <div class="flex gap-2">
+              <Button variant="outline" on:click={openCreateMnemonic}>New</Button>
+              <Button variant="outline" on:click={openImportMnemonic}>Import</Button>
+            </div>
+          </div>
+          <p class="text-sm text-muted-foreground mb-4">Path m/44'/{98765}'/0'/0/*</p>
+          <AccountList
+            mnemonic={hdMnemonic}
+            passphrase={hdPassphrase}
+            accounts={hdAccounts}
+            onAccountsChange={onHDAccountsChange}
+          />
+        </Card>
+    {/if}
   <!-- Transaction History Section - Full Width -->
   <Card class="p-6 mt-4">
     <div class="flex items-center justify-between mb-4">
@@ -1481,35 +1734,83 @@
 
     <!-- Filters -->
     <div class="flex flex-wrap gap-4 mb-4 items-end">
-      <div>
-        <label for="filter-type" class="block text-xs font-medium mb-1">{$t('filters.type')}</label>
-        <select id="filter-type" bind:value={filterType} class="border rounded px-2 py-1 text-sm">
-          <option value="all">{$t('filters.typeAll')}</option>
-          <option value="sent">{$t('filters.typeSent')}</option>
-          <option value="received">{$t('filters.typeReceived')}</option>
-        </select>
-      </div>
-      <div>
-        <label for="filter-date-from" class="block text-xs font-medium mb-1">{$t('filters.from')}</label>
-        <input id="filter-date-from" type="date" bind:value={filterDateFrom} class="border rounded px-2 py-1 text-sm" />
-      </div>
-      <div>
-        <label for="filter-date-to" class="block text-xs font-medium mb-1">{$t('filters.to')}</label>
-        <input id="filter-date-to" type="date" bind:value={filterDateTo} class="border rounded px-2 py-1 text-sm" />
-      </div>
-      <div>
-        <label for="sort-button" class="block text-xs font-medium mb-1">{$t('filters.sort')}</label>
-        <button id="sort-button" type="button" class="border rounded px-3 py-1 text-sm bg-white hover:bg-gray-100 transition-colors w-full" on:click={() => { sortDescending = !sortDescending; }} aria-pressed={sortDescending}>
-          {sortDescending ? $t('filters.sortNewest') : $t('filters.sortOldest')}
-        </button>
-      </div>
-      <div class="flex-1"></div>
-      <div class="flex flex-col gap-1 items-end">
-        <button type="button" class="border rounded px-3 py-1 text-sm bg-muted hover:bg-muted/70 transition-colors" on:click={() => { filterType = 'all'; filterDateFrom = ''; filterDateTo = ''; sortDescending = true; searchQuery = ''; }}>
-          {$t('filters.reset')}
-        </button>
+  <div>
+    <label for="filter-type" class="block text-xs font-medium mb-1">
+      {$t('filters.type')}
+    </label>
+    <div class="relative">
+      <select
+        id="filter-type"
+        bind:value={filterType}
+        class="appearance-none border rounded pl-3 pr-10 py-2 text-sm h-9 bg-white cursor-pointer hover:bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+      >
+        <option value="all">{$t('filters.typeAll')}</option>
+        <option value="sent">{$t('filters.typeSent')}</option>
+        <option value="received">{$t('filters.typeReceived')}</option>
+      </select>
+      <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4-4 4 4-4m0 6l-4 4-4-4"></path></svg>
       </div>
     </div>
+  </div>
+
+  <div>
+    <label for="filter-date-from" class="block text-xs font-medium mb-1">
+      {$t('filters.from')}
+    </label>
+    <input
+      id="filter-date-from"
+      type="date"
+      bind:value={filterDateFrom}
+      class="border rounded px-3 py-2 text-sm h-9 bg-white hover:bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+    />
+  </div>
+
+  <div>
+    <label for="filter-date-to" class="block text-xs font-medium mb-1">
+      {$t('filters.to')}
+    </label>
+    <input
+      id="filter-date-to"
+      type="date"
+      bind:value={filterDateTo}
+      class="border rounded px-3 py-2 text-sm h-9 bg-white hover:bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+    />
+  </div>
+
+  <div>
+    <label for="sort-button" class="block text-xs font-medium mb-1">
+      {$t('filters.sort')}
+    </label>
+    <button
+      id="sort-button"
+      type="button"
+      class="border rounded px-3 py-2 text-sm h-9 bg-white hover:bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 w-full text-left"
+      on:click={() => { sortDescending = !sortDescending; }}
+      aria-pressed={sortDescending}
+    >
+      {sortDescending ? $t('filters.sortNewest') : $t('filters.sortOldest')}
+    </button>
+  </div>
+
+  <div class="flex-1"></div>
+
+  <div class="flex flex-col gap-1 items-end">
+    <button
+      type="button"
+      class="border rounded px-3 py-2 text-sm h-9 bg-gray-100 hover:bg-gray-200 transition-colors"
+      on:click={() => { 
+        filterType = 'all'; 
+        filterDateFrom = ''; 
+        filterDateTo = ''; 
+        sortDescending = true; 
+        searchQuery = ''; 
+      }}
+    >
+      {$t('filters.reset')}
+    </button>
+  </div>
+</div>
 
     <!-- Transaction List -->
     <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
@@ -1524,6 +1825,8 @@
           }}
           role="button"
           tabindex="0"
+          in:fly={{ y: 20, duration: 300 }}
+          out:fade={{ duration: 200 }}
         >
           <div class="flex items-center gap-3">
             {#if tx.type === 'received'}
@@ -1557,6 +1860,39 @@
   </Card>
   {/if}
 
+  {#if $etcAccount}
+  <Card class="p-6">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h2 class="text-lg font-semibold">{$t('security.2fa.title')}</h2>
+          <p class="text-sm text-muted-foreground mt-1">{$t('security.2fa.subtitle_clear')}</p>
+        </div>
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-muted-foreground"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+      </div>
+      <div class="space-y-4">
+        {#if is2faEnabled}
+          <div class="flex items-center justify-between p-3 bg-green-50 border border-green-200 rounded-lg">
+            <div class="flex items-center gap-3">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-green-600"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+              <div>
+                <p class="font-semibold text-green-800">{$t('security.2fa.status.enabled')}</p>
+                <p class="text-sm text-green-700">{$t('security.2fa.status.enabled_desc')}</p>
+              </div>
+            </div>
+            <Button variant="destructive" on:click={disable2FA}>{$t('security.2fa.disable')}</Button>
+          </div>
+        {:else}
+          <div class="flex items-center justify-between p-4 border-2 border-dashed rounded-lg">
+            <p class="text-sm text-muted-foreground">{$t('security.2fa.status.disabled_desc')}</p>
+            <Button on:click={setup2FA}>{$t('security.2fa.enable')}</Button>
+          </div>
+        {/if}
+        <p class="text-sm text-muted-foreground">{$t('security.2fa.how_it_works')}</p>
+      </div>
+  </Card>
+  {/if}
+
+  {#if $etcAccount}
   <Card class="p-6">
     <div class="flex items-center gap-2 mb-4">
       <KeyRound class="h-5 w-5 text-muted-foreground" />
@@ -1567,16 +1903,37 @@
         {$t('keystore.desc')}
       </p>
       <div class="flex items-center gap-2">
-        <Input
-          type="password"
-          bind:value={keystorePassword}
-          placeholder={$t('placeholders.password')}
-          class="flex-1"
-          autocomplete="new-password"
-        />
+        <div class="flex-1">
+          <Input
+            type="password"
+            bind:value={keystorePassword}
+            placeholder={$t('placeholders.password')}
+            class="w-full {passwordStrength ? `border-${passwordStrength === 'strong' ? 'green' : passwordStrength === 'medium' ? 'yellow' : 'red'}-500` : ''}"
+            autocomplete="new-password"
+          />
+          {#if keystorePassword}
+            <div class="mt-1 flex items-center gap-2">
+              <div class="h-1 flex-1 bg-gray-200 rounded-full overflow-hidden">
+                <div
+                  class="h-full transition-all duration-300 {passwordStrength === 'strong' ? 'bg-green-500 w-full' : passwordStrength === 'medium' ? 'bg-yellow-500 w-2/3' : 'bg-red-500 w-1/3'}"
+                ></div>
+              </div>
+              <span class="text-xs {passwordStrength === 'strong' ? 'text-green-600' : passwordStrength === 'medium' ? 'text-yellow-600' : 'text-red-600'}">
+                {passwordFeedback}
+              </span>
+            </div>
+            <ul class="text-xs text-muted-foreground mt-2 space-y-1">
+              <li class="{keystorePassword.length >= 8 ? 'text-green-600' : ''}">• {$t('password.requirements.length')}</li>
+              <li class="{/[A-Z]/.test(keystorePassword) ? 'text-green-600' : ''}">• {$t('password.requirements.uppercase')}</li>
+              <li class="{/[a-z]/.test(keystorePassword) ? 'text-green-600' : ''}">• {$t('password.requirements.lowercase')}</li>
+              <li class="{/[0-9]/.test(keystorePassword) ? 'text-green-600' : ''}">• {$t('password.requirements.number')}</li>
+              <li class="{/[!@#$%^&*(),.?":{}|<>]/.test(keystorePassword) ? 'text-green-600' : ''}">• {$t('password.requirements.special')}</li>
+            </ul>
+          {/if}
+        </div>
         <Button
           on:click={saveToKeystore}
-          disabled={!keystorePassword || isSavingToKeystore}
+          disabled={!isPasswordValid || isSavingToKeystore}
         >
           {#if isSavingToKeystore}
             {$t('actions.saving')}
@@ -1590,7 +1947,9 @@
       {/if}
     </div>
   </Card>
-
+  {/if}
+  
+  {#if $etcAccount}
   <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
       <div>
@@ -1847,6 +2206,7 @@
       
     </div>
   </Card>
+  {/if}
 
   <!-- Transaction Receipt Modal -->
   <TransactionReceipt
@@ -1855,4 +2215,130 @@
     onClose={closeTransactionReceipt}
   />
 
+  <!-- 2FA Setup Modal -->
+  {#if show2faSetupModal && totpSetupInfo}
+    <div
+      class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+      role="button"
+      tabindex="0"
+      on:click={() => show2faSetupModal = false}
+      on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') show2faSetupModal = false; }}
+    >
+      <div
+        class="bg-card p-6 rounded-lg shadow-xl w-full max-w-md text-card-foreground"
+        on:click|stopPropagation
+        role="dialog"
+        aria-modal="true"
+        tabindex="-1"
+        on:keydown={(e) => { if (e.key === 'Escape') show2faSetupModal = false; }}
+      >
+        <h3 class="text-xl font-semibold mb-2">{$t('security.2fa.setup.title')}</h3>
+        <p class="text-sm text-muted-foreground mb-4">{$t('security.2fa.setup.step1_scan')}</p>
+        
+        <div class="flex flex-col md:flex-row gap-4 items-center bg-background p-4 rounded-lg">
+          <img src={totpSetupInfo.qrCodeDataUrl} alt="2FA QR Code" class="w-40 h-40 rounded-md border bg-white p-1" />
+          <div class="space-y-2">
+            <p class="text-sm">{$t('security.2fa.setup.scanAlt')}</p>
+            <p class="text-xs text-muted-foreground">{$t('security.2fa.setup.step2_manual')}</p>
+            <div class="flex items-center gap-2 bg-secondary p-2 rounded">
+              <code class="text-sm font-mono break-all">{totpSetupInfo.secret}</code>
+              <Button size="icon" variant="ghost" on:click={() => { navigator.clipboard.writeText(totpSetupInfo?.secret || ''); showToast('Copied!', 'success'); }}>
+                <Copy class="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        <p class="text-sm text-muted-foreground my-4">{$t('security.2fa.setup.step3_verify')}</p>
+        <div class="space-y-2">
+          <Label for="totp-verify">{$t('security.2fa.setup.verifyLabel')}</Label>
+          <Input
+            id="totp-verify"
+            type="text"
+            bind:value={totpVerificationCode}
+            placeholder="123456"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            maxlength={6}
+          />
+          <Label for="totp-password-setup" class="mt-4">{$t('keystore.load.password')}</Label>
+          <Input
+            id="totp-password-setup"
+            type="password"
+            bind:value={twoFaPassword}
+            placeholder={$t('placeholders.unlockPassword')}
+          />
+          {#if twoFaErrorMessage}
+            <p class="text-sm text-red-500">{twoFaErrorMessage}</p>
+          {/if}
+        </div>
+
+        <div class="mt-6 flex justify-end gap-2">
+          <Button variant="outline" on:click={() => show2faSetupModal = false}>{$t('actions.cancel')}</Button>
+          <Button on:click={verifyAndEnable2FA} disabled={isVerifying2fa || totpVerificationCode.length < 6 || !twoFaPassword}>
+            {isVerifying2fa ? $t('actions.verifying') : $t('security.2fa.setup.verifyAndEnable')}
+          </Button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- 2FA Action Prompt Modal -->
+  {#if show2faPromptModal}
+    <div
+      class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+      role="button"
+      tabindex="0"
+      on:click={() => { show2faPromptModal = false; actionToConfirm = null; }}
+      on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { show2faPromptModal = false; actionToConfirm = null; } }}
+    >
+      <div
+        class="bg-card p-6 rounded-lg shadow-xl w-full max-w-sm text-card-foreground"
+        on:click|stopPropagation
+        role="dialog"
+        aria-modal="true"
+        tabindex="-1"
+        on:keydown={(e) => { if (e.key === 'Escape' ) { show2faPromptModal = false; actionToConfirm = null; } }}
+      >
+        <h3 class="text-xl font-semibold mb-2">{$t('security.2fa.prompt.title')}</h3>
+        <p class="text-sm text-muted-foreground mb-4">{$t('security.2fa.prompt.enter_code')}</p>
+        
+        <div class="space-y-2">
+          <Label for="totp-action">{$t('security.2fa.prompt.label')}</Label>
+          <Input
+            id="totp-action"
+            type="text"
+            bind:value={totpActionCode}
+            placeholder="123456"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            maxlength={6}
+            autofocus
+          />
+          <Label for="totp-password-action" class="mt-4">{$t('keystore.load.password')}</Label>
+          <Input
+            id="totp-password-action"
+            type="password"
+            bind:value={twoFaPassword}
+            placeholder={$t('placeholders.unlockPassword')}
+          />
+          {#if twoFaErrorMessage}
+            <p class="text-sm text-red-500">{twoFaErrorMessage}</p>
+          {/if}
+        </div>
+
+        <div class="mt-6 flex justify-end gap-2">
+          <Button variant="outline" on:click={() => { show2faPromptModal = false; actionToConfirm = null; }}>{$t('actions.cancel')}</Button>
+          <Button on:click={confirmActionWith2FA} disabled={isVerifyingAction || totpActionCode.length < 6 || !twoFaPassword}>
+            {isVerifyingAction ? $t('actions.verifying') : $t('actions.confirm')}
+          </Button>
+        </div>
+      </div>
+    </div>
+  {/if}
+  {#if autoLockMessage}
+  <div class="fixed top-0 left-0 w-full bg-yellow-100 text-yellow-800 text-center py-2 z-50">
+    {autoLockMessage}
+  </div>
+  {/if}
 </div>

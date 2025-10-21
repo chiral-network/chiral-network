@@ -3,18 +3,28 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
   import { TrendingUp, Upload, DollarSign, HardDrive, Award, BarChart3, TrendingUp as LineChart } from 'lucide-svelte'
-  import { files, wallet, networkStats, proxyNodes } from '$lib/stores'
-  import { onMount } from 'svelte'
+  import { files, wallet } from '$lib/stores';
+  import { proxyNodes } from '$lib/proxy';
+  import { onMount, onDestroy } from 'svelte'
   import { t } from 'svelte-i18n'
   import { suspiciousActivity } from '$lib/stores'; // only import
+  import type { FileItem } from '$lib/stores';
+  import { miningState } from '$lib/stores';
+  import { miningProgress } from '$lib/stores';
+  import { analyticsService } from '$lib/services/analyticsService';
+  import type { BandwidthStats, NetworkActivity } from '$lib/services/analyticsService';
   
-  let uploadedFiles: any[] = []
-  let downloadedFiles: any[] = []
+  let uploadedFiles: FileItem[] = []
+  let downloadedFiles: FileItem[] = []
   let totalUploaded = 0
   let totalDownloaded = 0
   // let earningsHistory: any[] = []
   let storageUsed = 0
   let bandwidthUsed = { upload: 0, download: 0 }
+
+  // Real analytics data
+  let realBandwidthStats: BandwidthStats | null = null
+  let realNetworkActivity: NetworkActivity | null = null
   
   // Latency analytics (derived from proxy nodes)
   let avgLatency = 0
@@ -28,7 +38,7 @@
     // Use the live values from $proxyNodes
     const latencies = $proxyNodes
             .map(n => n.latency)
-            .filter(l => typeof l === 'number' && isFinite(l))
+            .filter((l): l is number => typeof l === 'number' && isFinite(l))
 
     if (latencies.length === 0) {
       avgLatency = 0
@@ -41,8 +51,8 @@
     const sum = latencies.reduce((s, v) => s + v, 0)
     avgLatency = sum / latencies.length
     const idx = Math.floor(0.95 * (latencies.length - 1))
-    p95Latency = latencies[idx]
-    bestLatency = latencies[0]
+    p95Latency = latencies[idx] || 0
+    bestLatency = latencies[0] || 0
   }
 
   type Earning = {
@@ -191,6 +201,27 @@
     return [];
   })();
 
+  let percentChange = 0;
+
+  $: {
+    const currentTotal = $miningState.totalRewards ?? 0;
+
+    miningProgress.update(prev => {
+      let lastBlock = 0;
+      let cumulative = prev.cumulative;
+
+      if (currentTotal > cumulative) {
+        lastBlock = currentTotal - cumulative;
+        cumulative = currentTotal;
+      } else {
+        lastBlock = prev.lastBlock;
+      }
+
+      percentChange = cumulative > 0 ? (lastBlock / cumulative) * 100 : 0;
+      return { cumulative, lastBlock };
+    });
+  }
+
   function handlePresetChange(value: string) {
     periodPreset = value;
     clearSelection();
@@ -230,60 +261,66 @@
     }
   }
 
+  // Fetch real analytics data
+  async function fetchAnalyticsData() {
+    realBandwidthStats = await analyticsService.getBandwidthStats();
+    realNetworkActivity = await analyticsService.getNetworkActivity();
+
+    // Update bandwidth used with real data
+    if (realBandwidthStats) {
+      bandwidthUsed = {
+        upload: realBandwidthStats.uploadBytes / (1024 * 1024), // Convert to MB
+        download: realBandwidthStats.downloadBytes / (1024 * 1024)
+      };
+    }
+  }
+
   // Generate mock latency history once on mount
-  onMount(() => {   
+  onMount(() => {
+    const now = new Date();
+    // Options to include the timezone name
+    const dateOptions: Intl.DateTimeFormatOptions = {
+      dateStyle: 'medium',
+      timeStyle: 'long',
+    };
     suspiciousActivity.set([
-        { type: 'Unusual Upload', description: 'File > 1GB uploaded unusually fast', date: new Date().toLocaleString(), severity: 'high' },
-        { type: 'Multiple Logins', description: 'User logged in from different countries in 5 mins', date: new Date().toLocaleString(), severity: 'medium' },
-        { type: 'Failed Downloads', description: 'Several failed download attempts detected', date: new Date().toLocaleString(), severity: 'low' },
+        { type: 'Unusual Upload', description: 'File > 1GB uploaded unusually fast', date: now.toLocaleString(undefined, dateOptions), severity: 'high' },
+        { type: 'Multiple Logins', description: 'User logged in from different countries in 5 mins', date: now.toLocaleString(undefined, dateOptions), severity: 'medium' },
+        { type: 'Failed Downloads', description: 'Several failed download attempts detected', date: now.toLocaleString(undefined, dateOptions), severity: 'low' },
       ]);
 
-    // Generate mock latency history (last 30 points)
-    const lhist: { date: string; latency: number }[] = []
-    for (let i = 29; i >= 0; i--) {
-      const d = new Date()
-      d.setDate(d.getDate() - i)
-      // Base on current avg and add slight jitter
-      const base = $proxyNodes.length
-              ? ($proxyNodes.reduce((s, n) => s + (n.latency || 0), 0) / $proxyNodes.length)
-              : 80
-      const jitter = (Math.random() - 0.5) * 20
-      lhist.push({ date: d.toLocaleDateString(), latency: Math.max(5, base + jitter) })
-    }
-    latencyHistory = lhist
+    // Initialize latency stats and history
     computeLatencyStats()
+    latencyHistory = Array(30).fill({
+      date: new Date().toLocaleTimeString(undefined, { timeStyle: 'long' }),
+      latency: avgLatency
+    });
 
+    // Fetch initial analytics data
+    fetchAnalyticsData();
 
-    // Update bandwidth usage periodically
-    /*const interval = setInterval(() => {
-      bandwidthUsed = {
-        upload: bandwidthUsed.upload + Math.random() * 100,
-        download: bandwidthUsed.download + Math.random() * 150
-      }
-    }, 3000)*/
-    
     // Update bandwidth & latency periodically
     const interval = setInterval(() => {
-      bandwidthUsed = {
-        upload: bandwidthUsed.upload + Math.random() * 100,
-        download: bandwidthUsed.download + Math.random() * 150
-      }
+      // Fetch real analytics data
+      fetchAnalyticsData();
 
-      // Simulate latency jitter and keep short history (30 points)
-      const base = $proxyNodes.length
-              ? ($proxyNodes.reduce((s, n) => s + (n.latency || 0), 0) / $proxyNodes.length)
-              : 80
-      const jitter = (Math.random() - 0.5) * 15
+      // First, re-calculate the current latency statistics
+      computeLatencyStats();
+
+      // Then, add the new *real* average latency to the history
       latencyHistory = [
         ...latencyHistory.slice(1),
-        { date: new Date().toLocaleTimeString(), latency: Math.max(5, base + jitter) }
+        { date: new Date().toLocaleTimeString(undefined, { timeStyle: 'long' }), latency: avgLatency }
       ]
-      computeLatencyStats()
     }, 3000)
 
 
     return () => clearInterval(interval)
   })
+
+  onDestroy(() => {
+    analyticsService.stopAutoUpdate();
+  });
 
   // Aggregation function
   function aggregateData(data: any[], maxBars: number) {
@@ -397,10 +434,12 @@
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">{$t('analytics.totalEarnings')}</p>
-          <p class="text-2xl font-bold">{$wallet.totalEarned.toFixed(2)} Chiral</p>
-          <p class="text-xs text-green-600 flex items-center gap-1 mt-1">
-            <TrendingUp class="h-3 w-3" />
-            {$t('analytics.earningsThisWeek')}
+          <p class="text-2xl font-bold">{($miningState.totalRewards ?? 0).toFixed(2)} Chiral</p>
+          <p class="text-xs flex items-center gap-1 mt-1"
+            class:text-green-600={percentChange >= 0}
+            class:text-red-600={percentChange < 0}>
+            <TrendingUp class="h-3 w-3 transform {percentChange < 0 ? 'rotate-180' : ''}" />
+            {percentChange.toFixed(1)}% share of total
           </p>
         </div>
         <div class="p-2 bg-green-500/10 rounded-lg">
@@ -441,11 +480,11 @@
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">{$t('analytics.reputation')}</p>
-          <p class="text-2xl font-bold">{$wallet.reputation || 4.5}/5.0</p>
+          <p class="text-2xl font-bold">{(($wallet.reputation ?? 4.5)).toFixed(1)}/5.0</p>
           <!-- Stars (replaces your existing block) -->
           <div
                   class="flex gap-0.5 mt-1"
-                  aria-label={"Reputation " + (($wallet.reputation ?? 4.5).toFixed(1)) + " out of 5"}
+                  aria-label={"Reputation " + (($wallet.reputation ?? 4.5)).toFixed(1) + " out of 5"}
           >
             {#each Array(5) as _, i}
     <span class="relative inline-block leading-none align-middle" style="width: 1em">
@@ -502,23 +541,27 @@
       <div class="space-y-3">
         <div class="flex justify-between items-center">
           <span class="text-sm">{$t('analytics.activeUploads')}</span>
-          <Badge>{uploadedFiles.filter(f => f.status === 'seeding').length}</Badge>
+          <Badge>{realNetworkActivity?.activeUploads ?? uploadedFiles.filter(f => f.status === 'seeding').length}</Badge>
         </div>
         <div class="flex justify-between items-center">
           <span class="text-sm">{$t('analytics.activeDownloads')}</span>
-          <Badge>{$files.filter(f => f.status === 'downloading').length}</Badge>
+          <Badge>{realNetworkActivity?.activeDownloads ?? $files.filter(f => f.status === 'downloading').length}</Badge>
         </div>
         <div class="flex justify-between items-center">
           <span class="text-sm">{$t('analytics.queuedDownloads')}</span>
-          <Badge variant="outline">{$files.filter(f => f.status === 'queued').length}</Badge>
+          <Badge variant="outline">{realNetworkActivity?.queuedDownloads ?? $files.filter(f => f.status === 'queued').length}</Badge>
         </div>
         <div class="flex justify-between items-center">
-          <span class="text-sm">{$t('analytics.totalTransactions')}</span>
-          <Badge variant="secondary">{$networkStats.totalTransactions}</Badge>
+          <span class="text-sm">{$t('analytics.completedUploads')}</span>
+          <Badge variant="secondary">{realNetworkActivity?.completedUploads ?? 0}</Badge>
         </div>
         <div class="flex justify-between items-center">
-          <span class="text-sm">{$t('analytics.networkFiles')}</span>
-          <Badge variant="secondary">{$networkStats.totalFiles}</Badge>
+          <span class="text-sm">{$t('analytics.completedDownloads')}</span>
+          <Badge variant="secondary">{realNetworkActivity?.completedDownloads ?? 0}</Badge>
+        </div>
+        <div class="flex justify-between items-center">
+          <span class="text-sm">{$t('analytics.uniquePeers')}</span>
+          <Badge variant="secondary">{realNetworkActivity?.uniquePeersAllTime ?? 0}</Badge>
         </div>
       </div>
     </Card>
@@ -593,40 +636,48 @@
           </div>
 
           <!-- Bars -->
-          {#each latencyHistory as p, i}
-            <div
-                    role="button"
-                    tabindex="0"
-                    class="flex-1 bg-gradient-to-t from-blue-400/40 to-blue-500/80 hover:from-blue-500/60 hover:to-blue-600/90 transition-all rounded-t-md shadow-sm relative"
-                    style="height: {(Math.min(p.latency, 300) / 300) * 100}%"
-                    aria-label="{p.date}: {p.latency.toFixed(0)} ms"
-                    on:mouseenter={() => { hoveredLatency = p; hoveredLatencyIndex = i; }}
-                    on:mouseleave={() => { hoveredLatency = null; hoveredLatencyIndex = null; }}
-            >
-              {#if hoveredLatencyIndex === i && hoveredLatency}
-                <div
-                        class="absolute left-1/2 -translate-x-1/2 -top-8 z-10 px-2 py-1 rounded bg-primary text-white text-xs shadow-lg pointer-events-none"
-                        style="white-space:nowrap;"
-                >
-                  {hoveredLatency.date}: {hoveredLatency.latency.toFixed(0)} ms
-                  <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0
-                border-l-6 border-l-transparent border-r-6 border-r-transparent
-                border-t-6 border-t-primary"></span>
-                </div>
-              {/if}
+          {#if $proxyNodes.length > 0}
+            {#each latencyHistory as p, i}
+              <div
+                      role="button"
+                      tabindex="0"
+                      class="flex-1 bg-gradient-to-t from-blue-400/40 to-blue-500/80 hover:from-blue-500/60 hover:to-blue-600/90 transition-all rounded-t-md shadow-sm relative"
+                      style="height: {(Math.min(p.latency, 300) / 300) * 100}%"
+                      aria-label="{p.date}: {p.latency.toFixed(0)} ms"
+                      on:mouseenter={() => { hoveredLatency = p; hoveredLatencyIndex = i; }}
+                      on:mouseleave={() => { hoveredLatency = null; hoveredLatencyIndex = null; }}
+              >
+                {#if hoveredLatencyIndex === i && hoveredLatency}
+                  <div
+                          class="absolute left-1/2 -translate-x-1/2 -top-8 z-10 px-2 py-1 rounded bg-primary text-white text-xs shadow-lg pointer-events-none"
+                          style="white-space:nowrap;"
+                  >
+                    {hoveredLatency.date}: {hoveredLatency.latency.toFixed(0)} ms
+                    <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0
+                  border-l-6 border-l-transparent border-r-6 border-r-transparent
+                  border-t-6 border-t-primary"></span>
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          {:else}
+            <div class="absolute inset-0 flex items-center justify-center">
+              <p class="text-sm text-muted-foreground text-center px-4">{$t('analytics.latencyNoNodes')}</p>
             </div>
-          {/each}
+          {/if}
         </div>
       </div>
 
-      <div class="flex justify-between mt-2 text-xs text-muted-foreground">
-        <span>{latencyHistory[0]?.date}</span>
-        <span>{latencyHistory[latencyHistory.length - 1]?.date}</span>
-      </div>
-      <div class="flex gap-4 mt-2 text-xs text-muted-foreground">
-        <span>Min: {Math.min(...latencyHistory.map(p => p.latency)).toFixed(0)} ms</span>
-        <span>Max: {Math.max(...latencyHistory.map(p => p.latency)).toFixed(0)} ms</span>
-      </div>
+      {#if $proxyNodes.length > 0}
+        <div class="flex justify-between mt-2 text-xs text-muted-foreground">
+          <span>{latencyHistory[0]?.date.split(' ')[0]}</span>
+          <span>{latencyHistory[latencyHistory.length - 1]?.date}</span>
+        </div>
+        <div class="flex gap-4 mt-2 text-xs text-muted-foreground">
+          <span>Min: {Math.min(...latencyHistory.map(p => p.latency)).toFixed(0)} ms</span>
+          <span>Max: {Math.max(...latencyHistory.map(p => p.latency)).toFixed(0)} ms</span>
+        </div>
+      {/if}
     </Card>
   </div>
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -930,7 +981,13 @@
   {#if $suspiciousActivity.length > 0}
     <div class="space-y-2">
       {#each $suspiciousActivity as alert}
-        <div class="flex items-center justify-between p-2 rounded hover:bg-red-50 transition">
+        <div
+          class="flex items-center justify-between p-2 rounded transition"
+          class:hover:bg-red-50={alert.severity === 'high'}
+          class:hover:bg-amber-50={alert.severity === 'medium'}
+          class:hover:bg-green-50={alert.severity === 'low'}
+          class:cursor-pointer={true}
+        >
           <div>
             <p class="text-sm font-medium">{alert.type}</p>
             <p class="text-xs text-muted-foreground">{alert.description}</p>
@@ -939,8 +996,8 @@
           <span
             class="px-2 py-0.5 rounded text-xs font-semibold"
             class:red-500={alert.severity === 'high'}
-            class:yellow-500={alert.severity === 'medium'}
-            class:green-500={alert.severity === 'low'}
+            class:text-amber-600={alert.severity === 'medium'}
+            class:text-green-600={alert.severity === 'low'}
             style="background-color: {alert.severity === 'high' ? '#fee2e2' : alert.severity === 'medium' ? '#fef3c7' : '#dcfce7'}"
           >
             {alert.severity.toUpperCase()}

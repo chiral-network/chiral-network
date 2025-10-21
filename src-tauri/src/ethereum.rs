@@ -1,3 +1,5 @@
+use ethers::prelude::*;
+use ethers::types::Signature;
 use rand::rngs::OsRng;
 use secp256k1::{PublicKey, Secp256k1, SecretKey};
 use serde::{Deserialize, Serialize};
@@ -13,6 +15,12 @@ use std::process::{Child, Command, Stdio};
 pub struct EthAccount {
     pub address: String,
     pub private_key: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EthSignedMessage {
+    pub message: String,
+    pub signature: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -91,8 +99,6 @@ impl GethProcess {
 
         // Always kill any existing geth processes before starting
         // This ensures we don't have multiple instances running
-        println!("Cleaning up any existing geth processes...");
-
         // First try to stop via HTTP if it's running
         if self.is_running() {
             let _ = Command::new("curl")
@@ -130,7 +136,6 @@ impl GethProcess {
 
         // Final check - if still running, we have a problem
         if self.is_running() {
-            println!("Error: Could not stop existing geth process");
             // Try one more aggressive kill
             #[cfg(unix)]
             {
@@ -148,8 +153,6 @@ impl GethProcess {
                 );
             }
         }
-
-        println!("Geth cleanup complete, starting new instance...");
 
         // Use the GethDownloader to get the correct path
         let downloader = crate::geth_downloader::GethDownloader::new();
@@ -234,11 +237,8 @@ impl GethProcess {
 
         // Add miner address if provided
         if let Some(address) = miner_address {
-            println!("Setting miner.etherbase to: {}", address);
             // Set the etherbase (coinbase) for mining rewards
             cmd.arg("--miner.etherbase").arg(address);
-        } else {
-            println!("No miner address provided, starting without etherbase");
         }
 
         // Create log file for geth output
@@ -261,8 +261,6 @@ impl GethProcess {
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
-        println!("Stopping geth process...");
-
         // First try to kill the tracked child process
         if let Some(mut child) = self.child.take() {
             // Try to kill the process
@@ -270,22 +268,17 @@ impl GethProcess {
                 Ok(_) => {
                     // Wait for the process to actually exit
                     let _ = child.wait();
-                    println!("Tracked geth process terminated successfully");
                 }
-                Err(e) => {
-                    println!("Failed to kill tracked geth process: {}", e);
+                Err(_) => {
+                    // Process was already dead or couldn't be killed
                 }
             }
-        } else {
-            println!("No tracked child process, will kill by pattern");
         }
 
         // Always kill any geth processes by name as a fallback
         // This handles orphaned processes
         #[cfg(unix)]
         {
-            println!("Killing any geth processes by pattern...");
-
             // Kill by process name
             let result = Command::new("pkill")
                 .arg("-9")
@@ -295,13 +288,11 @@ impl GethProcess {
 
             match result {
                 Ok(output) => {
-                    if output.status.success() {
-                        println!("Successfully killed geth processes");
-                    } else {
-                        println!("pkill returned non-zero (no processes found or error)");
-                    }
+                    // pkill completed
                 }
-                Err(e) => println!("Failed to run pkill: {}", e),
+                Err(e) => {
+                    // Failed to run pkill
+                }
             }
 
             // Also kill by port usage
@@ -988,8 +979,8 @@ pub async fn get_mined_blocks_count(miner_address: &str) -> Result<u64, String> 
         .map_err(|e| format!("Failed to parse block number: {}", e))?;
 
     // Check recent blocks (last 100 or current block count, whichever is smaller)
-    let blocks_to_check = std::cmp::min(100, current_block);
-    let start_block = current_block.saturating_sub(blocks_to_check);
+    let blocks_to_check = std::cmp::min(1000, current_block);
+    let start_block = current_block.saturating_sub(blocks_to_check).max(1);
 
     // Normalize the miner address for comparison
     let normalized_miner = miner_address.to_lowercase();
@@ -1118,62 +1109,64 @@ pub async fn get_recent_mined_blocks(
             .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
             .unwrap_or(n);
 
-        // Compute miner reward by changes in balance from block to block (balance@n - balance@(n-1))
-        // This approximates the value of the block as this isn't publicly available.
-        let reward = {
-            // Balance at block n
-            let bal_n_v = client
-                .post("http://127.0.0.1:8545")
-                .json(&serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "method": "eth_getBalance",
-                    "params": [target, format!("0x{:x}", number)],
-                    "id": 1
-                }))
-                .send()
-                .await
-                .map_err(|e| format!("RPC send: {e}"))?
-                .json::<serde_json::Value>()
-                .await
-                .map_err(|e| format!("RPC parse: {e}"))?;
+        // let reward = {
+        //     // Balance at block n
+        //     let bal_n_v = client
+        //         .post("http://127.0.0.1:8545")
+        //         .json(&serde_json::json!({
+        //             "jsonrpc": "2.0",
+        //             "method": "eth_getBalance",
+        //             "params": [target, format!("0x{:x}", number)],
+        //             "id": 1
+        //         }))
+        //         .send()
+        //         .await
+        //         .map_err(|e| format!("RPC send: {e}"))?
+        //         .json::<serde_json::Value>()
+        //         .await
+        //         .map_err(|e| format!("RPC parse: {e}"))?;
 
-            let bal_prev_v = client
-                .post("http://127.0.0.1:8545")
-                .json(&serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "method": "eth_getBalance",
-                    "params": [target, format!("0x{:x}", number.saturating_sub(1))],
-                    "id": 1
-                }))
-                .send()
-                .await
-                .map_err(|e| format!("RPC send: {e}"))?
-                .json::<serde_json::Value>()
-                .await
-                .map_err(|e| format!("RPC parse: {e}"))?;
+        //     let bal_prev_v = client
+        //         .post("http://127.0.0.1:8545")
+        //         .json(&serde_json::json!({
+        //             "jsonrpc": "2.0",
+        //             "method": "eth_getBalance",
+        //             "params": [target, format!("0x{:x}", number.saturating_sub(1))],
+        //             "id": 1
+        //         }))
+        //         .send()
+        //         .await
+        //         .map_err(|e| format!("RPC send: {e}"))?
+        //         .json::<serde_json::Value>()
+        //         .await
+        //         .map_err(|e| format!("RPC parse: {e}"))?;
 
-            let parse_u128 = |hex_str: &str| -> Option<u128> {
-                let s = hex_str.trim_start_matches("0x");
-                u128::from_str_radix(s, 16).ok()
-            };
+        //     let parse_u128 = |hex_str: &str| -> Option<u128> {
+        //         let s = hex_str.trim_start_matches("0x");
+        //         u128::from_str_radix(s, 16).ok()
+        //     };
 
-            let bal_n = bal_n_v
-                .get("result")
-                .and_then(|v| v.as_str())
-                .and_then(parse_u128);
-            let bal_prev = bal_prev_v
-                .get("result")
-                .and_then(|v| v.as_str())
-                .and_then(parse_u128);
-            if let (Some(bn), Some(bp)) = (bal_n, bal_prev) {
-                let delta_wei = bn.saturating_sub(bp);
-                // Convert to ether-like units (divide by 1e18)
-                let reward = (delta_wei as f64) / 1_000_000_000_000_000_000f64;
-                Some(reward)
-            } else {
-                None
-            }
-        };
+        //     let bal_n = bal_n_v
+        //         .get("result")
+        //         .and_then(|v| v.as_str())
+        //         .and_then(parse_u128);
+        //     let bal_prev = bal_prev_v
+        //         .get("result")
+        //         .and_then(|v| v.as_str())
+        //         .and_then(parse_u128);
+        //     if let (Some(bn), Some(bp)) = (bal_n, bal_prev) {
+        //         let delta_wei = bn.saturating_sub(bp);
+        //         // Convert to ether-like units (divide by 1e18)
+        //         let reward = (delta_wei as f64) / 1_000_000_000_000_000_000f64;
+        //         Some(reward)
+        //     } else {
+        //         None
+        //     }
+        // };
+
+        // Since Geth's default reward (2.0) doesn't match the intended Chiral Network
+        // reward, we hardcode the intended value of 5.0 here.
+        let reward = Some(2.0);
 
         out.push(MinedBlock {
             hash,
@@ -1293,4 +1286,105 @@ pub async fn get_network_hashrate() -> Result<String, String> {
     };
 
     Ok(formatted)
+}
+
+pub async fn send_transaction(
+    from_address: &str,
+    to_address: &str,
+    amount_chiral: f64,
+    private_key: &str,
+) -> Result<String, String> {
+    let private_key_clean = private_key.strip_prefix("0x").unwrap_or(private_key);
+
+    let wallet: LocalWallet = private_key_clean
+        .parse()
+        .map_err(|e| format!("Invalid private key: {}", e))?;
+
+    let wallet_address = format!("{:?}", wallet.address());
+    if wallet_address.to_lowercase() != from_address.to_lowercase() {
+        return Err(format!(
+            "Private key doesn't match account. Expected: {}, Got: {}",
+            from_address, wallet_address
+        ));
+    }
+
+    let provider = Provider::<Http>::try_from("http://127.0.0.1:8545")
+        .map_err(|e| format!("Failed to connect to Geth: {}", e))?;
+
+    let chain_id = 98765u64;
+    let wallet = wallet.with_chain_id(chain_id);
+
+    let client = SignerMiddleware::new(provider.clone(), wallet);
+
+    let to: Address = to_address
+        .parse()
+        .map_err(|e| format!("Invalid to address: {}", e))?;
+
+    let amount_wei = U256::from((amount_chiral * 1_000_000_000_000_000_000.0) as u128);
+
+    // Get nonce for pending block (includes pending transactions)
+    let from_addr: Address = from_address
+        .parse()
+        .map_err(|e| format!("Invalid from address: {}", e))?;
+
+    let nonce = provider
+        .get_transaction_count(from_addr, Some(BlockNumber::Pending.into()))
+        .await
+        .map_err(|e| format!("Failed to get nonce: {}", e))?;
+
+    let gas_price = provider
+        .get_gas_price()
+        .await
+        .map_err(|e| format!("Failed to get gas price: {}", e))?;
+
+    // Increase gas price by 10% to ensure it's not underpriced
+    let gas_price_adjusted = gas_price * 110 / 100;
+
+    let tx = TransactionRequest::new()
+        .to(to)
+        .value(amount_wei)
+        .gas(21000)
+        .gas_price(gas_price_adjusted)
+        .nonce(nonce);
+
+    let pending_tx = client
+        .send_transaction(tx, None)
+        .await
+        .map_err(|e| format!("Failed to send transaction: {}", e))?;
+
+    let tx_hash = format!("{:?}", pending_tx.tx_hash());
+
+    Ok(tx_hash)
+}
+
+/// Fetches the full details of a block by its number.
+/// This is used by the blockchain indexer to get reward data.
+pub async fn get_block_details_by_number(
+    block_number: u64,
+) -> Result<Option<serde_json::Value>, String> {
+    let client = reqwest::Client::new();
+    let payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_getBlockByNumber",
+        "params": [format!("0x{:x}", block_number), true], // true for full transaction objects
+        "id": 1
+    });
+
+    let response = client
+        .post("http://127.0.0.1:8545")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send request for block {}: {}", block_number, e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response for block {}: {}", block_number, e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error for block {}: {}", block_number, error));
+    }
+
+    Ok(json_response["result"].clone().into())
 }

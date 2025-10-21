@@ -1,6 +1,6 @@
 <script lang="ts">
     import './styles/globals.css'
-    import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X } from 'lucide-svelte'
+    import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Server } from 'lucide-svelte'
     import UploadPage from './pages/Upload.svelte'
     import DownloadPage from './pages/Download.svelte'
     import ProxyPage from './pages/Proxy.svelte'
@@ -9,16 +9,22 @@
     import AnalyticsPage from './pages/Analytics.svelte'
     import SettingsPage from './pages/Settings.svelte'
     import MiningPage from './pages/Mining.svelte'
+    import ReputationPage from './pages/Reputation.svelte'
+    import RelayPage from './pages/Relay.svelte'
     import NotFound from './pages/NotFound.svelte'
-    import { networkStatus } from './lib/stores'
+    import ProxySelfTest from './routes/proxy-self-test.svelte'
+    import { networkStatus, settings, userLocation } from './lib/stores'
     import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
     import {onMount, setContext} from 'svelte';
     import { tick } from 'svelte';
+    import { get } from 'svelte/store';
     import { setupI18n } from './i18n/i18n';
     import { t } from 'svelte-i18n';
     import SimpleToast from './lib/components/SimpleToast.svelte';
     import { startNetworkMonitoring } from './lib/services/networkService';
     import { fileService } from '$lib/services/fileService';
+    import { bandwidthScheduler } from '$lib/services/bandwidthScheduler';
+    import { detectUserRegion } from '$lib/services/geolocation';
     // gets path name not entire url:
     // ex: http://locatlhost:1420/download -> /download
     
@@ -45,6 +51,50 @@
         await setupI18n();
         loading = false;
 
+        let storedLocation: string | null = null;
+        try {
+          const storedSettings = localStorage.getItem('chiralSettings');
+          if (storedSettings) {
+            const parsed = JSON.parse(storedSettings);
+            if (typeof parsed?.userLocation === 'string' && parsed.userLocation) {
+              storedLocation = parsed.userLocation;
+              userLocation.set(parsed.userLocation);
+            }
+          }
+        } catch (error) {
+          console.warn('Failed to load stored user location:', error);
+        }
+        try {
+          const currentLocation = get(userLocation);
+          const shouldAutoDetect = !storedLocation || currentLocation === 'US-East';
+
+          if (shouldAutoDetect) {
+            const detection = await detectUserRegion();
+            const detectedLocation = detection.region.label;
+            if (detectedLocation && detectedLocation !== currentLocation) {
+              userLocation.set(detectedLocation);
+              settings.update((previous) => {
+                const next = { ...previous, userLocation: detectedLocation };
+                try {
+                  const storedSettings = localStorage.getItem('chiralSettings');
+                  if (storedSettings) {
+                    const parsed = JSON.parse(storedSettings) ?? {};
+                    parsed.userLocation = detectedLocation;
+                    localStorage.setItem ('chiralSettings', JSON.stringify(parsed));
+                  } else {
+                    localStorage.setItem('chiralSettings', JSON.stringify(next));
+                  }
+                } catch (storageError) {
+                  console.warn('Failed to persist detected location:', storageError);
+                }
+                console.log('User region detected via ${detection.source}: ${detectedLocation}');
+                return next;
+              });
+            }
+          }
+        } catch (error) {
+          console.warn('Automatic location detection failed:', error);
+        }
         // Initialize backend services (File Transfer, DHT)
         try {
           await fileService.initializeServices();
@@ -52,6 +102,10 @@
         } catch (error) {
           console.error('Failed to initialize backend services:', error);
         }
+
+        // Start bandwidth scheduler
+        bandwidthScheduler.start();
+        console.log('Bandwidth scheduler started.');
 
         // set the currentPage var
         syncFromUrl();
@@ -68,6 +122,7 @@
       return () => {
         window.removeEventListener('popstate', onPop);
         stopNetworkMonitoring();
+        bandwidthScheduler.stop();
       };
     })
 
@@ -78,12 +133,12 @@
     });
 
     let sidebarCollapsed = false
-    let mobileMenuOpen = false
+    let sidebarMenuOpen = false
 
     // Scroll to top when page changes
     $: if (currentPage) {
         tick().then(() => {
-            const mainContent = document.querySelector('.flex-1.overflow-auto')
+            const mainContent = document.querySelector('#main-content')
             if (mainContent) {
                 mainContent.scrollTop = 0
             }
@@ -102,11 +157,16 @@
         { id: 'download', label: $t('nav.download'), icon: Download },
         { id: 'upload', label: $t('nav.upload'), icon: Upload },
         { id: 'network', label: $t('nav.network'), icon: Globe },
+        { id: 'relay', label: $t('nav.relay'), icon: Server },
         { id: 'mining', label: $t('nav.mining'), icon: Cpu },
         { id: 'proxy', label: $t('nav.proxy'), icon: Shield },
         { id: 'analytics', label: $t('nav.analytics'), icon: BarChart3 },
+        { id: 'reputation', label: $t('nav.reputation'), icon: Star },
         { id: 'account', label: $t('nav.account'), icon: Wallet },
         { id: 'settings', label: $t('nav.settings'), icon: Settings },
+
+        ...(import.meta.env.DEV ? [{ id: 'proxy-self-test', label: 'Proxy Self-Test', icon: Shield }] : [])
+
       ]
     }
 
@@ -128,6 +188,10 @@
         component: NetworkPage
       },
       {
+        path: "relay",
+        component: RelayPage
+      },
+      {
         path: "mining",
         component: MiningPage
       },
@@ -140,6 +204,10 @@
         component: AnalyticsPage
       },
       {
+        path: "reputation",
+        component: ReputationPage
+      },
+      {
         path: "account",
         component: AccountPage,
       },
@@ -147,16 +215,21 @@
         path: "settings",
         component: SettingsPage
       },
+      {
+        path: "proxy-self-test",
+        component: ProxySelfTest
+      },
     ]
 
     
   </script>
   
-  <div class="flex h-screen bg-background">
+  <div class="flex bg-background h-full">
     {#if !loading}
     <!-- Desktop Sidebar -->
-    <div class="hidden md:block {sidebarCollapsed ? 'w-16' : 'w-64'} bg-card border-r transition-all">
-      <nav class="p-2 space-y-2">
+    <!-- Make the sidebar sticky so it stays visible while the main content scrolls -->
+    <div class="hidden md:block {sidebarCollapsed ? 'w-16' : 'w-64'} bg-card border-r transition-all sticky top-0 h-screen">
+      <nav class="p-2 space-y-2 h-full overflow-y-auto">
         <!-- Sidebar Header (desktop only) -->
         <div class="flex items-center justify-between px-2 py-2 mb-2">
           <div class="flex items-center">
@@ -208,31 +281,31 @@
       </nav>
     </div>
   
-    <!-- Mobile Menu Button -->
+    <!-- Sidebar Menu Button -->
     <div class="absolute top-2 right-2 md:hidden">
       <button
         class="p-2 rounded bg-card shadow"
-        on:click={() => mobileMenuOpen = true}
+        on:click={() => sidebarMenuOpen = true}
       >
         <Menu class="h-6 w-6" />
       </button>
     </div>
   
-<!-- Mobile Menu Overlay -->
-{#if mobileMenuOpen}
+<!-- Sidebar Menu Overlay -->
+{#if sidebarMenuOpen}
   <!-- Backdrop -->
   <div
     class="fixed inset-0 bg-black bg-opacity-50 z-40 md:hidden"
     role="button"
     tabindex="0"
-    aria-label={$t('nav.closeMobileMenu')}
-    on:click={() => mobileMenuOpen = false}
-    on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { mobileMenuOpen = false } }}
+    aria-label={$t('nav.closeSidebarMenu')}
+    on:click={() => sidebarMenuOpen = false}
+    on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { sidebarMenuOpen = false } }}
   ></div>
 
   <!-- Sidebar -->
   <div class="fixed top-0 right-0 h-full w-64 bg-white z-50 flex flex-col md:hidden">
-    <!-- Mobile Header -->
+    <!-- Sidebar Header -->
     <div class="flex justify-between items-center p-4 border-b">
       <!-- Left side -->
       <span class="font-bold text-base">{$t('nav.menu')}</span>
@@ -243,20 +316,20 @@
           <div class="w-2 h-2 rounded-full {$networkStatus === 'connected' ? 'bg-green-500' : 'bg-red-500'}"></div>
           <span class="text-muted-foreground text-sm">{$networkStatus === 'connected' ? $t('nav.connected') : $t('nav.disconnected')}</span>
         </div>
-        <button on:click={() => mobileMenuOpen = false}>
+        <button on:click={() => sidebarMenuOpen = false}>
           <X class="h-6 w-6" />
         </button>
       </div>
     </div>
 
-    <!-- Mobile Nav Items -->
+    <!-- Sidebar Nav Items -->
     <nav class="flex-1 p-4 space-y-2">
       {#each menuItems as item}
         <button
           on:click={() => {
             currentPage = item.id
             goto(`/${item.id}`)
-            mobileMenuOpen = false
+            sidebarMenuOpen = false
           }}
           class="w-full flex items-center rounded px-4 py-3 text-lg hover:bg-gray-100"
           aria-current={currentPage === item.id ? 'page' : undefined}
@@ -270,8 +343,9 @@
 {/if}
 {/if}
 
-    <!-- Main Content -->
-    <div class="flex-1 overflow-auto">
+  <!-- Main Content -->
+  <!-- Ensure main content doesn't go under the sticky sidebar -->
+  <div id="main-content" class="flex-1 overflow-y-auto">
       <div class="p-6">
         <!-- <Router {routes} /> -->
          
@@ -291,4 +365,3 @@
   </div>
   <!-- add Toast  -->
 <SimpleToast />
-  

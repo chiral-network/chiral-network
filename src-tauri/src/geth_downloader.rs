@@ -43,8 +43,8 @@ impl GethDownloader {
     fn get_download_url(&self) -> Result<String, String> {
         // Core-Geth v1.12.20 URLs for different platforms
         let url = match (std::env::consts::OS, std::env::consts::ARCH) {
-            ("macos", "aarch64") => "https://github.com/etclabscore/core-geth/releases/download/v1.12.20/core-geth-osx-v1.12.20.zip",            
-            ("macos", "x86_64") => "https://github.com/etclabscore/core-geth/releases/download/v1.12.20/core-geth-win64-v1.12.20.zip",
+            ("macos", "aarch64") => "https://github.com/etclabscore/core-geth/releases/download/v1.12.20/core-geth-osx-v1.12.20.zip",
+            ("macos", "x86_64") => "https://github.com/etclabscore/core-geth/releases/download/v1.12.20/core-geth-osx-v1.12.20.zip",
             ("linux", "x86_64") => "https://github.com/etclabscore/core-geth/releases/download/v1.12.20/core-geth-linux-v1.12.20.zip",
             ("linux", "aarch64") => "https://github.com/etclabscore/core-geth/releases/download/v1.12.20/core-geth-arm64-v1.12.20.zip",
             ("windows", "x86_64") => "https://github.com/etclabscore/core-geth/releases/download/v1.12.20/core-geth-win64-v1.12.20.zip",
@@ -167,8 +167,6 @@ impl GethDownloader {
         use std::io::Cursor;
         use tar::Archive;
 
-        println!("Extracting tar.gz archive, size: {} bytes", data.len());
-
         let cursor = Cursor::new(data);
         let tar = GzDecoder::new(cursor);
         let mut archive = Archive::new(tar);
@@ -184,23 +182,16 @@ impl GethDownloader {
                 .path()
                 .map_err(|e| format!("Failed to get entry path: {}", e))?;
 
-            println!("Found file in archive: {:?}", path);
-
             // Look for the geth binary (might be in a subdirectory)
             if let Some(file_name) = path.file_name() {
                 if file_name == "geth" {
                     let geth_path = output_dir.join("geth");
-                    println!("Extracting geth to: {:?}", geth_path);
 
                     let mut file = fs::File::create(&geth_path)
                         .map_err(|e| format!("Failed to create geth file: {}", e))?;
                     let bytes_copied = std::io::copy(&mut entry, &mut file)
                         .map_err(|e| format!("Failed to write geth file: {}", e))?;
 
-                    println!(
-                        "Successfully extracted geth, {} bytes written",
-                        bytes_copied
-                    );
                     found_geth = true;
                     break;
                 }
