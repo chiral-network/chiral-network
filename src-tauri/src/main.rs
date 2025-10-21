@@ -1969,12 +1969,12 @@ async fn upload_file_to_network(
             .ok_or("No private key available. Please log in again.")?
     };
 
-    let ft = {
+    let ft_opt = {
         let ft_guard = state.file_transfer.lock().await;
         ft_guard.as_ref().cloned()
     };
 
-    if let Some(ft) = ft {
+    if let Some(ft) = ft_opt {
         // Upload the file
         let file_name = file_path.split('/').last().unwrap_or(&file_path);
 
@@ -2024,17 +2024,15 @@ async fn upload_file_to_network(
             {
                 Ok(metadata) => {
                     // Store file data locally for seeding if file transfer service is available
-                    if let Some(ft) = ft {
-                        if let Err(e) = ft
-                            .store_file_data(
-                                file_hash.clone(),
-                                file_name.to_string(),
-                                file_data.clone(),
-                            )
-                            .await
-                        {
-                            warn!("Failed to store file data locally for seeding: {}", e);
-                        }
+                    if let Err(e) = ft
+                        .store_file_data(
+                            file_hash.clone(),
+                            file_name.to_string(),
+                            file_data.clone(),
+                        )
+                        .await
+                    {
+                        warn!("Failed to store file data locally for seeding: {}", e);
                     }
 
                     match dht.publish_file(metadata.clone()).await {
@@ -2081,7 +2079,7 @@ async fn download_file_from_network(
     file_hash: String,
     _output_path: String,
 ) -> Result<String, String> {
-    let ft = {
+    let ft_opt = {
         let ft_guard = state.file_transfer.lock().await;
         ft_guard.as_ref().cloned()
     };
