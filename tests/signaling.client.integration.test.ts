@@ -30,7 +30,10 @@ async function stopServer(node: any): Promise<void> {
 describe("SignalingService", () => {
   it("should connect and register", async () => {
     const server = await startServer(9006);
-    const client = new SignalingService("ws://localhost:9006");
+    const client = new SignalingService({
+      url: "ws://localhost:9006",
+      preferDht: false,
+    });
 
     await client.connect();
 
@@ -43,8 +46,14 @@ describe("SignalingService", () => {
 
   it("should send and receive messages", async () => {
     const server = await startServer(9007);
-    const clientA = new SignalingService("ws://localhost:9007");
-    const clientB = new SignalingService("ws://localhost:9007");
+    const clientA = new SignalingService({
+      url: "ws://localhost:9007",
+      preferDht: false,
+    });
+    const clientB = new SignalingService({
+      url: "ws://localhost:9007",
+      preferDht: false,
+    });
 
     await Promise.all([clientA.connect(), clientB.connect()]);
 
@@ -71,7 +80,10 @@ describe("SignalingService", () => {
 
   it("should handle peer updates", async () => {
     const server = await startServer(9008);
-    const client = new SignalingService("ws://localhost:9008");
+    const client = new SignalingService({
+      url: "ws://localhost:9008",
+      preferDht: false,
+    });
 
     await client.connect();
 
@@ -81,9 +93,9 @@ describe("SignalingService", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    // TODO: Implement a way to get peers from the client or store
-    // For now, just test that we can connect
-    expect(client.getClientId()).toBeDefined();
+    // Check that we can get peers from the client
+    const peers = client.getPeersWithTimestamps();
+    expect(Array.isArray(peers)).toBe(true);
 
     client.disconnect();
     await stopServer(server);
@@ -91,8 +103,14 @@ describe("SignalingService", () => {
 
   it("should broadcast messages", async () => {
     const server = await startServer(9009);
-    const clientA = new SignalingService("ws://localhost:9009");
-    const clientB = new SignalingService("ws://localhost:9009");
+    const clientA = new SignalingService({
+      url: "ws://localhost:9009",
+      preferDht: false,
+    });
+    const clientB = new SignalingService({
+      url: "ws://localhost:9009",
+      preferDht: false,
+    });
 
     await Promise.all([clientA.connect(), clientB.connect()]);
 
