@@ -136,6 +136,7 @@ export interface Transaction {
   amount: number;
   to?: string;
   from?: string;
+  txHash?: string;
   date: Date;
   description: string;
   status: "pending" | "completed";

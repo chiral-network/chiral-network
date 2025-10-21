@@ -65,7 +65,8 @@
                 payload.file_hash,
                 payload.file_name,
                 payload.file_size,
-                payload.downloader_address
+                payload.downloader_address,
+                payload.transaction_hash
               );
 
               if (result.success) {
