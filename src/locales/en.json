@@ -800,7 +800,14 @@
     "connect": "Connect",
     "remove": "Remove",
     "alreadyAdded": "This proxy address is already added!",
-    "autoReconnect": "Auto-reconnect"
+    "autoReconnect": "Auto-reconnect",
+    "sort": {
+      "status": "Sort by status",
+      "latency": "Sort by latency",
+      "bandwidth": "Sort by bandwidth",
+      "clearFilters": "Clear filters",
+      "emptyState": "No proxy nodes match your filters."
+    }
   },
   "mining": {
     "title": "Mining",

@@ -722,7 +722,14 @@
     "connect": "连接",
     "remove": "移除",
     "alreadyAdded": "该代理地址已添加！",
-    "autoReconnect": "自动重连"
+    "autoReconnect": "自动重连",
+    "sort": {
+      "status": "按状态排序",
+      "latency": "按延迟排序",
+      "bandwidth": "按带宽排序",
+      "clearFilters": "清除筛选",
+      "emptyState": "没有与筛选条件匹配的代理节点。"
+    }
   },
   "mining": {
     "title": "挖矿",

@@ -713,7 +713,14 @@
     "connect": "Conectar",
     "remove": "Eliminar",
     "alreadyAdded": "¡Esta dirección de proxy ya se ha agregado!",
-    "autoReconnect": "Reconexión automática"
+    "autoReconnect": "Reconexión automática",
+    "sort": {
+      "status": "Ordenar por estado",
+      "latency": "Ordenar por latencia",
+      "bandwidth": "Ordenar por ancho de banda",
+      "clearFilters": "Limpiar filtros",
+      "emptyState": "Ningún nodo proxy coincide con tus filtros."
+    }
   },
   "mining": {
     "title": "Minería",

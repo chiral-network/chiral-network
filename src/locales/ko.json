@@ -698,7 +698,14 @@
     "connect": "연결",
     "remove": "제거",
     "alreadyAdded": "이 프록시 주소는 이미 추가되었습니다!",
-    "autoReconnect": "자동 재연결"
+    "autoReconnect": "자동 재연결",
+    "sort": {
+      "status": "상태로 정렬",
+      "latency": "지연 시간으로 정렬",
+      "bandwidth": "대역폭으로 정렬",
+      "clearFilters": "필터 지우기",
+      "emptyState": "필터와 일치하는 프록시 노드가 없습니다."
+    }
   },
   "mining": {
     "title": "채굴",

@@ -50,9 +50,9 @@
   ]
 
   $: sortOptions = [
-    { value: 'status', label: $t('Sort by status') },
-    { value: 'latency', label: $t('Sort by latency') },
-    { value: 'bandwidth', label: $t('Sort by bandwidth') }
+    { value: 'status', label: $t('proxy.sort.status') },
+    { value: 'latency', label: $t('proxy.sort.latency') },
+    { value: 'bandwidth', label: $t('proxy.sort.bandwidth') }
   ]
 
   $: filteredNodes = $proxyNodes.filter(node => {
@@ -94,7 +94,26 @@
 
       // Clean up expired authentication tokens
       ProxyAuthService.cleanupExpiredTokens();
+
+      // Restore persisted filter and sort options
+      try {
+        const storedStatus = localStorage.getItem('proxy.statusFilter')
+        if (storedStatus && ['all','online','offline','connecting','error'].includes(storedStatus)) {
+          statusFilter = storedStatus
+        }
+
+        const storedSort = localStorage.getItem('proxy.sortBy') as typeof sortBy | null
+        if (storedSort && ['status','latency','bandwidth'].includes(storedSort)) {
+          sortBy = storedSort as typeof sortBy
+        }
+      } catch (e) {
+        console.warn('Could not restore proxy filters from localStorage:', e)
+      }
   });
+
+  // Persist changes to filter/sort
+  $: (() => { try { localStorage.setItem('proxy.statusFilter', statusFilter) } catch {} })()
+  $: (() => { try { localStorage.setItem('proxy.sortBy', sortBy) } catch {} })()
 
   function validateAddress(address: string): { valid: boolean; error: string } {
       if (!address || address.trim() === '') {
@@ -623,8 +642,16 @@
           options={sortOptions}
         />
       </div>
+      <Button variant="outline" on:click={() => { statusFilter = 'all'; sortBy = 'status'; }}>
+        {$t('proxy.sort.clearFilters')}
+      </Button>
     </div>
   </div>
+    {#if sortedNodes.length === 0}
+      <div class="p-4 bg-secondary/40 rounded-lg border border-dashed border-border/60 text-sm text-muted-foreground">
+        {$t('proxy.sort.emptyState')}
+      </div>
+    {/if}
     <div class="space-y-3">
       {#each sortedNodes as node}
         <div class="p-4 bg-secondary rounded-lg border border-border/50 hover:border-border transition-colors">
