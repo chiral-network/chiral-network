@@ -6,6 +6,7 @@
 pub mod commands;
 
 pub mod analytics;
+mod blockchain_listener;
 mod dht;
 mod encryption;
 mod ethereum;
@@ -31,18 +32,32 @@ use crate::commands::proxy::{
     disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
     proxy_echo, proxy_remove, ProxyNode,
 };
-use async_std::path::Path as async_path;
-use chiral_network::stream_auth::{
+use crate::stream_auth::{
     AuthMessage, HmacKeyExchangeConfirmation, HmacKeyExchangeRequest, HmacKeyExchangeResponse,
     StreamAuthService,
 };
+use chrono;
 use dht::{DhtEvent, DhtMetricsSnapshot, DhtService, FileMetadata};
 use directories::ProjectDirs;
 use ethereum::{
-    create_new_account, get_account_from_private_key, get_balance, get_block_number, get_hashrate,
-    get_mined_blocks_count, get_mining_logs, get_mining_performance, get_mining_status,
-    get_network_difficulty, get_network_hashrate, get_peer_count, get_recent_mined_blocks,
-    start_mining, stop_mining, EthAccount, GethProcess, MinedBlock,
+    create_new_account,
+    get_account_from_private_key,
+    get_balance,
+    get_block_number,
+    get_hashrate,
+    get_mined_blocks_count,
+    get_mining_logs,
+    get_mining_performance,
+    get_mining_status, // Assuming you have a file_handler module
+    get_network_difficulty,
+    get_network_hashrate,
+    get_peer_count,
+    get_recent_mined_blocks,
+    start_mining,
+    stop_mining,
+    EthAccount,
+    GethProcess,
+    MinedBlock,
 };
 use file_transfer::{DownloadMetricsSnapshot, FileTransferEvent, FileTransferService};
 use fs2::available_space;
@@ -71,7 +86,7 @@ use tauri::{
 use tokio::time::{timeout as tokio_timeout, Duration as TokioDuration};
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use totp_rs::{Algorithm, Secret, TOTP};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use webrtc_service::{WebRTCFileRequest, WebRTCService};
 
 use crate::manager::ChunkManager; // Import the ChunkManager
@@ -226,6 +241,12 @@ struct AppState {
     // make these clonable so we can .clone() and move into spawned tasks
     proof_watcher: Arc<Mutex<Option<JoinHandle<()>>>>,
     proof_contract_address: Arc<Mutex<Option<String>>>,
+
+    // Relay reputation statistics storage
+    relay_reputation: Arc<Mutex<std::collections::HashMap<String, RelayNodeStats>>>,
+
+    // Relay node aliases (peer_id -> alias)
+    relay_aliases: Arc<Mutex<std::collections::HashMap<String, String>>>,
 }
 
 #[tauri::command]
@@ -535,6 +556,7 @@ async fn upload_versioned_file(
                 file_data.clone(),
                 created_at,
                 mime_type,
+                None, // encrypted_key_bundle
                 is_encrypted,
                 encryption_method,
                 key_fingerprint,
@@ -752,6 +774,7 @@ async fn start_dht_node(
     // New optional relay controls
     enable_autorelay: Option<bool>,
     preferred_relays: Option<Vec<String>>,
+    enable_relay_server: Option<bool>,
 ) -> Result<String, String> {
     {
         let dht_guard = state.dht.lock().await;
@@ -777,6 +800,14 @@ async fn start_dht_node(
         ft_guard.as_ref().cloned()
     };
 
+    // Create a ChunkManager instance
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Could not get app data directory: {}", e))?;
+    let chunk_storage_path = app_data_dir.join("chunk_storage");
+    let chunk_manager = Arc::new(ChunkManager::new(chunk_storage_path));
+
     // --- Hotfix: Disable AutoRelay on bootstrap nodes (and via env var)
     let mut final_enable_autorelay = enable_autorelay.unwrap_or(true);
     if is_bootstrap.unwrap_or(false) {
@@ -790,7 +821,10 @@ async fn start_dht_node(
 
     let proj_dirs = ProjectDirs::from("com", "chiral-network", "chiral-network")
         .ok_or("Failed to get project directories")?;
+    // Create the async_std::path::Path here so we can pass a reference to it.
     let blockstore_db_path = proj_dirs.data_dir().join("blockstore_db");
+    let async_blockstore_path = async_std::path::Path::new(blockstore_db_path.as_os_str());
+
     let dht_service = DhtService::new(
         port,
         bootstrap_nodes,
@@ -801,12 +835,13 @@ async fn start_dht_node(
         autonat_server_list,
         final_proxy_address,
         file_transfer_service,
+        Some(chunk_manager), // Pass the chunk manager
         chunk_size_kb,
         cache_size_mb,
         /* enable AutoRelay (after hotfix) */ final_enable_autorelay,
         preferred_relays.unwrap_or_default(),
         is_bootstrap.unwrap_or(false), // enable_relay_server only on bootstrap
-        Some(async_path::new(blockstore_db_path.as_os_str())),
+        Some(&async_blockstore_path),
     )
     .await
     .map_err(|e| format!("Failed to start DHT: {}", e))?;
@@ -819,6 +854,7 @@ async fn start_dht_node(
     // Spawn the event pump
     let app_handle = app.clone();
     let proxies_arc = state.proxies.clone();
+    let relay_reputation_arc = state.relay_reputation.clone();
     let dht_clone_for_pump = dht_arc.clone();
 
     tokio::spawn(async move {
@@ -938,6 +974,63 @@ async fn start_dht_node(
                         let payload = serde_json::json!(metadata);
                         let _ = app_handle.emit("found_file", payload);
                     }
+                    DhtEvent::ReputationEvent {
+                        peer_id,
+                        event_type,
+                        impact,
+                        data,
+                    } => {
+                        // Update relay reputation statistics
+                        let mut stats = relay_reputation_arc.lock().await;
+                        let entry = stats.entry(peer_id.clone()).or_insert(RelayNodeStats {
+                            peer_id: peer_id.clone(),
+                            alias: None,
+                            reputation_score: 0.0,
+                            reservations_accepted: 0,
+                            circuits_established: 0,
+                            circuits_successful: 0,
+                            total_events: 0,
+                            last_seen: 0,
+                        });
+
+                        // Update statistics based on event type
+                        entry.reputation_score += impact;
+                        entry.total_events += 1;
+                        entry.last_seen = data
+                            .get("timestamp")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or_else(|| {
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_secs()
+                            });
+
+                        match event_type.as_str() {
+                            "RelayReservationAccepted" => entry.reservations_accepted += 1,
+                            "RelayCircuitEstablished" => entry.circuits_established += 1,
+                            "RelayCircuitSuccessful" => entry.circuits_successful += 1,
+                            _ => {}
+                        }
+
+                        // Emit event to frontend
+                        let payload = serde_json::json!({
+                            "peerId": peer_id,
+                            "eventType": event_type,
+                            "impact": impact,
+                            "data": data,
+                        });
+                        let _ = app_handle.emit("relay_reputation_event", payload);
+                    }
+                    DhtEvent::BitswapChunkDownloaded { file_hash, chunk_index, total_chunks, chunk_size } => {
+                        let payload = serde_json::json!({
+                            "fileHash": file_hash,
+                            "chunkIndex": chunk_index,
+                            "totalChunks": total_chunks,
+                            "chunkSize": chunk_size,
+                        });
+                        let _ = app_handle.emit("bitswap_chunk_downloaded", payload);
+                    },
                     _ => {}
                 }
             }
@@ -1268,6 +1361,24 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                 }
                 DhtEvent::FileDownloaded { file_hash } => {
                     format!("file_downloaded:{}", file_hash)
+                }
+                DhtEvent::BitswapChunkDownloaded { file_hash, chunk_index, total_chunks, chunk_size } => {
+                    format!("bitswap_chunk_downloaded:{}:{}:{}:{}", file_hash, chunk_index, total_chunks, chunk_size)
+                },
+                DhtEvent::ReputationEvent {
+                    peer_id,
+                    event_type,
+                    impact,
+                    data,
+                } => {
+                    let json = serde_json::to_string(&serde_json::json!({
+                        "peer_id": peer_id,
+                        "event_type": event_type,
+                        "impact": impact,
+                        "data": data,
+                    }))
+                    .unwrap_or_else(|_| "{}".to_string());
+                    format!("reputation_event:{}", json)
                 }
             })
             .collect();
@@ -1765,9 +1876,13 @@ async fn start_file_transfer_service(
     }
 
     // Initialize WebRTC service with file transfer service
-    let webrtc_service = WebRTCService::new(ft_arc.clone(), state.keystore.clone())
-        .await
-        .map_err(|e| format!("Failed to start WebRTC service: {}", e))?;
+    let webrtc_service = WebRTCService::new(
+        app.app_handle().clone(),
+        ft_arc.clone(),
+        state.keystore.clone(),
+    )
+    .await
+    .map_err(|e| format!("Failed to start WebRTC service: {}", e))?;
 
     let webrtc_arc = Arc::new(webrtc_service);
     {
@@ -1891,6 +2006,7 @@ async fn upload_file_to_network(
                 version: Some(1),
                 cids: None,
                 encrypted_key_bundle: None,
+                ..Default::default()
             };
 
             match dht.publish_file(metadata.clone()).await {
@@ -1911,18 +2027,18 @@ async fn upload_file_to_network(
 async fn download_blocks_from_network(
     state: State<'_, AppState>,
     file_metadata: FileMetadata,
+    download_path: String,
 ) -> Result<(), String> {
-    {
-        let dht = {
-            let dht_guard = state.dht.lock().await;
-            dht_guard.as_ref().cloned()
-        };
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
 
-        if let Some(dht) = dht {
-            dht.download_file(file_metadata).await
-        } else {
-            Err("DHT node is not running".to_string())
-        }
+    if let Some(dht) = dht {
+        info!("calling dht download_file");
+        dht.download_file(file_metadata, download_path).await
+    } else {
+        Err("DHT node is not running".to_string())
     }
 }
 
@@ -2339,11 +2455,12 @@ async fn upload_file_chunk(
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
-            parent_hash: None,
             version: Some(1),
             cids: Some(vec![root_cid.clone()]), // The root CID for retrieval
-            is_root: true,
             encrypted_key_bundle: None,
+            parent_hash: None,
+            is_root: true,
+            download_path: None,
         };
 
         // Store complete file data locally for seeding
@@ -2756,6 +2873,23 @@ async fn search_file_metadata(
     if let Some(dht) = dht {
         let timeout = timeout_ms.unwrap_or(10_000);
         dht.search_metadata(file_hash, timeout).await
+    } else {
+        Err("DHT node is not running".to_string())
+    }
+}
+
+#[tauri::command]
+async fn get_file_seeders(
+    state: State<'_, AppState>,
+    file_hash: String,
+) -> Result<Vec<String>, String> {
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    if let Some(dht_service) = dht {
+        Ok(dht_service.get_seeders_for_file(&file_hash).await)
     } else {
         Err("DHT node is not running".to_string())
     }
@@ -3658,12 +3792,18 @@ fn main() {
             proxy_auth_tokens: Arc::new(Mutex::new(std::collections::HashMap::new())),
 
             // Initialize stream authentication
-            stream_auth: Arc::new(Mutex::new(StreamAuthService::new())),
+            stream_auth: Arc::new(Mutex::new(crate::stream_auth::StreamAuthService::new())),
 
             // Proof-of-Storage watcher background handle and contract address
             // make these clonable so we can .clone() and move into spawned tasks
             proof_watcher: Arc::new(Mutex::new(None)),
             proof_contract_address: Arc::new(Mutex::new(None)),
+
+            // Relay reputation statistics
+            relay_reputation: Arc::new(Mutex::new(std::collections::HashMap::new())),
+
+            // Relay aliases
+            relay_aliases: Arc::new(Mutex::new(std::collections::HashMap::new())),
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
@@ -3707,6 +3847,7 @@ fn main() {
             stop_dht_node,
             stop_publishing_file,
             search_file_metadata,
+            get_file_seeders,
             connect_to_peer,
             get_dht_events,
             detect_locale,
@@ -3792,9 +3933,13 @@ fn main() {
             revoke_proxy_auth_token,
             cleanup_expired_proxy_auth_tokens,
             get_file_data,
+            send_chat_message,
             store_file_data,
             start_proof_of_storage_watcher,
-            stop_proof_of_storage_watcher
+            stop_proof_of_storage_watcher,
+            get_relay_reputation_stats,
+            set_relay_alias,
+            get_relay_alias
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -4143,6 +4288,7 @@ async fn upload_and_publish_file(
                 vec![], // Empty - chunks already stored
                 created_at,
                 Some(mime_type),
+                None,                            // encrypted_key_bundle
                 true,                            // is_encrypted
                 Some("AES-256-GCM".to_string()), // Encryption method
                 None,                            // key_fingerprint (deprecated)
@@ -4307,6 +4453,85 @@ async fn get_file_data(state: State<'_, AppState>, file_hash: String) -> Result<
     }
 }
 
+#[derive(serde::Serialize, Clone)]
+struct ChatMessageForFrontend {
+    from_peer_id: String,
+    message_id: String,
+    encrypted_payload: Vec<u8>,
+    timestamp: u64,
+    signature: Vec<u8>,
+}
+
+/// Sends an E2EE chat message to a peer.
+#[tauri::command]
+async fn send_chat_message(
+    state: State<'_, AppState>,
+    recipient_peer_id: String,
+    encrypted_payload: Vec<u8>,
+    signature: Vec<u8>,
+) -> Result<(), String> {
+    debug!("send_chat_message called for peer: {}", recipient_peer_id);
+    let webrtc = state
+        .webrtc
+        .lock()
+        .await
+        .as_ref()
+        .cloned()
+        .ok_or("WebRTC service not running")?;
+
+    // 1. Check if a WebRTC connection already exists.
+    if !webrtc.get_connection_status(&recipient_peer_id).await {
+        debug!(
+            "No existing WebRTC connection to {}. Attempting to establish one.",
+            recipient_peer_id
+        );
+        let dht = state
+            .dht
+            .lock()
+            .await
+            .as_ref()
+            .cloned()
+            .ok_or("DHT service not running")?;
+
+        dht.connect_to_peer_by_id(recipient_peer_id.clone()).await?;
+
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
+        if !webrtc.get_connection_status(&recipient_peer_id).await {
+            error!(
+                "Failed to establish WebRTC connection with peer {} after 5s.",
+                recipient_peer_id
+            );
+            return Err("Failed to establish WebRTC connection with peer.".to_string());
+        }
+        debug!(
+            "WebRTC connection to {} established successfully.",
+            recipient_peer_id
+        );
+    }
+
+    // 3. Construct the message payload.
+    let chat_message = webrtc_service::WebRTCChatMessage {
+        message_id: format!(
+            "msg_{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ),
+        encrypted_payload,
+        timestamp: chrono::Utc::now().timestamp() as u64,
+        signature,
+    };
+    let message = webrtc_service::WebRTCMessage::ChatMessage(chat_message);
+    let message_bytes = serde_json::to_vec(&message)
+        .map_err(|e| format!("Failed to serialize chat message: {}", e))?;
+    debug!("Sending chat message to {}", recipient_peer_id);
+    // Correctly serialize the message to a string before sending via send_text
+    let message_str = serde_json::to_string(&message)
+        .map_err(|e| format!("Failed to serialize chat message to string: {}", e))?;
+
+    // Assuming send_data is a method that sends text. If it sends bytes, use message_bytes.
+    webrtc.send_data(&recipient_peer_id, message_bytes).await
+}
+
 #[tauri::command]
 async fn store_file_data(
     state: State<'_, AppState>,
@@ -4345,196 +4570,62 @@ async fn store_file_data(
 #[tauri::command]
 async fn start_proof_of_storage_watcher(
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
     contract_address: String,
-    poll_interval_secs: Option<u64>,
-    response_timeout_secs: Option<u64>,
+    ws_url: String,
 ) -> Result<(), String> {
     // Basic validation
     if contract_address.trim().is_empty() {
         return Err("contract_address cannot be empty".into());
     }
+    if ws_url.trim().is_empty() {
+        return Err("ws_url cannot be empty".into());
+    }
 
-    // Store contract address in app state for other parts of the app to read
+    // Store contract address in app state
     {
         let mut addr = state.proof_contract_address.lock().await;
         *addr = Some(contract_address.clone());
     }
 
-    // If a watcher is already running, stop it first
+    // Ensure any previous watcher is stopped
     stop_proof_of_storage_watcher(state.clone()).await.ok();
 
-    // Spawn background watcher
-    let poll_interval = TokioDuration::from_secs(poll_interval_secs.unwrap_or(10));
-    let response_timeout = TokioDuration::from_secs(response_timeout_secs.unwrap_or(15));
-
-    let ft_arc = {
-        let ft_guard = state.file_transfer.lock().await;
-        ft_guard.as_ref().cloned()
+    // The DHT service is required for the listener to locate file chunks.
+    let dht_service = {
+        state
+            .dht
+            .lock()
+            .await
+            .as_ref()
+            .cloned()
+            .ok_or("DHT service is not running. Cannot start proof watcher.")?
     };
 
-    // Clone relevant Arcs to move into task
-    let proof_contract_address_arc = state.proof_contract_address.clone();
-    // Need to confirm usage of clone
-    // let app_state_clone = state.inner().clone();
-    let app_state_clone = state.inner();
-
     let handle = tokio::spawn(async move {
-        // Simple backoff mechanism on errors
-        let mut backoff = TokioDuration::from_secs(1);
-
-        loop {
-            // Read the configured contract address
-            let contract_opt = { proof_contract_address_arc.lock().await.clone() };
-            if contract_opt.is_none() {
-                tracing::info!("Proof watcher: no contract configured; exiting watcher loop.");
-                break;
-            }
-            let contract = contract_opt.unwrap();
-
-            // TODO: Replace the following placeholder with a real blockchain subscription
-            // Approach A: subscribe to events if your ethereum module exposes a listener
-            // Approach B: poll an RPC / ethers provider for new "ChallengeIssued" events
-            //
-            // For now we call a placeholder `fetch_pending_challenges(contract)` that you should
-            // implement in your `ethereum` module and return Vec<ChallengeEvent>.
-            let challenges_result: Result<Vec<ChallengeEvent>, String> = {
-                // Placeholder - if you have 'ethereum::fetch_pending_challenges', call it here:
-                // ethereum::fetch_pending_challenges(&contract).await.map_err(|e| e.to_string())
-                //
-                // Otherwise implement the fetch inside your ethereum module and call it here.
-                Err("fetch_pending_challenges not implemented - please wire your ethereum subscription here".to_string())
-            };
-
-            match challenges_result {
-                Ok(challenges) => {
-                    backoff = TokioDuration::from_secs(1); // reset backoff on success
-                    for challenge in challenges.into_iter() {
-                        let challenge_id = challenge.challenge_id.clone();
-                        tracing::info!("Proof watcher: received challenge {:?}", challenge);
-
-                        // Spawn a per-challenge handler with timeout for generating & submitting proof
-                        let ft_local = ft_arc.clone();
-                        let contract_clone = contract.clone();
-                        let resp_timeout = response_timeout;
-                        tokio::spawn(async move {
-                            // Wrap the full handling in a timeout.
-                            let res = tokio_timeout(resp_timeout, async {
-                                // 1) Locate requested chunk data (TODO: integrate with FileTransferService/ChunkManager)
-                                // Example stub-call — replace with your real API:
-                                // let chunk_data = ft_local.get_chunk(&challenge.merkle_root, challenge.chunk_index).await?;
-                                //
-                                // Or use ChunkManager to retrieve / reassemble chunk bytes.
-
-                                let chunk_data_result: Result<Vec<u8>, String> =
-                                    Err("get_chunk not implemented - please plug your ChunkManager/FileTransferService API".to_string());
-
-                                let chunk_data = match chunk_data_result {
-                                    Ok(c) => c,
-                                    Err(e) => {
-                                        tracing::error!("Failed to fetch chunk for challenge {}: {}", challenge_id, e);
-                                        return Err::<(), String>(e);
-                                    }
-                                };
-
-                                // 2) Generate Merkle proof for the chunk (TODO: call your Merkle helper)
-                                // Expected: produce a Vec<[u8; 32]> or similar proof along with index/total
-                                let merkle_proof_result: Result<MerkleProof, String> =
-                                    Err("generate_merkle_proof not implemented - please integrate your Merkle helper".to_string());
-
-                                let merkle_proof = match merkle_proof_result {
-                                    Ok(p) => p,
-                                    Err(e) => {
-                                        tracing::error!("Failed to generate merkle proof for {}: {}", challenge_id, e);
-                                        return Err::<(), String>(e);
-                                    }
-                                };
-
-                                // 3) Submit proof to smart contract (verifyProof(fileRoot, proof, chunkData))
-                                // TODO: call your ethereum module function that invokes contract method `verifyProof`
-                                // Example stub:
-                                // let tx_hash = ethereum::submit_proof(&contract_clone, &challenge.merkle_root, &merkle_proof, &chunk_data).await?;
-                                let submit_result: Result<String, String> =
-                                    Err("submit_proof not implemented - please integrate ethereum::submit_proof".to_string());
-
-                                match submit_result {
-                                    Ok(tx) => {
-                                        tracing::info!("Submitted proof for challenge {} tx={}", challenge_id, tx);
-                                        Ok::<(), String>(())
-                                    }
-                                    Err(e) => {
-                                        tracing::error!("Failed to submit proof for {}: {}", challenge_id, e);
-                                        Err(e)
-                                    }
-                                }
-                            }).await;
-
-                            match res {
-                                Ok(Ok(_)) => {
-                                    tracing::info!(
-                                        "Challenge {} handled successfully",
-                                        challenge_id
-                                    );
-                                }
-                                Ok(Err(e)) => {
-                                    // The handler returned an error (but within timeout)
-                                    tracing::error!(
-                                        "Error handling challenge {}: {}",
-                                        challenge_id,
-                                        e
-                                    );
-                                }
-                                Err(_) => {
-                                    // The entire proof handling timed out
-                                    tracing::warn!(
-                                        "Timeout while handling challenge {} ({}s)",
-                                        challenge_id,
-                                        resp_timeout.as_secs()
-                                    );
-                                    // TODO: Optionally notify contract of failure or emit event into UI
-                                }
-                            }
-                        });
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Proof watcher poll failed: {} (backoff {}s)",
-                        e,
-                        backoff.as_secs()
-                    );
-                    tokio::time::sleep(backoff).await;
-                    backoff = std::cmp::min(backoff * 2, TokioDuration::from_secs(300));
-                    // cap backoff
-                }
-            }
-
-            // Sleep until next poll cycle
-            tokio::time::sleep(poll_interval).await;
+        tracing::info!("Starting proof-of-storage watcher...");
+        // The listener will run until the contract address is cleared or an error occurs.
+        if let Err(e) =
+            blockchain_listener::run_blockchain_listener(ws_url, contract_address, dht_service)
+                .await
+        {
+            tracing::error!("Proof-of-storage watcher failed: {}", e);
+            // Emit an event to the frontend to notify the user of the failure.
+            let _ = app.emit(
+                "proof_watcher_error",
+                format!("Watcher failed: {}", e.to_string()),
+            );
         }
-
         tracing::info!("Proof watcher task exiting");
     });
 
-    // Store the handle in AppState so it can be stopped later
+    // Store the handle in AppState to manage its lifecycle
     {
         let mut guard = state.proof_watcher.lock().await;
         *guard = Some(handle);
     }
 
     Ok(())
-}
-
-// Define a small struct representing a challenge event coming from the chain.
-// Adjust fields to match your smart contract event definition.
-#[derive(Debug, Clone)]
-struct ChallengeEvent {
-    pub challenge_id: String,
-    pub merkle_root: String,
-    pub chunk_index: u32,
-    pub total_chunks: u32,
-    pub requester: Option<String>,
-    pub issued_at_unix: u64,
-    pub deadline_unix: Option<u64>,
 }
 
 // MerkleProof placeholder type - replace with your actual proof representation.
@@ -4548,7 +4639,7 @@ struct MerkleProof {
 
 #[tauri::command]
 async fn stop_proof_of_storage_watcher(state: State<'_, AppState>) -> Result<(), String> {
-    // Clear configured contract address
+    // Clear the configured contract address, which signals the listener loop to exit.
     {
         let mut addr = state.proof_contract_address.lock().await;
         *addr = None;
@@ -4561,14 +4652,12 @@ async fn stop_proof_of_storage_watcher(state: State<'_, AppState>) -> Result<(),
     };
 
     if let Some(handle) = maybe_handle {
-        // Ask the task to stop by dropping the contract address above; give it a chance to wind down.
-        // Also abort if it doesn't stop in a short amount of time.
         tracing::info!("Stopping Proof-of-Storage watcher...");
-        let abort_wait = TokioDuration::from_secs(5);
+        // Abort the task to ensure it stops immediately.
         handle.abort();
-        // best-effort: await join (not strictly necessary)
-        match tokio::time::timeout(abort_wait, handle).await {
-            Ok(_) => tracing::info!("Proof watcher stopped"),
+        // Awaiting the aborted handle can confirm it's terminated.
+        match tokio::time::timeout(TokioDuration::from_secs(2), handle).await {
+            Ok(_) => tracing::info!("Proof watcher task successfully joined."),
             Err(_) => tracing::warn!("Proof watcher abort timed out"),
         }
     } else {
@@ -4606,4 +4695,85 @@ mod tests {
     }
 
     // Add more tests for other functions/modules as needed
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct RelayReputationStats {
+    total_relays: usize,
+    top_relays: Vec<RelayNodeStats>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RelayNodeStats {
+    peer_id: String,
+    alias: Option<String>,
+    reputation_score: f64,
+    reservations_accepted: u64,
+    circuits_established: u64,
+    circuits_successful: u64,
+    total_events: u64,
+    last_seen: u64,
+}
+
+#[tauri::command]
+async fn get_relay_reputation_stats(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<RelayReputationStats, String> {
+    // Read from relay reputation storage
+    let stats_map = state.relay_reputation.lock().await;
+    let aliases_map = state.relay_aliases.lock().await;
+
+    let max_relays = limit.unwrap_or(100);
+
+    // Convert HashMap to Vec, populate aliases, and sort by reputation score (descending)
+    let mut all_relays: Vec<RelayNodeStats> = stats_map
+        .values()
+        .map(|stats| {
+            let mut stats_with_alias = stats.clone();
+            stats_with_alias.alias = aliases_map.get(&stats.peer_id).cloned();
+            stats_with_alias
+        })
+        .collect();
+
+    all_relays.sort_by(|a, b| {
+        b.reputation_score
+            .partial_cmp(&a.reputation_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Take top N relays
+    let top_relays = all_relays.into_iter().take(max_relays).collect();
+    let total_relays = stats_map.len();
+
+    Ok(RelayReputationStats {
+        total_relays,
+        top_relays,
+    })
+}
+
+#[tauri::command]
+async fn set_relay_alias(
+    state: State<'_, AppState>,
+    peer_id: String,
+    alias: String,
+) -> Result<(), String> {
+    let mut aliases = state.relay_aliases.lock().await;
+
+    if alias.trim().is_empty() {
+        aliases.remove(&peer_id);
+    } else {
+        aliases.insert(peer_id, alias.trim().to_string());
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_relay_alias(
+    state: State<'_, AppState>,
+    peer_id: String,
+) -> Result<Option<String>, String> {
+    let aliases = state.relay_aliases.lock().await;
+    Ok(aliases.get(&peer_id).cloned())
 }
