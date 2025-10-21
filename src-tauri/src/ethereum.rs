@@ -17,6 +17,12 @@ pub struct EthAccount {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct EthSignedMessage {
+    pub message: String,
+    pub signature: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AccountInfo {
     pub address: String,
     pub balance: String,
@@ -1348,4 +1354,36 @@ pub async fn send_transaction(
     let tx_hash = format!("{:?}", pending_tx.tx_hash());
 
     Ok(tx_hash)
+}
+
+/// Fetches the full details of a block by its number.
+/// This is used by the blockchain indexer to get reward data.
+pub async fn get_block_details_by_number(
+    block_number: u64,
+) -> Result<Option<serde_json::Value>, String> {
+    let client = reqwest::Client::new();
+    let payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_getBlockByNumber",
+        "params": [format!("0x{:x}", block_number), true], // true for full transaction objects
+        "id": 1
+    });
+
+    let response = client
+        .post("http://127.0.0.1:8545")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send request for block {}: {}", block_number, e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response for block {}: {}", block_number, e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error for block {}: {}", block_number, error));
+    }
+
+    Ok(json_response["result"].clone().into())
 }

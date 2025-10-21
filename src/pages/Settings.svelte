@@ -64,6 +64,7 @@
     enableAutorelay: true,
     preferredRelays: [],
     enableRelayServer: false,
+    autoStartDht: false,
     anonymousMode: false,
     shareAnalytics: true,
 
@@ -83,8 +84,8 @@
     enableBandwidthScheduling: false,
     bandwidthSchedules: [],
   };
-  let localSettings: AppSettings = get(settings); 
-  let savedSettings: AppSettings = get(settings);
+  let localSettings: AppSettings = JSON.parse(JSON.stringify(get(settings)));
+  let savedSettings: AppSettings = JSON.parse(JSON.stringify(localSettings));
   let hasChanges = false;
   let fileInputEl: HTMLInputElement | null = null;
   let selectedLanguage: string | undefined = undefined;
@@ -97,7 +98,6 @@
 
   // NAT & privacy configuration text bindings
   let autonatServersText = '';
-  let preferredRelaysText = '';
   let trustedProxyText = '';
 
   const locationOptions = GEO_REGIONS
@@ -116,7 +116,6 @@
 
   // Initialize configuration text from arrays
   $: autonatServersText = localSettings.autonatServers?.join('\n') || '';
-  $: preferredRelaysText = localSettings.preferredRelays?.join('\n') || '';
   $: trustedProxyText = localSettings.trustedProxyRelays?.join('\n') || '';
 
   const privacyModeOptions = [
@@ -133,6 +132,72 @@
       label: "Strict Relay-only (never expose your IP)",
     },
   ];
+
+  type PrivacySnapshot = Pick<
+    AppSettings,
+    "ipPrivacyMode" | "enableProxy" | "proxyAddress" | "disableDirectNatTraversal" | "enableAutorelay"
+  >;
+
+  let anonymousModeRestore: PrivacySnapshot | null = null;
+
+  function capturePrivacySnapshot(): void {
+    if (anonymousModeRestore !== null) {
+      return;
+    }
+    anonymousModeRestore = {
+      ipPrivacyMode: localSettings.ipPrivacyMode,
+      enableProxy: localSettings.enableProxy,
+      proxyAddress: localSettings.proxyAddress,
+      disableDirectNatTraversal: localSettings.disableDirectNatTraversal,
+      enableAutorelay: localSettings.enableAutorelay,
+    };
+  }
+
+  function applyAnonymousDefaults(): void {
+    capturePrivacySnapshot();
+
+    const needsUpdate =
+      localSettings.ipPrivacyMode !== "strict" ||
+      !localSettings.enableProxy ||
+      !localSettings.disableDirectNatTraversal ||
+      !localSettings.enableAutorelay;
+
+    if (!needsUpdate) {
+      return;
+    }
+
+    localSettings = {
+      ...localSettings,
+      ipPrivacyMode: "strict",
+      enableProxy: true,
+      enableAutorelay: true,
+      disableDirectNatTraversal: true,
+    };
+  }
+
+  function restorePrivacySnapshot(): void {
+    if (!anonymousModeRestore) {
+      return;
+    }
+
+    const snapshot = anonymousModeRestore;
+    anonymousModeRestore = null;
+
+    localSettings = {
+      ...localSettings,
+      ipPrivacyMode: snapshot.ipPrivacyMode,
+      enableProxy: snapshot.enableProxy,
+      proxyAddress: snapshot.proxyAddress,
+      disableDirectNatTraversal: snapshot.disableDirectNatTraversal,
+      enableAutorelay: snapshot.enableAutorelay,
+    };
+  }
+
+  $: if (localSettings.anonymousMode) {
+    applyAnonymousDefaults();
+  } else {
+    restorePrivacySnapshot();
+  }
 
   $: privacyStatus = (() => {
     switch (localSettings.ipPrivacyMode) {
@@ -394,13 +459,6 @@
       .filter(s => s.length > 0);
   }
 
-  function updatePreferredRelays() {
-    localSettings.preferredRelays = preferredRelaysText
-      .split('\n')
-      .map(s => s.trim())
-      .filter(s => s.length > 0);
-  }
-
   function updateTrustedProxyRelays() {
     localSettings.trustedProxyRelays = trustedProxyText
       .split('\n')
@@ -417,8 +475,8 @@
     // Set the store, which ensures it is available globally
     settings.set({ ...defaultSettings, ...loadedSettings }); 
     // Update local state from the store after loading
-    localSettings = get(settings); 
-    savedSettings = get(settings); 
+    localSettings = JSON.parse(JSON.stringify(get(settings)));
+    savedSettings = JSON.parse(JSON.stringify(localSettings)); 
   } catch (e) {
     console.error("Failed to load settings:", e);
   }
@@ -788,26 +846,18 @@ function sectionMatches(section: string, query: string) {
           <div class="flex items-center gap-2">
             <input
               type="checkbox"
-              id="enable-autorelay"
-              bind:checked={localSettings.enableAutorelay}
+              id="auto-start-dht"
+              bind:checked={localSettings.autoStartDht}
             />
-            <Label for="enable-autorelay" class="cursor-pointer">
-              {$t("settings.autorelay.enable")}
+            <Label for="auto-start-dht" class="cursor-pointer">
+              Auto-start Network on App Launch
             </Label>
           </div>
 
-          {#if localSettings.enableAutorelay}
-            <div class="space-y-2 ml-6">
-              <Label for="preferred-relays">{$t("settings.autorelay.relays")}</Label>
-              <textarea
-                id="preferred-relays"
-                bind:value={localSettings.preferredRelays}
-                placeholder="/ip4/147.75.80.110/tcp/4001/p2p/QmNnooDu..."
-                rows="3"
-                class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
-              ></textarea>
-              <p class="text-xs text-muted-foreground">
-                {$t("settings.autorelay.description")}
+          {#if localSettings.autoStartDht}
+            <div class="ml-6 p-3 bg-blue-50 rounded-md border border-blue-200">
+              <p class="text-xs text-blue-900">
+                The DHT network will automatically start when you open the application, so you don't have to manually start it each time.
               </p>
             </div>
           {/if}
@@ -819,24 +869,33 @@ function sectionMatches(section: string, query: string) {
               bind:checked={localSettings.enableRelayServer}
             />
             <Label for="enable-relay-server" class="cursor-pointer">
-              Enable Relay Server
+              Enable Relay Server <span class="text-xs text-green-600 font-semibold">(Recommended - Enabled by Default)</span>
             </Label>
           </div>
 
           {#if localSettings.enableRelayServer}
-            <div class="ml-6 p-4 bg-gray-50 rounded-md border border-gray-200">
-              <p class="text-sm text-gray-900 mb-2">
-                <strong>Relay Server Enabled</strong>
+            <div class="ml-6 p-4 bg-green-50 rounded-md border border-green-200">
+              <p class="text-sm text-green-900 mb-2">
+                <strong>✅ Relay Server Enabled</strong>
               </p>
-              <p class="text-xs text-gray-700 mb-2">
-                Your node will act as a relay server, helping peers behind NATs connect to the network.
+              <p class="text-xs text-green-700 mb-2">
+                Your node helps peers behind NAT connect. This strengthens the decentralized network without requiring central infrastructure.
               </p>
-              <ul class="text-xs text-gray-600 space-y-1">
-                <li>• Helps peers behind restrictive NATs connect</li>
-                <li>• Earns reputation points for your node</li>
-                <li>• Uses bandwidth when actively relaying circuits</li>
-                <li>• Can be disabled at any time</li>
+              <ul class="text-xs text-green-600 space-y-1">
+                <li>• Enables cross-network peer connections</li>
+                <li>• Strengthens network decentralization</li>
+                <li>• Minimal resource usage when idle</li>
+                <li>• Only uses bandwidth when actively relaying</li>
               </ul>
+            </div>
+          {:else}
+            <div class="ml-6 p-4 bg-yellow-50 rounded-md border border-yellow-200">
+              <p class="text-sm text-yellow-900 mb-2">
+                <strong>⚠️ Relay Server Disabled</strong>
+              </p>
+              <p class="text-xs text-yellow-700">
+                Your node cannot help others connect across networks. Enable this to strengthen the network.
+              </p>
             </div>
           {/if}
         </div>
@@ -1166,37 +1225,6 @@ function sectionMatches(section: string, query: string) {
           {/if}
         </div>
 
-        <!-- AutoRelay Configuration -->
-        <div class="space-y-3 border-t pt-3">
-          <div class="flex items-center gap-2">
-            <input
-              type="checkbox"
-              id="enable-autorelay"
-              bind:checked={localSettings.enableAutorelay}
-            />
-            <Label for="enable-autorelay" class="cursor-pointer">
-              Enable Circuit Relay v2 (AutoRelay)
-            </Label>
-          </div>
-
-          {#if localSettings.enableAutorelay}
-            <div>
-              <Label for="preferred-relays">Preferred Relay Nodes (optional)</Label>
-              <textarea
-                id="preferred-relays"
-                bind:value={preferredRelaysText}
-                on:blur={updatePreferredRelays}
-                placeholder="/ip4/relay.example.com/tcp/4001/p2p/QmRelayId&#10;One multiaddr per line"
-                rows="3"
-                class="w-full px-3 py-2 border rounded-md text-sm"
-              ></textarea>
-              <p class="text-xs text-muted-foreground mt-1">
-                Leave empty to use bootstrap nodes as relays
-              </p>
-            </div>
-          {/if}
-        </div>
-
         <div class="flex items-center gap-2">
           <input
             type="checkbox"
@@ -1410,7 +1438,7 @@ function sectionMatches(section: string, query: string) {
         variant="outline"
         size="xs"
         disabled={!hasChanges}
-        on:click={() => (localSettings = { ...savedSettings })}
+        on:click={() => (localSettings = JSON.parse(JSON.stringify(savedSettings)))}
         class={`transition-colors duration-200 ${!hasChanges ? "cursor-not-allowed opacity-50" : ""}`}
       >
         {$t("actions.cancel")}

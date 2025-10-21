@@ -1,6 +1,6 @@
 <script lang="ts">
     import './styles/globals.css'
-    import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star } from 'lucide-svelte'
+    import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Server } from 'lucide-svelte'
     import UploadPage from './pages/Upload.svelte'
     import DownloadPage from './pages/Download.svelte'
     import ProxyPage from './pages/Proxy.svelte'
@@ -10,6 +10,7 @@
     import SettingsPage from './pages/Settings.svelte'
     import MiningPage from './pages/Mining.svelte'
     import ReputationPage from './pages/Reputation.svelte'
+    import RelayPage from './pages/Relay.svelte'
     import NotFound from './pages/NotFound.svelte'
     import ProxySelfTest from './routes/proxy-self-test.svelte'
     import { networkStatus, settings, userLocation } from './lib/stores'
@@ -156,6 +157,7 @@
         { id: 'download', label: $t('nav.download'), icon: Download },
         { id: 'upload', label: $t('nav.upload'), icon: Upload },
         { id: 'network', label: $t('nav.network'), icon: Globe },
+        { id: 'relay', label: $t('nav.relay'), icon: Server },
         { id: 'mining', label: $t('nav.mining'), icon: Cpu },
         { id: 'proxy', label: $t('nav.proxy'), icon: Shield },
         { id: 'analytics', label: $t('nav.analytics'), icon: BarChart3 },
@@ -184,6 +186,10 @@
       {
         path: "network",
         component: NetworkPage
+      },
+      {
+        path: "relay",
+        component: RelayPage
       },
       {
         path: "mining",
@@ -221,8 +227,9 @@
   <div class="flex bg-background h-full">
     {#if !loading}
     <!-- Desktop Sidebar -->
-    <div class="hidden md:block {sidebarCollapsed ? 'w-16' : 'w-64'} bg-card border-r transition-all">
-      <nav class="p-2 space-y-2">
+    <!-- Make the sidebar sticky so it stays visible while the main content scrolls -->
+    <div class="hidden md:block {sidebarCollapsed ? 'w-16' : 'w-64'} bg-card border-r transition-all sticky top-0 h-screen">
+      <nav class="p-2 space-y-2 h-full overflow-y-auto">
         <!-- Sidebar Header (desktop only) -->
         <div class="flex items-center justify-between px-2 py-2 mb-2">
           <div class="flex items-center">
@@ -336,8 +343,9 @@
 {/if}
 {/if}
 
-    <!-- Main Content -->
-    <div id="main-content" class="flex-1 overflow-y-auto">
+  <!-- Main Content -->
+  <!-- Ensure main content doesn't go under the sticky sidebar -->
+  <div id="main-content" class="flex-1 overflow-y-auto">
       <div class="p-6">
         <!-- <Router {routes} /> -->
          

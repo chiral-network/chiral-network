@@ -143,8 +143,17 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
     } else {
         None
     };
-    let enable_autorelay = !args.disable_autorelay;
-    if enable_autorelay {
+    // ---- finalize AutoRelay flag (bootstrap OFF + ENV OFF)
+    let mut final_enable_autorelay = !args.disable_autorelay;
+    if args.is_bootstrap {
+        final_enable_autorelay = false;
+        info!("AutoRelay disabled on bootstrap (hotfix).");
+    }
+    if std::env::var("CHIRAL_DISABLE_AUTORELAY").ok().as_deref() == Some("1") {
+        final_enable_autorelay = false;
+        info!("AutoRelay disabled via env CHIRAL_DISABLE_AUTORELAY=1");
+    }
+    if final_enable_autorelay {
         if !args.relay.is_empty() {
             info!(
                 "AutoRelay enabled with {} preferred relays",
@@ -154,7 +163,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             info!("AutoRelay enabled, will discover relays from bootstrap nodes");
         }
     } else {
-        info!("AutoRelay disabled via CLI");
+        info!("AutoRelay disabled");
     }
 
     // Start DHT node
@@ -168,11 +177,13 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         args.autonat_server.clone(),
         args.socks5_proxy,
         file_transfer_service.clone(),
+        None, // chunk_manager
         None, // chunk_size_kb: use default
         None, // cache_size_mb: use default
-        enable_autorelay,
+        final_enable_autorelay,
         args.relay.clone(),
-        false, // enable_relay_server - disabled by default
+        args.is_bootstrap, // enable_relay_server on bootstrap
+        None,
     )
     .await?;
     let peer_id = dht_service.get_peer_id().await;
@@ -235,6 +246,8 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             version: Some(1),
             cids: None,
             is_root: true,
+            encrypted_key_bundle: None,
+            download_path: None,
         };
 
         dht_service.publish_file(example_metadata).await?;

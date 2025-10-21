@@ -5,7 +5,7 @@
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
-  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation } from 'lucide-svelte'
+  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation, Globe, Blocks, RefreshCw } from 'lucide-svelte'  
   import { files, downloadQueue, activeTransfers } from '$lib/stores'
   import { dhtService } from '$lib/dht'
   import DownloadSearchSection from '$lib/components/download/DownloadSearchSection.svelte'
@@ -17,22 +17,33 @@
   import { initDownloadTelemetry, disposeDownloadTelemetry } from '$lib/downloadTelemetry'
   import { MultiSourceDownloadService, type MultiSourceProgress } from '$lib/services/multiSourceDownloadService'
   import { listen } from '@tauri-apps/api/event'
+  import PeerSelectionService from '$lib/services/peerSelectionService'
+import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
 
- 
   import { invoke }  from '@tauri-apps/api/core';
 
-  
   const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params)
 
+ // Protocol selection state
+  $: selectedProtocol = $protocolStore
+  $: hasSelectedProtocol = selectedProtocol !== null
+
+  function handleProtocolSelect(protocol: 'WebRTC' | 'Bitswap') {
+    protocolStore.set(protocol)
+  }
+
+  function changeProtocol() {
+    protocolStore.reset()
+  }
   onMount(() => {
     initDownloadTelemetry()
-    
+
     // Listen for multi-source download events
     const setupEventListeners = async () => {
       try {
         const unlistenProgress = await listen('multi_source_progress_update', (event) => {
           const progress = event.payload as MultiSourceProgress
-          
+
           // Find the corresponding file and update its progress
           files.update(f => f.map(file => {
             if (file.hash === progress.fileHash) {
@@ -47,14 +58,14 @@
             }
             return file;
           }));
-          
+
           multiSourceProgress.set(progress.fileHash, progress)
           multiSourceProgress = multiSourceProgress // Trigger reactivity
         })
 
         const unlistenCompleted = await listen('multi_source_download_completed', (event) => {
           const data = event.payload as any
-          
+
           // Update file status to completed
           files.update(f => f.map(file => {
             if (file.hash === data.file_hash) {
@@ -67,7 +78,7 @@
             }
             return file;
           }));
-          
+
           multiSourceProgress.delete(data.file_hash)
           multiSourceProgress = multiSourceProgress
           showNotification(`Multi-source download completed: ${data.file_name}`, 'success')
@@ -80,7 +91,7 @@
 
         const unlistenFailed = await listen('multi_source_download_failed', (event) => {
           const data = event.payload as any
-          
+
           // Update file status to failed
           files.update(f => f.map(file => {
             if (file.hash === data.file_hash) {
@@ -91,11 +102,99 @@
             }
             return file;
           }));
-          
+
           multiSourceProgress.delete(data.file_hash)
           multiSourceProgress = multiSourceProgress
           showNotification(`Multi-source download failed: ${data.error}`, 'error')
         })
+
+        const unlistenBitswapProgress = await listen('bitswap_chunk_downloaded', (event) => {
+          const progress = event.payload as {
+                fileHash: string;
+                chunkIndex: number;
+                totalChunks: number;
+                chunkSize: number;
+            };
+
+            files.update(f => f.map(file => {
+                if (file.hash === progress.fileHash) {
+                    const downloadedChunks = new Set(file.downloadedChunks || []);
+                    
+                    if (downloadedChunks.has(progress.chunkIndex)) {
+                        return file; // Already have this chunk, do nothing.
+                    }
+                    downloadedChunks.add(progress.chunkIndex);
+                    const newSize = downloadedChunks.size;
+
+                    let bitswapStartTime = file.downloadStartTime;
+                    if (newSize === 1) {
+                        // This is the first chunk, start the timer
+                        bitswapStartTime = Date.now();
+                    }
+
+                    let speed = file.speed || '0 B/s';
+                    let eta = file.eta || 'N/A';
+
+                    if (bitswapStartTime) {
+                        const elapsedTimeMs = Date.now() - bitswapStartTime;
+                        
+                        // We have downloaded `newSize - 1` chunks since the timer started.
+                        const downloadedBytesSinceStart = (newSize - 1) * progress.chunkSize;
+                        
+                        if (elapsedTimeMs > 500) { // Get a better average over a short time.
+                            const speedBytesPerSecond = downloadedBytesSinceStart > 0 ? (downloadedBytesSinceStart / elapsedTimeMs) * 1000 : 0;
+                            
+                            if (speedBytesPerSecond < 1000) {
+                                speed = `${speedBytesPerSecond.toFixed(0)} B/s`;
+                            } else if (speedBytesPerSecond < 1000 * 1000) {
+                                speed = `${(speedBytesPerSecond / 1000).toFixed(2)} KB/s`;
+                            } else {
+                                speed = `${(speedBytesPerSecond / (1000 * 1000)).toFixed(2)} MB/s`;
+                            }
+
+                            const remainingChunks = progress.totalChunks - newSize;
+                            if (speedBytesPerSecond > 0) {
+                                const remainingBytes = remainingChunks * progress.chunkSize;
+                                const etaSeconds = remainingBytes / speedBytesPerSecond;
+                                eta = `${Math.round(etaSeconds)}s`;
+                            } else {
+                                eta = 'N/A';
+                            }
+                        }
+                    }
+                    
+                    const percentage = (newSize / progress.totalChunks) * 100;
+                    
+                    return {
+                        ...file,
+                        progress: percentage,
+                        status: 'downloading' as const,
+                        downloadedChunks: Array.from(downloadedChunks),
+                        totalChunks: progress.totalChunks,
+                        downloadStartTime: bitswapStartTime,
+                        speed: speed,
+                        eta: eta,
+                    };
+                }
+                return file;
+            }));
+        });
+
+        const unlistenDownloadCompleted = await listen('file_content', (event) => {
+            const metadata = event.payload as any;
+            files.update(f => f.map(file => {
+                if (file.hash === metadata.merkleRoot) {
+                    return {
+                        ...file,
+                        status: 'completed' as const,
+                        progress: 100,
+                        downloadPath: metadata.downloadPath
+                    };
+                }
+                return file;
+            }));
+        });
+
 
         // Cleanup listeners on destroy
         return () => {
@@ -103,13 +202,15 @@
           unlistenCompleted()
           unlistenStarted()
           unlistenFailed()
+          unlistenBitswapProgress()
+          unlistenDownloadCompleted()
         }
       } catch (error) {
         console.error('Failed to setup event listeners:', error)
         return () => {} // Return empty cleanup function
       }
     }
-    
+
     setupEventListeners()
   })
 
@@ -302,10 +403,6 @@
   async function handleSearchDownload(metadata: FileMetadata) {
     const allFiles = [...$downloadQueue]
     const existingFile = allFiles.find((file) => file.hash === metadata.fileHash)
-    // Uncomment below if you need to save raw data for testing
-    // const fileName = metadata.fileName;
-    // const fileData = new Uint8Array(metadata.fileData ?? []);
-    // saveRawData(fileName, fileData);
 
     if (existingFile) {
       let statusMessage = ''
@@ -482,6 +579,7 @@
     $files.forEach(file => {
       if (file.status === 'downloading' && !activeSimulations.has(file.id)) {
         // Start simulation only if not already active
+        if (selectedProtocol!=='Bitswap')
         simulateDownloadProgress(file.id)
       }
     })
@@ -529,7 +627,10 @@
       eta: 'N/A'      // Ensure eta property exists
     }
     files.update(f => [...f, downloadingFile])
-    simulateDownloadProgress(downloadingFile.id)
+    if (selectedProtocol!=="Bitswap"){
+      console.log('simulating download')
+        simulateDownloadProgress(downloadingFile.id)
+    }
   }
 
   function togglePause(fileId: string) {
@@ -643,15 +744,15 @@
 
         // If the local copy is available and we're running in Tauri, copy directly to outputPath
         const localPeerIdNow = dhtService.getPeerId ? dhtService.getPeerId() : null;
-       
+
         if (outputPath && (localPeerIdNow || seeders.includes('local_peer'))) {
           try {
-            
+
             let hash = fileToDownload.hash
             console.log("🔍 DEBUG: Attempting to get file data for hash:", hash);
             const base64Data = await invoke('get_file_data', { fileHash: hash }) as string;
             console.log("✅ DEBUG: Retrieved base64 data length:", base64Data.length);
-            
+
             // Convert base64 to Uint8Array
             let data_ = new Uint8Array(0); // Default empty array
             if (base64Data && base64Data.length > 0) {
@@ -664,7 +765,7 @@
             } else {
               console.warn("No file data found for hash:", hash);
             }
-            
+
             console.log("Final data array length:", data_.length);
 
             // Write the file data to the output path
@@ -693,14 +794,14 @@
 
       // Show "automatically started" message now that download is proceeding
       showNotification(tr('download.notifications.autostart'), 'info');
-        
+
        if (fileToDownload.isEncrypted && fileToDownload.manifest) {
         // 1. Download all the required encrypted chunks using the P2P service.
         //    This new function will handle fetching multiple chunks in parallel.
         showNotification(`Downloading encrypted chunks for "${fileToDownload.name}"...`, 'info');
-        
+
         const { p2pFileTransferService } = await import('$lib/services/p2pFileTransfer');
-        
+
 
         await p2pFileTransferService.downloadEncryptedChunks(
           fileToDownload.manifest,
@@ -727,29 +828,59 @@
       } else {
         // Check if we should use multi-source download
         const seeders = fileToDownload.seederAddresses || [];
-        
+
         if (multiSourceEnabled && seeders.length >= 2 && fileToDownload && fileToDownload.size > 1024 * 1024) {
           // Use multi-source download for files > 1MB with multiple seeders
+          const downloadStartTime = Date.now();
           try {
             showNotification(`Starting multi-source download from ${seeders.length} peers...`, 'info');
-            
+
             if (!outputPath) {
               throw new Error('Output path is required for download');
             }
-            
+
             await MultiSourceDownloadService.startDownload(
               fileToDownload.hash,
               outputPath,
               {
-                maxPeers: maxPeersPerDownload
+                maxPeers: maxPeersPerDownload,
+                selectedPeers: seeders,  // Pass selected peers from peer selection modal
+                peerAllocation: (fileToDownload as any).peerAllocation  // Pass manual allocation if available
               }
             );
 
             // The progress updates will be handled by the event listeners in onMount
             activeSimulations.delete(fileId);
 
+            // Record transfer success metrics for each peer
+            const downloadDuration = Date.now() - downloadStartTime;
+            for (const peerId of seeders) {
+              try {
+                await PeerSelectionService.recordTransferSuccess(
+                  peerId,
+                  fileToDownload.size,
+                  downloadDuration
+                );
+              } catch (error) {
+                console.error(`Failed to record success for peer ${peerId}:`, error);
+              }
+            }
+
           } catch (error) {
             console.error('Multi-source download failed, falling back to P2P:', error);
+
+            // Record transfer failures for each peer
+            for (const peerId of seeders) {
+              try {
+                await PeerSelectionService.recordTransferFailure(
+                  peerId,
+                  error instanceof Error ? error.message : 'Multi-source download failed'
+                );
+              } catch (recordError) {
+                console.error(`Failed to record failure for peer ${peerId}:`, recordError);
+              }
+            }
+
             // Fall back to single-peer P2P download
             await fallbackToP2PDownload();
           }
@@ -780,12 +911,15 @@
               throw new Error('File metadata is not available');
             }
 
+            // Track download start time for metrics
+            const p2pStartTime = Date.now();
+
             // Initiate P2P download with file saving
             const transferId = await p2pFileTransferService.initiateDownloadWithSave(
               fileMetadata,
               seeders,
               outputPath || undefined,
-              (transfer) => {
+              async (transfer) => {
                 // Update UI with transfer progress
                 files.update(f => f.map(file => {
                   if (file.id === fileId) {
@@ -803,11 +937,30 @@
                   return file;
                 }));
 
-                // Show notification on completion or failure
+                // Show notification and record metrics on completion or failure
                 if (transfer.status === 'completed' && fileToDownload) {
                   showNotification(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
+
+                  // Record success metrics for each peer
+                  const duration = Date.now() - p2pStartTime;
+                  for (const peerId of seeders) {
+                    try {
+                      await PeerSelectionService.recordTransferSuccess(peerId, fileToDownload.size, duration);
+                    } catch (error) {
+                      console.error(`Failed to record P2P success for peer ${peerId}:`, error);
+                    }
+                  }
                 } else if (transfer.status === 'failed' && fileToDownload) {
                   showNotification(tr('download.notifications.downloadFailed', { values: { name: fileToDownload.name } }), 'error');
+
+                  // Record failure metrics for each peer
+                  for (const peerId of seeders) {
+                    try {
+                      await PeerSelectionService.recordTransferFailure(peerId, 'P2P download failed');
+                    } catch (error) {
+                      console.error(`Failed to record P2P failure for peer ${peerId}:`, error);
+                    }
+                  }
                 }
               }
             );
@@ -851,7 +1004,6 @@
       );
     }
   }
-
   function changePriority(fileId: string, priority: 'low' | 'normal' | 'high') {
     downloadQueue.update(queue => queue.map(file =>
       file.id === fileId ? { ...file, priority } : file
@@ -933,10 +1085,82 @@
     <p class="text-muted-foreground mt-2">{$t('download.subtitle')}</p>
   </div>
 
-  <DownloadSearchSection
-    on:download={(event) => handleSearchDownload(event.detail)}
-    on:message={handleSearchMessage}
-  />
+  <!-- Protocol Selection -->
+  {#if !hasSelectedProtocol}
+   <Card>
+      <div class="p-6">
+        <h2 class="text-2xl font-bold mb-6 text-center">{$t('download.selectProtocol')}</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-2xl mx-auto">
+          <!-- WebRTC Option -->
+          <button
+            class="p-6 border-2 rounded-lg hover:border-blue-500 transition-colors duration-200 flex flex-col items-center gap-4 {selectedProtocol === 'WebRTC' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700'}"
+            on:click={() => handleProtocolSelect('WebRTC')}
+          >
+            <div class="w-16 h-16 flex items-center justify-center bg-blue-100 rounded-full">
+              <Globe class="w-8 h-8 text-blue-600" />
+            </div>
+            <div class="text-center">
+              <h3 class="text-lg font-semibold mb-2">WebRTC</h3>
+              <p class="text-sm text-gray-600 dark:text-gray-400">
+                {$t('upload.webrtcDescription')}
+              </p>
+            </div>
+          </button>
+
+          <!-- Bitswap Option -->
+          <button
+            class="p-6 border-2 rounded-lg hover:border-blue-500 transition-colors duration-200 flex flex-col items-center gap-4 {selectedProtocol === 'Bitswap' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700'}"
+            on:click={() => handleProtocolSelect('Bitswap')}
+          >
+            <div class="w-16 h-16 flex items-center justify-center bg-blue-100 rounded-full">
+              <Blocks class="w-8 h-8 text-blue-600" />
+            </div>
+            <div class="text-center">
+              <h3 class="text-lg font-semibold mb-2">Bitswap</h3>
+              <p class="text-sm text-gray-600 dark:text-gray-400">
+                {$t('upload.bitswapDescription')}
+              </p>
+            </div>
+          </button>
+        </div>
+      </div>
+    </Card>
+
+  {:else}
+    <DownloadSearchSection
+      on:download={(event) => handleSearchDownload(event.detail)}
+      on:message={handleSearchMessage}
+      isBitswap={selectedProtocol === 'Bitswap'}
+    />
+    <!-- Protocol Indicator and Switcher -->
+    <Card class="p-4">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="flex items-center justify-center w-10 h-10 bg-gradient-to-br from-blue-500/10 to-blue-500/5 rounded-lg border border-blue-500/20">
+            {#if selectedProtocol === 'WebRTC'}
+              <Globe class="h-5 w-5 text-blue-600" />
+            {:else}
+              <Blocks class="h-5 w-5 text-blue-600" />
+            {/if}
+          </div>
+          <div>
+            <p class="text-sm font-semibold">{$t('download.currentProtocol')}: {selectedProtocol}</p>
+            <p class="text-xs text-muted-foreground">
+              {selectedProtocol === 'WebRTC' ? $t('upload.webrtcDescription') : $t('upload.bitswapDescription')}
+            </p>
+          </div>
+        </div>
+        <button
+          on:click={changeProtocol}
+          class="inline-flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium border border-input bg-background hover:bg-muted transition-colors"
+        >
+          <RefreshCw class="h-4 w-4 mr-2" />
+          {$t('download.changeProtocol')}
+        </button>
+      </div>
+    </Card>
+  {/if}
+
   <!-- Unified Downloads List -->
   <Card class="p-6">
     <!-- Header Section -->
@@ -1296,11 +1520,25 @@
                   </div>
                   <span class="text-foreground">{(file.progress || 0).toFixed(2)}%</span>
                 </div>
-                <Progress
-                  value={file.progress || 0}
-                  max={100}
-                  class="h-2 bg-border [&>div]:bg-green-500 w-full"
-                />
+                {#if selectedProtocol === 'Bitswap'}
+                  <div class="w-full bg-border rounded-full h-2 flex overflow-hidden" title={`Chunks: ${file.downloadedChunks?.length || 0} / ${file.totalChunks || '?'}`}>
+                    {#if file.totalChunks > 0}
+                      {@const chunkWidth = 100 / file.totalChunks}
+                      {#each Array.from({ length: file.totalChunks }) as _, i}
+                        <div
+                          class="h-2 {file.downloadedChunks?.includes(i) ? 'bg-green-500' : 'bg-transparent'}"
+                          style="width: {chunkWidth}%"
+                        ></div>
+                      {/each}
+                    {/if}
+                  </div>
+                {:else}
+                  <Progress
+                    value={file.progress || 0}
+                    max={100}
+                    class="h-2 bg-border [&>div]:bg-green-500 w-full"
+                  />
+                {/if}
                 {#if multiSourceProgress.has(file.hash)}
                   {@const msProgress = multiSourceProgress.get(file.hash)}
                   {#if msProgress && msProgress.peerAssignments.length > 0}
@@ -1310,7 +1548,7 @@
                         <div class="flex items-center gap-2 text-xs">
                           <span class="w-20 truncate">{peerAssignment.peerId.slice(0, 8)}...</span>
                           <div class="flex-1 bg-muted rounded-full h-1">
-                            <div 
+                            <div
                               class="bg-purple-500 h-1 rounded-full transition-all duration-300"
                               style="width: {peerAssignment.status === 'Completed' ? 100 : peerAssignment.status === 'Downloading' ? 50 : 0}%"
                             ></div>

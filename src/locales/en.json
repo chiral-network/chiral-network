@@ -32,7 +32,9 @@
       "notFound": "Chiral node binary not found",
       "prompt": "Download the Core-Geth binary to run a local node",
       "button": "Download Chiral Node (~50 MB)",
-      "starting": "Starting download..."
+      "starting": "Starting download...",
+      "currentProtocol": "Current Protocol",
+      "changeProtocol": "Change Protocol"
     },
     "startingNode": "Starting Chiral node...",
     "pleaseWait": "Please wait, this may take a moment.",
@@ -419,6 +421,7 @@
     "download": "Download",
     "upload": "Upload",
     "network": "Network",
+    "relay": "Relay",
     "mining": "Mining",
     "proxy": "Proxy",
     "proxySelfTest": "Proxy Self-Test",
@@ -537,7 +540,8 @@
     "item": {
       "from": "From",
       "to": "To"
-    }
+    },
+    "searchPlaceholder": "Search by address, description, or ID..."
   },
   "keystore": {
     "title": "Save to Local Keystore",
@@ -711,7 +715,8 @@
     "amount": {
       "invalid": "Please enter a valid amount greater than 0.",
       "min": "Amount must be at least {min} Chiral.",
-      "insufficient": "Insufficient balance - Need {more} more Chiral."
+      "insufficient": "Insufficient balance - Need {more} more Chiral.",
+      "insufficientWithFee": "Insufficient funds. Total of {total} Chiral (amount + fee) exceeds your balance of {balance} Chiral."
     },
     "exportFailed": "Export failed. Please try again.",
     "createAccount": "Failed to create account: {error}"
@@ -929,6 +934,8 @@
     "hideAnalytics": "Hide Analytics",
     "showAnalytics": "Show Analytics",
     "loading": "Loading reputation data...",
+    "viewPeers": "Peer Reputation",
+    "viewRelays": "Relay Leaderboard",
     "searchPeers": "Search Peers",
     "searchPlaceholder": "Search by peer ID...",
     "filters": "Filters",
@@ -993,6 +1000,55 @@
       "FileShared": "File Shared"
     }
   },
+  "relay": {
+    "title": "Relay Infrastructure",
+    "subtitle": "Manage relay servers and network connectivity",
+    "server": {
+      "title": "Relay Server",
+      "subtitle": "Help peers connect through your node",
+      "running": "Running",
+      "stopped": "Stopped",
+      "description": "Run a relay server to help peers behind NATs connect to the network and earn reputation.",
+      "benefit1": "Earn reputation points for helping peers",
+      "benefit2": "Improve network connectivity and decentralization",
+      "benefit3": "Uses bandwidth when actively relaying circuits",
+      "enable": "Enable Relay Server",
+      "start": "Start Server",
+      "stop": "Stop Server",
+      "starting": "Starting...",
+      "activeMessage": "Your relay server is active and helping peers!",
+      "earningReputation": "You're earning reputation for each successful connection."
+    },
+    "client": {
+      "title": "AutoRelay Client",
+      "subtitle": "Connect through relay nodes when needed",
+      "enableAutorelay": "Enable Circuit Relay v2 (AutoRelay)",
+      "preferredRelays": "Preferred Relay Nodes (optional)",
+      "preferredRelaysHint": "Leave empty to use bootstrap nodes as relays",
+      "howItWorks": "How it works:",
+      "description": "AutoRelay automatically connects through relay nodes when you're behind a NAT or firewall, ensuring you can always participate in the network."
+    },
+    "leaderboard": {
+      "title": "Top Relay Servers",
+      "subtitle": "Reputation-based ranking of relay nodes",
+      "refresh": "Refresh",
+      "refreshing": "Refreshing...",
+      "loading": "Loading relay reputation data...",
+      "rank": "Rank",
+      "peerId": "Peer ID",
+      "score": "Score",
+      "circuits": "Circuits",
+      "bandwidth": "Bandwidth",
+      "uptime": "Uptime",
+      "points": "pts",
+      "lastSeen": "last seen",
+      "totalRelays": "Total Relays",
+      "badgedRelays": "Badged Relays",
+      "totalCircuits": "Total Circuits",
+      "noRelays": "No Relay Servers Found",
+      "noRelaysDesc": "Start running a relay server to appear on the leaderboard"
+    }
+  },
   "upload": {
     "title": "Upload Files",
     "subtitle": "Share your files on the Chiral Network",
@@ -1040,7 +1096,11 @@
       "publicKeyHint": "Enter the recipient's X25519 public key (hex format, 64 characters). The file will be encrypted so only they can decrypt it. Leave empty to encrypt for yourself.",
       "invalidPublicKey": "⚠️ Invalid public key format. Must be 64 hexadecimal characters.",
       "encryptedBadge": "Encrypted"
-    }
+    },
+    "currentProtocol": "Current Protocol",
+    "changeProtocol": "Change Protocol",
+    "webrtcDescription": "Fast peer-to-peer transfers using WebRTC",
+    "bitswapDescription": "IPFS-compatible block exchange protocol"
   },
   "bandwidthScheduling": {
     "title": "Bandwidth Scheduling",
