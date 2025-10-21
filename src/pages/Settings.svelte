@@ -214,7 +214,7 @@
   $: hasChanges = JSON.stringify(localSettings) !== JSON.stringify(savedSettings);
 
   async function saveSettings() {
-    if (!isValid || maxStorageError) {
+    if (!isValid || maxStorageError || storagePathError) {
       return;
     }
 
@@ -323,7 +323,7 @@
 
   $: {
     // Open Storage section if it has any errors (but don't close it if already open)
-    const hasStorageError = !!maxStorageError || !!errors.maxStorageSize || !!errors.cleanupThreshold;
+    const hasStorageError = !!maxStorageError || !!storagePathError || !!errors.maxStorageSize || !!errors.cleanupThreshold;
     if (hasStorageError) storageSectionOpen = true;
 
     // Open Network section if it has any errors (but don't close it if already open)
@@ -362,7 +362,8 @@
       });
 
       if (typeof result === "string") {
-        localSettings.storagePath = result.replace(home, "~");
+        // Reassign the entire object to trigger reactivity
+        localSettings = { ...localSettings, storagePath: result };
       }
     } catch {
       // Fallback for browser environment
@@ -370,7 +371,8 @@
         // Use File System Access API (Chrome/Edge)
         try {
           const directoryHandle = await (window as any).showDirectoryPicker();
-          localSettings.storagePath = directoryHandle.name;
+          // Reassign the entire object to trigger reactivity
+          localSettings = { ...localSettings, storagePath: directoryHandle.name };
         } catch (err: any) {
           if (err.name !== "AbortError") {
             console.error("Directory picker error:", err);
@@ -383,7 +385,8 @@
           localSettings.storagePath
         );
         if (newPath) {
-          localSettings.storagePath = newPath;
+          // Reassign the entire object to trigger reactivity
+          localSettings = { ...localSettings, storagePath: newPath };
         }
       }
     }
@@ -467,6 +470,16 @@
   }
 
     onMount(async () => {
+    // Get platform-specific default storage path from Tauri
+    try {
+      const platformDefaultPath = await invoke<string>("get_default_storage_path");
+      defaultSettings.storagePath = platformDefaultPath;
+    } catch (e) {
+      console.error("Failed to get default storage path:", e);
+      // Fallback to the hardcoded default if the command fails
+      defaultSettings.storagePath = "~/ChiralNetwork/Storage";
+    }
+
     // Load settings from local storage
     const stored = localStorage.getItem("chiralSettings");
     if (stored) {
@@ -541,10 +554,45 @@ selectedLanguage = initial; // Synchronize dropdown display value
 
   let freeSpaceGB: number | null = null;
   let maxStorageError: string | null = null;
+  let storagePathError: string | null = null;
 
   onMount(async () => {
     freeSpaceGB = await invoke('get_available_storage');
   });
+
+  // Check if storage path exists
+  async function checkStoragePathExists(path: string) {
+    if (!path || path.trim() === '') {
+      storagePathError = null;
+      return;
+    }
+
+    try {
+      // Expand ~ to actual home directory for checking
+      let pathToCheck = path;
+      if (path.startsWith("~/") || path.startsWith("~\\")) {
+        const home = await homeDir();
+        pathToCheck = path.replace(/^~/, home);
+      } else if (path === "~") {
+        pathToCheck = await homeDir();
+      }
+
+      const exists = await invoke<boolean>('check_directory_exists', { path: pathToCheck });
+      if (!exists) {
+        storagePathError = 'Directory does not exist';
+      } else {
+        storagePathError = null;
+      }
+    } catch (error) {
+      console.error('Failed to check directory:', error);
+      storagePathError = null;
+    }
+  }
+
+  // Check storage path whenever it changes
+  $: if (localSettings.storagePath) {
+    checkStoragePathExists(localSettings.storagePath);
+  }
 
   $: {
     if (freeSpaceGB !== null && localSettings.maxStorageSize > freeSpaceGB) {
@@ -657,7 +705,7 @@ function sectionMatches(section: string, query: string) {
               id="storage-path"
               bind:value={localSettings.storagePath}
               placeholder="~/ChiralNetwork/Storage"
-              class="flex-1"
+              class={`flex-1 ${storagePathError ? 'border-red-500 focus:border-red-500 ring-red-500' : ''}`}
             />
             <Button
               variant="outline"
@@ -667,6 +715,10 @@ function sectionMatches(section: string, query: string) {
               <FolderOpen class="h-4 w-4" />
             </Button>
           </div>
+          {#if storagePathError}
+            <p class="mt-1 text-sm text-red-500">{storagePathError}</p>
+          {/if}
+          
         </div>
 
         <div class="grid grid-cols-2 gap-4">
@@ -1447,8 +1499,9 @@ function sectionMatches(section: string, query: string) {
       <Button
         size="xs"
         on:click={saveSettings}
-        disabled={!hasChanges || !!maxStorageError || !isValid}
-        class={`transition-colors duration-200 ${!hasChanges || !!maxStorageError || !isValid ? "cursor-not-allowed opacity-50" : ""}`}
+        disabled={!hasChanges || maxStorageError || storagePathError || !isValid}
+      
+        class={`transition-colors duration-200 ${!hasChanges || maxStorageError || storagePathError || !isValid ? "cursor-not-allowed opacity-50" : ""}`}
       >
         <Save class="h-4 w-4 mr-2" />
         {$t("actions.save")}
