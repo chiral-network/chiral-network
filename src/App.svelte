@@ -13,7 +13,7 @@
     import RelayPage from './pages/Relay.svelte'
     import NotFound from './pages/NotFound.svelte'
     import ProxySelfTest from './routes/proxy-self-test.svelte'
-    import { networkStatus, settings, userLocation } from './lib/stores'
+    import { networkStatus, settings, userLocation, wallet } from './lib/stores'
     import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
     import {onMount, setContext} from 'svelte';
     import { tick } from 'svelte';
@@ -59,6 +59,23 @@
             const unlisten = await listen('seeder_payment_received', async (event: any) => {
               const payload = event.payload;
               console.log('💰 Seeder payment notification received:', payload);
+
+              // Only credit the payment if we are the seeder (not the downloader)
+              const currentWalletAddress = get(wallet).address;
+              const seederAddress = payload.seeder_wallet_address;
+
+              if (!seederAddress || !currentWalletAddress) {
+                console.warn('⚠️ Missing wallet addresses, skipping payment credit');
+                return;
+              }
+
+              // Check if this payment is meant for us (we are the seeder)
+              if (currentWalletAddress.toLowerCase() !== seederAddress.toLowerCase()) {
+                console.log(`⏭️ Skipping payment credit - not for us. Seeder: ${seederAddress}, Us: ${currentWalletAddress}`);
+                return;
+              }
+
+              console.log('✅ This payment is for us! Crediting...');
 
               // Credit the seeder's wallet
               const result = await paymentService.creditSeederPayment(
