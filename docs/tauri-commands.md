@@ -8,6 +8,98 @@ Local functionality inside the desktop app is exposed through Tauri commands and
 > await invoke('<command-name>', { /* parameters */ });
 > ```
 
+## Account Session
+
+### `create_chiral_account`
+- **Parameters**: *(none)*
+- **Returns**: `{ address: string; private_key: string }`
+- **Description**: Generates a new Ethereum-compatible account, saves its private key in memory for the session, and marks it as the active account.
+
+### `import_chiral_account`
+- **Parameters**
+  - `private_key: string`
+- **Returns**: `{ address: string; private_key: string }`
+- **Description**: Imports an existing account from a raw hex private key, storing it as the active session account.
+
+### `has_active_account`
+- **Parameters**: *(none)*
+- **Returns**: `boolean`
+- **Description**: Indicates whether an account is currently loaded in the desktop session.
+
+### `logout`
+- **Parameters**: *(none)*
+- **Returns**: `void`
+- **Description**: Clears the in-memory active account and wipes the cached private key (including the copy held by the WebRTC service).
+
+## Keystore Management
+
+### `save_account_to_keystore`
+- **Parameters**
+  - `address: string`
+  - `private_key: string`
+  - `password: string`
+- **Returns**: `void`
+- **Description**: Encrypts and writes the account to the disk keystore file so it can be restored later.
+
+### `load_account_from_keystore`
+- **Parameters**
+  - `address: string`
+  - `password: string`
+- **Returns**: `{ address: string; private_key: string }`
+- **Description**: Decrypts the stored key material, activates the account in session, and updates dependent services (e.g., WebRTC).
+
+### `list_keystore_accounts`
+- **Parameters**: *(none)*
+- **Returns**: `string[]`
+- **Description**: Lists the addresses currently available in the keystore.
+
+## Blockchain Node Lifecycle
+
+### `start_geth_node`
+- **Parameters**
+  - `data_dir: string`
+  - `rpc_url?: string`
+- **Returns**: `void`
+- **Description**: Launches the bundled geth process, reusing any cached miner address and overriding the RPC URL if provided.
+
+### `stop_geth_node`
+- **Parameters**: *(none)*
+- **Returns**: `void`
+- **Description**: Stops the tracked geth process if it is running.
+
+### `is_geth_running`
+- **Parameters**: *(none)*
+- **Returns**: `boolean`
+- **Description**: Reports whether geth is currently active (either through the tracked child process or by probing the RPC port).
+
+### `check_geth_binary`
+- **Parameters**: *(none)*
+- **Returns**: `boolean`
+- **Description**: Checks whether the geth binary is already installed.
+
+### `download_geth_binary`
+- **Parameters**: *(none)*
+- **Returns**: `void`
+- **Description**: Downloads or updates the geth binary. Emits `geth-download-progress` events with percentage updates while running.
+
+### `get_geth_status`
+- **Parameters**
+  - `data_dir?: string`
+  - `log_lines?: number`
+- **Returns**: `{ installed: boolean; running: boolean; binary_path?: string; data_dir: string; data_dir_exists: boolean; log_path?: string; log_available: boolean; log_lines: number; version?: string; last_logs: string[]; last_updated: number }`
+- **Description**: Aggregates the local node status, including whether the binary exists, current runtime state, latest log lines, and version information.
+
+### `set_miner_address`
+- **Parameters**
+  - `address: string`
+- **Returns**: `void`
+- **Description**: Persists the desired miner/etherbase address so future geth launches reuse it.
+
+### `get_network_peer_count`
+- **Parameters**: *(none)*
+- **Returns**: `number`
+- **Description**: Returns the current peer count from the local geth node.
+
 ## Mining Control
 
 ### `start_miner`
@@ -50,8 +142,8 @@ Local functionality inside the desktop app is exposed through Tauri commands and
 
 ### `get_network_stats`
 - **Parameters**: *(none)*
-- **Returns**: `[{ difficulty: string }, { hashrate: string }]` as a tuple.
-- **Description**: Fetches network difficulty and aggregate hashrate for dashboard displays.
+- **Returns**: `[string, string]` – tuple of `[difficulty, hashrate]`.
+- **Description**: Fetches the current network difficulty and aggregate hashrate for dashboard displays.
 
 ### `get_miner_logs`
 - **Parameters**
@@ -70,7 +162,7 @@ Local functionality inside the desktop app is exposed through Tauri commands and
 ### `get_miner_performance`
 - **Parameters**
   - `data_dir: string`
-- **Returns**: `{ blocksFound: number; averageHashrate: number }`
+- **Returns**: `[number, number]` – tuple of `[blocksFound, averageHashrate]`.
 - **Description**: Parses miner logs to surface blocks found and average hashrate.
 
 ### `get_blocks_mined`
@@ -84,8 +176,8 @@ Local functionality inside the desktop app is exposed through Tauri commands and
   - `address: string`
   - `lookback: number`
   - `limit: number`
-- **Returns**: `Array<{ hash: string; timestamp: number; reward?: number }>`
-- **Description**: Retrieves recent mined block metadata for history UIs.
+- **Returns**: `Array<{ hash: string; timestamp: number; number: number; reward?: number; difficulty?: string; nonce?: string }>`
+- **Description**: Retrieves recent mined block metadata (including optional difficulty/nonce info) for history UIs.
 
 ## Mining Pools *(Mock Data)*
 
@@ -134,4 +226,3 @@ These commands currently operate on in-memory mock data to support “progressiv
 - **Parameters**: *(none)*
 - **Returns**: `void`
 - **Description**: Mutates the mock pool list (miner counts, block times) to emulate new network data.
-
