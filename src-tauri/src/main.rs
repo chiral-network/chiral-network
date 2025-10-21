@@ -412,16 +412,41 @@ async fn process_download_payment(
 
 #[tauri::command]
 async fn record_download_payment(
-    _file_hash: String,
-    _file_name: String,
-    _file_size: u64,
-    _seeder_address: String,
-    _amount: f64,
-    _transaction_id: u64,
+    app: tauri::AppHandle,
+    file_hash: String,
+    file_name: String,
+    file_size: u64,
+    seeder_address: String,
+    downloader_address: String,
+    amount: f64,
+    transaction_id: u64,
 ) -> Result<(), String> {
-    // Log the payment transaction for analytics/audit purposes
-    // This is primarily handled in the frontend state, but could be persisted here
-    println!("📝 Download payment recorded: {} Chiral to {}", _amount, _seeder_address);
+    println!("📝 Download payment recorded: {} Chiral to {}", amount, seeder_address);
+
+    // Emit event to notify seeder that they received a payment
+    #[derive(Clone, serde::Serialize)]
+    struct SeederPaymentNotification {
+        file_hash: String,
+        file_name: String,
+        file_size: u64,
+        downloader_address: String,
+        amount: f64,
+        transaction_id: u64,
+    }
+
+    let notification = SeederPaymentNotification {
+        file_hash,
+        file_name,
+        file_size,
+        downloader_address,
+        amount,
+        transaction_id,
+    };
+
+    // Emit event that frontend will listen for
+    app.emit("seeder_payment_received", notification)
+        .map_err(|e| format!("Failed to emit seeder payment event: {}", e))?;
+
     Ok(())
 }
 

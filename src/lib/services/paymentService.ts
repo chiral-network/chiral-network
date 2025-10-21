@@ -68,7 +68,8 @@ export interface DownloadPayment {
 
 export class PaymentService {
   private static initialized = false;
-  private static processedPayments = new Set<string>(); // Track processed file hashes
+  private static processedPayments = new Set<string>(); // Track processed file hashes (for downloads)
+  private static receivedPayments = new Set<string>(); // Track received payments (for uploads)
 
   /**
    * Initialize payment service and load persisted data (only runs once)
@@ -209,18 +210,20 @@ export class PaymentService {
       this.processedPayments.add(fileHash);
       console.log('✅ Marked file as paid:', fileHash);
 
-      // Notify backend about the payment (if needed for persistence)
+      // Notify backend about the payment - this will emit an event to the seeder
       try {
         await invoke('record_download_payment', {
           fileHash,
           fileName,
           fileSize,
           seederAddress,
+          downloaderAddress: currentWallet.address || 'unknown',
           amount,
           transactionId
         });
+        console.log('✅ Backend notified of payment to seeder');
       } catch (invokeError) {
-        console.warn('Failed to persist payment to backend:', invokeError);
+        console.warn('Failed to notify backend of payment:', invokeError);
         // Continue anyway - frontend state is updated
       }
 
@@ -248,6 +251,18 @@ export class PaymentService {
     downloaderAddress: string
   ): Promise<{ success: boolean; transactionId?: number; error?: string }> {
     try {
+      // Generate unique key for this payment receipt
+      const paymentKey = `${fileHash}-${downloaderAddress}`;
+
+      // Check if we already received this payment
+      if (this.receivedPayments.has(paymentKey)) {
+        console.log('⚠️ Payment already received for:', paymentKey);
+        return {
+          success: false,
+          error: 'Payment already received'
+        };
+      }
+
       const amount = this.calculateDownloadCost(fileSize);
 
       // Get current wallet state
@@ -289,6 +304,10 @@ export class PaymentService {
         return updated;
       });
 
+      // Mark this payment as received
+      this.receivedPayments.add(paymentKey);
+      console.log('✅ Marked payment as received:', paymentKey);
+
       // Notify backend about the payment receipt
       try {
         await invoke('record_seeder_payment', {
@@ -303,6 +322,13 @@ export class PaymentService {
         console.warn('Failed to persist seeder payment to backend:', invokeError);
         // Continue anyway - frontend state is updated
       }
+
+      console.log('💰 Seeder payment credited:', {
+        amount: amount.toFixed(8),
+        from: downloaderAddress,
+        file: fileName,
+        newBalance: get(wallet).balance.toFixed(8)
+      });
 
       return {
         success: true,

@@ -26,6 +26,7 @@
     import { bandwidthScheduler } from '$lib/services/bandwidthScheduler';
     import { detectUserRegion } from '$lib/services/geolocation';
     import { paymentService } from '$lib/services/paymentService';
+    import { listen } from '@tauri-apps/api/event';
     // gets path name not entire url:
     // ex: http://locatlhost:1420/download -> /download
     
@@ -46,10 +47,38 @@
     
     onMount(() => {
       let stopNetworkMonitoring: () => void = () => {};
+      let unlistenSeederPayment: (() => void) | null = null;
 
       (async () => {
         // Initialize payment service to load wallet and transactions
         paymentService.initialize();
+
+        // Listen for seeder payment notifications from backend
+        if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+          try {
+            const unlisten = await listen('seeder_payment_received', async (event: any) => {
+              const payload = event.payload;
+              console.log('💰 Seeder payment notification received:', payload);
+
+              // Credit the seeder's wallet
+              const result = await paymentService.creditSeederPayment(
+                payload.file_hash,
+                payload.file_name,
+                payload.file_size,
+                payload.downloader_address
+              );
+
+              if (result.success) {
+                console.log('✅ Seeder payment credited successfully');
+              } else {
+                console.error('❌ Failed to credit seeder payment:', result.error);
+              }
+            });
+            unlistenSeederPayment = unlisten;
+          } catch (error) {
+            console.error('Failed to setup seeder payment listener:', error);
+          }
+        }
 
         // setup i18n
         await setupI18n();
@@ -127,6 +156,9 @@
         window.removeEventListener('popstate', onPop);
         stopNetworkMonitoring();
         bandwidthScheduler.stop();
+        if (unlistenSeederPayment) {
+          unlistenSeederPayment();
+        }
       };
     })
 
