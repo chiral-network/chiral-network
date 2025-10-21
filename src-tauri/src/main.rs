@@ -2023,17 +2023,10 @@ async fn upload_file_to_network(
                 .await
             {
                 Ok(metadata) => {
-                    // Store file data locally for seeding if file transfer service is available
-                    if let Err(e) = ft
-                        .store_file_data(
-                            file_hash.clone(),
-                            file_name.to_string(),
-                            file_data.clone(),
-                        )
-                        .await
-                    {
-                        warn!("Failed to store file data locally for seeding: {}", e);
-                    }
+                    // Store file data locally for seeding if file transfer service is available.
+                    // The store_file_data method returns () so we simply await it and continue.
+                    ft.store_file_data(file_hash.clone(), file_name.to_string(), file_data.clone())
+                        .await;
 
                     match dht.publish_file(metadata.clone()).await {
                         Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
@@ -2084,7 +2077,7 @@ async fn download_file_from_network(
         ft_guard.as_ref().cloned()
     };
 
-    if let Some(_ft) = ft {
+    if let Some(_ft) = ft_opt {
         info!("Starting P2P download for: {}", file_hash);
 
         // Search DHT for file metadata
