@@ -650,8 +650,9 @@
     if (selectedProtocol === "Bitswap") {
       for (const filePath of paths) {
         try {
-          // Get just the filename from the path
-          const fileName = filePath.split(/[\/\\]/).pop() || "";
+          // Get just the filename (basename) from the path
+          // Use a robust basename extraction that works with both / and \ separators
+          const fileName = filePath.replace(/^.*[\\/]/, "") || "";
           // Check for existing versions before upload
           let existingVersions: any[] = [];
           try {
@@ -735,7 +736,7 @@
           showToast(
             tr("upload.fileFailed", {
               values: {
-                name: filePath.split(/[\/]/).pop(),
+                name: filePath.replace(/^.*[\\/]/, ""),
                 error: String(error),
               },
             }),
@@ -747,7 +748,7 @@
       // Process all files concurrently to avoid blocking the UI
       const filePromises = paths.map(async (filePath) => {
         try {
-          const fileName = filePath.split(/[\/\\]/).pop() || "";
+          const fileName = filePath.replace(/^.*[\\/]/, "") || "";
           const recipientKey =
             useEncryptedSharing && recipientPublicKey.trim()
               ? recipientPublicKey.trim()
@@ -798,7 +799,7 @@
           return { type: "success", fileName };
         } catch (error) {
           console.error(error);
-          const fileName = filePath.split(/[\/]/).pop() || "unknown file";
+          const fileName = filePath.replace(/^.*[\\/]/, "") || "unknown file";
           showToast(
             tr("upload.fileFailed", {
               values: { name: fileName, error: String(error) },

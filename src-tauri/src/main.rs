@@ -1975,8 +1975,12 @@ async fn upload_file_to_network(
     };
 
     if let Some(ft) = ft_opt {
-        // Upload the file
-        let file_name = file_path.split('/').last().unwrap_or(&file_path);
+        // Upload the file (use filename basename only)
+        let file_name = std::path::Path::new(&file_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&file_path)
+            .to_string();
 
         ft.upload_file_with_account(
             file_path.clone(),
