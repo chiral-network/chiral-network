@@ -152,6 +152,77 @@ fn unix_timestamp() -> u64 {
         .as_secs()
 }
 
+fn merge_heartbeats(mut a: Vec<SeederHeartbeat>, mut b: Vec<SeederHeartbeat>) -> Vec<SeederHeartbeat> {
+    let mut merged = Vec::new();
+    let mut seen_peers = std::collections::HashSet::new();
+
+    // Sort both vectors by peer_id for deterministic merging
+    a.sort_by(|x, y| x.peer_id.cmp(&y.peer_id));
+    b.sort_by(|x, y| x.peer_id.cmp(&y.peer_id));
+
+    let mut a_iter = a.into_iter();
+    let mut b_iter = b.into_iter();
+    
+    let mut next_a = a_iter.next();
+    let mut next_b = b_iter.next();
+
+    while let (Some(a_entry), Some(b_entry)) = (&next_a, &next_b) {
+        match a_entry.peer_id.cmp(&b_entry.peer_id) {
+            std::cmp::Ordering::Equal => {
+                // Take the one with the latest heartbeat
+                let entry = if a_entry.last_heartbeat >= b_entry.last_heartbeat {
+                    a_entry.clone()
+                } else {
+                    b_entry.clone()
+                };
+                
+                if !seen_peers.contains(&entry.peer_id) {
+                    seen_peers.insert(entry.peer_id.clone());
+                    merged.push(entry);
+                }
+                
+                // Advance both iterators
+                next_a = a_iter.next();
+                next_b = b_iter.next();
+            }
+            std::cmp::Ordering::Less => {
+                if !seen_peers.contains(&a_entry.peer_id) {
+                    seen_peers.insert(a_entry.peer_id.clone());
+                    merged.push(a_entry.clone());
+                }
+                next_a = a_iter.next();
+            }
+            std::cmp::Ordering::Greater => {
+                if !seen_peers.contains(&b_entry.peer_id) {
+                    seen_peers.insert(b_entry.peer_id.clone());
+                    merged.push(b_entry.clone());
+                }
+                next_b = b_iter.next();
+            }
+        }
+    }
+
+    // Add remaining entries from a
+    while let Some(entry) = next_a {
+        if !seen_peers.contains(&entry.peer_id) {
+            seen_peers.insert(entry.peer_id.clone());
+            merged.push(entry);
+        }
+        next_a = a_iter.next();
+    }
+
+    // Add remaining entries from b
+    while let Some(entry) = next_b {
+        if !seen_peers.contains(&entry.peer_id) {
+            seen_peers.insert(entry.peer_id.clone());
+            merged.push(entry);
+        }
+        next_b = b_iter.next();
+    }
+
+    merged
+}
+
 fn prune_heartbeats(mut entries: Vec<SeederHeartbeat>, now: u64) -> Vec<SeederHeartbeat> {
     entries.retain(|hb| hb.expires_at > now);
     entries.sort_by(|a, b| a.peer_id.cmp(&b.peer_id));
@@ -160,6 +231,11 @@ fn prune_heartbeats(mut entries: Vec<SeederHeartbeat>, now: u64) -> Vec<SeederHe
 
 fn upsert_heartbeat(entries: &mut Vec<SeederHeartbeat>, peer_id: &str, now: u64) {
     let expires_at = now.saturating_add(FILE_HEARTBEAT_TTL.as_secs());
+    
+    // First remove any expired entries
+    entries.retain(|hb| hb.expires_at > now);
+    
+    // Then update or add the new heartbeat
     if let Some(entry) = entries.iter_mut().find(|hb| hb.peer_id == peer_id) {
         entry.expires_at = expires_at;
         entry.last_heartbeat = now;
@@ -170,6 +246,9 @@ fn upsert_heartbeat(entries: &mut Vec<SeederHeartbeat>, peer_id: &str, now: u64)
             last_heartbeat: now,
         });
     }
+    
+    // Sort by peer_id for consistent ordering
+    entries.sort_by(|a, b| a.peer_id.cmp(&b.peer_id));
 }
 
 fn heartbeats_to_peer_list(entries: &[SeederHeartbeat]) -> Vec<String> {
@@ -1708,9 +1787,22 @@ async fn run_dht_node(
                                     expires: None,
                                 };
 
-                        match swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One){
+                        // Determine appropriate quorum based on number of connected peers
+                        let connected_peers_count = connected_peers.lock().await.len();
+                        let min_replication_peers = 3; // Require at least 3 peers for stronger replication
+                        
+                        let quorum = if connected_peers_count >= min_replication_peers {
+                            info!("Using Quorum::All for file {} ({} peers available)", metadata.merkle_root, connected_peers_count);
+                            kad::Quorum::All
+                        } else {
+                            info!("Using Quorum::One for file {} (only {} peers available)", metadata.merkle_root, connected_peers_count);
+                            kad::Quorum::One
+                        };
+
+                        match swarm.behaviour_mut().kademlia.put_record(record, quorum) {
                             Ok(query_id) => {
-                                info!("started providing file: {}, query id: {:?}", metadata.merkle_root, query_id);
+                                info!("started providing file: {}, query id: {:?} with quorum {:?}", 
+                                    metadata.merkle_root, query_id, quorum);
                             }
                             Err(e) => {
                                 error!("failed to start providing file {}: {}", metadata.merkle_root, e);
