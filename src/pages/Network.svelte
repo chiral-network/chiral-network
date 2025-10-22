@@ -152,6 +152,18 @@
   let copiedPeerId = false
   let copiedBootstrap = false
   let copiedListenAddr: string | null = null
+  let publicMultiaddrs: string[] = []
+
+  // Fetch public multiaddresses (non-loopback)
+  async function fetchPublicMultiaddrs() {
+    try {
+      const addrs = await invoke<string[]>('get_multiaddresses')
+      publicMultiaddrs = addrs
+    } catch (e) {
+      console.error('Failed to get multiaddresses:', e)
+      publicMultiaddrs = []
+    }
+  }
 
   function formatSize(bytes: number | undefined): string {
     if (bytes === undefined || bytes === null || isNaN(bytes)) {
@@ -372,6 +384,7 @@
             enableAutorelay: $settings.enableAutorelay,
             preferredRelays: $settings.preferredRelays || [],
             enableRelayServer: $settings.enableRelayServer,
+            relayServerAlias: $settings.relayServerAlias || '',
             chunkSizeKb: $settings.chunkSize,
             cacheSizeMb: $settings.cacheSize,
           })
@@ -550,6 +563,8 @@
         if (health) {
           dhtHealth = health
           peerCount = health.peerCount
+          // Fetch public multiaddresses
+          await fetchPublicMultiaddrs()
           dhtPeerCount = peerCount
           lastNatState = health.reachability
           lastNatConfidence = health.reachabilityConfidence
@@ -1523,13 +1538,12 @@
             <p class="text-xs font-mono break-all">{dhtBootstrapNode}</p>
           </div>
 
-          {#if dhtHealth?.listenAddrs && dhtHealth.listenAddrs.length > 0}
+          {#if publicMultiaddrs && publicMultiaddrs.length > 0}
             <div class="pt-2 space-y-2">
               <p class="text-sm text-muted-foreground">{$t('network.dht.listenAddresses')}</p>
-              {#each dhtHealth.listenAddrs as addr}
-                {@const fullAddr = dhtPeerId ? `${addr}/p2p/${dhtPeerId}` : addr}
+              {#each publicMultiaddrs as fullAddr}
                 <div class="bg-muted/40 rounded-lg px-3 py-2">
-                  <div class="flex items-start justify-between gap-2">
+                  <div class="flex items-center justify-between gap-2">
                     <p class="text-xs font-mono break-all flex-1">{fullAddr}</p>
                     <Button
                       variant="outline"

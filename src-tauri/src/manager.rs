@@ -105,6 +105,12 @@ pub struct ChunkManager {
     storage_path: PathBuf,
 }
 
+/// The result of a canonical, one-time encryption of a file.
+pub struct CanonicalEncryptionResult {
+    pub manifest: FileManifest,
+    pub canonical_aes_key: [u8; 32],
+}
+
 impl ChunkManager {
     pub fn new(storage_path: PathBuf) -> Self {
         ChunkManager {
@@ -113,12 +119,31 @@ impl ChunkManager {
         }
     }
 
-    // The function now takes the recipient's public key and returns the encrypted key bundle
     pub fn chunk_and_encrypt_file(
         &self,
         file_path: &Path,
         recipient_public_key: &PublicKey,
     ) -> Result<FileManifest, String> {
+        let canonical_result = self.chunk_and_encrypt_file_canonical(file_path)?;
+        let mut manifest = canonical_result.manifest;
+        let canonical_aes_key = canonical_result.canonical_aes_key;
+
+        let encrypted_bundle =
+            encrypt_aes_key(&canonical_aes_key, recipient_public_key)?;
+
+        manifest.encrypted_key_bundle = Some(encrypted_bundle);
+
+        Ok(manifest)
+    }
+
+    /// Encrypts a file once with a new, canonical AES key.
+    /// This function is the first step in publishing a new encrypted file. It returns the manifest
+    /// (which is public and key-agnostic) and the raw AES key, which the caller MUST store securely.
+    pub fn chunk_and_encrypt_file_canonical(
+        &self,
+        file_path: &Path,
+    ) -> Result<CanonicalEncryptionResult, String> {
+        // 1. Generate a new, single-use canonical AES key for the entire file.
         let mut key_bytes = [0u8; 32];
         OsRng.fill_bytes(&mut key_bytes);
         let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
@@ -136,11 +161,12 @@ impl ChunkManager {
             }
 
             let chunk_data = &buffer[..bytes_read];
+            // Hash the original, unencrypted chunk for the Merkle root.
             let chunk_hash_bytes = Sha256Hasher::hash(chunk_data);
             chunk_hashes.push(chunk_hash_bytes);
-            let chunk_hash_hex = hex::encode(chunk_hash_bytes); // This is the original hash
+            let chunk_hash_hex = hex::encode(chunk_hash_bytes);
 
-            // Encrypt the chunk
+            // Encrypt the chunk with the canonical key.
             let encrypted_chunk_with_nonce = self.encrypt_chunk(chunk_data, &key)?;
             let encrypted_chunk_hash = Self::hash_data(&encrypted_chunk_with_nonce);
             self.save_chunk(&encrypted_chunk_hash, &encrypted_chunk_with_nonce)
@@ -157,17 +183,21 @@ impl ChunkManager {
             index += 1;
         }
 
-        // Build the Merkle tree from the chunk hashes to get the root hash.
+        // Build the Merkle tree from the original chunk hashes.
         let merkle_tree = MerkleTree::<Sha256Hasher>::from_leaves(&chunk_hashes);
         let merkle_root = merkle_tree.root().ok_or("Failed to compute Merkle root")?;
 
-        // Encrypt the file's AES key with the recipient's public key.
-        let encrypted_key_bundle = encrypt_aes_key(&key_bytes, recipient_public_key)?;
-
-        Ok(FileManifest {
+        // Create a key-agnostic manifest. The key bundle will be added later for each recipient.
+        let manifest = FileManifest {
             merkle_root: hex::encode(merkle_root),
             chunks: chunks_info,
-            encrypted_key_bundle: Some(encrypted_key_bundle),
+            encrypted_key_bundle: None,
+        };
+
+        // Return the manifest AND the raw AES key for secure storage by the caller.
+        Ok(CanonicalEncryptionResult {
+            manifest,
+            canonical_aes_key: key_bytes,
         })
     }
 
