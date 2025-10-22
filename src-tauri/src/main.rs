@@ -83,7 +83,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State,
 };
-use tokio::time::{timeout as tokio_timeout, Duration as TokioDuration};
+use tokio::time::Duration as TokioDuration;
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{debug, error, info, warn};
@@ -236,6 +236,9 @@ struct AppState {
 
     // Stream authentication service
     stream_auth: Arc<Mutex<StreamAuthService>>,
+
+    // New field for storing canonical AES keys for files being seeded
+    canonical_aes_keys: Arc<Mutex<std::collections::HashMap<String, [u8; 32]>>>,
 
     // Proof-of-Storage watcher background handle and contract address
     // make these clonable so we can .clone() and move into spawned tasks
@@ -1269,6 +1272,12 @@ async fn connect_to_peer(state: State<'_, AppState>, peer_address: String) -> Re
 }
 
 #[tauri::command]
+async fn is_dht_running(state: State<'_, AppState>) -> Result<bool, String> {
+    let dht_guard = state.dht.lock().await;
+    Ok(dht_guard.is_some())
+}
+
+#[tauri::command]
 async fn get_dht_peer_count(state: State<'_, AppState>) -> Result<usize, String> {
     let dht = {
         let dht_guard = state.dht.lock().await;
@@ -2029,6 +2038,26 @@ fn detect_locale() -> String {
 }
 
 #[tauri::command]
+fn get_default_storage_path(app: tauri::AppHandle) -> Result<String, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Could not get app data directory: {}", e))?;
+
+    let storage_path = app_data_dir.join("Storage");
+
+    storage_path
+        .to_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "Failed to convert path to string".to_string())
+}
+
+#[tauri::command]
+fn check_directory_exists(path: String) -> bool {
+    Path::new(&path).is_dir()
+}
+
+#[tauri::command]
 async fn start_file_transfer_service(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -2188,8 +2217,6 @@ async fn upload_file_to_network(
                 uploader_address: Some(account.clone()),
                 ..Default::default()
             };
-
-            println!("📦 BACKEND: Created FileMetadata with price: {:?}, uploader: {:?}", metadata.price, metadata.uploader_address);
 
             match dht.publish_file(metadata.clone()).await {
                 Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
@@ -3986,6 +4013,9 @@ fn main() {
             // Initialize stream authentication
             stream_auth: Arc::new(Mutex::new(crate::stream_auth::StreamAuthService::new())),
 
+            // Initialize the new map for AES keys
+            canonical_aes_keys: Arc::new(Mutex::new(std::collections::HashMap::new())),
+
             // Proof-of-Storage watcher background handle and contract address
             // make these clonable so we can .clone() and move into spawned tasks
             proof_watcher: Arc::new(Mutex::new(None)),
@@ -4049,6 +4079,8 @@ fn main() {
             connect_to_peer,
             get_dht_events,
             detect_locale,
+            get_default_storage_path,
+            check_directory_exists,
             get_dht_health,
             get_dht_peer_count,
             get_dht_peer_id,
@@ -4115,6 +4147,7 @@ fn main() {
             get_file_size,
             encrypt_file_for_self_upload,
             encrypt_file_for_recipient,
+            //request_file_access,
             upload_and_publish_file,
             decrypt_and_reassemble_file,
             create_auth_session,
@@ -4138,7 +4171,8 @@ fn main() {
             stop_proof_of_storage_watcher,
             get_relay_reputation_stats,
             set_relay_alias,
-            get_relay_alias
+            get_relay_alias,
+            get_multiaddresses
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -4389,8 +4423,21 @@ async fn encrypt_file_for_recipient(
         PublicKey::from(&secret_key)
     };
 
+    let private_key_hex = state
+        .active_account_private_key
+        .lock()
+        .await
+        .clone()
+        .ok_or("No account is currently active. Please log in.")?;
+
     // Run the encryption in a blocking task to avoid blocking the async runtime
     tokio::task::spawn_blocking(move || {
+        let pk_bytes = hex::decode(private_key_hex.trim_start_matches("0x"))
+            .map_err(|_| "Invalid private key format".to_string())?;
+        let secret_key = StaticSecret::from(
+            <[u8; 32]>::try_from(pk_bytes).map_err(|_| "Private key is not 32 bytes")?,
+        );
+
         // Initialize ChunkManager with proper app data directory
         let manager = ChunkManager::new(chunk_storage_path);
 
@@ -4413,6 +4460,35 @@ async fn encrypt_file_for_recipient(
     .map_err(|e| format!("Encryption task failed: {}", e))?
 }
 
+// #[tauri::command]
+// async fn request_file_access(
+//     state: State<'_, AppState>,
+//     seeder_peer_id: String,
+//     merkle_root: String,
+// ) -> Result<String, String> {
+//     let dht = state.dht.lock().await.as_ref().cloned().ok_or("DHT not running")?;
+//
+//     // 1. Get own public key
+//     let private_key_hex = state
+//         .active_account_private_key
+//         .lock()
+//         .await
+//         .clone()
+//         .ok_or("No active account to derive public key from.")?;
+//     let pk_bytes = hex::decode(private_key_hex.trim_start_matches("0x")).map_err(|_| "Invalid private key format")?;
+//     let secret_key = StaticSecret::from(<[u8; 32]>::try_from(pk_bytes).map_err(|_| "Private key is not 32 bytes")?);
+//     let public_key = PublicKey::from(&secret_key);
+//
+//     // 2. Parse seeder peer id
+//     let seeder = seeder_peer_id.parse().map_err(|_| "Invalid seeder peer ID")?;
+//
+//     // 3. Call the new DHT service method
+//     let bundle = dht.request_aes_key(seeder, merkle_root, public_key).await?;
+//
+//     // 4. Serialize the bundle to send to the frontend
+//     serde_json::to_string(&bundle).map_err(|e| e.to_string())
+// }
+
 /// Unified upload command: processes file with ChunkManager and auto-publishes to DHT
 /// Returns file metadata for frontend use
 #[derive(serde::Serialize)]
@@ -4433,13 +4509,7 @@ async fn upload_and_publish_file(
     file_path: String,
     file_name: Option<String>,
     recipient_public_key: Option<String>,
-    price: Option<f64>,
 ) -> Result<UploadResult, String> {
-    println!("🔍 BACKEND: upload_and_publish_file called with price: {:?}", price);
-
-    // Get the active account address
-    let account = get_active_account(&state).await?;
-
     // 1. Process file with ChunkManager (encrypt, chunk, build Merkle tree)
     let manifest = encrypt_file_for_recipient(
         app.clone(),
@@ -4449,7 +4519,7 @@ async fn upload_and_publish_file(
     )
     .await?;
 
-    // 2. Get file name (use provided name or extract from path)
+    // 2. Get file name and size
     let file_name = file_name.unwrap_or_else(|| {
         std::path::Path::new(&file_path)
             .file_name()
@@ -4497,12 +4567,12 @@ async fn upload_and_publish_file(
                 true,                            // is_encrypted
                 Some("AES-256-GCM".to_string()), // Encryption method
                 None,                            // key_fingerprint (deprecated)
-                price,                           // price
-                Some(account.clone()),           // uploader_address
+                None,                            // price
+                None,                            // uploader_address
             )
             .await?;
 
-        println!("📦 BACKEND: Created versioned metadata with price: {:?}, uploader: {:?}", metadata.price, metadata.uploader_address);
+        println!("📦 BACKEND: Created versioned metadata");
 
         let version = metadata.version.unwrap_or(1);
 
@@ -4985,4 +5055,14 @@ async fn get_relay_alias(
 ) -> Result<Option<String>, String> {
     let aliases = state.relay_aliases.lock().await;
     Ok(aliases.get(&peer_id).cloned())
+}
+
+#[tauri::command]
+async fn get_multiaddresses(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let dht_guard = state.dht.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        Ok(dht.get_multiaddresses().await)
+    } else {
+        Ok(Vec::new())
+    }
 }

@@ -1,6 +1,6 @@
 <script lang="ts">
     import './styles/globals.css'
-    import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Server } from 'lucide-svelte'
+    import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Mail, Server } from 'lucide-svelte'
     import UploadPage from './pages/Upload.svelte'
     import DownloadPage from './pages/Download.svelte'
     import ProxyPage from './pages/Proxy.svelte'
@@ -10,6 +10,7 @@
     import SettingsPage from './pages/Settings.svelte'
     import MiningPage from './pages/Mining.svelte'
     import ReputationPage from './pages/Reputation.svelte'
+    import MessagesPage from './pages/Messages.svelte'
     import RelayPage from './pages/Relay.svelte'
     import NotFound from './pages/NotFound.svelte'
     import ProxySelfTest from './routes/proxy-self-test.svelte'
@@ -210,6 +211,7 @@
       menuItems = [
         { id: 'download', label: $t('nav.download'), icon: Download },
         { id: 'upload', label: $t('nav.upload'), icon: Upload },
+        { id: 'messages', label: 'Messages', icon: Mail },
         { id: 'network', label: $t('nav.network'), icon: Globe },
         { id: 'relay', label: $t('nav.relay'), icon: Server },
         { id: 'mining', label: $t('nav.mining'), icon: Cpu },
@@ -236,6 +238,10 @@
       {
         path: "upload",
         component: UploadPage
+      },
+      {
+        path: "messages",
+        component: MessagesPage
       },
       {
         path: "network",

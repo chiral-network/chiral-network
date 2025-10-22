@@ -51,7 +51,9 @@
 | **Network** | 100 Mbps symmetric    |
 | **OS**      | Latest stable version |
 
-#### Recommended Requirements for Providers Who Want to Serve Files
+#### Recommended Requirements for Heavy File Seeding
+
+**Note**: All nodes are equal. These are recommendations for nodes that want to seed many files.
 
 | Component   | Specification      |
 | ----------- | ------------------ |
@@ -61,7 +63,9 @@
 | **Network** | 100 Mbps symmetric |
 | **Uptime**  | >95% availability  |
 
-## File Storage Specifications
+## File Sharing Specifications
+
+**Note**: Files are shared between equal peers. There are no dedicated "storage nodes" - all nodes can seed and download files.
 
 ### File Processing
 
@@ -329,7 +333,7 @@ Transaction {
 Handshake {
   version: "1.0.0",
   network_id: 9001,
-  capabilities: ["storage", "dht", "relay"],
+  capabilities: ["seeding", "downloading", "dht", "relay"],
   timestamp: 1234567890,
   nonce: "random_bytes"
 }
@@ -370,7 +374,7 @@ Example: 0x742d35Cc6634C0532925a3b8D0C9e0c8b346b983
 | 1003 | FILE_NOT_FOUND     | File not in network           |
 | 1004 | INSUFFICIENT_FUNDS | Not enough balance            |
 | 1005 | PERMISSION_DENIED  | Access not authorized         |
-| 1006 | STORAGE_FULL       | Node storage capacity reached |
+| 1006 | STORAGE_FULL       | Local storage capacity reached (this peer) |
 | 1007 | INVALID_CHUNK      | Chunk verification failed     |
 | 1008 | DHT_TIMEOUT        | DHT lookup timeout            |
 | 1009 | PEER_UNREACHABLE   | Cannot connect to peer        |
