@@ -358,6 +358,7 @@ impl ReputationDhtService {
             encrypted_key_bundle: None,
             is_root: true,
             download_path: None,
+            ftp_sources: None,
         };
 
         dht_service.publish_file(metadata).await
@@ -409,6 +410,7 @@ impl ReputationDhtService {
             encrypted_key_bundle: None,
             is_root: true,
             download_path: None,
+            ftp_sources: None,
         };
 
         dht_service.publish_file(metadata).await
