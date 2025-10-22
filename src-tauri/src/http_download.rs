@@ -5,20 +5,18 @@ use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, Semaphore};
-use x25519_dalek::StaticSecret;
 
-use crate::encryption::{decrypt_aes_key, EncryptedAesKeyBundle};
 use crate::manager::ChunkManager;
 
 /// HTTP Download Client for fetching files via HTTP protocol
 ///
-/// Flow:
+/// Simplified Flow (similar to WebRTC):
 /// 1. Fetch manifest from seeder's HTTP endpoint
-/// 2. Download encrypted chunks in parallel
-/// 3. Get decryption key from manifest
-/// 4. Decrypt chunks
-/// 5. Verify chunk hashes
-/// 6. Assemble final file
+/// 2. Download chunks in parallel (encrypted or unencrypted)
+/// 3. Assemble final file
+///
+/// Note: Decryption and verification are deferred for future implementation
+/// when the RequestFileAccess protocol handler is completed.
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpDownloadProgress {
@@ -35,8 +33,6 @@ pub struct HttpDownloadProgress {
 pub enum DownloadStatus {
     FetchingManifest,
     Downloading,
-    Decrypting,
-    Verifying,
     Assembling,
     Completed,
     Failed,
@@ -91,17 +87,18 @@ impl HttpDownloadClient {
     /// Arguments:
     /// - `seeder_url`: Base URL of the seeder (e.g., "http://192.168.1.5:8080")
     /// - `merkle_root`: File identifier
-    /// - `output_path`: Where to save the final decrypted file
-    /// - `recipient_secret_key`: User's private key for decrypting the AES key
+    /// - `output_path`: Where to save the final file
     /// - `progress_tx`: Optional channel for progress updates
     ///
     /// Returns: Ok(()) on success
+    ///
+    /// Note: This simplified version downloads and assembles chunks without decryption.
+    /// Files are saved as-is (encrypted if they were encrypted, unencrypted otherwise).
     pub async fn download_file(
         &self,
         seeder_url: &str,
         merkle_root: &str,
         output_path: &Path,
-        recipient_secret_key: &StaticSecret,
         progress_tx: Option<mpsc::Sender<HttpDownloadProgress>>,
     ) -> Result<(), String> {
         tracing::info!(
@@ -131,7 +128,7 @@ impl HttpDownloadClient {
             manifest.total_size
         );
 
-        // Step 2: Download all encrypted chunks
+        // Step 2: Download all chunks
         self.send_progress(
             &progress_tx,
             merkle_root,
@@ -144,7 +141,7 @@ impl HttpDownloadClient {
         )
         .await;
 
-        let encrypted_chunks = self
+        let chunks = self
             .download_chunks(
                 seeder_url,
                 &manifest.chunks,
@@ -153,58 +150,11 @@ impl HttpDownloadClient {
             )
             .await?;
 
-        tracing::info!("Downloaded {} chunks", encrypted_chunks.len());
+        tracing::info!("Downloaded {} chunks", chunks.len());
 
-        // Step 3: Decrypt AES key from bundle
-        self.send_progress(
-            &progress_tx,
-            merkle_root,
-            manifest.chunks.len(),
-            manifest.chunks.len(),
-            0,
-            manifest.total_size as u64,
-            manifest.total_size as u64,
-            DownloadStatus::Decrypting,
-        )
-        .await;
-
-        let encrypted_key_bundle_json = manifest
-            .encrypted_key_bundle
-            .ok_or("No encryption key in manifest")?;
-
-        let encrypted_key_bundle: EncryptedAesKeyBundle =
-            serde_json::from_str(&encrypted_key_bundle_json)
-                .map_err(|e| format!("Failed to parse key bundle: {}", e))?;
-
-        let aes_key = decrypt_aes_key(&encrypted_key_bundle, recipient_secret_key)?;
-
-        tracing::info!("Decrypted AES key");
-
-        // Step 4: Decrypt and verify chunks
-        self.send_progress(
-            &progress_tx,
-            merkle_root,
-            manifest.chunks.len(),
-            manifest.chunks.len(),
-            0,
-            manifest.total_size as u64,
-            manifest.total_size as u64,
-            DownloadStatus::Verifying,
-        )
-        .await;
-
-        let decrypted_chunks = self
-            .decrypt_and_verify_chunks(
-                &encrypted_chunks,
-                &aes_key,
-                merkle_root,
-                progress_tx.clone(),
-            )
-            .await?;
-
-        tracing::info!("Decrypted and verified {} chunks", decrypted_chunks.len());
-
-        // Step 5: Assemble final file
+        // Step 3: Assemble final file
+        // Note: Chunks are saved as-is (encrypted if they were encrypted)
+        // Decryption will be implemented later when RequestFileAccess handler is complete
         self.send_progress(
             &progress_tx,
             merkle_root,
@@ -217,11 +167,12 @@ impl HttpDownloadClient {
         )
         .await;
 
-        self.assemble_file(&decrypted_chunks, output_path).await?;
+        // Extract just the data from chunks (chunks is Vec<(u32, Vec<u8>)>)
+        let chunk_data: Vec<Vec<u8>> = chunks.iter().map(|(_, data)| data.clone()).collect();
 
-        // Step 6: Final verification (compute merkle root from decrypted chunks)
-        // TODO: Implement merkle tree verification here
+        self.assemble_file(&chunk_data, output_path).await?;
 
+        // Final status
         self.send_progress(
             &progress_tx,
             merkle_root,
@@ -382,63 +333,6 @@ impl HttpDownloadClient {
         results.sort_by_key(|(index, _)| *index);
 
         Ok(results)
-    }
-
-    /// Decrypt and verify chunks
-    async fn decrypt_and_verify_chunks(
-        &self,
-        encrypted_chunks: &[(u32, Vec<u8>)],
-        aes_key: &[u8; 32],
-        merkle_root: &str,
-        progress_tx: Option<mpsc::Sender<HttpDownloadProgress>>,
-    ) -> Result<Vec<Vec<u8>>, String> {
-        use aes_gcm::aead::{Aead, KeyInit};
-        use aes_gcm::{Aes256Gcm, Key, Nonce};
-
-        let key = Key::<Aes256Gcm>::from_slice(aes_key);
-        let cipher = Aes256Gcm::new(key);
-
-        let mut decrypted_chunks = Vec::new();
-
-        for (index, encrypted_data) in encrypted_chunks {
-            // Encrypted data format: [12-byte nonce][ciphertext]
-            if encrypted_data.len() < 12 {
-                return Err(format!("Chunk {} is too small to contain nonce", index));
-            }
-
-            let nonce_bytes = &encrypted_data[..12];
-            let ciphertext = &encrypted_data[12..];
-
-            let nonce = Nonce::from_slice(nonce_bytes);
-
-            let decrypted = cipher
-                .decrypt(nonce, ciphertext)
-                .map_err(|e| format!("Failed to decrypt chunk {}: {}", index, e))?;
-
-            tracing::debug!("Decrypted chunk {} ({} bytes)", index, decrypted.len());
-
-            decrypted_chunks.push(decrypted);
-
-            // Send progress update
-            if let Some(tx) = &progress_tx {
-                let _ = tx
-                    .send(HttpDownloadProgress {
-                        merkle_root: merkle_root.to_string(),
-                        chunks_total: encrypted_chunks.len(),
-                        chunks_downloaded: encrypted_chunks.len(),
-                        chunks_verified: decrypted_chunks.len(),
-                        bytes_downloaded: 0,
-                        bytes_total: 0,
-                        status: DownloadStatus::Verifying,
-                    })
-                    .await;
-            }
-        }
-
-        // TODO: Verify merkle tree here
-        // For now, we trust that decryption success means data is valid
-
-        Ok(decrypted_chunks)
     }
 
     /// Assemble chunks into final file

@@ -3887,11 +3887,15 @@ async fn register_manifest_for_http(
 /// Downloads encrypted chunks from an HTTP seeder, decrypts them,
 /// and assembles the final file.
 ///
+/// Download a file via HTTP protocol (simplified version without decryption)
+///
+/// Files are downloaded and saved as-is (encrypted if they were encrypted).
+/// Decryption will be implemented later when RequestFileAccess handler is complete.
+///
 /// Emits `http_download_progress` events with progress updates.
 #[tauri::command]
 async fn download_file_http(
     app: tauri::AppHandle,
-    state: State<'_, AppState>,
     seeder_url: String,
     merkle_root: String,
     output_path: String,
@@ -3909,20 +3913,6 @@ async fn download_file_http(
         .map_err(|e| format!("Could not get app data directory: {}", e))?;
 
     let chunk_storage_path = app_data_dir.join("chunk_storage");
-
-    // Get recipient's private key for decrypting the AES key
-    let private_key_hex = state
-        .active_account_private_key
-        .lock()
-        .await
-        .clone()
-        .ok_or("No account is currently active. Please log in.")?;
-
-    let pk_bytes = hex::decode(private_key_hex.trim_start_matches("0x"))
-        .map_err(|_| "Invalid private key format".to_string())?;
-
-    let secret_key = x25519_dalek::StaticSecret::from(<[u8; 32]>::try_from(&pk_bytes[..32])
-        .map_err(|_| "Invalid key length".to_string())?);
 
     // Create progress channel
     let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel(100);
@@ -3944,7 +3934,6 @@ async fn download_file_http(
             &seeder_url,
             &merkle_root,
             std::path::Path::new(&output_path),
-            &secret_key,
             Some(progress_tx),
         )
         .await?;
@@ -4632,14 +4621,11 @@ async fn upload_and_publish_file(
     info!("Published key-agnostic metadata for merkle root: {}", merkle_root);
 
     // 7. Register manifest with HTTP server for serving
-    let encrypted_key_bundle: Option<encryption::EncryptedAesKeyBundle> =
-        serde_json::from_str(&manifest.encrypted_key_bundle)
-            .map_err(|e| format!("Failed to parse key bundle: {}", e))?;
-
+    // Note: manifest.encrypted_key_bundle is None from canonical encryption
     let file_manifest = manager::FileManifest {
         merkle_root: manifest.merkle_root.clone(),
         chunks: manifest.chunks.clone(),
-        encrypted_key_bundle,
+        encrypted_key_bundle: manifest.encrypted_key_bundle.clone(),
     };
 
     state
