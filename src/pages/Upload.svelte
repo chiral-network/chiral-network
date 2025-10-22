@@ -758,7 +758,6 @@
         tabindex="0"
         aria-label="Drop zone for file uploads">
    {#if !hasSelectedProtocol}
-    <Card>
       <div class="p-6">
         <h2 class="text-2xl font-bold mb-6 text-center">{$t('upload.selectProtocol')}</h2>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-2xl mx-auto">
@@ -795,9 +794,7 @@
           </button>
         </div>
       </div>
-    </Card>
   {:else}
-    <Card>
       <div class="space-y-4" role="region">
           <!-- Protocol Indicator and Switcher -->
         <div class="flex items-center justify-between p-4 bg-muted/50 rounded-lg">
@@ -1119,7 +1116,6 @@
           {/if}
         </div>
       </div>
-    </Card>
 {/if}
 </Card>
 </div>
