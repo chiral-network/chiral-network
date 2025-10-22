@@ -282,11 +282,13 @@ pub fn create_router(state: Arc<HttpServerState>) -> Router {
 pub async fn start_server(
     state: Arc<HttpServerState>,
     addr: SocketAddr,
-) -> Result<SocketAddr, Box<dyn std::error::Error>> {
+) -> Result<SocketAddr, String> {
     let app = create_router(state);
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    let bound_addr = listener.local_addr()?;
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .map_err(|e| e.to_string())?;
+    let bound_addr = listener.local_addr().map_err(|e| e.to_string())?;
 
     tracing::info!("HTTP server listening on http://{}", bound_addr);
     tracing::info!("Endpoints:");

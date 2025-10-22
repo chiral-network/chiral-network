@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Semaphore};
 use x25519_dalek::StaticSecret;
 
 use crate::encryption::{decrypt_aes_key, EncryptedAesKeyBundle};
@@ -57,9 +57,21 @@ pub struct ChunkInfo {
     pub encrypted_size: usize,
 }
 
+/// Maximum concurrent chunk downloads per HTTP source
+///
+/// Set conservatively to 5 because:
+/// - Multi-source downloads will have multiple HTTP sources running in parallel
+/// - Total concurrency = MAX_CONCURRENT_CHUNKS × number_of_sources
+/// - Example: 3 sources × 5 chunks each = 15 concurrent downloads total
+/// - Prevents network/bandwidth saturation
+/// - Leaves headroom for WebRTC/Bitswap downloads happening simultaneously
+const MAX_CONCURRENT_CHUNKS: usize = 5;
+
 pub struct HttpDownloadClient {
     http_client: Client,
     chunk_manager: Arc<ChunkManager>,
+    /// Semaphore to limit concurrent chunk downloads
+    download_semaphore: Arc<Semaphore>,
 }
 
 impl HttpDownloadClient {
@@ -70,6 +82,7 @@ impl HttpDownloadClient {
                 .build()
                 .expect("Failed to create HTTP client"),
             chunk_manager: Arc::new(ChunkManager::new(chunk_storage_path)),
+            download_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_CHUNKS)),
         }
     }
 
@@ -258,7 +271,16 @@ impl HttpDownloadClient {
         Ok(manifest)
     }
 
-    /// Download all chunks in parallel
+    /// Download all chunks with bounded parallelism
+    ///
+    /// Uses a semaphore to limit concurrent downloads to MAX_CONCURRENT_CHUNKS,
+    /// preventing network/server overload while still achieving good parallelism.
+    ///
+    /// Flow:
+    /// 1. Acquire semaphore permit (blocks if MAX_CONCURRENT_CHUNKS already downloading)
+    /// 2. Download chunk
+    /// 3. Release permit (allows next chunk to start)
+    /// 4. Repeat until all chunks downloaded
     async fn download_chunks(
         &self,
         seeder_url: &str,
@@ -277,9 +299,15 @@ impl HttpDownloadClient {
             let merkle_root = merkle_root.to_string();
             let total_chunks = chunks.len();
             let total_size = chunks.iter().map(|c| c.encrypted_size).sum::<usize>();
+            let semaphore = self.download_semaphore.clone();
 
-            // Spawn parallel download task for each chunk
+            // Spawn task for each chunk (but semaphore limits concurrency)
             let task = tokio::spawn(async move {
+                // Acquire permit (waits if MAX_CONCURRENT_CHUNKS already downloading)
+                let _permit = semaphore
+                    .acquire()
+                    .await
+                    .map_err(|e| format!("Failed to acquire semaphore: {}", e))?;
                 tracing::debug!("Downloading chunk {} from {}", index, url);
 
                 let response = client
@@ -329,10 +357,17 @@ impl HttpDownloadClient {
                 }
 
                 Ok::<(u32, Vec<u8>), String>((index, data))
+                // Permit automatically released when _permit is dropped
             });
 
             tasks.push(task);
         }
+
+        tracing::info!(
+            "Downloading {} chunks with max {} concurrent downloads",
+            chunks.len(),
+            MAX_CONCURRENT_CHUNKS
+        );
 
         // Wait for all chunks to download
         let mut results = Vec::new();
