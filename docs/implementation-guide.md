@@ -14,17 +14,17 @@
 
 ```text
 chiral-network/
-├── blockchain/          # Ethereum-compatible implementation
+├── blockchain/          # Ethereum-compatible implementation (Geth integration)
 │   ├── src/            # Core blockchain code
 │   ├── wallet/         # Wallet implementation
 │   └── mining/         # Ethash mining implementation
-├── storage/            # Storage node implementation
-│   ├── dht/           # DHT implementation
+├── p2p/                # P2P file sharing implementation
+│   ├── dht/           # DHT implementation (Kademlia)
 │   ├── chunks/        # Chunk management
-│   └── api/           # Storage API
+│   └── api/           # Peer API
 ├── chiral-app/        # Desktop application
 │   ├── src/           # Svelte frontend
-│   ├── src-tauri/     # Tauri backend
+│   ├── src-tauri/     # Tauri backend (Rust)
 │   └── docs/          # Documentation
 └── scripts/           # Build and deployment scripts
 ```
@@ -110,11 +110,13 @@ geth --datadir ./chiral-data \
 
 ```
 
-## Phase 2: Storage Implementation
+## Phase 2: P2P File Sharing Implementation
+
+**Note**: All nodes are equal peers. This implementation allows any node to seed files, download files, and participate in DHT discovery.
 
 ### Step 1: DHT Implementation
 
-Create `storage/dht/dht.rs`:
+Create `p2p/dht/dht.rs`:
 
 ```rust
 use libp2p::{
@@ -200,7 +202,7 @@ impl DhtService {
 
 ### Step 2: Chunk Manager
 
-Create `storage/chunks/manager.rs`:
+Create `p2p/chunks/manager.rs`:
 
 ```rust
 use sha2::{Sha256, Digest};
@@ -263,9 +265,9 @@ impl ChunkManager {
 }
 ```
 
-### Step 3: Storage Node API
+### Step 3: Peer API
 
-Create `storage/api/server.rs`:
+Create `p2p/api/server.rs`:
 
 ```rust
 use warp::{Filter, Reply};
@@ -343,14 +345,14 @@ export class FileService {
   }
 
   async downloadFile(hash: string): Promise<Blob> {
-    // Search DHT for file metadata and available peers
+    // Search DHT for file metadata and available seeders
     const metadata = await this.searchDHT(hash);
 
     if (!metadata || metadata.seeders.length === 0) {
-      throw new Error("File not found in network");
+      throw new Error("No seeders found - file not available in network");
     }
 
-    // Download chunks directly from peers via DHT
+    // Download chunks from seeders (any node can be a seeder)
     const chunks = await invoke<Uint8Array[]>("download_file", {
       hash,
       metadata,
@@ -394,9 +396,9 @@ pub async fn upload_file(
     // Calculate file hash
     let file_hash = calculate_file_hash(&data);
 
-    // Upload chunks to storage nodes
+    // Start seeding chunks (make available to network)
     for chunk in chunks {
-        upload_chunk_to_network(&chunk).await?;
+        publish_chunk_to_dht(&chunk).await?;
     }
 
     // Register in DHT
@@ -408,23 +410,23 @@ pub async fn upload_file(
 #[command]
 pub async fn download_file(
     hash: String,
-    supplier: String
+    seeder: String
 ) -> Result<Vec<Vec<u8>>, String> {
     // Get file metadata from DHT
     let metadata = get_file_metadata(&hash).await?;
 
-    // Download chunks from supplier
+    // Download chunks from seeder (any node can be a seeder)
     let mut chunks = Vec::new();
     for chunk_info in metadata.chunks {
-        let chunk_data = download_chunk(&supplier, &chunk_info.hash).await?;
+        let chunk_data = download_chunk(&seeder, &chunk_info.hash).await?;
         chunks.push(chunk_data);
     }
 
     // Verify and decrypt chunks
     let decrypted = decrypt_chunks(chunks)?;
 
-    // Distribute rewards
-    distribute_rewards(&storage_nodes, &file_hash).await?;
+    // Distribute payment rewards to seeders
+    distribute_rewards(&metadata.seeders, &file_hash).await?;
 
     Ok(decrypted)
 }
@@ -506,8 +508,8 @@ confirm retry behaviour without the GUI.
 # Start blockchain node
 chiral-node --chain chiral-spec.json --config chiral-config.toml
 
-# Start storage nodes
-cd storage && cargo run --bin storage-node -- --port 8080 --dht-port 4001
+# Start peer nodes (for file sharing)
+cd p2p && cargo run --bin peer-node -- --port 8080 --dht-port 4001
 
 # Start desktop app
 cd chiral-app && npm run tauri dev
@@ -562,8 +564,8 @@ describe("Chiral Network Integration", () => {
 # Build blockchain
 cd blockchain && cargo build --release
 
-# Build storage node
-cd storage && cargo build --release
+# Build peer node
+cd p2p && cargo build --release
 
 # Build desktop app
 cd chiral-app && npm run tauri build
@@ -586,19 +588,19 @@ services:
       - blockchain-data:/data
     command: --chain /config/chiral-spec.json --config /config/chiral-config.toml
 
-  storage:
-    image: chiral/storage:latest
+  peer:
+    image: chiral/peer:latest
     ports:
       - "8080:8080"
       - "4001:4001"
     volumes:
-      - storage-data:/storage
+      - peer-data:/data
     environment:
       - DHT_BOOTSTRAP=/ip4/bootstrap.chiral.network/tcp/4001
 
 volumes:
   blockchain-data:
-  storage-data:
+  peer-data:
 ```
 
 ## Monitoring
@@ -610,9 +612,9 @@ volumes:
 const prometheus = require("prom-client");
 
 const metrics = {
-  filesUploaded: new prometheus.Counter({
-    name: "chiral_files_uploaded_total",
-    help: "Total number of files uploaded",
+  filesShared: new prometheus.Counter({
+    name: "chiral_files_shared_total",
+    help: "Total number of files shared (seeding)",
   }),
 
   bytesTransferred: new prometheus.Counter({
@@ -663,16 +665,16 @@ curl -X POST http://localhost:8080/api/dht/bootstrap
 curl http://localhost:8080/api/dht/peers
 ```
 
-#### Issue: File upload failures
+#### Issue: File sharing failures
 
 ```bash
-# Check storage node logs
-tail -f storage-node.log
+# Check peer node logs
+tail -f peer-node.log
 
-# Verify chunk storage
-ls -la /storage/chunks/
+# Verify seeding files
+ls -la /data/files/chunks/
 
-# Test chunk upload manually
+# Test chunk availability manually
 curl -X POST http://localhost:8080/chunks \
   -H "Content-Type: application/octet-stream" \
   --data-binary @test-chunk.bin

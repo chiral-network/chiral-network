@@ -1,3 +1,4 @@
+# IMPORTANT: This document should be ignored for now, because we don't want to support proxy functionality before we implement the core data transfer protocols. 
 
 # Proxy Self-Test Guide
 

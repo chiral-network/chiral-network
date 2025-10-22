@@ -4,10 +4,10 @@ use async_std::path::Path;
 use async_trait::async_trait;
 use blockstore::{
     block::{Block, CidError},
-    InMemoryBlockstore, RedbBlockstore,
+    RedbBlockstore,
 };
 use ethers::prelude::*;
-use tokio::task::{spawn_blocking, JoinHandle};
+use tokio::task::JoinHandle;
 
 pub use cid::Cid;
 use futures::future::{BoxFuture, FutureExt};
@@ -66,9 +66,9 @@ use libp2p::{
     },
     mdns::{tokio::Behaviour as Mdns, Event as MdnsEvent},
     ping::{self, Behaviour as Ping, Event as PingEvent},
-    quic, relay, request_response as rr,
+    relay, request_response as rr,
     swarm::{behaviour::toggle, NetworkBehaviour, SwarmEvent},
-    tcp, yamux, Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
+    Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
 };
 use rand::rngs::OsRng;
 const EXPECTED_PROTOCOL_VERSION: &str = "/chiral/1.0.0";
@@ -1884,7 +1884,7 @@ async fn run_dht_node(
                             let index_key_str = format!("idx:{}", keyword);
                             let _index_key = kad::RecordKey::new(&index_key_str);
 
-                            // TODO:
+                            // TODO: Implement the read-modify-write logic to update keyword indexes.
                             // 1. Call swarm.behaviour_mut().kademlia.get_record(index_key.clone())
                             // 2. In the KademliaEvent handler for GetRecordOk, deserialize the value (a list of hashes).
                             // 3. Add the new metadata.merkle_root to the list.
@@ -6404,6 +6404,7 @@ mod tests {
             false,
             None,
             Vec::new(),
+            None,
             None,
             None,
             Some(256),  // chunk_size_kb
