@@ -575,7 +575,7 @@
   try {
     const loadedSettings: AppSettings = JSON.parse(stored);
     // Set the store, which ensures it is available globally
-    settings.set({ ...defaultSettings, ...loadedSettings }); 
+    settings.set({ ...defaultSettings, ...loadedSettings });
     // Update local state from the store after loading
     localSettings = JSON.parse(JSON.stringify(get(settings)));
     savedSettings = JSON.parse(JSON.stringify(localSettings)); 

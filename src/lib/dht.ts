@@ -30,6 +30,7 @@ export interface DhtConfig {
   enableAutorelay?: boolean;
   preferredRelays?: string[];
   enableRelayServer?: boolean;
+  relayServerAlias?: string; // Public alias for relay server (appears in logs and bootstrap)
 }
 
 export interface FileMetadata {
@@ -96,6 +97,17 @@ export interface DhtHealth {
   lastReservationFailure: number | null;
   reservationRenewals: number;
   reservationEvictions: number;
+  // Extended relay error tracking
+  relayConnectionAttempts: number;
+  relayConnectionSuccesses: number;
+  relayConnectionFailures: number;
+  lastRelayError: string | null;
+  lastRelayErrorType: string | null;
+  lastRelayErrorAt: number | null;
+  activeRelayCount: number;
+  totalRelaysInPool: number;
+  relayHealthScore: number; // Average health score of all relays
+  lastReservationRenewal: number | null;
   // DCUtR hole-punching metrics
   dcutrEnabled: boolean;
   dcutrHolePunchAttempts: number;
@@ -169,6 +181,12 @@ export class DhtService {
       }
       if (typeof config?.enableRelayServer === "boolean") {
         payload.enableRelayServer = config.enableRelayServer;
+      }
+      if (
+        typeof config?.relayServerAlias === "string" &&
+        config.relayServerAlias.trim().length > 0
+      ) {
+        payload.relayServerAlias = config.relayServerAlias.trim();
       }
 
       const peerId = await invoke<string>("start_dht_node", payload);
