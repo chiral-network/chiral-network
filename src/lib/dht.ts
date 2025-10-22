@@ -63,7 +63,7 @@ export const encryptionService = {
 
   async decryptFile(
     manifest: FileManifestForJs,
-    outputPath: string
+    outputPath: string,
   ): Promise<void> {
     await invoke("decrypt_and_reassemble_file", {
       manifestJs: manifest,
@@ -212,7 +212,7 @@ export class DhtService {
             resolve(metadata);
             // Unsubscribe once we got the event
             unlistenPromise.then((unlistenFn) => unlistenFn());
-          }
+          },
         );
       });
 
@@ -251,11 +251,22 @@ export class DhtService {
       }
       resolvedStoragePath += "/" + fileMetadata.fileName;
 
-      // Trigger the backend upload
+      // Trigger the backend download - ensure cids and isRoot are provided for Bitswap handling
       fileMetadata.merkleRoot = fileMetadata.fileHash;
-      fileMetadata.fileData = [];
-      fileMetadata.isRoot = true;
-      console.log(fileMetadata);
+      // Preserve existing fileData if present, otherwise provide an empty placeholder
+      fileMetadata.fileData = fileMetadata.fileData ?? [];
+      // Ensure cids exists; Bitswap expects a root CID list. Fallback to merkleRoot when absent.
+      if (!fileMetadata.cids || fileMetadata.cids.length === 0) {
+        fileMetadata.cids = [fileMetadata.merkleRoot];
+      }
+      // Determine isRoot: true when explicitly set, or when the merkleRoot equals the first CID
+      // or when there's only a single CID (fallback root).
+      fileMetadata.isRoot =
+        typeof fileMetadata.isRoot === "boolean"
+          ? fileMetadata.isRoot
+          : fileMetadata.cids[0] === fileMetadata.merkleRoot ||
+            fileMetadata.cids.length === 1;
+      console.log("Prepared file metadata for Bitswap download:", fileMetadata);
       await invoke("download_blocks_from_network", {
         fileMetadata,
         downloadPath: resolvedStoragePath,
@@ -270,7 +281,7 @@ export class DhtService {
             resolve(event.payload);
             // Unsubscribe once we got the event
             unlistenPromise.then((unlistenFn) => unlistenFn());
-          }
+          },
         );
       });
 
@@ -310,13 +321,12 @@ export class DhtService {
     }
   }
 
-
   async connectPeer(peerAddress: string): Promise<void> {
     // Note: We check peerId to ensure DHT was started, but the actual error
     // might be from the backend saying networking isn't implemented
     if (!this.peerId) {
       console.error(
-        "DHT service peerId not set, service may not be initialized"
+        "DHT service peerId not set, service may not be initialized",
       );
       throw new Error("DHT service not initialized properly");
     }
@@ -400,7 +410,7 @@ export class DhtService {
 
   async searchFileMetadata(
     fileHash: string,
-    timeoutMs = 10_000
+    timeoutMs = 10_000,
   ): Promise<FileMetadata | null> {
     const trimmed = fileHash.trim();
     if (!trimmed) {
@@ -440,13 +450,13 @@ export class DhtService {
                         ? result.seeders
                         : [],
                     }
-                  : null
+                  : null,
               );
               // Unsubscribe once we got the event
               unlistenPromise.then((unlistenFn) => unlistenFn());
-            }
+            },
           );
-        }
+        },
       );
 
       // Trigger the backend search

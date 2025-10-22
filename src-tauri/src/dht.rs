@@ -1297,7 +1297,8 @@ async fn run_dht_node(
     bootstrap_peer_ids: HashSet<PeerId>,
 ) {
     // Track peers that support relay (discovered via identify protocol)
-    let relay_capable_peers: Arc<Mutex<HashMap<PeerId, Vec<Multiaddr>>>> = Arc::new(Mutex::new(HashMap::new()));
+    let relay_capable_peers: Arc<Mutex<HashMap<PeerId, Vec<Multiaddr>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
     let mut dht_maintenance_interval = tokio::time::interval(Duration::from_secs(30 * 60));
     dht_maintenance_interval.tick().await;
     // fast heartbeat-driven updater: run at FILE_HEARTBEAT_INTERVAL to keep provider records fresh
@@ -2692,7 +2693,7 @@ async fn run_dht_node(
                                 }
                             } else {
                                 // This is a data block query - find the corresponding file and handle it
-                                
+
                                 let mut completed_downloads = Vec::new();
 
                                 // Check all active downloads for this query_id
@@ -3774,10 +3775,15 @@ async fn handle_identify_event(
             let supports_relay = info.protocols.iter().any(|p| p.as_ref() == hop_proto);
 
             if supports_relay {
-                info!("🛰️ Peer {} supports relay (HOP protocol advertised)", peer_id);
+                info!(
+                    "🛰️ Peer {} supports relay (HOP protocol advertised)",
+                    peer_id
+                );
 
                 // Store this peer as relay-capable with its listen addresses
-                let reachable_addrs: Vec<Multiaddr> = info.listen_addrs.iter()
+                let reachable_addrs: Vec<Multiaddr> = info
+                    .listen_addrs
+                    .iter()
                     .filter(|addr| ma_plausibly_reachable(addr))
                     .cloned()
                     .collect();
@@ -3785,7 +3791,11 @@ async fn handle_identify_event(
                 if !reachable_addrs.is_empty() {
                     let mut relay_peers = relay_capable_peers.lock().await;
                     relay_peers.insert(peer_id, reachable_addrs.clone());
-                    info!("✅ Added {} to relay-capable peers list ({} addresses)", peer_id, reachable_addrs.len());
+                    info!(
+                        "✅ Added {} to relay-capable peers list ({} addresses)",
+                        peer_id,
+                        reachable_addrs.len()
+                    );
                     for (i, addr) in reachable_addrs.iter().enumerate().take(3) {
                         info!("   Relay address {}: {}", i + 1, addr);
                     }
@@ -5005,6 +5015,8 @@ impl DhtService {
     }
 
     /// Get all versions for a file name, sorted by version (desc)
+    /// Matching is performed case-insensitively so uploads that differ only by
+    /// filename case are treated as versions of the same file name.
     pub async fn get_versions_by_file_name(
         &self,
         file_name: String,
@@ -5017,9 +5029,12 @@ impl DhtService {
         let all = self.get_all_file_metadata().await?;
         info!("📁 Backend: Retrieved {} total files from cache", all.len());
 
+        // Perform case-insensitive match on file name to group versions regardless of case
+        let target = file_name.to_lowercase();
+
         let mut versions: Vec<FileMetadata> = all
             .into_iter()
-            .filter(|m| m.file_name == file_name) // Remove is_root filter - get all versions
+            .filter(|m| m.file_name.to_lowercase() == target) // case-insensitive match - get all versions
             .collect();
 
         info!(
@@ -5071,12 +5086,28 @@ impl DhtService {
             .get_latest_version_by_file_name(file_name.clone())
             .await?;
 
+        // When a latest version for the same filename exists, only increment the version
+        // if the merkle root (content identifier) is different. If the merkle root is
+        // identical we return the same version to avoid creating duplicate versions
+        // for the same content.
         let (version, parent_hash, is_root) = match latest {
-            Some(ref prev) => (
-                prev.version.map(|v| v + 1).unwrap_or(2),
-                Some(prev.merkle_root.clone()),
-                false, // not root if there was a previous version
-            ),
+            Some(ref prev) => {
+                if prev.merkle_root == file_hash {
+                    // Same content: keep same version and parent/is_root values
+                    (
+                        prev.version.unwrap_or(1),
+                        prev.parent_hash.clone(),
+                        prev.is_root,
+                    )
+                } else {
+                    // Different content: increment version and set parent to previous merkle root
+                    (
+                        prev.version.map(|v| v + 1).unwrap_or(2),
+                        Some(prev.merkle_root.clone()),
+                        false, // not root if there was a previous version
+                    )
+                }
+            }
             None => (1, None, true), // root if first version
         };
         Ok(FileMetadata {
