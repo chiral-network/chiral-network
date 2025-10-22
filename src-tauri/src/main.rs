@@ -4542,7 +4542,25 @@ async fn upload_and_publish_file(
         1 // Default to v1 if DHT not running
     };
 
-    // 5. Return metadata to frontend
+    // 5. Register manifest with HTTP server for serving
+    let encrypted_key_bundle: Option<encryption::EncryptedAesKeyBundle> =
+        serde_json::from_str(&manifest.encrypted_key_bundle)
+            .map_err(|e| format!("Failed to parse key bundle: {}", e))?;
+
+    let file_manifest = manager::FileManifest {
+        merkle_root: manifest.merkle_root.clone(),
+        chunks: manifest.chunks.clone(),
+        encrypted_key_bundle,
+    };
+
+    state
+        .http_server_state
+        .register_manifest(manifest.merkle_root.clone(), file_manifest)
+        .await;
+
+    tracing::info!("Registered manifest for HTTP serving: {}", manifest.merkle_root);
+
+    // 6. Return metadata to frontend
     Ok(UploadResult {
         merkle_root: manifest.merkle_root,
         file_name,

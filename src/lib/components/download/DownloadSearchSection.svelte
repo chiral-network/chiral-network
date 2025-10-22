@@ -551,6 +551,8 @@
       await handleHttpDownload(selectedFile, selectedPeers);
     } else {
       // WebRTC download flow (existing)
+      console.log(`🔍 DEBUG: Initiating WebRTC download for file: ${selectedFile.fileName}`);
+
       const fileWithSelectedPeers: FileMetadata & { peerAllocation?: any[] } = {
         ...selectedFile,
         seeders: selectedPeers,  // Override with selected peers
@@ -774,7 +776,7 @@
               <SearchResultCard
                 metadata={latestMetadata}
                 on:copy={handleCopy}
-                on:download={event => dispatch('download', event.detail)}
+                on:download={event => handleFileDownload(event.detail)}
                 isBitswap={isBitswap}
               />
               <p class="text-xs text-muted-foreground">
