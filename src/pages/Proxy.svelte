@@ -35,6 +35,8 @@
   let isTestingOptimization = false
   let testResults = ""
   
+  const LS_PROXY_ENABLED = 'proxy.enabled';
+  const LS_PROXY_AUTO_RECONNECT = 'proxy.autoReconnect';
   const ipv4Regex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):[0-9]{1,5}$/
   const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.([a-zA-Z]{2,}|[a-zA-Z]{2,}\.[a-zA-Z]{2,}):[0-9]{1,5}$/
   const enodeRegex = /^enode:\/\/[a-fA-F0-9]{128}@(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):[0-9]{1,5}$/
@@ -94,7 +96,18 @@
 
       // Clean up expired authentication tokens
       ProxyAuthService.cleanupExpiredTokens();
+
+      // Restore preferences
+      try {
+      const pe = localStorage.getItem(LS_PROXY_ENABLED);
+      if (pe !== null) proxyEnabled = pe === 'true';
+      const ar = localStorage.getItem(LS_PROXY_AUTO_RECONNECT);
+      if (ar !== null) autoReconnectEnabled = ar === 'true';
+      } catch {}
   });
+
+  localStorage.setItem(LS_PROXY_ENABLED, String(proxyEnabled));
+  localStorage.setItem(LS_PROXY_AUTO_RECONNECT, String(autoReconnectEnabled));
 
   function validateAddress(address: string): { valid: boolean; error: string } {
       if (!address || address.trim() === '') {
