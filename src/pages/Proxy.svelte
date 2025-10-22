@@ -5,7 +5,7 @@
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import { ShieldCheck, ShieldX, Globe, Activity, Plus, Power, Trash2 } from 'lucide-svelte'
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { proxyNodes, connectProxy, disconnectProxy, removeProxy, listProxies, getProxyOptimizationStatus } from '$lib/proxy';
   import { ProxyLatencyOptimizationService } from '$lib/services/proxyLatencyOptimization';
   import { t } from 'svelte-i18n'
@@ -18,8 +18,8 @@
   let addressError = ''
   let showConfirmDialog = false
   let nodeToRemove: any = null
-  let connectionTimeouts = new Map<string, NodeJS.Timeout>()
-  let reconnectIntervals = new Map<string, NodeJS.Timeout>()
+  let connectionTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
+  let reconnectIntervals = new Map<string, ReturnType<typeof setInterval>>()
   let autoReconnectEnabled = true
   let performanceHistory = new Map<string, {
     totalAttempts: number
@@ -35,6 +35,8 @@
   let isTestingOptimization = false
   let testResults = ""
   
+  const LS_PROXY_ENABLED = 'proxy.enabled';
+  const LS_PROXY_AUTO_RECONNECT = 'proxy.autoReconnect';
   const ipv4Regex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):[0-9]{1,5}$/
   const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.([a-zA-Z]{2,}|[a-zA-Z]{2,}\.[a-zA-Z]{2,}):[0-9]{1,5}$/
   const enodeRegex = /^enode:\/\/[a-fA-F0-9]{128}@(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):[0-9]{1,5}$/
@@ -94,7 +96,18 @@
 
       // Clean up expired authentication tokens
       ProxyAuthService.cleanupExpiredTokens();
+
+      // Restore preferences
+      try {
+      const pe = localStorage.getItem(LS_PROXY_ENABLED);
+      if (pe !== null) proxyEnabled = pe === 'true';
+      const ar = localStorage.getItem(LS_PROXY_AUTO_RECONNECT);
+      if (ar !== null) autoReconnectEnabled = ar === 'true';
+      } catch {}
   });
+
+  localStorage.setItem(LS_PROXY_ENABLED, String(proxyEnabled));
+  localStorage.setItem(LS_PROXY_AUTO_RECONNECT, String(autoReconnectEnabled));
 
   function validateAddress(address: string): { valid: boolean; error: string } {
       if (!address || address.trim() === '') {
@@ -408,6 +421,19 @@
       }
   }
 
+// Clear pending timeouts when not connecting and stop auto-reconnect once online
+ $: {
+   $proxyNodes.forEach(node => {
+     if (!node.address) return
+     if (node.status !== 'connecting') {
+       clearConnectionTimeout(node.address)
+     }
+     if (node.status === 'online') {
+       stopAutoReconnect(node.address)
+     }
+   })
+}
+
   // Track successful connections when nodes come online
   $: {
       $proxyNodes.forEach(node => {
@@ -425,7 +451,16 @@
           }
       })
   }
+//Clean up timers on component destroy
+onDestroy(() => {
+   connectionTimeouts.forEach(t => clearTimeout(t))
+   reconnectIntervals.forEach(i => clearInterval(i))
+   connectionTimeouts.clear()
+   reconnectIntervals.clear()
+ })
 </script>
+
+
 
 <!-- Confirmation Dialog -->
 {#if showConfirmDialog && nodeToRemove}
@@ -593,6 +628,9 @@
                     bind:value={newNodeAddress}
                     placeholder="example.com:8080 or enode://..."
                     class="flex-1 {isAddressValid || newNodeAddress === '' ? '' : 'border border-red-500 focus:ring-red-500'}"
+                    on:keydown={(e) => {
+                     if (e.key === 'Enter' && isAddressValid && newNodeAddress) addNode()
+                    }}
                 />
                 <Button on:click={addNode} disabled={!isAddressValid || !newNodeAddress}>
                     <Plus class="h-4 w-4 mr-2" />
