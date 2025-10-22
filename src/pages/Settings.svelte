@@ -13,7 +13,11 @@
     Bell,
     RefreshCw,
     Database,
-    Languages
+    Languages,
+    Activity,
+    CheckCircle,
+    AlertTriangle,
+    Copy
   } from "lucide-svelte";
   import { onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
@@ -21,7 +25,7 @@
   import { getVersion } from "@tauri-apps/api/app";
   import { userLocation } from "$lib/stores";
   import { GEO_REGIONS, UNKNOWN_REGION_ID } from '$lib/geo';
-  import { changeLocale, loadLocale } from "../i18n/i18n";
+  import { changeLocale, loadLocale, saveLocale } from "../i18n/i18n";
   import { t } from "svelte-i18n";
   import { get } from "svelte/store";
   import { showToast } from "$lib/toast";
@@ -95,6 +99,13 @@
     message: string;
     type: "success" | "error";
   } | null = null;
+
+  // Diagnostics state
+  type DiagStatus = "pass" | "fail" | "warn";
+  type DiagItem = { id: string; label: string; status: DiagStatus; details?: string };
+  let diagnosticsRunning = false;
+  let diagnostics: DiagItem[] = [];
+  let diagnosticsReport = "";
 
   // NAT & privacy configuration text bindings
   let autonatServersText = '';
@@ -214,7 +225,7 @@
   $: hasChanges = JSON.stringify(localSettings) !== JSON.stringify(savedSettings);
 
   async function saveSettings() {
-    if (!isValid || maxStorageError) {
+    if (!isValid || maxStorageError || storagePathError) {
       return;
     }
 
@@ -323,7 +334,7 @@
 
   $: {
     // Open Storage section if it has any errors (but don't close it if already open)
-    const hasStorageError = !!maxStorageError || !!errors.maxStorageSize || !!errors.cleanupThreshold;
+    const hasStorageError = !!maxStorageError || !!storagePathError || !!errors.maxStorageSize || !!errors.cleanupThreshold;
     if (hasStorageError) storageSectionOpen = true;
 
     // Open Network section if it has any errors (but don't close it if already open)
@@ -362,7 +373,8 @@
       });
 
       if (typeof result === "string") {
-        localSettings.storagePath = result.replace(home, "~");
+        // Reassign the entire object to trigger reactivity
+        localSettings = { ...localSettings, storagePath: result };
       }
     } catch {
       // Fallback for browser environment
@@ -370,7 +382,8 @@
         // Use File System Access API (Chrome/Edge)
         try {
           const directoryHandle = await (window as any).showDirectoryPicker();
-          localSettings.storagePath = directoryHandle.name;
+          // Reassign the entire object to trigger reactivity
+          localSettings = { ...localSettings, storagePath: directoryHandle.name };
         } catch (err: any) {
           if (err.name !== "AbortError") {
             console.error("Directory picker error:", err);
@@ -383,7 +396,8 @@
           localSettings.storagePath
         );
         if (newPath) {
-          localSettings.storagePath = newPath;
+          // Reassign the entire object to trigger reactivity
+          localSettings = { ...localSettings, storagePath: newPath };
         }
       }
     }
@@ -466,14 +480,102 @@
       .filter((line) => line.length > 0);
   }
 
+  async function runDiagnostics() {
+    diagnosticsRunning = true;
+    diagnostics = [];
+    diagnosticsReport = "";
+
+    const add = (item: DiagItem) => {
+      diagnostics = [...diagnostics, item];
+    };
+
+    const tr = get(t) as (key: string, params?: any) => string;
+
+    // 1) Environment (Web vs Tauri)
+    const isTauri = typeof window !== "undefined" && "__TAURI__" in window;
+    try {
+      if (isTauri) {
+        const ver = await getVersion();
+        add({ id: "env", label: tr("settings.diagnostics.environment"), status: "pass", details: `Tauri ${ver}` });
+      } else {
+        add({ id: "env", label: tr("settings.diagnostics.environment"), status: "warn", details: "Web build: some checks skipped" });
+      }
+    } catch (e:any) {
+      add({ id: "env", label: tr("settings.diagnostics.environment"), status: "fail", details: String(e) });
+    }
+
+    // 2) i18n storage read/write
+    try {
+      const before = await loadLocale();
+      await saveLocale(before || "en");
+      const after = await loadLocale();
+      const ok = (before || "en") === (after || "en");
+      add({ id: "i18n", label: tr("settings.diagnostics.i18nStorage"), status: ok ? "pass" : "warn", details: `value=${after ?? "null"}` });
+    } catch (e:any) {
+      add({ id: "i18n", label: tr("settings.diagnostics.i18nStorage"), status: "fail", details: String(e) });
+    }
+
+    // 3) Bootstrap nodes availability (DHT)
+    try {
+      // Only in Tauri builds
+      if (isTauri) {
+        const nodes = await invoke<string[]>("get_bootstrap_nodes_command");
+        const count = Array.isArray(nodes) ? nodes.length : 0;
+        add({ id: "dht", label: tr("settings.diagnostics.bootstrapNodes"), status: count > 0 ? "pass" : "fail", details: `count=${count}` });
+      } else {
+        add({ id: "dht", label: tr("settings.diagnostics.bootstrapNodes"), status: "warn", details: "Skipped in web build" });
+      }
+    } catch (e:any) {
+      add({ id: "dht", label: tr("settings.diagnostics.bootstrapNodes"), status: "fail", details: String(e) });
+    }
+
+    // 4) Privacy routing configuration sanity
+    try {
+      const ipMode = localSettings.ipPrivacyMode;
+      const trusted = localSettings.trustedProxyRelays?.length ?? 0;
+      if (ipMode !== "off" && trusted === 0) {
+        add({ id: "privacy", label: tr("settings.diagnostics.privacyConfig"), status: "warn", details: tr("settings.diagnostics.privacyNeedsTrusted") });
+      } else {
+        add({ id: "privacy", label: tr("settings.diagnostics.privacyConfig"), status: "pass", details: `mode=${ipMode}, trusted=${trusted}` });
+      }
+    } catch (e:any) {
+      add({ id: "privacy", label: tr("settings.diagnostics.privacyConfig"), status: "fail", details: String(e) });
+    }
+
+    // Build report text
+    diagnosticsReport = diagnostics
+      .map((d) => `${d.status.toUpperCase()} - ${d.label}: ${d.details ?? ""}`)
+      .join("\n");
+    diagnosticsRunning = false;
+  }
+
+  async function copyDiagnostics() {
+    try {
+      await navigator.clipboard.writeText(diagnosticsReport);
+      showToast(tr("settings.diagnostics.copied"));
+    } catch (e) {
+      showToast(tr("settings.diagnostics.copyFailed"), "error");
+    }
+  }
+
     onMount(async () => {
+    // Get platform-specific default storage path from Tauri
+    try {
+      const platformDefaultPath = await invoke<string>("get_default_storage_path");
+      defaultSettings.storagePath = platformDefaultPath;
+    } catch (e) {
+      console.error("Failed to get default storage path:", e);
+      // Fallback to the hardcoded default if the command fails
+      defaultSettings.storagePath = "~/ChiralNetwork/Storage";
+    }
+
     // Load settings from local storage
     const stored = localStorage.getItem("chiralSettings");
     if (stored) {
   try {
     const loadedSettings: AppSettings = JSON.parse(stored);
     // Set the store, which ensures it is available globally
-    settings.set({ ...defaultSettings, ...loadedSettings }); 
+    settings.set({ ...defaultSettings, ...loadedSettings });
     // Update local state from the store after loading
     localSettings = JSON.parse(JSON.stringify(get(settings)));
     savedSettings = JSON.parse(JSON.stringify(localSettings)); 
@@ -541,10 +643,45 @@ selectedLanguage = initial; // Synchronize dropdown display value
 
   let freeSpaceGB: number | null = null;
   let maxStorageError: string | null = null;
+  let storagePathError: string | null = null;
 
   onMount(async () => {
     freeSpaceGB = await invoke('get_available_storage');
   });
+
+  // Check if storage path exists
+  async function checkStoragePathExists(path: string) {
+    if (!path || path.trim() === '') {
+      storagePathError = null;
+      return;
+    }
+
+    try {
+      // Expand ~ to actual home directory for checking
+      let pathToCheck = path;
+      if (path.startsWith("~/") || path.startsWith("~\\")) {
+        const home = await homeDir();
+        pathToCheck = path.replace(/^~/, home);
+      } else if (path === "~") {
+        pathToCheck = await homeDir();
+      }
+
+      const exists = await invoke<boolean>('check_directory_exists', { path: pathToCheck });
+      if (!exists) {
+        storagePathError = 'Directory does not exist';
+      } else {
+        storagePathError = null;
+      }
+    } catch (error) {
+      console.error('Failed to check directory:', error);
+      storagePathError = null;
+    }
+  }
+
+  // Check storage path whenever it changes
+  $: if (localSettings.storagePath) {
+    checkStoragePathExists(localSettings.storagePath);
+  }
 
   $: {
     if (freeSpaceGB !== null && localSettings.maxStorageSize > freeSpaceGB) {
@@ -657,7 +794,7 @@ function sectionMatches(section: string, query: string) {
               id="storage-path"
               bind:value={localSettings.storagePath}
               placeholder="~/ChiralNetwork/Storage"
-              class="flex-1"
+              class={`flex-1 ${storagePathError ? 'border-red-500 focus:border-red-500 ring-red-500' : ''}`}
             />
             <Button
               variant="outline"
@@ -667,6 +804,10 @@ function sectionMatches(section: string, query: string) {
               <FolderOpen class="h-4 w-4" />
             </Button>
           </div>
+          {#if storagePathError}
+            <p class="mt-1 text-sm text-red-500">{storagePathError}</p>
+          {/if}
+          
         </div>
 
         <div class="grid grid-cols-2 gap-4">
@@ -1427,6 +1568,56 @@ function sectionMatches(section: string, query: string) {
     </Expandable>
   {/if}
 
+  <!-- Diagnostics -->
+  {#if sectionMatches("diagnostics", search)}
+    <Expandable>
+      <div slot="title" class="flex items-center gap-3">
+        <Activity class="h-6 w-6 text-blue-600" />
+        <h2 class="text-xl font-semibold text-black">{$t("settings.diagnostics.title")}</h2>
+      </div>
+      <div class="space-y-4">
+        <p class="text-sm text-muted-foreground">{$t("settings.diagnostics.description")}</p>
+
+        <div class="flex gap-2 items-center">
+          <Button size="xs" on:click={runDiagnostics} disabled={diagnosticsRunning}>
+            <RefreshCw class="h-4 w-4 mr-2 {diagnosticsRunning ? 'animate-spin' : ''}" />
+            {diagnosticsRunning ? $t("settings.diagnostics.running") : $t("settings.diagnostics.run")}
+          </Button>
+          {#if diagnostics.length > 0}
+            <Button variant="outline" size="xs" on:click={copyDiagnostics}>
+              <Copy class="h-4 w-4 mr-2" />{$t("settings.diagnostics.copyReport")}
+            </Button>
+          {/if}
+        </div>
+
+        {#if diagnostics.length > 0}
+          <div>
+            <h3 class="font-medium mb-2">{$t("settings.diagnostics.resultsTitle")}</h3>
+            <ul class="space-y-2">
+              {#each diagnostics as d}
+                <li class="flex items-start gap-2">
+                  {#if d.status === 'pass'}
+                    <CheckCircle class="h-4 w-4 text-green-600 mt-0.5" />
+                  {:else if d.status === 'warn'}
+                    <AlertTriangle class="h-4 w-4 text-amber-600 mt-0.5" />
+                  {:else}
+                    <AlertTriangle class="h-4 w-4 text-red-600 mt-0.5" />
+                  {/if}
+                  <div>
+                    <div class="text-sm font-medium">{d.label}</div>
+                    {#if d.details}
+                      <div class="text-xs text-muted-foreground">{d.details}</div>
+                    {/if}
+                  </div>
+                </li>
+              {/each}
+            </ul>
+          </div>
+        {/if}
+      </div>
+    </Expandable>
+  {/if}
+
   <!-- Action Buttons -->
   <div class="flex flex-wrap items-center justify-between gap-2">
     <Button variant="destructive" size="xs" on:click={openResetConfirm}>
@@ -1447,8 +1638,9 @@ function sectionMatches(section: string, query: string) {
       <Button
         size="xs"
         on:click={saveSettings}
-        disabled={!hasChanges || !!maxStorageError || !isValid}
-        class={`transition-colors duration-200 ${!hasChanges || !!maxStorageError || !isValid ? "cursor-not-allowed opacity-50" : ""}`}
+        disabled={!hasChanges || maxStorageError || storagePathError || !isValid}
+      
+        class={`transition-colors duration-200 ${!hasChanges || maxStorageError || storagePathError || !isValid ? "cursor-not-allowed opacity-50" : ""}`}
       >
         <Save class="h-4 w-4 mr-2" />
         {$t("actions.save")}

@@ -11,7 +11,8 @@ Welcome to the Chiral Network documentation. This directory contains comprehensi
 ### Technical Documentation
 - [Technical Specifications](technical-specifications.md) - Detailed technical specs, protocols, and data structures
 - [Network Protocol](network-protocol.md) - P2P networking, DHT, NAT traversal, and relay infrastructure
-- [API Documentation](api-documentation.md) - Service APIs, Tauri commands, and integration guides
+- [API Documentation](api-documentation.md) - Service APIs and integration guides
+- [Tauri Command Reference](tauri-commands.md) - Desktop invoke commands and local services
 
 ### Implementation & Deployment
 - [Implementation Guide](implementation-guide.md) - Development workflows, coding standards, and best practices
