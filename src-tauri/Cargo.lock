@@ -1089,6 +1089,7 @@ dependencies = [
  "rs_merkle",
  "secp256k1",
  "serde",
+ "serde_bytes",
  "serde_json",
  "sha2",
  "sha3",
