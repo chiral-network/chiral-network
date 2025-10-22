@@ -11,6 +11,7 @@
 import { wallet, transactions, type Transaction, settings } from '$lib/stores';
 import { get } from 'svelte/store';
 import { invoke } from '@tauri-apps/api/core';
+import { walletService } from '$lib/wallet';
 
 // Helper functions for localStorage persistence
 function saveWalletToStorage(walletData: any) {
@@ -331,17 +332,6 @@ export class PaymentService {
         ? Math.max(...currentTransactions.map(tx => tx.id)) + 1
         : 1;
 
-      // Credit to seeder's balance (support 8 decimal places)
-      wallet.update(w => {
-        const updated = {
-          ...w,
-          balance: parseFloat((w.balance + amount).toFixed(8))
-          // Note: totalEarned is automatically calculated from mining rewards
-        };
-        saveWalletToStorage(updated);
-        return updated;
-      });
-
       // Create transaction record for seeder
       const newTransaction: Transaction = {
         id: transactionId,
@@ -361,6 +351,33 @@ export class PaymentService {
         saveTransactionsToStorage(updated);
         return updated;
       });
+
+      // Trigger wallet refresh to recalculate balance from transaction history
+      // This ensures consistency with walletService polling
+      try {
+        await walletService.refreshBalance();
+      } catch (error) {
+        console.warn('Failed to refresh balance after payment:', error);
+        // Fallback: manually calculate balance for immediate UI feedback
+        wallet.update(w => {
+          const allTxs = get(transactions);
+          const totalReceived = allTxs
+            .filter((tx) => tx.status === 'completed' && tx.type === 'received')
+            .reduce((sum, tx) => sum + tx.amount, 0);
+          const totalSpent = allTxs
+            .filter((tx) => tx.status === 'completed' && tx.type === 'sent')
+            .reduce((sum, tx) => sum + tx.amount, 0);
+
+          const updated = {
+            ...w,
+            balance: parseFloat((totalReceived - totalSpent).toFixed(8)),
+            totalEarned: totalReceived,
+            totalSpent: totalSpent
+          };
+          saveWalletToStorage(updated);
+          return updated;
+        });
+      }
 
       // Mark this payment as received
       this.receivedPayments.add(paymentKey);
