@@ -39,6 +39,7 @@
   const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.([a-zA-Z]{2,}|[a-zA-Z]{2,}\.[a-zA-Z]{2,}):[0-9]{1,5}$/
   const enodeRegex = /^enode:\/\/[a-fA-F0-9]{128}@(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):[0-9]{1,5}$/
   let statusFilter = 'all'
+  let sortBy: 'status' | 'latency' | 'bandwidth' = 'status'
   
   $: statusOptions = [
     { value: 'all', label: $t('All') },
@@ -46,6 +47,12 @@
     { value: 'offline', label: $t('Offline') },
     { value: 'connecting', label: $t('Connecting') },
     { value: 'error', label: 'Error' }
+  ]
+
+  $: sortOptions = [
+    { value: 'status', label: $t('Sort by status') },
+    { value: 'latency', label: $t('Sort by latency') },
+    { value: 'bandwidth', label: $t('Sort by bandwidth') }
   ]
 
   $: filteredNodes = $proxyNodes.filter(node => {
@@ -57,10 +64,25 @@
 
   
   $: sortedNodes = [...filteredNodes].sort((a, b) => {
-      const statusOrder: Record<string, number> = { 'online': 1, 'connecting': 2, 'offline': 3, 'error': 4 };
-      const aOrder = statusOrder[a.status || 'offline'] || 5;
-      const bOrder = statusOrder[b.status || 'offline'] || 5;
-      return aOrder - bOrder;
+      if (sortBy === 'status') {
+        // Preserve upstream status precedence and include error state with a safe fallback
+        const statusOrder: Record<string, number> = { online: 1, connecting: 2, offline: 3, error: 4 }
+        const aOrder = statusOrder[(a.status as string) || 'offline'] ?? 5
+        const bOrder = statusOrder[(b.status as string) || 'offline'] ?? 5
+        return aOrder - bOrder
+      }
+
+      if (sortBy === 'latency') {
+        // Ascending: lower latency first; undefined latencies go to the end
+        const aLat = a.latency ?? Number.POSITIVE_INFINITY
+        const bLat = b.latency ?? Number.POSITIVE_INFINITY
+        return aLat - bLat
+      }
+
+      // Sort by effective bandwidth (derived from latency): higher first; unknowns last
+      const aBw = a.latency != null ? Math.round(100 - a.latency) : Number.NEGATIVE_INFINITY
+      const bBw = b.latency != null ? Math.round(100 - b.latency) : Number.NEGATIVE_INFINITY
+      return bBw - aBw
   });
 
   
@@ -586,15 +608,23 @@
   </Card>
   
   <Card class="p-6">
-    <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold">{$t('proxy.proxyNodes')}</h2>
-        <div class="w-40 flex-shrink-0">
-            <DropDown
-                bind:value={statusFilter}
-                options={statusOptions}
-            />
-        </div>
+  <div class="flex items-center justify-between mb-4 gap-3">
+    <h2 class="text-lg font-semibold">{$t('proxy.proxyNodes')}</h2>
+    <div class="flex items-center gap-2">
+      <div class="w-40">
+        <DropDown
+          bind:value={statusFilter}
+          options={statusOptions}
+        />
+      </div>
+      <div class="w-44">
+        <DropDown
+          bind:value={sortBy}
+          options={sortOptions}
+        />
+      </div>
     </div>
+  </div>
     <div class="space-y-3">
       {#each sortedNodes as node}
         <div class="p-4 bg-secondary rounded-lg border border-border/50 hover:border-border transition-colors">

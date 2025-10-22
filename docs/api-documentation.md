@@ -175,19 +175,21 @@ GET /api/v1/files/list
 }
 ```
 
-### Provider Node Operations
+### Node Operations
 
-#### Register provider Node
+**Note**: All nodes are equal in Chiral Network. Any node can seed files, download files, and participate in the network. There are no dedicated "storage nodes" - all nodes can perform any role.
+
+#### Register Node
 
 ```http
-POST /api/v1/provider/register
+POST /api/v1/node/register
 ```
 
 **Request Body:**
 
 ```json
 {
-  "node_id": "peer_id_12345",
+  "node_id": "12D3KooW...",
   "ip_address": "192.168.1.100",
   "port": 8080,
   "capacity": 1099511627776,
@@ -209,25 +211,25 @@ POST /api/v1/provider/register
 ```json
 {
   "success": true,
-  "node_id": "peer_id_12345",
+  "node_id": "12D3KooW...",
   "registration_time": 1234567890,
   "certificate": "base64_encoded_cert"
 }
 ```
 
-#### Update Provider Node Status
+#### Update Node Status
 
 ```http
-PUT /api/v1/provider/status
+PUT /api/v1/node/status
 ```
 
 **Request Body:**
 
 ```json
 {
-  "node_id": "peer_id_12345",
+  "node_id": "12D3KooW...",
   "available_space": 549755813888,
-  "stored_chunks": 15000,
+  "seeding_chunks": 15000,
   "bandwidth_used": {
     "upload": 52428800,
     "download": 26214400
@@ -236,10 +238,10 @@ PUT /api/v1/provider/status
 }
 ```
 
-#### Get Provider Statistics
+#### Get Network Statistics
 
 ```http
-GET /api/v1/provider/stats
+GET /api/v1/network/stats
 ```
 
 **Response:**

@@ -1,3 +1,6 @@
+
+# IMPORTANT: This document needs full revision. If we decided go through only public protocols (http, ftp, webtorrent, etc), there might be no needs to do NAT traversal ourselves. 
+
 # NAT Traversal & Network Reachability
 
 Chiral Network implements comprehensive NAT traversal solutions to ensure connectivity between peers regardless of network configuration.

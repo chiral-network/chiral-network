@@ -84,26 +84,22 @@ services:
     command: ["--config", "/config/blockchain.toml"]
     restart: unless-stopped
 
-  storage:
-    image: chiralnetwork/storage:latest
-    container_name: chiral-storage
+  peer:
+    image: chiralnetwork/peer:latest
+    container_name: chiral-peer
     ports:
       - "8080:8080" # File transfer
       - "4001:4001" # DHT
     volumes:
-      - storage-data:/storage
-      - ./config/storage.toml:/config/storage.toml
+      - peer-data:/data
+      - ./config/peer.toml:/config/peer.toml
     environment:
       - MAX_STORAGE=100GB
-      - NODE_TYPE=storage
-    restart: unless-stopped
-
-
     restart: unless-stopped
 
 volumes:
   blockchain-data:
-  storage-data:
+  peer-data:
 ```
 
 #### Start Services
@@ -136,12 +132,14 @@ cargo build --release
 sudo cp target/release/chiral-node /usr/local/bin/
 ```
 
-#### Build Storage Node
+[TODO: Revise this. I think we only have one binary.]
+
+#### Build Peer Node
 
 ```bash
-cd ../storage
+cd ../peer
 cargo build --release
-sudo cp target/release/chiral-storage /usr/local/bin/
+sudo cp target/release/chiral-peer /usr/local/bin/
 ```
 
 #### Build Client Application
@@ -197,14 +195,16 @@ coinbase = "0x0000000000000000000000000000000000000000"
 threads = 4
 ```
 
-### 2. Storage Node Configuration
+### 2. Peer Node Configuration
 
-#### storage.toml
+**Note**: All nodes are equal peers. Any node can seed files, download files, and participate in DHT. There are no dedicated "storage nodes".
+
+#### peer.toml
 
 ```toml
 [node]
 id = "auto"
-type = "storage"
+# Max storage capacity this peer will dedicate to seeding files
 capacity = "100GB"
 
 [network]
@@ -217,8 +217,9 @@ bootstrap_peers = [
   "/ip4/bootstrap.chiral.network/tcp/4001/p2p/QmBootstrap"
 ]
 
-[storage]
-path = "/var/lib/chiral/storage"
+[file_sharing]
+# Local path for seeding files
+path = "/var/lib/chiral/files"
 chunk_size = 262144
 
 [api]
@@ -361,7 +362,9 @@ geth --datadir ./node1 \
   --ws --ws.port 8547
 ```
 
-#### Node 2 (Storage Node)
+#### Node 2 (Seeding Peer)
+
+**Note**: This is a regular peer that happens to seed files. All nodes are equal and can seed files.
 
 ```bash
 # Start Geth node
@@ -372,11 +375,11 @@ geth --datadir ./node2 \
   --http --http.port 8547 \
   --ws --ws.port 8548
 
-# Run storage service alongside
-chiral-storage \
+# Run peer service (for file sharing/seeding)
+chiral-peer \
   --ethereum-rpc http://localhost:8547 \
-  --storage-capacity 500GB \
-  --data-dir ./node2/storage
+  --max-capacity 500GB \
+  --data-dir ./node2/files
 ```
 
 #### Node 3 (Light Client)
@@ -563,8 +566,8 @@ DATE=$(date +%Y%m%d_%H%M%S)
 # Backup blockchain data
 tar -czf $BACKUP_DIR/blockchain_$DATE.tar.gz /var/lib/chiral/blockchain
 
-# Backup storage metadata
-# No database backup needed - fully decentralized
+# Backup seeding files (if desired)
+tar -czf $BACKUP_DIR/files_$DATE.tar.gz /var/lib/chiral/files
 
 # Backup configuration
 tar -czf $BACKUP_DIR/config_$DATE.tar.gz /etc/chiral
@@ -585,8 +588,8 @@ systemctl stop chiral-node
 # Restore blockchain
 tar -xzf blockchain_backup.tar.gz -C /
 
-# Restore database
-# No database restore needed - fully decentralized
+# Restore seeding files (if backed up)
+tar -xzf files_backup.tar.gz -C /
 
 # Start services
 systemctl start chiral-node
@@ -672,17 +675,17 @@ systemctl restart chiral-node
 chiral-cli admin addPeer "enode://..."
 ```
 
-#### 2. Storage Issues
+#### 2. File Seeding Issues
 
 ```bash
-# Check storage status
-chiral-cli storage status
+# Check seeding status
+chiral-cli files status
 
 # Repair corrupted chunks
-chiral-cli storage repair --verify
+chiral-cli files repair --verify
 
-# Reindex storage
-chiral-cli storage reindex
+# Reindex seeding files
+chiral-cli files reindex
 ```
 
 #### 3. High Resource Usage

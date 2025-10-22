@@ -1,3 +1,5 @@
+# IMPORTANT: This document needs full revision. We dont' need overcomplicated wallet and blockchain integration. We only need to support Ethereum-compatible blockchain and a simple wallet.
+
 # Wallet & Blockchain Integration
 
 Chiral Network includes a separate Ethereum-compatible blockchain with HD wallet support and CPU mining capabilities.

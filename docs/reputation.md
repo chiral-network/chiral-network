@@ -1,3 +1,5 @@
+# IMPORTANT: This document needs full revision. We don't yet have a reputation system design, which should be a high-priority item.
+
 # Reputation System
 
 Chiral Network implements a comprehensive peer reputation system to ensure reliable file transfers and network quality.
