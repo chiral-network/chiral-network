@@ -1,11 +1,12 @@
+use crate::FileTransferService;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{sleep, Duration};
-use tracing::{info, warn, error};
-use sha2::{Digest, Sha256};
+use tracing::{error, info, warn};
 use webrtc::api::APIBuilder;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
 use webrtc::data_channel::RTCDataChannel;
@@ -14,7 +15,6 @@ use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
-use crate::FileTransferService;
 
 const CHUNK_SIZE: usize = 16384; // 16KB chunks
 
@@ -188,7 +188,14 @@ impl WebRTCService {
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
                 WebRTCCommand::EstablishConnection { peer_id, offer } => {
-                    Self::handle_establish_connection(&peer_id, &offer, &event_tx, &connections, &file_transfer_service).await;
+                    Self::handle_establish_connection(
+                        &peer_id,
+                        &offer,
+                        &event_tx,
+                        &connections,
+                        &file_transfer_service,
+                    )
+                    .await;
                 }
                 WebRTCCommand::HandleAnswer { peer_id, answer } => {
                     Self::handle_answer(&peer_id, &answer, &connections).await;
@@ -197,13 +204,31 @@ impl WebRTCService {
                     Self::handle_ice_candidate(&peer_id, &candidate, &connections).await;
                 }
                 WebRTCCommand::SendFileRequest { peer_id, request } => {
-                    Self::handle_file_request(&peer_id, &request, &event_tx, &file_transfer_service, &connections).await;
+                    Self::handle_file_request(
+                        &peer_id,
+                        &request,
+                        &event_tx,
+                        &file_transfer_service,
+                        &connections,
+                    )
+                    .await;
                 }
                 WebRTCCommand::SendFileChunk { peer_id, chunk } => {
                     Self::handle_send_chunk(&peer_id, &chunk, &connections).await;
                 }
-                WebRTCCommand::RequestFileChunk { peer_id, file_hash, chunk_index } => {
-                    Self::handle_request_chunk(&peer_id, &file_hash, chunk_index, &event_tx, &connections).await;
+                WebRTCCommand::RequestFileChunk {
+                    peer_id,
+                    file_hash,
+                    chunk_index,
+                } => {
+                    Self::handle_request_chunk(
+                        &peer_id,
+                        &file_hash,
+                        chunk_index,
+                        &event_tx,
+                        &connections,
+                    )
+                    .await;
                 }
                 WebRTCCommand::CloseConnection { peer_id } => {
                     Self::handle_close_connection(&peer_id, &connections).await;
@@ -230,23 +255,30 @@ impl WebRTCService {
             Ok(pc) => Arc::new(pc),
             Err(e) => {
                 error!("Failed to create peer connection: {}", e);
-                let _ = event_tx.send(WebRTCEvent::ConnectionFailed {
-                    peer_id: peer_id.to_string(),
-                    error: e.to_string(),
-                }).await;
+                let _ = event_tx
+                    .send(WebRTCEvent::ConnectionFailed {
+                        peer_id: peer_id.to_string(),
+                        error: e.to_string(),
+                    })
+                    .await;
                 return;
             }
         };
 
         // Create data channel
-        let data_channel = match peer_connection.create_data_channel("file-transfer", None).await {
+        let data_channel = match peer_connection
+            .create_data_channel("file-transfer", None)
+            .await
+        {
             Ok(dc) => dc,
             Err(e) => {
                 error!("Failed to create data channel: {}", e);
-                let _ = event_tx.send(WebRTCEvent::ConnectionFailed {
-                    peer_id: peer_id.to_string(),
-                    error: e.to_string(),
-                }).await;
+                let _ = event_tx
+                    .send(WebRTCEvent::ConnectionFailed {
+                        peer_id: peer_id.to_string(),
+                        error: e.to_string(),
+                    })
+                    .await;
                 return;
             }
         };
@@ -264,7 +296,14 @@ impl WebRTCService {
             let connections = connections_clone.clone();
 
             Box::pin(async move {
-                Self::handle_data_channel_message(&peer_id, &msg, &event_tx, &file_transfer_service, &connections).await;
+                Self::handle_data_channel_message(
+                    &peer_id,
+                    &msg,
+                    &event_tx,
+                    &file_transfer_service,
+                    &connections,
+                )
+                .await;
             })
         }));
 
@@ -282,56 +321,68 @@ impl WebRTCService {
 
             Box::pin(async move {
                 if let Some(candidate) = candidate {
-                    if let Ok(candidate_str) = serde_json::to_string(&candidate.to_json().unwrap_or_default()) {
-                        let _ = event_tx.send(WebRTCEvent::IceCandidate {
-                            peer_id,
-                            candidate: candidate_str,
-                        }).await;
+                    if let Ok(candidate_str) =
+                        serde_json::to_string(&candidate.to_json().unwrap_or_default())
+                    {
+                        let _ = event_tx
+                            .send(WebRTCEvent::IceCandidate {
+                                peer_id,
+                                candidate: candidate_str,
+                            })
+                            .await;
                     }
                 }
             })
         }));
 
-        peer_connection.on_peer_connection_state_change(Box::new(move |state: RTCPeerConnectionState| {
-            let event_tx = event_tx_clone.clone();
-            let peer_id = peer_id_clone.clone();
-            let _data_channel = data_channel_clone.clone();
+        peer_connection.on_peer_connection_state_change(Box::new(
+            move |state: RTCPeerConnectionState| {
+                let event_tx = event_tx_clone.clone();
+                let peer_id = peer_id_clone.clone();
+                let _data_channel = data_channel_clone.clone();
 
-            Box::pin(async move {
-                match state {
-                    RTCPeerConnectionState::Connected => {
-                        info!("WebRTC connection established with peer: {}", peer_id);
-                        let _ = event_tx.send(WebRTCEvent::ConnectionEstablished {
-                            peer_id,
-                        }).await;
+                Box::pin(async move {
+                    match state {
+                        RTCPeerConnectionState::Connected => {
+                            info!("WebRTC connection established with peer: {}", peer_id);
+                            let _ = event_tx
+                                .send(WebRTCEvent::ConnectionEstablished { peer_id })
+                                .await;
+                        }
+                        RTCPeerConnectionState::Disconnected
+                        | RTCPeerConnectionState::Failed
+                        | RTCPeerConnectionState::Closed => {
+                            info!("WebRTC connection closed with peer: {}", peer_id);
+                        }
+                        _ => {}
                     }
-                    RTCPeerConnectionState::Disconnected | RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed => {
-                        info!("WebRTC connection closed with peer: {}", peer_id);
-                    }
-                    _ => {}
-                }
-            })
-        }));
+                })
+            },
+        ));
 
         // Set remote description from offer
         let offer = match serde_json::from_str::<RTCSessionDescription>(offer_sdp) {
             Ok(offer) => offer,
             Err(e) => {
                 error!("Failed to parse offer SDP: {}", e);
-                let _ = event_tx.send(WebRTCEvent::ConnectionFailed {
-                    peer_id: peer_id.to_string(),
-                    error: format!("Invalid offer SDP: {}", e),
-                }).await;
+                let _ = event_tx
+                    .send(WebRTCEvent::ConnectionFailed {
+                        peer_id: peer_id.to_string(),
+                        error: format!("Invalid offer SDP: {}", e),
+                    })
+                    .await;
                 return;
             }
         };
 
         if let Err(e) = peer_connection.set_remote_description(offer).await {
             error!("Failed to set remote description: {}", e);
-            let _ = event_tx.send(WebRTCEvent::ConnectionFailed {
-                peer_id: peer_id.to_string(),
-                error: e.to_string(),
-            }).await;
+            let _ = event_tx
+                .send(WebRTCEvent::ConnectionFailed {
+                    peer_id: peer_id.to_string(),
+                    error: e.to_string(),
+                })
+                .await;
             return;
         }
 
@@ -340,10 +391,12 @@ impl WebRTCService {
             Ok(answer) => answer,
             Err(e) => {
                 error!("Failed to create answer: {}", e);
-                let _ = event_tx.send(WebRTCEvent::ConnectionFailed {
-                    peer_id: peer_id.to_string(),
-                    error: e.to_string(),
-                }).await;
+                let _ = event_tx
+                    .send(WebRTCEvent::ConnectionFailed {
+                        peer_id: peer_id.to_string(),
+                        error: e.to_string(),
+                    })
+                    .await;
                 return;
             }
         };
@@ -351,20 +404,24 @@ impl WebRTCService {
         // Set local description
         if let Err(e) = peer_connection.set_local_description(answer).await {
             error!("Failed to set local description: {}", e);
-            let _ = event_tx.send(WebRTCEvent::ConnectionFailed {
-                peer_id: peer_id.to_string(),
-                error: e.to_string(),
-            }).await;
+            let _ = event_tx
+                .send(WebRTCEvent::ConnectionFailed {
+                    peer_id: peer_id.to_string(),
+                    error: e.to_string(),
+                })
+                .await;
             return;
         }
 
         // Send answer
         if let Some(local_desc) = peer_connection.local_description().await {
             if let Ok(answer_str) = serde_json::to_string(&local_desc) {
-                let _ = event_tx.send(WebRTCEvent::AnswerReceived {
-                    peer_id: peer_id.to_string(),
-                    answer: answer_str,
-                }).await;
+                let _ = event_tx
+                    .send(WebRTCEvent::AnswerReceived {
+                        peer_id: peer_id.to_string(),
+                        answer: answer_str,
+                    })
+                    .await;
             }
         }
 
@@ -383,7 +440,11 @@ impl WebRTCService {
         conns.insert(peer_id.to_string(), connection);
     }
 
-    async fn handle_answer(peer_id: &str, answer_sdp: &str, connections: &Arc<Mutex<HashMap<String, PeerConnection>>>) {
+    async fn handle_answer(
+        peer_id: &str,
+        answer_sdp: &str,
+        connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
+    ) {
         let mut conns = connections.lock().await;
         if let Some(connection) = conns.get_mut(peer_id) {
             if let Some(pc) = &connection.peer_connection {
@@ -402,17 +463,22 @@ impl WebRTCService {
         }
     }
 
-    async fn handle_ice_candidate(peer_id: &str, candidate_str: &str, connections: &Arc<Mutex<HashMap<String, PeerConnection>>>) {
+    async fn handle_ice_candidate(
+        peer_id: &str,
+        candidate_str: &str,
+        connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
+    ) {
         let mut conns = connections.lock().await;
         if let Some(connection) = conns.get_mut(peer_id) {
             if let Some(pc) = &connection.peer_connection {
-                let candidate_init = match serde_json::from_str::<RTCIceCandidateInit>(candidate_str) {
-                    Ok(candidate) => candidate,
-                    Err(e) => {
-                        error!("Failed to parse ICE candidate: {}", e);
-                        return;
-                    }
-                };
+                let candidate_init =
+                    match serde_json::from_str::<RTCIceCandidateInit>(candidate_str) {
+                        Ok(candidate) => candidate,
+                        Err(e) => {
+                            error!("Failed to parse ICE candidate: {}", e);
+                            return;
+                        }
+                    };
 
                 if let Err(e) = pc.add_ice_candidate(candidate_init).await {
                     error!("Failed to add ICE candidate: {}", e);
@@ -428,25 +494,46 @@ impl WebRTCService {
         file_transfer_service: &Arc<FileTransferService>,
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
     ) {
-        info!("Handling file request from peer {}: {}", peer_id, request.file_hash);
+        info!(
+            "Handling file request from peer {}: {}",
+            peer_id, request.file_hash
+        );
 
         // Check if we have the file locally
-        let stored_files = file_transfer_service.get_stored_files().await.unwrap_or_default();
-        let has_file = stored_files.iter().any(|(hash, _)| hash == &request.file_hash);
+        let stored_files = file_transfer_service
+            .get_stored_files()
+            .await
+            .unwrap_or_default();
+        let has_file = stored_files
+            .iter()
+            .any(|(hash, _)| hash == &request.file_hash);
 
         if has_file {
             // Start sending file chunks
-            Self::start_file_transfer(peer_id, request, event_tx, file_transfer_service, connections).await;
+            Self::start_file_transfer(
+                peer_id,
+                request,
+                event_tx,
+                file_transfer_service,
+                connections,
+            )
+            .await;
         } else {
-            let _ = event_tx.send(WebRTCEvent::TransferFailed {
-                peer_id: peer_id.to_string(),
-                file_hash: request.file_hash.clone(),
-                error: "File not found locally".to_string(),
-            }).await;
+            let _ = event_tx
+                .send(WebRTCEvent::TransferFailed {
+                    peer_id: peer_id.to_string(),
+                    file_hash: request.file_hash.clone(),
+                    error: "File not found locally".to_string(),
+                })
+                .await;
         }
     }
 
-    async fn handle_send_chunk(peer_id: &str, chunk: &FileChunk, connections: &Arc<Mutex<HashMap<String, PeerConnection>>>) {
+    async fn handle_send_chunk(
+        peer_id: &str,
+        chunk: &FileChunk,
+        connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
+    ) {
         let mut conns = connections.lock().await;
         if let Some(connection) = conns.get_mut(peer_id) {
             if let Some(dc) = &connection.data_channel {
@@ -472,14 +559,19 @@ impl WebRTCService {
         event_tx: &mpsc::Sender<WebRTCEvent>,
         _connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
     ) {
-        let _ = event_tx.send(WebRTCEvent::FileChunkRequested {
-            peer_id: peer_id.to_string(),
-            file_hash: file_hash.to_string(),
-            chunk_index,
-        }).await;
+        let _ = event_tx
+            .send(WebRTCEvent::FileChunkRequested {
+                peer_id: peer_id.to_string(),
+                file_hash: file_hash.to_string(),
+                chunk_index,
+            })
+            .await;
     }
 
-    async fn handle_close_connection(peer_id: &str, connections: &Arc<Mutex<HashMap<String, PeerConnection>>>) {
+    async fn handle_close_connection(
+        peer_id: &str,
+        connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
+    ) {
         info!("Closing WebRTC connection with peer: {}", peer_id);
         let mut conns = connections.lock().await;
         if let Some(mut connection) = conns.remove(peer_id) {
@@ -500,20 +592,38 @@ impl WebRTCService {
             // Try to parse as FileChunk
             if let Ok(chunk) = serde_json::from_str::<FileChunk>(text) {
                 // Handle received chunk
-                Self::process_incoming_chunk(&chunk, file_transfer_service, connections, event_tx, peer_id).await;
-                let _ = event_tx.send(WebRTCEvent::FileChunkReceived {
-                    peer_id: peer_id.to_string(),
-                    chunk,
-                }).await;
+                Self::process_incoming_chunk(
+                    &chunk,
+                    file_transfer_service,
+                    connections,
+                    event_tx,
+                    peer_id,
+                )
+                .await;
+                let _ = event_tx
+                    .send(WebRTCEvent::FileChunkReceived {
+                        peer_id: peer_id.to_string(),
+                        chunk,
+                    })
+                    .await;
             }
             // Try to parse as WebRTCFileRequest
             else if let Ok(request) = serde_json::from_str::<WebRTCFileRequest>(text) {
-                let _ = event_tx.send(WebRTCEvent::FileRequestReceived {
-                    peer_id: peer_id.to_string(),
-                    request: request.clone(),
-                }).await;
+                let _ = event_tx
+                    .send(WebRTCEvent::FileRequestReceived {
+                        peer_id: peer_id.to_string(),
+                        request: request.clone(),
+                    })
+                    .await;
                 // Actually handle the file request to start transfer
-                Self::handle_file_request(peer_id, &request, event_tx, file_transfer_service, connections).await;
+                Self::handle_file_request(
+                    peer_id,
+                    &request,
+                    event_tx,
+                    file_transfer_service,
+                    connections,
+                )
+                .await;
             }
         }
     }
@@ -526,20 +636,29 @@ impl WebRTCService {
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
     ) {
         // Get file data from local storage
-        let file_data = match file_transfer_service.get_file_data(&request.file_hash).await {
+        let file_data = match file_transfer_service
+            .get_file_data(&request.file_hash)
+            .await
+        {
             Some(data) => data,
             None => {
-                let _ = event_tx.send(WebRTCEvent::TransferFailed {
-                    peer_id: peer_id.to_string(),
-                    file_hash: request.file_hash.clone(),
-                    error: "File data not available".to_string(),
-                }).await;
+                let _ = event_tx
+                    .send(WebRTCEvent::TransferFailed {
+                        peer_id: peer_id.to_string(),
+                        file_hash: request.file_hash.clone(),
+                        error: "File data not available".to_string(),
+                    })
+                    .await;
                 return;
             }
         };
 
-        info!("Starting real file transfer of {} ({} bytes) to peer {}",
-              request.file_name, file_data.len(), peer_id);
+        info!(
+            "Starting real file transfer of {} ({} bytes) to peer {}",
+            request.file_name,
+            file_data.len(),
+            peer_id
+        );
 
         // Calculate total chunks
         let total_chunks = ((file_data.len() as f64) / CHUNK_SIZE as f64).ceil() as u32;
@@ -557,7 +676,9 @@ impl WebRTCService {
                     bytes_sent: 0,
                     start_time: Instant::now(),
                 };
-                connection.active_transfers.insert(request.file_hash.clone(), transfer);
+                connection
+                    .active_transfers
+                    .insert(request.file_hash.clone(), transfer);
             }
         }
 
@@ -585,7 +706,8 @@ impl WebRTCService {
             {
                 let mut conns = connections.lock().await;
                 if let Some(connection) = conns.get_mut(peer_id) {
-                    if let Some(transfer) = connection.active_transfers.get_mut(&request.file_hash) {
+                    if let Some(transfer) = connection.active_transfers.get_mut(&request.file_hash)
+                    {
                         transfer.chunks_sent += 1;
                         transfer.bytes_sent += chunk.data.len() as u64;
 
@@ -596,13 +718,17 @@ impl WebRTCService {
                             total_bytes: transfer.file_size,
                             chunks_transferred: transfer.chunks_sent,
                             total_chunks: transfer.total_chunks,
-                            percentage: (transfer.chunks_sent as f32 / transfer.total_chunks as f32) * 100.0,
+                            percentage: (transfer.chunks_sent as f32
+                                / transfer.total_chunks as f32)
+                                * 100.0,
                         };
 
-                        let _ = event_tx.send(WebRTCEvent::TransferProgress {
-                            peer_id: peer_id.to_string(),
-                            progress,
-                        }).await;
+                        let _ = event_tx
+                            .send(WebRTCEvent::TransferProgress {
+                                peer_id: peer_id.to_string(),
+                                progress,
+                            })
+                            .await;
                     }
                 }
             }
@@ -622,10 +748,12 @@ impl WebRTCService {
             }
         }
 
-        let _ = event_tx.send(WebRTCEvent::TransferCompleted {
-            peer_id: peer_id.to_string(),
-            file_hash: request.file_hash.clone(),
-        }).await;
+        let _ = event_tx
+            .send(WebRTCEvent::TransferCompleted {
+                peer_id: peer_id.to_string(),
+                file_hash: request.file_hash.clone(),
+            })
+            .await;
     }
 
     async fn process_incoming_chunk(
@@ -645,7 +773,8 @@ impl WebRTCService {
         let mut conns = connections.lock().await;
         if let Some(connection) = conns.get_mut(peer_id) {
             // Store chunk
-            let chunks = connection.received_chunks
+            let chunks = connection
+                .received_chunks
                 .entry(chunk.file_hash.clone())
                 .or_insert_with(HashMap::new);
             chunks.insert(chunk.chunk_index, chunk.clone());
@@ -654,7 +783,14 @@ impl WebRTCService {
             if let Some(total_chunks) = chunks.values().next().map(|c| c.total_chunks) {
                 if chunks.len() == total_chunks as usize {
                     // Assemble file
-                    Self::assemble_file_from_chunks(&chunk.file_hash, chunks, file_transfer_service, event_tx, peer_id).await;
+                    Self::assemble_file_from_chunks(
+                        &chunk.file_hash,
+                        chunks,
+                        file_transfer_service,
+                        event_tx,
+                        peer_id,
+                    )
+                    .await;
                 }
             }
         }
@@ -681,10 +817,12 @@ impl WebRTCService {
         let file_name = format!("downloaded_{}", file_hash);
         file_transfer_service.store_file_data(file_hash.to_string(), file_name, file_data);
 
-        let _ = event_tx.send(WebRTCEvent::TransferCompleted {
-            peer_id: peer_id.to_string(),
-            file_hash: file_hash.to_string(),
-        }).await;
+        let _ = event_tx
+            .send(WebRTCEvent::TransferCompleted {
+                peer_id: peer_id.to_string(),
+                file_hash: file_hash.to_string(),
+            })
+            .await;
     }
 
     fn calculate_chunk_checksum(data: &[u8]) -> String {
@@ -710,7 +848,10 @@ impl WebRTCService {
         };
 
         // Create data channel
-        let data_channel = match peer_connection.create_data_channel("file-transfer", None).await {
+        let data_channel = match peer_connection
+            .create_data_channel("file-transfer", None)
+            .await
+        {
             Ok(dc) => dc,
             Err(e) => {
                 error!("Failed to create data channel: {}", e);
@@ -731,7 +872,14 @@ impl WebRTCService {
             let connections = connections_clone.clone();
 
             Box::pin(async move {
-                Self::handle_data_channel_message(&peer_id, &msg, &event_tx, &file_transfer_service, &connections).await;
+                Self::handle_data_channel_message(
+                    &peer_id,
+                    &msg,
+                    &event_tx,
+                    &file_transfer_service,
+                    &connections,
+                )
+                .await;
             })
         }));
 
@@ -749,36 +897,44 @@ impl WebRTCService {
 
             Box::pin(async move {
                 if let Some(candidate) = candidate {
-                    if let Ok(candidate_str) = serde_json::to_string(&candidate.to_json().unwrap_or_default()) {
-                        let _ = event_tx.send(WebRTCEvent::IceCandidate {
-                            peer_id,
-                            candidate: candidate_str,
-                        }).await;
+                    if let Ok(candidate_str) =
+                        serde_json::to_string(&candidate.to_json().unwrap_or_default())
+                    {
+                        let _ = event_tx
+                            .send(WebRTCEvent::IceCandidate {
+                                peer_id,
+                                candidate: candidate_str,
+                            })
+                            .await;
                     }
                 }
             })
         }));
 
-        peer_connection.on_peer_connection_state_change(Box::new(move |state: RTCPeerConnectionState| {
-            let event_tx = event_tx_clone.clone();
-            let peer_id = peer_id_clone.clone();
-            let _data_channel = data_channel_clone.clone();
+        peer_connection.on_peer_connection_state_change(Box::new(
+            move |state: RTCPeerConnectionState| {
+                let event_tx = event_tx_clone.clone();
+                let peer_id = peer_id_clone.clone();
+                let _data_channel = data_channel_clone.clone();
 
-            Box::pin(async move {
-                match state {
-                    RTCPeerConnectionState::Connected => {
-                        info!("WebRTC connection established with peer: {}", peer_id);
-                        let _ = event_tx.send(WebRTCEvent::ConnectionEstablished {
-                            peer_id,
-                        }).await;
+                Box::pin(async move {
+                    match state {
+                        RTCPeerConnectionState::Connected => {
+                            info!("WebRTC connection established with peer: {}", peer_id);
+                            let _ = event_tx
+                                .send(WebRTCEvent::ConnectionEstablished { peer_id })
+                                .await;
+                        }
+                        RTCPeerConnectionState::Disconnected
+                        | RTCPeerConnectionState::Failed
+                        | RTCPeerConnectionState::Closed => {
+                            info!("WebRTC connection closed with peer: {}", peer_id);
+                        }
+                        _ => {}
                     }
-                    RTCPeerConnectionState::Disconnected | RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed => {
-                        info!("WebRTC connection closed with peer: {}", peer_id);
-                    }
-                    _ => {}
-                }
-            })
-        }));
+                })
+            },
+        ));
 
         // Create offer
         let offer = match peer_connection.create_offer(None).await {
@@ -820,14 +976,22 @@ impl WebRTCService {
         }
     }
 
-    pub async fn establish_connection_with_answer(&self, peer_id: String, answer: String) -> Result<(), String> {
+    pub async fn establish_connection_with_answer(
+        &self,
+        peer_id: String,
+        answer: String,
+    ) -> Result<(), String> {
         self.cmd_tx
             .send(WebRTCCommand::HandleAnswer { peer_id, answer })
             .await
             .map_err(|e| e.to_string())
     }
 
-    pub async fn establish_connection_with_offer(&self, peer_id: String, offer: String) -> Result<String, String> {
+    pub async fn establish_connection_with_offer(
+        &self,
+        peer_id: String,
+        offer: String,
+    ) -> Result<String, String> {
         // Create WebRTC API
         let api = APIBuilder::new().build();
 
@@ -842,7 +1006,10 @@ impl WebRTCService {
         };
 
         // Create data channel
-        let data_channel = match peer_connection.create_data_channel("file-transfer", None).await {
+        let data_channel = match peer_connection
+            .create_data_channel("file-transfer", None)
+            .await
+        {
             Ok(dc) => dc,
             Err(e) => {
                 error!("Failed to create data channel: {}", e);
@@ -863,7 +1030,14 @@ impl WebRTCService {
             let connections = connections_clone.clone();
 
             Box::pin(async move {
-                Self::handle_data_channel_message(&peer_id, &msg, &event_tx, &file_transfer_service, &connections).await;
+                Self::handle_data_channel_message(
+                    &peer_id,
+                    &msg,
+                    &event_tx,
+                    &file_transfer_service,
+                    &connections,
+                )
+                .await;
             })
         }));
 
@@ -881,36 +1055,44 @@ impl WebRTCService {
 
             Box::pin(async move {
                 if let Some(candidate) = candidate {
-                    if let Ok(candidate_str) = serde_json::to_string(&candidate.to_json().unwrap_or_default()) {
-                        let _ = event_tx.send(WebRTCEvent::IceCandidate {
-                            peer_id,
-                            candidate: candidate_str,
-                        }).await;
+                    if let Ok(candidate_str) =
+                        serde_json::to_string(&candidate.to_json().unwrap_or_default())
+                    {
+                        let _ = event_tx
+                            .send(WebRTCEvent::IceCandidate {
+                                peer_id,
+                                candidate: candidate_str,
+                            })
+                            .await;
                     }
                 }
             })
         }));
 
-        peer_connection.on_peer_connection_state_change(Box::new(move |state: RTCPeerConnectionState| {
-            let event_tx = event_tx_clone.clone();
-            let peer_id = peer_id_clone.clone();
-            let _data_channel = data_channel_clone.clone();
+        peer_connection.on_peer_connection_state_change(Box::new(
+            move |state: RTCPeerConnectionState| {
+                let event_tx = event_tx_clone.clone();
+                let peer_id = peer_id_clone.clone();
+                let _data_channel = data_channel_clone.clone();
 
-            Box::pin(async move {
-                match state {
-                    RTCPeerConnectionState::Connected => {
-                        info!("WebRTC connection established with peer: {}", peer_id);
-                        let _ = event_tx.send(WebRTCEvent::ConnectionEstablished {
-                            peer_id,
-                        }).await;
+                Box::pin(async move {
+                    match state {
+                        RTCPeerConnectionState::Connected => {
+                            info!("WebRTC connection established with peer: {}", peer_id);
+                            let _ = event_tx
+                                .send(WebRTCEvent::ConnectionEstablished { peer_id })
+                                .await;
+                        }
+                        RTCPeerConnectionState::Disconnected
+                        | RTCPeerConnectionState::Failed
+                        | RTCPeerConnectionState::Closed => {
+                            info!("WebRTC connection closed with peer: {}", peer_id);
+                        }
+                        _ => {}
                     }
-                    RTCPeerConnectionState::Disconnected | RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed => {
-                        info!("WebRTC connection closed with peer: {}", peer_id);
-                    }
-                    _ => {}
-                }
-            })
-        }));
+                })
+            },
+        ));
 
         // Set remote description from offer
         let offer_desc = match serde_json::from_str::<RTCSessionDescription>(offer.as_str()) {
@@ -966,7 +1148,11 @@ impl WebRTCService {
         }
     }
 
-    pub async fn send_file_request(&self, peer_id: String, request: WebRTCFileRequest) -> Result<(), String> {
+    pub async fn send_file_request(
+        &self,
+        peer_id: String,
+        request: WebRTCFileRequest,
+    ) -> Result<(), String> {
         self.cmd_tx
             .send(WebRTCCommand::SendFileRequest { peer_id, request })
             .await
@@ -980,16 +1166,29 @@ impl WebRTCService {
             .map_err(|e| e.to_string())
     }
 
-    pub async fn add_ice_candidate(&self, peer_id: String, candidate: String) -> Result<(), String> {
+    pub async fn add_ice_candidate(
+        &self,
+        peer_id: String,
+        candidate: String,
+    ) -> Result<(), String> {
         self.cmd_tx
             .send(WebRTCCommand::AddIceCandidate { peer_id, candidate })
             .await
             .map_err(|e| e.to_string())
     }
 
-    pub async fn request_file_chunk(&self, peer_id: String, file_hash: String, chunk_index: u32) -> Result<(), String> {
+    pub async fn request_file_chunk(
+        &self,
+        peer_id: String,
+        file_hash: String,
+        chunk_index: u32,
+    ) -> Result<(), String> {
         self.cmd_tx
-            .send(WebRTCCommand::RequestFileChunk { peer_id, file_hash, chunk_index })
+            .send(WebRTCCommand::RequestFileChunk {
+                peer_id,
+                file_hash,
+                chunk_index,
+            })
             .await
             .map_err(|e| e.to_string())
     }
@@ -1017,7 +1216,10 @@ impl WebRTCService {
 
     pub async fn get_connection_status(&self, peer_id: &str) -> bool {
         let connections = self.connections.lock().await;
-        connections.get(peer_id).map(|c| c.is_connected).unwrap_or(false)
+        connections
+            .get(peer_id)
+            .map(|c| c.is_connected)
+            .unwrap_or(false)
     }
 }
 
@@ -1028,7 +1230,9 @@ lazy_static! {
     static ref WEBRTC_SERVICE: Mutex<Option<Arc<WebRTCService>>> = Mutex::new(None);
 }
 
-pub async fn init_webrtc_service(file_transfer_service: Arc<FileTransferService>) -> Result<(), String> {
+pub async fn init_webrtc_service(
+    file_transfer_service: Arc<FileTransferService>,
+) -> Result<(), String> {
     let mut service = WEBRTC_SERVICE.lock().await;
     if service.is_none() {
         let webrtc_service = WebRTCService::new(file_transfer_service).await?;
@@ -1048,14 +1252,17 @@ impl FileTransferService {
         peer_id: String,
         output_path: String,
     ) -> Result<(), String> {
-        info!("Initiating P2P download: {} from peer {}", file_hash, peer_id);
+        info!(
+            "Initiating P2P download: {} from peer {}",
+            file_hash, peer_id
+        );
 
         // Send file request over WebRTC
         if let Some(webrtc_service) = get_webrtc_service().await {
             let request = WebRTCFileRequest {
                 file_hash: file_hash.clone(),
                 file_name: "downloaded_file".to_string(), // Will be updated when we get metadata
-                file_size: 0, // Will be updated
+                file_size: 0,                             // Will be updated
                 requester_peer_id: "local_peer".to_string(), // Should be actual local peer ID
             };
 

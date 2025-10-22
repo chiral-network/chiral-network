@@ -114,7 +114,8 @@ fn create_mock_pools() -> Vec<MiningPool> {
             id: "small-miners".to_string(),
             name: "Small Miners United".to_string(),
             url: "stratum+tcp://small.miners.net:3335".to_string(),
-            description: "Dedicated pool for small-scale miners with low minimum payout".to_string(),
+            description: "Dedicated pool for small-scale miners with low minimum payout"
+                .to_string(),
             fee_percentage: 0.5,
             miners_count: 67,
             total_hashrate: "845 MH/s".to_string(),
@@ -155,17 +156,17 @@ fn get_current_timestamp() -> u64 {
 #[command]
 pub async fn discover_mining_pools() -> Result<Vec<MiningPool>, String> {
     info!("Discovering available mining pools in decentralized network");
-    
+
     let pools = AVAILABLE_POOLS.lock().await;
     let mut all_pools = pools.clone();
-    
+
     // Add user-created pools
     let user_pools = USER_CREATED_POOLS.lock().await;
     all_pools.extend(user_pools.clone());
-    
+
     // Simulate network discovery delay
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-    
+
     info!("Found {} mining pools", all_pools.len());
     Ok(all_pools)
 }
@@ -180,17 +181,24 @@ pub async fn create_mining_pool(
     payment_method: String,
     region: String,
 ) -> Result<MiningPool, String> {
-    info!("Creating new decentralized mining pool: {} by {}", name, address);
-    
+    info!(
+        "Creating new decentralized mining pool: {} by {}",
+        name, address
+    );
+
     if name.trim().is_empty() {
         return Err("Pool name cannot be empty".to_string());
     }
-    
+
     if fee_percentage < 0.0 || fee_percentage > 10.0 {
         return Err("Fee percentage must be between 0% and 10%".to_string());
     }
-    
-    let pool_id = format!("user-{}-{}", address[..8].to_string(), get_current_timestamp());
+
+    let pool_id = format!(
+        "user-{}-{}",
+        address[..8].to_string(),
+        get_current_timestamp()
+    );
     let new_pool = MiningPool {
         id: pool_id.clone(),
         name: name.clone(),
@@ -207,46 +215,50 @@ pub async fn create_mining_pool(
         payment_method,
         created_by: Some(address.clone()),
     };
-    
+
     // Add to user-created pools
     let mut user_pools = USER_CREATED_POOLS.lock().await;
     user_pools.push(new_pool.clone());
-    
+
     // Simulate DHT announcement delay
     tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-    
+
     info!("Successfully created and announced pool: {}", name);
     Ok(new_pool)
 }
 
 #[command]
 pub async fn join_mining_pool(pool_id: String, address: String) -> Result<JoinedPoolInfo, String> {
-    info!("Attempting to join mining pool: {} with address: {}", pool_id, address);
-    
+    info!(
+        "Attempting to join mining pool: {} with address: {}",
+        pool_id, address
+    );
+
     // Check if already in a pool
     let current_pool = CURRENT_POOL.lock().await;
     if current_pool.is_some() {
         return Err("Already connected to a mining pool. Leave current pool first.".to_string());
     }
     drop(current_pool);
-    
+
     // Find the pool
     let pools = AVAILABLE_POOLS.lock().await;
     let user_pools = USER_CREATED_POOLS.lock().await;
-    
-    let pool = pools.iter()
+
+    let pool = pools
+        .iter()
         .chain(user_pools.iter())
         .find(|p| p.id == pool_id)
         .cloned()
         .ok_or_else(|| "Pool not found".to_string())?;
-    
+
     if matches!(pool.status, PoolStatus::Offline) {
         return Err("Pool is currently offline".to_string());
     }
-    
+
     // Simulate connection process
     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-    
+
     let stats = PoolStats {
         connected_miners: pool.miners_count + 1,
         pool_hashrate: pool.total_hashrate.clone(),
@@ -257,17 +269,17 @@ pub async fn join_mining_pool(pool_id: String, address: String) -> Result<Joined
         estimated_payout_24h: 0.0,
         last_share_time: get_current_timestamp(),
     };
-    
+
     let joined_info = JoinedPoolInfo {
         pool: pool.clone(),
         stats,
         joined_at: get_current_timestamp(),
     };
-    
+
     // Update current pool
     let mut current = CURRENT_POOL.lock().await;
     *current = Some(joined_info.clone());
-    
+
     info!("Successfully joined pool: {}", pool.name);
     Ok(joined_info)
 }
@@ -275,18 +287,18 @@ pub async fn join_mining_pool(pool_id: String, address: String) -> Result<Joined
 #[command]
 pub async fn leave_mining_pool() -> Result<(), String> {
     info!("Leaving current mining pool");
-    
+
     let mut current_pool = CURRENT_POOL.lock().await;
     if current_pool.is_none() {
         return Err("Not currently connected to any pool".to_string());
     }
-    
+
     let pool_name = current_pool.as_ref().unwrap().pool.name.clone();
     *current_pool = None;
-    
+
     // Simulate disconnection delay
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-    
+
     info!("Successfully left pool: {}", pool_name);
     Ok(())
 }
@@ -300,14 +312,15 @@ pub async fn get_current_pool_info() -> Result<Option<JoinedPoolInfo>, String> {
 #[command]
 pub async fn get_pool_stats() -> Result<Option<PoolStats>, String> {
     let current_pool = CURRENT_POOL.lock().await;
-    
+
     if let Some(ref pool_info) = *current_pool {
         // Simulate updated stats with some randomization
         let mut updated_stats = pool_info.stats.clone();
-        
+
         // Simulate some mining activity
         let time_mining = get_current_timestamp() - pool_info.joined_at;
-        if time_mining > 30 { // After 30 seconds of "mining"
+        if time_mining > 30 {
+            // After 30 seconds of "mining"
             updated_stats.shares_submitted += (time_mining / 30) as u32;
             updated_stats.shares_accepted = (updated_stats.shares_submitted as f32 * 0.95) as u32; // 95% acceptance rate
             updated_stats.your_hashrate = "125.7 KH/s".to_string(); // Simulated hashrate
@@ -315,7 +328,7 @@ pub async fn get_pool_stats() -> Result<Option<PoolStats>, String> {
             updated_stats.estimated_payout_24h = updated_stats.your_share_percentage * 5.0; // Simulated earnings
             updated_stats.last_share_time = get_current_timestamp() - (time_mining % 30);
         }
-        
+
         Ok(Some(updated_stats))
     } else {
         Ok(None)
@@ -325,25 +338,26 @@ pub async fn get_pool_stats() -> Result<Option<PoolStats>, String> {
 #[command]
 pub async fn update_pool_discovery() -> Result<(), String> {
     info!("Updating pool discovery from decentralized network");
-    
+
     // Simulate discovering new pools or updating existing ones
     let mut pools = AVAILABLE_POOLS.lock().await;
-    
+
     // Simulate some network changes
     for pool in pools.iter_mut() {
         // Simulate minor fluctuations in miner count
         let change = (rand::random::<i32>() % 10) - 5; // -5 to +4
         pool.miners_count = ((pool.miners_count as i32 + change).max(1)) as u32;
-        
+
         // Update last block time occasionally
-        if rand::random::<f32>() < 0.1 { // 10% chance
+        if rand::random::<f32>() < 0.1 {
+            // 10% chance
             pool.last_block_time = get_current_timestamp();
             pool.blocks_found_24h += 1;
         }
     }
-    
+
     // Simulate network delay
     tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-    
+
     Ok(())
 }

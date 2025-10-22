@@ -6,18 +6,18 @@
 pub mod commands;
 
 mod dht;
-mod manager;
 mod encryption;
 mod ethereum;
 mod file_transfer;
 mod geth_downloader;
-mod webrtc_service;
 mod headless;
 mod keystore;
-mod pool;
+mod manager;
 pub mod net;
 mod peer_selection;
+mod pool;
 mod transaction_services;
+mod webrtc_service;
 use crate::commands::proxy::{
     list_proxies, proxy_connect, proxy_disconnect, proxy_echo, ProxyNode,
 };
@@ -33,7 +33,6 @@ use ethereum::{
     start_mining, stop_mining, EthAccount, GethProcess, MinedBlock,
 };
 use file_transfer::{DownloadMetricsSnapshot, FileTransferEvent, FileTransferService};
-use webrtc_service::{WebRTCService, WebRTCFileRequest};
 use fs2::available_space;
 use geth_downloader::GethDownloader;
 use keystore::Keystore;
@@ -57,6 +56,7 @@ use tauri::{
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{info, warn};
+use webrtc_service::{WebRTCFileRequest, WebRTCService};
 
 #[derive(Clone)]
 struct QueuedTransaction {
@@ -74,7 +74,7 @@ struct AppState {
     // Wrap in Arc so they can be cloned
     active_account: Arc<Mutex<Option<String>>>,
     active_account_private_key: Arc<Mutex<Option<String>>>,
-    
+
     rpc_url: Mutex<String>,
     dht: Mutex<Option<Arc<DhtService>>>,
     file_transfer: Mutex<Option<Arc<FileTransferService>>>,
@@ -82,52 +82,51 @@ struct AppState {
     proxies: Arc<Mutex<Vec<ProxyNode>>>,
     file_transfer_pump: Mutex<Option<JoinHandle<()>>>,
     socks5_proxy_cli: Mutex<Option<String>>,
-    
+
     // New fields for transaction queue
     transaction_queue: Arc<Mutex<VecDeque<QueuedTransaction>>>,
     transaction_processor: Mutex<Option<JoinHandle<()>>>,
     processing_transaction: Arc<Mutex<bool>>,
 }
 
-
 #[tauri::command]
 async fn create_chiral_account(state: State<'_, AppState>) -> Result<EthAccount, String> {
     let account = create_new_account()?;
-    
+
     // Set as active account
     {
         let mut active_account = state.active_account.lock().await;
         *active_account = Some(account.address.clone());
     }
-    
+
     // Store private key in session
     {
         let mut active_key = state.active_account_private_key.lock().await;
         *active_key = Some(account.private_key.clone());
     }
-    
+
     Ok(account)
 }
 
 #[tauri::command]
 async fn import_chiral_account(
     private_key: String,
-    state: State<'_, AppState>
+    state: State<'_, AppState>,
 ) -> Result<EthAccount, String> {
     let account = get_account_from_private_key(&private_key)?;
-    
+
     // Set as active account
     {
         let mut active_account = state.active_account.lock().await;
         *active_account = Some(account.address.clone());
     }
-    
+
     // Store private key in session
     {
         let mut active_key = state.active_account_private_key.lock().await;
         *active_key = Some(account.private_key.clone());
     }
-    
+
     Ok(account)
 }
 
@@ -247,7 +246,7 @@ async fn set_miner_address(state: State<'_, AppState>, address: String) -> Resul
 #[tauri::command]
 async fn get_file_versions_by_name(
     state: State<'_, AppState>,
-    file_name: String
+    file_name: String,
 ) -> Result<Vec<FileMetadata>, String> {
     let dht = { state.dht.lock().await.as_ref().cloned() };
     if let Some(dht) = dht {
@@ -265,7 +264,9 @@ async fn establish_webrtc_connection(
 ) -> Result<(), String> {
     let webrtc = { state.webrtc.lock().await.as_ref().cloned() };
     if let Some(webrtc) = webrtc {
-        webrtc.establish_connection_with_answer(peer_id, offer).await
+        webrtc
+            .establish_connection_with_answer(peer_id, offer)
+            .await
     } else {
         Err("WebRTC service not running".into())
     }
@@ -327,7 +328,9 @@ async fn upload_versioned_file(
     let dht_opt = { state.dht.lock().await.as_ref().cloned() };
     if let Some(dht) = dht_opt {
         // --- FIX: Calculate file_hash using file_transfer helper
-        let file_data = tokio::fs::read(&file_path).await.map_err(|e| e.to_string())?;
+        let file_data = tokio::fs::read(&file_path)
+            .await
+            .map_err(|e| e.to_string())?;
         let file_hash = FileTransferService::calculate_file_hash(&file_data);
 
         let created_at = std::time::SystemTime::now()
@@ -340,7 +343,7 @@ async fn upload_versioned_file(
             .prepare_versioned_metadata(
                 file_hash.clone(),
                 file_name,
-                file_data.len() as u64,  // Use file size directly from data
+                file_data.len() as u64, // Use file size directly from data
                 created_at,
                 mime_type,
                 is_encrypted,
@@ -828,7 +831,7 @@ async fn get_dht_connected_peers(state: State<'_, AppState>) -> Result<Vec<Strin
 async fn send_dht_message(
     state: State<'_, AppState>,
     peer_id: String,
-    message: serde_json::Value
+    message: serde_json::Value,
 ) -> Result<(), String> {
     let dht = {
         let dht_guard = state.dht.lock().await;
@@ -837,7 +840,8 @@ async fn send_dht_message(
 
     if let Some(dht) = dht {
         // Send message through DHT to target peer
-        dht.send_message_to_peer(&peer_id, message).await
+        dht.send_message_to_peer(&peer_id, message)
+            .await
             .map_err(|e| format!("Failed to send DHT message: {}", e))
     } else {
         Err("DHT not available".to_string())
@@ -1338,12 +1342,17 @@ async fn download_file_from_network(
             // Search for file metadata in DHT with 5 second timeout
             match dht_service.search_metadata(file_hash.clone(), 5000).await {
                 Ok(Some(metadata)) => {
-                    info!("Found file metadata in DHT: {} (size: {} bytes)",
-                          metadata.file_name, metadata.file_size);
+                    info!(
+                        "Found file metadata in DHT: {} (size: {} bytes)",
+                        metadata.file_name, metadata.file_size
+                    );
 
                     // Implement peer discovery for file chunks
-                    info!("Discovering peers for file: {} with {} known seeders",
-                          metadata.file_name, metadata.seeders.len());
+                    info!(
+                        "Discovering peers for file: {} with {} known seeders",
+                        metadata.file_name,
+                        metadata.seeders.len()
+                    );
 
                     if metadata.seeders.is_empty() {
                         return Err(format!(
@@ -1353,7 +1362,9 @@ async fn download_file_from_network(
                     }
 
                     // Discover and verify available peers for this file
-                    let available_peers = dht_service.discover_peers_for_file(&metadata).await
+                    let available_peers = dht_service
+                        .discover_peers_for_file(&metadata)
+                        .await
                         .map_err(|e| format!("Peer discovery failed: {}", e))?;
 
                     if available_peers.is_empty() {
@@ -1386,7 +1397,10 @@ async fn download_file_from_network(
                                     false,
                                 )
                                 .await;
-                            recommended.into_iter().next().unwrap_or_else(|| available_peers[0].clone())
+                            recommended
+                                .into_iter()
+                                .next()
+                                .unwrap_or_else(|| available_peers[0].clone())
                         };
 
                         info!("Selected peer {} for WebRTC download", selected_peer);
@@ -1403,20 +1417,37 @@ async fn download_file_from_network(
                                     requester_peer_id: dht_service.get_peer_id().await,
                                 };
 
-                                match dht_service.send_webrtc_offer(selected_peer.clone(), offer_request).await {
+                                match dht_service
+                                    .send_webrtc_offer(selected_peer.clone(), offer_request)
+                                    .await
+                                {
                                     Ok(answer_receiver) => {
-                                        info!("Sent WebRTC offer to peer {}, waiting for answer", selected_peer);
+                                        info!(
+                                            "Sent WebRTC offer to peer {}, waiting for answer",
+                                            selected_peer
+                                        );
 
                                         // Wait for WebRTC answer with timeout
-                                        match tokio::time::timeout(Duration::from_secs(30), answer_receiver).await {
+                                        match tokio::time::timeout(
+                                            Duration::from_secs(30),
+                                            answer_receiver,
+                                        )
+                                        .await
+                                        {
                                             Ok(Ok(Ok(answer_response))) => {
-                                                info!("Received WebRTC answer from peer {}", selected_peer);
+                                                info!(
+                                                    "Received WebRTC answer from peer {}",
+                                                    selected_peer
+                                                );
 
                                                 // Establish WebRTC connection with the answer
-                                                match webrtc_service.establish_connection_with_answer(
-                                                    selected_peer.clone(),
-                                                    answer_response.answer_sdp,
-                                                ).await {
+                                                match webrtc_service
+                                                    .establish_connection_with_answer(
+                                                        selected_peer.clone(),
+                                                        answer_response.answer_sdp,
+                                                    )
+                                                    .await
+                                                {
                                                     Ok(_) => {
                                                         info!("WebRTC connection established with peer {}", selected_peer);
 
@@ -1428,7 +1459,13 @@ async fn download_file_from_network(
                                                             requester_peer_id: dht_service.get_peer_id().await,
                                                         };
 
-                                                        match webrtc_service.send_file_request(selected_peer.clone(), file_request).await {
+                                                        match webrtc_service
+                                                            .send_file_request(
+                                                                selected_peer.clone(),
+                                                                file_request,
+                                                            )
+                                                            .await
+                                                        {
                                                             Ok(_) => {
                                                                 info!("Sent file request for {} to peer {}", metadata.file_name, selected_peer);
 
@@ -1447,7 +1484,10 @@ async fn download_file_from_network(
                                                     }
                                                     Err(e) => {
                                                         warn!("Failed to establish WebRTC connection: {}", e);
-                                                        Err(format!("WebRTC connection failed: {}", e))
+                                                        Err(format!(
+                                                            "WebRTC connection failed: {}",
+                                                            e
+                                                        ))
                                                     }
                                                 }
                                             }
@@ -1457,11 +1497,18 @@ async fn download_file_from_network(
                                             }
                                             Ok(Err(_)) => {
                                                 warn!("WebRTC answer receiver was canceled");
-                                                Err("WebRTC answer receiver was canceled".to_string())
+                                                Err("WebRTC answer receiver was canceled"
+                                                    .to_string())
                                             }
                                             Err(_) => {
-                                                warn!("WebRTC answer timeout from peer {}", selected_peer);
-                                                Err(format!("WebRTC answer timeout from peer {}", selected_peer))
+                                                warn!(
+                                                    "WebRTC answer timeout from peer {}",
+                                                    selected_peer
+                                                );
+                                                Err(format!(
+                                                    "WebRTC answer timeout from peer {}",
+                                                    selected_peer
+                                                ))
                                             }
                                         }
                                     }
@@ -2189,20 +2236,17 @@ async fn send_chiral_transaction(
 ) -> Result<String, String> {
     // Get the active account address
     let account = get_active_account(&state).await?;
-    
+
     // Get the private key from state
     let private_key = {
         let key_guard = state.active_account_private_key.lock().await;
-        key_guard.clone().ok_or("No private key available. Please log in again.")?
+        key_guard
+            .clone()
+            .ok_or("No private key available. Please log in again.")?
     };
-    
-    let tx_hash = ethereum::send_transaction(
-        &account,
-        &to_address,
-        amount,
-        &private_key
-    ).await?;
-    
+
+    let tx_hash = ethereum::send_transaction(&account, &to_address, amount, &private_key).await?;
+
     Ok(tx_hash)
 }
 
@@ -2215,13 +2259,16 @@ async fn queue_transaction(
 ) -> Result<String, String> {
     // Validate account is logged in
     let _account = get_active_account(&state).await?;
-    
+
     // Generate unique transaction ID
-    let tx_id = format!("tx_{}", SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis());
-    
+    let tx_id = format!(
+        "tx_{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    );
+
     // Create queued transaction
     let queued_tx = QueuedTransaction {
         id: tx_id.clone(),
@@ -2232,13 +2279,13 @@ async fn queue_transaction(
             .unwrap()
             .as_secs(),
     };
-    
+
     // Add to queue
     {
         let mut queue = state.transaction_queue.lock().await;
         queue.push_back(queued_tx);
     }
-    
+
     // Start processor if not running
     {
         let mut processor_guard = state.transaction_processor.lock().await;
@@ -2246,25 +2293,26 @@ async fn queue_transaction(
             let app_handle = app.clone();
             let queue_arc = state.transaction_queue.clone();
             let processing_arc = state.processing_transaction.clone();
-            
+
             // Clone the Arc references we need instead of borrowing state
             let active_account_arc = state.active_account.clone();
             let active_key_arc = state.active_account_private_key.clone();
-            
+
             let handle = tokio::spawn(async move {
                 process_transaction_queue(
-                    app_handle, 
-                    queue_arc, 
+                    app_handle,
+                    queue_arc,
                     processing_arc,
                     active_account_arc,
-                    active_key_arc
-                ).await;
+                    active_key_arc,
+                )
+                .await;
             });
-            
+
             *processor_guard = Some(handle);
         }
     }
-    
+
     Ok(tx_id)
 }
 
@@ -2284,34 +2332,34 @@ async fn process_transaction_queue(
                 continue;
             }
         }
-        
+
         // Get next transaction from queue
         let next_tx = {
             let mut queue_guard = queue.lock().await;
             queue_guard.pop_front()
         };
-        
+
         if let Some(tx) = next_tx {
             // Mark as processing
             {
                 let mut is_processing = processing.lock().await;
                 *is_processing = true;
             }
-            
+
             // Emit queue status
             let _ = app.emit("transaction_queue_processing", &tx.id);
-            
+
             // Get account and private key from the Arc references
             let account_opt = {
                 let account_guard = active_account.lock().await;
                 account_guard.clone()
             };
-            
+
             let private_key_opt = {
                 let key_guard = active_private_key.lock().await;
                 key_guard.clone()
             };
-            
+
             match (account_opt, private_key_opt) {
                 (Some(account), Some(private_key)) => {
                     // Process transaction
@@ -2320,43 +2368,54 @@ async fn process_transaction_queue(
                         &tx.to_address,
                         tx.amount,
                         &private_key,
-                    ).await {
+                    )
+                    .await
+                    {
                         Ok(tx_hash) => {
                             // Success - emit event
-                            let _ = app.emit("transaction_sent", serde_json::json!({
-                                "id": tx.id,
-                                "txHash": tx_hash,
-                                "to": tx.to_address,
-                                "amount": tx.amount,
-                            }));
-                            
+                            let _ = app.emit(
+                                "transaction_sent",
+                                serde_json::json!({
+                                    "id": tx.id,
+                                    "txHash": tx_hash,
+                                    "to": tx.to_address,
+                                    "amount": tx.amount,
+                                }),
+                            );
+
                             // Wait a bit before processing next (to ensure nonce increments)
                             tokio::time::sleep(Duration::from_secs(2)).await;
                         }
                         Err(e) => {
                             // Error - emit event
                             warn!("Transaction failed: {}", e);
-                            let _ = app.emit("transaction_failed", serde_json::json!({
-                                "id": tx.id,
-                                "error": e,
-                                "to": tx.to_address,
-                                "amount": tx.amount,
-                            }));
+                            let _ = app.emit(
+                                "transaction_failed",
+                                serde_json::json!({
+                                    "id": tx.id,
+                                    "error": e,
+                                    "to": tx.to_address,
+                                    "amount": tx.amount,
+                                }),
+                            );
                         }
                     }
                 }
                 _ => {
                     // No account or private key - user logged out
                     warn!("Cannot process transaction - user logged out");
-                    let _ = app.emit("transaction_failed", serde_json::json!({
-                        "id": tx.id,
-                        "error": "User logged out",
-                        "to": tx.to_address,
-                        "amount": tx.amount,
-                    }));
+                    let _ = app.emit(
+                        "transaction_failed",
+                        serde_json::json!({
+                            "id": tx.id,
+                            "error": "User logged out",
+                            "to": tx.to_address,
+                            "amount": tx.amount,
+                        }),
+                    );
                 }
             }
-            
+
             // Mark as not processing
             {
                 let mut is_processing = processing.lock().await;
@@ -2375,7 +2434,7 @@ async fn get_transaction_queue_status(
 ) -> Result<serde_json::Value, String> {
     let queue = state.transaction_queue.lock().await;
     let processing = state.processing_transaction.lock().await;
-    
+
     Ok(serde_json::json!({
         "queueLength": queue.len(),
         "isProcessing": *processing,
@@ -2387,7 +2446,6 @@ async fn get_transaction_queue_status(
         })).collect::<Vec<_>>(),
     }))
 }
-
 
 #[cfg(not(test))]
 fn main() {

@@ -22,7 +22,7 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{debug, error, info, warn};
 
 use crate::peer_selection::{PeerMetrics, PeerSelectionService, SelectionStrategy};
-use crate::webrtc_service::{FileChunk, get_webrtc_service};
+use crate::webrtc_service::{get_webrtc_service, FileChunk};
 use std::io::{self};
 use tokio_socks::tcp::Socks5Stream;
 
@@ -30,8 +30,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 // Import the missing types
-use std::error::Error;
 use crate::file_transfer::FileTransferService;
+use std::error::Error;
 
 // Trait alias to abstract over async I/O types used by proxy transport
 pub trait AsyncIo: FAsyncRead + FAsyncWrite + Unpin + Send {}
@@ -178,7 +178,9 @@ pub enum DhtEvent {
     PeerDisconnected(String), // Replaced by ProxyStatus
     FileDiscovered(FileMetadata),
     FileNotFound(String),
-    FileDownloaded { file_hash: String },
+    FileDownloaded {
+        file_hash: String,
+    },
     Error(String),
     ProxyStatus {
         id: String,
@@ -707,7 +709,11 @@ async fn run_dht_node(
     peer_selection: Arc<Mutex<PeerSelectionService>>,
     received_chunks: Arc<Mutex<HashMap<String, HashMap<u32, FileChunk>>>>,
     file_transfer_service: Option<Arc<FileTransferService>>,
-    pending_webrtc_offers: Arc<Mutex<HashMap<rr::OutboundRequestId, oneshot::Sender<Result<WebRTCAnswerResponse, String>>>>>,
+    pending_webrtc_offers: Arc<
+        Mutex<
+            HashMap<rr::OutboundRequestId, oneshot::Sender<Result<WebRTCAnswerResponse, String>>>,
+        >,
+    >,
     is_bootstrap: bool,
 ) {
     // Periodic bootstrap interval
@@ -1612,7 +1618,11 @@ impl DhtService {
         let (tx, rx) = oneshot::channel();
 
         self.cmd_tx
-            .send(DhtCommand::SendWebRTCOffer { peer: peer_id, offer_request, sender: tx })
+            .send(DhtCommand::SendWebRTCOffer {
+                peer: peer_id,
+                offer_request,
+                sender: tx,
+            })
             .await
             .map_err(|e| format!("send webrtc offer cmd: {e}"))?;
 
@@ -1637,7 +1647,11 @@ pub struct DhtService {
     file_metadata_cache: Arc<Mutex<HashMap<String, FileMetadata>>>,
     received_chunks: Arc<Mutex<HashMap<String, HashMap<u32, FileChunk>>>>,
     file_transfer_service: Option<Arc<FileTransferService>>,
-    pending_webrtc_offers: Arc<Mutex<HashMap<rr::OutboundRequestId, oneshot::Sender<Result<WebRTCAnswerResponse, String>>>>>,
+    pending_webrtc_offers: Arc<
+        Mutex<
+            HashMap<rr::OutboundRequestId, oneshot::Sender<Result<WebRTCAnswerResponse, String>>>,
+        >,
+    >,
 }
 
 impl DhtService {
@@ -1716,8 +1730,10 @@ impl DhtService {
             std::iter::once(("/chiral/proxy/1.0.0".to_string(), rr::ProtocolSupport::Full));
         let proxy_rr = rr::Behaviour::new(proxy_protocols, rr_cfg.clone());
 
-        let webrtc_protocols =
-            std::iter::once(("/chiral/webrtc-signaling/1.0.0".to_string(), rr::ProtocolSupport::Full));
+        let webrtc_protocols = std::iter::once((
+            "/chiral/webrtc-signaling/1.0.0".to_string(),
+            rr::ProtocolSupport::Full,
+        ));
         let webrtc_signaling_rr = rr::Behaviour::new(webrtc_protocols, rr_cfg);
 
         let probe_interval = autonat_probe_interval.unwrap_or(Duration::from_secs(30));
@@ -2106,11 +2122,15 @@ impl DhtService {
 
     pub async fn get_connected_peers(&self) -> Vec<String> {
         let connected_peers = self.connected_peers.lock().await;
-        connected_peers.iter().map(|peer_id| peer_id.to_string()).collect()
+        connected_peers
+            .iter()
+            .map(|peer_id| peer_id.to_string())
+            .collect()
     }
 
     pub async fn echo(&self, peer_id: String, payload: Vec<u8>) -> Result<Vec<u8>, String> {
-        let target_peer_id: PeerId = peer_id.parse()
+        let target_peer_id: PeerId = peer_id
+            .parse()
             .map_err(|e| format!("Invalid peer ID: {}", e))?;
 
         let (tx, rx) = oneshot::channel();
@@ -2123,7 +2143,8 @@ impl DhtService {
             .await
             .map_err(|e| format!("Failed to send echo command: {}", e))?;
 
-        rx.await.map_err(|e| format!("Echo response error: {}", e))?
+        rx.await
+            .map_err(|e| format!("Echo response error: {}", e))?
     }
 
     pub async fn send_message_to_peer(
@@ -2131,7 +2152,8 @@ impl DhtService {
         peer_id: &str,
         message: serde_json::Value,
     ) -> Result<(), String> {
-        let target_peer_id: PeerId = peer_id.parse()
+        let target_peer_id: PeerId = peer_id
+            .parse()
             .map_err(|e| format!("Invalid peer ID: {}", e))?;
 
         // Send message through DHT command system
@@ -2261,7 +2283,9 @@ impl DhtService {
                 // Store the chunk
                 {
                     let mut chunks_map = received_chunks.lock().await;
-                    let file_chunks = chunks_map.entry(chunk.file_hash.clone()).or_insert_with(HashMap::new);
+                    let file_chunks = chunks_map
+                        .entry(chunk.file_hash.clone())
+                        .or_insert_with(HashMap::new);
                     file_chunks.insert(chunk.chunk_index, chunk.clone());
                 }
 
@@ -2277,21 +2301,31 @@ impl DhtService {
 
                 if has_all_chunks {
                     // Assemble the file from all chunks
-                    Self::assemble_file_from_chunks(&chunk.file_hash, received_chunks, file_transfer_service, event_tx).await;
+                    Self::assemble_file_from_chunks(
+                        &chunk.file_hash,
+                        received_chunks,
+                        file_transfer_service,
+                        event_tx,
+                    )
+                    .await;
                 }
 
-                let _ = event_tx.send(DhtEvent::BitswapDataReceived {
-                    query_id: format!("{:?}", query_id),
-                    data: data.to_vec(),
-                }).await;
+                let _ = event_tx
+                    .send(DhtEvent::BitswapDataReceived {
+                        query_id: format!("{:?}", query_id),
+                        data: data.to_vec(),
+                    })
+                    .await;
             }
             Err(e) => {
                 warn!("Failed to parse Bitswap data as FileChunk: {}", e);
                 // Emit raw data event for debugging
-                let _ = event_tx.send(DhtEvent::BitswapDataReceived {
-                    query_id: format!("{:?}", query_id),
-                    data: data.to_vec(),
-                }).await;
+                let _ = event_tx
+                    .send(DhtEvent::BitswapDataReceived {
+                        query_id: format!("{:?}", query_id),
+                        data: data.to_vec(),
+                    })
+                    .await;
             }
         }
     }
@@ -2302,39 +2336,47 @@ impl DhtService {
         // Send command to DHT task to query provider records for this file
         let (tx, rx) = oneshot::channel();
 
-        if let Err(e) = self.cmd_tx.send(DhtCommand::GetProviders {
-            file_hash: file_hash.to_string(),
-            sender: tx,
-        }).await {
+        if let Err(e) = self
+            .cmd_tx
+            .send(DhtCommand::GetProviders {
+                file_hash: file_hash.to_string(),
+                sender: tx,
+            })
+            .await
+        {
             warn!("Failed to send GetProviders command: {}", e);
             return Vec::new();
         }
 
-    // Wait for response with timeout
-    match tokio::time::timeout(Duration::from_secs(5), rx).await {
-        Ok(Ok(Ok(providers))) => {
-            info!("Found {} providers for file: {}", providers.len(), file_hash);
-            providers
+        // Wait for response with timeout
+        match tokio::time::timeout(Duration::from_secs(5), rx).await {
+            Ok(Ok(Ok(providers))) => {
+                info!(
+                    "Found {} providers for file: {}",
+                    providers.len(),
+                    file_hash
+                );
+                providers
+            }
+            Ok(Ok(Err(e))) => {
+                warn!("GetProviders command failed: {}", e);
+                // Fallback to connected peers
+                let connected = self.connected_peers.lock().await;
+                connected.iter().take(3).map(|p| p.to_string()).collect()
+            }
+            Ok(Err(e)) => {
+                warn!("Receiver error: {}", e);
+                // Fallback to connected peers
+                let connected = self.connected_peers.lock().await;
+                connected.iter().take(3).map(|p| p.to_string()).collect()
+            }
+            Err(_) => {
+                warn!("GetProviders command timed out for file: {}", file_hash);
+                // Fallback to connected peers
+                let connected = self.connected_peers.lock().await;
+                connected.iter().take(3).map(|p| p.to_string()).collect()
+            }
         }
-        Ok(Ok(Err(e))) => {
-            warn!("GetProviders command failed: {}", e);
-            // Fallback to connected peers
-            let connected = self.connected_peers.lock().await;
-            connected.iter().take(3).map(|p| p.to_string()).collect()
-        }
-        Ok(Err(e)) => {
-            warn!("Receiver error: {}", e);
-            // Fallback to connected peers
-            let connected = self.connected_peers.lock().await;
-            connected.iter().take(3).map(|p| p.to_string()).collect()
-        }
-        Err(_) => {
-            warn!("GetProviders command timed out for file: {}", file_hash);
-            // Fallback to connected peers
-            let connected = self.connected_peers.lock().await;
-            connected.iter().take(3).map(|p| p.to_string()).collect()
-        }
-    }
     }
 
     /// Assemble a complete file from received chunks
@@ -2350,30 +2392,36 @@ impl DhtService {
             chunks_map.remove(file_hash)
         };
 
-    if let Some(mut file_chunks) = chunks {
-        // Sort chunks by index
-        let mut sorted_chunks: Vec<FileChunk> = file_chunks.drain().map(|(_, chunk)| chunk).collect();
-        sorted_chunks.sort_by_key(|c| c.chunk_index);
+        if let Some(mut file_chunks) = chunks {
+            // Sort chunks by index
+            let mut sorted_chunks: Vec<FileChunk> =
+                file_chunks.drain().map(|(_, chunk)| chunk).collect();
+            sorted_chunks.sort_by_key(|c| c.chunk_index);
 
-        // Get the count before consuming the vector
-        let chunk_count = sorted_chunks.len();
+            // Get the count before consuming the vector
+            let chunk_count = sorted_chunks.len();
 
-        // Concatenate chunk data
-        let mut file_data = Vec::new();
-        for chunk in sorted_chunks {
-            file_data.extend_from_slice(&chunk.data);
+            // Concatenate chunk data
+            let mut file_data = Vec::new();
+            for chunk in sorted_chunks {
+                file_data.extend_from_slice(&chunk.data);
+            }
+
+            // Store the assembled file
+            let file_name = format!("downloaded_{}", file_hash);
+            file_transfer_service.store_file_data(file_hash.to_string(), file_name, file_data);
+
+            info!(
+                "Successfully assembled file {} from {} chunks",
+                file_hash, chunk_count
+            );
+
+            let _ = event_tx
+                .send(DhtEvent::FileDownloaded {
+                    file_hash: file_hash.to_string(),
+                })
+                .await;
         }
-
-        // Store the assembled file
-        let file_name = format!("downloaded_{}", file_hash);
-        file_transfer_service.store_file_data(file_hash.to_string(), file_name, file_data);
-
-        info!("Successfully assembled file {} from {} chunks", file_hash, chunk_count);
-
-        let _ = event_tx.send(DhtEvent::FileDownloaded {
-            file_hash: file_hash.to_string(),
-        }).await;
-    }
     }
 
     /// Discover and verify available peers for a specific file
@@ -2441,7 +2489,9 @@ async fn process_bitswap_chunk(
             // Store the chunk
             {
                 let mut chunks_map = received_chunks.lock().await;
-                let file_chunks = chunks_map.entry(chunk.file_hash.clone()).or_insert_with(HashMap::new);
+                let file_chunks = chunks_map
+                    .entry(chunk.file_hash.clone())
+                    .or_insert_with(HashMap::new);
                 file_chunks.insert(chunk.chunk_index, chunk.clone());
             }
 
@@ -2457,21 +2507,31 @@ async fn process_bitswap_chunk(
 
             if has_all_chunks {
                 // Assemble the file from all chunks
-                assemble_file_from_chunks(&chunk.file_hash, received_chunks, file_transfer_service, event_tx).await;
+                assemble_file_from_chunks(
+                    &chunk.file_hash,
+                    received_chunks,
+                    file_transfer_service,
+                    event_tx,
+                )
+                .await;
             }
 
-            let _ = event_tx.send(DhtEvent::BitswapDataReceived {
-                query_id: format!("{:?}", query_id),
-                data: data.to_vec(),
-            }).await;
+            let _ = event_tx
+                .send(DhtEvent::BitswapDataReceived {
+                    query_id: format!("{:?}", query_id),
+                    data: data.to_vec(),
+                })
+                .await;
         }
         Err(e) => {
             warn!("Failed to parse Bitswap data as FileChunk: {}", e);
             // Emit raw data event for debugging
-            let _ = event_tx.send(DhtEvent::BitswapDataReceived {
-                query_id: format!("{:?}", query_id),
-                data: data.to_vec(),
-            }).await;
+            let _ = event_tx
+                .send(DhtEvent::BitswapDataReceived {
+                    query_id: format!("{:?}", query_id),
+                    data: data.to_vec(),
+                })
+                .await;
         }
     }
 }
@@ -2491,7 +2551,8 @@ async fn assemble_file_from_chunks(
 
     if let Some(mut file_chunks) = chunks {
         // Sort chunks by index
-        let mut sorted_chunks: Vec<FileChunk> = file_chunks.drain().map(|(_, chunk)| chunk).collect();
+        let mut sorted_chunks: Vec<FileChunk> =
+            file_chunks.drain().map(|(_, chunk)| chunk).collect();
         sorted_chunks.sort_by_key(|c| c.chunk_index);
 
         // Get the count before consuming the vector
@@ -2507,11 +2568,16 @@ async fn assemble_file_from_chunks(
         let file_name = format!("downloaded_{}", file_hash);
         file_transfer_service.store_file_data(file_hash.to_string(), file_name, file_data);
 
-        info!("Successfully assembled file {} from {} chunks", file_hash, chunk_count);
+        info!(
+            "Successfully assembled file {} from {} chunks",
+            file_hash, chunk_count
+        );
 
-        let _ = event_tx.send(DhtEvent::FileDownloaded {
-            file_hash: file_hash.to_string(),
-        }).await;
+        let _ = event_tx
+            .send(DhtEvent::FileDownloaded {
+                file_hash: file_hash.to_string(),
+            })
+            .await;
     }
 }
 
@@ -2629,12 +2695,8 @@ mod tests {
         {
             let guard = metrics.lock().await;
             assert_eq!(guard.listen_addrs.len(), 2);
-            assert!(guard
-                .listen_addrs
-                .contains(&listen_addr.to_string()));
-            assert!(guard
-                .listen_addrs
-                .contains(&secondary_addr.to_string()));
+            assert!(guard.listen_addrs.contains(&listen_addr.to_string()));
+            assert!(guard.listen_addrs.contains(&secondary_addr.to_string()));
         }
 
         record_identify_push_metrics(&metrics, &info);

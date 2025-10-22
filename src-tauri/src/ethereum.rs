@@ -1,3 +1,4 @@
+use ethers::prelude::*;
 use once_cell::sync::Lazy;
 use rand::rngs::OsRng;
 use secp256k1::{PublicKey, Secp256k1, SecretKey};
@@ -8,7 +9,6 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use ethers::prelude::*;
 
 // ============================================================================
 // Configuration & Shared Resources
@@ -32,19 +32,17 @@ impl Default for NetworkConfig {
 }
 
 // Global configuration - can be updated via environment variables
-pub static NETWORK_CONFIG: Lazy<NetworkConfig> = Lazy::new(|| {
-    NetworkConfig {
-        rpc_endpoint: std::env::var("CHIRAL_RPC_ENDPOINT")
-            .unwrap_or_else(|_| "http://127.0.0.1:8545".to_string()),
-        chain_id: std::env::var("CHIRAL_CHAIN_ID")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(98765),
-        network_id: std::env::var("CHIRAL_NETWORK_ID")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(98765),
-    }
+pub static NETWORK_CONFIG: Lazy<NetworkConfig> = Lazy::new(|| NetworkConfig {
+    rpc_endpoint: std::env::var("CHIRAL_RPC_ENDPOINT")
+        .unwrap_or_else(|_| "http://127.0.0.1:8545".to_string()),
+    chain_id: std::env::var("CHIRAL_CHAIN_ID")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(98765),
+    network_id: std::env::var("CHIRAL_NETWORK_ID")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(98765),
 });
 
 // Shared HTTP client for all RPC calls
@@ -331,7 +329,7 @@ impl GethProcess {
                 }
                 Err(e) => {
                     // Failed to run pkill
-                },
+                }
             }
 
             // Also kill by port usage
@@ -342,8 +340,6 @@ impl GethProcess {
 
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
-
-
 
         Ok(())
     }
@@ -1308,7 +1304,6 @@ pub async fn get_network_hashrate() -> Result<String, String> {
     Ok(formatted)
 }
 
-
 pub async fn send_transaction(
     from_address: &str,
     to_address: &str,
@@ -1316,11 +1311,11 @@ pub async fn send_transaction(
     private_key: &str,
 ) -> Result<String, String> {
     let private_key_clean = private_key.strip_prefix("0x").unwrap_or(private_key);
-    
+
     let wallet: LocalWallet = private_key_clean
         .parse()
         .map_err(|e| format!("Invalid private key: {}", e))?;
-    
+
     let wallet_address = format!("{:?}", wallet.address());
     if wallet_address.to_lowercase() != from_address.to_lowercase() {
         return Err(format!(
@@ -1328,52 +1323,52 @@ pub async fn send_transaction(
             from_address, wallet_address
         ));
     }
-    
+
     let provider = Provider::<Http>::try_from("http://127.0.0.1:8545")
         .map_err(|e| format!("Failed to connect to Geth: {}", e))?;
-    
+
     let chain_id = 98765u64;
     let wallet = wallet.with_chain_id(chain_id);
-    
+
     let client = SignerMiddleware::new(provider.clone(), wallet);
-    
+
     let to: Address = to_address
         .parse()
         .map_err(|e| format!("Invalid to address: {}", e))?;
-    
+
     let amount_wei = U256::from((amount_chiral * 1_000_000_000_000_000_000.0) as u128);
-    
+
     // Get nonce for pending block (includes pending transactions)
     let from_addr: Address = from_address
         .parse()
         .map_err(|e| format!("Invalid from address: {}", e))?;
-    
+
     let nonce = provider
         .get_transaction_count(from_addr, Some(BlockNumber::Pending.into()))
         .await
         .map_err(|e| format!("Failed to get nonce: {}", e))?;
-    
+
     let gas_price = provider
         .get_gas_price()
         .await
         .map_err(|e| format!("Failed to get gas price: {}", e))?;
-    
+
     // Increase gas price by 10% to ensure it's not underpriced
     let gas_price_adjusted = gas_price * 110 / 100;
-    
+
     let tx = TransactionRequest::new()
         .to(to)
         .value(amount_wei)
         .gas(21000)
         .gas_price(gas_price_adjusted)
         .nonce(nonce);
-    
+
     let pending_tx = client
         .send_transaction(tx, None)
         .await
         .map_err(|e| format!("Failed to send transaction: {}", e))?;
-    
+
     let tx_hash = format!("{:?}", pending_tx.tx_hash());
-    
+
     Ok(tx_hash)
 }

@@ -250,7 +250,7 @@ const dummyTransactions: Transaction[] = [
     from: "0x8765...4321",
     date: new Date("2024-03-15"),
     description: "Storage reward",
-    status: "completed",
+    status: "success",
   },
   {
     id: 2,
@@ -259,7 +259,7 @@ const dummyTransactions: Transaction[] = [
     to: "0x1234...5678",
     date: new Date("2024-03-14"),
     description: "Proxy service",
-    status: "completed",
+    status: "success",
   },
   {
     id: 3,
@@ -268,7 +268,7 @@ const dummyTransactions: Transaction[] = [
     from: "0xabcd...ef12",
     date: new Date("2024-03-13"),
     description: "Upload reward",
-    status: "completed",
+    status: "success",
   },
   {
     id: 4,
@@ -277,7 +277,7 @@ const dummyTransactions: Transaction[] = [
     to: "0x9876...5432",
     date: new Date("2024-03-12"),
     description: "File download",
-    status: "completed",
+    status: "success",
   },
 ];
 

@@ -1,12 +1,12 @@
+use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, info_span, warn};
-use directories::ProjectDirs;
-use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileRequest {
@@ -504,7 +504,11 @@ impl FileTransferService {
             .await
             .map_err(|e| format!("Failed to read storage directory: {}", e))?;
 
-        while let Some(entry) = entries.next_entry().await.map_err(|e| format!("Failed to read directory entry: {}", e))? {
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| format!("Failed to read directory entry: {}", e))?
+        {
             let path = entry.path();
             if let Some(extension) = path.extension() {
                 if extension == "meta" {
@@ -513,11 +517,16 @@ impl FileTransferService {
                             .await
                             .map_err(|e| format!("Failed to read metadata file: {}", e))?;
 
-                        let metadata: serde_json::Value = serde_json::from_str(&metadata_content)
-                            .map_err(|e| format!("Failed to parse metadata: {}", e))?;
+                        let metadata: serde_json::Value =
+                            serde_json::from_str(&metadata_content)
+                                .map_err(|e| format!("Failed to parse metadata: {}", e))?;
 
-                        if let (Some(file_name), Some(_)) = (metadata.get("file_name"), metadata.get("file_size")) {
-                            if let (Some(name_str), Some(hash_str)) = (file_name.as_str(), file_hash.to_str()) {
+                        if let (Some(file_name), Some(_)) =
+                            (metadata.get("file_name"), metadata.get("file_size"))
+                        {
+                            if let (Some(name_str), Some(hash_str)) =
+                                (file_name.as_str(), file_hash.to_str())
+                            {
                                 files.push((hash_str.to_string(), name_str.to_string()));
                             }
                         }
@@ -560,7 +569,9 @@ impl FileTransferService {
                 .as_secs(),
         });
         let metadata_path = self.storage_dir.join(format!("{}.meta", file_hash));
-        if let Err(e) = tokio::fs::write(&metadata_path, serde_json::to_string(&metadata).unwrap()).await {
+        if let Err(e) =
+            tokio::fs::write(&metadata_path, serde_json::to_string(&metadata).unwrap()).await
+        {
             error!("Failed to store metadata: {}", e);
         }
     }
@@ -596,13 +607,17 @@ mod tests {
         let storage_dir = temp_dir.path().to_path_buf();
 
         // Create storage directory
-        tokio::fs::create_dir_all(&storage_dir).await.expect("create storage dir");
+        tokio::fs::create_dir_all(&storage_dir)
+            .await
+            .expect("create storage dir");
 
         // Store test file
         let test_hash = "test-hash";
         let test_data = b"hello world".to_vec();
         let file_path = storage_dir.join(test_hash);
-        tokio::fs::write(&file_path, &test_data).await.expect("write test file");
+        tokio::fs::write(&file_path, &test_data)
+            .await
+            .expect("write test file");
 
         // Store metadata
         let metadata = serde_json::json!({
@@ -611,7 +626,9 @@ mod tests {
             "uploaded_at": 0
         });
         let metadata_path = storage_dir.join(format!("{}.meta", test_hash));
-        tokio::fs::write(&metadata_path, serde_json::to_string(&metadata).unwrap()).await.expect("write metadata");
+        tokio::fs::write(&metadata_path, serde_json::to_string(&metadata).unwrap())
+            .await
+            .expect("write metadata");
 
         let temp_output_dir = tempdir().expect("temp output dir");
         let output_path = temp_output_dir.path().join("downloaded.txt");
@@ -661,7 +678,9 @@ mod tests {
         let storage_dir = temp_dir.path().to_path_buf();
 
         // Create storage directory
-        tokio::fs::create_dir_all(&storage_dir).await.expect("create storage dir");
+        tokio::fs::create_dir_all(&storage_dir)
+            .await
+            .expect("create storage dir");
 
         let temp_output_dir = tempdir().expect("temp output dir");
         let output_path = temp_output_dir.path().join("missing.txt");
