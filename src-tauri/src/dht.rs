@@ -1,4 +1,71 @@
-use crate::manager::Sha256Hasher;
+use crate::encryption::EncryptedAesKeyBundle;
+use x25519_dalek::PublicKey;
+use serde_bytes;
+
+// ------ Key Request Protocol Implementation ------
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyRequestProtocol;
+
+impl AsRef<str> for KeyRequestProtocol {
+    fn as_ref(&self) -> &str {
+        "/chiral/key-request/1.0.0"
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct KeyRequestCodec;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct KeyRequest {
+    pub merkle_root: String,
+    #[serde(with = "serde_bytes")]
+    pub recipient_public_key: Vec<u8>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct KeyResponse {
+    pub encrypted_bundle: Option<EncryptedAesKeyBundle>,
+    pub error: Option<String>,
+}
+
+#[async_trait::async_trait]
+impl rr::Codec for KeyRequestCodec {
+    type Protocol = KeyRequestProtocol;
+    type Request = KeyRequest;
+    type Response = KeyResponse;
+
+    async fn read_request<T>(&mut self, _: &Self::Protocol, io: &mut T) -> std::io::Result<Self::Request>
+    where
+        T: FAsyncRead + Unpin + Send,
+    {
+        let data = read_framed(io).await?;
+        serde_json::from_slice(&data).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    }
+
+    async fn read_response<T>(&mut self, _: &Self::Protocol, io: &mut T) -> std::io::Result<Self::Response>
+    where
+        T: FAsyncRead + Unpin + Send,
+    {
+        let data = read_framed(io).await?;
+        serde_json::from_slice(&data).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    }
+
+    async fn write_request<T>(&mut self, _: &Self::Protocol, io: &mut T, request: Self::Request) -> std::io::Result<()>
+    where
+        T: FAsyncWrite + Unpin + Send,
+    {
+        let data = serde_json::to_vec(&request).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        write_framed(io, data).await
+    }
+
+    async fn write_response<T>(&mut self, _: &Self::Protocol, io: &mut T, response: Self::Response) -> std::io::Result<()>
+    where
+        T: FAsyncWrite + Unpin + Send,
+    {
+        let data = serde_json::to_vec(&response).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        write_framed(io, data).await
+    }
+}
 use async_std::fs;
 use async_std::path::Path;
 use async_trait::async_trait;
@@ -35,6 +102,7 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::peer_selection::{PeerMetrics, PeerSelectionService, SelectionStrategy};
 use crate::webrtc_service::{get_webrtc_service, FileChunk};
+use crate::manager::Sha256Hasher;
 use std::io::{self};
 use tokio_socks::tcp::Socks5Stream;
 
@@ -350,6 +418,7 @@ struct DhtBehaviour {
     ping: ping::Behaviour,
     proxy_rr: rr::Behaviour<ProxyCodec>,
     webrtc_signaling_rr: rr::Behaviour<WebRTCSignalingCodec>,
+    key_request: rr::Behaviour<KeyRequestCodec>,
     autonat_client: toggle::Toggle<v2::client::Behaviour>,
     autonat_server: toggle::Toggle<v2::server::Behaviour>,
     relay_client: relay::client::Behaviour,
@@ -398,13 +467,18 @@ pub enum DhtCommand {
         cid: Cid,
         data: Vec<u8>,
     },
-    StoreBlocks {
-        blocks: Vec<(Cid, Vec<u8>)>,
-        root_cid: Cid,
-        metadata: FileMetadata,
-    },
-}
-
+        StoreBlocks {
+            blocks: Vec<(Cid, Vec<u8>)>, 
+            root_cid: Cid,
+            metadata: FileMetadata,
+        },
+        RequestFileAccess {
+            seeder: PeerId,
+            merkle_root: String,
+            recipient_public_key: PublicKey,
+            sender: oneshot::Sender<Result<EncryptedAesKeyBundle, String>>,
+        },
+    }
 #[derive(Debug, Clone, Serialize)]
 pub enum DhtEvent {
     // PeerDiscovered(String),
@@ -2539,6 +2613,9 @@ async fn run_dht_node(
                                 error!("Failed to store block in Bitswap: {}", e);
                             }
                         }
+                    }
+                    Some(DhtCommand::RequestFileAccess { .. }) => {
+                        todo!();
                     }
                     None => {
                         info!("DHT command channel closed; shutting down node task");
@@ -4774,7 +4851,11 @@ impl DhtService {
             "/chiral/webrtc-signaling/1.0.0".to_string(),
             rr::ProtocolSupport::Full,
         ));
-        let webrtc_signaling_rr = rr::Behaviour::new(webrtc_protocols, rr_cfg);
+        let webrtc_signaling_rr = rr::Behaviour::new(webrtc_protocols, rr_cfg.clone());
+
+        let key_request_protocols =
+            std::iter::once((KeyRequestProtocol, rr::ProtocolSupport::Full));
+        let key_request = rr::Behaviour::new(key_request_protocols, rr_cfg);
 
         let probe_interval = autonat_probe_interval.unwrap_or(Duration::from_secs(30));
         let autonat_client_behaviour = if enable_autonat {
@@ -4830,6 +4911,7 @@ impl DhtService {
             ping: Ping::new(ping::Config::new()),
             proxy_rr,
             webrtc_signaling_rr,
+            key_request,
             autonat_client: autonat_client_toggle,
             autonat_server: autonat_server_toggle,
             relay_client: relay_client_behaviour,
