@@ -22,6 +22,7 @@
 
   function selectConversation(peerId: string) {
     selectedPeerId = peerId;
+    // TODO: Load actual messages for this peer
     messages = [
       { from: "them", text: "Hey, how is it going?" },
       { from: "me", text: "Pretty good, working on the new messaging feature." },
@@ -55,7 +56,7 @@
       peers.sort((a, b) => b.lastSeen - a.lastSeen);
       conversations = peers;
 
-      // If no conversation is selected, or the selected one is no longer in the list, select the first one.
+      // If no conversation is selected, or the selected one is no longer in the list, select the first one
       if (conversations.length > 0 && (!selectedPeerId || !conversations.some(p => p.peerId === selectedPeerId))) {
         selectConversation(conversations[0].peerId);
       } else if (conversations.length === 0) {
@@ -86,13 +87,16 @@
     <!-- Conversation List -->
     <div class="w-1/3 border-r flex flex-col">
       <div class="p-4 border-b bg-card flex justify-between items-center">
-        <h2 class="text-lg font-semibold flex items-center gap-2">{$t('messages.conversations', { default: 'Contacts' })}</h2>
+        <h2 class="text-lg font-semibold flex items-center gap-2">
+          <Mail class="h-5 w-5 text-muted-foreground" />
+          {$t('messages.conversations', { default: 'Contacts' })}
+        </h2>
         <Button variant="ghost" size="icon" on:click={fetchPeers} disabled={isLoadingPeers} aria-label="Refresh peer list">
           <RefreshCw class="h-4 w-4 {isLoadingPeers ? 'animate-spin' : ''}" />
         </Button>
       </div>
       <div class="p-4 border-b">
-        <div class="relative mt-3">
+        <div class="relative">
           <Search class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input placeholder={$t('messages.searchPlaceholder', { default: 'Search contacts...' })} class="pl-9" />
         </div>
