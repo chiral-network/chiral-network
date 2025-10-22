@@ -39,7 +39,6 @@
 
   function selectConversation(id: number) {
     selectedConversationId = id;
-=======
   import { Mail, Send, Search, RefreshCw } from "lucide-svelte";
   import Button from "$lib/components/ui/button.svelte";
   import Input from "$lib/components/ui/input.svelte";
