@@ -1867,6 +1867,26 @@ fn detect_locale() -> String {
 }
 
 #[tauri::command]
+fn get_default_storage_path(app: tauri::AppHandle) -> Result<String, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Could not get app data directory: {}", e))?;
+    
+    let storage_path = app_data_dir.join("Storage");
+    
+    storage_path
+        .to_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "Failed to convert path to string".to_string())
+}
+
+#[tauri::command]
+fn check_directory_exists(path: String) -> bool {
+    Path::new(&path).is_dir()
+}
+
+#[tauri::command]
 async fn start_file_transfer_service(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -3879,6 +3899,8 @@ fn main() {
             connect_to_peer,
             get_dht_events,
             detect_locale,
+            get_default_storage_path,
+            check_directory_exists,
             get_dht_health,
             get_dht_peer_count,
             get_dht_peer_id,
