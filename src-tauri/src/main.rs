@@ -4264,36 +4264,33 @@ fn main() {
             // NOTE: You must add `start_proof_of_storage_watcher` to the invoke_handler call in the
             // real code where you register other commands. For brevity the snippet above shows where to add it.
 
-            // Auto-start HTTP server after Tauri runtime is ready
-            // We use window.once() to run after the event loop starts
-            if let Some(window) = app.get_webview_window("main") {
+            // Auto-start HTTP server
+            // Spawn directly in setup() - no need to wait for window events
+            {
                 let app_handle = app.handle().clone();
 
-                // Schedule HTTP server startup after window is ready
-                window.once("tauri://created", move |_| {
-                    let app_handle_clone = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    // Small delay to ensure state is fully initialized
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-                    // Now we can spawn because Tauri's async runtime is running
-                    tauri::async_runtime::spawn(async move {
-                        if let Some(state) = app_handle_clone.try_state::<AppState>() {
-                            let bind_addr: std::net::SocketAddr = ([0, 0, 0, 0], 8080).into();
+                    if let Some(state) = app_handle.try_state::<AppState>() {
+                        let bind_addr: std::net::SocketAddr = ([0, 0, 0, 0], 8080).into();
 
-                            tracing::info!("Auto-starting HTTP server on port 8080...");
+                        tracing::info!("Auto-starting HTTP server on port 8080...");
 
-                            match http_server::start_server(state.http_server_state.clone(), bind_addr).await {
-                                Ok(bound_addr) => {
-                                    let mut addr_lock = state.http_server_addr.lock().await;
-                                    *addr_lock = Some(bound_addr);
-                                    tracing::info!("HTTP server started at http://{}", bound_addr);
-                                    println!("✅ HTTP server listening on http://{}", bound_addr);
-                                }
-                                Err(e) => {
-                                    tracing::error!("Failed to start HTTP server: {}", e);
-                                    eprintln!("⚠️  HTTP server failed to start: {}", e);
-                                }
+                        match http_server::start_server(state.http_server_state.clone(), bind_addr).await {
+                            Ok(bound_addr) => {
+                                let mut addr_lock = state.http_server_addr.lock().await;
+                                *addr_lock = Some(bound_addr);
+                                tracing::info!("HTTP server started at http://{}", bound_addr);
+                                println!("✅ HTTP server listening on http://{}", bound_addr);
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to start HTTP server: {}", e);
+                                eprintln!("⚠️  HTTP server failed to start: {}", e);
                             }
                         }
-                    });
+                    }
                 });
             }
 
