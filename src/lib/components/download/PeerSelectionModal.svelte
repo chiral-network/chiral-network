@@ -128,7 +128,6 @@
             >
               <Globe class="h-4 w-4 mr-2" />
               HTTP
-              <Badge variant="secondary" class="ml-2 text-xs">Recommended</Badge>
             </Button>
             <Button
               variant={protocol === 'webrtc' ? 'default' : 'outline'}
