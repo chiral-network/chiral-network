@@ -1105,6 +1105,12 @@ async fn connect_to_peer(state: State<'_, AppState>, peer_address: String) -> Re
 }
 
 #[tauri::command]
+async fn is_dht_running(state: State<'_, AppState>) -> Result<bool, String> {
+    let dht_guard = state.dht.lock().await;
+    Ok(dht_guard.is_some())
+}
+
+#[tauri::command]
 async fn get_dht_peer_count(state: State<'_, AppState>) -> Result<usize, String> {
     let dht = {
         let dht_guard = state.dht.lock().await;
