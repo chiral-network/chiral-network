@@ -112,5 +112,6 @@ FileMetadata: Each file has an associated metadata published to the DHT when it 
 - Gas prices to be added to cost as a fee for initiating a transaction
 - File payments, upload and download not working correctly for Windows-Windows sharing
 - Implementation and documentation for when there are multiple seeders for the same file and handling payments for this scenario.
+- More specific details on price/payment specification (apis, message formats and etc.)
 
 
