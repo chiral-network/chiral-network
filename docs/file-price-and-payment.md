@@ -111,5 +111,6 @@ FileMetadata: Each file has an associated metadata published to the DHT when it 
 - Implement timeouts, transaction timeouts or invoices if process takes too long
 - Gas prices to be added to cost as a fee for initiating a transaction
 - File payments, upload and download not working correctly for Windows-Windows sharing
+- Implementation and documentation for when there are multiple seeders for the same file and handling payments for this scenario.
 
 
