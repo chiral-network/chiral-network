@@ -360,6 +360,7 @@ impl ReputationDhtService {
             download_path: None,
             price: None,
             uploader_address: None,
+            ftp_sources: None,
         };
 
         dht_service.publish_file(metadata).await
@@ -413,6 +414,7 @@ impl ReputationDhtService {
             download_path: None,
             price: None,
             uploader_address: None,
+            ftp_sources: None,
         };
 
         dht_service.publish_file(metadata).await

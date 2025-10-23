@@ -888,7 +888,8 @@ lazy_static! {
 async fn get_blocks_mined(address: String) -> Result<u64, String> {
     // Check cache (directly return within 500ms)
     {
-        let cache = BLOCKS_CACHE.lock().unwrap();
+        let cache = BLOCKS_CACHE.lock()
+            .map_err(|e| format!("Failed to acquire blocks cache lock: {}", e))?;
         if let Some((cached_addr, cached_blocks, cached_time)) = cache.as_ref() {
             if cached_addr == &address && cached_time.elapsed() < Duration::from_millis(500) {
                 return Ok(*cached_blocks);
@@ -901,7 +902,8 @@ async fn get_blocks_mined(address: String) -> Result<u64, String> {
 
     // Update Cache
     {
-        let mut cache = BLOCKS_CACHE.lock().unwrap();
+        let mut cache = BLOCKS_CACHE.lock()
+            .map_err(|e| format!("Failed to acquire blocks cache lock for update: {}", e))?;
         *cache = Some((address, blocks, Instant::now()));
     }
 
@@ -1602,7 +1604,7 @@ async fn get_cpu_temperature() -> Option<f32> {
         let temp_history_mutex = TEMP_HISTORY.get_or_init(|| std::sync::Mutex::new(Vec::new()));
 
         {
-            let mut last_update = last_update_mutex.lock().unwrap();
+            let mut last_update = last_update_mutex.lock().ok()?;
             if let Some(last) = *last_update {
                 if last.elapsed() < MINIMUM_CPU_UPDATE_INTERVAL {
                     return None;
@@ -1614,7 +1616,13 @@ async fn get_cpu_temperature() -> Option<f32> {
         // Helper function to add temperature to history and return smoothed value
         let smooth_temperature = |raw_temp: f32| -> f32 {
             let now = Instant::now();
-            let mut history = temp_history_mutex.lock().unwrap();
+            let mut history = match temp_history_mutex.lock() {
+                Ok(h) => h,
+                Err(e) => {
+                    tracing::error!("Failed to acquire temperature history lock: {}", e);
+                    return raw_temp; // Return raw temp if lock fails
+                }
+            };
 
             // Add current reading
             history.push((now, raw_temp));
@@ -1640,14 +1648,14 @@ async fn get_cpu_temperature() -> Option<f32> {
 
         // Try cached working method first
         {
-            let working_method = working_method_mutex.lock().unwrap();
+            let working_method = working_method_mutex.lock().ok()?;
             if let Some(ref method) = *working_method {
                 if let Some(temp) = try_temperature_method(method) {
                     return Some(smooth_temperature(temp));
                 }
                 // Method stopped working, clear cache
                 drop(working_method);
-                let mut working_method = working_method_mutex.lock().unwrap();
+                let mut working_method = working_method_mutex.lock().ok()?;
                 *working_method = None;
             }
         }
@@ -1664,7 +1672,7 @@ async fn get_cpu_temperature() -> Option<f32> {
         for method in methods_to_try {
             if let Some(temp) = try_temperature_method(&method) {
                 // Cache the working method
-                let mut working_method = working_method_mutex.lock().unwrap();
+                let mut working_method = working_method_mutex.lock().ok()?;
                 *working_method = Some(method.clone());
                 return Some(smooth_temperature(temp));
             }
@@ -1955,10 +1963,11 @@ fn get_windows_temperature() -> Option<f32> {
                     if temp_celsius > 0.0 && temp_celsius < 150.0 {
                         // Log success only once
                         let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
-                        let mut logged = log_state.lock().unwrap();
-                        if !*logged {
-                            info!("✅ Temperature sensor detected via WMI HighPrecision: {:.1}°C", temp_celsius);
-                            *logged = true;
+                        if let Ok(mut logged) = log_state.lock() {
+                            if !*logged {
+                                info!("✅ Temperature sensor detected via WMI HighPrecision: {:.1}°C", temp_celsius);
+                                *logged = true;
+                            }
                         }
                         return Some(temp_celsius);
                     }
@@ -1982,10 +1991,11 @@ fn get_windows_temperature() -> Option<f32> {
                     let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
                     if temp_celsius > 0.0 && temp_celsius < 150.0 {
                         let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
-                        let mut logged = log_state.lock().unwrap();
-                        if !*logged {
-                            info!("✅ Temperature sensor detected via WMI CurrentTemperature: {:.1}°C", temp_celsius);
-                            *logged = true;
+                        if let Ok(mut logged) = log_state.lock() {
+                            if !*logged {
+                                info!("✅ Temperature sensor detected via WMI CurrentTemperature: {:.1}°C", temp_celsius);
+                                *logged = true;
+                            }
                         }
                         return Some(temp_celsius);
                     }
@@ -2009,10 +2019,11 @@ fn get_windows_temperature() -> Option<f32> {
                     let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
                     if temp_celsius > 0.0 && temp_celsius < 150.0 {
                         let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
-                        let mut logged = log_state.lock().unwrap();
-                        if !*logged {
-                            info!("✅ Temperature sensor detected via MSAcpi: {:.1}°C", temp_celsius);
-                            *logged = true;
+                        if let Ok(mut logged) = log_state.lock() {
+                            if !*logged {
+                                info!("✅ Temperature sensor detected via MSAcpi: {:.1}°C", temp_celsius);
+                                *logged = true;
+                            }
                         }
                         return Some(temp_celsius);
                     }
@@ -2023,10 +2034,11 @@ fn get_windows_temperature() -> Option<f32> {
 
     // Log only once when no sensor is found
     let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
-    let mut logged = log_state.lock().unwrap();
-    if !*logged {
-        info!("⚠️ No WMI temperature sensors detected. Temperature monitoring disabled.");
-        *logged = true;
+    if let Ok(mut logged) = log_state.lock() {
+        if !*logged {
+            info!("⚠️ No WMI temperature sensors detected. Temperature monitoring disabled.");
+            *logged = true;
+        }
     }
 
     None
@@ -2680,6 +2692,7 @@ async fn upload_file_chunk(
             download_path: None,
             price: None,
             uploader_address: None,
+            ftp_sources: None,
         };
 
         // Store complete file data locally for seeding
