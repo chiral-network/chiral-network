@@ -159,8 +159,8 @@ npm run tauri build
 
 ```toml
 [network]
-chain_id = 9001
-network_id = 9001
+chain_id = 98765
+network_id = 98765
 port = 30304
 bootnodes = [
   "enode://node1@seed1.chiral.network:30304",
@@ -263,11 +263,11 @@ METRICS_PORT=9090
 ```bash
 # Generate genesis configuration for Ethereum network
 chiral-node tools genesis \
-  --chain-id 9001 \
-  --network-id 9001 \
+  --chain-id 98765 \
+  --network-id 98765 \
   --timestamp $(date +%s) \
-  --difficulty 0x20000 \
-  --gas-limit 0x7A1200 \
+  --difficulty 0x400000 \
+  --gas-limit 0x47b760 \
   --alloc accounts.json \
   --output genesis.json
 ````
