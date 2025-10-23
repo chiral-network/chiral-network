@@ -2924,7 +2924,13 @@ async fn run_dht_node(
                                         info!("Chunk offsets: {:?}", chunk_offsets);
 
                                         info!("About to create ActiveDownload for file: {}", metadata.merkle_root);
-                                        let download_path = PathBuf::from_str(metadata.download_path.as_ref().expect("Error: download_path not defined"));
+                                        let download_path = match metadata.download_path.as_ref() {
+                                            Some(path_str) => PathBuf::from_str(path_str),
+                                            None => {
+                                                error!("Download path not defined for file: {}", metadata.merkle_root);
+                                                return;
+                                            }
+                                        };
                                         let download_path = match download_path {
                                             Ok(path) => get_available_download_path(path).await,
                                             Err(e) => {
@@ -5009,12 +5015,17 @@ impl DhtService {
         // Use the new relay-aware transport builder
         let transport = build_transport_with_relay(&local_key, relay_transport, proxy_address)?;
 
+        // Extract behaviour or return error if already taken
+        let behaviour_instance = behaviour.take().ok_or_else(|| {
+            Box::<dyn Error>::from("behaviour already taken")
+        })?;
+
         // Create the swarm
         let mut swarm = SwarmBuilder::with_existing_identity(local_key)
             .with_tokio()
             .with_other_transport(|_| Ok(transport))
-            .expect("Failed to create libp2p transport")
-            .with_behaviour(move |_| behaviour.take().expect("behaviour already taken"))?
+            .map_err(|e| format!("Failed to create libp2p transport: {}", e))?
+            .with_behaviour(move |_| behaviour_instance)?
             .with_swarm_config(
                 |c| c.with_idle_connection_timeout(Duration::from_secs(300)), // 5 minutes
             )
