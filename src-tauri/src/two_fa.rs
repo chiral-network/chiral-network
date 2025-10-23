@@ -225,6 +225,9 @@ pub fn disable_2fa(app_handle: tauri::AppHandle, active_account: State<'_, Activ
 /// Sets the active account in the backend state (e.g., after a successful login).
 #[tauri::command]
 pub fn login(address: String, active_account: State<'_, ActiveAccount>) {
-    let mut address_lock = active_account.0.lock().unwrap();
-    *address_lock = Some(address);
+    if let Ok(mut address_lock) = active_account.0.lock() {
+        *address_lock = Some(address);
+    } else {
+        tracing::error!("Failed to acquire lock for active account during login");
+    }
 }
