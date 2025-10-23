@@ -248,7 +248,10 @@ impl GethProcess {
             .open(&log_path)
             .map_err(|e| format!("Failed to create log file: {}", e))?;
 
-        cmd.stdout(Stdio::from(log_file.try_clone().unwrap()))
+        let log_file_clone = log_file.try_clone()
+            .map_err(|e| format!("Failed to clone log file handle: {}", e))?;
+
+        cmd.stdout(Stdio::from(log_file_clone))
             .stderr(Stdio::from(log_file));
 
         let child = cmd

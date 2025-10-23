@@ -225,15 +225,17 @@ impl ChunkManager {
         if chunk_path.exists() {
             // Already present, skip writing
             // Prime the L1 cache anyway
-            let mut cache = L1_CACHE.lock().unwrap();
-            cache.put(hash.to_string(), data_with_nonce.to_vec());
+            if let Ok(mut cache) = L1_CACHE.lock() {
+                cache.put(hash.to_string(), data_with_nonce.to_vec());
+            }
             return Ok(());
         }
         fs::write(&chunk_path, data_with_nonce)?;
         // Prime the L1 cache
         {
-            let mut cache = L1_CACHE.lock().unwrap();
-            cache.put(hash.to_string(), data_with_nonce.to_vec());
+            if let Ok(mut cache) = L1_CACHE.lock() {
+                cache.put(hash.to_string(), data_with_nonce.to_vec());
+            }
         }
         Ok(())
     }
@@ -241,17 +243,19 @@ impl ChunkManager {
     pub fn read_chunk(&self, hash: &str) -> Result<Vec<u8>, Error> {
         // Check L1 cache first
         {
-            let mut cache = L1_CACHE.lock().unwrap();
-            if let Some(data) = cache.get(hash) {
-                return Ok(data.clone());
+            if let Ok(mut cache) = L1_CACHE.lock() {
+                if let Some(data) = cache.get(hash) {
+                    return Ok(data.clone());
+                }
             }
         }
         // Fallback to disk
         let data = fs::read(self.storage_path.join(hash))?;
         // Populate L1 cache
         {
-            let mut cache = L1_CACHE.lock().unwrap();
-            cache.put(hash.to_string(), data.clone());
+            if let Ok(mut cache) = L1_CACHE.lock() {
+                cache.put(hash.to_string(), data.clone());
+            }
         }
         Ok(data)
     }

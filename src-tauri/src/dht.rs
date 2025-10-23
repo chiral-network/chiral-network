@@ -1830,7 +1830,13 @@ async fn run_dht_node(
 
                             // Build the Merkle tree from original chunk hashes
                             let merkle_tree = MerkleTree::<Sha256Hasher>::from_leaves(&original_chunk_hashes);
-                            let merkle_root = merkle_tree.root().ok_or("Failed to compute Merkle root").unwrap();
+                            let merkle_root = match merkle_tree.root().ok_or("Failed to compute Merkle root") {
+                                Ok(root) => root,
+                                Err(e) => {
+                                    eprintln!("Merkle root computation failed: {}", e);
+                                    return;
+                                }
+                            };
 
                             // Create root block containing just the CIDs
                             let root_block_data = match serde_json::to_vec(&block_cids) {
@@ -2063,7 +2069,13 @@ async fn run_dht_node(
                             .kademlia
                             .get_record(record_key.clone());
 
-                        let record_value = serde_json::to_vec(&dht_metadata).map_err(|e| e.to_string()).unwrap();
+                        let record_value = match serde_json::to_vec(&dht_metadata).map_err(|e| e.to_string()) {
+                            Ok(val) => val,
+                            Err(e) => {
+                                warn!("Failed to serialize DHT metadata: {}", e);
+                                continue;
+                            }
+                        };
                         let record = Record {
                             key: record_key.clone(),
                             value: record_value,
@@ -4644,7 +4656,8 @@ impl ActiveDownload {
     }
 
     fn write_chunk(&self, chunk_index: u32, data: &[u8], offset: u64) -> std::io::Result<()> {
-        let mut mmap = self.mmap.lock().unwrap();
+        let mut mmap = self.mmap.lock()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Mutex lock failed: {}", e)))?;
         let start = offset as usize;
         let end = start + data.len();
 
@@ -4656,22 +4669,29 @@ impl ActiveDownload {
         }
 
         mmap[start..end].copy_from_slice(data);
-        self.received_chunks.lock().unwrap().insert(chunk_index);
+        self.received_chunks.lock()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Mutex lock failed: {}", e)))?
+            .insert(chunk_index);
 
         Ok(())
     }
 
     fn is_complete(&self) -> bool {
         self.queries.is_empty()
-            && self.received_chunks.lock().unwrap().len() == self.total_chunks as usize
+            && self.received_chunks.lock()
+                .map(|chunks| chunks.len() == self.total_chunks as usize)
+                .unwrap_or(false)
     }
 
     fn flush(&self) -> std::io::Result<()> {
-        self.mmap.lock().unwrap().flush()
+        self.mmap.lock()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Mutex lock failed: {}", e)))?
+            .flush()
     }
 
     fn read_complete_file(&self) -> std::io::Result<Vec<u8>> {
-        let mmap = self.mmap.lock().unwrap();
+        let mmap = self.mmap.lock()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Mutex lock failed: {}", e)))?;
         Ok(mmap.to_vec())
     }
 
@@ -4681,7 +4701,9 @@ impl ActiveDownload {
         self.flush()?;
 
         // Drop the mmap to release the file handle
-        drop(self.mmap.lock().unwrap());
+        if let Ok(mmap_guard) = self.mmap.lock() {
+            drop(mmap_guard);
+        }
 
         info!(
             "Renaming {:?} to {:?}",
@@ -4710,12 +4732,16 @@ impl ActiveDownload {
     }
 
     fn progress(&self) -> f32 {
-        let received = self.received_chunks.lock().unwrap().len() as f32;
+        let received = self.received_chunks.lock()
+            .map(|chunks| chunks.len())
+            .unwrap_or(0) as f32;
         received / self.total_chunks as f32
     }
 
     fn chunks_received(&self) -> usize {
-        self.received_chunks.lock().unwrap().len()
+        self.received_chunks.lock()
+            .map(|chunks| chunks.len())
+            .unwrap_or(0)
     }
 }
 
