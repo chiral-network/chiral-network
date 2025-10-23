@@ -23,7 +23,6 @@ Chiral Network implements a BitTorrent-like file sharing model with instant seed
     - Instantly available when added (no upload process)
     - Identified by cryptographic hashes (SHA-256)
     - Discoverable through the DHT network
-    - Optionally encrypted with AES-256-GCM
     - Versioned for update tracking
 
 ### Basic File Sharing
@@ -37,21 +36,6 @@ Chiral Network implements a BitTorrent-like file sharing model with instant seed
    - Content hash generated (SHA-256)
    - Metadata published to DHT
    - File immediately available for download by peers
-
-### File Encryption
-
-Files can be encrypted before sharing:
-
-1. **Enable encryption** in file upload dialog
-2. **Share the file hash** with authorized users
-3. **Share the encryption key** securely (out-of-band)
-
-**Encryption Features**:
-- AES-256-GCM encryption with PBKDF2 key derivation
-- Key fingerprinting for verification
-- Recipient public key support
-- Manifest-based chunk tracking
-- Encrypted chunk transfers via WebRTC
 
 ### File Versioning
 
@@ -110,7 +94,6 @@ Files are discovered using their content hash:
 3. **DHT returns**:
    - File metadata (name, size, type, price)
    - List of seeders
-   - Encryption status
    - Version information
 
 ### Search History
@@ -159,8 +142,6 @@ sequenceDiagram
   createdAt: number         // Unix timestamp
   merkleRoot?: string       // Merkle tree root for chunks
   mimeType?: string         // File MIME type
-  isEncrypted: boolean      // Encryption flag
-  encryptionMethod?: string // Encryption algorithm
   keyFingerprint?: string   // Key verification
   version?: number          // File version number
   cids?: string[]           // Content IDs for chunks
@@ -228,26 +209,23 @@ Files are stored locally:
 
 ### For Uploaders
 
-1. **Use encryption** for sensitive files
-2. **Verify file hashes** before sharing
-3. **Share complete files** (no partial uploads)
-4. **Keep seeding** to ensure availability
-5. **Monitor bandwidth** usage
+1. **Verify file hashes** before sharing
+2. **Share complete files** (no partial uploads)
+3. **Keep seeding** to ensure availability
+4. **Monitor bandwidth** usage
 
 ### For Downloaders
 
 1. **Verify file hashes** with sender
 2. **Check seeder count** before downloading
 3. **Select multiple sources** for faster downloads
-4. **Verify encryption** status
-5. **Scan files** before opening
+4. **Scan files** before opening
 
 ### Privacy Considerations
 
-1. **File hashes reveal content**: Use encryption for privacy
-2. **Seeding reveals IP**: Use proxy/relay for anonymity
-3. **Metadata is public**: DHT metadata visible to all peers
-4. **Consider file names**: Avoid revealing information
+1. **Seeding reveals IP**: Use proxy/relay for anonymity
+2. **Metadata is public**: DHT metadata visible to all peers
+3. **Consider file names**: Avoid revealing information
 
 ## Troubleshooting
 
