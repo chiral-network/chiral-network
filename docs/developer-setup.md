@@ -13,6 +13,7 @@ Guide for setting up a development environment for Chiral Network.
 ### Platform-Specific Requirements
 
 #### macOS
+
 ```bash
 # Install Xcode Command Line Tools
 xcode-select --install
@@ -25,6 +26,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
 #### Linux (Ubuntu/Debian)
+
 ```bash
 # Update package list
 sudo apt update
@@ -50,6 +52,7 @@ nvm use 18
 ```
 
 #### Windows
+
 ```powershell
 # Install Chocolatey package manager
 Set-ExecutionPolicy Bypass -Scope Process -Force
@@ -89,7 +92,9 @@ cargo install tauri-cli
 ### IDE Recommendations
 
 #### VS Code (Recommended)
+
 Install these extensions:
+
 - **Svelte for VS Code** - Svelte language support
 - **Tailwind CSS IntelliSense** - Tailwind autocomplete
 - **rust-analyzer** - Rust language server
@@ -98,6 +103,7 @@ Install these extensions:
 - **Prettier** - Code formatting
 
 #### WebStorm
+
 - Built-in Svelte support
 - TypeScript support
 - Install Rust plugin
@@ -105,6 +111,7 @@ Install these extensions:
 ### VS Code Settings
 
 Create `.vscode/settings.json`:
+
 ```json
 {
   "editor.formatOnSave": true,
@@ -125,6 +132,7 @@ Create `.vscode/settings.json`:
 ### Development Mode
 
 #### Web Development Server (Frontend Only)
+
 ```bash
 npm run dev
 # Opens http://localhost:5173
@@ -132,6 +140,7 @@ npm run dev
 ```
 
 #### Tauri Development (Full Desktop App)
+
 ```bash
 npm run tauri:dev
 # Builds frontend + Rust backend
@@ -149,11 +158,13 @@ npm run tauri:dev
 ### Debugging
 
 #### Frontend Debugging
+
 - Open DevTools in Tauri window (Right-click → Inspect)
 - Use browser console for logs
 - Svelte DevTools extension available
 
 #### Backend Debugging
+
 ```bash
 # Enable Rust debug logs
 RUST_LOG=debug npm run tauri:dev
@@ -169,26 +180,45 @@ chiral-network/
 ├── src/                      # Frontend source
 │   ├── lib/                  # Svelte libraries
 │   │   ├── components/       # Reusable components
+│   │   ├── diagnostics/      # Diagnostic tools
 │   │   ├── services/         # Business logic services
-│   │   ├── stores/           # State management
+│   │   ├── stores/           # Additional state stores
+│   │   ├── types/            # TypeScript type definitions
+│   │   ├── utils/            # Utility functions
 │   │   └── wallet/           # HD wallet implementation
 │   ├── pages/                # Application pages
+│   ├── routes/               # Special routes
+│   ├── styles/               # Global styles
+│   ├── types/                # Global type definitions
 │   ├── locales/              # i18n translation files
 │   ├── i18n/                 # i18n configuration
 │   ├── App.svelte            # Main app component
 │   └── main.ts               # Entry point
 ├── src-tauri/                # Rust backend
 │   ├── src/                  # Rust source code
+│   │   ├── commands/         # Tauri command handlers
+│   │   ├── net/              # Network modules
+│   │   └── ...               # Other Rust modules
 │   ├── capabilities/         # Tauri capabilities
+│   ├── icons/                # Application icons
+│   ├── tests/                # Rust tests
+│   ├── build.rs              # Build script
 │   ├── Cargo.toml            # Rust dependencies
 │   └── tauri.conf.json       # Tauri configuration
+├── relay/                    # Relay server implementation
+├── storage/                  # Storage module
 ├── docs/                     # Documentation
-├── tests/                    # Test files
-├── public/                   # Static assets
+├── tests/                    # Frontend tests
+├── genesis.json              # Blockchain genesis configuration
+├── index.html                # HTML entry point
 ├── package.json              # Node.js dependencies
 ├── vite.config.ts            # Vite configuration
+├── vitest.config.ts          # Vitest configuration
+├── svelte.config.js          # Svelte configuration
 ├── tailwind.config.js        # Tailwind CSS config
-└── tsconfig.json             # TypeScript configuration
+├── postcss.config.js         # PostCSS configuration
+├── tsconfig.json             # TypeScript configuration
+└── tsconfig.node.json        # TypeScript Node configuration
 ```
 
 ## Common Development Tasks
@@ -210,7 +240,8 @@ chiral-network/
 
 ### Adding a Tauri Command
 
-1. Add function in `src-tauri/src/commands.rs`:
+1. Add function in `src-tauri/src/commands/` (or create new module):
+
 ```rust
 #[tauri::command]
 pub fn my_command(param: String) -> Result<String, String> {
@@ -220,6 +251,7 @@ pub fn my_command(param: String) -> Result<String, String> {
 ```
 
 2. Register in `src-tauri/src/main.rs`:
+
 ```rust
 tauri::Builder::default()
     .invoke_handler(tauri::generate_handler![my_command])
@@ -228,10 +260,11 @@ tauri::Builder::default()
 ```
 
 3. Call from frontend:
-```typescript
-import { invoke } from '@tauri-apps/api/core';
 
-const result = await invoke<string>('my_command', { param: 'value' });
+```typescript
+import { invoke } from "@tauri-apps/api/core";
+
+const result = await invoke<string>("my_command", { param: "value" });
 ```
 
 ## Testing
@@ -253,11 +286,11 @@ npm test -- --coverage
 
 ```typescript
 // tests/myService.test.ts
-import { describe, it, expect } from 'vitest';
-import { myService } from '../src/lib/services/myService';
+import { describe, it, expect } from "vitest";
+import { myService } from "../src/lib/services/myService";
 
-describe('myService', () => {
-  it('should do something', () => {
+describe("myService", () => {
+  it("should do something", () => {
     const result = myService.doSomething();
     expect(result).toBe(expected);
   });
@@ -267,6 +300,7 @@ describe('myService', () => {
 ### Integration Tests
 
 Located in `tests/` directory:
+
 - `peerSelection.test.ts` - Peer selection logic
 - `multi-source-download.test.ts` - Download functionality
 - `mining.test.ts` - Mining operations
@@ -285,6 +319,7 @@ npm run check -- --watch
 ## Linting & Formatting
 
 ### ESLint
+
 ```bash
 # Lint all files
 npm run lint
@@ -294,6 +329,7 @@ npm run lint -- --fix
 ```
 
 ### Prettier
+
 ```bash
 # Format all files
 npm run format
@@ -305,11 +341,13 @@ npm run format -- --check
 ## Building
 
 ### Development Build
+
 ```bash
 npm run build
 ```
 
 ### Production Build
+
 ```bash
 # Build web version
 npm run build
@@ -319,12 +357,14 @@ npm run tauri:build
 ```
 
 Build outputs:
+
 - **Web**: `dist/` directory
 - **Desktop**: `src-tauri/target/release/bundle/`
 
 ## Environment Variables
 
 Create `.env` file in project root:
+
 ```bash
 # Development
 VITE_DEV_MODE=true
@@ -336,6 +376,7 @@ RUST_BACKTRACE=1
 ```
 
 Access in frontend:
+
 ```typescript
 const apiUrl = import.meta.env.VITE_API_URL;
 ```
@@ -345,6 +386,7 @@ const apiUrl = import.meta.env.VITE_API_URL;
 ### Common Issues
 
 #### "Command not found: tauri"
+
 ```bash
 # Install Tauri CLI
 cargo install tauri-cli
@@ -353,10 +395,12 @@ npm run tauri
 ```
 
 #### "WebView2 not found" (Windows)
+
 Download and install WebView2 Runtime:
 https://developer.microsoft.com/en-us/microsoft-edge/webview2/
 
 #### Port 5173 already in use
+
 ```bash
 # Kill process using port
 # macOS/Linux
@@ -367,6 +411,7 @@ taskkill /PID <PID> /F
 ```
 
 #### Rust compilation errors
+
 ```bash
 # Clean and rebuild
 cd src-tauri
@@ -375,6 +420,7 @@ cargo build
 ```
 
 #### Node modules issues
+
 ```bash
 # Clean install
 rm -rf node_modules package-lock.json
@@ -415,6 +461,7 @@ git push origin feature/my-feature
 ### Commit Messages
 
 Follow conventional commits:
+
 - `feat:` New feature
 - `fix:` Bug fix
 - `docs:` Documentation
@@ -432,9 +479,9 @@ Follow conventional commits:
 // Open DevTools → Svelte tab
 
 // Or manual timing
-console.time('operation');
+console.time("operation");
 // ... code ...
-console.timeEnd('operation');
+console.timeEnd("operation");
 ```
 
 ### Backend Performance
@@ -451,6 +498,7 @@ println!("Time elapsed: {:?}", duration);
 ## Continuous Integration
 
 GitHub Actions workflow (`.github/workflows/test.yml`):
+
 - Runs on push/PR
 - Tests all platforms (macOS, Linux, Windows)
 - Runs lint, type check, and tests

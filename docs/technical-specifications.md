@@ -13,9 +13,9 @@
 | **Initial Difficulty**    | 0x400000              | Starting mining difficulty           |
 | **Difficulty Adjustment** | Per block             | Dynamic difficulty adjustment        |
 | **Mining Algorithm**      | Ethash                | ASIC-resistant proof-of-work         |
-| **Initial Reward**        | 2 ETH                 | Block reward initially               |
+| **Initial Reward**        | 2 Chiral              | Block reward initially               |
 | **Max Supply**            | No limit              | Inflationary supply model            |
-| **Precision**             | 18 decimals           | Smallest unit: 1 wei (10^-18 ETH)    |
+| **Precision**             | 18 decimals           | Smallest unit: 1 wei (10^-18 Chiral) |
 | **Coinbase**              | 0x0000...0000         | Initial coinbase address             |
 | **Extra Data**            | "Keep on keeping on!" | Genesis message (0x4b656570...)      |
 
@@ -274,10 +274,10 @@ Master Key (from mnemonic)
 
 ### Transaction Types
 
-| Type                | Description          | Base Gas Cost |
-| ------------------- | -------------------- | ------------- |
-| **Transfer**        | Send coins           | 21,000 gas    |
-| **File Access**     | Access stored file   | 30,000 gas    |
+| Type            | Description        | Base Gas Cost |
+| --------------- | ------------------ | ------------- |
+| **Transfer**    | Send coins         | 21,000 gas    |
+| **File Access** | Access stored file | 30,000 gas    |
 
 ### Transaction Structure
 
@@ -366,18 +366,18 @@ Example: 0x742d35Cc6634C0532925a3b8D0C9e0c8b346b983
 
 ### System Error Codes
 
-| Code | Name               | Description                   |
-| ---- | ------------------ | ----------------------------- |
-| 1000 | NETWORK_ERROR      | Network connectivity issue    |
-| 1001 | TIMEOUT            | Operation timed out           |
-| 1002 | INVALID_HASH       | Invalid file hash format      |
-| 1003 | FILE_NOT_FOUND     | File not in network           |
-| 1004 | INSUFFICIENT_FUNDS | Not enough balance            |
-| 1005 | PERMISSION_DENIED  | Access not authorized         |
+| Code | Name               | Description                                |
+| ---- | ------------------ | ------------------------------------------ |
+| 1000 | NETWORK_ERROR      | Network connectivity issue                 |
+| 1001 | TIMEOUT            | Operation timed out                        |
+| 1002 | INVALID_HASH       | Invalid file hash format                   |
+| 1003 | FILE_NOT_FOUND     | File not in network                        |
+| 1004 | INSUFFICIENT_FUNDS | Not enough balance                         |
+| 1005 | PERMISSION_DENIED  | Access not authorized                      |
 | 1006 | STORAGE_FULL       | Local storage capacity reached (this peer) |
-| 1007 | INVALID_CHUNK      | Chunk verification failed     |
-| 1008 | DHT_TIMEOUT        | DHT lookup timeout            |
-| 1009 | PEER_UNREACHABLE   | Cannot connect to peer        |
+| 1007 | INVALID_CHUNK      | Chunk verification failed                  |
+| 1008 | DHT_TIMEOUT        | DHT lookup timeout                         |
+| 1009 | PEER_UNREACHABLE   | Cannot connect to peer                     |
 
 ## Quality of Service
 
