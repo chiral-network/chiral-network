@@ -180,26 +180,45 @@ chiral-network/
 ├── src/                      # Frontend source
 │   ├── lib/                  # Svelte libraries
 │   │   ├── components/       # Reusable components
+│   │   ├── diagnostics/      # Diagnostic tools
 │   │   ├── services/         # Business logic services
-│   │   ├── stores/           # State management
+│   │   ├── stores/           # Additional state stores
+│   │   ├── types/            # TypeScript type definitions
+│   │   ├── utils/            # Utility functions
 │   │   └── wallet/           # HD wallet implementation
 │   ├── pages/                # Application pages
+│   ├── routes/               # Special routes
+│   ├── styles/               # Global styles
+│   ├── types/                # Global type definitions
 │   ├── locales/              # i18n translation files
 │   ├── i18n/                 # i18n configuration
 │   ├── App.svelte            # Main app component
 │   └── main.ts               # Entry point
 ├── src-tauri/                # Rust backend
 │   ├── src/                  # Rust source code
+│   │   ├── commands/         # Tauri command handlers
+│   │   ├── net/              # Network modules
+│   │   └── ...               # Other Rust modules
 │   ├── capabilities/         # Tauri capabilities
+│   ├── icons/                # Application icons
+│   ├── tests/                # Rust tests
+│   ├── build.rs              # Build script
 │   ├── Cargo.toml            # Rust dependencies
 │   └── tauri.conf.json       # Tauri configuration
+├── relay/                    # Relay server implementation
+├── storage/                  # Storage module
 ├── docs/                     # Documentation
-├── tests/                    # Test files
-├── public/                   # Static assets
+├── tests/                    # Frontend tests
+├── genesis.json              # Blockchain genesis configuration
+├── index.html                # HTML entry point
 ├── package.json              # Node.js dependencies
 ├── vite.config.ts            # Vite configuration
+├── vitest.config.ts          # Vitest configuration
+├── svelte.config.js          # Svelte configuration
 ├── tailwind.config.js        # Tailwind CSS config
-└── tsconfig.json             # TypeScript configuration
+├── postcss.config.js         # PostCSS configuration
+├── tsconfig.json             # TypeScript configuration
+└── tsconfig.node.json        # TypeScript Node configuration
 ```
 
 ## Common Development Tasks
@@ -221,7 +240,7 @@ chiral-network/
 
 ### Adding a Tauri Command
 
-1. Add function in `src-tauri/src/commands.rs`:
+1. Add function in `src-tauri/src/commands/` (or create new module):
 
 ```rust
 #[tauri::command]
