@@ -251,14 +251,14 @@ Message Structure:
 
 ### Algorithms
 
-| Purpose                | Algorithm   | Parameters                |
-| ---------------------- | ----------- | ------------------------- |
-| **File Hashing**       | Keccak-256  | 256-bit output            |
-| **File Encryption**    | AES-256-GCM | 256-bit key, 96-bit nonce |
-| **Key Derivation**     | PBKDF2      | SHA-256, 100k iterations  |
-| **Digital Signatures** | ECDSA       | secp256k1 curve           |
-| **Account Addresses**  | Keccak-256  | Last 20 bytes of hash     |
-| **Random Generation**  | CSPRNG      | System entropy            |
+| Purpose                | Algorithm   | Parameters                          |
+| ---------------------- | ----------- | ----------------------------------- |
+| **File Hashing**       | SHA-256     | 256-bit output, plain hex (no `0x`) |
+| **File Encryption**    | AES-256-GCM | 256-bit key, 96-bit nonce           |
+| **Key Derivation**     | PBKDF2      | SHA-256, 100k iterations            |
+| **Digital Signatures** | ECDSA       | secp256k1 curve                     |
+| **Account Addresses**  | Keccak-256  | Last 20 bytes of hash (with `0x`)   |
+| **Random Generation**  | CSPRNG      | System entropy                      |
 
 ### Key Management
 
@@ -343,12 +343,14 @@ Handshake {
 
 ### File Hash Format
 
-The file hash is the hex-encoded SHA-256 Merkle root of the file's original chunks. It is a standard 64-character hexadecimal string.
+The file hash is the hex-encoded SHA-256 Merkle root of the file's original chunks. It is a standard 64-character hexadecimal string **without** the `0x` prefix.
 
 **Format**: `<merkle_root_hash>`
 **Example**: `7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a17d8f9e8c7b6a5d4f3e2d1c0`
 
-- **Hash**: SHA-256 Merkle root in hex (64 chars)
+- **Hash**: SHA-256 Merkle root in hex (64 chars, no `0x` prefix)
+
+**Note**: File hashes do NOT use the `0x` prefix. This distinguishes them from Ethereum-style addresses and blockchain hashes, which DO use the `0x` prefix.
 
 (Note: The `version` of a file is tracked as a separate field in the DHT Record, not as part of the hash string itself.)
 

@@ -59,7 +59,7 @@ encryption_key: string (optional)
 ```json
 {
   "success": true,
-  "file_hash": "0xa7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456",
+  "file_hash": "a7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456",
   "chunks": [
     {
       "index": 0,
@@ -105,7 +105,7 @@ GET /api/v1/files/{file_hash}/info
 
 ```json
 {
-  "file_hash": "0xa7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456",
+  "file_hash": "a7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456",
   "file_name": "document.pdf",
   "file_size": 10485760,
   "mime_type": "application/pdf",
@@ -159,7 +159,7 @@ GET /api/v1/files/list
 {
   "files": [
     {
-      "file_hash": "0xa7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456",
+      "file_hash": "a7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456",
       "name": "document.pdf",
       "size": 10485760,
       "uploaded_at": 1234567890,
@@ -632,7 +632,7 @@ ws.onopen = () => {
 {
   "type": "file_progress",
   "data": {
-    "file_hash": "0xa7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456",
+    "file_hash": "a7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456",
     "action": "upload" | "download",
     "progress": 75.5,
     "speed": 1048576,
@@ -670,7 +670,7 @@ ws.onopen = () => {
 ```json
 {
   "type": "request_chunk",
-  "file_hash": "0xa7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456",
+  "file_hash": "a7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456",
   "chunk_index": 5,
   "peer_id": "12D3KooWExample"
 }
@@ -730,7 +730,7 @@ ws.onopen = () => {
   "jsonrpc": "2.0",
   "method": "chiral_getFileInfo",
   "params": [
-    "0xa7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456"
+    "a7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456"
   ],
   "id": 1
 }
