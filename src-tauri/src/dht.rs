@@ -117,6 +117,7 @@ use std::error::Error;
 // Trait alias to abstract over async I/O types used by proxy transport
 pub trait AsyncIo: FAsyncRead + FAsyncWrite + Unpin + Send {}
 impl<T: FAsyncRead + FAsyncWrite + Unpin + Send> AsyncIo for T {}
+use anyhow::Result;
 
 use libp2p::{
     autonat::v2,
@@ -177,26 +178,50 @@ pub struct FileMetadata {
     pub merkle_root: String,
     pub file_name: String,
     pub file_size: u64,
+    #[serde(skip)]
     pub file_data: Vec<u8>, // holds the actual file data
     pub seeders: Vec<String>,
     pub created_at: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
     /// Whether the file is encrypted
     pub is_encrypted: bool,
     /// The encryption method used (e.g., "AES-256-GCM")
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub encryption_method: Option<String>,
     /// Fingerprint of the encryption key for identification.
     /// This is now deprecated in favor of the merkle_root.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub key_fingerprint: Option<String>,
     // --- VERSIONING FIELDS ---
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     /// The root CID(s) for retrieving the file from Bitswap. Usually one.
     pub cids: Option<Vec<Cid>>,
     /// For encrypted files, this contains the encrypted AES key and other info.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub encrypted_key_bundle: Option<crate::encryption::EncryptedAesKeyBundle>,
+    #[serde(skip_serializing_if = "Option::is_none")] 
+    pub ftp_sources: Option<Vec<FtpSourceInfo>>,
     pub is_root: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub download_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FtpSourceInfo {
+    pub url: String, // e.g., "ftp://ftp.example.com/path/to/file" or "ftp://user@host/path"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    // Store an encrypted password, if one is provided.
+    // This string would be the Base64-encoded result of:
+    // AES-GCM-SIV(key: file_aes_key, plaintext: ftp_password)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encrypted_password: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -5395,6 +5420,7 @@ impl DhtService {
             cids: None,
             is_root,
             download_path: None,
+            ftp_sources: None,
         })
     }
 

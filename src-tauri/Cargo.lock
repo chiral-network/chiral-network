@@ -1058,6 +1058,7 @@ version = "0.1.0"
 dependencies = [
  "aes",
  "aes-gcm",
+ "anyhow",
  "async-std",
  "async-trait",
  "base64 0.21.7",
