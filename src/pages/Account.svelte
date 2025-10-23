@@ -141,12 +141,13 @@
   $: if ($etcAccount && isGethRunning) {
     fetchBalance()
   }
-  // Add this reactive statement after your other reactive statements (around line 170)
+  // Filter transactions to show only those related to current account
   $: if ($etcAccount) {
-    const accountTransactions = $transactions.filter(tx => 
-      tx.from === 'Mining reward' || 
+    const accountTransactions = $transactions.filter(tx =>
+      // Mining rewards
+      tx.from === 'Mining reward' ||
       tx.description?.toLowerCase().includes('block reward') ||
-      tx.description === tr('transactions.manual') ||
+      // Transactions to/from this account
       tx.to?.toLowerCase() === $etcAccount.address.toLowerCase() ||
       tx.from?.toLowerCase() === $etcAccount.address.toLowerCase()
     );
@@ -503,8 +504,9 @@
     await loadKeystoreAccountsList();
 
     if ($etcAccount && isGethRunning) {
-      await walletService.refreshBalance();
+      // IMPORTANT: refreshTransactions must run BEFORE refreshBalance
       await walletService.refreshTransactions();
+      await walletService.refreshBalance();
     }
   })
 
