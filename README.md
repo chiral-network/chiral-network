@@ -35,11 +35,13 @@ npm run tauri:build
 ## 📚 Documentation
 
 ### Getting Started
+
 - **[User Guide](docs/user-guide.md)** - Complete guide for end users
 - **[Developer Setup](docs/developer-setup.md)** - Development environment setup
 - **[System Overview](docs/system-overview.md)** - Introduction and core concepts
 
 ### Development
+
 - **[Implementation Guide](docs/implementation-guide.md)** - Development workflows
 - **[Contributing Guide](docs/contributing.md)** - How to contribute
 - **[Deployment Guide](docs/deployment-guide.md)** - Production deployment
@@ -51,6 +53,7 @@ npm run tauri:build
 ## 🤝 Contributing
 
 We welcome contributions! Please read our [Contributing Guide](docs/contributing.md) for:
+
 - Code of conduct
 - Development workflow
 - Code style guidelines
@@ -63,16 +66,19 @@ See our [Roadmap](docs/roadmap.md) for planned features and development phases.
 ### Common Issues
 
 **Can't connect to network?**
+
 - Check firewall settings
 - Verify DHT status in Network page
 - Try restarting the application
 
 **Files not downloading?**
+
 - Verify file hash is correct
 - Check if seeders are online
 - Review bandwidth limits in Settings
 
 **Mining not starting?**
+
 - Ensure Geth is initialized
 - Check system resources
 - Verify mining address is set
@@ -86,7 +92,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 📞 Support
 
 - **Documentation**: [docs/](docs/index.md)
-- **Issues**: [GitHub Issues](https://github.com/Aery1e/chiral-network/issues)
+- **Issues**: [GitHub Issues](https://github.com/chiral-network/chiral-network/issues)
 - **Discussions**: [Zulip](https://brooknet.zulipchat.com/join/f3jj4k2okvlfpu5vykz5kkk5/)
 
 ## ⚠️ Disclaimer
@@ -97,4 +103,4 @@ Chiral Network is designed for legitimate file storage and sharing. Users are re
 
 **Built with ❤️ for a decentralized, privacy-focused future**
 
-[Documentation](docs/index.md) • [Contributing](docs/contributing.md) • [License](LICENSE) • [GitHub](https://github.com/Aery1e/chiral-network)
+[Documentation](docs/index.md) • [Contributing](docs/contributing.md) • [License](LICENSE) • [GitHub](https://github.com/chiral-network/chiral-network)

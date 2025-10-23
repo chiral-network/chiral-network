@@ -69,7 +69,7 @@ choco install nodejs rust visualstudio2022-workload-vctools
 ## Clone Repository
 
 ```bash
-git clone https://github.com/Aery1e/chiral-network.git
+git clone https://github.com/chiral-network/chiral-network.git
 cd chiral-network
 ```
 
@@ -429,7 +429,7 @@ npm install
 
 ### Getting Help
 
-- Check [GitHub Issues](https://github.com/Aery1e/chiral-network/issues)
+- Check [GitHub Issues](https://github.com/chiral-network/chiral-network/issues)
 - Review [Tauri Documentation](https://tauri.app/v1/guides/)
 - Read [Svelte Documentation](https://svelte.dev/docs)
 - Join community on Zulip

@@ -13,20 +13,21 @@ Build a fully decentralized peer-to-peer file sharing platform that prioritizes 
 **Goal**: Establish basic UI and application structure
 
 **Completed Features**:
+
 - ✅ Modern desktop interface (Svelte 5 + Tauri 2)
 - ✅ Real-time file management dashboard
 - ✅ Network monitoring & peer discovery
 - ✅ Analytics dashboard with real metrics
 - ✅ Comprehensive settings management
 
-**Timeline**: W1-W4
----
+## **Timeline**: W1-W4
 
 ### Phase 2: P2P Network Infrastructure ✅ COMPLETED
 
 **Goal**: Implement production-ready P2P networking
 
 **Completed Features**:
+
 - ✅ Full libp2p v0.54 integration
 - ✅ Kademlia DHT integration
 - ✅ CPU mining with Geth integration
@@ -40,6 +41,7 @@ Build a fully decentralized peer-to-peer file sharing platform that prioritizes 
 **Goal**: Complete essential file sharing functionality
 
 **In Progress**:
+
 - Chunk transfer protocol
 - Support for multiple protocols, such as http, ftp, bittorrent, ed2k, etc.
 - Reputation system with trust levels
@@ -83,6 +85,7 @@ We welcome community input on our roadmap! Here's how to contribute:
 ### What We Won't Add For Now (Before core features are working and stable)
 
 **Commercial & Piracy-Enabling Features**:
+
 - Centralized market servers
 - Global file search/discovery (piracy risk)
 - Price/payment systems
@@ -92,10 +95,12 @@ We welcome community input on our roadmap! Here's how to contribute:
 - Marketplace or trading platforms
 
 **The Proxy Feature**:
+
 - Proxy service provider for peers to support for web traffic
 - Traffic mixing/onion routing
 
 **Privacy in File Sharing**
+
 - File encryption (protect file content)
 - Anonymous mode (hide IP during P2P file transfers only)
 
@@ -111,7 +116,6 @@ Want to help shape the future of Chiral Network?
 
 ## Roadmap Updates
 
-**Last Updated**: October 2024
----
+## **Last Updated**: October 2025
 
 [Back to Documentation Index](index.md)
