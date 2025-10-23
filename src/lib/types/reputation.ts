@@ -7,6 +7,7 @@ export interface PeerReputation {
   lastSeen: Date;
   reputationHistory: ReputationEvent[];
   metrics: PeerMetrics;
+  blockchainReputation?: BlockchainReputationData;
 }
 
 export enum TrustLevel {
@@ -84,4 +85,40 @@ export interface ReputationEventData {
   timestamp: number;
   data: Record<string, any>;
   impact: number;
+}
+
+// Blockchain reputation types
+export interface BlockchainReputationData {
+  score: number;
+  verified: boolean;
+  lastVerified: Date;
+  epochCount: number;
+  totalEvents: number;
+  recentEpochs: BlockchainReputationEpoch[];
+  verificationStatus: VerificationStatus;
+}
+
+export interface BlockchainReputationEpoch {
+  epochId: number;
+  merkleRoot: string;
+  timestamp: number;
+  blockNumber?: number;
+  eventCount: number;
+  verified: boolean;
+  submitter: string;
+}
+
+export enum VerificationStatus {
+  Verified = 'Verified',
+  Pending = 'Pending',
+  Failed = 'Failed',
+  NotAvailable = 'Not Available'
+}
+
+export interface BlockchainReputationAnalytics {
+  totalVerifiedPeers: number;
+  averageBlockchainScore: number;
+  recentEpochs: BlockchainReputationEpoch[];
+  verificationSuccessRate: number;
+  blockchainConnectivityStatus: 'Connected' | 'Disconnected' | 'Error';
 }

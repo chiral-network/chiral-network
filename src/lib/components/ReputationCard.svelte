@@ -2,8 +2,10 @@
   import { TrustLevel, type PeerReputation } from '$lib/types/reputation';
   import Badge from '$lib/components/ui/badge.svelte';
   import Card from '$lib/components/ui/card.svelte';
+  import BlockchainReputationCard from './BlockchainReputationCard.svelte';
 
   export let peer: PeerReputation;
+  export let showBlockchainReputation = true;
 
   // Trust level colors
   const getTrustLevelColor = (level: TrustLevel): string => {
@@ -157,4 +159,11 @@
       </div>
     </div>
   </div>
+
+  <!-- Blockchain Reputation Section -->
+  {#if showBlockchainReputation && peer.blockchainReputation}
+    <div class="mt-4 pt-4 border-t border-gray-200">
+      <BlockchainReputationCard blockchainReputation={peer.blockchainReputation} />
+    </div>
+  {/if}
 </Card>

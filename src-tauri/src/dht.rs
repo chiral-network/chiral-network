@@ -83,6 +83,7 @@ use futures::{AsyncReadExt as _, AsyncWriteExt as _};
 use futures_util::StreamExt;
 use libp2p::multiaddr::Protocol;
 pub use multihash_codetable::{Code, MultihashDigest};
+use crate::reputation::ReputationSystem;
 use relay::client::Event as RelayClientEvent;
 use rs_merkle::{Hasher, MerkleTree};
 use serde::{Deserialize, Serialize};
@@ -4545,6 +4546,7 @@ pub struct DhtService {
     search_counter: Arc<AtomicU64>,
     proxy_mgr: ProxyMgr,
     peer_selection: Arc<Mutex<PeerSelectionService>>,
+    reputation_system: Option<Arc<tokio::sync::Mutex<ReputationSystem>>>,
     file_metadata_cache: Arc<Mutex<HashMap<String, FileMetadata>>>,
     received_chunks: Arc<Mutex<HashMap<String, HashMap<u32, FileChunk>>>>,
     file_transfer_service: Option<Arc<FileTransferService>>,
@@ -5139,6 +5141,7 @@ impl DhtService {
             search_counter,
             proxy_mgr,
             peer_selection,
+            reputation_system: None,
             file_metadata_cache: Arc::new(Mutex::new(HashMap::new())),
             received_chunks: received_chunks_clone,
             file_transfer_service,

@@ -1,66 +1,28 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';
-  import { TrustLevel, type PeerReputation, type ReputationAnalytics } from '$lib/types/reputation';
+  import { TrustLevel, type PeerReputation, type ReputationAnalytics, type BlockchainReputationAnalytics } from '$lib/types/reputation';
   import ReputationCard from '$lib/components/ReputationCard.svelte';
   import ReputationAnalyticsComponent from '$lib/components/ReputationAnalytics.svelte';
-  import RelayReputationLeaderboard from '$lib/components/RelayReputationLeaderboard.svelte';
+  import BlockchainReputationAnalyticsComponent from '$lib/components/BlockchainReputationAnalytics.svelte';
   import Card from '$lib/components/ui/card.svelte';
   import Button from '$lib/components/ui/button.svelte';
   import PeerSelectionService, { type PeerMetrics as BackendPeerMetrics } from '$lib/services/peerSelectionService';
+  import { BlockchainReputationService } from '$lib/services/blockchainReputationService';
   import { invoke } from '@tauri-apps/api/core';
-  import { debounce } from '$lib/utils/debounce';
-
-  // LocalStorage keys for persisted UI state
-  const STORAGE_KEY_SHOW_ANALYTICS = 'chiral.reputation.showAnalytics';
-  const STORAGE_KEY_SHOW_RELAY_LEADERBOARD = 'chiral.reputation.showRelayLeaderboard';
-
-  // Load persisted UI toggles from localStorage
-  function loadPersistedToggles() {
-    if (typeof window === 'undefined') return { showAnalytics: true, showRelayLeaderboard: true };
-    
-    try {
-      const storedAnalytics = window.localStorage.getItem(STORAGE_KEY_SHOW_ANALYTICS);
-      const storedLeaderboard = window.localStorage.getItem(STORAGE_KEY_SHOW_RELAY_LEADERBOARD);
-      
-      return {
-        showAnalytics: storedAnalytics !== null ? storedAnalytics === 'true' : true,
-        showRelayLeaderboard: storedLeaderboard !== null ? storedLeaderboard === 'true' : true
-      };
-    } catch (e) {
-      console.warn('Failed to load persisted UI toggles:', e);
-      return { showAnalytics: true, showRelayLeaderboard: true };
-    }
-  }
-
-  // Persist UI toggle to localStorage
-  function persistToggle(key: string, value: boolean) {
-    if (typeof window === 'undefined') return;
-    
-    try {
-      window.localStorage.setItem(key, String(value));
-    } catch (e) {
-      console.warn('Failed to persist UI toggle:', e);
-    }
-  }
-
-  const persistedToggles = loadPersistedToggles();
 
   // State
   let peers: PeerReputation[] = [];
   let analytics: ReputationAnalytics;
+  let blockchainAnalytics: BlockchainReputationAnalytics;
   let sortBy: 'score' | 'interactions' | 'lastSeen' = 'score';
   let searchQuery = '';
-  let debouncedSearchQuery = ''; // Debounced version for filtering
   let isLoading = true;
-  let showAnalytics = persistedToggles.showAnalytics;
-  let showRelayLeaderboard = persistedToggles.showRelayLeaderboard;
+  let showAnalytics = true;
+  let showBlockchainAnalytics = true;
+  let showBlockchainReputation = true;
   let currentPage = 1;
   const peersPerPage = 8;
-
-  // Node's own relay reputation
-  let myPeerId: string | null = null;
-  let myRelayStats: any = null;
 
   // Filter states
   let isFilterOpen = false;
@@ -72,29 +34,6 @@
   let pendingSelectedTrustLevels: TrustLevel[] = [];
   let pendingFilterEncryptionSupported: boolean | null = null;
   let pendingMinUptime = 0;
-
-  // Previous filter/sort values for detecting actual changes
-  let prevSelectedTrustLevels: TrustLevel[] = [];
-  let prevFilterEncryptionSupported: boolean | null = null;
-  let prevMinUptime = 0;
-  let prevSortBy: 'score' | 'interactions' | 'lastSeen' = 'score';
-
-  // Debounced search handler
-  const updateDebouncedSearch = debounce((query: string) => {
-    debouncedSearchQuery = query;
-  }, 300);
-
-  // Watch search query and update debounced version
-  $: updateDebouncedSearch(searchQuery);
-
-  // Persist UI toggles when they change
-  $: {
-    persistToggle(STORAGE_KEY_SHOW_ANALYTICS, showAnalytics);
-  }
-  
-  $: {
-    persistToggle(STORAGE_KEY_SHOW_RELAY_LEADERBOARD, showRelayLeaderboard);
-  }
 
   function openFilters() {
     // Sync pending state with applied state when opening
@@ -115,13 +54,6 @@
     pendingSelectedTrustLevels = [];
     pendingFilterEncryptionSupported = null;
     pendingMinUptime = 0;
-  }
-
-  // Close filter dropdown on escape key
-  function handleKeydown(event: KeyboardEvent) {
-    if (event.key === 'Escape' && isFilterOpen) {
-      isFilterOpen = false;
-    }
   }
 
   // Action to detect clicks outside an element
@@ -180,7 +112,8 @@
             storageOffered: 0,
             filesShared: 0,
             encryptionSupported: !!m.encryption_support
-          }
+          },
+          blockchainReputation: BlockchainReputationService.createMockBlockchainReputationData(m.peer_id)
         };
       });
 
@@ -204,6 +137,9 @@
       };
 
       peers = mappedPeers;
+
+      // Load blockchain analytics
+      blockchainAnalytics = BlockchainReputationService.createMockBlockchainReputationAnalytics();
     } catch (e) {
       console.error('Failed to load peer metrics', e);
       peers = [];
@@ -220,6 +156,13 @@
           [TrustLevel.Low]: 0,
           [TrustLevel.Unknown]: 0,
         },
+      };
+      blockchainAnalytics = {
+        totalVerifiedPeers: 0,
+        averageBlockchainScore: 0,
+        recentEpochs: [],
+        verificationSuccessRate: 0,
+        blockchainConnectivityStatus: 'Disconnected'
       };
     }
   }
@@ -240,39 +183,11 @@
     }
   }
 
-  // Load node's own relay reputation
-  async function loadMyRelayStats() {
-    try {
-      // Get our peer ID
-      myPeerId = await invoke<string>('get_dht_peer_id');
-      if (!myPeerId) return;
-
-      // Get relay reputation stats
-      const stats = await invoke<any>('get_relay_reputation_stats', { limit: 1000 });
-
-      // Find our node in the stats
-      if (stats && stats.top_relays) {
-        const myIndex = stats.top_relays.findIndex((r: any) => r.peer_id === myPeerId);
-        if (myIndex !== -1) {
-          myRelayStats = {
-            ...stats.top_relays[myIndex],
-            rank: myIndex + 1,
-            totalRelays: stats.total_relays
-          };
-        }
-      }
-    } catch (e) {
-      console.debug('Failed to load my relay stats:', e);
-      myPeerId = null;
-      myRelayStats = null;
-    }
-  }
-
   // Filter and sort peers
   $: filteredPeers = peers
     .filter(peer => {
       const matchesTrustLevel = selectedTrustLevels.length === 0 || selectedTrustLevels.includes(peer.trustLevel);
-      const matchesSearch = debouncedSearchQuery === '' || peer.peerId.toLowerCase().includes(debouncedSearchQuery.toLowerCase());
+      const matchesSearch = searchQuery === '' || peer.peerId.toLowerCase().includes(searchQuery.toLowerCase());
       const matchesEncryption = filterEncryptionSupported === null || peer.metrics.encryptionSupported === filterEncryptionSupported;
       const matchesUptime = peer.metrics.uptime >= minUptime;
 
@@ -298,52 +213,26 @@
     currentPage = totalPages;
   }
 
-  // Reset to page 1 only when filters or sort ACTUALLY change (not on every reactive update)
-  $: {
-    const filtersChanged = 
-      JSON.stringify(selectedTrustLevels) !== JSON.stringify(prevSelectedTrustLevels) ||
-      filterEncryptionSupported !== prevFilterEncryptionSupported ||
-      minUptime !== prevMinUptime ||
-      sortBy !== prevSortBy ||
-      debouncedSearchQuery !== (prevDebouncedSearchQuery || '');
-    
-    if (filtersChanged) {
-      currentPage = 1;
-      prevSelectedTrustLevels = [...selectedTrustLevels];
-      prevFilterEncryptionSupported = filterEncryptionSupported;
-      prevMinUptime = minUptime;
-      prevSortBy = sortBy;
-      prevDebouncedSearchQuery = debouncedSearchQuery;
-    }
+  // Reset to page 1 when filters or search change
+  $: if (searchQuery || selectedTrustLevels || filterEncryptionSupported || minUptime || sortBy) {
+    currentPage = 1;
   }
-
-  // Track previous debounced search for comparison
-  let prevDebouncedSearchQuery = '';
 
   onMount(() => {
     loadPeersFromBackend();
-    loadMyRelayStats();
     // Best-effort latency probe and follow-up refresh
     probePeerLatencies();
     // Refresh after a short delay to pick up new latency
-    setTimeout(() => { loadPeersFromBackend(); loadMyRelayStats(); }, 1500);
+    setTimeout(() => { loadPeersFromBackend(); }, 1500);
     // Periodic refresh to keep data live
-    const interval = setInterval(() => { loadPeersFromBackend(); loadMyRelayStats(); }, 10000);
-    
-    // Add escape key listener
-    window.addEventListener('keydown', handleKeydown);
-    
+    const interval = setInterval(() => { loadPeersFromBackend(); }, 10000);
     isLoading = false;
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener('keydown', handleKeydown);
-    };
+    return () => clearInterval(interval);
   });
 
   async function refreshData() {
     isLoading = true;
     await loadPeersFromBackend();
-    await loadMyRelayStats();
     isLoading = false;
   }
 </script>
@@ -367,9 +256,12 @@
           <Button on:click={() => showAnalytics = !showAnalytics} variant="outline" class="w-full sm:w-auto">
             {showAnalytics ? $t('reputation.hideAnalytics') : $t('reputation.showAnalytics')}
           </Button>
-          <Button on:click={() => showRelayLeaderboard = !showRelayLeaderboard} variant="outline" class="w-full sm:w-auto">
-            {showRelayLeaderboard ? 'Hide Relay Leaderboard' : 'Show Relay Leaderboard'}
-          </Button>
+  <Button on:click={() => showBlockchainAnalytics = !showBlockchainAnalytics} variant="outline" class="w-full sm:w-auto">
+    {showBlockchainAnalytics ? 'Hide Blockchain Analytics' : 'Show Blockchain Analytics'}
+  </Button>
+  <Button on:click={() => showBlockchainReputation = !showBlockchainReputation} variant="outline" class="w-full sm:w-auto">
+    {showBlockchainReputation ? 'Hide Blockchain Reputation' : 'Show Blockchain Reputation'}
+  </Button>
         </div>
       </div>
     </div>
@@ -390,46 +282,10 @@
         </div>
       {/if}
 
-      <!-- My Relay Status (if running as a relay) -->
-      {#if myRelayStats}
-        <Card class="p-6 mb-8 bg-gradient-to-r from-blue-50 to-purple-50 border-2 border-blue-200">
-          <div class="flex items-start justify-between">
-            <div class="flex-1">
-              <div class="flex items-center gap-3 mb-4">
-                <span class="text-3xl">⚡</span>
-                <div>
-                  <h3 class="text-xl font-bold text-gray-900">Your Relay Reputation</h3>
-                  <p class="text-sm text-gray-600">Your node is running as a relay server</p>
-                </div>
-              </div>
-
-              <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div class="bg-white rounded-lg p-4 shadow-sm">
-                  <div class="text-2xl font-bold text-blue-600">#{myRelayStats.rank}</div>
-                  <div class="text-xs text-gray-600">Rank of {myRelayStats.totalRelays}</div>
-                </div>
-                <div class="bg-white rounded-lg p-4 shadow-sm">
-                  <div class="text-2xl font-bold text-purple-600">{myRelayStats.reputation_score.toFixed(0)}</div>
-                  <div class="text-xs text-gray-600">Reputation Score</div>
-                </div>
-                <div class="bg-white rounded-lg p-4 shadow-sm">
-                  <div class="text-2xl font-bold text-green-600">{myRelayStats.circuits_successful}</div>
-                  <div class="text-xs text-gray-600">Successful Circuits</div>
-                </div>
-                <div class="bg-white rounded-lg p-4 shadow-sm">
-                  <div class="text-2xl font-bold text-orange-600">{myRelayStats.reservations_accepted}</div>
-                  <div class="text-xs text-gray-600">Reservations</div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </Card>
-      {/if}
-
-      <!-- Relay Reputation Leaderboard -->
-      {#if showRelayLeaderboard}
+      <!-- Blockchain Analytics Section -->
+      {#if showBlockchainAnalytics && blockchainAnalytics}
         <div class="mb-8">
-          <RelayReputationLeaderboard />
+          <BlockchainReputationAnalyticsComponent analytics={blockchainAnalytics} />
         </div>
       {/if}
 
@@ -537,7 +393,7 @@
       {:else}
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
           {#each paginatedPeers as peer (peer.peerId)}
-            <ReputationCard {peer} />
+            <ReputationCard {peer} {showBlockchainReputation} />
           {/each}
         </div>
 
