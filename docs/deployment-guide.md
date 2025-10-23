@@ -804,8 +804,8 @@ chiral-node --fork-block 12345 --override
 
 ### Documentation
 
-- Deployment Docs: https://github.com/chiral-network/chiral-network/blob/main/docs/08-deployment-guide.md
-- API Reference:   https://github.com/chiral-network/chiral-network/blob/main/docs/05-api-documentation.md
+- Deployment Docs: https://github.com/chiral-network/chiral-network/blob/main/docs/deployment-guide.md
+- API Reference: https://github.com/chiral-network/chiral-network/blob/main/docs/api-documentation.md
 - Troubleshooting: N/A
 
 ### Community Support

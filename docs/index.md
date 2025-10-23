@@ -5,21 +5,25 @@ Welcome to the Chiral Network documentation. This directory contains comprehensi
 ## Documentation Index
 
 ### Getting Started
+
 - [System Overview](system-overview.md) - Introduction to Chiral Network, core concepts, and design philosophy
 - [Architecture](architecture.md) - System architecture, component design, and interaction patterns
 
 ### Technical Documentation
+
 - [Technical Specifications](technical-specifications.md) - Detailed technical specs, protocols, and data structures
 - [Network Protocol](network-protocol.md) - P2P networking, DHT, NAT traversal, and relay infrastructure
 - [API Documentation](api-documentation.md) - Service APIs and integration guides
 - [Tauri Command Reference](tauri-commands.md) - Desktop invoke commands and local services
 
 ### Implementation & Deployment
+
 - [Implementation Guide](implementation-guide.md) - Development workflows, coding standards, and best practices
 - [Deployment Guide](deployment-guide.md) - Installation, configuration, and production deployment
 - [Security & Privacy](security-privacy.md) - Security features, privacy mechanisms, and threat model
 
 ### Feature Documentation
+
 - [NAT Traversal & Relay](nat-traversal.md) - AutoNAT v2, Circuit Relay v2, and connectivity solutions
 - [File Sharing](file-sharing.md) - Upload/download workflows, encryption, and versioning
 - [Reputation System](reputation.md) - Peer reputation, trust levels, and analytics
@@ -27,19 +31,21 @@ Welcome to the Chiral Network documentation. This directory contains comprehensi
 - [Internationalization](i18n.md) - Multi-language support and translation guide
 
 ### Guides & Tutorials
+
 - [User Guide](user-guide.md) - End-user instructions for common tasks
 - [Developer Setup](developer-setup.md) - Environment setup and development tools
 - [Contributing Guide](contributing.md) - How to contribute to Chiral Network
 - [Roadmap](roadmap.md) - Project roadmap and future development plans
 
 ### Special Topics
+
 - [Proxy Self-Test](PROXY_SELF_TEST.md) - Proxy functionality testing guide
 
 ## Quick Links
 
 - [Main README](../README.md) - Project overview and quick start
 - [CLAUDE.md](../CLAUDE.md) - AI assistant development guide
-- [GitHub Repository](https://github.com/Aery1e/chiral-network)
+- [GitHub Repository](https://github.com/chiral-network/chiral-network)
 
 ## Documentation Conventions
 
@@ -51,6 +57,7 @@ Welcome to the Chiral Network documentation. This directory contains comprehensi
 ## Need Help?
 
 If you can't find what you're looking for:
+
 1. Check the [System Overview](system-overview.md) for basic concepts
 2. Review the [Implementation Guide](implementation-guide.md) for development tasks
 3. See [API Documentation](api-documentation.md) for technical details
@@ -58,4 +65,4 @@ If you can't find what you're looking for:
 
 ---
 
-*Last Updated: October 2024*
+_Last Updated: October 2024_
