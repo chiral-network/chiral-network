@@ -1,117 +1,415 @@
-# File Pricing & Upload Payment System
+# **File Sharing & Payment System Guide**
+Chiral Network implements a BitTorrent-like file sharing model with instant seeding and DHT-based discovery.
+## **Purpose**
+- Facilitate peer-to-peer file sharing incentivized by **Chiral token** exchange.
+- Automatically price files using a **global Chiral-to-MB value** or a **hash-power-based dynamic rate**.
+- Provide a consistent protocol for **upload, download, and micropayment flows**.
+- Ensure seamless integration between:
+  - **Frontend**: pricing display, validation, and payment UX,
+  - **Backend**: payment services, wallet handling, and transaction logging,
+  - **Network layers**: DHT discovery, seeding, and transport protocols.
+- Maintain modular separation between **data transmission** and **payment verification**.
 
-## Purpose:
-- In a peer to peer network, file sharing is facilitated by the exchange of Chiral to incentivize downloading and uploading files
-- Attach a price to each uploaded file so the network components can enforce payments for downloads or other interactions.
-- Ensure the frontend can compute a sensible price, present/confirm it to the user, and pass it to back-end upload/publish flows.
-- Provide a clear backend contract so the native/Tauri service and DHT/publish layers can persist and use price metadata.
-- Data transmission and payment of files are decoupled and independent
+---
 
+## **Overview**
+- The Chiral Network implements a **BitTorrent-like file sharing model** with DHT-based peer discovery and instant seeding.
+- Each uploaded file has an **associated price**, automatically computed using a **global Chiral-to-MB exchange rate**.
+- The default conversion is **1 MB = 0.001 Chiral**.
+- No manual price entry is required per upload — prices derive automatically from:
+  - The **current global Chiral value**, or
+  - A **dynamic rate** calculated from **network hash power**, reflecting mining difficulty.
+- Files shared on Chiral Network are:
+    - Instantly available when added (no upload process)
+    - Identified by cryptographic hashes (SHA-256)
+    - Discoverable through the DHT network
+    - Optionally encrypted with AES-256-GCM
+    - Versioned for update tracking
 
+### Basic File Sharing
 
-## Overview:
-- Currently, Chiral Network implements a BitTorrent-like file sharing model with instant seeding and DHT-based discovery.
-- Every uploaded file is associated with a price that is calculated automatically based on its file size. There is no manual updating of the file’s price.
-- Prices are calculated on a per-MB rate (0.001 Chiral per MB)
+1. **Navigate to Upload Page** (Shared Files)
+2. **Add Files** using one of these methods:
+   - Click "Add Files" button
+   - Drag & drop files onto the card
+   - Drag files anywhere on the page
+3. **Files are processed immediately**:
+   - Content hash generated (SHA-256)
+   - Metadata published to DHT
+   - File immediately available for download by peers
 
+### File Encryption
 
-## How it Works:
-1. Suppose Node A wants to download ‘file.txt’ that is currently being seeded by Node B.
-2. Node A joins the network and establishes connections via handshakes to nearby peer nodes on the network. (DHT Discovery)
-3. Node A queries the DHT to find who is seeding this file and the DHT returns a file metadata object that contains the list of the seeders.
-4. Node A queries the file hash to find the file and establishes a direct connection with Node B to facilitate the transaction. 
-- If Node A has insufficient Chiral to download the file, Node A is gated from being able to download the file. 
-- If Node A has sufficient Chiral to download the file, Node A can successfully download the file using either WebRTC or BitSwap Protocols
-5. Given Node A has sufficient Chiral to request downloading the file which costs N Chiral, N Chiral will be deducted from Node A’s balance and N Chiral will be added to Node B’s balance
-6. Transactions will be logged in both the uploader and downloader’s transaction history
+Files can be encrypted before sharing:
 
+1. **Enable encryption** in file upload dialog
+2. **Share the file hash** with authorized users
+3. **Share the encryption key** securely (out-of-band)
 
+**Encryption Features**:
+- AES-256-GCM encryption with PBKDF2 key derivation
+- Key fingerprinting for verification
+- Recipient public key support
+- Manifest-based chunk tracking
+- Encrypted chunk transfers via WebRTC
 
-Payment Processing Flow Diagram:
-[![image1.png](https://i.postimg.cc/5y3z8zKd/image1.png)](https://postimg.cc/V0J58JcD)
+### File Versioning
 
-File Upload Process:
-[![image2.png](https://i.postimg.cc/Xq8595Ht/image2.png)](https://postimg.cc/K31421y5)
+Chiral Network supports file versioning:
 
-File Discovery & Balance Check:
-[![image3.png](https://i.postimg.cc/ZncN6N72/image3.png)](https://postimg.cc/hQXhBXq1)
+1. **Upload a file** normally
+2. **Upload updated version** with same base name
+3. **System tracks versions** automatically
+4. **Users can choose** which version to download
 
-Download & Payment Process:
-[![image4.png](https://i.postimg.cc/PJ4D1DVG/image4.png)](https://postimg.cc/fSVkNVh5)
+## Downloading Files
 
-Seeder Payment Reception:
-[![image5.png](https://i.postimg.cc/gjDh3hST/image5.png)](https://postimg.cc/7J5bk5y3)
+### Basic Download
 
-General File Payment Flow Diagram:
-[![image6.png](https://i.postimg.cc/8cHvLvKX/image6.png)](https://postimg.cc/648TX8NC)
+1. **Navigate to Download Page**
+2. **Enter file hash** received from peer
+3. **Click "Search & Download"**
+4. **System will**:
+   - Query DHT for file metadata
+   - Discover seeders
+   - Display peer selection modal
+5. **Select peers** to download from
+6. **Monitor progress** in download queue
 
-High Level Overview of Steps:
-[![image7.png](https://i.postimg.cc/kGcSWS11/image7.png)](https://postimg.cc/CnRdgRVk)
-[![image8.png](https://i.postimg.cc/gjDh3hSM/image8.png)](https://postimg.cc/bSZdhZjb)
-[![image9.png](https://i.postimg.cc/D0gG1Gjx/image9.png)](https://postimg.cc/RJWqBWzt)
-[![image10.png](https://i.postimg.cc/SRr9c9TD/image10.png)](https://postimg.cc/BPjt0jGK)
+### Multi-Source Downloads
 
+Chiral Network supports downloading from multiple peers simultaneously:
 
-## File Pricing and Metadata:
+- **Parallel chunk downloads** from different peers
+- **Intelligent peer selection** based on reputation
+- **Bandwidth aggregation** for faster transfers
+- **Automatic failover** if peers disconnect
+- **Chunk verification** using merkle tree
 
-FileMetadata: Each file has an associated metadata published to the DHT when it is uploaded
-```{
-    fileHash: string          // SHA-256 content hash
-    fileName: string          // Original filename
-    fileSize: number          // Size in bytes
-    seeders: string[]         // List of seeder peer IDs
-    createdAt: number         // Unix timestamp
-    merkleRoot?: string       // Merkle tree root for chunks
-    mimeType?: string         // File MIME type
-    isEncrypted: boolean      // Encryption flag
-    encryptionMethod?: string // Encryption algorithm
-    keyFingerprint?: string   // Key verification
-    version?: number          // File version number
-    cids?: string[]           // Content IDs for chunks
-    price: number		    // The price in Chiral for the file
-    uploader_address: string  // The peer address of the uploader of the file
+### Download Queue Management
+
+**Priority Levels**:
+- High: Download immediately
+- Normal: Queue normally
+- Low: Download when bandwidth available
+
+**Queue Controls**:
+- Pause/Resume individual downloads
+- Cancel downloads
+- Reorder queue
+- Set concurrent download limit (1-10)
+
+## File Discovery
+
+### Hash-Based Discovery
+
+Files are discovered using their content hash:
+
+1. **Obtain file hash** from peer (out-of-band)
+2. **Search using hash** in Download page
+3. **DHT returns**:
+   - File metadata (name, size, type, price)
+   - List of seeders
+   - Encryption status
+   - Version information
+
+### Search History
+
+The application maintains search history:
+- **Recent searches** saved locally
+- **Quick re-download** from history
+- **Seeder count** updated in real-time
+- **Filter by status** (available, unavailable)
+
+## **System Overview Diagram**
+
+```mermaid
+sequenceDiagram
+    participant A as Downloader
+    participant DHT
+    participant B as Seeder
+    participant ETH 
+
+    A->>DHT: Query file hash (metadata request)
+    DHT-->>A: Return seeders + price info
+    A->>B: Initiate file handshake
+    A->>ETH: Verify wallet balance
+    ETH-->>A: Balance confirmation
+    A->>B: Begin download
+
+    loop Pay-per-MB transfer
+        A->>ETH: Send microtransaction
+        ETH-->>B: Credit Chiral tokens
+        B-->>A: Serve next MB segment
+    end
+
+    A-->>DHT: Log download transaction
+    B-->>DHT: Log payment receipt
+```
+
+- Price and uploader address fields are automatically populated on upload. The backend references the global pricing configuration to maintain consistent pricing across sessions and peers.
+
+### File Metadata:
+```typescript
+{
+  fileHash: string          // SHA-256 content hash
+  fileName: string          // Original filename
+  fileSize: number          // Size in bytes
+  seeders: string[]         // List of seeder peer IDs
+  createdAt: number         // Unix timestamp
+  merkleRoot?: string       // Merkle tree root for chunks
+  mimeType?: string         // File MIME type
+  isEncrypted: boolean      // Encryption flag
+  encryptionMethod?: string // Encryption algorithm
+  keyFingerprint?: string   // Key verification
+  version?: number          // File version number
+  cids?: string[]           // Content IDs for chunks
+  price: number             // price of file in Chiral
 }
 ```
-- Price and uploader_address fields are added to the FileMetadata struct
-- Given the fileSize in bytes, files prices are automatically calculated based on price-per-MB settings (0.001 Chiral per MB)
-- Uploader’s wallet address contains additional metadata for accurate and efficient payment routing
+## Seeding Behavior
 
-## Features:
+### Continuous Seeding
 
-### File Prices:
-- Price computation for files happens automatically after they are uploaded. Using the fileSize field which represents the amount of Bytes the file takes up, we convert this to MB to determine the amount of Chiral this file costs at the conversion rate of 0.001 Chiral per MB
-- File prices should persist in the backend. When a seeder uploads a file, the price of the file should be maintained and remain the same across multiple sessions
-- Secure transaction processing with Ethereum integration
+Files remain seeded as long as they're in your "Shared Files" list:
+
+- **No upload step**: Files immediately available
+- **Real-time seeder count**: Shows how many peers have the file
+- **Automatic DHT updates**: Metadata refreshed periodically
+- **Bandwidth control**: Configurable upload limits
+
+### Seed Management
+
+**Stop Seeding**:
+1. Go to Upload page
+2. Find file in list
+3. Click Remove/Delete
+4. File removed from DHT
+
+**Seed Statistics**:
+- Total upload bandwidth contributed
+- Number of peers served
+- Reputation earned from seeding
+
+## Advanced Features
+
+### Chunk-Based Transfers
+
+Large files are split into chunks:
+
+- **Configurable chunk size** (default 256 KB)
+- **Bitswap protocol** for efficient exchange
+- **Parallel chunk transfer** from multiple sources
+- **Integrity verification** per chunk
+- **Resume support** for interrupted transfers
+
+### Bandwidth Scheduling
+
+Control when files are seeded:
+
+1. **Navigate to Settings** → Bandwidth Scheduling
+2. **Create schedules** with:
+   - Time ranges (HH:MM format)
+   - Days of week
+   - Upload/download limits
+3. **Enable scheduling**
+4. **System applies limits** automatically
+
+### File Storage
+
+Files are stored locally:
+
+- **Default location**: `~/ChiralNetwork/Storage`
+- **Configurable path**: Change in Settings
+- **Storage limits**: Set maximum storage size
+- **Auto-cleanup**: Remove old files automatically
+
+## Best Practices
+
+### For Uploaders
+
+1. **Use encryption** for sensitive files
+2. **Verify file hashes** before sharing
+3. **Share complete files** (no partial uploads)
+4. **Keep seeding** to ensure availability
+5. **Monitor bandwidth** usage
+
+### For Downloaders
+
+1. **Verify file hashes** with sender
+2. **Check seeder count** before downloading
+3. **Select multiple sources** for faster downloads
+4. **Verify encryption** status
+5. **Scan files** before opening
+
+### Privacy Considerations
+
+1. **File hashes reveal content**: Use encryption for privacy
+2. **Seeding reveals IP**: Use proxy/relay for anonymity
+3. **Metadata is public**: DHT metadata visible to all peers
+4. **Consider file names**: Avoid revealing information
+
+## Troubleshooting
+
+### File Not Found
+- Verify file hash is correct
+- Check if seeders are online
+- Wait for DHT propagation (~30 seconds)
+- Try searching again later
+
+### Slow Downloads
+- Select more seeders
+- Check your download bandwidth limit
+- Verify seeders have good reputation
+- Enable multi-source downloads
+
+### Upload Not Working
+- Check DHT is connected
+- Verify file is not corrupted
+- Ensure storage path is writable
+- Check firewall settings
+
+# Global Pricing System
+
+Objective: Maintain a single global configuration for determining the Chiral-to-MB conversion, avoiding manual price setting for every file. 
+
+### Mechanisms
+
+1. Static Global Rate (Default)
+    - Conversion: 1 MB = 0.001 Chiral.
+    - Stored globally in the DHT or config service.
+    - Provides stability and simplicity.
+
+2. Dynamic Hash-Power-Based Rate: Adjusts pricing based on the network’s mining difficulty.
+```pricePerMB = (baseHashCost / avgHashPower) * normalizationFactor```
 
 
+# Download Control & Payment Enforcement Protocol
+### Mechanism
+##### During downloads:
+- Node B (seeder) serves file chunks through HTTP/WebRTC.
+- The protocol enforces payment checkpoints after specific data amounts are transmitted.
 
-### Payment Service (Backend):
-- Be able to fetch the current user’s wallet balance and update the balance as transactions are made
-- Ensure that the current user has enough Chiral before any transactions can occur
-- Execute and facilitate payment transaction across two connected peers ensuring that accurate additions and removals are made to each users’ wallet
-- Log payment details in the current user’s wallet and transaction history
-- Handle seeder and downloader payment receipts
+##### Example Control Logic:
+- Serve first 10 MB as initial handshake segment.
+- If no payment received after 10 MB → stop serving.
+- If payment received → continue serving.
+- Download resumes with incremental payments:
+   - 1 MB --> pay Chiral
+   - 2 MB --> pay Chiral
+   - 4 MB --> pay Chiral
+   - etc
 
-
-
-### Payment Service (Frontend):
-- Automatic payment calculation based on file size
-- Price Badges showing cost of files in Chiral tokens
-- Enhanced File cards showing transaction-related information
-- Balance checks and validations before downloads
-- Payment confirmation modals
-- Transaction changes recording and history in Account page
-- Live P2P Payment toasts and notifications between peers for successful and failed transactions and downloads
-
-## Areas for Improvement and TODOs:
-- Define clear rounding rules, to which decimal place do we show up to and do we round?
-- Adding unit and integration tests for price calculation and persistence
-- Handle edge cases such as for empty files
-- Audit logs: record who uploaded, price passed, timestamp and any changes to price for compliance.
-- Implement timeouts, transaction timeouts or invoices if process takes too long
-- Gas prices to be added to cost as a fee for initiating a transaction
-- File payments, upload and download not working correctly for Windows-Windows sharing
-- Implementation and documentation for when there are multiple seeders for the same file and handling payments for this scenario.
-- More specific details on price/payment specification (apis, message formats and etc.)
+##### Payment Options
 
 
+| Mode                     | Description                                        | Recommended For                                 |
+| ------------------------ | -------------------------------------------------- | ----------------------------------------------- 
+| **Exponential Scaling**  | Payments grow as trust builds (1→2→4→8 MB).        | Typical use case, balances risk and efficiency. |
+| **Full Upfront Payment** | Pay entire file price at once.                     | Trusted seeders or verified peers.              |
+
+Potential Protocol Message Specification:
+| Message Type        | Direction               | Description                                    |
+| ------------------- | ----------------------- | ---------------------------------------------- |
+| `PRICE_QUERY`       | Downloader → DHT        | Request global Chiral price and file rate      |
+| `PRICE_RESPONSE`    | DHT → Downloader        | Return computed price per MB                   |
+| `PAYMENT_INIT`      | Downloader → Seeder     | Initiate payment session                       |
+| `PAYMENT_ACK`       | Seeder → Downloader     | Confirm receipt of Chiral payment              |
+| `CHUNK_REQUEST`     | Downloader → Seeder     | Request data chunk (N MB)                      |
+| `CHUNK_DELIVER`     | Seeder → Downloader     | Serve chunk upon payment confirmation          |
+| `PAYMENT_FAILURE`   | Seeder → Downloader     | Stop serving due to missing or invalid payment |
+| `REPUTATION_UPDATE` | Seeder/Downloader → DHT | Submit peer trust rating                       |
+
+
+##### Payment Flow Protocol
+```mermaid
+sequenceDiagram
+  participant A as Downloader
+  participant B as Seeder
+  participant E as Ethereum
+
+  A->>B: PAYMENT_INIT (fileHash, MB_count)
+  B->>E: Create/verify payment channel
+  E-->>B: Channel ready
+  loop For each MB segment
+    A->>E: Send microtransaction
+    E-->>B: Credit Chiral balance
+    B-->>A: Send MB data
+    alt Payment timeout
+      B-->>A: Stop serving
+    end
+  end
+  A-->>E: Close payment channel
+  E-->>A: Transaction summary
+```
+#### Ethereum/Chiral Integration:
+##### Wallet Capabilities:
+Each peer node runs a local Ethereum-compatible wallet supporting:
+- getBalance()
+- sendPayment(address, amount)
+- verifyTransaction(txHash)
+- logTransaction(metadata)
+
+##### Transaction Model
+Transactions include:
+- Recipient address (seeder)
+- File hash reference
+- Payment amount (in Chiral)
+- Metadata (timestamp, MB segment)
+
+#### Security
+- Transactions are cryptographically signed with user’s private key.
+- DHT stores public receipts only, never private keys.
+- Local key storage handled securely within native environment (e.g., Tauri).
+
+#### Gas and Fees
+- Each transaction includes a small gas fee.
+- Estimated cost = base gas + data fee.
+- Option to dynamically add a “gas surcharge” to file price for accurate costing.
+
+### Frontend Integration
+#### Features
+- Automatic price computation after file upload.
+- Price badges display file cost in Chiral.
+- Balance check prior to download.
+- Payment confirmation modals for user validation.
+- Transaction logs shown in account dashboard.
+- Live peer-to-peer toasts for payment success/failure notifications.
+
+#### Payment UI Flow
+``` mermaid
+flowchart TD
+  A[User selects file to download] --> B[Fetch metadata & price]
+  B --> C[Check user balance]
+  C -->|Sufficient| D[Show payment modal]
+  C -->|Insufficient| E[Show balance error]
+  D --> F[Execute payment]
+  F --> G[Start incremental download]
+  G --> H[Record transaction in history]
+```
+
+### Areas for Improvement & TODOs
+- Define rounding rules for price display (e.g., 4 decimal places).
+- Add automated tests for global pricing updates.
+- Handle empty or zero-byte file uploads gracefully.
+- Include uploader/audit logs for all uploads.
+- Implement transaction timeouts and retry strategies.
+- Add multi-seeder payment splitting support.
+- Include gas fee estimation in pricing UI.
+- Enable dynamic rate propagation through DHT.
+- Build reputation registry for trust-weighted pricing.
+- Develop control parameters for HTTP server payment enforcement.
+
+
+### Summary
+##### The Chiral File Sharing & Payment System integrates peer-to-peer file distribution with an adaptive Chiral-based payment mechanism. This system ensures:
+- Automated and fair file pricing through global or hash-based valuation.
+- Incremental, flexible payment protocols tied to network trust.
+- Ethereum-backed settlement for verifiable transactions.
+- Scalable architecture for decentralized, incentive-aligned file exchange.
+
+## See Also
+
+- [Network Protocol](network-protocol.md) - P2P transfer details
+- [Security & Privacy](security-privacy.md) - Encryption features
+- [User Guide](user-guide.md) - Step-by-step instructions
