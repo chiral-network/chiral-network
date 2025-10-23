@@ -149,7 +149,7 @@ fn create_mock_pools() -> Vec<MiningPool> {
 fn get_current_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or(std::time::Duration::from_secs(0))
         .as_secs()
 }
 
@@ -293,7 +293,9 @@ pub async fn leave_mining_pool() -> Result<(), String> {
         return Err("Not currently connected to any pool".to_string());
     }
 
-    let pool_name = current_pool.as_ref().unwrap().pool.name.clone();
+    let pool_name = current_pool.as_ref()
+        .map(|p| p.pool.name.clone())
+        .unwrap_or_else(|| "Unknown Pool".to_string());
     *current_pool = None;
 
     // Simulate disconnection delay
