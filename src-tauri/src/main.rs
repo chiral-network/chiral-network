@@ -23,6 +23,7 @@ mod proxy_latency;
 mod stream_auth;
 mod webrtc_service;
 
+
 use crate::commands::auth::{
     cleanup_expired_proxy_auth_tokens, generate_proxy_auth_token, revoke_proxy_auth_token,
     validate_proxy_auth_token,
@@ -93,6 +94,14 @@ use crate::manager::ChunkManager; // Import the ChunkManager
                                   // For key encoding
 use blockstore::block::Block;
 use x25519_dalek::{PublicKey, StaticSecret}; // For key handling
+
+//for port randomization
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tracing::{info, error};
+use axum::{Router, routing::get};
+use tokio::net::TcpListener;
+use tauri::State;
 
 /// Detect MIME type from file extension
 fn detect_mime_type_from_filename(filename: &str) -> Option<String> {
@@ -250,6 +259,8 @@ struct AppState {
 
     // Relay node aliases (peer_id -> alias)
     relay_aliases: Arc<Mutex<std::collections::HashMap<String, String>>>,
+    //port randomization http
+    pub http_server_port: Arc<Mutex<Option<u16>>>,
 }
 
 #[tauri::command]
@@ -3790,6 +3801,28 @@ async fn reset_analytics(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+//helper for port rand
+// Spawns a simple Axum HTTP server on a random port
+async fn start_http_server_random_port() -> Result<u16, String> {
+    let app = Router::new().route("/health", get(|| async { "OK" }));
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let port = listener
+        .local_addr()
+        .map_err(|e| e.to_string())?
+        .port();
+
+    tokio::spawn(async move {
+        if let Err(e) = axum::serve(listener, app).await {
+            error!("HTTP server failed: {}", e);
+        }
+    });
+
+    Ok(port)
+}
 #[cfg(not(test))]
 fn main() {
     // Initialize logging for debug builds
@@ -3892,6 +3925,9 @@ fn main() {
 
             // Relay aliases
             relay_aliases: Arc::new(Mutex::new(std::collections::HashMap::new())),
+
+            //port rand http
+            http_server_port: Arc::new(Mutex::new(None)),
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
@@ -4029,7 +4065,8 @@ fn main() {
             get_relay_reputation_stats,
             set_relay_alias,
             get_relay_alias,
-            get_multiaddresses
+            get_multiaddresses,
+            get_http_server_port //for port rand
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -4048,6 +4085,25 @@ fn main() {
             }
         })
         .setup(|app| {
+
+            //adding for port rand
+            let app_handle = app.handle().clone();
+            let state = app.state::<AppState>();
+            let port_arc = state.http_server_port.clone();
+
+            tokio::spawn(async move {
+                match start_http_server_random_port().await {
+                    Ok(port) => {
+                        info!("✅ HTTP server started on port {}", port);
+                        *port_arc.lock().await = Some(port);
+                        let _ = app_handle.emit("http_server_port", port);
+                    }
+                    Err(e) => {
+                        error!("❌ Failed to start HTTP server: {}", e);
+                    }
+                }
+            });
+            //end of port rand add
             // Clean up any orphaned geth processes on startup
             #[cfg(unix)]
             {
@@ -4907,4 +4963,10 @@ async fn get_multiaddresses(state: State<'_, AppState>) -> Result<Vec<String>, S
     } else {
         Ok(Vec::new())
     }
+}
+
+//adding for port rand
+#[tauri::command]
+async fn get_http_server_port(state: State<'_, AppState>) -> Result<Option<u16>, String> {
+    Ok(*state.http_server_port.lock().await)
 }

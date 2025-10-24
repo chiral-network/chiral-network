@@ -4,6 +4,36 @@ import { listen } from '@tauri-apps/api/event';
 
 // Export network status store
 export const networkStatus = writable<"connected" | "disconnected">("disconnected");
+// Export HTTP server port store
+export const httpServerPort = writable<number | null>(null);
+
+// Listen for HTTP server port from backend
+export function setupHttpPortListener(): void {
+  listen<number>('http_server_port', (event) => {
+    const port = event.payload;
+    console.log(`🌐 HTTP server port received: ${port}`);
+    httpServerPort.set(port);
+    
+    // Store in localStorage for persistence
+    localStorage.setItem('http_server_port', port.toString());
+  }).catch((err) => console.error('Failed to listen to http_server_port:', err));
+  
+  // Try to get port immediately from backend
+  invoke<number | null>('get_http_server_port')
+    .then(port => {
+      if (port) {
+        console.log(`📌 Retrieved HTTP server port from backend: ${port}`);
+        httpServerPort.set(port);
+      } else {
+        // Try localStorage as fallback
+        const stored = localStorage.getItem('http_server_port');
+        if (stored) {
+          httpServerPort.set(parseInt(stored, 10));
+        }
+      }
+    })
+    .catch(err => console.error('Failed to get HTTP server port:', err));
+}
 
 // Track real-time DHT connection status
 let dhtConnectedPeerCount = 0;
@@ -68,7 +98,7 @@ export function startNetworkMonitoring(): () => void {
   
   // Set up event listeners for real-time DHT connection updates
   setupDhtEventListeners();
-  
+  setupHttpPortListener(); //for http port rand 
   // Check immediately
   updateNetworkStatus();
   

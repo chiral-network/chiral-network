@@ -149,8 +149,15 @@ start_relay() {
     local pid=$!
 
     # Wait a moment and verify it started
-    sleep 2
+    sleep 3
 
+    local http_port=$(grep -oP 'HTTP server started on port \K\d+' "$LOG_FILE" | tail -1)
+    #adding for port rand 
+    if [ -n "$http_port" ]; then
+        print_info "✅ HTTP server listening on port: $http_port"
+        echo "$http_port" > "$RELAY_DIR/http_port.txt"
+    fi 
+    #for port rand
     if ps -p "$pid" > /dev/null 2>&1; then
         print_info "✅ Relay daemon started successfully (PID: $pid)"
         print_info ""

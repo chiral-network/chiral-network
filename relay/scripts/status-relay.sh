@@ -190,7 +190,12 @@ main() {
         local rss_mb=$((rss / 1024))
         print_field "Memory (RSS)" "${rss_mb} MB"
     fi
-
+    # Show HTTP port if available
+    if [ -f "$RELAY_DIR/http_port.txt" ]; then
+        local http_port=$(cat "$RELAY_DIR/http_port.txt")
+        print_field "HTTP Server Port" "$http_port"
+        print_info "  Health check: http://127.0.0.1:$http_port/health"
+    fi
     echo ""
 
     # Display metrics if available

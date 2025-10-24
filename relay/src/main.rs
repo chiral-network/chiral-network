@@ -40,6 +40,15 @@ use std::{
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
+use axum::{
+    routing::get,
+    Router,
+};
+use std::net::SocketAddr;
+use tokio::net::TcpListener;
+use tauri::AppHandle; // only if not already imported
+use serde_json;       // ensure serde_json is in Cargo.toml
+
 #[derive(Parser, Debug)]
 #[command(name = "chiral-relay")]
 #[command(about = "Chiral Network Circuit Relay v2 Daemon", long_about = None)]
@@ -123,6 +132,46 @@ struct Metrics {
     uptime_seconds: u64,
     relay_reservations: usize,
     relay_circuits: usize,
+}
+
+// Start a lightweight HTTP server on a random available port
+async fn start_http_server(app_handle: tauri::AppHandle) -> Result<u16, String> {
+    // Define a small status router
+    let app = Router::new()
+        .route("/health", get(|| async { "OK" }))
+        .route("/metrics", get(|| async {
+            serde_json::json!({
+                "status": "running",
+                "timestamp": std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+            }).to_string()
+        }));
+
+    // Bind to port 0 for OS-assigned random port
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|e| format!("Failed to bind TCP listener: {}", e))?;
+
+    // Retrieve assigned port
+    let local_addr = listener.local_addr()
+        .map_err(|e| format!("Failed to get local address: {}", e))?;
+    let port = local_addr.port();
+
+    info!("🌐 HTTP server started on port {}", port);
+
+    // Notify frontend or other services if needed
+    let _ = app_handle.emit("http_server_port", port);
+
+    // Spawn server task
+    tokio::spawn(async move {
+        if let Err(e) = axum::serve(listener, app).await {
+            error!("HTTP server error: {}", e);
+        }
+    });
+
+    Ok(port)
 }
 
 #[tokio::main]
@@ -249,7 +298,12 @@ async fn main() -> Result<()> {
     let mut connected_peers = 0usize;
     let mut reservation_count = 0usize;
     let mut circuit_count = 0usize;
-
+    //placing for port randomization
+    // Start HTTP server on a random port
+    let http_port = start_http_server(app.handle().clone())
+        .await
+        .expect("Failed to start HTTP server");
+    info!("✅ HTTP server listening on http://127.0.0.1:{}", http_port);
     // Main event loop
     info!("✅ Relay daemon is running");
     loop {
