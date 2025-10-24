@@ -96,12 +96,8 @@ use blockstore::block::Block;
 use x25519_dalek::{PublicKey, StaticSecret}; // For key handling
 
 //for port randomization
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use tracing::{info, error};
 use axum::{Router, routing::get};
 use tokio::net::TcpListener;
-use tauri::State;
 
 /// Detect MIME type from file extension
 fn detect_mime_type_from_filename(filename: &str) -> Option<String> {
