@@ -101,9 +101,12 @@ impl FileEncryption {
         let mut salt = [0u8; 16];
         OsRng.fill_bytes(&mut salt);
 
+        let key_array: [u8; 32] = key.as_slice().try_into()
+            .map_err(|_| "Key must be exactly 32 bytes".to_string())?;
+
         let encryption_info = EncryptionInfo {
             method: "AES-256-GCM".to_string(),
-            key_fingerprint: Self::generate_key_fingerprint(key.as_slice().try_into().unwrap()),
+            key_fingerprint: Self::generate_key_fingerprint(&key_array),
             nonce: nonce.to_vec(),
             salt: salt.to_vec(),
         };

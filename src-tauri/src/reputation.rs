@@ -35,6 +35,7 @@ pub enum EventType {
     DhtQueryAnswered,
     StorageOffered,
     MaliciousBehaviorReport,
+    TorrentChunkSeeded,
     FileShared,
     // Relay server events
     RelayReservationAccepted,
@@ -59,6 +60,7 @@ impl EventType {
             EventType::DhtQueryAnswered => 3.0,
             EventType::StorageOffered => 8.0,
             EventType::MaliciousBehaviorReport => -50.0,
+            EventType::TorrentChunkSeeded => 2.0, // Small reward for each chunk
             EventType::FileShared => 5.0,
             EventType::RelayReservationAccepted => 5.0,
             EventType::RelayCircuitEstablished => 10.0,
@@ -361,6 +363,8 @@ impl ReputationDhtService {
             price: None,
             uploader_address: None,
             ftp_sources: None,
+            info_hash: None,
+            trackers: None,
         };
 
         dht_service.publish_file(metadata).await
@@ -415,6 +419,8 @@ impl ReputationDhtService {
             price: None,
             uploader_address: None,
             ftp_sources: None,
+            info_hash: None,
+            trackers: None,
         };
 
         dht_service.publish_file(metadata).await

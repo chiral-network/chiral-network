@@ -64,8 +64,6 @@ The network ensures both confidentiality and availability using encryption and r
 6. Store the individually encrypted chunks across the network
 ```
 
-
-
 ### File Integrity and Retrieval
 
 A Merkle Tree is constructed from the hashes of the **original, unencrypted** chunks. This tree's root hash serves as the file's primary identifier and ensures top-level integrity.
@@ -301,12 +299,12 @@ Sign transaction with group:
 
 #### Internal Threats
 
-| Threat          | Impact             | Mitigation                       |
-| --------------- | ------------------ | -------------------------------- |
-| Malicious Peer  | Data corruption    | Redundancy, chunk verification   |
-| Free Riding     | Resource drain     | Payment incentive system         |
-| Peer Collusion  | Network disruption | Reputation penalties             |
-| Data Mining     | Privacy breach     | Encryption, anonymity            |
+| Threat         | Impact             | Mitigation                     |
+| -------------- | ------------------ | ------------------------------ |
+| Malicious Peer | Data corruption    | Redundancy, chunk verification |
+| Free Riding    | Resource drain     | Payment incentive system       |
+| Peer Collusion | Network disruption | Reputation penalties           |
+| Data Mining    | Privacy breach     | Encryption, anonymity          |
 
 ### Attack Scenarios
 
@@ -571,21 +569,21 @@ PGP Key: https://chiralnetwork.org/security/pgp
 - ✅ Rate limiting
 - ✅ Input validation
 
-### Phase 1: Enhanced Privacy (Q1 2024)
+### Phase 1: Enhanced Privacy (Q1 2025)
 
 - [ ] Onion routing
 - [ ] Mix networks
 - [ ] Private transactions
 - [ ] Metadata obfuscation
 
-### Phase 2: Advanced Security (Q2 2024)
+### Phase 2: Advanced Security (Q2 2025)
 
 - [ ] Zero-knowledge proofs
 - [ ] Homomorphic encryption
 - [ ] Secure multi-party computation
 - [ ] Threshold signatures
 
-### Phase 3: Quantum Resistance (Q3 2024)
+### Phase 3: Quantum Resistance (Q3 2025)
 
 - [ ] Post-quantum algorithms
 - [ ] Lattice-based crypto

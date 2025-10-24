@@ -215,6 +215,12 @@ pub struct FileMetadata {
     /// Ethereum address of the uploader (for payment)
     #[serde(default)]
     pub uploader_address: Option<String>,
+    /// The SHA-1 info hash for BitTorrent compatibility.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub info_hash: Option<String>,
+    /// A list of BitTorrent tracker URLs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trackers: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -509,6 +515,9 @@ pub enum DhtCommand {
             recipient_public_key: PublicKey,
             sender: oneshot::Sender<Result<EncryptedAesKeyBundle, String>>,
         },
+    AnnounceTorrent {
+        info_hash: String,
+    },
     }
 #[derive(Debug, Clone, Serialize)]
 pub enum DhtEvent {
@@ -1789,6 +1798,8 @@ async fn run_dht_node(
                                         parent_hash: json_val.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                         cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
                                         encrypted_key_bundle: json_val.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
+                                        info_hash: json_val.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                        trackers: json_val.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
                                         is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
                                         price: json_val.get("price").and_then(|v| v.as_f64()),
                                         uploader_address: json_val.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
@@ -1844,7 +1855,13 @@ async fn run_dht_node(
 
                             // Build the Merkle tree from original chunk hashes
                             let merkle_tree = MerkleTree::<Sha256Hasher>::from_leaves(&original_chunk_hashes);
-                            let merkle_root = merkle_tree.root().ok_or("Failed to compute Merkle root").unwrap();
+                            let merkle_root = match merkle_tree.root().ok_or("Failed to compute Merkle root") {
+                                Ok(root) => root,
+                                Err(e) => {
+                                    eprintln!("Merkle root computation failed: {}", e);
+                                    return;
+                                }
+                            };
 
                             // Create root block containing just the CIDs
                             let root_block_data = match serde_json::to_vec(&block_cids) {
@@ -1914,6 +1931,8 @@ async fn run_dht_node(
                             "parent_hash": metadata.parent_hash,
                             "cids": metadata.cids, // The root CID for Bitswap
                             "encrypted_key_bundle": metadata.encrypted_key_bundle,
+                            "info_hash": metadata.info_hash,
+                            "trackers": metadata.trackers,
                             "seeders": metadata.seeders,
                             "seederHeartbeats": active_heartbeats,
                             "price": metadata.price,
@@ -2059,6 +2078,8 @@ async fn run_dht_node(
                             "cids": metadata.cids,
                             "encrypted_key_bundle": metadata.encrypted_key_bundle,
                             "version": metadata.version,
+                            "info_hash": metadata.info_hash,
+                            "trackers": metadata.trackers,
                             "parent_hash": metadata.parent_hash,
                             "seeders": metadata.seeders,
                             "seederHeartbeats": active_heartbeats,
@@ -2085,7 +2106,13 @@ async fn run_dht_node(
                             .kademlia
                             .get_record(record_key.clone());
 
-                        let record_value = serde_json::to_vec(&dht_metadata).map_err(|e| e.to_string()).unwrap();
+                        let record_value = match serde_json::to_vec(&dht_metadata).map_err(|e| e.to_string()) {
+                            Ok(val) => val,
+                            Err(e) => {
+                                warn!("Failed to serialize DHT metadata: {}", e);
+                                continue;
+                            }
+                        };
                         let record = Record {
                             key: record_key.clone(),
                             value: record_value,
@@ -2693,6 +2720,19 @@ async fn run_dht_node(
                     Some(DhtCommand::RequestFileAccess { .. }) => {
                         todo!();
                     }
+                    Some(DhtCommand::AnnounceTorrent { info_hash }) => {
+                        let key = kad::RecordKey::new(&info_hash);
+                        match swarm.behaviour_mut().kademlia.start_providing(key) {
+                            Ok(query_id) => {
+                                info!("Started providing torrent with info_hash: {}, query_id: {:?}", info_hash, query_id);
+                                let _ = event_tx.send(DhtEvent::Info(format!("Announced torrent: {}", info_hash))).await;
+                            }
+                            Err(e) => {
+                                error!("Failed to start providing torrent {}: {}", info_hash, e);
+                                let _ = event_tx.send(DhtEvent::Error(format!("Failed to announce torrent: {}", e))).await;
+                            }
+                        }
+                    }
                     None => {
                         info!("DHT command channel closed; shutting down node task");
                         break 'outer;
@@ -2964,7 +3004,13 @@ async fn run_dht_node(
                                         info!("Chunk offsets: {:?}", chunk_offsets);
 
                                         info!("About to create ActiveDownload for file: {}", metadata.merkle_root);
-                                        let download_path = PathBuf::from_str(metadata.download_path.as_ref().expect("Error: download_path not defined"));
+                                        let download_path = match metadata.download_path.as_ref() {
+                                            Some(path_str) => PathBuf::from_str(path_str),
+                                            None => {
+                                                error!("Download path not defined for file: {}", metadata.merkle_root);
+                                                return;
+                                            }
+                                        };
                                         let download_path = match download_path {
                                             Ok(path) => get_available_download_path(path).await,
                                             Err(e) => {
@@ -3035,26 +3081,50 @@ async fn run_dht_node(
                                                 });
 
 
-                                            match active_download.write_chunk(chunk_index, &data, offset) {
-                                                Ok(_) => {
-                                                    info!("Successfully wrote chunk {}/{} for file {}",
-                                                        chunk_index + 1,
-                                                        active_download.total_chunks,
-                                                        file_hash);
-
-                                                    let _ = event_tx.send(DhtEvent::BitswapChunkDownloaded {
-                                                        file_hash: file_hash.clone(),
-                                                        chunk_index,
-                                                        total_chunks: active_download.total_chunks,
-                                                        chunk_size: data.len(),
-                                                    }).await;
-                                                }
-                                                Err(e) => {
-                                                    error!("Failed to write chunk {} to disk for file {}: {}",
-                                                        chunk_index, file_hash, e);
-                                                    break;
-                                                }
+                                            if let Err(e) = active_download.write_chunk(chunk_index, &data, offset) {
+                                                error!("Failed to write chunk {} to disk for file {}: {}",
+                                                    chunk_index, file_hash, e);
+                                                break;
                                             }
+
+                                            info!("Successfully wrote chunk {}/{} for file {}",
+                                                chunk_index + 1,
+                                                active_download.total_chunks,
+                                                file_hash);
+
+                                            let _ = event_tx.send(DhtEvent::BitswapChunkDownloaded {
+                                                file_hash: file_hash.clone(),
+                                                chunk_index,
+                                                total_chunks: active_download.total_chunks,
+                                                chunk_size: data.len(),
+                                            }).await;
+
+                                            // --- Reputation System Integration ---
+                                            // Reward the peer who sent this chunk.
+                                            // The `peer` ID is part of the GetQueryResponse event.
+                                            // The `peer` field was removed. We get the seeder from the metadata.
+                                            let seeder = match active_download.metadata.seeders.first() {
+                                                Some(s) => s.clone(),
+                                                None => continue, // Should not happen if we got a response
+                                            };
+
+                                            let _ = event_tx.send(DhtEvent::ReputationEvent {
+                                                peer_id: seeder.to_string(),
+                                                event_type: "TorrentChunkSeeded".to_string(),
+                                                impact: 2.0, // Use the default impact from EventType
+                                                data: serde_json::json!({
+                                                    "file_hash": file_hash,
+                                                    "chunk_index": chunk_index,
+                                                    "chunk_size": data.len(),
+                                                    "timestamp": unix_timestamp(),
+                                                }),
+                                            }).await;
+                                            debug!(
+                                                "Rewarded peer {} for seeding chunk {} of file {}",
+                                                seeder,
+                                                chunk_index,
+                                                file_hash
+                                            );
 
                                            // In the "all chunks downloaded" section:
                                             if active_download.is_complete() {
@@ -3099,7 +3169,10 @@ async fn run_dht_node(
                                 }
                             }
                         }
-                        beetswap::Event::GetQueryError { query_id, error } => {
+                        beetswap::Event::GetQueryError {
+                            query_id,
+                            error,
+                        } => {
                             // Handle Bitswap query error
                             error!("❌ Bitswap query {:?} failed: {:?}", query_id, error);
 
@@ -3127,6 +3200,7 @@ async fn run_dht_node(
                                 error: format!("{:?}", error),
                             }).await;
                         }
+                        _ => {}
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Ping(ev)) => {
                         match ev {
@@ -3341,6 +3415,8 @@ async fn run_dht_node(
                                         parent_hash: json_val.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                         cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
                                         encrypted_key_bundle: json_val.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
+                                        info_hash: json_val.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                        trackers: json_val.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
                                         is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
                                         price: json_val.get("price").and_then(|v| v.as_f64()),
                                         uploader_address: json_val.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
@@ -3898,6 +3974,10 @@ async fn handle_kademlia_event(
                                             >(v.clone())
                                             .unwrap_or(None)
                                         }),
+                                    info_hash: metadata_json.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                    trackers: metadata_json.get("trackers").and_then(|v| {
+                                        serde_json::from_value::<Option<Vec<String>>>(v.clone()).unwrap_or(None)
+                                    }),
                                     is_root: metadata_json
                                         .get("is_root")
                                         .and_then(|v| v.as_bool())
@@ -4721,7 +4801,8 @@ impl ActiveDownload {
     }
 
     fn write_chunk(&self, chunk_index: u32, data: &[u8], offset: u64) -> std::io::Result<()> {
-        let mut mmap = self.mmap.lock().unwrap();
+        let mut mmap = self.mmap.lock()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Mutex lock failed: {}", e)))?;
         let start = offset as usize;
         let end = start + data.len();
 
@@ -4733,22 +4814,29 @@ impl ActiveDownload {
         }
 
         mmap[start..end].copy_from_slice(data);
-        self.received_chunks.lock().unwrap().insert(chunk_index);
+        self.received_chunks.lock()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Mutex lock failed: {}", e)))?
+            .insert(chunk_index);
 
         Ok(())
     }
 
     fn is_complete(&self) -> bool {
         self.queries.is_empty()
-            && self.received_chunks.lock().unwrap().len() == self.total_chunks as usize
+            && self.received_chunks.lock()
+                .map(|chunks| chunks.len() == self.total_chunks as usize)
+                .unwrap_or(false)
     }
 
     fn flush(&self) -> std::io::Result<()> {
-        self.mmap.lock().unwrap().flush()
+        self.mmap.lock()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Mutex lock failed: {}", e)))?
+            .flush()
     }
 
     fn read_complete_file(&self) -> std::io::Result<Vec<u8>> {
-        let mmap = self.mmap.lock().unwrap();
+        let mmap = self.mmap.lock()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Mutex lock failed: {}", e)))?;
         Ok(mmap.to_vec())
     }
 
@@ -4758,7 +4846,9 @@ impl ActiveDownload {
         self.flush()?;
 
         // Drop the mmap to release the file handle
-        drop(self.mmap.lock().unwrap());
+        if let Ok(mmap_guard) = self.mmap.lock() {
+            drop(mmap_guard);
+        }
 
         info!(
             "Renaming {:?} to {:?}",
@@ -4787,12 +4877,16 @@ impl ActiveDownload {
     }
 
     fn progress(&self) -> f32 {
-        let received = self.received_chunks.lock().unwrap().len() as f32;
+        let received = self.received_chunks.lock()
+            .map(|chunks| chunks.len())
+            .unwrap_or(0) as f32;
         received / self.total_chunks as f32
     }
 
     fn chunks_received(&self) -> usize {
-        self.received_chunks.lock().unwrap().len()
+        self.received_chunks.lock()
+            .map(|chunks| chunks.len())
+            .unwrap_or(0)
     }
 }
 
@@ -5060,12 +5154,17 @@ impl DhtService {
         // Use the new relay-aware transport builder
         let transport = build_transport_with_relay(&local_key, relay_transport, proxy_address)?;
 
+        // Extract behaviour or return error if already taken
+        let behaviour_instance = behaviour.take().ok_or_else(|| {
+            Box::<dyn Error>::from("behaviour already taken")
+        })?;
+
         // Create the swarm
         let mut swarm = SwarmBuilder::with_existing_identity(local_key)
             .with_tokio()
             .with_other_transport(|_| Ok(transport))
-            .expect("Failed to create libp2p transport")
-            .with_behaviour(move |_| behaviour.take().expect("behaviour already taken"))?
+            .map_err(|e| format!("Failed to create libp2p transport: {}", e))?
+            .with_behaviour(move |_| behaviour_instance)?
             .with_swarm_config(
                 |c| c.with_idle_connection_timeout(Duration::from_secs(300)), // 5 minutes
             )
@@ -5502,6 +5601,8 @@ impl DhtService {
             price,
             uploader_address,
             ftp_sources: None,
+            info_hash: None,
+            trackers: None,
         })
     }
 
@@ -5539,6 +5640,13 @@ impl DhtService {
 
         self.start_file_heartbeat(&file_hash).await?;
         Ok(())
+    }
+
+    pub async fn announce_torrent(&self, info_hash: String) -> Result<(), String> {
+        self.cmd_tx
+            .send(DhtCommand::AnnounceTorrent { info_hash })
+            .await
+            .map_err(|e| e.to_string())
     }
 
     pub async fn search_file(&self, file_hash: String) -> Result<(), String> {

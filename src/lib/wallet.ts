@@ -74,12 +74,18 @@ export class WalletService {
       }
     }
 
-    this.unsubscribeAccount = etcAccount.subscribe((account) => {
+    this.unsubscribeAccount = etcAccount.subscribe(async (account) => {
       if (!account || !this.isTauri) {
         return;
       }
-      this.refreshBalance().catch((err) => console.error('WalletService balance refresh failed', err));
-      this.refreshTransactions().catch((err) => console.error('WalletService tx refresh failed', err));
+      // IMPORTANT: refreshTransactions must run BEFORE refreshBalance
+      // because refreshBalance depends on blocksFound set by refreshTransactions
+      try {
+        await this.refreshTransactions();
+        await this.refreshBalance();
+      } catch (err) {
+        console.error('WalletService refresh failed', err);
+      }
     });
   }
 
@@ -126,13 +132,19 @@ export class WalletService {
       return;
     }
 
-    this.pollHandle = setInterval(() => {
+    this.pollHandle = setInterval(async () => {
       const account = get(etcAccount);
       if (!account) {
         return;
       }
-      this.refreshBalance().catch((err) => console.error('WalletService poll balance failed', err));
-      this.refreshTransactions().catch((err) => console.error('WalletService poll tx failed', err));
+      // IMPORTANT: refreshTransactions must run BEFORE refreshBalance
+      // because refreshBalance depends on blocksFound set by refreshTransactions
+      try {
+        await this.refreshTransactions();
+        await this.refreshBalance();
+      } catch (err) {
+        console.error('WalletService poll failed', err);
+      }
     }, this.pollInterval);
   }
 
@@ -141,7 +153,14 @@ export class WalletService {
     if (!account) {
       return;
     }
-    await Promise.allSettled([this.refreshBalance(), this.refreshTransactions()]);
+    // IMPORTANT: refreshTransactions must run BEFORE refreshBalance
+    // because refreshBalance depends on blocksFound set by refreshTransactions
+    try {
+      await this.refreshTransactions();
+      await this.refreshBalance();
+    } catch (err) {
+      console.error('WalletService sync failed', err);
+    }
   }
 
   
@@ -165,6 +184,7 @@ export class WalletService {
       ]);
   
       // Update total count FIRST, before adding blocks
+      console.log('[refreshTransactions] Setting blocksFound to:', totalBlockCount);
       miningState.update((state) => ({
         ...state,
         blocksFound: totalBlockCount,
@@ -367,6 +387,7 @@ export class WalletService {
         type: 'sent',
         amount,
         to: toAddress,
+        from: account.address,
         date: new Date(),
         description: 'Manual transfer',
         status: 'pending',
@@ -501,7 +522,7 @@ export class WalletService {
 
   private pushRecentBlock(block: { hash: string; reward?: number; timestamp?: Date }): void {
     const reward = typeof block.reward === 'number' ? block.reward : 0;
-  
+
     const newBlock = {
       id: `block-${block.hash}-${block.timestamp?.getTime() ?? Date.now()}`,
       hash: block.hash,
@@ -510,13 +531,14 @@ export class WalletService {
       difficulty: 0,
       nonce: 0,
     };
-  
+
     miningState.update((state) => ({
       ...state,
       recentBlocks: [newBlock, ...(state.recentBlocks ?? [])].slice(0, 50),
-      blocksFound: state.blocksFound ?? (state.recentBlocks?.length ?? 0) + 1,
+      // Don't modify blocksFound here - it's set by refreshTransactions from backend
+      // This method is only called during refreshTransactions, so blocksFound is already correct
     }));
-  
+
     if (reward > 0) {
       const last4 = block.hash.slice(-4);
       const tx: Transaction = {

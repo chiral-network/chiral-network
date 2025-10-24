@@ -44,6 +44,7 @@ Each layer communicates through well-defined interfaces, allowing for independen
 The network supports **two protocol styles** for file transfer and payment.
 
 **⚠️ IMPORTANT**: **Both styles ALWAYS start with DHT discovery** as the first step. DHT discovery is the common mechanism for:
+
 - Finding which nodes are seeding a file
 - Discovering what protocols each node supports (HTTP, BitTorrent, WebTorrent, ed2k, or private protocol)
 - Getting connection endpoints and wallet addresses
@@ -100,12 +101,14 @@ After DHT discovery, client proceeds with selected protocol style.
 Uses established public protocols for data transfer, with payments settled separately on blockchain.
 
 **Supported Public Protocols**:
+
 - **HTTP/HTTPS**: Standard web protocol
 - **BitTorrent**: DHT-based P2P swarming
 - **WebTorrent**: Browser-compatible WebRTC
 - **ed2k**: eDonkey2000 multi-source
 
 **Default Protocol Selection by Network Capability**:
+
 ```
 Node has public IP address:
   └─> Serve via HTTP (default)
@@ -128,6 +131,7 @@ Node behind NAT (no public IP):
 ```
 
 **Complete Flow for Style 1 (Out-of-Band Payment)**:
+
 ```
 1. DHT Discovery Phase (COMMON STEP):
    - Query DHT for file hash → Get seeder list with protocols
@@ -164,12 +168,14 @@ Node behind NAT (no public IP):
 [Revise, there are some steps unclear: Negotiate for price, payment frequence, etc]
 
 **Advantages**:
+
 - Uses proven, mature protocols
 - No modification to existing protocol specs
 - Works with standard clients (for BitTorrent, ed2k)
 - Protocol selection flexibility
 
 **Limitations**:
+
 - Requires separate payment step
 - Payment trust model (download first, pay later or pay first, download later)
 - Two-phase process (data + payment)
@@ -181,6 +187,7 @@ Proprietary protocol that combines data transfer and payment in a single channel
 **Two Options Under Consideration**:
 
 **Option A: BitSwap-Like Protocol**
+
 ```
 Characteristics:
 - Block exchange with atomic payment
@@ -222,6 +229,7 @@ Challenges:
 ```
 
 **Option B: WebRPC-Based Private Protocol**
+
 ```
 Characteristics:
 - RPC-style protocol
@@ -258,22 +266,41 @@ Challenges:
 ```
 
 **[Decision Needed - Discussion with Students]**:
+
 - Which private protocol to implement?
 - BitSwap-like (proven concept, atomic) vs WebRPC (custom, flexible)
 - Or implement both and let clients choose?
 - Priority vs public protocols? (Now, I am leanning to support public protocols first)
 
 **In-Band Payment Benefits**:
+
 - Single protocol for data + payment
 - Atomic exchange guarantees
 - No separate payment step
 - Trustless operation
 
 **Current Status**:
+
 - **Style 1 (Public + Out-of-Band)**: Primary implementation target
 - **Style 2 (Private + In-Band)**: Design phase, needs decision on approach
 
 ## Core Architecture Components
+
+### Hash Format Conventions
+
+**Important**: The network uses different hash formats for different types of identifiers:
+
+- **File Hashes (Content IDs)**: Plain 64-character hexadecimal strings **without** the `0x` prefix
+  - Example: `7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a17d8f9e8c7b6a5d4f3e2d1c0`
+  - Used for: File identification, Merkle roots, chunk hashes
+  - Algorithm: SHA-256
+
+- **Blockchain Addresses & Hashes**: Hexadecimal strings **with** the `0x` prefix
+  - Example: `0x742d35Cc6634C0532925a3b8D0C9e0c8b346b983`
+  - Used for: Wallet addresses, transaction hashes, block hashes
+  - Format: Ethereum-compatible
+
+This distinction helps differentiate between file system operations (content addressing) and blockchain operations (payments, mining).
 
 ### 1. Blockchain Infrastructure (Payment Layer)
 
@@ -327,6 +354,7 @@ Payment Transaction Structure:
 **Purpose**: Handle file transfers using multiple protocol styles.
 
 The network implements **two protocol styles**:
+
 - **Style 1**: Public protocols with out-of-band payment (Primary)
 - **Style 2**: Private protocol with in-band payment (Under development)
 
@@ -476,11 +504,11 @@ When a node starts seeding a file, it automatically selects default protocol bas
 function selectDefaultSeedingProtocol(): Protocol {
   // Check if node has public IP
   if (hasPublicIP()) {
-    return Protocol.HTTP;  // DEFAULT for public IP nodes
+    return Protocol.HTTP; // DEFAULT for public IP nodes
   } else {
     // Behind NAT
     // [DECISION NEEDED]: WebTorrent or BitTorrent as default?
-    return Protocol.WebTorrent;  // Current default for NAT'd nodes
+    return Protocol.WebTorrent; // Current default for NAT'd nodes
     // OR
     // return Protocol.BitTorrent;  // Alternative (needs discussion)
   }
@@ -488,6 +516,7 @@ function selectDefaultSeedingProtocol(): Protocol {
 ```
 
 **Default Protocol Matrix**:
+
 ```
 Network Capability      → Default Seeding Protocol
 ─────────────────────────────────────────────────
@@ -652,6 +681,7 @@ Performance: Higher (batch operations)
 ##### Decision Points for Students
 
 **Questions to Discuss**:
+
 1. **Which protocol to implement first?**
    - BitSwap-like: Proven concept, simpler, trustless
    - WebRPC: More efficient, flexible, but custom
@@ -727,6 +757,7 @@ Peer Node:
 ```
 
 **Key Differences from Traditional "Storage Nodes"**:
+
 - No dedicated role - all nodes are equal
 - No storage contracts or commitments
 - Files only available while node chooses to seed
@@ -857,6 +888,7 @@ struct ChunkPayment {
 ```
 
 **Example Multi-Protocol Payment**:
+
 ```rust
 // Single file downloaded using multiple protocols
 let payments = vec![
@@ -973,6 +1005,7 @@ Backend Services (Decoupled):
 #### Client Operations Flow
 
 ##### File Upload (Seeding):
+
 ```
 1. Select File → Generate SHA-256 Hash (CID)
 2. Create Chunks → 256 KB chunks
@@ -986,6 +1019,7 @@ Backend Services (Decoupled):
 ```
 
 ##### File Download (Multi-Protocol):
+
 ```
 1. Input Hash (CID) → Query DHT
 
@@ -1176,6 +1210,7 @@ sequenceDiagram
 ```
 
 **Key Architectural Features**:
+
 1. **DHT discovery is always the first step** - finds seeders and available protocols
 2. Protocol selection independent of payment logic
 3. Multi-protocol transfers maximize bandwidth
@@ -1353,6 +1388,7 @@ Techniques:
 **Rationale**: Maximum protocol flexibility while maintaining consistent payment incentives. Payments happen on blockchain layer, independent of HTTP, WebTorrent, BitTorrent, or ed2k protocols.
 **Alternative**: Embed payment logic in each protocol implementation
 **Trade-off**: More complex architecture but enables:
+
 - Adding new protocols without changing payment logic
 - Using established protocols (BitTorrent, ed2k) without modification
 - Protocol selection based on performance, not payment constraints
@@ -1361,12 +1397,13 @@ Techniques:
 ### Decision: Support Multiple Protocols (HTTP, WebTorrent, BitTorrent, ed2k)
 
 **Rationale**:
+
 - **HTTP**: Universal compatibility, no special client required
 - **WebTorrent**: Browser support via WebRTC, no plugins
 - **BitTorrent**: Proven protocol, wide adoption, efficient swarming
 - **ed2k**: Multi-source downloads, large existing network
-**Alternative**: Single protocol only (e.g., BitTorrent only)
-**Trade-off**: More implementation complexity but provides:
+  **Alternative**: Single protocol only (e.g., BitTorrent only)
+  **Trade-off**: More implementation complexity but provides:
 - Protocol choice based on network conditions
 - Fallback options if one protocol blocked
 - Multi-protocol transfers for maximum bandwidth
@@ -1377,6 +1414,7 @@ Techniques:
 **Rationale**: All nodes are equal, no storage commitments, files available only while seeders choose to seed. Simpler than storage contracts, aligns with proven BitTorrent model.
 **Alternative**: Filecoin-style storage contracts with guaranteed persistence
 **Trade-off**: No storage guarantee but gains:
+
 - Simpler implementation (no proof-of-storage challenges)
 - No contract enforcement complexity
 - Lower barrier to entry for seeders
@@ -1393,30 +1431,33 @@ Techniques:
 
 **Rationale**: Support both public protocols with out-of-band payment AND private protocol with in-band payment.
 **Alternatives**:
+
 - Only public protocols (simpler but requires trust)
 - Only private protocol (trustless but more complex)
-**Trade-off**: More implementation work but provides:
+  **Trade-off**: More implementation work but provides:
 - **Style 1 (Public + Out-of-Band)**: Uses proven protocols (HTTP, BitTorrent, WebTorrent, ed2k), easier to implement, broader compatibility
 - **Style 2 (Private + In-Band)**: Atomic exchange, trustless, but requires custom protocol and both peers to support it
-**Current Status**: Style 1 is primary implementation target; Style 2 in design phase
+  **Current Status**: Style 1 is primary implementation target; Style 2 in design phase
 
 ### Decision: Default Protocol Selection Based on Network Capability
 
 **Rationale**: Automatically select most appropriate protocol based on node's network capability.
 **Decision**:
+
 - **Public IP nodes** → Serve via **HTTP** by default (most compatible, no NAT issues)
 - **NAT'd nodes** → Serve via **WebTorrent** by default (WebRTC NAT traversal)
-**Alternative Under Discussion**: Use **BitTorrent** instead of WebTorrent for NAT'd nodes
+  **Alternative Under Discussion**: Use **BitTorrent** instead of WebTorrent for NAT'd nodes
   - Pros: More efficient, better swarming, proven NAT traversal
   - Cons: Not browser-native, may be blocked by ISPs
-**Trade-off**: Automatic defaults simplify setup but users can override with manual protocol selection
-**Needs Discussion**: WebTorrent vs BitTorrent as default for NAT'd nodes
+    **Trade-off**: Automatic defaults simplify setup but users can override with manual protocol selection
+    **Needs Discussion**: WebTorrent vs BitTorrent as default for NAT'd nodes
 
 ### Decision: Style 2 Protocol Design (Open Question)
 
 **Status**: **Decision needed - discussion with students required**
 
 **Options**:
+
 1. **BitSwap-Like Protocol**:
    - Pros: Proven concept (IPFS), atomic exchange, trustless
    - Cons: Payment verification overhead per chunk, higher latency
@@ -1426,6 +1467,7 @@ Techniques:
    - Cons: Custom design, more implementation complexity
 
 **Questions to Resolve**:
+
 - Which protocol to implement first? (BitSwap-like or WebRPC)
 - Should Style 2 be implemented before or after Style 1 is stable?
 - Can nodes support both Style 1 and Style 2 simultaneously?

@@ -143,6 +143,20 @@
   }
   // Note: Transaction filtering is handled by the display logic below
   // All transactions in the store are shown in the history
+  // Filter transactions to show only those related to current account
+  $: if ($etcAccount) {
+    const accountTransactions = $transactions.filter(tx =>
+      // Mining rewards
+      tx.from === 'Mining reward' ||
+      tx.description?.toLowerCase().includes('block reward') ||
+      // Transactions to/from this account
+      tx.to?.toLowerCase() === $etcAccount.address.toLowerCase() ||
+      tx.from?.toLowerCase() === $etcAccount.address.toLowerCase()
+    );
+    if (accountTransactions.length !== $transactions.length) {
+      transactions.set(accountTransactions);
+    }
+}
 
   // Derived filtered transactions with safety checks
   $: filteredTransactions = (() => {
@@ -516,8 +530,9 @@
     await loadKeystoreAccountsList();
 
     if ($etcAccount && isGethRunning) {
-      await walletService.refreshBalance();
+      // IMPORTANT: refreshTransactions must run BEFORE refreshBalance
       await walletService.refreshTransactions();
+      await walletService.refreshBalance();
     }
   })
 

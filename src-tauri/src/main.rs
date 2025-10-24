@@ -699,7 +699,7 @@ async fn upload_versioned_file(
 
         let created_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
         // Use the DHT versioning helper to fill in parent_hash/version
@@ -1161,7 +1161,7 @@ async fn start_dht_node(
                             .unwrap_or_else(|| {
                                 std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap()
+                                    .unwrap_or(std::time::Duration::from_secs(0))
                                     .as_secs()
                             });
 
@@ -1682,8 +1682,9 @@ async fn get_cpu_temperature() -> Option<f32> {
         #[cfg(target_os = "linux")]
         {
             if let Some((temp, method)) = get_linux_temperature_advanced() {
-                let mut working_method = working_method_mutex.lock().unwrap();
-                *working_method = Some(method);
+                if let Ok(mut working_method) = working_method_mutex.lock() {
+                    *working_method = Some(method);
+                }
                 return Some(smooth_temperature(temp));
             }
         }
@@ -2229,6 +2230,44 @@ async fn upload_file_to_network(
                 uploader_address: Some(account.clone()),
                 ..Default::default()
             };
+          
+          // Prepare a timestamp for metadata
+            let created_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or(std::time::Duration::from_secs(0))
+                .as_secs();
+
+            // Use DHT helper to prepare versioned metadata so version and parent_hash are computed
+            match dht
+                .prepare_versioned_metadata(
+                    file_hash.clone(),
+                    file_name.to_string(),
+                    file_data.len() as u64,
+                    file_data.clone(),
+                    created_at,
+                    None,  // mime_type
+                    None,  // encrypted_key_bundle
+                    false, // is_encrypted
+                    None,  // encryption_method
+                    None,  // key_fingerprint
+                )
+                .await
+            {
+                Ok(metadata) => {
+                    // Store file data locally for seeding if file transfer service is available.
+                    // The store_file_data method returns () so we simply await it and continue.
+                    ft.store_file_data(file_hash.clone(), file_name.to_string(), file_data.clone())
+                        .await;
+
+                    match dht.publish_file(metadata.clone()).await {
+                        Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
+                        Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
+                    };
+                }
+                Err(e) => {
+                    warn!("Failed to prepare versioned metadata: {}", e);
+                }
+            
 
             match dht.publish_file(metadata.clone()).await {
                 Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
@@ -2533,7 +2572,7 @@ async fn save_temp_file_for_upload(
     // Create unique temp file path
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or(Duration::from_secs(0))
         .as_nanos();
     let temp_file_path = temp_dir.join(format!("{}_{}", timestamp, file_name));
 
@@ -2571,7 +2610,7 @@ async fn start_streaming_upload(
         "upload_{}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_nanos()
     );
 
@@ -2670,7 +2709,7 @@ async fn upload_file_chunk(
         // Create minimal metadata (without file_data to avoid DHT size limits)
         let created_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
         let metadata = dht::FileMetadata {
@@ -2693,6 +2732,8 @@ async fn upload_file_chunk(
             price: None,
             uploader_address: None,
             ftp_sources: None,
+            info_hash: None,
+            trackers: None,
         };
 
         // Store complete file data locally for seeding
@@ -3716,7 +3757,7 @@ async fn queue_transaction(
         "tx_{}",
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(Duration::from_secs(0))
             .as_millis()
     );
 
@@ -3727,7 +3768,7 @@ async fn queue_transaction(
         amount,
         timestamp: SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(Duration::from_secs(0))
             .as_secs(),
     };
 
@@ -3955,16 +3996,28 @@ fn main() {
     #[cfg(debug_assertions)]
     {
         use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+        let mut filter = EnvFilter::from_default_env();
+        
+        // Add directives with safe fallback
+        if let Ok(directive) = "chiral_network=info".parse() {
+            filter = filter.add_directive(directive);
+        }
+        if let Ok(directive) = "libp2p=warn".parse() {
+            filter = filter.add_directive(directive);
+        }
+        if let Ok(directive) = "libp2p_kad=warn".parse() {
+            filter = filter.add_directive(directive);
+        }
+        if let Ok(directive) = "libp2p_swarm=warn".parse() {
+            filter = filter.add_directive(directive);
+        }
+        if let Ok(directive) = "libp2p_mdns=warn".parse() {
+            filter = filter.add_directive(directive);
+        }
+        
         tracing_subscriber::registry()
             .with(fmt::layer())
-            .with(
-                EnvFilter::from_default_env()
-                    .add_directive("chiral_network=info".parse().unwrap())
-                    .add_directive("libp2p=warn".parse().unwrap())
-                    .add_directive("libp2p_kad=warn".parse().unwrap())
-                    .add_directive("libp2p_swarm=warn".parse().unwrap())
-                    .add_directive("libp2p_mdns=warn".parse().unwrap()),
-            )
+            .with(filter)
             .init();
     }
 
@@ -4244,8 +4297,12 @@ fn main() {
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &hide_i, &quit_i])?;
 
+            let icon = app.default_window_icon()
+                .ok_or("Failed to get default window icon")?
+                .clone();
+
             let tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(icon)
                 .menu(&menu)
                 .tooltip("Chiral Network")
                 .show_menu_on_left_click(false)
@@ -4296,8 +4353,8 @@ fn main() {
 
             // Get the main window and ensure it's visible
             if let Some(window) = app.get_webview_window("main") {
-                window.show().unwrap();
-                window.set_focus().unwrap();
+                let _ = window.show();
+                let _ = window.set_focus();
 
                 let app_handle = app.handle().clone();
                 window.on_window_event(move |event| {

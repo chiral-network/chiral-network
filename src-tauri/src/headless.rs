@@ -251,6 +251,8 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             price: None,
             uploader_address: None,
             ftp_sources: None,
+            info_hash: None,
+            trackers: None,
         };
 
         dht_service.publish_file(example_metadata).await?;

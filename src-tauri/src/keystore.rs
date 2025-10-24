@@ -359,12 +359,12 @@ impl Keystore {
     }
 }
 
-fn derive_key(password: &str, salt: &[u8]) -> [u8; 32] {
+fn derive_key(password: &str, salt: &[u8]) -> Result<[u8; 32], String> {
     let mut key = [0u8; 32];
     // Increased iterations from 4096 to 100000 for better security
     pbkdf2::<Hmac<Sha3_256>>(password.as_bytes(), salt, 100_000, &mut key)
-        .expect("PBKDF2 should not fail");
-    key
+        .map_err(|e| format!("PBKDF2 key derivation failed: {}", e))?;
+    Ok(key)
 }
 
 fn encrypt_private_key(
@@ -382,7 +382,7 @@ fn encrypt_private_key(
     rng.fill_bytes(&mut iv);
 
     // Derive key from password
-    let key = derive_key(password, &salt);
+    let key = derive_key(password, &salt)?;
 
     // Encrypt
     let mut data = private_key.as_bytes().to_vec();
@@ -399,7 +399,7 @@ fn encrypt_data(
     salt_hex: &str,
 ) -> Result<(String, String), String> {
     let salt = hex::decode(salt_hex).map_err(|e| format!("Invalid salt: {}", e))?;
-    let key = derive_key(password, &salt);
+    let key = derive_key(password, &salt)?;
 
     let mut iv = [0u8; 16];
     rand::thread_rng().fill_bytes(&mut iv);
@@ -420,7 +420,7 @@ fn decrypt_data(
 ) -> Result<String, String> {
     // First, try with the current (higher) iteration count and new hash algorithm
     let result = try_decrypt(encrypted_hex, salt_hex, iv_hex, password, |p, s| {
-        derive_key(p, s)
+        derive_key(p, s).ok()
     });
 
     if result.is_ok() {
@@ -428,14 +428,13 @@ fn decrypt_data(
     }
 
     // If that fails, fall back to the legacy (lower) iteration count and old hash algorithm
-    let legacy_derive = |password: &str, salt: &[u8]| -> [u8; 32] {
+    let legacy_derive = |password: &str, salt: &[u8]| -> Option<[u8; 32]> {
         use hmac::Hmac;
         use pbkdf2::pbkdf2;
         use sha3::Sha3_256; // The old "new" standard was Sha3
         let mut key = [0u8; 32];
-        pbkdf2::<Hmac<Sha3_256>>(password.as_bytes(), salt, 4096, &mut key)
-            .expect("PBKDF2 legacy derivation should not fail with Sha3");
-        key
+        pbkdf2::<Hmac<Sha3_256>>(password.as_bytes(), salt, 4096, &mut key).ok()?;
+        Some(key)
     };
 
     try_decrypt(encrypted_hex, salt_hex, iv_hex, password, legacy_derive)
@@ -460,14 +459,15 @@ fn try_decrypt<F>(
     derive_fn: F,
 ) -> Result<String, String>
 where
-    F: Fn(&str, &[u8]) -> [u8; 32],
+    F: Fn(&str, &[u8]) -> Option<[u8; 32]>,
 {
     let salt_bytes = hex::decode(salt_hex).map_err(|_| "Invalid salt format".to_string())?;
     let iv_bytes = hex::decode(iv_hex).map_err(|_| "Invalid IV format".to_string())?;
     let mut ciphertext =
         hex::decode(encrypted_hex).map_err(|_| "Invalid ciphertext".to_string())?;
 
-    let key = derive_fn(password, &salt_bytes);
+    let key = derive_fn(password, &salt_bytes)
+        .ok_or_else(|| "Key derivation failed".to_string())?;
 
     let iv_array: [u8; 16] = iv_bytes
         .try_into()
