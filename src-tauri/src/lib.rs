@@ -1,5 +1,6 @@
 // Library exports for testing
 pub mod analytics;
+pub mod protocols;
 pub mod multi_source_download;
 
 // Required modules for multi_source_download
