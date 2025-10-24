@@ -2967,6 +2967,40 @@ async fn get_file_seeders(
 }
 
 #[tauri::command]
+async fn search_by_cid(
+    state: State<'_, AppState>,
+    cid_str: String,
+) -> Result<(), String> {
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    if let Some(dht) = dht {
+        dht.search_by_cid(cid_str).await
+    } else {
+        Err("DHT node is not running".to_string())
+    }
+}
+
+#[tauri::command]
+async fn search_by_infohash(
+    state: State<'_, AppState>,
+    info_hash: String,
+) -> Result<(), String> {
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    if let Some(dht) = dht {
+        dht.search_by_infohash(info_hash).await
+    } else {
+        Err("DHT node is not running".to_string())
+    }
+}
+
+#[tauri::command]
 async fn get_available_storage() -> f64 {
     use std::time::Duration;
     use tokio::time::timeout;
@@ -3933,6 +3967,8 @@ fn main() {
             stop_dht_node,
             stop_publishing_file,
             search_file_metadata,
+            search_by_cid,
+            search_by_infohash,
             get_file_seeders,
             connect_to_peer,
             get_dht_events,

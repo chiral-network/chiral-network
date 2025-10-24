@@ -80,7 +80,7 @@ pub use cid::Cid;
 use futures::future::{BoxFuture, FutureExt};
 use futures::io::{AsyncRead as FAsyncRead, AsyncWrite as FAsyncWrite};
 use futures::{AsyncReadExt as _, AsyncWriteExt as _};
-use futures_util::StreamExt;
+use futures_util::{StreamExt, TryFutureExt};
 use libp2p::multiaddr::Protocol;
 pub use multihash_codetable::{Code, MultihashDigest};
 use relay::client::Event as RelayClientEvent;
@@ -103,6 +103,7 @@ use tracing::{debug, error, info, trace, warn};
 use crate::peer_selection::{PeerMetrics, PeerSelectionService, SelectionStrategy};
 use crate::webrtc_service::{get_webrtc_service, FileChunk};
 use crate::manager::Sha256Hasher;
+use multihash_codetable::Multihash;
 use std::io::{self};
 use tokio_socks::tcp::Socks5Stream;
 
@@ -456,6 +457,8 @@ pub enum DhtCommand {
         metadata: FileMetadata,
         response_tx: oneshot::Sender<FileMetadata>,
     },
+    SearchByCid(String),
+    SearchByInfoHash(String),
     SearchFile(String),
     DownloadFile(FileMetadata, String),
     ConnectPeer(String),
@@ -2003,6 +2006,16 @@ async fn run_dht_node(
                         let _ = event_tx.send(DhtEvent::PublishedFile(metadata.clone())).await;
                         // store in file_uploaded_cache
                         let _ = response_tx.send(metadata.clone());
+                    }
+                    Some(DhtCommand::SearchByCid(cid_str)) => {
+                        let key = kad::RecordKey::new(&cid_str.as_bytes());
+                        let query_id = swarm.behaviour_mut().kademlia.get_record(key);
+                        info!("Searching by CID: {} (query: {:?})", cid_str, query_id);
+                    }
+                    Some(DhtCommand::SearchByInfoHash(info_hash)) => {
+                        let key = kad::RecordKey::new(&info_hash.as_bytes());
+                        let query_id = swarm.behaviour_mut().kademlia.get_record(key);
+                        info!("Searching by infohash: {} (query: {:?})", info_hash, query_id);
                     }
                     Some(DhtCommand::StoreBlocks { blocks, root_cid, mut metadata }) => {
                         // 1. Store all encrypted data blocks in bitswap
@@ -5495,6 +5508,23 @@ impl DhtService {
 
         self.start_file_heartbeat(&file_hash).await?;
         Ok(())
+    }
+
+    pub async fn search_by_cid(&self, cid_str: String) -> Result<(), String> {
+        self.cmd_tx
+            .send(DhtCommand::SearchByCid(cid_str))
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    pub async fn search_by_infohash(&self, info_hash: String) -> Result<(), String> {
+        // Convert hex infohash to a base58-encoded CID v1 with bittorrent-infohash multicodec (0x1300)
+        let info_hash_bytes =
+            hex::decode(&info_hash).map_err(|e| format!("Invalid infohash hex: {}", e))?;
+        let multihash =
+            Multihash::wrap(0x1300, &info_hash_bytes).map_err(|e| e.to_string())?;
+        let cid = Cid::new_v1(0x71, multihash); // 0x71 is dag-pb, common for torrents
+        self.search_by_cid(cid.to_string()).await
     }
 
     pub async fn search_file(&self, file_hash: String) -> Result<(), String> {

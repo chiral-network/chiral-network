@@ -339,6 +339,21 @@ export class DhtService {
     }
   }
 
+  async searchByCid(cid: string): Promise<void> {
+    if (!this.peerId) throw new Error("DHT not started");
+    try {
+      await invoke("search_by_cid", { cidStr: cid });
+    } catch (e) {
+      console.error("Failed to search by CID:", e);
+      throw e;
+    }
+  }
+
+  async searchByInfoHash(infoHash: string): Promise<void> {
+    if (!this.peerId) throw new Error("DHT not started");
+    await invoke("search_by_infohash", { infoHash });
+  }
+
   async connectPeer(peerAddress: string): Promise<void> {
     // Note: We check peerId to ensure DHT was started, but the actual error
     // might be from the backend saying networking isn't implemented
