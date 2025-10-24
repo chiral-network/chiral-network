@@ -255,7 +255,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             trackers: None,
         };
 
-        dht_service.publish_file(example_metadata).await?;
+        dht_service.publish_file(example_metadata, None).await?;
         info!("Published bootstrap file metadata");
     } else {
         info!("Connecting to bootstrap nodes: {:?}", bootstrap_nodes);

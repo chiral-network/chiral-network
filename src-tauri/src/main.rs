@@ -730,7 +730,7 @@ async fn upload_versioned_file(
                 .await;
         }
 
-        dht.publish_file(metadata.clone()).await?;
+        dht.publish_file(metadata.clone(), None).await?;
         Ok(metadata)
     } else {
         Err("DHT not running".into())
@@ -2260,7 +2260,7 @@ async fn upload_file_to_network(
                     ft.store_file_data(file_hash.clone(), file_name.to_string(), file_data.clone())
                         .await;
 
-                    match dht.publish_file(metadata.clone()).await {
+                    match dht.publish_file(metadata.clone(), None).await {
                         Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
                         Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
                     }
@@ -2756,7 +2756,7 @@ async fn upload_file_chunk(
 
         // Publish to DHT
         if let Some(dht) = dht_opt {
-            dht.publish_file(metadata.clone()).await?;
+            dht.publish_file(metadata.clone(), None).await?;
         } else {
             return Err("DHT not running".into());
         }
@@ -4658,7 +4658,7 @@ async fn upload_and_publish_file(
                 .await; // Store with Merkle root as key
         }
 
-        dht.publish_file(metadata).await?;
+        dht.publish_file(metadata, None).await?;
         version
     } else {
         1 // Default to v1 if DHT not running
