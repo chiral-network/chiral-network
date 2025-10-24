@@ -2250,29 +2250,25 @@ async fn upload_file_to_network(
                     false, // is_encrypted
                     None,  // encryption_method
                     None,  // key_fingerprint
+                    price, // Add price parameter
+                    Some(account.clone()), // Add uploader_address parameter
                 )
                 .await
             {
                 Ok(metadata) => {
-                    // Store file data locally for seeding if file transfer service is available.
-                    // The store_file_data method returns () so we simply await it and continue.
+                    // Store file data locally for seeding
                     ft.store_file_data(file_hash.clone(), file_name.to_string(), file_data.clone())
                         .await;
 
                     match dht.publish_file(metadata.clone()).await {
                         Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
                         Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
-                    };
+                    }
                 }
                 Err(e) => {
                     warn!("Failed to prepare versioned metadata: {}", e);
                 }
-            
-
-            match dht.publish_file(metadata.clone()).await {
-                Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
-                Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
-            };
+            }
 
             Ok(())
         } else {
