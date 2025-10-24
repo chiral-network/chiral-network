@@ -247,7 +247,9 @@ pub async fn get_transaction_status(
         transaction_hash: transaction_hash.clone(),
         status: "success".to_string(),
         block_number: Some(12345),
-        block_hash: Some("0x9876543210abcdef9876543210abcdef9876543210abcdef9876543210abcdef".to_string()),
+        block_hash: Some(
+            "0x9876543210abcdef9876543210abcdef9876543210abcdef9876543210abcdef".to_string(),
+        ),
         transaction_index: Some(2),
         gas_used: Some(21000),
         effective_gas_price: Some("20000000000".to_string()),
@@ -276,17 +278,16 @@ pub async fn get_transaction_history(
     let offset = offset.unwrap_or(0);
 
     // Mock implementation
-    let transactions = vec![
-        TransactionHistoryItem {
-            transaction_hash: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_string(),
-            from_address: address.clone(),
-            to_address: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8".to_string(),
-            value: "1.5".to_string(),
-            status: status.clone().unwrap_or_else(|| "success".to_string()),
-            block_number: Some(12345),
-            timestamp: chrono::Utc::now().to_rfc3339(),
-        },
-    ];
+    let transactions = vec![TransactionHistoryItem {
+        transaction_hash: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+            .to_string(),
+        from_address: address.clone(),
+        to_address: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8".to_string(),
+        value: "1.5".to_string(),
+        status: status.clone().unwrap_or_else(|| "success".to_string()),
+        block_number: Some(12345),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    }];
 
     let data = TransactionHistoryData {
         transactions,

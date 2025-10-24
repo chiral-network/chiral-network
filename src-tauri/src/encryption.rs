@@ -3,12 +3,12 @@ use aes_gcm::{
     Aes256Gcm, Key, Nonce,
 };
 // PBKDF2 imports handled in function
+use base64::{engine::general_purpose, Engine as _};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use tokio::fs;
-use base64::{Engine as _, engine::general_purpose};
 
 // ECIES imports for key encryption
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
@@ -460,7 +460,8 @@ pub fn sign_message(
 /// Returns an `Err` if any part of the bundle is malformed.
 pub fn verify_message(signed_message: &SignedMessage) -> Result<bool, String> {
     // 1. Decode the data from the bundle.
-    let message_bytes = general_purpose::STANDARD.decode(&signed_message.message)
+    let message_bytes = general_purpose::STANDARD
+        .decode(&signed_message.message)
         .map_err(|e| format!("Invalid base64 message: {}", e))?;
 
     let public_key_bytes: [u8; 32] = hex::decode(&signed_message.signer_public_key)

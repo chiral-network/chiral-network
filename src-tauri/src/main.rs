@@ -1886,9 +1886,9 @@ fn get_default_storage_path(app: tauri::AppHandle) -> Result<String, String> {
         .path()
         .app_data_dir()
         .map_err(|e| format!("Could not get app data directory: {}", e))?;
-    
+
     let storage_path = app_data_dir.join("Storage");
-    
+
     storage_path
         .to_str()
         .map(|s| s.to_string())
@@ -4364,7 +4364,9 @@ async fn upload_and_publish_file(
         let manager = ChunkManager::new(chunk_storage_path);
         let result = manager.chunk_and_encrypt_file_canonical(Path::new(&file_path_clone))?;
         Ok::<(manager::FileManifest, [u8; 32]), String>((result.manifest, result.canonical_aes_key))
-    }).await.map_err(|e| e.to_string())??;
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
     let merkle_root = manifest.merkle_root.clone();
 
@@ -4386,7 +4388,13 @@ async fn upload_and_publish_file(
     let file_size: u64 = manifest.chunks.iter().map(|c| c.size as u64).sum();
 
     // 5. Get peer ID from DHT
-    let dht = state.dht.lock().await.as_ref().cloned().ok_or("DHT not running")?;
+    let dht = state
+        .dht
+        .lock()
+        .await
+        .as_ref()
+        .cloned()
+        .ok_or("DHT not running")?;
     let peer_id = dht.get_peer_id().await;
 
     // 6. Publish key-agnostic metadata to DHT
@@ -4397,18 +4405,20 @@ async fn upload_and_publish_file(
             .as_secs();
 
         let mime_type = detect_mime_type_from_filename(&file_name);
-        let mut metadata = dht.prepare_versioned_metadata(
+        let mut metadata = dht
+            .prepare_versioned_metadata(
                 merkle_root.clone(),
                 file_name.clone(),
                 file_size,
                 vec![], // data is already chunked and stored
                 created_at,
                 mime_type,
-                None,                            // encrypted_key_bundle
+                None, // encrypted_key_bundle
                 true, // is_encrypted
                 Some("AES-256-GCM".to_string()),
                 None, // key_fingerprint
-            ).await?;
+            )
+            .await?;
 
         // This is important: we publish without any key bundle.
         metadata.encrypted_key_bundle = None;
@@ -4418,7 +4428,10 @@ async fn upload_and_publish_file(
         version
     };
 
-    info!("Published key-agnostic metadata for merkle root: {}", merkle_root);
+    info!(
+        "Published key-agnostic metadata for merkle root: {}",
+        merkle_root
+    );
 
     // 7. Return metadata to frontend
     Ok(UploadResult {

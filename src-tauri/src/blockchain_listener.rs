@@ -64,10 +64,8 @@ async fn handle_challenge(event: ChallengeIssuedEvent, dht_service: Arc<dht::Dht
         hex::encode(event.file_root)
     );
 
-    let response_future = dht_service.generate_and_submit_proof(
-        hex::encode(event.file_root),
-        event.chunk_index.as_u64(),
-    );
+    let response_future = dht_service
+        .generate_and_submit_proof(hex::encode(event.file_root), event.chunk_index.as_u64());
 
     match timeout(
         Duration::from_secs(RESPONSE_TIMEOUT_SECONDS),

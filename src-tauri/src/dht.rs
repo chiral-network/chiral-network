@@ -1,6 +1,6 @@
 use crate::encryption::EncryptedAesKeyBundle;
-use x25519_dalek::PublicKey;
 use serde_bytes;
+use x25519_dalek::PublicKey;
 
 // ------ Key Request Protocol Implementation ------
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,35 +34,57 @@ impl rr::Codec for KeyRequestCodec {
     type Request = KeyRequest;
     type Response = KeyResponse;
 
-    async fn read_request<T>(&mut self, _: &Self::Protocol, io: &mut T) -> std::io::Result<Self::Request>
+    async fn read_request<T>(
+        &mut self,
+        _: &Self::Protocol,
+        io: &mut T,
+    ) -> std::io::Result<Self::Request>
     where
         T: FAsyncRead + Unpin + Send,
     {
         let data = read_framed(io).await?;
-        serde_json::from_slice(&data).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        serde_json::from_slice(&data)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 
-    async fn read_response<T>(&mut self, _: &Self::Protocol, io: &mut T) -> std::io::Result<Self::Response>
+    async fn read_response<T>(
+        &mut self,
+        _: &Self::Protocol,
+        io: &mut T,
+    ) -> std::io::Result<Self::Response>
     where
         T: FAsyncRead + Unpin + Send,
     {
         let data = read_framed(io).await?;
-        serde_json::from_slice(&data).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        serde_json::from_slice(&data)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 
-    async fn write_request<T>(&mut self, _: &Self::Protocol, io: &mut T, request: Self::Request) -> std::io::Result<()>
+    async fn write_request<T>(
+        &mut self,
+        _: &Self::Protocol,
+        io: &mut T,
+        request: Self::Request,
+    ) -> std::io::Result<()>
     where
         T: FAsyncWrite + Unpin + Send,
     {
-        let data = serde_json::to_vec(&request).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let data = serde_json::to_vec(&request)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         write_framed(io, data).await
     }
 
-    async fn write_response<T>(&mut self, _: &Self::Protocol, io: &mut T, response: Self::Response) -> std::io::Result<()>
+    async fn write_response<T>(
+        &mut self,
+        _: &Self::Protocol,
+        io: &mut T,
+        response: Self::Response,
+    ) -> std::io::Result<()>
     where
         T: FAsyncWrite + Unpin + Send,
     {
-        let data = serde_json::to_vec(&response).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let data = serde_json::to_vec(&response)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         write_framed(io, data).await
     }
 }
@@ -100,9 +122,9 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio_util::compat::TokioAsyncReadCompatExt;
 use tracing::{debug, error, info, trace, warn};
 
+use crate::manager::Sha256Hasher;
 use crate::peer_selection::{PeerMetrics, PeerSelectionService, SelectionStrategy};
 use crate::webrtc_service::{get_webrtc_service, FileChunk};
-use crate::manager::Sha256Hasher;
 use std::io::{self};
 use tokio_socks::tcp::Socks5Stream;
 
@@ -220,7 +242,10 @@ fn unix_timestamp() -> u64 {
         .as_secs()
 }
 
-fn merge_heartbeats(mut a: Vec<SeederHeartbeat>, mut b: Vec<SeederHeartbeat>) -> Vec<SeederHeartbeat> {
+fn merge_heartbeats(
+    mut a: Vec<SeederHeartbeat>,
+    mut b: Vec<SeederHeartbeat>,
+) -> Vec<SeederHeartbeat> {
     let mut merged = Vec::new();
     let mut seen_peers = std::collections::HashSet::new();
     let now = unix_timestamp();
@@ -231,17 +256,19 @@ fn merge_heartbeats(mut a: Vec<SeederHeartbeat>, mut b: Vec<SeederHeartbeat>) ->
     let common_peers: HashSet<_> = a_peers.intersection(&b_peers).cloned().collect();
 
     // Filter and collect entries in one pass instead of using retain
-    let filtered_a: Vec<_> = a.into_iter()
+    let filtered_a: Vec<_> = a
+        .into_iter()
         .filter(|hb| {
-            common_peers.contains(&hb.peer_id) || 
-            hb.expires_at > now.saturating_sub(30) // 30s grace period
+            common_peers.contains(&hb.peer_id) || hb.expires_at > now.saturating_sub(30)
+            // 30s grace period
         })
         .collect();
 
-    let filtered_b: Vec<_> = b.into_iter()
+    let filtered_b: Vec<_> = b
+        .into_iter()
         .filter(|hb| {
-            common_peers.contains(&hb.peer_id) || 
-            hb.expires_at > now.saturating_sub(30) // 30s grace period
+            common_peers.contains(&hb.peer_id) || hb.expires_at > now.saturating_sub(30)
+            // 30s grace period
         })
         .collect();
 
@@ -255,7 +282,7 @@ fn merge_heartbeats(mut a: Vec<SeederHeartbeat>, mut b: Vec<SeederHeartbeat>) ->
 
     let mut a_iter = a.into_iter();
     let mut b_iter = b.into_iter();
-    
+
     let mut next_a = a_iter.next();
     let mut next_b = b_iter.next();
 
@@ -266,27 +293,29 @@ fn merge_heartbeats(mut a: Vec<SeederHeartbeat>, mut b: Vec<SeederHeartbeat>) ->
                 // 1. Takes the most recent heartbeat timestamp
                 // 2. Uses the latest expiry time
                 // 3. Extends the expiry if it's an active seeder (recent heartbeat)
-                let latest_heartbeat = std::cmp::max(a_entry.last_heartbeat, b_entry.last_heartbeat);
+                let latest_heartbeat =
+                    std::cmp::max(a_entry.last_heartbeat, b_entry.last_heartbeat);
                 let latest_expiry = std::cmp::max(a_entry.expires_at, b_entry.expires_at);
-                
+
                 // If this is an active seeder (recent heartbeat), extend its expiry
-                let new_expiry = if now.saturating_sub(latest_heartbeat) < FILE_HEARTBEAT_INTERVAL.as_secs() {
-                    now.saturating_add(FILE_HEARTBEAT_TTL.as_secs())
-                } else {
-                    latest_expiry
-                };
-                
+                let new_expiry =
+                    if now.saturating_sub(latest_heartbeat) < FILE_HEARTBEAT_INTERVAL.as_secs() {
+                        now.saturating_add(FILE_HEARTBEAT_TTL.as_secs())
+                    } else {
+                        latest_expiry
+                    };
+
                 let entry = SeederHeartbeat {
                     peer_id: a_entry.peer_id.clone(),
                     expires_at: new_expiry,
                     last_heartbeat: latest_heartbeat,
                 };
-                
+
                 if !seen_peers.contains(&entry.peer_id) {
                     seen_peers.insert(entry.peer_id.clone());
                     merged.push(entry);
                 }
-                
+
                 next_a = a_iter.next();
                 next_b = b_iter.next();
             }
@@ -339,10 +368,10 @@ fn prune_heartbeats(mut entries: Vec<SeederHeartbeat>, now: u64) -> Vec<SeederHe
 
 fn upsert_heartbeat(entries: &mut Vec<SeederHeartbeat>, peer_id: &str, now: u64) {
     let expires_at = now.saturating_add(FILE_HEARTBEAT_TTL.as_secs());
-    
+
     // First remove any expired entries
     entries.retain(|hb| hb.expires_at > now);
-    
+
     // Then update or add the new heartbeat
     if let Some(entry) = entries.iter_mut().find(|hb| hb.peer_id == peer_id) {
         entry.expires_at = expires_at;
@@ -354,7 +383,7 @@ fn upsert_heartbeat(entries: &mut Vec<SeederHeartbeat>, peer_id: &str, now: u64)
             last_heartbeat: now,
         });
     }
-    
+
     // Sort by peer_id for consistent ordering
     entries.sort_by(|a, b| a.peer_id.cmp(&b.peer_id));
 }
@@ -467,18 +496,18 @@ pub enum DhtCommand {
         cid: Cid,
         data: Vec<u8>,
     },
-        StoreBlocks {
-            blocks: Vec<(Cid, Vec<u8>)>, 
-            root_cid: Cid,
-            metadata: FileMetadata,
-        },
-        RequestFileAccess {
-            seeder: PeerId,
-            merkle_root: String,
-            recipient_public_key: PublicKey,
-            sender: oneshot::Sender<Result<EncryptedAesKeyBundle, String>>,
-        },
-    }
+    StoreBlocks {
+        blocks: Vec<(Cid, Vec<u8>)>,
+        root_cid: Cid,
+        metadata: FileMetadata,
+    },
+    RequestFileAccess {
+        seeder: PeerId,
+        merkle_root: String,
+        recipient_public_key: PublicKey,
+        sender: oneshot::Sender<Result<EncryptedAesKeyBundle, String>>,
+    },
+}
 #[derive(Debug, Clone, Serialize)]
 pub enum DhtEvent {
     // PeerDiscovered(String),
@@ -1914,7 +1943,7 @@ async fn run_dht_node(
                         // Determine appropriate quorum based on number of connected peers
                         let connected_peers_count = connected_peers.lock().await.len();
                         let min_replication_peers = 3; // Require at least 3 peers for stronger replication
-                        
+
                         let quorum = if connected_peers_count >= min_replication_peers {
                             info!("Using Quorum::All for file {} ({} peers available)", metadata.merkle_root, connected_peers_count);
                             kad::Quorum::All
@@ -1925,7 +1954,7 @@ async fn run_dht_node(
 
                         match swarm.behaviour_mut().kademlia.put_record(record, quorum) {
                             Ok(query_id) => {
-                                info!("started providing file: {}, query id: {:?} with quorum {:?}", 
+                                info!("started providing file: {}, query id: {:?} with quorum {:?}",
                                     metadata.merkle_root, query_id, quorum);
                             }
                             Err(e) => {
@@ -2181,13 +2210,13 @@ async fn run_dht_node(
                             // Determine appropriate quorum based on number of connected peers
                         let connected_peers_count = connected_peers.lock().await.len();
                         let min_replication_peers = 3; // Require at least 3 peers for stronger replication
-                        
+
                         let quorum = if connected_peers_count >= min_replication_peers {
-                            debug!("Using Quorum::All for heartbeat update of {} ({} peers available)", 
+                            debug!("Using Quorum::All for heartbeat update of {} ({} peers available)",
                                 file_hash, connected_peers_count);
                             kad::Quorum::All
                         } else {
-                            debug!("Using Quorum::One for heartbeat update of {} (only {} peers available)", 
+                            debug!("Using Quorum::One for heartbeat update of {} (only {} peers available)",
                                 file_hash, connected_peers_count);
                             kad::Quorum::One
                         };
@@ -3668,7 +3697,8 @@ async fn handle_kademlia_event(
                                     active_heartbeats.clone()
                                 };
 
-                                let mut merged_seeders = heartbeats_to_peer_list(&merged_heartbeats);
+                                let mut merged_seeders =
+                                    heartbeats_to_peer_list(&merged_heartbeats);
                                 if merged_seeders.is_empty() && !fallback_seeders.is_empty() {
                                     merged_seeders = fallback_seeders.clone();
                                 }
@@ -5544,7 +5574,8 @@ impl DhtService {
         let metrics = self.metrics.lock().await;
         let peer_id = &self.peer_id;
 
-        metrics.listen_addrs
+        metrics
+            .listen_addrs
             .iter()
             .filter(|addr| {
                 // Filter out loopback addresses

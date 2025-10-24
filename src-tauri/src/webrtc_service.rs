@@ -7,13 +7,13 @@ use aes_gcm::aead::Aead;
 use aes_gcm::{AeadCore, KeyInit};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tokio_util::bytes::Bytes;
-use tauri::Emitter;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
+use tauri::Emitter;
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{sleep, Duration};
+use tokio_util::bytes::Bytes;
 use tracing::{error, info, warn};
 use webrtc::api::APIBuilder;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
@@ -884,7 +884,10 @@ impl WebRTCService {
                         .await;
                     }
                     WebRTCMessage::ChatMessage(chat_message) => {
-                        info!("Received chat message {} from peer {}", chat_message.message_id, peer_id);
+                        info!(
+                            "Received chat message {} from peer {}",
+                            chat_message.message_id, peer_id
+                        );
                         // Just forward the entire message to the frontend.
                         // The frontend will be responsible for decryption.
                         if let Err(e) = app_handle.emit("incoming_chat_message", chat_message) {
@@ -1565,11 +1568,7 @@ impl WebRTCService {
             .map_err(|e| e.to_string())
     }
 
-    pub async fn send_data(
-        &self,
-        peer_id: &str,
-        data: Vec<u8>,
-    ) -> Result<(), String> {
+    pub async fn send_data(&self, peer_id: &str, data: Vec<u8>) -> Result<(), String> {
         let conns = self.connections.lock().await;
         if let Some(connection) = conns.get(peer_id) {
             if let Some(dc) = &connection.data_channel {
@@ -1737,7 +1736,8 @@ pub async fn init_webrtc_service(
 ) -> Result<(), String> {
     let mut service = WEBRTC_SERVICE.lock().await;
     if service.is_none() {
-        let webrtc_service = WebRTCService::new(app_handle, file_transfer_service, keystore).await?;
+        let webrtc_service =
+            WebRTCService::new(app_handle, file_transfer_service, keystore).await?;
         *service = Some(Arc::new(webrtc_service));
     }
     Ok(())

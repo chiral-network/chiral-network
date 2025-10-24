@@ -128,8 +128,7 @@ impl ChunkManager {
         let mut manifest = canonical_result.manifest;
         let canonical_aes_key = canonical_result.canonical_aes_key;
 
-        let encrypted_bundle =
-            encrypt_aes_key(&canonical_aes_key, recipient_public_key)?;
+        let encrypted_bundle = encrypt_aes_key(&canonical_aes_key, recipient_public_key)?;
 
         manifest.encrypted_key_bundle = Some(encrypted_bundle);
 

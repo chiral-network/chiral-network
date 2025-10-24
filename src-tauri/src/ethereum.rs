@@ -32,19 +32,17 @@ impl Default for NetworkConfig {
 }
 
 // Global configuration - can be updated via environment variables
-pub static NETWORK_CONFIG: Lazy<NetworkConfig> = Lazy::new(|| {
-    NetworkConfig {
-        rpc_endpoint: std::env::var("CHIRAL_RPC_ENDPOINT")
-            .unwrap_or_else(|_| "http://127.0.0.1:8545".to_string()),
-        chain_id: std::env::var("CHIRAL_CHAIN_ID")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(98765),
-        network_id: std::env::var("CHIRAL_NETWORK_ID")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(98765),
-    }
+pub static NETWORK_CONFIG: Lazy<NetworkConfig> = Lazy::new(|| NetworkConfig {
+    rpc_endpoint: std::env::var("CHIRAL_RPC_ENDPOINT")
+        .unwrap_or_else(|_| "http://127.0.0.1:8545".to_string()),
+    chain_id: std::env::var("CHIRAL_CHAIN_ID")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(98765),
+    network_id: std::env::var("CHIRAL_NETWORK_ID")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(98765),
 });
 
 // Shared HTTP client for all RPC calls
