@@ -25,5 +25,6 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": ["src/**/*.ts", "src/**/*.js", "src/**/*.svelte"],
+  "exclude": ["src/lib/services/deploy.ts"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

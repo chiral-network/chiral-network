@@ -21,7 +21,7 @@ const getInitialProtocol = (): Protocol => {
 };
 
 function createProtocolStore() {
-  const { subscribe, set, update } = writable<Protocol>(getInitialProtocol());
+  const { subscribe, set } = writable<Protocol>(getInitialProtocol());
 
   return {
     subscribe,

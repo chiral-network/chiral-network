@@ -1,4 +1,4 @@
-import { ethers } from "hardhat";
+import hre from "hardhat";
 
 async function main() {
   // The challenge interval in blocks.
@@ -7,7 +7,7 @@ async function main() {
 
   console.log("Deploying ProofOfStorage contract...");
 
-  const proofOfStorage = await ethers.deployContract("ProofOfStorage", [
+  const proofOfStorage = await hre.ethers.deployContract("ProofOfStorage", [
     challengeInterval,
   ]);
 

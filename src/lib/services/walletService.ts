@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
 import { get } from 'svelte/store';
-import { etcAccount, wallet } from '$lib/stores';
+import { etcAccount } from '$lib/stores';
 
 const CHAIN_ID = 98765; // Chiral Network Chain ID
 

@@ -216,7 +216,7 @@ export class DhtService {
   async publishFileToNetwork(filePath: string): Promise<FileMetadata> {
     try {
       // Start listening for the published_file event
-      const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {
+      const metadataPromise = new Promise<FileMetadata>((resolve) => {
         const unlistenPromise = listen<FileMetadata>(
           "published_file",
           (event) => {
