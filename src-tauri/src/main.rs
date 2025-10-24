@@ -2532,6 +2532,8 @@ async fn upload_file_chunk(
             is_root: true,
             download_path: None,
             ftp_sources: None,
+            info_hash: None,
+            trackers: None,
         };
 
         // Store complete file data locally for seeding
