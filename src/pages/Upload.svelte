@@ -20,8 +20,9 @@
     Key,
     Blocks,
     Globe,
+    DollarSign
   } from "lucide-svelte";
-  import { files, type FileItem, etcAccount } from "$lib/stores";
+  import { files, type FileItem, etcAccount, settings } from "$lib/stores";
   import {
     loadSeedList,
     saveSeedList,
@@ -41,7 +42,9 @@
   import { selectedProtocol as protocolStore } from "$lib/stores/protocolStore";
 
   const tr = (k: string, params?: Record<string, any>): string =>
-    (get(t) as (key: string, params?: any) => string)(k, params); // Check if running in Tauri environment
+    (get(t) as (key: string, params?: any) => string)(k, params);
+
+  // Check if running in Tauri environment
   const isTauri =
     typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -153,6 +156,13 @@
   let recipientPublicKey = "";
   let showEncryptionOptions = false;
 
+  // Calculate price based on file size and price per MB
+  function calculateFilePrice(sizeInBytes: number): number {
+    const sizeInMB = sizeInBytes / 1_048_576; // Convert bytes to MB
+    const pricePerMb = $settings.pricePerMb || 0.001;
+    return parseFloat((sizeInMB * pricePerMb).toFixed(6)); // Round to 6 decimal places
+  }
+
   $: storageLabel = isRefreshingStorage
     ? tr("upload.storage.checking")
     : availableStorage !== null
@@ -193,12 +203,11 @@
   async function refreshAvailableStorage() {
     if (isRefreshingStorage) return;
     isRefreshingStorage = true;
-    storageError = null; // Clear any previous errors
+    storageError = null;
 
     const startTime = Date.now();
 
     try {
-      // Add timeout to prevent infinite hanging
       const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error("Storage check timeout")), 3000),
       );
@@ -207,7 +216,7 @@
         .getAvailableStorage()
         .catch((error) => {
           console.warn("Storage service error:", error);
-          return null; // Return null on error instead of throwing
+          return null;
         });
 
       const result = (await Promise.race([storagePromise, timeoutPromise])) as
@@ -236,7 +245,6 @@
       lastChecked = null;
       storageStatus = "unknown";
     } finally {
-      // Ensure minimum loading time for better UX (at least 600ms)
       const elapsed = Date.now() - startTime;
       const minDelay = 600;
       if (elapsed < minDelay) {
@@ -271,6 +279,7 @@
               version: 1,
               isEncrypted: false,
               manifest: s.manifest ?? null,
+              price: s.price ?? 0,
             });
           }
         }
@@ -303,13 +312,11 @@
       const handleDragLeave = (e: DragEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        // Only set isDragging to false if we're leaving the drop zone entirely
         if (e.currentTarget && !dropZone.contains(e.relatedTarget as Node)) {
           isDragging = false;
         }
       };
 
-      // Add global drag end handler to reset dragging state
       const handleDragEnd = (_e: DragEvent) => {
         isDragging = false;
       };
@@ -338,7 +345,6 @@
         const droppedFiles = Array.from(e.dataTransfer?.files || []);
 
         if (droppedFiles.length > 0) {
-          // Check if we're in Tauri environment
           if (!isTauri) {
             showToast(
               "File upload is only available in the desktop app",
@@ -353,9 +359,7 @@
             let addedCount = 0;
             let blockedCount = 0;
 
-            // Process each dropped file using versioned upload
             for (const file of droppedFiles) {
-              // Block executable files for security
               const blockedExtensions = [
                 ".exe",
                 ".bat",
@@ -375,7 +379,6 @@
                 continue;
               }
 
-              // Check for empty files
               if (file.size === 0) {
                 showToast(`${file.name}: File is empty`, "error");
                 blockedCount++;
@@ -383,7 +386,6 @@
               }
 
               try {
-                // Check for existing versions before upload
                 let existingVersions: any[] = [];
                 try {
                   existingVersions = (await invoke(
@@ -394,13 +396,11 @@
                   console.log("No existing versions found for", file.name);
                 }
 
-                // Get recipient key if encrypted sharing is enabled
                 const recipientKey =
                   useEncryptedSharing && recipientPublicKey.trim()
                     ? recipientPublicKey.trim()
                     : undefined;
 
-                // UNIFIED UPLOAD: Save to temp file, then use single backend command
                 const buffer = await file.arrayBuffer();
                 const fileData = Array.from(new Uint8Array(buffer));
                 const tempFilePath = await invoke<string>(
@@ -411,7 +411,10 @@
                   },
                 );
 
-                // Single command: chunk, encrypt, publish to DHT
+                const filePrice = calculateFilePrice(file.size);
+
+                console.log("🔍 Uploading file with calculated price:", filePrice, "for", file.size, "bytes");
+
                 const result = await invoke<{
                   merkleRoot: string;
                   fileName: string;
@@ -421,11 +424,13 @@
                   version: number;
                 }>("upload_and_publish_file", {
                   filePath: tempFilePath,
-                  fileName: file.name, // Pass original filename for DHT
+                  fileName: file.name,
                   recipientPublicKey: recipientKey,
+                  price: filePrice
                 });
 
-                // Check for duplicates
+                console.log("📦 Received metadata from backend:", result);
+
                 if (get(files).some((f) => f.hash === result.merkleRoot)) {
                   duplicateCount++;
                   continue;
@@ -436,8 +441,8 @@
 
                 const newFile = {
                   id: `file-${Date.now()}-${Math.random()}`,
-                  name: file.name, // Use original file name from drag-drop
-                  path: file.name, // Use original file name as path for display
+                  name: file.name,
+                  path: file.name,
                   hash: result.merkleRoot,
                   size: result.fileSize,
                   status: isDhtRunning
@@ -446,9 +451,10 @@
                   seeders: isDhtRunning ? 1 : 0,
                   leechers: 0,
                   uploadDate: new Date(),
-                  version: result.version, // Use version from backend
+                  version: result.version,
                   isNewVersion: isNewVersion,
                   isEncrypted: result.isEncrypted,
+                  price: filePrice,
                 };
 
                 files.update((currentFiles) => [...currentFiles, newFile]);
@@ -491,7 +497,6 @@
                   "info",
                 );
               }
-              // Make storage refresh non-blocking to prevent UI hanging
               setTimeout(() => refreshAvailableStorage(), 100);
             }
           } catch (error) {
@@ -511,7 +516,6 @@
       dropZone.addEventListener("dragleave", handleDragLeave);
       dropZone.addEventListener("drop", handleDrop);
 
-      // Prevent default browser behavior for drag and drop on the entire window
       const preventDefaults = (e: Event) => {
         e.preventDefault();
         e.stopPropagation();
@@ -520,11 +524,9 @@
       window.addEventListener("dragover", preventDefaults);
       window.addEventListener("drop", preventDefaults);
 
-      // Add global drag end handlers to ensure dragging state is reset
       document.addEventListener("dragend", handleDragEnd);
       document.addEventListener("drop", handleDragEnd);
 
-      // Store cleanup function
       (window as any).dragDropCleanup = () => {
         dropZone.removeEventListener("dragenter", handleDragEnter);
         dropZone.removeEventListener("dragover", handleDragOver);
@@ -539,16 +541,13 @@
   });
 
   onDestroy(() => {
-    // Cleanup drag and drop listeners
     if ((window as any).dragDropCleanup) {
       (window as any).dragDropCleanup();
     }
   });
 
-  // Persist seeding list when files store changes (debounced-ish)
   let persistTimeout: ReturnType<typeof setTimeout> | null = null;
   const unsubscribeFiles = files.subscribe(($files) => {
-    // Collect seeding entries
     const seeds: SeedRecord[] = $files
       .filter((f) => f.status === "seeding" && f.path)
       .map((f) => ({
@@ -561,6 +560,7 @@
           ? f.uploadDate.toISOString()
           : new Date().toISOString(),
         manifest: f.manifest,
+        price: f.price ?? 0,
       }));
 
     if (persistTimeout) clearTimeout(persistTimeout);
@@ -571,7 +571,6 @@
     }, 400);
   });
 
-  // Ensure we unsubscribe when leaving the page
   onDestroy(() => {
     unsubscribeFiles();
     if (persistTimeout) clearTimeout(persistTimeout);
@@ -605,7 +604,6 @@
   }
 
   async function removeFile(fileHash: string) {
-    // Check if we're in Tauri environment
     if (!isTauri) {
       showToast(
         "File management is only available in the desktop app",
@@ -615,7 +613,6 @@
     }
 
     try {
-      // Stop publishing file to DHT network
       try {
         await invoke("stop_publishing_file", { fileHash });
         console.log("File unpublished from DHT:", fileHash);
@@ -650,10 +647,12 @@
     if (selectedProtocol === "Bitswap") {
       for (const filePath of paths) {
         try {
-          // Get just the filename (basename) from the path
-          // Use a robust basename extraction that works with both / and \ separators
           const fileName = filePath.replace(/^.*[\\/]/, "") || "";
-          // Check for existing versions before upload
+
+          // Get file size to calculate price
+          const fileSize = await invoke<number>('get_file_size', { filePath });
+          const price = calculateFilePrice(fileSize);
+
           let existingVersions: any[] = [];
           try {
             existingVersions = (await invoke("get_file_versions_by_name", {
@@ -662,8 +661,10 @@
           } catch (versionError) {
             console.log("No existing versions found for", fileName);
           }
-          // Use versioned upload - let backend handle duplicate detection
-          const metadata = await dhtService.publishFileToNetwork(filePath);
+
+          console.log("🔍 Uploading file with calculated price:", price, "for", fileSize, "bytes");
+          const metadata = await dhtService.publishFileToNetwork(filePath, price);
+          console.log("📦 Received metadata from backend:", metadata);
 
           const newFile = {
             id: `file-${Date.now()}-${Math.random()}`,
@@ -677,9 +678,9 @@
             leechers: 0,
             uploadDate: new Date(metadata.createdAt),
             version: metadata.version,
+            price: price,
           };
 
-          // Deduplicate: update existing entry when the same file (by merkleRoot/hash or name+size) is already present
           let existed = false;
           files.update((f) => {
             const matchIndex = f.findIndex(
@@ -690,7 +691,6 @@
             );
 
             if (matchIndex !== -1) {
-              // Update the existing record in-place with latest metadata/version/seeder info
               const existing = f[matchIndex];
               const updated = {
                 ...existing,
@@ -706,12 +706,12 @@
                     Date.now()) * 1000,
                 ),
                 status: "seeding",
+                price: price,
               };
               f = f.slice();
               f[matchIndex] = updated;
               existed = true;
             } else {
-              // Insert new entry
               f = [...f, newFile];
             }
 
@@ -745,7 +745,6 @@
         }
       }
     } else {
-      // Process all files concurrently to avoid blocking the UI
       const filePromises = paths.map(async (filePath) => {
         try {
           const fileName = filePath.replace(/^.*[\\/]/, "") || "";
@@ -754,7 +753,12 @@
               ? recipientPublicKey.trim()
               : undefined;
 
-          // UNIFIED UPLOAD: Single command chunks, encrypts, and publishes to DHT
+          // Get file size to calculate price
+          const fileSize = await invoke<number>('get_file_size', { filePath });
+          const price = calculateFilePrice(fileSize);
+
+          console.log("🔍 Uploading file with calculated price:", price, "for", fileSize, "bytes");
+
           const result = await invoke<{
             merkleRoot: string;
             fileName: string;
@@ -764,11 +768,13 @@
             version: number;
           }>("upload_and_publish_file", {
             filePath,
-            fileName: null, // File path already contains correct name
+            fileName: null,
             recipientPublicKey: recipientKey,
+            price: price
           });
 
-          // Check for duplicates
+          console.log("📦 Received metadata from backend:", result);
+
           if (get(files).some((f: FileItem) => f.hash === result.merkleRoot)) {
             return { type: "duplicate", fileName };
           }
@@ -790,8 +796,9 @@
             seederAddresses,
             leechers: 0,
             uploadDate: new Date(),
-            version: result.version, // Use version from backend
+            version: result.version,
             isEncrypted: result.isEncrypted,
+            price: price,
           };
 
           files.update((f) => [...f, newFile]);
@@ -810,10 +817,8 @@
         }
       });
 
-      // Wait for all files to be processed concurrently
       const results = await Promise.all(filePromises);
 
-      // Count results
       results.forEach((result) => {
         if (result.type === "duplicate") {
           duplicateCount++;
@@ -822,7 +827,6 @@
         }
       });
 
-      // Show summary messages
       if (duplicateCount > 0) {
         showToast(
           tr("upload.duplicateSkipped", { values: { count: duplicateCount } }),
@@ -847,7 +851,6 @@
           "info",
         );
       }
-      // Make storage refresh non-blocking to prevent UI hanging
       setTimeout(() => refreshAvailableStorage(), 100);
     }
   }
@@ -1130,7 +1133,6 @@
                   ? 'border-primary bg-gradient-to-br from-primary/20 via-primary/10 to-primary/5 scale-105 shadow-2xl'
                   : 'border-muted-foreground/25 bg-gradient-to-br from-muted/5 to-muted/10 hover:border-muted-foreground/40 hover:bg-muted/20'}"
               >
-                <!-- Animated background when dragging -->
                 {#if isDragging}
                   <div
                     class="absolute inset-0 bg-gradient-to-r from-transparent via-primary/10 to-transparent animate-pulse"
@@ -1141,7 +1143,6 @@
                 {/if}
 
                 <div class="relative z-10">
-                  <!-- Dynamic icon based on drag state -->
                   <div class="relative mb-6">
                     {#if isDragging}
                       <div class="absolute inset-0 animate-ping">
@@ -1157,7 +1158,6 @@
                     {/if}
                   </div>
 
-                  <!-- Dynamic text -->
                   <h3
                     class="text-2xl font-bold mb-3 transition-all duration-300 {isDragging
                       ? 'text-primary scale-110'
@@ -1187,7 +1187,6 @@
                   </p>
 
                   {#if !isDragging}
-                    <!-- File type icons preview -->
                     <div class="flex justify-center gap-4 mb-8 opacity-60">
                       <Image class="h-8 w-8 text-blue-500 animate-pulse" />
                       <Video class="h-8 w-8 text-purple-500 animate-pulse" />
@@ -1221,7 +1220,6 @@
                       {/if}
                     </div>
 
-                    <!-- Supported formats hint -->
                     <p class="text-xs text-muted-foreground/75 mt-4">
                       {#if isTauri}
                         {$t("upload.supportedFormats")}
@@ -1290,7 +1288,6 @@
               {#if $files.filter((f) => f.status === "seeding" || f.status === "uploaded").length > 0}
                 <div class="space-y-3 relative">
                   {#each $files.filter((f) => f.status === "seeding" || f.status === "uploaded") as file}
-                    <!-- File Item -->
                     <div
                       class="group relative bg-gradient-to-r from-card to-card/80 border border-border/50 rounded-xl p-4 hover:shadow-lg hover:border-border transition-all duration-300 hover:scale-[1.01] overflow-hidden"
                     >
@@ -1397,8 +1394,21 @@
                           </div>
                         </div>
 
-                        <!-- Actions -->
+                        <!-- Price and Actions -->
                         <div class="flex items-center gap-2">
+                          <!-- Price Badge -->
+                          {#if file.price !== undefined && file.price !== null}
+                            <div
+                              class="flex items-center gap-1.5 bg-green-500/10 text-green-600 border border-green-500/20 font-medium px-2.5 py-1 rounded-md"
+                              title="Price calculated at {$settings.pricePerMb} Chiral per MB"
+                            >
+                              <DollarSign class="h-3.5 w-3.5" />
+                              <span class="text-sm"
+                                >{file.price.toFixed(6)} Chiral</span
+                              >
+                            </div>
+                          {/if}
+
                           {#if file.status === "seeding"}
                             <Badge
                               variant="secondary"

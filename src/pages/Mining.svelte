@@ -352,11 +352,15 @@
     // Start polling for mining stats
     statsInterval = setInterval(async () => {
       if ($miningState.isMining) {
-        // ✅ Execute in parallel without waiting for each other
+        // Update mining stats in parallel with wallet data
         await Promise.all([
           updateMiningStats(),
-          walletService.refreshTransactions(),
-          walletService.refreshBalance()
+          // IMPORTANT: refreshTransactions must run BEFORE refreshBalance
+          // because refreshBalance depends on blocksFound set by refreshTransactions
+          (async () => {
+            await walletService.refreshTransactions();
+            await walletService.refreshBalance();
+          })()
         ]);
       }
       await updateNetworkStats();
