@@ -1,12 +1,13 @@
 <script lang="ts">
     import './styles/globals.css'
-    import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Mail, Server } from 'lucide-svelte'
+    import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Mail, Server, Share2 } from 'lucide-svelte'
     import UploadPage from './pages/Upload.svelte'
     import DownloadPage from './pages/Download.svelte'
     import ProxyPage from './pages/Proxy.svelte'
     import AccountPage from './pages/Account.svelte'
     import NetworkPage from './pages/Network.svelte'
     import AnalyticsPage from './pages/Analytics.svelte'
+    import TorrentDownloadPage from './pages/TorrentDownload.svelte'
     import SettingsPage from './pages/Settings.svelte'
     import MiningPage from './pages/Mining.svelte'
     import ReputationPage from './pages/Reputation.svelte'
@@ -157,6 +158,7 @@
       menuItems = [
         { id: 'download', label: $t('nav.download'), icon: Download },
         { id: 'upload', label: $t('nav.upload'), icon: Upload },
+        { id: 'torrents', label: 'Torrents', icon: Share2 },
         { id: 'messages', label: 'Messages', icon: Mail },
         { id: 'network', label: $t('nav.network'), icon: Globe },
         { id: 'relay', label: $t('nav.relay'), icon: Server },
@@ -184,6 +186,10 @@
       {
         path: "upload",
         component: UploadPage
+      },
+      {
+        path: "torrents",
+        component: TorrentDownloadPage
       },
       {
         path: "messages",
