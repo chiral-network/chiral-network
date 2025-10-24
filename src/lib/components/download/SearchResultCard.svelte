@@ -57,16 +57,15 @@
     if (isSeeding) {
       showDecryptDialog = true;
     } else {
-      dispatch("download", metadata);
       if (isBitswap) {
         console.log("🔍 DEBUG: Initiating Bitswap download for file:", metadata.fileName);
         await dhtService.downloadFile(metadata);
         showToast(
           `The file "${metadata.fileName}" has been added to your download folder via Bitswap.`,
         );
-      }
-      else {
-        console.log("🔍 DEBUG: Initiating WebRTC download for file:", metadata.fileName);
+      } else {
+        // Dispatch to parent - peer selection modal will determine actual protocol
+        dispatch("download", metadata);
       }
     }
   }
@@ -74,16 +73,15 @@
   async function confirmDecryptAndQueue() {
     showDecryptDialog = false;
     if (isBitswap) {
-        console.log("🔍 DEBUG: Initiating Bitswap download for file:", metadata.fileName);
-        await dhtService.downloadFile(metadata);
-        showToast(
-          `The file "${metadata.fileName}" has been added to your download folder via Bitswap.`,
-        );
-      }
-      else {
-        console.log("🔍 DEBUG: Initiating WebRTC download for file:", metadata.fileName);
-        dispatch('download', metadata);
-      }
+      console.log("🔍 DEBUG: Initiating Bitswap download for file:", metadata.fileName);
+      await dhtService.downloadFile(metadata);
+      showToast(
+        `The file "${metadata.fileName}" has been added to your download folder via Bitswap.`,
+      );
+    } else {
+      // Dispatch to parent - peer selection modal will determine actual protocol
+      dispatch('download', metadata);
+    }
   }
 
   function cancelDecryptDialog() {
