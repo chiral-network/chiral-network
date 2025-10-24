@@ -209,6 +209,12 @@ pub struct FileMetadata {
     pub is_root: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub download_path: Option<String>,
+    /// Price in Chiral tokens set by the uploader
+    #[serde(default)]
+    pub price: Option<f64>,
+    /// Ethereum address of the uploader (for payment)
+    #[serde(default)]
+    pub uploader_address: Option<String>,
     /// The SHA-1 info hash for BitTorrent compatibility.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub info_hash: Option<String>,
@@ -580,6 +586,10 @@ pub enum DhtEvent {
         chunk_index: u32,
         total_chunks: u32,
         chunk_size: usize,
+    },
+    PaymentNotificationReceived {
+        from_peer: String,
+        payload: serde_json::Value,
     },
 }
 
@@ -1791,6 +1801,8 @@ async fn run_dht_node(
                                         info_hash: json_val.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                         trackers: json_val.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
                                         is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
+                                        price: json_val.get("price").and_then(|v| v.as_f64()),
+                                        uploader_address: json_val.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                         ..Default::default()
                                     };
                                     let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
@@ -1829,7 +1841,9 @@ async fn run_dht_node(
                                 println!("block {} size={} cid={}", idx, block.data().len(), cid);
 
                                 match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(cid.clone(), block.data().to_vec()){
-                                    Ok(_) => {},
+                                    Ok(_) => {
+                                        info!("📦 Stored block {} (size: {} bytes) in Bitswap blockstore", cid, block.data().len());
+                                    },
                                     Err(e) => {
                                         error!("failed to store block {}: {}", cid, e);
                                         let _ = event_tx.send(DhtEvent::Error(format!("failed to store block {}: {}", cid, e))).await;
@@ -1860,8 +1874,10 @@ async fn run_dht_node(
 
                             // Store root block in Bitswap
                             let root_cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&root_block_data));
-                            match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(root_cid.clone(), root_block_data) {
-                                Ok(_) => {},
+                            match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(root_cid.clone(), root_block_data.clone()) {
+                                Ok(_) => {
+                                    info!("🌳 Stored ROOT block {} (size: {} bytes, contains {} CIDs) in Bitswap blockstore", root_cid, root_block_data.len(), block_cids.len());
+                                },
                                 Err(e) => {
                                     error!("failed to store root block: {}", e);
                                     let _ = event_tx.send(DhtEvent::Error(format!("failed to store root block: {}", e))).await;
@@ -1899,6 +1915,8 @@ async fn run_dht_node(
                         metadata.seeders = heartbeats_to_peer_list(&active_heartbeats);
 
                         // Store minimal metadata in DHT
+                        println!("💾 DHT: About to serialize metadata with price: {:?}, uploader: {:?}", metadata.price, metadata.uploader_address);
+
                         let dht_metadata = serde_json::json!({
                             "file_hash":metadata.merkle_root,
                             "merkle_root": metadata.merkle_root,
@@ -1917,7 +1935,11 @@ async fn run_dht_node(
                             "trackers": metadata.trackers,
                             "seeders": metadata.seeders,
                             "seederHeartbeats": active_heartbeats,
+                            "price": metadata.price,
+                            "uploader_address": metadata.uploader_address,
                         });
+
+                        println!("💾 DHT: Serialized metadata JSON: {}", serde_json::to_string(&dht_metadata).unwrap_or_else(|_| "error".to_string()));
 
                         {
                             let mut cache = seeder_heartbeats_cache.lock().await;
@@ -2124,8 +2146,37 @@ async fn run_dht_node(
                             Ok(cid) => cid.clone(),
                             Err(e) => { let _ = event_tx.send(DhtEvent::Error(e)).await; continue; }
                         };
+
+                        info!("🔽 Starting Bitswap download for file: {} (root CID: {})", file_metadata.file_name, root_cid);
+                        info!("📊 File has {} known seeders: {:?}", file_metadata.seeders.len(), file_metadata.seeders);
+
+                        // Check if we're connected to any seeders
+                        let connected = connected_peers.lock().await;
+                        let connected_seeders: Vec<_> = file_metadata.seeders.iter()
+                            .filter(|seeder| {
+                                if let Ok(peer_id) = seeder.parse::<PeerId>() {
+                                    connected.contains(&peer_id)
+                                } else {
+                                    false
+                                }
+                            })
+                            .collect();
+
+                        if connected_seeders.is_empty() {
+                            warn!("⚠️  Not connected to any seeders for file {}!", file_metadata.file_name);
+                            warn!("   Available seeders: {:?}", file_metadata.seeders);
+                            warn!("   Connected peers: {:?}", connected.iter().map(|p| p.to_string()).collect::<Vec<_>>());
+                            let _ = event_tx.send(DhtEvent::Error(
+                                format!("Not connected to any seeders for file {}. Please ensure at least one seeder is online and connected.", file_metadata.file_name)
+                            )).await;
+                            continue;
+                        }
+
+                        info!("✅ Connected to {}/{} seeders", connected_seeders.len(), file_metadata.seeders.len());
+
                         // Request the root block which contains the CIDs
                         let root_query_id = swarm.behaviour_mut().bitswap.get(&root_cid);
+                        info!("📤 Sent Bitswap GET request for root block (query_id: {:?})", root_query_id);
 
                         file_metadata.download_path = Some(download_path);
                         // Store the root query ID to handle when we get the root block
@@ -2921,13 +2972,12 @@ async fn run_dht_node(
                         }
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) => match bitswap {
-                        beetswap::Event::GetQueryResponse {
-                            query_id,
-                            data,
-                        } => {
+                        beetswap::Event::GetQueryResponse { query_id, data } => {
+                            info!("📥 Received Bitswap block (query_id: {:?}, size: {} bytes)", query_id, data.len());
+
                             // Check if this is a root block query first
                             if let Some(metadata) = root_query_mapping.lock().await.remove(&query_id) {
-                                info!("This is a ROOT BLOCK for file: {}", metadata.merkle_root);
+                                info!("✅ This is a ROOT BLOCK for file: {}", metadata.merkle_root);
 
                                 // This is the root block containing CIDs - parse and request all data blocks
                                 match serde_json::from_slice::<Vec<Cid>>(&data) {
@@ -3124,7 +3174,7 @@ async fn run_dht_node(
                             error,
                         } => {
                             // Handle Bitswap query error
-                            warn!("Bitswap query {:?} failed: {:?}", query_id, error);
+                            error!("❌ Bitswap query {:?} failed: {:?}", query_id, error);
 
                             // Clean up any active downloads that contain this failed query
                             {
@@ -3368,6 +3418,8 @@ async fn run_dht_node(
                                         info_hash: json_val.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                         trackers: json_val.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
                                         is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
+                                        price: json_val.get("price").and_then(|v| v.as_f64()),
+                                        uploader_address: json_val.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                         ..Default::default()
                                     };
                                     let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
@@ -3452,7 +3504,23 @@ async fn run_dht_node(
                                     }).await;
                                     let EchoRequest(data) = request;
 
-                                    // 2) Showing received data to UI
+                                    // Check if this is a payment notification
+                                    if let Ok(json_str) = std::str::from_utf8(&data) {
+                                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
+                                            if parsed.get("type").and_then(|v| v.as_str()) == Some("payment_notification") {
+                                                // This is a payment notification, emit special event
+                                                if let Some(payload) = parsed.get("payload") {
+                                                    info!("💰 Received payment notification from peer {}: {:?}", peer, payload);
+                                                    let _ = event_tx.send(DhtEvent::PaymentNotificationReceived {
+                                                        from_peer: peer.to_string(),
+                                                        payload: payload.clone(),
+                                                    }).await;
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // 2) Showing received data to UI (for non-payment messages)
                                     let preview = std::str::from_utf8(&data).ok().map(|s| s.to_string());
                                     let _ = event_tx.send(DhtEvent::EchoReceived {
                                         from: peer.to_string(),
@@ -3914,8 +3982,15 @@ async fn handle_kademlia_event(
                                         .get("is_root")
                                         .and_then(|v| v.as_bool())
                                         .unwrap_or(true),
+                                    price: metadata_json.get("price").and_then(|v| v.as_f64()),
+                                    uploader_address: metadata_json
+                                        .get("uploader_address")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string()),
                                     ..Default::default()
                                 };
+
+                                println!("🔎 DHT: Retrieved metadata from DHT - price: {:?}, uploader: {:?}", metadata.price, metadata.uploader_address);
 
                                 let notify_metadata = metadata.clone();
                                 let file_hash = notify_metadata.merkle_root.clone();
@@ -5475,6 +5550,8 @@ impl DhtService {
         is_encrypted: bool,
         encryption_method: Option<String>,
         key_fingerprint: Option<String>,
+        price: Option<f64>,
+        uploader_address: Option<String>,
     ) -> Result<FileMetadata, String> {
         let latest = self
             .get_latest_version_by_file_name(file_name.clone())
@@ -5521,6 +5598,8 @@ impl DhtService {
             cids: None,
             is_root,
             download_path: None,
+            price,
+            uploader_address,
             ftp_sources: None,
             info_hash: None,
             trackers: None,
