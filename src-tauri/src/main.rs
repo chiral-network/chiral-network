@@ -2282,6 +2282,7 @@ async fn upload_file_to_network(
         Err("File transfer service is not running".to_string())
     }
 }
+}
 
 #[tauri::command]
 async fn download_blocks_from_network(
