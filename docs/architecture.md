@@ -433,7 +433,41 @@ Limitations:
 - STUN/TURN infrastructure needed
 ```
 
-##### 3. BitTorrent Protocol Integration
+##### 3. BitTorrent Protocol Integration  (Alternative for NAT'd Nodes)
+
+**[Discussion Needed]**: Should BitTorrent be the default for NAT'd nodes instead of WebTorrent?
+
+```
+Characteristics:
+- Proven P2P protocol
+- Efficient swarming
+- Wide client support
+- DHT-based peer discovery
+- Piece exchange optimization
+- ALTERNATIVE default for nodes behind NAT
+
+Flow:
+1. DHT Query: Find peers via Kademlia DHT
+2. Handshake: BitTorrent protocol handshake
+3. Piece Exchange: Request/send pieces
+4. Verification: SHA-1 or SHA-256 piece hashes
+5. Payment: Blockchain transaction (separate, out-of-band)
+
+Advantages vs WebTorrent for NAT'd nodes:
+- Highly efficient swarming
+- Mature protocol with proven NAT traversal
+- Existing client ecosystem
+- Optimized for large files
+- Lower overhead than WebRTC
+
+Disadvantages vs WebTorrent for NAT'd nodes:
+- Not browser-native
+- May be blocked by ISPs
+- Requires BitTorrent client software
+- DHT may be slower than WebRTC STUN/TURN
+
+[Decision Point]: WebTorrent (browser-friendly) vs BitTorrent (efficient) for NAT default?
+```
 
 The BitTorrent protocol is integrated as a primary method for file transfer, leveraging the global BitTorrent network to enhance multi-source download capabilities. It acts as an additional source within `multi_source_download.rs`, coordinated by a central `ProtocolManager`.
 
@@ -453,15 +487,8 @@ This dual-network approach allows the `ProtocolManager` to query both networks s
     - It identifies the source type (e.g., a `magnet:` link) and delegates the download or seeding task to the appropriate handler.
 
 2.  **`BitTorrentHandler` (Rust Module)**:
-    - A dedicated Rust module (`src-tauri/src/protocols/bittorrent/`) that implements the common `ProtocolHandler` trait. This trait defines the standard interface for all data transfer protocols:
-      ```rust
-      // src-tauri/src/protocols/mod.rs
-      pub trait ProtocolHandler {
-          async fn download(&self, identifier: &str) -> Result<(), String>;
-          async fn seed(&self, file_path: &str) -> Result<String, String>; // Returns identifier (e.g., magnet link)
-      }
-      ```
-    - **Responsibilities**: The `BitTorrentHandler` implements these methods to encapsulate all BitTorrent-specific logic, including parsing magnet links/.torrent files, managing connections to trackers and the public DHT, handling the peer-wire protocol, and downloading/verifying torrent pieces against their SHA-1 hashes.
+    - A dedicated Rust module (`src-tauri/src/protocols/bittorrent/`) that implements the `ProtocolHandler` trait.
+    - **Responsibilities**: Encapsulates all BitTorrent-specific logic, including parsing magnet links/.torrent files, managing connections to trackers and the public DHT, handling the peer-wire protocol, and downloading/verifying torrent pieces against their SHA-1 hashes.
 
 3.  **`multi_source_download.rs` Integration**:
     - The multi-source engine is updated to treat the BitTorrent swarm as a valid source.
