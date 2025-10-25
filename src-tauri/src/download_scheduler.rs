@@ -3,9 +3,11 @@
 // This module demonstrates how to use DownloadSource in scheduling and logging
 
 use crate::download_source::{DownloadSource, FtpSourceInfo, HttpSourceInfo, P2pSourceInfo};
+use crate::ftp_client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::{debug, info, warn};
+use std::path::PathBuf;
+use tracing::{debug, error, info, warn};
 
 /// Represents a scheduled download task
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,14 +164,46 @@ impl DownloadScheduler {
             use_ftps = info.use_ftps,
             "Initiating FTP download"
         );
-        // TODO: Implement actual FTP download logic
-        // This is where you would:
-        // 1. Parse the FTP URL
-        // 2. Connect to the FTP server
-        // 3. Authenticate if credentials provided
-        // 4. Download the file
-        // 5. Handle passive/active mode
-        // 6. Handle FTPS if enabled
+
+        // Get task to determine output path
+        let task = self
+            .tasks
+            .get(task_id)
+            .ok_or_else(|| format!("Task not found: {}", task_id))?;
+
+        // Construct output path (use file name from task or URL)
+        let file_name = &task.file_name;
+        let output_path = PathBuf::from(format!("./downloads/{}", file_name));
+
+        // Create downloads directory if it doesn't exist
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create download directory: {}", e))?;
+        }
+
+        // Spawn async task to download file
+        let info_clone = info.clone();
+        let output_path_clone = output_path.clone();
+
+        tokio::spawn(async move {
+            match ftp_client::download_from_ftp(&info_clone, &output_path_clone).await {
+                Ok(bytes) => {
+                    info!(
+                        bytes = bytes,
+                        output = ?output_path_clone,
+                        "FTP download completed successfully"
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        error = %e,
+                        url = %info_clone.url,
+                        "FTP download failed"
+                    );
+                }
+            }
+        });
+
         Ok(())
     }
 
