@@ -433,7 +433,7 @@ Limitations:
 - STUN/TURN infrastructure needed
 ```
 
-##### 3. BitTorrent Protocol (Alternative for NAT'd Nodes)
+##### 3. BitTorrent Protocol Integration  (Alternative for NAT'd Nodes)
 
 **[Discussion Needed]**: Should BitTorrent be the default for NAT'd nodes instead of WebTorrent?
 
@@ -467,6 +467,63 @@ Disadvantages vs WebTorrent for NAT'd nodes:
 - DHT may be slower than WebRTC STUN/TURN
 
 [Decision Point]: WebTorrent (browser-friendly) vs BitTorrent (efficient) for NAT default?
+```
+
+The BitTorrent protocol is integrated as a primary method for file transfer, leveraging the global BitTorrent network to enhance multi-source download capabilities. It acts as an additional source within `multi_source_download.rs`, coordinated by a central `ProtocolManager`.
+
+###### Conceptual Overview: Dual-Network Approach
+
+It is crucial to understand that the Chiral P2P network (built on libp2p) and the public BitTorrent network are **separate, parallel P2P networks**. The Chiral application acts as a bridge between them.
+
+- **Chiral P2P Network (libp2p)**: Used to find other Chiral peers, manage reputation, and coordinate transfers and payments within the Chiral ecosystem.
+- **Public BitTorrent Network**: The global, public swarm of all BitTorrent clients. The Chiral client connects to this network to download and seed files like a standard BitTorrent client.
+
+This dual-network approach allows the `ProtocolManager` to query both networks simultaneously, combining the speed and trust of the private Chiral network with the vast reach of the public one for faster, more resilient downloads.
+
+###### Key Architectural Components
+
+1.  **`ProtocolManager` (Orchestrator)**:
+    - The central component responsible for managing all available data transfer protocols (HTTP, BitTorrent, etc.).
+    - It identifies the source type (e.g., a `magnet:` link) and delegates the download or seeding task to the appropriate handler.
+
+2.  **`BitTorrentHandler` (Rust Module)**:
+    - A dedicated Rust module (`src-tauri/src/protocols/bittorrent/`) that implements the `ProtocolHandler` trait.
+    - **Responsibilities**: Encapsulates all BitTorrent-specific logic, including parsing magnet links/.torrent files, managing connections to trackers and the public DHT, handling the peer-wire protocol, and downloading/verifying torrent pieces against their SHA-1 hashes.
+
+3.  **`multi_source_download.rs` Integration**:
+    - The multi-source engine is updated to treat the BitTorrent swarm as a valid source.
+    - It assigns torrent *pieces* (rather than byte ranges) to be downloaded by the `BitTorrentHandler`.
+    - It manages fallback logic, allowing it to supplement a slow torrent swarm with downloads from other sources like HTTP or Chiral P2P.
+
+4.  **Chiral DHT Integration**:
+    - While the `BitTorrentHandler` uses the public BitTorrent DHT to find public peers, the **Chiral DHT** is extended to allow Chiral peers to announce to *each other* that they can provide a file via BitTorrent. This is done by storing the torrent's info hash alongside the file's primary content ID (CID).
+
+5.  **Tauri API (Frontend Boundary)**:
+    - The frontend interacts with the backend through a set of clear, high-level Tauri commands:
+        - `download_torrent(magnet_uri: String)`: Initiates a download from a magnet link.
+        - `seed_file(file_path: String)`: Creates a torrent from a local file, begins seeding it, and returns the magnet link to the UI.
+    - The backend emits events (e.g., `torrent_progress`, `torrent_complete`) to the frontend for real-time UI updates.
+
+###### Data Flow
+
+The following diagram illustrates the high-level data flow when a user initiates a torrent download from the UI.
+
+```mermaid
+sequenceDiagram
+    participant UI as Frontend (Svelte)
+    participant Tauri as Tauri API
+    participant Manager as ProtocolManager
+    participant BHandler as BitTorrentHandler
+    participant PublicSwarm as Public BitTorrent Network
+
+    UI->>+Tauri: invoke('download_torrent', { magnet_uri: '...' })
+    Tauri->>+Manager: download('magnet:...')
+    Manager->>+BHandler: download('magnet:...')
+    BHandler->>+PublicSwarm: Connect to Trackers/DHT & Download Pieces
+    PublicSwarm-->>-BHandler: Piece Data
+    BHandler-->>-Manager: Progress Events
+    Manager-->>-Tauri: emit('torrent_progress', ...)
+    Tauri-->>-UI: Event received, update progress bar
 ```
 
 ##### 4. ed2k (eDonkey2000) Protocol
