@@ -275,7 +275,6 @@ async refreshBalance(): Promise<void> {
     } catch (error) {
       console.error('Failed to refresh balance:', error);
     }
-  }
 
 
   async ensureGethRunning(): Promise<boolean> {

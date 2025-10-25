@@ -1,12 +1,13 @@
 <script lang="ts">
     import './styles/globals.css'
-    import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Mail, Server } from 'lucide-svelte'
+    import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Mail, Server, Share2 } from 'lucide-svelte'
     import UploadPage from './pages/Upload.svelte'
     import DownloadPage from './pages/Download.svelte'
     import ProxyPage from './pages/Proxy.svelte'
     import AccountPage from './pages/Account.svelte'
     import NetworkPage from './pages/Network.svelte'
     import AnalyticsPage from './pages/Analytics.svelte'
+    import TorrentDownloadPage from './pages/TorrentDownload.svelte'
     import SettingsPage from './pages/Settings.svelte'
     import MiningPage from './pages/Mining.svelte'
     import ReputationPage from './pages/Reputation.svelte'
@@ -14,7 +15,7 @@
     import RelayPage from './pages/Relay.svelte'
     import NotFound from './pages/NotFound.svelte'
     import ProxySelfTest from './routes/proxy-self-test.svelte'
-    import { networkStatus, settings, userLocation } from './lib/stores'
+    import { networkStatus, settings, userLocation, wallet } from './lib/stores'
     import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
     import {onMount, setContext} from 'svelte';
     import { tick } from 'svelte';
@@ -26,6 +27,8 @@
     import { fileService } from '$lib/services/fileService';
     import { bandwidthScheduler } from '$lib/services/bandwidthScheduler';
     import { detectUserRegion } from '$lib/services/geolocation';
+    import { paymentService } from '$lib/services/paymentService';
+    import { listen } from '@tauri-apps/api/event';
     // gets path name not entire url:
     // ex: http://locatlhost:1420/download -> /download
     
@@ -46,8 +49,57 @@
     
     onMount(() => {
       let stopNetworkMonitoring: () => void = () => {};
+      let unlistenSeederPayment: (() => void) | null = null;
 
       (async () => {
+        // Initialize payment service to load wallet and transactions
+        paymentService.initialize();
+
+        // Listen for payment notifications from backend
+        if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+          try {
+            const unlisten = await listen('seeder_payment_received', async (event: any) => {
+              const payload = event.payload;
+              console.log('💰 Seeder payment notification received:', payload);
+
+              // Only credit the payment if we are the seeder (not the downloader)
+              const currentWalletAddress = get(wallet).address;
+              const seederAddress = payload.seeder_wallet_address;
+
+              if (!seederAddress || !currentWalletAddress) {
+                console.warn('⚠️ Missing wallet addresses, skipping payment credit');
+                return;
+              }
+
+              // Check if this payment is meant for us (we are the seeder)
+              if (currentWalletAddress.toLowerCase() !== seederAddress.toLowerCase()) {
+                console.log(`⏭️ Skipping payment credit - not for us. Seeder: ${seederAddress}, Us: ${currentWalletAddress}`);
+                return;
+              }
+
+              console.log('✅ This payment is for us! Crediting...');
+
+              // Credit the seeder's wallet
+              const result = await paymentService.creditSeederPayment(
+                payload.file_hash,
+                payload.file_name,
+                payload.file_size,
+                payload.downloader_address,
+                payload.transaction_hash
+              );
+
+              if (result.success) {
+                console.log('✅ Seeder payment credited successfully');
+              } else {
+                console.error('❌ Failed to credit seeder payment:', result.error);
+              }
+            });
+            unlistenSeederPayment = unlisten;
+          } catch (error) {
+            console.error('Failed to setup payment listener:', error);
+          }
+        }
+
         // setup i18n
         await setupI18n();
         loading = false;
@@ -124,6 +176,9 @@
         window.removeEventListener('popstate', onPop);
         stopNetworkMonitoring();
         bandwidthScheduler.stop();
+        if (unlistenSeederPayment) {
+          unlistenSeederPayment();
+        }
       };
     })
 
@@ -157,6 +212,7 @@
       menuItems = [
         { id: 'download', label: $t('nav.download'), icon: Download },
         { id: 'upload', label: $t('nav.upload'), icon: Upload },
+        { id: 'torrents', label: 'Torrents', icon: Share2 },
         { id: 'messages', label: 'Messages', icon: Mail },
         { id: 'network', label: $t('nav.network'), icon: Globe },
         { id: 'relay', label: $t('nav.relay'), icon: Server },
@@ -184,6 +240,10 @@
       {
         path: "upload",
         component: UploadPage
+      },
+      {
+        path: "torrents",
+        component: TorrentDownloadPage
       },
       {
         path: "messages",
