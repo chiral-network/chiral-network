@@ -42,6 +42,8 @@ ctr = "0.9"
 hmac = "0.12"
 directories = "5.0"
 reqwest = { version = "0.11", features = ["json", "blocking", "stream"] }
+suppaftp = { version = "6.0", features = ["async", "secure"] }
+url = "2.5"
 chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1", features = ["full"] }
 flate2 = "1.0"
