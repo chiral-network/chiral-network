@@ -206,7 +206,7 @@ export class WalletService {
     }
   }
 
-  async refreshBalance(): Promise<void> {
+async refreshBalance(): Promise<void> {
     const account = get(etcAccount);
     if (!account || !this.isTauri) {
       return;
@@ -248,10 +248,14 @@ export class WalletService {
         actualBalance,
       }));
 
-      // Update pending transaction status
-      if (pendingSent > 0) {
-        const expectedBalance = actualBalance - pendingSent;
-        if (Math.abs(actualBalance - expectedBalance) < 0.01) {
+      // Update pending transaction status if they've been confirmed
+      // If we have pending sent transactions, check if the balance has decreased
+      // to mark them as completed
+      if (pendingSent > 0 && realBalance > 0) {
+        const expectedBalanceAfterPending = availableBalance;
+        // If real balance is lower than expected (meaning pending txs were processed),
+        // mark pending sent transactions as completed
+        if (realBalance < expectedBalanceAfterPending + pendingSent - 0.01) {
           transactions.update((txs) =>
             txs.map((tx) =>
               tx.status === 'pending' && tx.type === 'sent'
