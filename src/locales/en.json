@@ -495,7 +495,7 @@
   "wallet": {
     "title": "Chiral Network Wallet",
     "balance": "Balance",
-    "totalEarned": "Total Earned",
+    "totalEarned": "Total Mined",
     "totalSpent": "Total Spent",
     "address": "Chiral Address",
     "qrModal": {

@@ -450,10 +450,15 @@
       <!-- Filters and Sort Controls -->
       <div class="flex items-center justify-between mb-4 gap-2 flex-wrap">
         <!-- Filter Dropdown -->
-        <div class="relative">
-          <Button variant="outline" class="sm:w-auto" on:click={openFilters}>{$t('reputation.filters')}</Button>
+        <div class="relative" use:clickOutside>
+          <Button
+            variant="outline"
+            class="sm:w-auto"
+            on:click={() => (isFilterOpen ? (isFilterOpen = false) : openFilters())}
+            aria-haspopup="true"
+            aria-expanded={isFilterOpen}
+          >{$t('reputation.filters')}</Button>
           {#if isFilterOpen}
-            <div use:clickOutside>
               <Card class="absolute top-full mt-2 p-6 w-72 z-10">
                 <div class="space-y-6">
                   <!-- Trust Level Filter -->
@@ -503,7 +508,6 @@
                   <Button on:click={applyFilters}>{$t('reputation.apply')}</Button>
                 </div>
               </Card>
-            </div>
           {/if}
         </div>
 

@@ -3,6 +3,10 @@ pub mod analytics;
 pub mod protocols;
 pub mod multi_source_download;
 
+// Download source abstraction
+pub mod download_source;
+pub mod download_scheduler;
+
 // Required modules for multi_source_download
 pub mod dht;
 pub mod file_transfer;

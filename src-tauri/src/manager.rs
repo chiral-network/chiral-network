@@ -412,48 +412,57 @@ impl ChunkManager {
         Ok((proof_indices, proof_hashes_hex, all_chunk_hashes.len()))
     }
 
-    /// Verifies a downloaded chunk against the file's Merkle root using a proof.
-    /// This is called by a downloader node to ensure chunk integrity.
-    pub fn verify_chunk(
-        &self,
-        merkle_root_hex: &str,
-        chunk_info: &ChunkInfo,
-        chunk_data: &[u8],
-        proof_indices: &[usize],
-        proof_hashes_hex: &[String],
-        total_leaves_count: usize,
-    ) -> Result<bool, String> {
-        // 1. Verify the chunk's own hash.
-        let calculated_hash = Sha256Hasher::hash(chunk_data);
-        if hex::encode(calculated_hash) != chunk_info.hash {
-            return Ok(false); // The chunk data does not match its expected hash.
-        }
-
-        // 2. Decode hex strings to bytes for Merkle proof verification.
-        let merkle_root: [u8; 32] = hex::decode(merkle_root_hex)
-            .map_err(|e| e.to_string())?
-            .try_into()
-            .map_err(|_| "Invalid Merkle root length".to_string())?;
-
-        let proof_hashes: Vec<[u8; 32]> = proof_hashes_hex
-            .iter()
-            .map(|h| {
-                hex::decode(h)
-                    .map_err(|e| e.to_string())?
-                    .try_into()
-                    .map_err(|_| "Invalid proof hash length".to_string())
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-
-        // 3. Construct a Merkle proof object and verify it against the root.
-        let proof = rs_merkle::MerkleProof::<Sha256Hasher>::new(proof_hashes);
-        Ok(proof.verify(
-            merkle_root,
-            proof_indices,
-            &[calculated_hash],
-            total_leaves_count,
-        ))
+    /// Verifies a downloaded chunk against the file's Merkle root using a proof. (DEPRECATED)
+    /// This is now a wrapper around the standalone `verify_chunk_with_proof` function.
+    #[deprecated(
+        since = "0.1.0",
+        note = "Please use the standalone `verify_chunk_with_proof` function instead"
+    )]
+    pub fn verify_chunk(&self, merkle_root_hex: &str, chunk_info: &ChunkInfo, chunk_data: &[u8], proof_indices: &[usize], proof_hashes_hex: &[String], total_leaves_count: usize) -> Result<bool, String> {
+        verify_chunk_with_proof(merkle_root_hex, &chunk_info.hash, chunk_data, proof_indices, proof_hashes_hex, total_leaves_count)
     }
+}
+
+/// Verifies a downloaded chunk against its expected hash and a Merkle root using a proof.
+/// This is a standalone utility function for ensuring chunk integrity.
+pub fn verify_chunk_with_proof(
+    merkle_root_hex: &str,
+    expected_chunk_hash_hex: &str,
+    chunk_data: &[u8],
+    proof_indices: &[usize],
+    proof_hashes_hex: &[String],
+    total_leaves_count: usize,
+) -> Result<bool, String> {
+    // 1. Verify the chunk's own hash.
+    let calculated_hash_bytes = Sha256Hasher::hash(chunk_data);
+    if hex::encode(calculated_hash_bytes) != expected_chunk_hash_hex {
+        return Ok(false); // The chunk data does not match its expected hash.
+    }
+
+    // 2. Decode hex strings to bytes for Merkle proof verification.
+    let merkle_root: [u8; 32] = hex::decode(merkle_root_hex)
+        .map_err(|e| e.to_string())?
+        .try_into()
+        .map_err(|_| "Invalid Merkle root length".to_string())?;
+
+    let proof_hashes: Vec<[u8; 32]> = proof_hashes_hex
+        .iter()
+        .map(|h| {
+            hex::decode(h)
+                .map_err(|e| e.to_string())?
+                .try_into()
+                .map_err(|_| "Invalid proof hash length".to_string())
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    // 3. Construct a Merkle proof object and verify it against the root.
+    let proof = rs_merkle::MerkleProof::<Sha256Hasher>::new(proof_hashes);
+    Ok(proof.verify(
+        merkle_root,
+        proof_indices,
+        &[calculated_hash_bytes],
+        total_leaves_count,
+    ))
 }
 
 #[cfg(test)]
@@ -710,10 +719,10 @@ mod tests {
         let original_chunk_data = &buffer[..bytes_read];
 
         // 6. Verify the chunk using the proof.
-        let is_valid = manager
-            .verify_chunk(
+        let is_valid = 
+            verify_chunk_with_proof(
                 &manifest.merkle_root,
-                chunk_info,
+                &chunk_info.hash,
                 original_chunk_data,
                 &proof_indices,
                 &proof_hashes,
@@ -729,10 +738,9 @@ mod tests {
         // 7. Negative test: Verify that tampered data fails verification.
         let mut tampered_data = original_chunk_data.to_vec();
         tampered_data[0] = tampered_data[0].wrapping_add(1); // Modify one byte
-        let is_tampered_valid = manager
-            .verify_chunk(
+        let is_tampered_valid = verify_chunk_with_proof(
                 &manifest.merkle_root,
-                chunk_info,
+                &chunk_info.hash,
                 &tampered_data,
                 &proof_indices,
                 &proof_hashes,

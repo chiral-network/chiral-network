@@ -40,6 +40,7 @@ export interface FileItem {
   downloadedChunks?: number[];
   totalChunks?: number;
   downloadStartTime?: number;
+  price?: number; // Price in Chiral for this file
 }
 
 export interface ProxyNode {
@@ -135,6 +136,7 @@ export interface Transaction {
   amount: number;
   to?: string;
   from?: string;
+  txHash?: string;
   date: Date;
   description: string;
   status: "pending" | "completed";
@@ -429,6 +431,7 @@ export interface AppSettings {
   autoUpdate: boolean;
   enableBandwidthScheduling: boolean;
   bandwidthSchedules: BandwidthScheduleEntry[];
+  pricePerMb: number; // Price per MB in Chiral (e.g., 0.001)
 }
 
 // Export the settings store
@@ -472,4 +475,5 @@ export const settings = writable<AppSettings>({
   autoUpdate: true,
   enableBandwidthScheduling: false,
   bandwidthSchedules: [],
+  pricePerMb: 0.001, // Default price: 0.001 Chiral per MB
 });
