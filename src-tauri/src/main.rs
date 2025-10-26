@@ -4072,29 +4072,6 @@ async fn get_http_server_status(
     }
 }
 
-/// Register a file manifest with the HTTP server after successful upload
-///
-/// This should be called after `upload_and_publish_file` to make the file
-/// available for HTTP downloads.
-#[tauri::command]
-async fn register_manifest_for_http(
-    state: State<'_, AppState>,
-    merkle_root: String,
-    manifest_json: String,
-) -> Result<(), String> {
-    let manifest: manager::FileManifest = serde_json::from_str(&manifest_json)
-        .map_err(|e| format!("Failed to parse manifest: {}", e))?;
-
-    state
-        .http_server_state
-        .register_manifest(merkle_root.clone(), manifest)
-        .await;
-
-    tracing::info!("Registered manifest for HTTP serving: {}", merkle_root);
-
-    Ok(())
-}
-
 /// Download a file via HTTP protocol
 ///
 /// Downloads encrypted chunks from an HTTP seeder, decrypts them,
@@ -4242,12 +4219,14 @@ fn main() {
             // Initialize proxy authentication tokens
             proxy_auth_tokens: Arc::new(Mutex::new(std::collections::HashMap::new())),
 
-            // Initialize HTTP server state (will be started on-demand)
-            http_server_state: Arc::new(http_server::HttpServerState::new(
-                std::env::current_dir()
-                    .unwrap()
-                    .join("chunk_storage") // Temporary, will be updated with app data dir in setup
-            )),
+            // Initialize HTTP server state (uses same storage as FileTransferService)
+            http_server_state: Arc::new(http_server::HttpServerState::new({
+                // Use same storage directory as FileTransferService (files/, not chunks/)
+                use directories::ProjectDirs;
+                ProjectDirs::from("com", "chiral-network", "chiral-network")
+                    .map(|dirs| dirs.data_dir().join("files"))
+                    .unwrap_or_else(|| std::env::current_dir().unwrap().join("files"))
+            })),
             http_server_addr: Arc::new(Mutex::new(None)),
 
             // Initialize stream authentication
@@ -4387,7 +4366,6 @@ fn main() {
             start_http_server,
             stop_http_server,
             get_http_server_status,
-            register_manifest_for_http,
             download_file_http,
             save_temp_file_for_upload,
             get_file_size,
@@ -4878,20 +4856,18 @@ async fn upload_and_publish_file(
     };
 
 
-    // 6. Register manifest with HTTP server for serving
-    // Note: manifest.encrypted_key_bundle is None from canonical encryption
-    let file_manifest = manager::FileManifest {
-        merkle_root: manifest.merkle_root.clone(),
-        chunks: manifest.chunks.clone(),
-        encrypted_key_bundle: manifest.encrypted_key_bundle.clone(),
-    };
-
+    // 6. Register file with HTTP server for Range-based serving
     state
         .http_server_state
-        .register_manifest(manifest.merkle_root.clone(), file_manifest)
+        .register_file(http_server::HttpFileMetadata {
+            hash: manifest.merkle_root.clone(),
+            name: file_name.clone(),
+            size: file_size,
+            encrypted: true,
+        })
         .await;
 
-    tracing::info!("Registered manifest for HTTP serving: {}", manifest.merkle_root);
+    tracing::info!("Registered file for HTTP serving: {} ({})", file_name, manifest.merkle_root);
 
     // 7. Return metadata to frontend
     Ok(UploadResult {

@@ -13,78 +13,84 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::manager::{ChunkManager, FileManifest};
+/// HTTP Server for serving files via Range requests
+///
+/// Simplified Architecture (no pre-chunking):
+/// - GET /health → Health check
+/// - GET /files/{file_hash} → Serve file (supports Range header for partial downloads)
+/// - GET /files/{file_hash}/metadata → Returns file metadata (name, size, encrypted status)
+///
+/// This approach:
+/// - Stores whole files (not pre-chunked)
+/// - Uses HTTP Range requests for chunking on-demand
+/// - Simpler than manifest-based chunking
+/// - Aligns with professor feedback (PR #543)
 
-/// HTTP Server for serving encrypted file chunks and decryption keys
-///
-/// Architecture:
-/// - GET /chunks/{encrypted_hash} → Returns encrypted chunk data
-/// - GET /files/{merkle_root}/manifest → Returns file manifest with key bundle
-/// - GET /files/{merkle_root}/key → Returns just the encrypted key bundle
-///
-/// Security:
-/// - All chunks are served encrypted (security at rest)
-/// - Keys are encrypted with recipient's public key (ECIES)
-/// - Simple HTTP for now (HTTPS can be added later)
+/// File metadata for HTTP serving
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpFileMetadata {
+    pub hash: String,
+    pub name: String,
+    pub size: u64,
+    pub encrypted: bool,
+}
 
 #[derive(Clone)]
 pub struct HttpServerState {
-    /// Maps merkle_root → FileManifest (includes encrypted_key_bundle)
-    pub manifests: Arc<RwLock<HashMap<String, FileManifest>>>,
+    /// Path to file storage directory (where whole files are stored)
+    /// This is the same directory used by FileTransferService
+    pub storage_dir: PathBuf,
 
-    /// Path to chunk storage directory
-    pub chunk_storage_path: PathBuf,
-
-    /// ChunkManager for reading chunks from disk
-    pub chunk_manager: Arc<ChunkManager>,
+    /// Maps file_hash → HttpFileMetadata
+    /// Tracks which files are available for HTTP download
+    pub files: Arc<RwLock<HashMap<String, HttpFileMetadata>>>,
 }
 
 impl HttpServerState {
-    pub fn new(chunk_storage_path: PathBuf) -> Self {
+    /// Create new HTTP server state
+    ///
+    /// The storage_dir should point to the FileTransferService storage directory
+    /// (e.g., ~/.local/share/chiral-network/files/)
+    pub fn new(storage_dir: PathBuf) -> Self {
         Self {
-            manifests: Arc::new(RwLock::new(HashMap::new())),
-            chunk_storage_path: chunk_storage_path.clone(),
-            chunk_manager: Arc::new(ChunkManager::new(chunk_storage_path)),
+            storage_dir,
+            files: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
-    /// Register a file manifest so it can be served via HTTP
-    /// Should be called after successful upload
-    pub async fn register_manifest(&self, merkle_root: String, manifest: FileManifest) {
-        let mut manifests = self.manifests.write().await;
-        manifests.insert(merkle_root.clone(), manifest);
-        tracing::info!("Registered file manifest for HTTP serving: {}", merkle_root);
+    /// Register a file for HTTP serving
+    ///
+    /// This should be called after a file is successfully uploaded and stored
+    /// in the storage directory. The file should exist at: storage_dir/{metadata.hash}
+    pub async fn register_file(&self, metadata: HttpFileMetadata) {
+        let mut files = self.files.write().await;
+        files.insert(metadata.hash.clone(), metadata.clone());
+        tracing::info!(
+            "Registered file for HTTP serving: {} ({})",
+            metadata.name,
+            metadata.hash
+        );
     }
 
     /// Unregister a file (e.g., when user stops seeding)
-    pub async fn unregister_manifest(&self, merkle_root: &str) {
-        let mut manifests = self.manifests.write().await;
-        manifests.remove(merkle_root);
-        tracing::info!("Unregistered file manifest: {}", merkle_root);
+    pub async fn unregister_file(&self, file_hash: &str) {
+        let mut files = self.files.write().await;
+        if let Some(metadata) = files.remove(file_hash) {
+            tracing::info!("Unregistered file: {} ({})", metadata.name, file_hash);
+        }
     }
-}
 
-/// Response for manifest endpoint
-#[derive(Serialize, Deserialize)]
-pub struct ManifestResponse {
-    pub merkle_root: String,
-    pub chunks: Vec<ChunkInfoResponse>,
-    pub encrypted_key_bundle: Option<String>, // JSON serialized EncryptedAesKeyBundle
-    pub total_size: usize,
-}
+    /// Get file metadata
+    pub async fn get_file_metadata(&self, file_hash: &str) -> Option<HttpFileMetadata> {
+        let files = self.files.read().await;
+        files.get(file_hash).cloned()
+    }
 
-#[derive(Serialize, Deserialize)]
-pub struct ChunkInfoResponse {
-    pub index: u32,
-    pub encrypted_hash: String, // Hash to use for fetching chunk
-    pub encrypted_size: usize,
-}
-
-/// Response for key-only endpoint
-#[derive(Serialize, Deserialize)]
-pub struct KeyResponse {
-    pub merkle_root: String,
-    pub encrypted_key_bundle: String, // JSON serialized
+    /// Check if a file is registered
+    pub async fn has_file(&self, file_hash: &str) -> bool {
+        let files = self.files.read().await;
+        files.contains_key(file_hash)
+    }
 }
 
 /// Error response
@@ -97,35 +103,26 @@ pub struct ErrorResponse {
 // HTTP Handlers
 // ============================================================================
 
-/// GET /chunks/{encrypted_hash}
+/// GET /files/{file_hash}/metadata
 ///
-/// Serves an encrypted chunk by its hash
-///
-/// Flow:
-/// 1. Client requests chunk by encrypted_hash (from manifest)
-/// 2. Server reads encrypted chunk from disk
-/// 3. Server returns raw encrypted bytes
-async fn serve_chunk(
-    Path(encrypted_hash): Path<String>,
+/// Returns file metadata (name, size, encrypted status)
+async fn serve_metadata(
+    Path(file_hash): Path<String>,
     State(state): State<Arc<HttpServerState>>,
 ) -> Response {
-    tracing::debug!("Serving chunk: {}", encrypted_hash);
+    tracing::debug!("Serving metadata for: {}", file_hash);
 
-    // Read encrypted chunk from disk (includes [nonce][ciphertext])
-    match state.chunk_manager.read_chunk(&encrypted_hash) {
-        Ok(encrypted_data) => {
-            tracing::info!("Served chunk {} ({} bytes)", encrypted_hash, encrypted_data.len());
-
-            // Return raw bytes with appropriate content type
-            (StatusCode::OK, encrypted_data).into_response()
+    match state.get_file_metadata(&file_hash).await {
+        Some(metadata) => {
+            tracing::info!("Served metadata for {}: {}", file_hash, metadata.name);
+            (StatusCode::OK, Json(metadata)).into_response()
         }
-        Err(e) => {
-            tracing::error!("Failed to read chunk {}: {}", encrypted_hash, e);
-
+        None => {
+            tracing::warn!("Metadata not found: {}", file_hash);
             (
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse {
-                    error: format!("Chunk not found: {}", encrypted_hash),
+                    error: format!("File not found: {}", file_hash),
                 }),
             )
                 .into_response()
@@ -133,120 +130,207 @@ async fn serve_chunk(
     }
 }
 
-/// GET /files/{merkle_root}/manifest
+/// GET /files/{file_hash}
 ///
-/// Returns file manifest including chunk list and encrypted key bundle
+/// Serves a file with support for HTTP Range requests
 ///
-/// This is the primary endpoint clients use to start a download:
-/// 1. Client queries DHT for merkle_root → gets seeder's HTTP URL
-/// 2. Client fetches manifest from seeder
-/// 3. Client gets list of chunks + encrypted key
-/// 4. Client downloads chunks in parallel
-/// 5. Client decrypts chunks with key
-async fn serve_manifest(
-    Path(merkle_root): Path<String>,
+/// This allows clients to download specific byte ranges, enabling:
+/// - Parallel chunk downloads from the same file
+/// - Resume capability
+/// - Bandwidth management
+///
+/// If no Range header is provided, returns the entire file.
+async fn serve_file(
+    Path(file_hash): Path<String>,
     State(state): State<Arc<HttpServerState>>,
+    headers: axum::http::HeaderMap,
 ) -> Response {
-    tracing::debug!("Serving manifest for: {}", merkle_root);
+    tracing::debug!("Serving file: {}", file_hash);
 
-    let manifests = state.manifests.read().await;
+    // Check if file is registered
+    let metadata = match state.get_file_metadata(&file_hash).await {
+        Some(m) => m,
+        None => {
+            tracing::warn!("File not registered: {}", file_hash);
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("File not found: {}", file_hash),
+                }),
+            )
+                .into_response();
+        }
+    };
 
-    match manifests.get(&merkle_root) {
-        Some(manifest) => {
-            let total_size: usize = manifest.chunks.iter().map(|c| c.encrypted_size).sum();
+    // Build file path
+    let file_path = state.storage_dir.join(&file_hash);
 
-            let response = ManifestResponse {
-                merkle_root: manifest.merkle_root.clone(),
-                chunks: manifest
-                    .chunks
-                    .iter()
-                    .map(|c| ChunkInfoResponse {
-                        index: c.index,
-                        encrypted_hash: c.encrypted_hash.clone(),
-                        encrypted_size: c.encrypted_size,
-                    })
-                    .collect(),
-                encrypted_key_bundle: manifest
-                    .encrypted_key_bundle
-                    .as_ref()
-                    .map(|bundle| serde_json::to_string(bundle).unwrap_or_default()),
-                total_size,
-            };
+    // Check if file exists on disk
+    if !file_path.exists() {
+        tracing::error!(
+            "File registered but not found on disk: {} at {:?}",
+            file_hash,
+            file_path
+        );
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "File not found on disk".to_string(),
+            }),
+        )
+            .into_response();
+    }
 
-            tracing::info!(
-                "Served manifest for {} ({} chunks, {} bytes total)",
-                merkle_root,
-                response.chunks.len(),
-                total_size
+    // Check for Range header
+    let range_header = headers
+        .get("range")
+        .and_then(|v| v.to_str().ok());
+
+    if let Some(range_str) = range_header {
+        // Serve partial content (Range request)
+        serve_file_range(&file_path, range_str, metadata.size).await
+    } else {
+        // Serve entire file
+        serve_entire_file(&file_path, metadata.size).await
+    }
+}
+
+/// Serve a byte range from a file (206 Partial Content)
+async fn serve_file_range(
+    file_path: &PathBuf,
+    range_str: &str,
+    file_size: u64,
+) -> Response {
+    use tokio::fs::File;
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+    // Parse Range header: "bytes=start-end"
+    let (start, end) = match parse_range_header(range_str, file_size) {
+        Some(range) => range,
+        None => {
+            tracing::warn!("Invalid Range header: {}", range_str);
+            return (
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                Json(ErrorResponse {
+                    error: "Invalid Range header".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    // Open file
+    let mut file = match File::open(file_path).await {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::error!("Failed to open file {:?}: {}", file_path, e);
+            return (StatusCode::INTERNAL_SERVER_ERROR).into_response();
+        }
+    };
+
+    // Seek to start position
+    if let Err(e) = file.seek(tokio::io::SeekFrom::Start(start)).await {
+        tracing::error!("Failed to seek in file: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR).into_response();
+    }
+
+    // Read chunk
+    let chunk_size = (end - start + 1) as usize;
+    let mut buffer = vec![0u8; chunk_size];
+
+    match file.read_exact(&mut buffer).await {
+        Ok(_) => {
+            tracing::debug!(
+                "Serving range {}-{} of {:?} ({} bytes)",
+                start,
+                end,
+                file_path,
+                chunk_size
             );
 
-            (StatusCode::OK, Json(response)).into_response()
-        }
-        None => {
-            tracing::warn!("Manifest not found: {}", merkle_root);
-
+            // Return 206 Partial Content
             (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("File not found: {}", merkle_root),
-                }),
+                StatusCode::PARTIAL_CONTENT,
+                [
+                    (
+                        "Content-Range",
+                        format!("bytes {}-{}/{}", start, end, file_size),
+                    ),
+                    ("Content-Length", chunk_size.to_string()),
+                    ("Accept-Ranges", "bytes".to_string()),
+                ],
+                buffer,
             )
                 .into_response()
+        }
+        Err(e) => {
+            tracing::error!("Failed to read file: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR).into_response()
         }
     }
 }
 
-/// GET /files/{merkle_root}/key
-///
-/// Returns only the encrypted key bundle (without full manifest)
-///
-/// Useful for cases where client already has chunk list but needs key
-async fn serve_key(
-    Path(merkle_root): Path<String>,
-    State(state): State<Arc<HttpServerState>>,
-) -> Response {
-    tracing::debug!("Serving key for: {}", merkle_root);
-
-    let manifests = state.manifests.read().await;
-
-    match manifests.get(&merkle_root) {
-        Some(manifest) => {
-            match &manifest.encrypted_key_bundle {
-                Some(bundle) => {
-                    let response = KeyResponse {
-                        merkle_root: merkle_root.clone(),
-                        encrypted_key_bundle: serde_json::to_string(bundle)
-                            .unwrap_or_default(),
-                    };
-
-                    tracing::info!("Served key for {}", merkle_root);
-                    (StatusCode::OK, Json(response)).into_response()
-                }
-                None => {
-                    tracing::warn!("No key bundle for file: {}", merkle_root);
-
-                    (
-                        StatusCode::NOT_FOUND,
-                        Json(ErrorResponse {
-                            error: "No encryption key available for this file".to_string(),
-                        }),
-                    )
-                        .into_response()
-                }
-            }
-        }
-        None => {
-            tracing::warn!("File not found: {}", merkle_root);
+/// Serve the entire file (200 OK)
+async fn serve_entire_file(file_path: &PathBuf, file_size: u64) -> Response {
+    match tokio::fs::read(file_path).await {
+        Ok(data) => {
+            tracing::debug!("Serving entire file {:?} ({} bytes)", file_path, data.len());
 
             (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("File not found: {}", merkle_root),
-                }),
+                StatusCode::OK,
+                [
+                    ("Content-Length", data.len().to_string()),
+                    ("Accept-Ranges", "bytes".to_string()),
+                ],
+                data,
             )
                 .into_response()
         }
+        Err(e) => {
+            tracing::error!("Failed to read file {:?}: {}", file_path, e);
+            (StatusCode::INTERNAL_SERVER_ERROR).into_response()
+        }
     }
+}
+
+/// Parse HTTP Range header
+///
+/// Supports formats:
+/// - "bytes=0-999" → Some((0, 999))
+/// - "bytes=1000-" → Some((1000, file_size-1))
+/// - "bytes=-500" → Not supported (returns None)
+fn parse_range_header(range_str: &str, file_size: u64) -> Option<(u64, u64)> {
+    let bytes_str = range_str.strip_prefix("bytes=")?;
+    let mut parts = bytes_str.split('-');
+
+    let start_str = parts.next()?;
+    let end_str = parts.next()?;
+
+    // Parse start
+    let start: u64 = if start_str.is_empty() {
+        // Suffix range (e.g., "bytes=-500") - not supported
+        return None;
+    } else {
+        start_str.parse().ok()?
+    };
+
+    // Parse end
+    let end: u64 = if end_str.is_empty() {
+        // Open-ended range (e.g., "bytes=1000-")
+        file_size - 1
+    } else {
+        end_str.parse().ok()?
+    };
+
+    // Validate range
+    if start > end || start >= file_size {
+        return None;
+    }
+
+    // Clamp end to file size
+    let end = std::cmp::min(end, file_size - 1);
+
+    Some((start, end))
 }
 
 /// GET /health
@@ -264,9 +348,8 @@ async fn health_check() -> impl IntoResponse {
 pub fn create_router(state: Arc<HttpServerState>) -> Router {
     Router::new()
         .route("/health", get(health_check))
-        .route("/chunks/:encrypted_hash", get(serve_chunk))
-        .route("/files/:merkle_root/manifest", get(serve_manifest))
-        .route("/files/:merkle_root/key", get(serve_key))
+        .route("/files/:file_hash", get(serve_file))
+        .route("/files/:file_hash/metadata", get(serve_metadata))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
@@ -293,9 +376,8 @@ pub async fn start_server(
     tracing::info!("HTTP server listening on http://{}", bound_addr);
     tracing::info!("Endpoints:");
     tracing::info!("  GET /health");
-    tracing::info!("  GET /chunks/:encrypted_hash");
-    tracing::info!("  GET /files/:merkle_root/manifest");
-    tracing::info!("  GET /files/:merkle_root/key");
+    tracing::info!("  GET /files/:file_hash (supports Range header)");
+    tracing::info!("  GET /files/:file_hash/metadata");
 
     // Spawn server in background
     tokio::spawn(async move {
@@ -313,7 +395,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_check() {
-        let state = Arc::new(HttpServerState::new(PathBuf::from("/tmp/test_chunks")));
+        let state = Arc::new(HttpServerState::new(PathBuf::from("/tmp/test_files")));
         let app = create_router(state);
 
         let response = app
@@ -328,5 +410,30 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_parse_range_header() {
+        // Standard range
+        assert_eq!(
+            parse_range_header("bytes=0-262143", 1048576),
+            Some((0, 262143))
+        );
+
+        // Open-ended range
+        assert_eq!(
+            parse_range_header("bytes=1000-", 2000),
+            Some((1000, 1999))
+        );
+
+        // Range beyond file size (clamped)
+        assert_eq!(
+            parse_range_header("bytes=0-999999", 1000),
+            Some((0, 999))
+        );
+
+        // Invalid ranges
+        assert_eq!(parse_range_header("bytes=-500", 1000), None);
+        assert_eq!(parse_range_header("bytes=2000-", 1000), None);
     }
 }
