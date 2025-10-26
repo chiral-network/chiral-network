@@ -10,6 +10,7 @@ pub mod ftp_client;
 // Required modules for multi_source_download
 pub mod dht;
 pub mod file_transfer;
+pub mod ftp_downloader;
 pub mod peer_selection;
 pub mod webrtc_service;
 
