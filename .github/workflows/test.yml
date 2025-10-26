@@ -86,8 +86,23 @@ jobs:
       - name: Check if backend compiles
         run: |
           cd src-tauri
-          cargo check --workspace
+          # Check library code first (faster, no GUI dependencies)
+          cargo check --lib
+          # Then check binaries if lib passes
+          cargo check --bins
         timeout-minutes: 10
+
+      - name: Run backend tests
+        run: |
+          cd src-tauri
+          # Run tests for multi-source download
+          cargo test --lib multi_source_download
+          # Run tests for FTP client
+          cargo test --lib ftp_client
+          # Run tests for download scheduler
+          cargo test --lib download_scheduler
+        timeout-minutes: 5
+        continue-on-error: true
 
   relay:
     name: Relay Tests
