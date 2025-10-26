@@ -4072,15 +4072,19 @@ async fn get_http_server_status(
     }
 }
 
-/// Download a file via HTTP protocol
+/// Download a file via HTTP protocol using Range requests
 ///
-/// Downloads encrypted chunks from an HTTP seeder, decrypts them,
-/// and assembles the final file.
+/// This uses HTTP Range headers (RFC 7233) to download file chunks in parallel,
+/// without requiring pre-chunking or manifest endpoints.
 ///
-/// Download a file via HTTP protocol (simplified version without decryption)
+/// Flow:
+/// 1. Fetch file metadata from HTTP server
+/// 2. Calculate byte ranges (256KB chunks)
+/// 3. Download chunks in parallel using Range headers
+/// 4. Reassemble chunks into final file
 ///
-/// Files are downloaded and saved as-is (encrypted if they were encrypted).
-/// Decryption will be implemented later when RequestFileAccess handler is complete.
+/// Files are downloaded as-is (encrypted if they were encrypted).
+/// Decryption happens at a higher level when needed.
 ///
 /// Emits `http_download_progress` events with progress updates.
 #[tauri::command]
@@ -4091,18 +4095,10 @@ async fn download_file_http(
     output_path: String,
 ) -> Result<(), String> {
     tracing::info!(
-        "Starting HTTP download: {} from {}",
+        "Starting HTTP Range-based download: {} from {}",
         merkle_root,
         seeder_url
     );
-
-    // Get app data directory for chunk storage
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Could not get app data directory: {}", e))?;
-
-    let chunk_storage_path = app_data_dir.join("chunk_storage");
 
     // Create progress channel
     let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel(100);
@@ -4115,10 +4111,10 @@ async fn download_file_http(
         }
     });
 
-    // Create HTTP download client
-    let client = http_download::HttpDownloadClient::new(chunk_storage_path);
+    // Create HTTP download client (Range-based, no chunk storage needed)
+    let client = http_download::HttpDownloadClient::new();
 
-    // Start download
+    // Start download using Range requests
     client
         .download_file(
             &seeder_url,

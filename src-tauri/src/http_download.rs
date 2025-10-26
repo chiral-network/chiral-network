@@ -1,29 +1,35 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, Semaphore};
 
-use crate::manager::ChunkManager;
-
-/// HTTP Download Client for fetching files via HTTP protocol
+/// HTTP Download Client for fetching files via HTTP Range requests
 ///
-/// Simplified Flow (similar to WebRTC):
-/// 1. Fetch manifest from seeder's HTTP endpoint
-/// 2. Download chunks in parallel (encrypted or unencrypted)
-/// 3. Assemble final file
+/// Simplified Architecture (Range-based, no manifest):
+/// 1. Fetch file metadata from seeder's HTTP endpoint
+/// 2. Calculate byte ranges (e.g., 0-256KB, 256KB-512KB, etc.)
+/// 3. Download chunks in parallel using Range headers
+/// 4. Reassemble chunks into final file
 ///
-/// Note: Decryption and verification are deferred for future implementation
-/// when the RequestFileAccess protocol handler is completed.
+/// This approach uses HTTP Range requests (RFC 7233) to download file chunks
+/// dynamically, without requiring pre-chunking or manifest endpoints.
+///
+/// Example Range request:
+/// GET /files/{hash}
+/// Range: bytes=0-262143
+///
+/// Server responds with:
+/// HTTP/1.1 206 Partial Content
+/// Content-Range: bytes 0-262143/1048576
+/// Content-Length: 262144
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpDownloadProgress {
-    pub merkle_root: String,
+    pub file_hash: String,
     pub chunks_total: usize,
     pub chunks_downloaded: usize,
-    pub chunks_verified: usize,
     pub bytes_downloaded: u64,
     pub bytes_total: u64,
     pub status: DownloadStatus,
@@ -31,27 +37,32 @@ pub struct HttpDownloadProgress {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum DownloadStatus {
-    FetchingManifest,
+    FetchingMetadata,
     Downloading,
     Assembling,
     Completed,
     Failed,
 }
 
+/// File metadata from HTTP server (matches HttpFileMetadata in http_server.rs)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ManifestResponse {
-    pub merkle_root: String,
-    pub chunks: Vec<ChunkInfo>,
-    pub encrypted_key_bundle: Option<String>,
-    pub total_size: usize,
+pub struct HttpFileMetadata {
+    pub hash: String,
+    pub name: String,
+    pub size: u64,
+    pub encrypted: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChunkInfo {
-    pub index: u32,
-    pub encrypted_hash: String,
-    pub encrypted_size: usize,
+/// Represents a byte range to download
+#[derive(Debug, Clone)]
+struct ByteRange {
+    start: u64,
+    end: u64,
+    index: usize,
 }
+
+/// Chunk size for Range requests (256 KB)
+const CHUNK_SIZE: u64 = 256 * 1024;
 
 /// Maximum concurrent chunk downloads per HTTP source
 ///
@@ -65,191 +76,246 @@ const MAX_CONCURRENT_CHUNKS: usize = 5;
 
 pub struct HttpDownloadClient {
     http_client: Client,
-    chunk_manager: Arc<ChunkManager>,
     /// Semaphore to limit concurrent chunk downloads
-    download_semaphore: Arc<Semaphore>,
+    download_semaphore: std::sync::Arc<Semaphore>,
 }
 
 impl HttpDownloadClient {
-    pub fn new(chunk_storage_path: std::path::PathBuf) -> Self {
+    pub fn new() -> Self {
         Self {
             http_client: Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .expect("Failed to create HTTP client"),
-            chunk_manager: Arc::new(ChunkManager::new(chunk_storage_path)),
-            download_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_CHUNKS)),
+            download_semaphore: std::sync::Arc::new(Semaphore::new(MAX_CONCURRENT_CHUNKS)),
         }
     }
 
-    /// Download a file from an HTTP seeder
+    /// Create with custom timeout
+    pub fn with_timeout(timeout_secs: u64) -> Self {
+        Self {
+            http_client: Client::builder()
+                .timeout(std::time::Duration::from_secs(timeout_secs))
+                .build()
+                .expect("Failed to create HTTP client"),
+            download_semaphore: std::sync::Arc::new(Semaphore::new(MAX_CONCURRENT_CHUNKS)),
+        }
+    }
+
+    /// Download a file from an HTTP seeder using Range requests
     ///
     /// Arguments:
     /// - `seeder_url`: Base URL of the seeder (e.g., "http://192.168.1.5:8080")
-    /// - `merkle_root`: File identifier
+    /// - `file_hash`: File identifier (merkle_root)
     /// - `output_path`: Where to save the final file
     /// - `progress_tx`: Optional channel for progress updates
     ///
     /// Returns: Ok(()) on success
     ///
-    /// Note: This simplified version downloads and assembles chunks without decryption.
-    /// Files are saved as-is (encrypted if they were encrypted, unencrypted otherwise).
+    /// This method:
+    /// 1. Fetches file metadata to get size
+    /// 2. Calculates byte ranges (256KB chunks)
+    /// 3. Downloads chunks in parallel using Range headers
+    /// 4. Reassembles chunks into final file
+    ///
+    /// Note: Files are downloaded as-is (encrypted if they were encrypted).
+    /// Decryption happens at a higher level when needed.
     pub async fn download_file(
         &self,
         seeder_url: &str,
-        merkle_root: &str,
+        file_hash: &str,
         output_path: &Path,
         progress_tx: Option<mpsc::Sender<HttpDownloadProgress>>,
     ) -> Result<(), String> {
         tracing::info!(
-            "Starting HTTP download: {} from {}",
-            merkle_root,
+            "Starting HTTP Range-based download: {} from {}",
+            file_hash,
             seeder_url
         );
 
-        // Step 1: Fetch manifest
+        // Step 1: Fetch file metadata
         self.send_progress(
             &progress_tx,
-            merkle_root,
+            file_hash,
             0,
             0,
             0,
             0,
-            0,
-            DownloadStatus::FetchingManifest,
+            DownloadStatus::FetchingMetadata,
         )
         .await;
 
-        let manifest = self.fetch_manifest(seeder_url, merkle_root).await?;
+        let metadata = self.fetch_metadata(seeder_url, file_hash).await?;
 
         tracing::info!(
-            "Fetched manifest: {} chunks, {} bytes total",
-            manifest.chunks.len(),
-            manifest.total_size
+            "Fetched metadata: {} ({} bytes, encrypted: {})",
+            metadata.name,
+            metadata.size,
+            metadata.encrypted
         );
 
-        // Step 2: Download all chunks
+        // Step 2: Calculate byte ranges
+        let ranges = self.calculate_ranges(metadata.size);
+        let total_chunks = ranges.len();
+
+        tracing::info!(
+            "Calculated {} chunks of {} bytes each",
+            total_chunks,
+            CHUNK_SIZE
+        );
+
         self.send_progress(
             &progress_tx,
-            merkle_root,
-            manifest.chunks.len(),
+            file_hash,
+            total_chunks,
             0,
             0,
-            0,
-            manifest.total_size as u64,
+            metadata.size,
             DownloadStatus::Downloading,
         )
         .await;
 
+        // Step 3: Download all chunks using Range requests
         let chunks = self
-            .download_chunks(
+            .download_chunks_with_ranges(
                 seeder_url,
-                &manifest.chunks,
-                merkle_root,
+                file_hash,
+                &ranges,
                 progress_tx.clone(),
+                metadata.size,
             )
             .await?;
 
         tracing::info!("Downloaded {} chunks", chunks.len());
 
-        // Step 3: Assemble final file
-        // Note: Chunks are saved as-is (encrypted if they were encrypted)
-        // Decryption will be implemented later when RequestFileAccess handler is complete
+        // Step 4: Assemble final file
         self.send_progress(
             &progress_tx,
-            merkle_root,
-            manifest.chunks.len(),
-            manifest.chunks.len(),
-            manifest.chunks.len(),
-            manifest.total_size as u64,
-            manifest.total_size as u64,
+            file_hash,
+            total_chunks,
+            total_chunks,
+            metadata.size,
+            metadata.size,
             DownloadStatus::Assembling,
         )
         .await;
 
-        // Extract just the data from chunks (chunks is Vec<(u32, Vec<u8>)>)
-        let chunk_data: Vec<Vec<u8>> = chunks.iter().map(|(_, data)| data.clone()).collect();
-
-        self.assemble_file(&chunk_data, output_path).await?;
+        self.assemble_file(&chunks, output_path).await?;
 
         // Final status
         self.send_progress(
             &progress_tx,
-            merkle_root,
-            manifest.chunks.len(),
-            manifest.chunks.len(),
-            manifest.chunks.len(),
-            manifest.total_size as u64,
-            manifest.total_size as u64,
+            file_hash,
+            total_chunks,
+            total_chunks,
+            metadata.size,
+            metadata.size,
             DownloadStatus::Completed,
         )
         .await;
 
-        tracing::info!("Download completed: {}", output_path.display());
+        tracing::info!(
+            "Download completed: {} ({})",
+            output_path.display(),
+            metadata.name
+        );
 
         Ok(())
     }
 
-    /// Fetch file manifest from HTTP seeder
-    async fn fetch_manifest(
+    /// Fetch file metadata from HTTP seeder
+    ///
+    /// Calls: GET /files/{file_hash}/metadata
+    async fn fetch_metadata(
         &self,
         seeder_url: &str,
-        merkle_root: &str,
-    ) -> Result<ManifestResponse, String> {
-        let url = format!("{}/files/{}/manifest", seeder_url, merkle_root);
+        file_hash: &str,
+    ) -> Result<HttpFileMetadata, String> {
+        let url = format!("{}/files/{}/metadata", seeder_url, file_hash);
 
-        tracing::debug!("Fetching manifest from: {}", url);
+        tracing::debug!("Fetching metadata from: {}", url);
 
         let response = self
             .http_client
             .get(&url)
             .send()
             .await
-            .map_err(|e| format!("Failed to fetch manifest: {}", e))?;
+            .map_err(|e| format!("Failed to fetch metadata: {}", e))?;
 
         if !response.status().is_success() {
             return Err(format!(
-                "Manifest request failed: {}",
-                response.status()
+                "Metadata request failed: {} ({})",
+                response.status(),
+                url
             ));
         }
 
-        let manifest: ManifestResponse = response
+        let metadata: HttpFileMetadata = response
             .json()
             .await
-            .map_err(|e| format!("Failed to parse manifest: {}", e))?;
+            .map_err(|e| format!("Failed to parse metadata: {}", e))?;
 
-        Ok(manifest)
+        Ok(metadata)
     }
 
-    /// Download all chunks with bounded parallelism
+    /// Calculate byte ranges for chunked download
+    ///
+    /// Splits file into CHUNK_SIZE (256KB) ranges
+    /// Example for 1MB file:
+    /// - Range 0: bytes 0-262143 (256KB)
+    /// - Range 1: bytes 262144-524287 (256KB)
+    /// - Range 2: bytes 524288-786431 (256KB)
+    /// - Range 3: bytes 786432-1048575 (262KB, last chunk may be smaller)
+    fn calculate_ranges(&self, file_size: u64) -> Vec<ByteRange> {
+        let mut ranges = Vec::new();
+        let mut offset = 0u64;
+        let mut index = 0;
+
+        while offset < file_size {
+            let end = std::cmp::min(offset + CHUNK_SIZE - 1, file_size - 1);
+            ranges.push(ByteRange {
+                start: offset,
+                end,
+                index,
+            });
+            offset = end + 1;
+            index += 1;
+        }
+
+        ranges
+    }
+
+    /// Download all chunks using Range requests with bounded parallelism
     ///
     /// Uses a semaphore to limit concurrent downloads to MAX_CONCURRENT_CHUNKS,
     /// preventing network/server overload while still achieving good parallelism.
     ///
     /// Flow:
     /// 1. Acquire semaphore permit (blocks if MAX_CONCURRENT_CHUNKS already downloading)
-    /// 2. Download chunk
-    /// 3. Release permit (allows next chunk to start)
-    /// 4. Repeat until all chunks downloaded
-    async fn download_chunks(
+    /// 2. Send GET request with Range header
+    /// 3. Verify 206 Partial Content response
+    /// 4. Download chunk data
+    /// 5. Release permit (allows next chunk to start)
+    /// 6. Repeat until all chunks downloaded
+    async fn download_chunks_with_ranges(
         &self,
         seeder_url: &str,
-        chunks: &[ChunkInfo],
-        merkle_root: &str,
+        file_hash: &str,
+        ranges: &[ByteRange],
         progress_tx: Option<mpsc::Sender<HttpDownloadProgress>>,
-    ) -> Result<Vec<(u32, Vec<u8>)>, String> {
+        file_size: u64,
+    ) -> Result<Vec<Vec<u8>>, String> {
         let mut tasks = Vec::new();
 
-        for chunk_info in chunks {
+        for range in ranges {
             let client = self.http_client.clone();
-            let url = format!("{}/chunks/{}", seeder_url, chunk_info.encrypted_hash);
-            let index = chunk_info.index;
-            let expected_size = chunk_info.encrypted_size;
+            let url = format!("{}/files/{}", seeder_url, file_hash);
+            let start = range.start;
+            let end = range.end;
+            let index = range.index;
             let progress_tx = progress_tx.clone();
-            let merkle_root = merkle_root.to_string();
-            let total_chunks = chunks.len();
-            let total_size = chunks.iter().map(|c| c.encrypted_size).sum::<usize>();
+            let file_hash = file_hash.to_string();
+            let total_chunks = ranges.len();
             let semaphore = self.download_semaphore.clone();
 
             // Spawn task for each chunk (but semaphore limits concurrency)
@@ -259,28 +325,40 @@ impl HttpDownloadClient {
                     .acquire()
                     .await
                     .map_err(|e| format!("Failed to acquire semaphore: {}", e))?;
-                tracing::debug!("Downloading chunk {} from {}", index, url);
 
+                tracing::debug!(
+                    "Downloading chunk {} (bytes {}-{}) from {}",
+                    index,
+                    start,
+                    end,
+                    url
+                );
+
+                // Make request with Range header
                 let response = client
                     .get(&url)
+                    .header("Range", format!("bytes={}-{}", start, end))
                     .send()
                     .await
                     .map_err(|e| format!("Failed to download chunk {}: {}", index, e))?;
 
-                if !response.status().is_success() {
+                // Verify 206 Partial Content response
+                if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
                     return Err(format!(
-                        "Chunk {} request failed: {}",
+                        "Chunk {} request failed: expected 206 Partial Content, got {}",
                         index,
                         response.status()
                     ));
                 }
 
+                // Read chunk data
                 let data = response
                     .bytes()
                     .await
                     .map_err(|e| format!("Failed to read chunk {} data: {}", index, e))?
                     .to_vec();
 
+                let expected_size = (end - start + 1) as usize;
                 if data.len() != expected_size {
                     return Err(format!(
                         "Chunk {} size mismatch: expected {}, got {}",
@@ -296,18 +374,17 @@ impl HttpDownloadClient {
                 if let Some(tx) = progress_tx {
                     let _ = tx
                         .send(HttpDownloadProgress {
-                            merkle_root: merkle_root.clone(),
+                            file_hash: file_hash.clone(),
                             chunks_total: total_chunks,
-                            chunks_downloaded: index as usize + 1,
-                            chunks_verified: 0,
+                            chunks_downloaded: index + 1,
                             bytes_downloaded: data.len() as u64,
-                            bytes_total: total_size as u64,
+                            bytes_total: file_size,
                             status: DownloadStatus::Downloading,
                         })
                         .await;
                 }
 
-                Ok::<(u32, Vec<u8>), String>((index, data))
+                Ok::<(usize, Vec<u8>), String>((index, data))
                 // Permit automatically released when _permit is dropped
             });
 
@@ -316,7 +393,7 @@ impl HttpDownloadClient {
 
         tracing::info!(
             "Downloading {} chunks with max {} concurrent downloads",
-            chunks.len(),
+            ranges.len(),
             MAX_CONCURRENT_CHUNKS
         );
 
@@ -332,20 +409,25 @@ impl HttpDownloadClient {
         // Sort by chunk index
         results.sort_by_key(|(index, _)| *index);
 
-        Ok(results)
+        // Extract just the data (drop indices)
+        let chunks: Vec<Vec<u8>> = results.into_iter().map(|(_, data)| data).collect();
+
+        Ok(chunks)
     }
 
     /// Assemble chunks into final file
+    ///
+    /// Writes chunks sequentially to the output file
     async fn assemble_file(
         &self,
-        decrypted_chunks: &[Vec<u8>],
+        chunks: &[Vec<u8>],
         output_path: &Path,
     ) -> Result<(), String> {
         let mut file = File::create(output_path)
             .await
             .map_err(|e| format!("Failed to create output file: {}", e))?;
 
-        for (index, chunk) in decrypted_chunks.iter().enumerate() {
+        for (index, chunk) in chunks.iter().enumerate() {
             file.write_all(chunk)
                 .await
                 .map_err(|e| format!("Failed to write chunk {}: {}", index, e))?;
@@ -355,7 +437,7 @@ impl HttpDownloadClient {
             .await
             .map_err(|e| format!("Failed to flush file: {}", e))?;
 
-        tracing::info!("Assembled file: {}", output_path.display());
+        tracing::info!("Assembled file: {} ({} chunks)", output_path.display(), chunks.len());
 
         Ok(())
     }
@@ -364,10 +446,9 @@ impl HttpDownloadClient {
     async fn send_progress(
         &self,
         progress_tx: &Option<mpsc::Sender<HttpDownloadProgress>>,
-        merkle_root: &str,
+        file_hash: &str,
         chunks_total: usize,
         chunks_downloaded: usize,
-        chunks_verified: usize,
         bytes_downloaded: u64,
         bytes_total: u64,
         status: DownloadStatus,
@@ -375,10 +456,9 @@ impl HttpDownloadClient {
         if let Some(tx) = progress_tx {
             let _ = tx
                 .send(HttpDownloadProgress {
-                    merkle_root: merkle_root.to_string(),
+                    file_hash: file_hash.to_string(),
                     chunks_total,
                     chunks_downloaded,
-                    chunks_verified,
                     bytes_downloaded,
                     bytes_total,
                     status,
