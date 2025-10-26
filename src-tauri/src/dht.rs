@@ -142,6 +142,10 @@ use libp2p::{
 use rand::rngs::OsRng;
 const EXPECTED_PROTOCOL_VERSION: &str = "/chiral/1.0.0";
 const MAX_MULTIHASH_LENGHT: usize = 64;
+/// Prefix for DHT records that map a torrent info_hash to a Chiral Merkle root.
+const INFO_HASH_PREFIX: &str = "info_hash_idx::";
+/// Prefix for DHT records that map a keyword to a list of file Merkle roots.
+const KEYWORD_INDEX_PREFIX: &str = "keyword_idx::";
 pub const RAW_CODEC: u64 = 0x55;
 /// Heartbeat interval (how often we refresh our provider entry).
 const FILE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15); // More frequent updates
@@ -2025,7 +2029,7 @@ async fn run_dht_node(
                         // Task 1: Keyword Extraction
                         let keywords = extract_keywords(&metadata.file_name);
                         info!(
-                            "Extracted {} keywords for file '{}': {:?}",
+                            "Extracted {} keywords for file '{}': {:?}", // Merkle root is now the primary identifier
                             keywords.len(),
                             metadata.file_name,
                             keywords
@@ -2033,7 +2037,7 @@ async fn run_dht_node(
                         // Task 2: DHT Indexing
                         // TODO: implement the "read-modify-write" logic inside this loop.
                         for keyword in keywords {
-                            let index_key_str = format!("idx:{}", keyword);
+                            let index_key_str = format!("{}{}", KEYWORD_INDEX_PREFIX, keyword);
                             let _index_key = kad::RecordKey::new(&index_key_str);
 
                             // TODO: Implement the read-modify-write logic to update keyword indexes.
@@ -2051,7 +2055,7 @@ async fn run_dht_node(
 
                         // If there's an info_hash, create the secondary index record
                         if let Some(info_hash) = &metadata.info_hash {
-                            let index_key = format!("info_hash:{}", info_hash);
+                            let index_key = format!("{}{}", INFO_HASH_PREFIX, info_hash);
                             let index_record = Record::new(index_key.as_bytes().to_vec(), metadata.merkle_root.as_bytes().to_vec());
                             swarm.behaviour_mut().kademlia.put_record(index_record, kad::Quorum::One).ok();
                             info!("Published info_hash index for {}", info_hash);
@@ -2382,7 +2386,7 @@ async fn run_dht_node(
                         info!("Searching for file: {} (query: {:?})", file_hash, query_id);
                     }
                     Some(DhtCommand::SearchByInfohash { info_hash, sender }) => {
-                        let index_key = format!("info_hash:{}", info_hash);
+                        let index_key = format!("{}{}", INFO_HASH_PREFIX, info_hash);
                         let record_key = kad::RecordKey::new(&index_key.as_bytes());
                         let query_id = swarm.behaviour_mut().kademlia.get_record(record_key.clone());
                         info!("Searching for info_hash index: {} (query: {:?})", index_key, query_id);

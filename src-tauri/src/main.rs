@@ -2230,7 +2230,6 @@ async fn upload_file_to_network(
                 uploader_address: Some(account.clone()),
                 ..Default::default()
             };
-          
           // Prepare a timestamp for metadata
             let created_at = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
