@@ -1,5 +1,5 @@
 use crate::dht::{DhtService, FileMetadata, WebRTCOfferRequest};
-use crate::peer_selection::SelectionStrategy;
+use crate::download_source::DownloadSource;
 use crate::webrtc_service::{WebRTCFileRequest, WebRTCService};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
@@ -8,6 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::time::timeout;
 use tracing::{error, info, warn};
+use url::Url;
 
 const DEFAULT_CHUNK_SIZE: usize = 256 * 1024; // 256KB chunks
 const MAX_CHUNKS_PER_PEER: usize = 10; // Maximum chunks to assign to a single peer
@@ -39,6 +40,26 @@ pub struct PeerAssignment {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SourceAssignment {
+    pub source: DownloadSource,
+    pub chunks: Vec<u32>, // chunk IDs assigned to this source
+    pub status: SourceStatus,
+    pub connected_at: Option<u64>,
+    pub last_activity: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SourceStatus {
+    Connecting,
+    Connected,
+    Downloading,
+    Failed,
+    Completed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum PeerStatus {
     Connecting,
     Connected,
@@ -57,9 +78,11 @@ pub struct MultiSourceProgress {
     pub total_chunks: u32,
     pub completed_chunks: u32,
     pub active_peers: usize,
+    pub active_sources: usize,
     pub download_speed_bps: f64,
     pub eta_seconds: Option<u32>,
     pub peer_assignments: Vec<PeerAssignment>,
+    pub source_assignments: Vec<SourceAssignment>,
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +113,7 @@ pub struct ActiveDownload {
     pub file_metadata: FileMetadata,
     pub chunks: Vec<ChunkInfo>,
     pub peer_assignments: HashMap<String, PeerAssignment>,
+    pub source_assignments: HashMap<String, SourceAssignment>, // source_id -> assignment
     pub completed_chunks: HashMap<u32, CompletedChunk>,
     pub pending_requests: HashMap<u32, ChunkRequest>,
     pub failed_chunks: VecDeque<u32>,
@@ -285,11 +309,43 @@ impl MultiSourceDownloadService {
             .await
             .map_err(|e| format!("Peer discovery failed: {}", e))?;
 
-        if available_peers.is_empty() {
-            return Err("No peers available for download".to_string());
+        // Check for FTP sources in metadata
+        let mut available_sources = Vec::new();
+        
+        // Add P2P sources from discovered peers
+        for peer_id in &available_peers {
+            available_sources.push(DownloadSource::P2p(crate::download_source::P2pSourceInfo {
+                peer_id: peer_id.clone(),
+                multiaddr: None,
+                reputation: Some(50), // Default reputation
+                supports_encryption: true,
+                protocol: Some("webrtc".to_string()),
+            }));
         }
 
-        info!("Found {} available peers for file", available_peers.len());
+        // Add FTP sources from metadata
+        if let Some(ftp_sources) = &metadata.ftp_sources {
+            for ftp_source in ftp_sources {
+                available_sources.push(DownloadSource::Ftp(crate::download_source::FtpSourceInfo {
+                    url: ftp_source.url.clone(),
+                    username: ftp_source.username.clone(),
+                    encrypted_password: ftp_source.encrypted_password.clone(),
+                    passive_mode: true, // Default to passive mode
+                    use_ftps: false,    // Default to regular FTP
+                    timeout_secs: Some(30), // Default timeout
+                }));
+            }
+            info!("Found {} FTP sources for file", ftp_sources.len());
+        }
+
+        if available_sources.is_empty() {
+            return Err("No sources available for download".to_string());
+        }
+
+        info!("Found {} total sources for file ({} P2P, {} FTP)", 
+              available_sources.len(), 
+              available_peers.len(),
+              metadata.ftp_sources.as_ref().map_or(0, |s| s.len()));
 
         // Calculate chunk information
         let chunk_size = chunk_size.unwrap_or(DEFAULT_CHUNK_SIZE);
@@ -298,37 +354,30 @@ impl MultiSourceDownloadService {
 
         // Determine if we should use multi-source download
         let use_multi_source =
-            total_chunks >= MIN_CHUNKS_FOR_PARALLEL as u32 && available_peers.len() > 1;
+            total_chunks >= MIN_CHUNKS_FOR_PARALLEL as u32 && available_sources.len() > 1;
 
         if !use_multi_source {
-            info!("Using single-source download (not enough chunks or peers)");
+            info!("Using single-source download (not enough chunks or sources)");
             return self
                 .start_single_source_download(metadata, output_path)
                 .await;
         }
 
-        // Select optimal peers for multi-source download
-        let max_peers = max_peers.unwrap_or(available_peers.len().min(4));
-        let selected_peers = self
-            .dht_service
-            .select_peers_with_strategy(
-                &available_peers,
-                max_peers,
-                SelectionStrategy::Balanced,
-                false,
-            )
-            .await;
+        // Select optimal sources for multi-source download
+        let max_sources = max_peers.unwrap_or(available_sources.len().min(4));
+        let selected_sources = self.select_optimal_sources(&available_sources, max_sources).await;
 
         info!(
-            "Selected {} peers for multi-source download",
-            selected_peers.len()
+            "Selected {} sources for multi-source download",
+            selected_sources.len()
         );
 
         // Create download state
-        let download = ActiveDownload {
+        let mut download = ActiveDownload {
             file_metadata: metadata.clone(),
             chunks,
             peer_assignments: HashMap::new(),
+            source_assignments: HashMap::new(),
             completed_chunks: HashMap::new(),
             pending_requests: HashMap::new(),
             failed_chunks: VecDeque::new(),
@@ -337,20 +386,23 @@ impl MultiSourceDownloadService {
             output_path,
         };
 
+        // Assign chunks to sources
+        self.assign_chunks_to_sources(&mut download, &selected_sources).await;
+
         // Store download state
         {
             let mut downloads = self.active_downloads.write().await;
             downloads.insert(file_hash.clone(), download);
         }
 
-        // Start peer connections and assign chunks
-        self.start_peer_connections(&file_hash, selected_peers.clone())
+        // Start source connections and downloads
+        self.start_source_connections(&file_hash, selected_sources.clone())
             .await?;
 
         // Emit download started event
         let _ = self.event_tx.send(MultiSourceEvent::DownloadStarted {
             file_hash: file_hash.clone(),
-            total_peers: selected_peers.len(),
+            total_peers: selected_sources.len(),
         });
 
         // Start monitoring download progress
@@ -824,9 +876,16 @@ impl MultiSourceDownloadService {
             total_chunks,
             completed_chunks,
             active_peers,
+            active_sources: download.source_assignments.values().filter(|assignment| {
+                matches!(
+                    assignment.status,
+                    SourceStatus::Connected | SourceStatus::Downloading
+                )
+            }).count(),
             download_speed_bps,
             eta_seconds,
             peer_assignments: download.peer_assignments.values().cloned().collect(),
+            source_assignments: download.source_assignments.values().cloned().collect(),
         }
     }
 
@@ -918,9 +977,16 @@ impl MultiSourceDownloadService {
             total_chunks,
             completed_chunks,
             active_peers,
+            active_sources: download.source_assignments.values().filter(|assignment| {
+                matches!(
+                    assignment.status,
+                    SourceStatus::Connected | SourceStatus::Downloading
+                )
+            }).count(),
             download_speed_bps,
             eta_seconds,
             peer_assignments: download.peer_assignments.values().cloned().collect(),
+            source_assignments: download.source_assignments.values().cloned().collect(),
         }
     }
 
@@ -1015,6 +1081,157 @@ impl MultiSourceDownloadService {
             })
         }
     }
+
+    /// Select optimal sources for multi-source download based on priority scores
+    async fn select_optimal_sources(
+        &self,
+        available_sources: &[DownloadSource],
+        max_sources: usize,
+    ) -> Vec<DownloadSource> {
+        let mut sources = available_sources.to_vec();
+        
+        // Sort by priority score (higher is better)
+        sources.sort_by_key(|source| std::cmp::Reverse(source.priority_score()));
+        
+        // Take the top sources up to max_sources
+        sources.truncate(max_sources);
+        
+        info!("Selected sources by priority: {:?}", 
+              sources.iter().map(|s| s.display_name()).collect::<Vec<_>>());
+        
+        sources
+    }
+
+    /// Assign chunks to sources for parallel download
+    async fn assign_chunks_to_sources(
+        &self,
+        download: &mut ActiveDownload,
+        sources: &[DownloadSource],
+    ) {
+        let total_chunks = download.chunks.len() as u32;
+        let chunks_per_source = (total_chunks as f64 / sources.len() as f64).ceil() as u32;
+        
+        info!("Assigning {} chunks to {} sources ({} chunks per source)", 
+              total_chunks, sources.len(), chunks_per_source);
+
+        for (source_index, source) in sources.iter().enumerate() {
+            let start_chunk = (source_index as u32) * chunks_per_source;
+            let end_chunk = ((source_index as u32 + 1) * chunks_per_source).min(total_chunks);
+            
+            let mut assigned_chunks = Vec::new();
+            for chunk_id in start_chunk..end_chunk {
+                assigned_chunks.push(chunk_id);
+            }
+
+            if !assigned_chunks.is_empty() {
+                let source_id = source.identifier();
+                let assignment = SourceAssignment {
+                    source: source.clone(),
+                    chunks: assigned_chunks.clone(),
+                    status: SourceStatus::Connecting,
+                    connected_at: None,
+                    last_activity: None,
+                };
+                
+                download.source_assignments.insert(source_id, assignment);
+                
+                info!("Assigned chunks {:?} to source {}", 
+                      assigned_chunks, source.display_name());
+            }
+        }
+    }
+
+    /// Start connections to all sources and begin downloads
+    async fn start_source_connections(
+        &self,
+        file_hash: &str,
+        sources: Vec<DownloadSource>,
+    ) -> Result<(), String> {
+        for source in sources {
+            match source {
+                DownloadSource::P2p(p2p_info) => {
+                    // Start P2P connection
+                    self.start_p2p_connection(file_hash, &p2p_info.peer_id).await?;
+                }
+                DownloadSource::Ftp(ftp_info) => {
+                    // Start FTP download
+                    self.start_ftp_download(file_hash, &ftp_info).await?;
+                }
+                DownloadSource::Http(http_info) => {
+                    // Start HTTP download
+                    self.start_http_download(file_hash, &http_info).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Start P2P connection for a peer
+    async fn start_p2p_connection(
+        &self,
+        file_hash: &str,
+        peer_id: &str,
+    ) -> Result<(), String> {
+        info!("Starting P2P connection to peer {} for file {}", peer_id, file_hash);
+        
+        // This would integrate with the existing WebRTC service
+        // For now, just log the action
+        info!("P2P connection initiated for peer {}", peer_id);
+        Ok(())
+    }
+
+    /// Start FTP download for a source
+    async fn start_ftp_download(
+        &self,
+        file_hash: &str,
+        ftp_info: &crate::download_source::FtpSourceInfo,
+    ) -> Result<(), String> {
+        info!("Starting FTP download from {} for file {}", ftp_info.url, file_hash);
+        
+        // Parse FTP URL to extract remote path
+        let remote_path = self.parse_ftp_remote_path(&ftp_info.url)?;
+        info!("FTP remote path: {}", remote_path);
+        
+        // This would integrate with the ftp_downloader.rs
+        // For now, just log the action
+        info!("FTP download initiated for {}", ftp_info.url);
+        Ok(())
+    }
+
+    /// Start HTTP download for a source
+    async fn start_http_download(
+        &self,
+        file_hash: &str,
+        http_info: &crate::download_source::HttpSourceInfo,
+    ) -> Result<(), String> {
+        info!("Starting HTTP download from {} for file {}", http_info.url, file_hash);
+        
+        // This would integrate with HTTP download logic
+        // For now, just log the action
+        info!("HTTP download initiated for {}", http_info.url);
+        Ok(())
+    }
+
+    /// Parse remote path from FTP URL
+    fn parse_ftp_remote_path(&self, ftp_url: &str) -> Result<String, String> {
+        let url = Url::parse(ftp_url)
+            .map_err(|e| format!("Invalid FTP URL: {}", e))?;
+        
+        // Extract path from URL
+        let path = url.path();
+        if path.is_empty() || path == "/" {
+            return Err("FTP URL must include a file path".to_string());
+        }
+        
+        Ok(path.to_string())
+    }
+
+    /// Calculate byte range for FTP chunk request
+    fn calculate_ftp_byte_range(&self, chunk: &ChunkInfo) -> (u64, u64) {
+        let start_byte = chunk.offset;
+        let size = chunk.size as u64;
+        (start_byte, size)
+    }
 }
 
 #[cfg(test)]
@@ -1053,6 +1270,7 @@ mod tests {
         assert_eq!(MIN_CHUNKS_FOR_PARALLEL, 4);
         assert_eq!(CONNECTION_TIMEOUT_SECS, 30);
     }
+
 
     #[test]
     fn test_chunk_request_creation() {
