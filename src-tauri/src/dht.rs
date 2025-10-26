@@ -2818,6 +2818,7 @@ async fn run_dht_node(
                             enable_autorelay,
                             &relay_candidates,
                             &proxy_mgr,
+                            &peer_selection,
                             relay_capable_peers.clone(),
                         )
                         .await;
@@ -4251,6 +4252,7 @@ async fn handle_identify_event(
     enable_autorelay: bool,
     relay_candidates: &HashSet<String>,
     proxy_mgr: &ProxyMgr,
+    peer_selection: &Arc<Mutex<PeerSelectionService>>,
     relay_capable_peers: Arc<Mutex<HashMap<PeerId, Vec<Multiaddr>>>>,
 ) {
     match event {
@@ -4271,6 +4273,20 @@ async fn handle_identify_event(
                     .filter(|addr| ma_plausibly_reachable(addr))
                     .cloned()
                     .collect();
+
+                // Store supported protocols in PeerMetrics
+                {
+                    let mut metrics = {
+                        let selection = peer_selection.lock().await;
+                        selection
+                            .get_peer_metrics(&peer_id.to_string())
+                            .cloned()
+                    }
+                    .unwrap_or_else(|| PeerMetrics::new(peer_id.to_string(), "".to_string()));
+
+                    metrics.protocols = info.protocols.iter().map(|p| p.to_string()).collect();
+                    peer_selection.lock().await.update_peer_metrics(metrics);
+                }
 
                 if !reachable_addrs.is_empty() {
                     let mut relay_peers = relay_capable_peers.lock().await;
