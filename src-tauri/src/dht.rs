@@ -1,4 +1,5 @@
 use crate::encryption::EncryptedAesKeyBundle;
+use crate::download_source::HttpSourceInfo;
 use x25519_dalek::PublicKey;
 use serde_bytes;
 
@@ -208,7 +209,7 @@ pub struct FileMetadata {
     pub ftp_sources: Option<Vec<FtpSourceInfo>>,
     /// HTTP sources for downloading the file (HTTP Range request endpoints)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub http_sources: Option<Vec<crate::download_source::HttpSourceInfo>>,
+    pub http_sources: Option<Vec<HttpSourceInfo>>,
     pub is_root: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub download_path: Option<String>,

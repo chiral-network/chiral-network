@@ -8,6 +8,7 @@ pub mod commands;
 pub mod analytics;
 mod blockchain_listener;
 mod dht;
+mod download_source;
 mod encryption;
 mod ethereum;
 mod file_transfer;
@@ -2735,6 +2736,7 @@ async fn upload_file_chunk(
             price: None,
             uploader_address: None,
             ftp_sources: None,
+            http_sources: None,
             info_hash: None,
             trackers: None,
         };
@@ -4829,15 +4831,19 @@ async fn upload_and_publish_file(
         // Add HTTP source if HTTP server is running
         let http_addr = state.http_server_addr.lock().await;
         if let Some(addr) = *http_addr {
-            let http_url = format!("http://{}", addr);
-            metadata.http_sources = Some(vec![crate::download_source::HttpSourceInfo {
+            // Get actual local IP instead of 0.0.0.0
+            let port = addr.port();
+            let local_ip = crate::headless::get_local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
+            let http_url = format!("http://{}:{}", local_ip, port);
+
+            metadata.http_sources = Some(vec![download_source::HttpSourceInfo {
                 url: http_url.clone(),
                 auth_header: None,
                 verify_ssl: false,
                 headers: None,
                 timeout_secs: Some(30),
             }]);
-            tracing::info!("Added HTTP source to metadata: {}", http_url);
+            tracing::info!("Added HTTP source to metadata: {} (local IP: {})", http_url, local_ip);
         }
 
         println!("📦 BACKEND: Created versioned metadata");

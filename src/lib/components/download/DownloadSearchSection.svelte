@@ -590,14 +590,14 @@
       }
 
       // For HTTP, use the first selected peer
-      // TODO: Get actual HTTP URL from peer metadata
+      // Get HTTP URL from DHT metadata
       const firstPeer = selectedPeerIds[0];
       if (!firstPeer) {
         throw new Error('No peers selected for HTTP download');
       }
 
-      // Mock HTTP URL - in production, this would come from DHT peer metadata
-      const seederUrl = `http://localhost:8080`;  // TODO: Get from peer metadata
+      // Get HTTP URL from file metadata (published to DHT)
+      const seederUrl = file.httpSources?.[0]?.url || `http://localhost:8080`;
       const merkleRoot = file.fileHash || file.merkleRoot || '';
 
       console.log(`📡 Starting HTTP download from ${seederUrl}`);
