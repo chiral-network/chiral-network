@@ -363,6 +363,7 @@ impl ReputationDhtService {
             price: None,
             uploader_address: None,
             ftp_sources: None,
+            http_sources: None,
             info_hash: None,
             trackers: None,
         };
@@ -419,6 +420,7 @@ impl ReputationDhtService {
             price: None,
             uploader_address: None,
             ftp_sources: None,
+            http_sources: None,
             info_hash: None,
             trackers: None,
         };

@@ -33,6 +33,14 @@ export interface DhtConfig {
   relayServerAlias?: string; // Public alias for relay server (appears in logs and bootstrap)
 }
 
+export interface HttpSourceInfo {
+  url: string;
+  authHeader?: string;
+  verifySsl: boolean;
+  headers?: Array<[string, string]>;
+  timeoutSecs?: number;
+}
+
 export interface FileMetadata {
   fileHash: string;
   fileName: string;
@@ -51,6 +59,7 @@ export interface FileMetadata {
   cids?: string[];
   price?: number;
   uploaderAddress?: string;
+  httpSources?: HttpSourceInfo[];
 }
 
 export interface FileManifestForJs {

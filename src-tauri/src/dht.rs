@@ -204,8 +204,11 @@ pub struct FileMetadata {
     /// For encrypted files, this contains the encrypted AES key and other info.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub encrypted_key_bundle: Option<crate::encryption::EncryptedAesKeyBundle>,
-    #[serde(skip_serializing_if = "Option::is_none")] 
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ftp_sources: Option<Vec<FtpSourceInfo>>,
+    /// HTTP sources for downloading the file (HTTP Range request endpoints)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http_sources: Option<Vec<crate::download_source::HttpSourceInfo>>,
     pub is_root: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub download_path: Option<String>,
@@ -5601,6 +5604,7 @@ impl DhtService {
             price,
             uploader_address,
             ftp_sources: None,
+            http_sources: None,
             info_hash: None,
             trackers: None,
         })

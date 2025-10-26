@@ -4809,7 +4809,7 @@ async fn upload_and_publish_file(
         // Use prepare_versioned_metadata to handle version incrementing and parent_hash
         let mime_type = detect_mime_type_from_filename(&file_name)
             .unwrap_or_else(|| "application/octet-stream".to_string());
-        let metadata = dht
+        let mut metadata = dht
             .prepare_versioned_metadata(
                 manifest.merkle_root.clone(), // This is the Merkle root
                 file_name.clone(),
@@ -4825,6 +4825,20 @@ async fn upload_and_publish_file(
                 None,                            // uploader_address
             )
             .await?;
+
+        // Add HTTP source if HTTP server is running
+        let http_addr = state.http_server_addr.lock().await;
+        if let Some(addr) = *http_addr {
+            let http_url = format!("http://{}", addr);
+            metadata.http_sources = Some(vec![crate::download_source::HttpSourceInfo {
+                url: http_url.clone(),
+                auth_header: None,
+                verify_ssl: false,
+                headers: None,
+                timeout_secs: Some(30),
+            }]);
+            tracing::info!("Added HTTP source to metadata: {}", http_url);
+        }
 
         println!("📦 BACKEND: Created versioned metadata");
 
