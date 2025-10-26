@@ -206,107 +206,76 @@ export class WalletService {
     }
   }
 
-    async refreshBalance(): Promise<void> {
-        const account = get(etcAccount);
-        if (!account || !this.isTauri) {
-            return;
-        }
-
-        try {
-            // Get block data that was already loaded from miningState
-            const currentMiningState = get(miningState);
-            const blocksMined = currentMiningState.recentBlocks?.length ?? 0;
-
-            // Calculate total mining rewards
-            const miningRewards = blocksMined * 2;
-
-            // Calculate total transactions from transaction history
-            const allTransactions = get(transactions);
-
-            // Calculate total received (mining + upload payments)
-            const totalReceived = allTransactions
-                .filter((tx) => tx.status === 'completed' && tx.type === 'received')
-                .reduce((sum, tx) => sum + tx.amount, 0);
-
-            // Calculate total spent from completed sent transactions
-            const totalSpent = allTransactions
-                .filter((tx) => tx.status === 'completed' && tx.type === 'sent')
-                .reduce((sum, tx) => sum + tx.amount, 0);
-
-            // Calculate pending sent transactions
-            const pendingSent = allTransactions
-                .filter((tx) => tx.status === 'pending' && tx.type === 'sent')
-                .reduce((sum, tx) => sum + tx.amount, 0);
-
-            // Calculate the actual balance: totalReceived - totalSpent - pendingSent
-            // NOTE: We use transaction history as the source of truth because upload payments
-            // are tracked off-chain. The geth balance would not include upload payments.
-            const calculatedBalance = Math.max(0, totalReceived - totalSpent - pendingSent);
-            const actualBalance = calculatedBalance;
-
-            // Try to get balance from geth for validation/logging purposes
-            let gethBalance = 0;
-            try {
-                const balanceStr = await invoke('get_account_balance', {
-                    address: account.address
-                }) as string;
-                gethBalance = parseFloat(balanceStr);
-
-                // Log if there's a significant discrepancy
-                if (Math.abs(gethBalance - calculatedBalance) > 0.01) {
-                    console.log('Balance discrepancy detected:', {
-                        gethBalance,
-                        calculatedBalance,
-                        difference: gethBalance - calculatedBalance
-                    });
-                }
-            } catch (e) {
-                console.debug('Could not get balance from geth:', e);
-            }
-
-            // Always update the balance to reflect current state
-            wallet.update((current) => {
-                const updated = {
-                    ...current,
-                    balance: actualBalance,
-                    totalEarned: totalReceived,  // Total earned includes mining + upload payments
-                    totalSpent,
-                    pendingTransactions: allTransactions.filter(tx => tx.status === 'pending').length,
-                };
-                // Persist to localStorage to ensure balance persists across app restarts
-                try {
-                    localStorage.setItem('chiral_wallet', JSON.stringify(updated));
-                } catch (error) {
-                    console.error('Failed to save wallet to localStorage:', error);
-                }
-                return updated;
-            });
-
-            // Update pending transaction status if they've been confirmed
-            if (pendingSent > 0 && realBalance > 0) {
-                const expectedBalance = realBalance - pendingSent;
-                // If the real balance matches what we expect after pending txs, mark them as completed
-                if (Math.abs(realBalance - expectedBalance) < 0.01) {
-                    transactions.update((txs) =>
-                        txs.map((tx) =>
-                            tx.status === 'pending' && tx.type === 'sent'
-                                ? { ...tx, status: 'completed' as const }
-                                : tx
-                        )
-                    );
-                }
-            }
-
-            // Update mining state with mining-specific data
-            miningState.update((state) => ({
-                ...state,
-                totalRewards: miningRewards,  // Mining rewards only
-                blocksFound: blocksMined,
-            }));
-        } catch (error) {
-            console.error('Failed to refresh balance:', error);
-        }
+async refreshBalance(): Promise<void> {
+    const account = get(etcAccount);
+    if (!account || !this.isTauri) {
+      return;
     }
+
+    try {
+      // Get actual total blocks mined from miningState (set by refreshTransactions)
+      const currentMiningState = get(miningState);
+      const actualBlocksFound = currentMiningState.blocksFound ?? 0;
+
+      // Calculate total rewards based on ACTUAL blocks found, not recentBlocks length
+      const totalEarned = actualBlocksFound * 2;
+
+      console.log('[refreshBalance] blocksFound:', actualBlocksFound, 'totalEarned:', totalEarned, 'recentBlocks.length:', currentMiningState.recentBlocks?.length ?? 0);
+
+      // Try to get balance from geth
+      let realBalance = 0;
+      try {
+        const balanceStr = await invoke('get_account_balance', {
+          address: account.address
+        }) as string;
+        realBalance = parseFloat(balanceStr);
+      } catch (e) {
+        console.warn('Could not get balance from geth:', e);
+      }
+
+      // Calculate pending sent transactions
+      const pendingSent = get(transactions)
+        .filter((tx) => tx.status === 'pending' && tx.type === 'sent')
+        .reduce((sum, tx) => sum + tx.amount, 0);
+
+      // If geth balance is 0 but we have mined blocks, use calculated balance
+      const actualBalance = realBalance > 0 ? realBalance : totalEarned;
+      const availableBalance = Math.max(0, actualBalance - pendingSent);
+
+      wallet.update((current) => ({
+        ...current,
+        balance: availableBalance,
+        actualBalance,
+      }));
+
+      // Update pending transaction status if they've been confirmed
+      // If we have pending sent transactions, check if the balance has decreased
+      // to mark them as completed
+      if (pendingSent > 0 && realBalance > 0) {
+        const expectedBalanceAfterPending = availableBalance;
+        // If real balance is lower than expected (meaning pending txs were processed),
+        // mark pending sent transactions as completed
+        if (realBalance < expectedBalanceAfterPending + pendingSent - 0.01) {
+          transactions.update((txs) =>
+            txs.map((tx) =>
+              tx.status === 'pending' && tx.type === 'sent'
+                ? { ...tx, status: 'completed' as const }
+                : tx
+            )
+          );
+        }
+      }
+
+      // Update mining state totalRewards (don't override blocksFound - it's set by refreshTransactions)
+      miningState.update((state) => ({
+        ...state,
+        totalRewards: totalEarned,
+        // blocksFound is already correctly set by refreshTransactions
+      }));
+    } catch (error) {
+      console.error('Failed to refresh balance:', error);
+    }
+  }
 
 
   async ensureGethRunning(): Promise<boolean> {
