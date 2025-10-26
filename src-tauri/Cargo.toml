@@ -42,7 +42,6 @@ ctr = "0.9"
 hmac = "0.12"
 directories = "5.0"
 reqwest = { version = "0.11", features = ["json", "blocking", "stream"] }
-suppaftp = { version = "6.0", features = ["async", "secure"] }
 url = "2.5"
 chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1", features = ["full"] }
@@ -68,7 +67,8 @@ rs_merkle = "1.5.0"
 tokio-util = { version = "0.7", features = ["compat"] }
 tokio-socks = "0.5"
 
-# FTP client for FTP download support
+# FTP client for FTP download support (sync API)
+# Using 5.3 for compatibility with connect_secure_implicit() method
 suppaftp = { version = "5.3", features = ["native-tls", "secure", "deprecated"] }
 native-tls = "0.2"
 
