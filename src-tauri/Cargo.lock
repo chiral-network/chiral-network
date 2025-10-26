@@ -1125,6 +1125,7 @@ version = "0.1.0"
 dependencies = [
  "aes",
  "aes-gcm",
+ "anyhow",
  "async-std",
  "async-trait",
  "axum",
@@ -1157,6 +1158,7 @@ dependencies = [
  "rs_merkle",
  "secp256k1",
  "serde",
+ "serde_bytes",
  "serde_json",
  "sha2",
  "sha3",

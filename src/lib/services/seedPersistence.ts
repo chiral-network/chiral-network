@@ -6,6 +6,7 @@ export type SeedRecord = {
   size?: number;
   addedAt?: string; // ISO
   manifest?: any;
+  price?: number; // Price in Chiral for this file
 };
 
 const STORAGE_KEY = "chiral.seeds.v1";

@@ -23,7 +23,7 @@ pub(crate) async fn generate_proxy_auth_token(
     // Calculate expiry time
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or(std::time::Duration::from_secs(0))
         .as_secs();
     let expires_at = now + (expiry_hours as u64 * 3600);
 
@@ -110,7 +110,7 @@ fn generate_secure_token() -> String {
 fn is_token_expired(expires_at: u64) -> bool {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or(std::time::Duration::from_secs(0))
         .as_secs();
     now > expires_at
 }
@@ -119,7 +119,7 @@ fn is_token_expired(expires_at: u64) -> bool {
 fn cleanup_expired_tokens(store: &mut HashMap<String, ProxyAuthToken>) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or(std::time::Duration::from_secs(0))
         .as_secs();
 
     store.retain(|_, token_data| !is_token_expired(token_data.expires_at));

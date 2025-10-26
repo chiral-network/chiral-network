@@ -384,6 +384,155 @@ async fn get_account_balance(address: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn get_user_balance(state: State<'_, AppState>) -> Result<String, String> {
+    let account = get_active_account(&state).await?;
+    get_balance(&account).await
+}
+
+#[tauri::command]
+async fn can_afford_download(state: State<'_, AppState>, price: f64) -> Result<bool, String> {
+    let account = get_active_account(&state).await?;
+    let balance_str = get_balance(&account).await?;
+    let balance = balance_str.parse::<f64>()
+        .map_err(|e| format!("Failed to parse balance: {}", e))?;
+    Ok(balance >= price)
+}
+
+#[tauri::command]
+async fn process_download_payment(
+    state: State<'_, AppState>,
+    uploader_address: String,
+    price: f64,
+) -> Result<String, String> {
+    // Get the active account address
+    let account = get_active_account(&state).await?;
+
+    // Get the private key from state
+    let private_key = {
+        let key_guard = state.active_account_private_key.lock().await;
+        key_guard
+            .clone()
+            .ok_or("No private key available. Please log in again.")?
+    };
+
+    // Send the payment transaction
+    ethereum::send_transaction(&account, &uploader_address, price, &private_key).await
+}
+
+#[tauri::command]
+async fn record_download_payment(
+    app: tauri::AppHandle,
+    file_hash: String,
+    file_name: String,
+    file_size: u64,
+    seeder_wallet_address: String,
+    seeder_peer_id: String,
+    downloader_address: String,
+    amount: f64,
+    transaction_id: u64,
+    transaction_hash: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    println!(
+        "📝 Download payment recorded: {} Chiral to wallet {} (peer: {}) tx: {}",
+        amount, seeder_wallet_address, seeder_peer_id, transaction_hash
+    );
+
+    // Send P2P payment notification message to the seeder's peer
+    #[derive(Clone, serde::Serialize, serde::Deserialize)]
+    struct PaymentNotificationMessage {
+        file_hash: String,
+        file_name: String,
+        file_size: u64,
+        downloader_address: String,
+        seeder_wallet_address: String,
+        amount: f64,
+        transaction_id: u64,
+        transaction_hash: String,
+    }
+
+    let payment_msg = PaymentNotificationMessage {
+        file_hash,
+        file_name,
+        file_size,
+        downloader_address,
+        seeder_wallet_address: seeder_wallet_address.clone(),
+        amount,
+        transaction_id,
+        transaction_hash: transaction_hash.clone(),
+    };
+
+    // Serialize the payment message
+    let payment_json = serde_json::to_string(&payment_msg)
+        .map_err(|e| format!("Failed to serialize payment message: {}", e))?;
+
+    // Emit local event for payment notification (works on same machine for testing)
+    app.emit("seeder_payment_received", payment_msg.clone())
+        .map_err(|e| format!("Failed to emit payment notification: {}", e))?;
+
+    println!("✅ Payment notification emitted locally for seeder: {}", seeder_wallet_address);
+
+    // Send P2P payment notification to the seeder's peer
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    if let Some(dht) = dht {
+        // Convert payment message to JSON
+        let notification_json = serde_json::to_value(&payment_msg)
+            .map_err(|e| format!("Failed to serialize payment notification: {}", e))?;
+
+        // Wrap in a payment notification envelope so receiver can identify it
+        let wrapped_message = serde_json::json!({
+            "type": "payment_notification",
+            "payload": notification_json
+        });
+
+        // Send via DHT to the seeder's peer ID
+        match dht.send_message_to_peer(&seeder_peer_id, wrapped_message).await {
+            Ok(_) => {
+                println!("✅ P2P payment notification sent to peer: {}", seeder_peer_id);
+            }
+            Err(e) => {
+                // Don't fail the whole operation if P2P message fails
+                println!("⚠️ Failed to send P2P payment notification: {}. Seeder will see payment when they check blockchain.", e);
+            }
+        }
+    } else {
+        println!("⚠️ DHT not available, payment notification only sent locally");
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn record_seeder_payment(
+    _file_hash: String,
+    _file_name: String,
+    _file_size: u64,
+    _downloader_address: String,
+    _amount: f64,
+    _transaction_id: u64,
+) -> Result<(), String> {
+    // Log the seeder payment receipt for analytics/audit purposes
+    println!("💰 Seeder payment received: {} Chiral from {}", _amount, _downloader_address);
+    Ok(())
+}
+
+#[tauri::command]
+async fn check_payment_notifications(
+    _wallet_address: String,
+    _state: State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    // NOTE: This command is kept for compatibility but not used anymore
+    // Payment notifications are now handled via local events (seeder_payment_received)
+    // For testing on same machine, the event system works fine
+    // For cross-peer payments, this would need to be implemented with P2P messaging
+    Ok(vec![])
+}
+
+#[tauri::command]
 async fn get_network_peer_count() -> Result<u32, String> {
     get_peer_count().await
 }
@@ -542,7 +691,10 @@ async fn upload_versioned_file(
     is_encrypted: bool,
     encryption_method: Option<String>,
     key_fingerprint: Option<String>,
+    price: Option<f64>,
 ) -> Result<FileMetadata, String> {
+    // Get the active account address
+    let account = get_active_account(&state).await?;
     let dht_opt = { state.dht.lock().await.as_ref().cloned() };
     if let Some(dht) = dht_opt {
         // --- FIX: Calculate file_hash using file_transfer helper
@@ -553,7 +705,7 @@ async fn upload_versioned_file(
 
         let created_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
         // Use the DHT versioning helper to fill in parent_hash/version
@@ -569,6 +721,8 @@ async fn upload_versioned_file(
                 is_encrypted,
                 encryption_method,
                 key_fingerprint,
+                price,
+                Some(account.clone()),
             )
             .await?;
 
@@ -740,7 +894,8 @@ lazy_static! {
 async fn get_blocks_mined(address: String) -> Result<u64, String> {
     // Check cache (directly return within 500ms)
     {
-        let cache = BLOCKS_CACHE.lock().unwrap();
+        let cache = BLOCKS_CACHE.lock()
+            .map_err(|e| format!("Failed to acquire blocks cache lock: {}", e))?;
         if let Some((cached_addr, cached_blocks, cached_time)) = cache.as_ref() {
             if cached_addr == &address && cached_time.elapsed() < Duration::from_millis(500) {
                 return Ok(*cached_blocks);
@@ -753,7 +908,8 @@ async fn get_blocks_mined(address: String) -> Result<u64, String> {
 
     // Update Cache
     {
-        let mut cache = BLOCKS_CACHE.lock().unwrap();
+        let mut cache = BLOCKS_CACHE.lock()
+            .map_err(|e| format!("Failed to acquire blocks cache lock for update: {}", e))?;
         *cache = Some((address, blocks, Instant::now()));
     }
 
@@ -1011,7 +1167,7 @@ async fn start_dht_node(
                             .unwrap_or_else(|| {
                                 std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap()
+                                    .unwrap_or(std::time::Duration::from_secs(0))
                                     .as_secs()
                             });
 
@@ -1031,12 +1187,7 @@ async fn start_dht_node(
                         });
                         let _ = app_handle.emit("relay_reputation_event", payload);
                     }
-                    DhtEvent::BitswapChunkDownloaded {
-                        file_hash,
-                        chunk_index,
-                        total_chunks,
-                        chunk_size,
-                    } => {
+                    DhtEvent::BitswapChunkDownloaded { file_hash, chunk_index, total_chunks, chunk_size } => {
                         let payload = serde_json::json!({
                             "fileHash": file_hash,
                             "chunkIndex": chunk_index,
@@ -1044,7 +1195,25 @@ async fn start_dht_node(
                             "chunkSize": chunk_size,
                         });
                         let _ = app_handle.emit("bitswap_chunk_downloaded", payload);
-                    }
+                    },
+                    DhtEvent::PaymentNotificationReceived { from_peer, payload } => {
+                        println!("💰 Payment notification received from peer {}: {:?}", from_peer, payload);
+                        // Convert payload to match the expected format for seeder_payment_received
+                        if let Ok(notification) = serde_json::from_value::<serde_json::Value>(payload.clone()) {
+                            let formatted_payload = serde_json::json!({
+                                "file_hash": notification.get("file_hash").and_then(|v| v.as_str()).unwrap_or(""),
+                                "file_name": notification.get("file_name").and_then(|v| v.as_str()).unwrap_or(""),
+                                "file_size": notification.get("file_size").and_then(|v| v.as_u64()).unwrap_or(0),
+                                "downloader_address": notification.get("downloader_address").and_then(|v| v.as_str()).unwrap_or(""),
+                                "seeder_wallet_address": notification.get("seeder_wallet_address").and_then(|v| v.as_str()).unwrap_or(""),
+                                "amount": notification.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                                "transaction_id": notification.get("transaction_id").and_then(|v| v.as_u64()).unwrap_or(0),
+                            });
+                            // Emit the same event that local payments use
+                            let _ = app_handle.emit("seeder_payment_received", formatted_payload);
+                            println!("✅ Payment notification forwarded to frontend");
+                        }
+                    },
                     _ => {}
                 }
             }
@@ -1382,17 +1551,12 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                 DhtEvent::FileDownloaded { file_hash } => {
                     format!("file_downloaded:{}", file_hash)
                 }
-                DhtEvent::BitswapChunkDownloaded {
-                    file_hash,
-                    chunk_index,
-                    total_chunks,
-                    chunk_size,
-                } => {
-                    format!(
-                        "bitswap_chunk_downloaded:{}:{}:{}:{}",
-                        file_hash, chunk_index, total_chunks, chunk_size
-                    )
-                }
+                DhtEvent::BitswapChunkDownloaded { file_hash, chunk_index, total_chunks, chunk_size } => {
+                    format!("bitswap_chunk_downloaded:{}:{}:{}:{}", file_hash, chunk_index, total_chunks, chunk_size)
+                },
+                DhtEvent::PaymentNotificationReceived { from_peer, payload } => {
+                    format!("payment_notification_received:{}:{:?}", from_peer, payload)
+                },
                 DhtEvent::ReputationEvent {
                     peer_id,
                     event_type,
@@ -1446,7 +1610,7 @@ async fn get_cpu_temperature() -> Option<f32> {
         let temp_history_mutex = TEMP_HISTORY.get_or_init(|| std::sync::Mutex::new(Vec::new()));
 
         {
-            let mut last_update = last_update_mutex.lock().unwrap();
+            let mut last_update = last_update_mutex.lock().ok()?;
             if let Some(last) = *last_update {
                 if last.elapsed() < MINIMUM_CPU_UPDATE_INTERVAL {
                     return None;
@@ -1458,7 +1622,13 @@ async fn get_cpu_temperature() -> Option<f32> {
         // Helper function to add temperature to history and return smoothed value
         let smooth_temperature = |raw_temp: f32| -> f32 {
             let now = Instant::now();
-            let mut history = temp_history_mutex.lock().unwrap();
+            let mut history = match temp_history_mutex.lock() {
+                Ok(h) => h,
+                Err(e) => {
+                    tracing::error!("Failed to acquire temperature history lock: {}", e);
+                    return raw_temp; // Return raw temp if lock fails
+                }
+            };
 
             // Add current reading
             history.push((now, raw_temp));
@@ -1484,14 +1654,14 @@ async fn get_cpu_temperature() -> Option<f32> {
 
         // Try cached working method first
         {
-            let working_method = working_method_mutex.lock().unwrap();
+            let working_method = working_method_mutex.lock().ok()?;
             if let Some(ref method) = *working_method {
                 if let Some(temp) = try_temperature_method(method) {
                     return Some(smooth_temperature(temp));
                 }
                 // Method stopped working, clear cache
                 drop(working_method);
-                let mut working_method = working_method_mutex.lock().unwrap();
+                let mut working_method = working_method_mutex.lock().ok()?;
                 *working_method = None;
             }
         }
@@ -1508,7 +1678,7 @@ async fn get_cpu_temperature() -> Option<f32> {
         for method in methods_to_try {
             if let Some(temp) = try_temperature_method(&method) {
                 // Cache the working method
-                let mut working_method = working_method_mutex.lock().unwrap();
+                let mut working_method = working_method_mutex.lock().ok()?;
                 *working_method = Some(method.clone());
                 return Some(smooth_temperature(temp));
             }
@@ -1518,8 +1688,9 @@ async fn get_cpu_temperature() -> Option<f32> {
         #[cfg(target_os = "linux")]
         {
             if let Some((temp, method)) = get_linux_temperature_advanced() {
-                let mut working_method = working_method_mutex.lock().unwrap();
-                *working_method = Some(method);
+                if let Ok(mut working_method) = working_method_mutex.lock() {
+                    *working_method = Some(method);
+                }
                 return Some(smooth_temperature(temp));
             }
         }
@@ -1799,10 +1970,11 @@ fn get_windows_temperature() -> Option<f32> {
                     if temp_celsius > 0.0 && temp_celsius < 150.0 {
                         // Log success only once
                         let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
-                        let mut logged = log_state.lock().unwrap();
-                        if !*logged {
-                            info!("✅ Temperature sensor detected via WMI HighPrecision: {:.1}°C", temp_celsius);
-                            *logged = true;
+                        if let Ok(mut logged) = log_state.lock() {
+                            if !*logged {
+                                info!("✅ Temperature sensor detected via WMI HighPrecision: {:.1}°C", temp_celsius);
+                                *logged = true;
+                            }
                         }
                         return Some(temp_celsius);
                     }
@@ -1826,10 +1998,11 @@ fn get_windows_temperature() -> Option<f32> {
                     let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
                     if temp_celsius > 0.0 && temp_celsius < 150.0 {
                         let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
-                        let mut logged = log_state.lock().unwrap();
-                        if !*logged {
-                            info!("✅ Temperature sensor detected via WMI CurrentTemperature: {:.1}°C", temp_celsius);
-                            *logged = true;
+                        if let Ok(mut logged) = log_state.lock() {
+                            if !*logged {
+                                info!("✅ Temperature sensor detected via WMI CurrentTemperature: {:.1}°C", temp_celsius);
+                                *logged = true;
+                            }
                         }
                         return Some(temp_celsius);
                     }
@@ -1853,10 +2026,11 @@ fn get_windows_temperature() -> Option<f32> {
                     let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
                     if temp_celsius > 0.0 && temp_celsius < 150.0 {
                         let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
-                        let mut logged = log_state.lock().unwrap();
-                        if !*logged {
-                            info!("✅ Temperature sensor detected via MSAcpi: {:.1}°C", temp_celsius);
-                            *logged = true;
+                        if let Ok(mut logged) = log_state.lock() {
+                            if !*logged {
+                                info!("✅ Temperature sensor detected via MSAcpi: {:.1}°C", temp_celsius);
+                                *logged = true;
+                            }
                         }
                         return Some(temp_celsius);
                     }
@@ -1867,10 +2041,11 @@ fn get_windows_temperature() -> Option<f32> {
 
     // Log only once when no sensor is found
     let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
-    let mut logged = log_state.lock().unwrap();
-    if !*logged {
-        info!("⚠️ No WMI temperature sensors detected. Temperature monitoring disabled.");
-        *logged = true;
+    if let Ok(mut logged) = log_state.lock() {
+        if !*logged {
+            info!("⚠️ No WMI temperature sensors detected. Temperature monitoring disabled.");
+            *logged = true;
+        }
     }
 
     None
@@ -1887,9 +2062,9 @@ fn get_default_storage_path(app: tauri::AppHandle) -> Result<String, String> {
         .path()
         .app_data_dir()
         .map_err(|e| format!("Could not get app data directory: {}", e))?;
-    
+
     let storage_path = app_data_dir.join("Storage");
-    
+
     storage_path
         .to_str()
         .map(|s| s.to_string())
@@ -1992,7 +2167,10 @@ async fn start_file_transfer_service(
 async fn upload_file_to_network(
     state: State<'_, AppState>,
     file_path: String,
+    price: Option<f64>,
 ) -> Result<(), String> {
+    println!("🔍 BACKEND: upload_file_to_network called with price: {:?}", price);
+
     // Get the active account address
     let account = get_active_account(&state).await?;
 
@@ -2004,23 +2182,19 @@ async fn upload_file_to_network(
             .ok_or("No private key available. Please log in again.")?
     };
 
-    let ft_opt = {
+    let ft = {
         let ft_guard = state.file_transfer.lock().await;
         ft_guard.as_ref().cloned()
     };
 
-    if let Some(ft) = ft_opt {
-        // Upload the file (use filename basename only)
-        let file_name = std::path::Path::new(&file_path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(&file_path)
-            .to_string();
+    if let Some(ft) = ft {
+        // Upload the file
+        let file_name = file_path.split('/').last().unwrap_or(&file_path);
 
         ft.upload_file_with_account(
             file_path.clone(),
             file_name.to_string(),
-            Some(account),
+            Some(account.clone()),
             Some(private_key),
         )
         .await
@@ -2039,10 +2213,34 @@ async fn upload_file_to_network(
         };
 
         if let Some(dht) = dht {
-            // Prepare a timestamp for metadata
+            let metadata = FileMetadata {
+                merkle_root: file_hash.clone(),
+                is_root: true,
+                file_name: file_name.to_string(),
+                file_size: file_data.len() as u64,
+                file_data: file_data.clone(),
+                seeders: vec![],
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+                mime_type: None,
+                is_encrypted: false,
+                encryption_method: None,
+                key_fingerprint: None,
+                parent_hash: None,
+                version: Some(1),
+                cids: None,
+                encrypted_key_bundle: None,
+                price,
+                uploader_address: Some(account.clone()),
+                ..Default::default()
+            };
+          
+          // Prepare a timestamp for metadata
             let created_at = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or(std::time::Duration::from_secs(0))
                 .as_secs();
 
             // Use DHT helper to prepare versioned metadata so version and parent_hash are computed
@@ -2058,19 +2256,20 @@ async fn upload_file_to_network(
                     false, // is_encrypted
                     None,  // encryption_method
                     None,  // key_fingerprint
+                    price, // Add price parameter
+                    Some(account.clone()), // Add uploader_address parameter
                 )
                 .await
             {
                 Ok(metadata) => {
-                    // Store file data locally for seeding if file transfer service is available.
-                    // The store_file_data method returns () so we simply await it and continue.
+                    // Store file data locally for seeding
                     ft.store_file_data(file_hash.clone(), file_name.to_string(), file_data.clone())
                         .await;
 
                     match dht.publish_file(metadata.clone()).await {
                         Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
                         Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
-                    };
+                    }
                 }
                 Err(e) => {
                     warn!("Failed to prepare versioned metadata: {}", e);
@@ -2085,6 +2284,7 @@ async fn upload_file_to_network(
         Err("File transfer service is not running".to_string())
     }
 }
+
 
 #[tauri::command]
 async fn download_blocks_from_network(
@@ -2111,12 +2311,12 @@ async fn download_file_from_network(
     file_hash: String,
     _output_path: String,
 ) -> Result<String, String> {
-    let ft_opt = {
+    let ft = {
         let ft_guard = state.file_transfer.lock().await;
         ft_guard.as_ref().cloned()
     };
 
-    if let Some(_ft) = ft_opt {
+    if let Some(_ft) = ft {
         info!("Starting P2P download for: {}", file_hash);
 
         // Search DHT for file metadata
@@ -2375,7 +2575,7 @@ async fn save_temp_file_for_upload(
     // Create unique temp file path
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or(Duration::from_secs(0))
         .as_nanos();
     let temp_file_path = temp_dir.join(format!("{}_{}", timestamp, file_name));
 
@@ -2384,6 +2584,14 @@ async fn save_temp_file_for_upload(
         .map_err(|e| format!("Failed to write temp file: {}", e))?;
 
     Ok(temp_file_path.to_string_lossy().to_string())
+}
+
+/// Get file size in bytes
+#[tauri::command]
+async fn get_file_size(file_path: String) -> Result<u64, String> {
+    let metadata = fs::metadata(&file_path)
+        .map_err(|e| format!("Failed to get file metadata: {}", e))?;
+    Ok(metadata.len())
 }
 
 #[tauri::command]
@@ -2405,7 +2613,7 @@ async fn start_streaming_upload(
         "upload_{}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_nanos()
     );
 
@@ -2504,7 +2712,7 @@ async fn upload_file_chunk(
         // Create minimal metadata (without file_data to avoid DHT size limits)
         let created_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
         let metadata = dht::FileMetadata {
@@ -2524,6 +2732,11 @@ async fn upload_file_chunk(
             parent_hash: None,
             is_root: true,
             download_path: None,
+            price: None,
+            uploader_address: None,
+            ftp_sources: None,
+            info_hash: None,
+            trackers: None,
         };
 
         // Store complete file data locally for seeding
@@ -3547,7 +3760,7 @@ async fn queue_transaction(
         "tx_{}",
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(Duration::from_secs(0))
             .as_millis()
     );
 
@@ -3558,7 +3771,7 @@ async fn queue_transaction(
         amount,
         timestamp: SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(Duration::from_secs(0))
             .as_secs(),
     };
 
@@ -3949,16 +4162,28 @@ fn main() {
     #[cfg(debug_assertions)]
     {
         use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+        let mut filter = EnvFilter::from_default_env();
+        
+        // Add directives with safe fallback
+        if let Ok(directive) = "chiral_network=info".parse() {
+            filter = filter.add_directive(directive);
+        }
+        if let Ok(directive) = "libp2p=warn".parse() {
+            filter = filter.add_directive(directive);
+        }
+        if let Ok(directive) = "libp2p_kad=warn".parse() {
+            filter = filter.add_directive(directive);
+        }
+        if let Ok(directive) = "libp2p_swarm=warn".parse() {
+            filter = filter.add_directive(directive);
+        }
+        if let Ok(directive) = "libp2p_mdns=warn".parse() {
+            filter = filter.add_directive(directive);
+        }
+        
         tracing_subscriber::registry()
             .with(fmt::layer())
-            .with(
-                EnvFilter::from_default_env()
-                    .add_directive("chiral_network=info".parse().unwrap())
-                    .add_directive("libp2p=warn".parse().unwrap())
-                    .add_directive("libp2p_kad=warn".parse().unwrap())
-                    .add_directive("libp2p_swarm=warn".parse().unwrap())
-                    .add_directive("libp2p_mdns=warn".parse().unwrap()),
-            )
+            .with(filter)
             .init();
     }
 
@@ -4046,6 +4271,12 @@ fn main() {
             create_chiral_account,
             import_chiral_account,
             has_active_account,
+            get_user_balance,
+            can_afford_download,
+            process_download_payment,
+            record_download_payment,
+            record_seeder_payment,
+            check_payment_notifications,
             get_network_peer_count,
             start_geth_node,
             stop_geth_node,
@@ -4159,6 +4390,9 @@ fn main() {
             register_manifest_for_http,
             download_file_http,
             save_temp_file_for_upload,
+            get_file_size,
+            encrypt_file_for_self_upload,
+            encrypt_file_for_recipient,
             //request_file_access,
             upload_and_publish_file,
             decrypt_and_reassemble_file,
@@ -4243,8 +4477,12 @@ fn main() {
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &hide_i, &quit_i])?;
 
+            let icon = app.default_window_icon()
+                .ok_or("Failed to get default window icon")?
+                .clone();
+
             let tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(icon)
                 .menu(&menu)
                 .tooltip("Chiral Network")
                 .show_menu_on_left_click(false)
@@ -4295,8 +4533,8 @@ fn main() {
 
             // Get the main window and ensure it's visible
             if let Some(window) = app.get_webview_window("main") {
-                window.show().unwrap();
-                window.set_focus().unwrap();
+                let _ = window.show();
+                let _ = window.set_focus();
 
                 let app_handle = app.handle().clone();
                 window.on_window_event(move |event| {
@@ -4550,32 +4788,18 @@ async fn upload_and_publish_file(
     state: State<'_, AppState>,
     file_path: String,
     file_name: Option<String>,
+    recipient_public_key: Option<String>,
 ) -> Result<UploadResult, String> {
-    // This command now performs canonical encryption and publishes a key-agnostic manifest.
-    // The AES key is stored locally for sharing with authorized peers upon request.
+    // 1. Process file with ChunkManager (encrypt, chunk, build Merkle tree)
+    let manifest = encrypt_file_for_recipient(
+        app.clone(),
+        state.clone(),
+        file_path.clone(),
+        recipient_public_key.clone(),
+    )
+    .await?;
 
-    // 1. Get app data dir for chunk storage
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let chunk_storage_path = app_data_dir.join("chunk_storage");
-
-    // 2. Perform canonical encryption in a blocking task
-    let file_path_clone = file_path.clone();
-    let (manifest, canonical_aes_key) = tokio::task::spawn_blocking(move || {
-        let manager = ChunkManager::new(chunk_storage_path);
-        let result = manager.chunk_and_encrypt_file_canonical(Path::new(&file_path_clone))?;
-        Ok::<(manager::FileManifest, [u8; 32]), String>((result.manifest, result.canonical_aes_key))
-    }).await.map_err(|e| e.to_string())??;
-
-    let merkle_root = manifest.merkle_root.clone();
-
-    // 3. Store the canonical AES key in AppState, mapped by its Merkle root
-    {
-        let mut keys = state.canonical_aes_keys.lock().await;
-        keys.insert(merkle_root.clone(), canonical_aes_key);
-        info!("Stored canonical AES key for merkle root: {}", merkle_root);
-    }
-
-    // 4. Get file name and size
+    // 2. Get file name and size
     let file_name = file_name.unwrap_or_else(|| {
         std::path::Path::new(&file_path)
             .file_name()
@@ -4583,44 +4807,78 @@ async fn upload_and_publish_file(
             .unwrap_or("unknown")
             .to_string()
     });
+
     let file_size: u64 = manifest.chunks.iter().map(|c| c.size as u64).sum();
 
-    // 5. Get peer ID from DHT
-    let dht = state.dht.lock().await.as_ref().cloned().ok_or("DHT not running")?;
-    let peer_id = dht.get_peer_id().await;
+    // 3. Get peer ID from DHT
+    let peer_id = {
+        let dht_guard = state.dht.lock().await;
+        if let Some(dht) = dht_guard.as_ref() {
+            dht.get_peer_id().await
+        } else {
+            "unknown".to_string()
+        }
+    };
 
-    // 6. Publish key-agnostic metadata to DHT
-    let version = {
+    // 4. Publish to DHT with versioning support
+    let dht = {
+        let dht_guard = state.dht.lock().await; // Use the Merkle root as the file hash
+        dht_guard.as_ref().cloned()
+    };
+
+    let version = if let Some(dht) = dht {
         let created_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
 
-        let mime_type = detect_mime_type_from_filename(&file_name);
-        let mut metadata = dht.prepare_versioned_metadata(
-                merkle_root.clone(),
+        // Use prepare_versioned_metadata to handle version incrementing and parent_hash
+        let mime_type = detect_mime_type_from_filename(&file_name)
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+        let metadata = dht
+            .prepare_versioned_metadata(
+                manifest.merkle_root.clone(), // This is the Merkle root
                 file_name.clone(),
                 file_size,
-                vec![], // data is already chunked and stored
+                vec![], // Empty - chunks already stored
                 created_at,
-                mime_type,
+                Some(mime_type),
                 None,                            // encrypted_key_bundle
-                true, // is_encrypted
-                Some("AES-256-GCM".to_string()),
-                None, // key_fingerprint
-            ).await?;
+                true,                            // is_encrypted
+                Some("AES-256-GCM".to_string()), // Encryption method
+                None,                            // key_fingerprint (deprecated)
+                None,                            // price
+                None,                            // uploader_address
+            )
+            .await?;
 
-        // This is important: we publish without any key bundle.
-        metadata.encrypted_key_bundle = None;
+        println!("📦 BACKEND: Created versioned metadata");
 
         let version = metadata.version.unwrap_or(1);
+
+        // Store file data locally for seeding (CRITICAL FIX)
+        let ft = {
+            let ft_guard = state.file_transfer.lock().await;
+            ft_guard.as_ref().cloned()
+        };
+        if let Some(ft) = ft {
+            // Read the original file data to store locally
+            let file_data = tokio::fs::read(&file_path)
+                .await
+                .map_err(|e| format!("Failed to read file for local storage: {}", e))?;
+
+            ft.store_file_data(manifest.merkle_root.clone(), file_name.clone(), file_data)
+                .await; // Store with Merkle root as key
+        }
+
         dht.publish_file(metadata).await?;
         version
+    } else {
+        1 // Default to v1 if DHT not running
     };
 
-    info!("Published key-agnostic metadata for merkle root: {}", merkle_root);
 
-    // 7. Register manifest with HTTP server for serving
+    // 6. Register manifest with HTTP server for serving
     // Note: manifest.encrypted_key_bundle is None from canonical encryption
     let file_manifest = manager::FileManifest {
         merkle_root: manifest.merkle_root.clone(),
@@ -4635,9 +4893,9 @@ async fn upload_and_publish_file(
 
     tracing::info!("Registered manifest for HTTP serving: {}", manifest.merkle_root);
 
-    // 8. Return metadata to frontend
+    // 7. Return metadata to frontend
     Ok(UploadResult {
-        merkle_root,
+        merkle_root: manifest.merkle_root,
         file_name,
         file_size,
         is_encrypted: true,
