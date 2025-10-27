@@ -1807,6 +1807,7 @@ async fn run_dht_node(
                                         is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
                                         price: json_val.get("price").and_then(|v| v.as_f64()),
                                         uploader_address: json_val.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                        http_sources: json_val.get("http_sources").and_then(|v| {serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)}),
                                         ..Default::default()
                                     };
                                     let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
@@ -1941,6 +1942,7 @@ async fn run_dht_node(
                             "seederHeartbeats": active_heartbeats,
                             "price": metadata.price,
                             "uploader_address": metadata.uploader_address,
+                            "http_sources": metadata.http_sources,
                         });
 
                         println!("💾 DHT: Serialized metadata JSON: {}", serde_json::to_string(&dht_metadata).unwrap_or_else(|_| "error".to_string()));
@@ -3424,6 +3426,7 @@ async fn run_dht_node(
                                         is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
                                         price: json_val.get("price").and_then(|v| v.as_f64()),
                                         uploader_address: json_val.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                        http_sources: json_val.get("http_sources").and_then(|v| {serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)}),
                                         ..Default::default()
                                     };
                                     let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
@@ -3987,6 +3990,9 @@ async fn handle_kademlia_event(
                                         .and_then(|v| v.as_bool())
                                         .unwrap_or(true),
                                     price: metadata_json.get("price").and_then(|v| v.as_f64()),
+                                    http_sources: metadata_json.get("http_sources").and_then(|v| {
+                                            serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)
+                                    }),
                                     uploader_address: metadata_json
                                         .get("uploader_address")
                                         .and_then(|v| v.as_str())
