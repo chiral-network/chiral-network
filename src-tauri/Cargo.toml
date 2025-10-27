@@ -66,6 +66,7 @@ glob = "0.3"
 rs_merkle = "1.5.0"
 tokio-util = { version = "0.7", features = ["compat"] }
 tokio-socks = "0.5"
+url = { version = "2.5.0", features = ["serde"] }
 
 # Bitswap and related dependencies
 beetswap = { git = "https://github.com/totoro-ming-lin/beetswap.git", branch = "older-version" }
@@ -87,7 +88,6 @@ ed25519-dalek = { version = "2.0", features = ["rand_core", "serde"] }
 memmap2 = "0.9"
 serde_bytes = "0.11.19"
 anyhow = "1.0.100"
-url = { version = "2.5.0", features = ["serde"] }
 
 [dev-dependencies]
 tempfile = "3.8"
