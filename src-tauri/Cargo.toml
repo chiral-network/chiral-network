@@ -64,30 +64,30 @@ clap = { version = "4.4", features = ["derive"] }
 fs2 = "0.4"
 glob = "0.3"
 rs_merkle = "1.5.0"
-tokio-util = { version = "0.7", features = ["compat"] }
-tokio-socks = "0.5"
-url = { version = "2.5.0", features = ["serde"] }
+tokio-socks = "0.5.2"
+url = { version = "2.5.7", features = ["serde"] }
 
 # Bitswap and related dependencies
 beetswap = { git = "https://github.com/totoro-ming-lin/beetswap.git", branch = "older-version" }
 multihash-codetable = { version = "0.1", features = ["blake3", "sha2", "sha3"] }
 cid = { version = "0.11.1", features = ["serde-codec"] }
-blockstore = { version = "0.7.0", features = ["redb"] }
+blockstore = { version = "0.7.1", features = ["redb"] }
 
 # BitTorrent protocol dependencies
-bip_metainfo = "0.7"
 bendy = { version = "0.4", features = ["serde"] }
 bip_handshake = "0.7"
 
 # WebRTC dependencies for P2P file transfers
 webrtc = "0.10"
 tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
-uuid = { version = "1.0", features = ["v4", "serde"] }
-tauri-plugin-fs = "2"
-ed25519-dalek = { version = "2.0", features = ["rand_core", "serde"] }
+uuid = { version = "1.18.1", features = ["v4", "serde"] }
+tauri-plugin-fs = "2.4.2"
+ed25519-dalek = { version = "2.2.0", features = ["rand_core", "serde"] }
 memmap2 = "0.9"
 serde_bytes = "0.11.19"
 anyhow = "1.0.100"
+tokio-util = { version = "0.7", features = ["compat"] }
+bip_metainfo = "0.7.0"
 
 [dev-dependencies]
 tempfile = "3.8"
