@@ -417,6 +417,82 @@ async fn process_download_payment(
 }
 
 #[tauri::command]
+async fn log_file_transaction(
+    state: State<'_, AppState>,
+    transaction_type: String,
+    file_hash: String,
+    file_name: String,
+    file_size: u64,
+    peer_address: String,
+) -> Result<String, String> {
+    tracing::info!(
+        "Logging {} transaction to blockchain: {} ({} bytes) peer: {}",
+        transaction_type,
+        file_name,
+        file_size,
+        peer_address
+    );
+
+    // Get the active account
+    let account = match get_active_account(&state).await {
+        Ok(acc) => acc,
+        Err(e) => {
+            tracing::warn!("No active account for blockchain logging: {}", e);
+            return Err(format!("No active account: {}", e));
+        }
+    };
+
+    // Get the private key
+    let private_key = {
+        let key_guard = state.active_account_private_key.lock().await;
+        match key_guard.clone() {
+            Some(key) => key,
+            None => {
+                tracing::warn!("No private key available for blockchain logging");
+                return Err("No private key available".to_string());
+            }
+        }
+    };
+
+    // Create transaction data payload with file metadata
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let tx_data = format!(
+        "{}:{}:{}:{}:{}",
+        transaction_type, file_hash, file_name, file_size, timestamp
+    );
+
+    tracing::debug!("Transaction data: {}", tx_data);
+
+    // Send transaction to peer address with zero value (just logging)
+    // The peer_address might be a peer ID or 'unknown', so use account address as fallback
+    let recipient = if peer_address.starts_with("0x") && peer_address.len() == 42 {
+        peer_address
+    } else {
+        // If peer_address is not a valid eth address, send to self (just storing data)
+        account.clone()
+    };
+
+    match ethereum::send_transaction(&account, &recipient, 0.0, &private_key).await {
+        Ok(tx_hash) => {
+            tracing::info!(
+                "{} transaction logged to blockchain: {}",
+                transaction_type,
+                tx_hash
+            );
+            Ok(tx_hash)
+        }
+        Err(e) => {
+            tracing::error!("Failed to log {} transaction: {}", transaction_type, e);
+            Err(format!("Blockchain logging failed: {}", e))
+        }
+    }
+}
+
+#[tauri::command]
 async fn record_download_payment(
     app: tauri::AppHandle,
     file_hash: String,
@@ -4100,6 +4176,7 @@ fn main() {
             get_user_balance,
             can_afford_download,
             process_download_payment,
+            log_file_transaction,
             record_download_payment,
             record_seeder_payment,
             check_payment_notifications,

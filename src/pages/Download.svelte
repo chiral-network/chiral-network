@@ -67,7 +67,7 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
           multiSourceProgress = multiSourceProgress // Trigger reactivity
         })
 
-        const unlistenCompleted = await listen('multi_source_download_completed', (event) => {
+        const unlistenCompleted = await listen('multi_source_download_completed', async (event) => {
           const data = event.payload as any
 
           // Update file status to completed
@@ -82,6 +82,31 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
             }
             return file;
           }));
+
+          // Log download transaction to blockchain
+          try {
+            const completedFile = $files.find(f => f.hash === data.file_hash);
+            if (completedFile) {
+              console.log('Logging download to blockchain:', {
+                fileHash: data.file_hash,
+                fileName: data.file_name,
+                fileSize: completedFile.size
+              });
+
+              const txHash = await invoke('log_file_transaction', {
+                transactionType: 'download',
+                fileHash: data.file_hash,
+                fileName: data.file_name,
+                fileSize: completedFile.size,
+                peerAddress: completedFile.seederAddresses?.[0] || 'unknown'
+              });
+
+              console.log('Download logged to blockchain:', txHash);
+            }
+          } catch (error) {
+            // Don't fail the download if blockchain logging fails
+            console.warn('Failed to log download to blockchain:', error);
+          }
 
           multiSourceProgress.delete(data.file_hash)
           multiSourceProgress = multiSourceProgress
@@ -245,6 +270,31 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
                 }
                 return file;
             }));
+
+            // Log download transaction to blockchain
+            try {
+                const completedFile = $files.find(f => f.hash === metadata.merkleRoot);
+                if (completedFile) {
+                    console.log('Logging Bitswap download to blockchain:', {
+                        fileHash: metadata.merkleRoot,
+                        fileName: completedFile.name,
+                        fileSize: completedFile.size
+                    });
+
+                    const txHash = await invoke('log_file_transaction', {
+                        transactionType: 'download',
+                        fileHash: metadata.merkleRoot,
+                        fileName: completedFile.name,
+                        fileSize: completedFile.size,
+                        peerAddress: completedFile.seederAddresses?.[0] || 'unknown'
+                    });
+
+                    console.log('Bitswap download logged to blockchain:', txHash);
+                }
+            } catch (error) {
+                // Don't fail the download if blockchain logging fails
+                console.warn('Failed to log Bitswap download to blockchain:', error);
+            }
         });
 
         // Listen for DHT errors (like missing CIDs)

@@ -718,6 +718,28 @@
             return f;
           });
 
+          // Log upload transaction to blockchain
+          try {
+            console.log('Logging upload to blockchain:', {
+              fileHash: metadata.merkleRoot,
+              fileName: metadata.fileName,
+              fileSize: metadata.fileSize
+            });
+
+            const txHash = await invoke('log_file_transaction', {
+              transactionType: 'upload',
+              fileHash: metadata.merkleRoot,
+              fileName: metadata.fileName,
+              fileSize: metadata.fileSize,
+              peerAddress: dhtService.getPeerId() || 'local'
+            });
+
+            console.log('Upload logged to blockchain:', txHash);
+          } catch (error) {
+            // Don't fail the upload if blockchain logging fails
+            console.warn('Failed to log upload to blockchain:', error);
+          }
+
           if (existed) {
             duplicateCount++;
             showToast(
