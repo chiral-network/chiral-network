@@ -628,6 +628,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bendy"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3d60116e2174fd5ea2889fffacdcbe47229beeb12f7908e1e6525dc346c9431"
+dependencies = [
+ "rustversion",
+ "serde",
+ "serde_bytes",
+ "thiserror 2.0.17",
+]
+
+[[package]]
 name = "bincode"
 version = "1.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1130,6 +1142,7 @@ dependencies = [
  "async-trait",
  "base64 0.21.7",
  "beetswap",
+ "bendy",
  "bip_handshake",
  "bip_metainfo",
  "blockstore",
@@ -1161,6 +1174,7 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_json",
+ "sha1",
  "sha2",
  "sha3",
  "sys-locale",
@@ -1183,6 +1197,7 @@ dependencies = [
  "totp-rs",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid 1.18.1",
  "webrtc",
  "x25519-dalek",
