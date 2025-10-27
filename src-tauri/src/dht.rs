@@ -204,7 +204,7 @@ pub struct FileMetadata {
     /// For encrypted files, this contains the encrypted AES key and other info.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub encrypted_key_bundle: Option<crate::encryption::EncryptedAesKeyBundle>,
-    #[serde(skip_serializing_if = "Option::is_none")] 
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ftp_sources: Option<Vec<FtpSourceInfo>>,
     pub is_root: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -223,18 +223,41 @@ pub struct FileMetadata {
     pub trackers: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// FTP source information for a file
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FtpSourceInfo {
-    pub url: String, // e.g., "ftp://ftp.example.com/path/to/file" or "ftp://user@host/path"
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Full FTP URL (e.g., "ftp://ftp.example.com/path/to/file.bin")
+    pub url: String,
+    /// Optional username (None means anonymous)
     pub username: Option<String>,
-    // Store an encrypted password, if one is provided.
-    // This string would be the Base64-encoded result of:
-    // AES-GCM-SIV(key: file_aes_key, plaintext: ftp_password)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub encrypted_password: Option<String>,
+    /// Optional password (stored temporarily, not persisted to DHT for security)
+    /// This should be provided at download time, not stored in DHT
+    #[serde(skip_serializing, skip_deserializing)]
+    pub password: Option<String>,
+    /// Whether this FTP server supports resume (REST command)
+    pub supports_resume: bool,
+    /// Last known file size on this FTP server
+    pub file_size: u64,
+    /// Server availability (updated based on connection attempts)
+    pub last_checked: Option<u64>,  // Unix timestamp
+    pub is_available: bool,
 }
+
+impl FtpSourceInfo {
+    /// Creates a copy of the struct suitable for DHT storage, stripping the password.
+    pub fn for_dht_storage(&self) -> Self {
+        Self {
+            url: self.url.clone(),
+            username: self.username.clone(),
+            password: None,  // Always None for DHT storage
+            supports_resume: self.supports_resume,
+            file_size: self.file_size,
+            last_checked: self.last_checked,
+            is_available: self.is_available,
+        }
+    }
+}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -3200,7 +3223,6 @@ async fn run_dht_node(
                                 error: format!("{:?}", error),
                             }).await;
                         }
-                        _ => {}
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Ping(ev)) => {
                         match ev {
@@ -5441,7 +5463,14 @@ impl DhtService {
         debug!("Heartbeat tracking stopped for {}", file_hash);
     }
 
-    pub async fn publish_file(&self, metadata: FileMetadata) -> Result<(), String> {
+    pub async fn publish_file(&self, mut metadata: FileMetadata,ftp_sources: Option<Vec<FtpSourceInfo>>,) -> Result<(), String> {
+        // Add FTP sources to metadata before publishing
+        if let Some(sources) = ftp_sources {
+            metadata.ftp_sources = Some(
+                sources.into_iter().map(|s| s.for_dht_storage()).collect()
+            );
+        }
+
         let (response_tx, response_rx) = oneshot::channel();
 
         self.cmd_tx
@@ -5721,7 +5750,7 @@ impl DhtService {
                         pending.remove(&file_hash);
                     }
                 }
-                Err("Search timed out".into())
+                return Err("Search timed out".into())
             }
         }
     }
