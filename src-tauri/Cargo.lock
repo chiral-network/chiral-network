@@ -1084,6 +1084,7 @@ dependencies = [
  "libp2p",
  "memmap2",
  "multihash-codetable",
+ "native-tls",
  "pbkdf2 0.12.2",
  "rand 0.8.5",
  "reqwest 0.11.27",

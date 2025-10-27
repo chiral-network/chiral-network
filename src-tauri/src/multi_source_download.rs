@@ -1,4 +1,5 @@
 use crate::dht::{DhtService, FileMetadata, WebRTCOfferRequest};
+use crate::download_source::DownloadSource;
 use crate::peer_selection::SelectionStrategy;
 use crate::webrtc_service::{WebRTCFileRequest, WebRTCService};
 use serde::{Deserialize, Serialize};
@@ -27,25 +28,61 @@ pub struct ChunkInfo {
     pub hash: String,
 }
 
+/// Assignment of chunks to a download source (P2P peer, HTTP, or FTP)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PeerAssignment {
-    pub peer_id: String,
-    pub chunks: Vec<u32>, // chunk IDs assigned to this peer
-    pub status: PeerStatus,
+pub struct SourceAssignment {
+    /// Download source (P2P, HTTP, or FTP)
+    pub source: DownloadSource,
+
+    /// Chunk IDs assigned to this source
+    pub chunks: Vec<u32>,
+
+    /// Current status of this source
+    pub status: SourceStatus,
+
+    /// Timestamp when connection was established
     pub connected_at: Option<u64>,
+
+    /// Timestamp of last activity from this source
     pub last_activity: Option<u64>,
 }
 
+/// Status of a download source
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum PeerStatus {
+pub enum SourceStatus {
     Connecting,
     Connected,
     Downloading,
     Failed,
     Completed,
 }
+
+impl SourceAssignment {
+    /// Create a new SourceAssignment from a DownloadSource
+    pub fn new(source: DownloadSource, chunks: Vec<u32>) -> Self {
+        Self {
+            source,
+            chunks,
+            status: SourceStatus::Connecting,
+            connected_at: None,
+            last_activity: None,
+        }
+    }
+
+    /// Get the source identifier (peer ID for P2P, URL for HTTP/FTP)
+    pub fn source_id(&self) -> String {
+        self.source.identifier()
+    }
+}
+
+// Legacy type alias for backwards compatibility
+#[deprecated(note = "Use SourceAssignment instead")]
+pub type PeerAssignment = SourceAssignment;
+
+#[deprecated(note = "Use SourceStatus instead")]
+pub type PeerStatus = SourceStatus;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,10 +93,10 @@ pub struct MultiSourceProgress {
     pub downloaded_size: u64,
     pub total_chunks: u32,
     pub completed_chunks: u32,
-    pub active_peers: usize,
+    pub active_sources: usize,
     pub download_speed_bps: f64,
     pub eta_seconds: Option<u32>,
-    pub peer_assignments: Vec<PeerAssignment>,
+    pub source_assignments: Vec<SourceAssignment>,
 }
 
 #[derive(Debug, Clone)]
@@ -67,7 +104,7 @@ pub struct ChunkRequest {
     #[allow(dead_code)]
     pub chunk_id: u32,
     #[allow(dead_code)]
-    pub peer_id: String,
+    pub source_id: String, // Changed from peer_id - can be peer ID, URL, etc.
     #[allow(dead_code)]
     pub requested_at: Instant,
     #[allow(dead_code)]
@@ -80,7 +117,7 @@ pub struct CompletedChunk {
     pub chunk_id: u32,
     pub data: Vec<u8>,
     #[allow(dead_code)]
-    pub peer_id: String,
+    pub source_id: String, // Changed from peer_id - can be peer ID, URL, etc.
     #[allow(dead_code)]
     pub completed_at: Instant,
 }
@@ -89,7 +126,7 @@ pub struct CompletedChunk {
 pub struct ActiveDownload {
     pub file_metadata: FileMetadata,
     pub chunks: Vec<ChunkInfo>,
-    pub peer_assignments: HashMap<String, PeerAssignment>,
+    pub source_assignments: HashMap<String, SourceAssignment>, // Changed from source_assignments
     pub completed_chunks: HashMap<u32, CompletedChunk>,
     pub pending_requests: HashMap<u32, ChunkRequest>,
     pub failed_chunks: VecDeque<u32>,
@@ -328,7 +365,7 @@ impl MultiSourceDownloadService {
         let download = ActiveDownload {
             file_metadata: metadata.clone(),
             chunks,
-            peer_assignments: HashMap::new(),
+            source_assignments: HashMap::new(),
             completed_chunks: HashMap::new(),
             pending_requests: HashMap::new(),
             failed_chunks: VecDeque::new(),
@@ -487,19 +524,24 @@ impl MultiSourceDownloadService {
             chunk_ids.len()
         );
 
-        // Update peer assignment status
+        // Update source assignment status
         {
+            use crate::download_source::{DownloadSource, P2pSourceInfo};
+
             let mut downloads = self.active_downloads.write().await;
             if let Some(download) = downloads.get_mut(file_hash) {
-                download.peer_assignments.insert(
+                // Create P2P download source
+                let p2p_source = DownloadSource::P2p(P2pSourceInfo {
+                    peer_id: peer_id.clone(),
+                    multiaddr: None,
+                    reputation: None,
+                    supports_encryption: false,
+                    protocol: Some("webrtc".to_string()),
+                });
+
+                download.source_assignments.insert(
                     peer_id.clone(),
-                    PeerAssignment {
-                        peer_id: peer_id.clone(),
-                        chunks: chunk_ids.clone(),
-                        status: PeerStatus::Connecting,
-                        connected_at: None,
-                        last_activity: None,
-                    },
+                    SourceAssignment::new(p2p_source, chunk_ids.clone()),
                 );
             }
         }
@@ -592,8 +634,8 @@ impl MultiSourceDownloadService {
         {
             let mut downloads = self.active_downloads.write().await;
             if let Some(download) = downloads.get_mut(file_hash) {
-                if let Some(assignment) = download.peer_assignments.get_mut(peer_id) {
-                    assignment.status = PeerStatus::Connected;
+                if let Some(assignment) = download.source_assignments.get_mut(peer_id) {
+                    assignment.status = SourceStatus::Connected;
                     assignment.connected_at = Some(now);
                     assignment.last_activity = Some(now);
                 }
@@ -618,8 +660,8 @@ impl MultiSourceDownloadService {
         let reassign_chunks = {
             let mut downloads = self.active_downloads.write().await;
             if let Some(download) = downloads.get_mut(file_hash) {
-                if let Some(assignment) = download.peer_assignments.get_mut(peer_id) {
-                    assignment.status = PeerStatus::Failed;
+                if let Some(assignment) = download.source_assignments.get_mut(peer_id) {
+                    assignment.status = SourceStatus::Failed;
                     let chunks = assignment.chunks.clone();
 
                     // Add failed chunks back to retry queue
@@ -688,8 +730,8 @@ impl MultiSourceDownloadService {
             {
                 let mut downloads = self.active_downloads.write().await;
                 if let Some(download) = downloads.get_mut(file_hash) {
-                    if let Some(assignment) = download.peer_assignments.get_mut(peer_id) {
-                        assignment.status = PeerStatus::Downloading;
+                    if let Some(assignment) = download.source_assignments.get_mut(peer_id) {
+                        assignment.status = SourceStatus::Downloading;
                     }
                 }
             }
@@ -709,7 +751,7 @@ impl MultiSourceDownloadService {
 
         if let Some(download) = download {
             // Close all peer connections
-            for peer_id in download.peer_assignments.keys() {
+            for peer_id in download.source_assignments.keys() {
                 let _ = self.webrtc_service.close_connection(peer_id.clone()).await;
             }
         }
@@ -743,12 +785,12 @@ impl MultiSourceDownloadService {
             let downloads = self.active_downloads.read().await;
             if let Some(download) = downloads.get(file_hash) {
                 download
-                    .peer_assignments
+                    .source_assignments
                     .iter()
                     .filter(|(_, assignment)| {
                         matches!(
                             assignment.status,
-                            PeerStatus::Connected | PeerStatus::Downloading
+                            SourceStatus::Connected | SourceStatus::Downloading
                         )
                     })
                     .map(|(peer_id, _)| peer_id.clone())
@@ -772,7 +814,7 @@ impl MultiSourceDownloadService {
             {
                 let mut downloads = self.active_downloads.write().await;
                 if let Some(download) = downloads.get_mut(file_hash) {
-                    if let Some(assignment) = download.peer_assignments.get_mut(peer_id) {
+                    if let Some(assignment) = download.source_assignments.get_mut(peer_id) {
                         assignment.chunks.push(*chunk_id);
                     }
                 }
@@ -791,13 +833,13 @@ impl MultiSourceDownloadService {
             .map(|chunk| chunk.data.len() as u64)
             .sum();
 
-        let active_peers = download
-            .peer_assignments
+        let active_sources = download
+            .source_assignments
             .values()
             .filter(|assignment| {
                 matches!(
                     assignment.status,
-                    PeerStatus::Connected | PeerStatus::Downloading
+                    SourceStatus::Connected | SourceStatus::Downloading
                 )
             })
             .count();
@@ -823,10 +865,10 @@ impl MultiSourceDownloadService {
             downloaded_size,
             total_chunks,
             completed_chunks,
-            active_peers,
+            active_sources,
             download_speed_bps,
             eta_seconds,
-            peer_assignments: download.peer_assignments.values().cloned().collect(),
+            source_assignments: download.source_assignments.values().cloned().collect(),
         }
     }
 
@@ -885,13 +927,13 @@ impl MultiSourceDownloadService {
             .map(|chunk| chunk.data.len() as u64)
             .sum();
 
-        let active_peers = download
-            .peer_assignments
+        let active_sources = download
+            .source_assignments
             .values()
             .filter(|assignment| {
                 matches!(
                     assignment.status,
-                    PeerStatus::Connected | PeerStatus::Downloading
+                    SourceStatus::Connected | SourceStatus::Downloading
                 )
             })
             .count();
@@ -917,10 +959,10 @@ impl MultiSourceDownloadService {
             downloaded_size,
             total_chunks,
             completed_chunks,
-            active_peers,
+            active_sources,
             download_speed_bps,
             eta_seconds,
-            peer_assignments: download.peer_assignments.values().cloned().collect(),
+            source_assignments: download.source_assignments.values().cloned().collect(),
         }
     }
 
@@ -1058,13 +1100,13 @@ mod tests {
     fn test_chunk_request_creation() {
         let request = ChunkRequest {
             chunk_id: 1,
-            peer_id: "peer123".to_string(),
+            source_id: "peer123".to_string(),
             requested_at: Instant::now(),
             retry_count: 0,
         };
 
         assert_eq!(request.chunk_id, 1);
-        assert_eq!(request.peer_id, "peer123");
+        assert_eq!(request.source_id, "peer123");
         assert_eq!(request.retry_count, 0);
     }
 
@@ -1074,13 +1116,13 @@ mod tests {
         let chunk = CompletedChunk {
             chunk_id: 2,
             data: data.clone(),
-            peer_id: "peer456".to_string(),
+            source_id: "peer456".to_string(),
             completed_at: Instant::now(),
         };
 
         assert_eq!(chunk.chunk_id, 2);
         assert_eq!(chunk.data, data);
-        assert_eq!(chunk.peer_id, "peer456");
+        assert_eq!(chunk.source_id, "peer456");
     }
 
     #[test]
