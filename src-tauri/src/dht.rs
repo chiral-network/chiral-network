@@ -763,6 +763,42 @@ fn is_relay_candidate(peer_id: &PeerId, relay_candidates: &HashSet<String>) -> b
     })
 }
 
+/// Check if an address is likely unreachable from the public internet
+/// Returns true if the address should be filtered out
+fn is_unreachable_address(addr: &Multiaddr) -> bool {
+    use libp2p::multiaddr::Protocol;
+    use std::net::IpAddr;
+    
+    for protocol in addr.iter() {
+        if let Protocol::Ip4(ip) = protocol {
+            let octets = ip.octets();
+            
+            // Docker bridge networks (172.17.0.0/16, 172.18.0.0/16, etc.)
+            if octets[0] == 172 && (octets[1] >= 16 && octets[1] <= 31) {
+                return true;
+            }
+            
+            // Private networks that are typically not routable
+            // 10.0.0.0/8
+            if octets[0] == 10 {
+                return true;
+            }
+            
+            // 192.168.0.0/16
+            if octets[0] == 192 && octets[1] == 168 {
+                return true;
+            }
+            
+            // Localhost
+            if octets[0] == 127 {
+                return true;
+            }
+        }
+    }
+    
+    false
+}
+
 fn extract_relay_peer(address: &Multiaddr) -> Option<PeerId> {
     use libp2p::multiaddr::Protocol;
 
@@ -2503,6 +2539,12 @@ async fn handle_identify_event(
                 }
                 // for addr in info.listen_addrs {
                 for addr in listen_addrs.iter() {
+                    // Filter out unreachable addresses (Docker IPs, private IPs without relay)
+                    if is_unreachable_address(addr) {
+                        debug!("  🚫 Skipping unreachable addr: {}", addr);
+                        continue;
+                    }
+                    
                     info!("  📍 Peer {} listen addr: {}", peer_id, addr);
                     if not_loopback(&addr) {
                         swarm
