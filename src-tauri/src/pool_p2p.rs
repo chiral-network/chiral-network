@@ -12,6 +12,7 @@ use tracing::{info, warn};
 const DHT_POOL_PREFIX: &str = "chiral:pool:";
 const DHT_SHARE_PREFIX: &str = "chiral:share:";
 const DHT_COORDINATOR_PREFIX: &str = "chiral:coordinator:";
+const DHT_POOL_DIRECTORY: &str = "chiral:pool:directory"; // Pool ID registry
 const POOL_TTL_SECONDS: u64 = 3600; // 1 hour
 const SHARE_TTL_SECONDS: u64 = 600;  // 10 minutes
 
@@ -41,7 +42,7 @@ impl P2PPoolManager {
         }
     }
 
-    /// Announce a pool to the P2P network (currently using local storage)
+    /// Announce a pool to the P2P network
     pub async fn announce_pool(&self, pool: MiningPool) -> Result<(), String> {
         info!("📡 Announcing pool to DHT: {} ({})", pool.name, pool.id);
         
@@ -49,10 +50,13 @@ impl P2PPoolManager {
         let pool_json = serde_json::to_vec(&pool)
             .map_err(|e| format!("Failed to serialize pool: {}", e))?;
         
-        // Store in DHT with key: "chiral:pool:{pool_id}"
+        // Store pool data in DHT with key: "chiral:pool:{pool_id}"
         let key = format!("{}{}", DHT_POOL_PREFIX, pool.id);
         self.dht.put_record(&key, pool_json).await
             .map_err(|e| format!("Failed to announce pool to DHT: {}", e))?;
+        
+        // Add pool ID to the directory for discovery
+        self.add_pool_to_directory(&pool.id).await?;
         
         // Also store locally for quick access
         let mut pools = self.local_pools.write().await;
@@ -61,9 +65,35 @@ impl P2PPoolManager {
         info!("✅ Pool announced to DHT and stored locally");
         Ok(())
     }
+    
+    /// Add a pool ID to the global pool directory
+    async fn add_pool_to_directory(&self, pool_id: &str) -> Result<(), String> {
+        // Get current directory
+        let mut pool_ids: Vec<String> = match self.dht.get_record(DHT_POOL_DIRECTORY).await {
+            Ok(Some(data)) => {
+                serde_json::from_slice(&data).unwrap_or_else(|_| Vec::new())
+            }
+            _ => Vec::new(),
+        };
+        
+        // Add this pool if not already present
+        if !pool_ids.contains(&pool_id.to_string()) {
+            pool_ids.push(pool_id.to_string());
+            
+            // Store updated directory
+            let directory_json = serde_json::to_vec(&pool_ids)
+                .map_err(|e| format!("Failed to serialize directory: {}", e))?;
+            
+            self.dht.put_record(DHT_POOL_DIRECTORY, directory_json).await
+                .map_err(|e| format!("Failed to update pool directory: {}", e))?;
+            
+            info!("📋 Added pool {} to directory (total: {})", pool_id, pool_ids.len());
+        }
+        
+        Ok(())
+    }
 
-    /// Discover pools from the P2P network (currently using local storage)
-    /// TODO: Integrate with actual DHT once API is available
+    /// Discover pools from the P2P network
     pub async fn discover_pools(&self, pool_id: Option<&str>) -> Result<Vec<MiningPool>, String> {
         let mut discovered_pools = Vec::new();
         
@@ -102,11 +132,50 @@ impl P2PPoolManager {
                 }
             }
         } else {
-            info!("📋 Returning all local pools");
-            // For now, return all local pools
-            // TODO: Implement pool directory in DHT for discovering all pools
+            info!("� Discovering all pools from DHT directory");
+            
+            // Query the pool directory for all pool IDs
+            match self.dht.get_record(DHT_POOL_DIRECTORY).await {
+                Ok(Some(data)) => {
+                    match serde_json::from_slice::<Vec<String>>(&data) {
+                        Ok(pool_ids) => {
+                            info!("📋 Found {} pools in directory, fetching details...", pool_ids.len());
+                            
+                            // Fetch each pool's data from DHT
+                            for pool_id in pool_ids {
+                                let key = format!("{}{}", DHT_POOL_PREFIX, pool_id);
+                                if let Ok(Some(pool_data)) = self.dht.get_record(&key).await {
+                                    if let Ok(pool) = serde_json::from_slice::<MiningPool>(&pool_data) {
+                                        discovered_pools.push(pool);
+                                    }
+                                }
+                            }
+                            
+                            info!("✅ Successfully discovered {} pools from DHT", discovered_pools.len());
+                        }
+                        Err(e) => {
+                            warn!("Failed to parse pool directory: {}", e);
+                        }
+                    }
+                }
+                Ok(None) => {
+                    info!("No pool directory found in DHT, returning local pools only");
+                }
+                Err(e) => {
+                    warn!("DHT directory query error: {}", e);
+                }
+            }
+            
+            // Always include local pools as fallback
             let pools = self.local_pools.read().await;
-            discovered_pools.extend(pools.values().cloned());
+            for (id, pool) in pools.iter() {
+                // Only add if not already in discovered list
+                if !discovered_pools.iter().any(|p| &p.id == id) {
+                    discovered_pools.push(pool.clone());
+                }
+            }
+            
+            info!("📋 Total pools discovered: {} (DHT + local)", discovered_pools.len());
         }
         
         Ok(discovered_pools)
