@@ -2313,14 +2313,19 @@ async fn start_ftp_download(
     let mut file = std::fs::File::create(&output_path)
         .map_err(|e| format!("Failed to create output file: {}", e))?;
 
-    // Retrieve file and write to local file
+    // Retrieve file and stream in chunks
     ftp.retr(path, |mut reader| {
-        let mut buffer = Vec::new();
-        reader
-            .read_to_end(&mut buffer)
-            .map_err(|e| suppaftp::FtpError::ConnectionError(e))?;
-        file.write_all(&buffer)
-            .map_err(|e| suppaftp::FtpError::ConnectionError(e))?;
+        let mut buffer = [0u8; 65536]; // 64 KB
+        loop {
+            let bytes_read = reader
+                .read(&mut buffer)
+                .map_err(|e| suppaftp::FtpError::ConnectionError(e))?;
+            if bytes_read == 0 {
+                break; // End of file
+            }
+            file.write_all(&buffer[..bytes_read])
+                .map_err(|e| suppaftp::FtpError::ConnectionError(e))?;
+        }
         Ok(())
     })
     .map_err(|e| format!("FTP RETR failed: {}", e))?;
