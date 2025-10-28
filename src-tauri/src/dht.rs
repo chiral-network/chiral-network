@@ -536,7 +536,6 @@ pub enum DhtCommand {
         key: String,
         sender: oneshot::Sender<Result<Option<Vec<u8>>, String>>,
     },
-<<<<<<< HEAD
         StoreBlocks {
             blocks: Vec<(Cid, Vec<u8>)>, 
             root_cid: Cid,
@@ -552,10 +551,6 @@ pub enum DhtCommand {
         info_hash: String,
     },
     }
-=======
-}
-
->>>>>>> d80c67cff522050c5bc3a23b808786228dc496eb
 #[derive(Debug, Clone, Serialize)]
 pub enum DhtEvent {
     // PeerDiscovered(String),
@@ -1191,7 +1186,6 @@ fn is_unreachable_address(addr: &Multiaddr) -> bool {
     false
 }
 
-<<<<<<< HEAD
 fn peer_id_from_multiaddr_str(s: &str) -> Option<PeerId> {
     if let Ok(ma) = s.parse::<Multiaddr>() {
         let mut last_p2p: Option<PeerId> = None;
@@ -1282,8 +1276,6 @@ fn filter_relay_candidates(
     out
 }
 
-=======
->>>>>>> d80c67cff522050c5bc3a23b808786228dc496eb
 fn extract_relay_peer(address: &Multiaddr) -> Option<PeerId> {
     use libp2p::multiaddr::Protocol;
 
@@ -1613,7 +1605,6 @@ async fn run_dht_node(
     let mut put_record_senders: HashMap<kad::QueryId, oneshot::Sender<Result<(), String>>> = HashMap::new();
     let mut get_record_senders: HashMap<kad::QueryId, oneshot::Sender<Result<Option<Vec<u8>>, String>>> = HashMap::new();
     
-<<<<<<< HEAD
     // Track peers that support relay (discovered via identify protocol)
     let relay_capable_peers: Arc<Mutex<HashMap<PeerId, Vec<Multiaddr>>>> =
         Arc::new(Mutex::new(HashMap::new()));
@@ -1622,10 +1613,6 @@ async fn run_dht_node(
     // fast heartbeat-driven updater: run at FILE_HEARTBEAT_INTERVAL to keep provider records fresh
     let mut heartbeat_maintenance_interval = tokio::time::interval(FILE_HEARTBEAT_INTERVAL);
     heartbeat_maintenance_interval.tick().await;
-=======
-    let mut dht_maintenance_interval = tokio::time::interval(Duration::from_secs(30 * 60)); 
-    dht_maintenance_interval.tick().await; 
->>>>>>> d80c67cff522050c5bc3a23b808786228dc496eb
     // Periodic bootstrap interval
 
     /// Creates a proper circuit relay address for connecting through a relay peer
@@ -2841,7 +2828,6 @@ async fn run_dht_node(
                         // Store the sender to respond when the query completes
                         get_record_senders.insert(query_id, sender);
                     }
-<<<<<<< HEAD
                     Some(DhtCommand::RequestFileAccess { .. }) => {
                         todo!();
                     }
@@ -2858,8 +2844,6 @@ async fn run_dht_node(
                             }
                         }
                     }
-=======
->>>>>>> d80c67cff522050c5bc3a23b808786228dc496eb
                     None => {
                         info!("DHT command channel closed; shutting down node task");
                         break 'outer;
@@ -2881,12 +2865,9 @@ async fn run_dht_node(
                             &get_providers_queries,
                             &mut put_record_senders,
                             &mut get_record_senders,
-<<<<<<< HEAD
                             &seeder_heartbeats_cache,
                             &pending_heartbeat_updates,
                             &pending_keyword_indexes,
-=======
->>>>>>> d80c67cff522050c5bc3a23b808786228dc496eb
                         )
                         .await;
                     }
@@ -3850,12 +3831,9 @@ async fn handle_kademlia_event(
     get_providers_queries: &Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>,
     put_record_senders: &mut HashMap<kad::QueryId, oneshot::Sender<Result<(), String>>>,
     get_record_senders: &mut HashMap<kad::QueryId, oneshot::Sender<Result<Option<Vec<u8>>, String>>>,
-<<<<<<< HEAD
     seeder_heartbeats_cache: &Arc<Mutex<HashMap<String, FileHeartbeatCacheEntry>>>,
     pending_heartbeat_updates: &Arc<Mutex<HashSet<String>>>,
     pending_keyword_indexes: &Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>>,
-=======
->>>>>>> d80c67cff522050c5bc3a23b808786228dc496eb
 ) {
     match event {
         KademliaEvent::RoutingUpdated { peer, .. } => {
@@ -4455,8 +4433,6 @@ async fn handle_identify_event(
                         peer_id, addr
                     );
                 }
-<<<<<<< HEAD
-=======
                 // for addr in info.listen_addrs {
                 for addr in listen_addrs.iter() {
                     // Filter out unreachable addresses (Docker IPs, private IPs without relay)
@@ -4471,7 +4447,6 @@ async fn handle_identify_event(
                             .behaviour_mut()
                             .kademlia
                             .add_address(&peer_id, addr.clone());
->>>>>>> d80c67cff522050c5bc3a23b808786228dc496eb
 
                 // Relay Setting: from candidate's "public base", create /p2p-circuit
                 if enable_autorelay && is_relay_candidate(&peer_id, relay_candidates) {
@@ -6082,7 +6057,6 @@ impl DhtService {
             .map_err(|e| format!("Get record response error: {}", e))?
     }
 
-<<<<<<< HEAD
     pub async fn update_privacy_proxy_targets(&self, addresses: Vec<String>) -> Result<(), String> {
         self.cmd_tx
             .send(DhtCommand::SetPrivacyProxies { addresses })
@@ -6090,8 +6064,6 @@ impl DhtService {
             .map_err(|e| format!("Failed to update privacy proxies: {e}"))
     }
 
-=======
->>>>>>> d80c67cff522050c5bc3a23b808786228dc496eb
     /// Verifies that a peer actually provides working proxy services through protocol negotiation
     async fn verify_proxy_capabilities(&self, peer_id: &PeerId) -> Result<(), String> {
         // Use the existing echo protocol to verify proxy capabilities
