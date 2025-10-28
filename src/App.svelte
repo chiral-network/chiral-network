@@ -171,9 +171,48 @@
       const onPop = () => syncFromUrl();
       window.addEventListener('popstate', onPop);
 
+      // keyboard shortcuts
+      const handleKeyDown = (event: KeyboardEvent) => {
+        // Ctrl/Cmd + , - Open Settings
+        if ((event.ctrlKey || event.metaKey) && event.key === ',') {
+          event.preventDefault();
+          currentPage = 'settings';
+          goto('/settings');
+          return;
+        }
+
+        // Ctrl/Cmd + R - Refresh current page
+        if ((event.ctrlKey || event.metaKey) && event.key === 'r') {
+          event.preventDefault();
+          window.location.reload();
+          return;
+        }
+
+        // F5 - Reload application
+        if (event.key === 'F5') {
+          event.preventDefault();
+          window.location.reload();
+          return;
+        }
+
+        // F11 - Toggle fullscreen (desktop)
+        if (event.key === 'F11') {
+          event.preventDefault();
+          if (document.fullscreenElement) {
+            document.exitFullscreen();
+          } else {
+            document.documentElement.requestFullscreen();
+          }
+          return;
+        }
+      };
+
+      window.addEventListener('keydown', handleKeyDown);
+
       // cleanup
       return () => {
         window.removeEventListener('popstate', onPop);
+        window.removeEventListener('keydown', handleKeyDown);
         stopNetworkMonitoring();
         bandwidthScheduler.stop();
         if (unlistenSeederPayment) {

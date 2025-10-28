@@ -730,6 +730,11 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
     }
   }
 
+  // Auto-clear completed downloads when setting is enabled
+  $: if (autoClearCompleted) {
+    files.update(f => f.filter(file => file.status !== 'completed'))
+  }
+
   // New function to download from search results
   async function processQueue() {
     console.log('📋 processQueue called')
@@ -1836,14 +1841,6 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
                         <Badge class="text-xs font-semibold bg-muted-foreground/20 text-foreground border-0 px-2 py-0.5">
                           {formatFileSize(file.size)}
                         </Badge>
-                        <!-- Price Badge -->
-                        {#if file.status === 'queued' || file.status === 'downloading'}
-                          {@const price = paymentService.calculateDownloadCost(file.size)}
-                          <Badge class="text-xs font-semibold bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 border-0 px-2 py-0.5 flex items-center gap-1">
-                            <Coins class="h-3 w-3" />
-                            {price.toFixed(8)} Chiral
-                          </Badge>
-                        {/if}
                       </div>
                       <div class="flex items-center gap-x-3 gap-y-1 mt-1">
                         <p class="text-xs text-muted-foreground truncate">{$t('download.file.hash')}: {file.hash}</p>

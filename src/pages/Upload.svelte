@@ -1233,7 +1233,7 @@
             {:else}
               <!-- Shared Files Header -->
               <div
-                class="flex flex-wrap items-center justify-between gap-4 mb-4"
+                class="flex flex-wrap items-center justify-between gap-4 mb-4 px-4"
               >
                 <div>
                   <h2 class="text-lg font-semibold">
@@ -1286,10 +1286,10 @@
 
               <!-- File List -->
               {#if $files.filter((f) => f.status === "seeding" || f.status === "uploaded").length > 0}
-                <div class="space-y-3 relative">
+                <div class="space-y-3 relative px-4">
                   {#each $files.filter((f) => f.status === "seeding" || f.status === "uploaded") as file}
                     <div
-                      class="group relative bg-gradient-to-r from-card to-card/80 border border-border/50 rounded-xl p-4 hover:shadow-lg hover:border-border transition-all duration-300 hover:scale-[1.01] overflow-hidden"
+                      class="group relative bg-gradient-to-r from-card to-card/80 border border-border/50 rounded-xl p-4 hover:shadow-lg hover:border-border transition-all duration-300 overflow-hidden"
                     >
                       <div
                         class="absolute inset-0 bg-gradient-to-r from-primary/5 via-transparent to-secondary/5 opacity-0 group-hover:opacity-100 transition-opacity duration-300"
