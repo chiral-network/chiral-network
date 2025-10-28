@@ -730,6 +730,11 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
     }
   }
 
+  // Auto-clear completed downloads when setting is enabled
+  $: if (autoClearCompleted) {
+    files.update(f => f.filter(file => file.status !== 'completed'))
+  }
+
   // New function to download from search results
   async function processQueue() {
     console.log('📋 processQueue called')
@@ -1455,7 +1460,7 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
   {#if !hasSelectedProtocol}
    <Card>
       <div class="p-6">
-        <h2 class="text-2xl font-bold mb-6 text-center">{$t('download.selectProtocol')}</h2>
+        <h2 class="text-2xl font-bold mb-6 text-center">Select Protocol</h2>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-2xl mx-auto">
           <!-- WebRTC Option -->
           <button
@@ -1510,7 +1515,7 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
             {/if}
           </div>
           <div>
-            <p class="text-sm font-semibold">{$t('download.currentProtocol')}: {selectedProtocol}</p>
+            <p class="text-sm font-semibold">Current Protocol: {selectedProtocol}</p>
             <p class="text-xs text-muted-foreground">
               {selectedProtocol === 'WebRTC' ? $t('upload.webrtcDescription') : $t('upload.bitswapDescription')}
             </p>
@@ -1521,7 +1526,7 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
           class="inline-flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium border border-input bg-background hover:bg-muted transition-colors"
         >
           <RefreshCw class="h-4 w-4 mr-2" />
-          {$t('download.changeProtocol')}
+          Change Protocol
         </button>
       </div>
     </Card>
@@ -1836,14 +1841,6 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
                         <Badge class="text-xs font-semibold bg-muted-foreground/20 text-foreground border-0 px-2 py-0.5">
                           {formatFileSize(file.size)}
                         </Badge>
-                        <!-- Price Badge -->
-                        {#if file.status === 'queued' || file.status === 'downloading'}
-                          {@const price = paymentService.calculateDownloadCost(file.size)}
-                          <Badge class="text-xs font-semibold bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 border-0 px-2 py-0.5 flex items-center gap-1">
-                            <Coins class="h-3 w-3" />
-                            {price.toFixed(8)} Chiral
-                          </Badge>
-                        {/if}
                       </div>
                       <div class="flex items-center gap-x-3 gap-y-1 mt-1">
                         <p class="text-xs text-muted-foreground truncate">{$t('download.file.hash')}: {file.hash}</p>

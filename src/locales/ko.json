@@ -724,6 +724,12 @@
     "powerUsage": "전력 사용량",
     "hw": "H/W",
     "temperature": "온도",
+    "temperatureStatus": {
+      "critical": "심각",
+      "hot": "뜨거움",
+      "warm": "따뜻함",
+      "normal": "정상"
+    },
     "control": "채굴 제어",
     "active": "채굴 활성",
     "stopped": "채굴 중지",

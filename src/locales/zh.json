@@ -748,6 +748,12 @@
     "powerUsage": "能耗",
     "hw": "硬件",
     "temperature": "温度",
+    "temperatureStatus": {
+      "critical": "严重",
+      "hot": "高温",
+      "warm": "温暖",
+      "normal": "正常"
+    },
     "control": "挖矿控制",
     "active": "挖矿中",
     "stopped": "挖矿已停止",

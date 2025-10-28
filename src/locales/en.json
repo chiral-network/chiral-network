@@ -360,7 +360,8 @@
       "resume": "Resume",
       "remove": "Remove",
       "cancel": "Cancel",
-      "showInFolder": "Show in Folder"
+      "showInFolder": "Show in Folder",
+      "retry": "Retry"
     },
     "notifications": {
       "enterHash": "Please enter a file hash to start downloading.",
