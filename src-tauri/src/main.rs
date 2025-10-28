@@ -881,8 +881,9 @@ async fn get_miner_logs(data_dir: String, lines: usize) -> Result<Vec<String>, S
 
 #[tauri::command]
 async fn get_miner_performance(data_dir: String) -> Result<(u64, f64), String> {
-    get_mining_performance(&data_dir)
+    get_mining_performance(&data_dir).await
 }
+
 lazy_static! {
     static ref BLOCKS_CACHE: StdMutex<Option<(String, u64, Instant)>> = StdMutex::new(None);
 }
