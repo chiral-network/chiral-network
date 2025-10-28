@@ -133,6 +133,31 @@ Peers may be automatically blacklisted for:
 - Protocol violations detected elsewhere in the stack
 - Excessive connection abuse (rate-limited separately)
 
+### Blacklist Settings
+
+A simple, user-facing settings panel lets you control how blacklisting behaves. Settings are intentionally straightforward so users can quickly tune protection without needing deep technical knowledge.
+
+- Blacklist mode
+  - `manual` — Only block peers you explicitly add.
+  - `automatic` — Allow the system to add peers that meet configured thresholds.
+  - `hybrid` — Both manual and automatic blocking enabled (default).
+- Auto-blacklist toggle
+  - Enable or disable automatic blacklisting without affecting any manually added entries.
+- Score threshold
+  - Numeric value (0.0–1.0). Peers whose aggregated score falls below this value become candidates for automatic blacklisting. Default: `0.2`.
+- Bad-verdicts threshold
+  - Number of distinct `bad` verdicts from different issuers required to trigger automatic blacklisting. Default: `3`.
+- Retention / automatic unban
+  - How long a peer stays on the automatic blacklist before being eligible for automatic removal (or re-evaluation). Default: `30 days`.
+- Notification preferences
+  - Enable notifications when a peer is automatically blacklisted so you can review and optionally unblock them.
+- Reason & notes
+  - When blocking (manual or automatic), a short reason can be stored for later review (plain-text, small size).
+- Local vs. shared
+  - Blacklists are local to your client by default. Sharing blacklists across peers or publishing them to the network is intentionally out of scope for privacy and abuse reasons.
+
+These settings are exposed in the Settings page under "Reputation" and via the Analytics/Peer view where you can quickly add, review, or remove blacklisted peers.
+
 ## Privacy Considerations
 
 ### What's Tracked
@@ -194,6 +219,11 @@ Library consumers should build higher-level helpers that:
 | `retention_period` | How long to keep accepted verdicts before pruning. | 90 days |
 | `max_verdict_size` | Maximum bytes allowed in `details`. | 1 KB |
 | `cache_ttl` | Duration to cache aggregated scores locally. | 10 minutes |
+| `blacklist_mode` | How automatic blacklisting behaves: `manual`, `automatic`, or `hybrid`. | `hybrid` |
+| `blacklist_auto_enabled` | Enable automatic blacklisting (does not affect manual entries). | true |
+| `blacklist_score_threshold` | Score below which a peer becomes eligible for automatic blacklisting (0.0–1.0). | 0.2 |
+| `blacklist_bad_verdicts_threshold` | Distinct `bad` verdicts from different issuers required to auto-blacklist a peer. | 3 |
+| `blacklist_retention` | How long automatic blacklist entries are retained before re-evaluation or auto-unban. | 30 days |
 
 ## Using Reputation Data
 
