@@ -6860,7 +6860,7 @@ mod tests {
         assert_eq!(
             result,
             MagnetData {
-                info_hash: "b263275b1e3138b29596356533f685c33103575c".tostring(),
+                info_hash: "b263275b1e3138b29596356533f685c33103575c".to_string(),
                 display_name: None,
                 trackers: vec![],
             }
