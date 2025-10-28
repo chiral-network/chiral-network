@@ -1197,6 +1197,7 @@ dependencies = [
  "totp-rs",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid 1.18.1",
  "webrtc",
  "x25519-dalek",
