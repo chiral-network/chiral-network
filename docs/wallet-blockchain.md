@@ -1,343 +1,250 @@
-# IMPORTANT: This document needs full revision. We dont' need overcomplicated wallet and blockchain integration. We only need to support Ethereum-compatible blockchain and a simple wallet.
-
-# Wallet & Blockchain Integration
+# **Chiral Network – Wallet & Blockchain Design**
 
-Chiral Network includes a separate Ethereum-compatible blockchain with HD wallet support and CPU mining capabilities.
+## **1. Overview**
 
-## HD Wallet
+The **Wallet & Blockchain Layer** provides a minimal **payment and identity system** for the Chiral Network.
+It enables users to:
 
-### Overview
+- **Earn** cryptocurrency for seeding files
+- **Pay** for file downloads
+- **Verify** payments and balances on-chain
+- **Authenticate** nodes cryptographically
 
-Chiral Network uses Hierarchical Deterministic (HD) wallets based on industry standards:
-- **BIP32**: HD wallet structure
-- **BIP39**: Mnemonic phrase generation
-- **secp256k1**: Elliptic curve cryptography
+This layer is **Ethereum-compatible**, meaning all accounts and transactions follow Ethereum standards and can be used with supported Ethereum libraries.
 
-### Creating a Wallet
+Our EVM-compatible blockchain is hosted on a dedicated Geth node, which processes transactions, maintains the ledger, and provides a JSON-RPC interface for wallet interactions.
 
-#### Generate New Wallet
-
-1. **Navigate to Account Page**
-2. **Click "Create Wallet"**
-3. **System generates**:
-   - 12 or 24-word mnemonic phrase
-   - Master private key
-   - First account address
-4. **Write down mnemonic phrase** (CRITICAL - cannot be recovered)
-5. **Verify phrase** by re-entering words
-6. **Wallet is created** and ready to use
+Here’s a revised **Overview** section that integrates a description of your wallet under the blockchain, based on the summary you provided:
 
-#### Import Existing Wallet
+---
 
-1. **Navigate to Account Page**
-2. **Click "Import Wallet"**
-3. **Enter mnemonic phrase**
-4. **Optional: Enter derivation path** (default: m/44'/60'/0'/0)
-5. **System derives**:
-   - Private keys
-   - Account addresses
-6. **Wallet restored**
+## **1. Overview**
 
-### Mnemonic Phrase Security
+The **Wallet & Blockchain Layer** provides a minimal **payment and identity system** for the Chiral Network.
+It enables users to:
 
-**Critical Security Rules**:
-- ✅ Write down phrase on paper
-- ✅ Store in secure location (safe, vault)
-- ✅ Never share with anyone
-- ✅ Never store digitally (no photos, no cloud)
-- ❌ Never enter on websites
-- ❌ Never send via email/chat
+- **Earn** cryptocurrency for seeding files
+- **Pay** for file downloads
+- **Verify** payments and balances on-chain
+- **Authenticate** nodes cryptographically
 
-**Phrase Characteristics**:
-- 12 or 24 words from BIP39 wordlist
-- Deterministically generates all accounts
-- Can restore wallet on any device
-- Losing phrase = losing access forever
+This layer is **Ethereum-compatible**, meaning all accounts and transactions follow Ethereum standards and can be used with supported Ethereum libraries.
 
-### Multiple Accounts
+Our EVM blockchain resides on a **Geth node**, which the application communicates with via a configurable JSON-RPC endpoint.
 
-HD wallets support multiple accounts:
+### Wallet Description
 
-1. **Derived from single mnemonic**
-2. **Each account has unique address**
-3. **Derivation path**: m/44'/60'/0'/0/N (N = account index)
-4. **Create new accounts** in Account page
-5. **Switch between accounts** easily
+> **Note:** This description describes the current wallet system in the application, but for maximum simplicity we can consider integrating Alloy instead.
 
-### Account Management
+The project implements a **single-account, local wallet** managed by the backend (`src-tauri`):
 
-**Account List Features**:
-- View all derived accounts
-- See balances for each
-- Copy addresses
-- Generate QR codes
-- Set default account
-- Export individual private keys (advanced)
+- **State management:** Wallet state is held in `AppState` (`active_account` and `active_account_private_key`) and exposed to the UI via Tauri commands.
+- **Persistence:** Accounts are saved and loaded using a password-protected Keystore module (`src-tauri/src/keystore.rs`).
+- **Blockchain interaction:** Transactions are signed locally using the in-memory private key and submitted to the blockchain via the `ethereum` module (`src-tauri/src/ethereum.rs`).
+- **UI / CLI integration:** Wallet operations such as creating/importing accounts, checking balances, sending transactions, and processing download payments are exposed through Tauri commands.
+- **Payment & file flows:** Download and upload payments are checked, recorded, and triggered using hooks (`process_download_payment` → `ethereum::send_transaction`) with notifications to seeders via DHT events.
+- **Security features:** Private keys are kept in memory during sessions and cleared on logout. Keystore is encrypted and optional 2FA/TOTP support (`totp_rs`) is available for sensitive actions.
 
-### Wallet Security
+This setup provides a **lightweight, secure, and Rust-native wallet** fully integrated with the Chiral Network file-sharing and payment system, while relying on a **local Geth node** for Ethereum-compatible blockchain operations.
 
-**Implemented**:
-- Private keys never leave device
-- Encrypted storage (if device supports)
-- No cloud backup (intentional - security)
-- Secure random number generation
+## **2. Design Goals**
 
-**Best Practices**:
-- Use strong device password
-- Enable disk encryption
-- Backup mnemonic phrase securely
-- Consider hardware wallet for large amounts
+| Goal              | Description                                                               |
+| ----------------- | ------------------------------------------------------------------------- |
+| **Simplicity**    | Minimal logic — single-account wallet, no mining or full node integration |
+| **Compatibility** | Works with any Ethereum-compatible chain or testnet                       |
+| **Separation**    | Decoupled from file transfer layer                                        |
+| **Transparency**  | All payments verifiable on-chain                                          |
 
-## Blockchain
+---
 
-### Network Details
+## **3. System Components**
 
-Chiral Network runs a **separate Ethereum-compatible blockchain**:
+### 3.1 Wallet Service
 
-- **Network Name**: Chiral Network
-- **Chain ID**: Custom (configured in genesis.json)
-- **Consensus**: Proof of Work (Ethash)
-- **Block Time**: ~15 seconds
-- **Gas Limit**: Configurable
+Lightweight client-side key manager for generating, storing, and using Ethereum-compatible wallets.
 
-### Geth Integration
+**Responsibilities:**
 
-The application integrates with Geth (Go Ethereum):
+- Create a new wallet or import from mnemonic (single account)
+- Sign and send blockchain transactions (offline signing supported)
+- Query account balances
+- Expose wallet functions to the app (UI & API)
 
-**Features**:
-- Full Ethereum node
-- Transaction signing
-- Smart contract deployment
-- Block mining
-- RPC interface
+**Key Functions:**
 
-**Geth Service** (`src/lib/services/gethService.ts`):
-- Start/stop Geth node
-- Monitor sync status
-- Submit transactions
-- Query balances
+- `createWallet()` – Generate BIP39 mnemonic, derive first account (`m/44'/60'/0'/0/0`)
+- `importWallet(mnemonic)` – Restore wallet from mnemonic
+- `getAddress()` – Return wallet address
+- `getBalance()` – Query account balance
+- `signMessage(message)` – Offline message signing
+- `sendTransaction(to, amount, data?)` – Submit transaction via RPC
 
-### Proof of Storage Smart Contract
+> **Note:** This is a general guideline. The actual implementation can differ.
 
-Location: `src/lib/services/ProofOfStorage.sol`
+---
 
-**Purpose**: Validate storage claims through periodic challenges
+### 3.2 Blockchain Service
 
-**Features**:
-- Storage commitment registration
-- Challenge/response mechanism
-- Verification of stored data
-- Reward distribution
+Handles communication with the Ethereum-compatible blockchain via **JSON-RPC** by interacting with a **Geth node**.
 
-## Mining
+**Responsibilities:**
 
-### Overview
+- Connect to a configurable **Geth RPC endpoint** (HTTP or WebSocket)
+- Submit **locally signed transactions** to the Geth node
+- Fetch blockchain data from Geth (balances, receipts, confirmations)
+- Handle gas estimation (optional; can use default values or query Geth)
+- Track transaction status (`pending` / `confirmed`) via Geth
 
-Mine blocks to secure the network and earn rewards:
+**Core APIs:**
 
-- **Algorithm**: Ethash (Ethereum PoW)
-- **Difficulty**: Adjusts based on network hashrate
-- **Rewards**: Block reward + transaction fees
-- **Hardware**: CPU mining (GPU mining not yet supported)
-
-### Starting Mining
-
-1. **Navigate to Mining Page**
-2. **Configure settings**:
-   - Number of CPU threads (1-16)
-   - Mining intensity (1-100%)
-   - Pool selection (solo or pool)
-3. **Click "Start Mining"**
-4. **Monitor**:
-   - Hash rate (H/s, KH/s, MH/s)
-   - Blocks found
-   - Total rewards
-   - Mining history
-
-### Mining Pools
-
-**Note**: Pool UI exists but actual pool mining not yet implemented.
-
-**Available Options**:
-- Solo mining (fully functional)
-- Pool mining (UI only, coming soon)
-
-### Mining Performance
-
-**Factors Affecting Hashrate**:
-- CPU model and speed
-- Number of threads
-- Mining intensity
-- System temperature
-- Other running processes
-
-**Optimization Tips**:
-- Use all available CPU cores
-- Close unnecessary applications
-- Ensure adequate cooling
-- Monitor temperature
-- Adjust intensity if system lags
-
-### Mining Rewards
-
-**Block Rewards**:
-- Fixed reward per block (configured in genesis.json)
-- Transaction fees (minimal on new network)
-- Rewards sent to mining address
-
-**Reward Tracking**:
-- Total blocks found
-- Total rewards earned
-- Recent blocks list
-- Mining history chart
-
-**Note**: Reward values in UI may use mock data; actual rewards depend on blockchain configuration.
-
-### Mining History
-
-The Mining page displays:
-
-- **Hash Rate Chart**: Historical hashrate over time
-- **Blocks Found**: List of blocks you've mined
-- **Power Usage**: Estimated power consumption (mock data)
-- **Efficiency**: Hash/watt ratio (mock data)
-- **Session Statistics**: Current mining session details
-
-## Transactions
-
-### Sending Transactions
-
-1. **Navigate to Account Page**
-2. **Click "Send"**
-3. **Enter**:
-   - Recipient address
-   - Amount (in native token)
-   - Gas limit (optional)
-   - Gas price (optional)
-4. **Review transaction**
-5. **Confirm and sign**
-6. **Transaction submitted** to blockchain
-
-### Transaction History
-
-View all transactions in Account page:
-
-- **Sent transactions**: Outgoing transfers
-- **Received transactions**: Incoming transfers
-- **Pending transactions**: Not yet confirmed
-- **Failed transactions**: Rejected by network
-
-### Transaction Details
-
-Each transaction shows:
-- Transaction hash
-- Status (pending/completed/failed)
-- Amount
-- From/to addresses
-- Gas used
-- Block number
-- Timestamp
-
-## Wallet Features
-
-### QR Codes
-
-Generate QR codes for:
-- **Receiving payments**: Share your address
-- **Mnemonic backup**: Paper wallet creation
-- **Account import**: Easy import on mobile
-
-### Address Book
-
-**Coming Soon**: Save frequently used addresses with labels
-
-### Token Support
-
-**Currently**: Native token only
-**Future**: ERC-20 token support
-
-### Hardware Wallet Integration
-
-**Planned Feature**: Support for hardware wallets (Ledger, Trezor)
-
-## Best Practices
-
-### Security
-
-1. **Backup mnemonic phrase** immediately
-2. **Use strong passwords** for device encryption
-3. **Never share private keys**
-4. **Verify addresses** before sending
-5. **Test with small amounts** first
-
-### Mining
-
-1. **Monitor temperatures** regularly
-2. **Start with lower intensity** and increase gradually
-3. **Don't mine on battery** (laptops)
-4. **Calculate electricity costs** vs. rewards
-5. **Join a pool** for more consistent rewards (when available)
-
-### Transaction Management
-
-1. **Set appropriate gas prices** for urgency
-2. **Double-check addresses** before sending
-3. **Keep transaction history** for records
-4. **Monitor pending transactions**
-5. **Contact support** if transaction stuck
-
-## Troubleshooting
-
-### Wallet Issues
-
-**Can't access wallet**:
-- Verify mnemonic phrase is correct
-- Check derivation path
-- Ensure Geth is running
-- Restart application
-
-**Balance not showing**:
-- Wait for Geth to sync
-- Check network connectivity
-- Verify correct account selected
-- Refresh account page
-
-### Mining Issues
-
-**Mining won't start**:
-- Check Geth is running
-- Verify mining address is set
-- Ensure sufficient system resources
-- Check console for errors
-
-**Low hashrate**:
-- Increase thread count
-- Raise mining intensity
-- Close other applications
-- Check CPU throttling
-
-**No blocks found**:
-- Mining is probabilistic (keep mining)
-- Check network difficulty
-- Verify connection to peers
-- Consider pool mining
-
-### Transaction Issues
-
-**Transaction pending forever**:
-- Increase gas price
-- Resubmit with higher gas
-- Check network congestion
-- Verify Geth is synced
-
-**Transaction failed**:
-- Check gas limit
-- Verify sufficient balance
-- Review transaction parameters
-- Check smart contract execution
-
-## See Also
-
-- [Security & Privacy](security-privacy.md) - Wallet security details
-- [User Guide](user-guide.md) - Step-by-step wallet usage
-- [API Documentation](api-documentation.md) - Wallet API reference
+- `connect(gethRpcUrl)` — Connects to the Geth node’s RPC endpoint
+- `getBalance(address)` — Queries wallet balance from Geth
+- `sendRawTransaction(txSigned)` — Submits signed transaction via Geth
+- `getTransactionStatus(txHash)` — Checks transaction status through Geth
+- `getGasPrice()` — Optionally queries current gas price from Geth
+
+> **Note:** This is a general guideline. The actual implementation can differ.
+
+> **Note:** The Rust Blockchain Service does not run an Ethereum node itself; it relies on a local or remote **Geth node** for all blockchain interactions.
+
+## **4. Wallet Architecture**
+
+```text
+┌──────────────────────────────────────────┐
+│               Wallet Layer               │
+│ ┌──────────────────────────────────────┐ │
+│ │ Mnemonic / Private Key Management     │ │
+│ │ - BIP39 Mnemonic                     │ │
+│ │ - BIP32 Derivation                   │ │
+│ │ - Single account derivation          │ │
+│ │ - secp256k1 Signatures               │ │
+│ └──────────────────────────────────────┘ │
+│ ┌──────────────────────────────────────┐ │
+│ │ Transaction Signing                  │ │
+│ │ - EIP-155 Transaction Format         │ │
+│ │ - Local / Offline Signing            │ │
+│ └──────────────────────────────────────┘ │
+│ ┌──────────────────────────────────────┐ │
+│ │ RPC Interface                        │ │
+│ │ - Send Transactions via RPC          │ │
+│ │ - Query Balances & Receipts          │ │
+│ └──────────────────────────────────────┘ │
+└──────────────────────────────────────────┘
+```
+
+## 5.1 Network Setup (Simplified)
+
+- **Type:** Ethereum-compatible (EVM-based)
+  - Wallet and transactions follow Ethereum standards (addresses, accounts, transactions).
+
+- **Blockchain Node:** Local Geth node
+  - Communicates over a single **Geth node** running the Chiral Network blockchain.
+  - This node handles transaction submission, balance queries, and block information.
+
+- **RPC Endpoint:** Configurable
+  - The blockchain service connects to Geth via **JSON-RPC** over HTTP or WebSocket.
+  - Example: `http://localhost:8545` or `ws://localhost:8546`
+
+- **Notes:**
+  - For simplicity, only one node is required per client.
+  - No need for testnets, mainnet, or external providers in the minimal implementation.
+  - The RPC endpoint can be changed in app settings if the user wants to connect to another local or remote Geth node.
+
+### 5.2 Transaction Flow
+
+1. Seeder or leecher triggers a payment event.
+2. Wallet signs transaction locally.
+3. Blockchain Service submits transaction via RPC.
+4. UI reflects transaction status: **pending** → **confirmed**.
+
+## **6. User Flow (File-Sharing Context)**
+
+### 6.1 Create Wallet
+
+1. On first launch, the node prompts the user to **create a Chiral wallet**.
+2. System generates a **BIP39 mnemonic** and derives the first Ethereum account (`m/44'/60'/0'/0/0`).
+3. The address becomes the node’s **on-chain identity** for earning or paying tokens.
+4. User is prompted to **securely back up the mnemonic** (never stored remotely).
+
+> This wallet represents the node for both authentication and payment settlement.
+
+---
+
+### 6.2 Import Wallet
+
+1. Existing users can **import a wallet** using a mnemonic phrase.
+2. Wallet restores locally, loading balance, transaction history, and **previous upload/download logs**.
+3. Node resumes previous seeding/downloading state with the same identity.
+
+---
+
+### 6.3 Pay for Download (Leecher Flow)
+
+1. A **leecher** requests a file or chunk.
+2. System determines the **price** (from metadata or smart contract).
+3. Wallet **signs and sends a transaction** via `ethereum::send_transaction()`.
+4. The node logs the **download event** with:
+   - File hash / name
+   - Payment transaction hash
+   - Amount
+   - Timestamp
+   - Seeder address
+
+5. Seeder receives proof of payment before transfer begins.
+6. After confirmation, file data is streamed.
+7. **Transaction + download logs** are stored locally for the user to view.
+
+---
+
+### 6.4 Earn for Seeding (Seeder Flow)
+
+1. **Seeder node** advertises available files with its wallet address attached.
+2. When a leecher initiates a download and pays:
+   - Seeder’s address is the **payment recipient**
+   - Seeder logs the **upload event**:
+     - File hash / name
+     - Payment transaction hash
+     - Amount received
+     - Timestamp
+     - Leecher address
+
+3. After verification (hash match / receipt proof), the seeder account **receives payment**.
+4. Seeder can review **payment + upload logs** in the wallet UI/CLI.
+
+---
+
+### 6.5 View Transactions and File History
+
+- Wallet UI or CLI displays **financial and file-level history**, including all uploads and downloads:
+  - `Received from` / `Sent to` addresses
+  - File hash / name
+  - Amount / payment transaction hash
+  - Timestamp
+  - Status: `pending` / `confirmed`
+  - Type: `Upload` / `Download`
+
+- Filterable by:
+  - **“Payments Sent”**
+  - **“Earnings Received”**
+  - **“File Uploads”**
+  - **“File Downloads”**
+
+## **7. Summary**
+
+The **Wallet & Blockchain Layer** in Chiral Network provides:
+
+✅ Lightweight Ethereum-compatible wallet (single account)
+✅ Offline or RPC-based transaction signing
+✅ Simple RPC integration for payments
+✅ Fully decoupled from file-sharing protocols
+✅ Minimal transaction states (`pending` / `confirmed`)
+✅ Extensible for future token and smart contract logic
+
+---
+
+## **See Also**
+
+- [Security & Privacy](security-privacy.md) – Wallet security details
+- [User Guide](user-guide.md) – Step-by-step wallet usage
+- [API Documentation](api-documentation.md) – Wallet API reference
