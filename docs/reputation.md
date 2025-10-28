@@ -113,35 +113,6 @@ Each peer maintains a history of:
 - **Trust level changes**
 - **Pending verdicts** still waiting on chain confirmations
 
-
-## Relay Reputation
-Peers running as relay servers earn additional reputation:
-
-### Relay Metrics
-
-- **Circuits Successful**: Number of relay connections established
-- **Reservations Accepted**: Number of relay reservations granted
-- **Bytes Relayed**: Total data relayed for other peers
-- **Uptime as Relay**: Time operating as relay server
-
-### Relay Leaderboard
-
-The Reputation page shows top relay nodes:
-- Ranked by relay reputation score
-- Displays relay-specific metrics
-- Shows your node's rank (if running as relay)
-- Updates in real-time
-
-### Earning Relay Reputation
-
-To earn relay reputation:
-
-1. **Enable Relay Server** in Settings → Network
-2. **Keep node online** with good uptime
-3. **Accept reservations** from NAT'd peers
-4. **Maintain reliable service** (don't drop circuits)
-5. **Monitor your ranking** in Reputation page
-
 ## Blacklisting
 
 Users can blacklist misbehaving peers:
