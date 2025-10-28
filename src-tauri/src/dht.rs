@@ -55,7 +55,7 @@ use libp2p::{
     identify::{self, Event as IdentifyEvent},
     identity,
     kad::{
-        self, store::MemoryStore, Behaviour as Kademlia, Config as KademliaConfig,
+        self, store::MemoryStore, store::RecordStore, Behaviour as Kademlia, Config as KademliaConfig,
         Event as KademliaEvent, GetRecordOk, Mode, PutRecordOk, QueryResult, Record,
     },
     mdns::{tokio::Behaviour as Mdns, Event as MdnsEvent},
@@ -1596,16 +1596,28 @@ async fn run_dht_node(
                         }
                     }
                     Some(DhtCommand::PutRecord { key, value, sender }) => {
+                        let record_key = kad::RecordKey::new(&key);
                         let record = Record {
-                            key: kad::RecordKey::new(&key),
-                            value,
+                            key: record_key.clone(),
+                            value: value.clone(),
                             publisher: Some(peer_id),
                             expires: None,
                         };
                         
+                        // First, store the record locally so this node can serve it
+                        match swarm.behaviour_mut().kademlia.store_mut().put(record.clone()) {
+                            Ok(_) => {
+                                info!("✅ Stored record locally for key: {}", key);
+                            }
+                            Err(e) => {
+                                warn!("Failed to store record locally for key {}: {:?}", key, e);
+                            }
+                        }
+                        
+                        // Then propagate it to the network
                         match swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One) {
                             Ok(query_id) => {
-                                info!("Started put_record for key: {}, query id: {:?}", key, query_id);
+                                info!("Started put_record propagation for key: {}, query id: {:?}", key, query_id);
                                 // Store the sender to respond when the query completes
                                 put_record_senders.insert(query_id, sender);
                             }
@@ -2322,7 +2334,23 @@ async fn handle_kademlia_event(
                 QueryResult::GetRecord(Err(err)) => {
                     // Check if this is a query we're tracking for pool discovery
                     if let Some(sender) = get_record_senders.remove(&id) {
-                        warn!("GetRecord failed for pool query: {:?}", err);
+                        // Enhanced logging for pool discovery failures
+                        match &err {
+                            kad::GetRecordError::NotFound { key, closest_peers } => {
+                                let key_str = String::from_utf8_lossy(key.as_ref()).to_string();
+                                warn!("❌ GetRecord failed for pool: {}", key_str);
+                                warn!("   Queried {} peers, none had the record", closest_peers.len());
+                                for (i, peer) in closest_peers.iter().enumerate().take(5) {
+                                    warn!("   Closest peer {}: {}", i + 1, peer);
+                                }
+                                if closest_peers.is_empty() {
+                                    warn!("   ⚠️  No peers available to query - check network connectivity");
+                                }
+                            }
+                            _ => {
+                                warn!("GetRecord failed for pool query: {:?}", err);
+                            }
+                        }
                         let _ = sender.send(Err(format!("GetRecord failed: {:?}", err)));
                     } else {
                         // Existing error handling for file metadata queries
