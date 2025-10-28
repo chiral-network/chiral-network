@@ -1460,7 +1460,7 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
   {#if !hasSelectedProtocol}
    <Card>
       <div class="p-6">
-        <h2 class="text-2xl font-bold mb-6 text-center">Select Protocol</h2>
+        <h2 class="text-2xl font-bold mb-6 text-center">{$t('download.selectProtocol')}</h2>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-2xl mx-auto">
           <!-- WebRTC Option -->
           <button
@@ -1515,7 +1515,7 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
             {/if}
           </div>
           <div>
-            <p class="text-sm font-semibold">Current Protocol: {selectedProtocol}</p>
+            <p class="text-sm font-semibold">{$t('download.currentProtocol')}: {selectedProtocol}</p>
             <p class="text-xs text-muted-foreground">
               {selectedProtocol === 'WebRTC' ? $t('upload.webrtcDescription') : $t('upload.bitswapDescription')}
             </p>
@@ -1526,7 +1526,7 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
           class="inline-flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium border border-input bg-background hover:bg-muted transition-colors"
         >
           <RefreshCw class="h-4 w-4 mr-2" />
-          Change Protocol
+          {$t('download.changeProtocol')}
         </button>
       </div>
     </Card>

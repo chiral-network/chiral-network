@@ -1098,6 +1098,9 @@
       "retrying": "正在重试 {hash} 下载（第 {attempt}/{max} 次尝试）",
       "recovered": "{hash} 下载在 {retries} 次重试后恢复（{duration} 毫秒）",
       "failed": "{hash} 下载在 {attempts} 次尝试后失败"
-    }
+    },
+    "selectProtocol": "选择协议",
+    "currentProtocol": "当前协议",
+    "changeProtocol": "更改协议"
   }
 }

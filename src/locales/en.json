@@ -417,7 +417,10 @@
       "retrying": "Retrying download for {hash} (attempt {attempt} of {max})",
       "recovered": "Recovered download for {hash} after {retries} retries ({duration} ms)",
       "failed": "Download failed for {hash} after {attempts} attempts"
-    }
+    },
+    "selectProtocol": "Select Protocol",
+    "currentProtocol": "Current Protocol",
+    "changeProtocol": "Change Protocol"
   },
   "regions.usEast": "US East",
   "regions.usWest": "US West",
