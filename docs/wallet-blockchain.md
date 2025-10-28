@@ -96,7 +96,7 @@ Handles communication with the Ethereum-compatible blockchain via **JSON-RPC** b
 ┌──────────────────────────────────────────┐
 │               Wallet Layer               │
 │ ┌──────────────────────────────────────┐ │
-│ │ Mnemonic / Private Key Management     │ │
+│ │ Mnemonic / Private Key Management    │ │
 │ │ - BIP39 Mnemonic                     │ │
 │ │ - BIP32 Derivation                   │ │
 │ │ - Single account derivation          │ │
@@ -117,7 +117,7 @@ Handles communication with the Ethereum-compatible blockchain via **JSON-RPC** b
 
 ## 5.1 Network Setup
 
-- **Type:** Ethereum-compatible (EVM-based)
+- **Type:** Ethereum-compatible
   - Wallet and transactions follow Ethereum standards (addresses, accounts, transactions).
 
 - **Blockchain Node:** Local Geth node
@@ -246,12 +246,12 @@ Keeping the **Wallet & Blockchain Layer** separate from upload/download logic pr
 
 The **Wallet & Blockchain Layer** in Chiral Network provides:
 
-✅ Lightweight Ethereum-compatible wallet (single account)
-✅ Offline or RPC-based transaction signing
-✅ Simple RPC integration for payments
-✅ Fully decoupled from file-sharing protocols
-✅ Minimal transaction states (`pending` / `confirmed`)
-✅ Extensible for future token and smart contract logic
+- ✅ Lightweight Ethereum-compatible wallet (single account)
+- ✅ Offline or RPC-based transaction signing
+- ✅ Simple RPC integration for payments
+- ✅ Fully decoupled from file-sharing protocols
+- ✅ Minimal transaction states (`pending` / `confirmed`)
+- ✅ Extensible for future token and smart contract logic
 
 ---
 
