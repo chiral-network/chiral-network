@@ -1,5 +1,6 @@
 # **File Sharing & Payment System Guide**
 Chiral Network implements a BitTorrent-like file sharing model with instant seeding and DHT-based discovery.
+> See also: [Proof-of-Delivery Receipts](proof-of-delivery-receipts.md) for cryptographic attribution of which peers delivered which bytes and how this integrates with reputation and optional settlement.
 ## **Purpose**
 - Facilitate peer-to-peer file sharing incentivized by **Chiral token** exchange.
 - Automatically price files using a **global Chiral-to-MB value** or a **hash-power-based dynamic rate**.

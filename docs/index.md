@@ -26,6 +26,7 @@ Welcome to the Chiral Network documentation. This directory contains comprehensi
 
 - [NAT Traversal & Relay](nat-traversal.md) - AutoNAT v2, Circuit Relay v2, and connectivity solutions
 - [File Sharing](file-sharing.md) - Upload/download workflows, encryption, and versioning
+- [Proof-of-Delivery Receipts](proof-of-delivery-receipts.md) - Verifiable attribution, hybrid off-chain/on-chain model
 - [Reputation System](reputation.md) - Peer reputation, trust levels, and analytics
 - [Wallet & Blockchain](wallet-blockchain.md) - HD wallets, mining, and blockchain integration
 - [Internationalization](i18n.md) - Multi-language support and translation guide
