@@ -115,7 +115,6 @@ Each peer maintains a history of:
 
 
 ## Relay Reputation
-
 Peers running as relay servers earn additional reputation:
 
 ### Relay Metrics
