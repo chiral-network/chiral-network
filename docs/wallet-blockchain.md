@@ -14,24 +14,6 @@ This layer is **Ethereum-compatible**, meaning all accounts and transactions fol
 
 Our EVM-compatible blockchain is hosted on a dedicated Geth node, which processes transactions, maintains the ledger, and provides a JSON-RPC interface for wallet interactions.
 
-Here’s a revised **Overview** section that integrates a description of your wallet under the blockchain, based on the summary you provided:
-
----
-
-## **1. Overview**
-
-The **Wallet & Blockchain Layer** provides a minimal **payment and identity system** for the Chiral Network.
-It enables users to:
-
-- **Earn** cryptocurrency for seeding files
-- **Pay** for file downloads
-- **Verify** payments and balances on-chain
-- **Authenticate** nodes cryptographically
-
-This layer is **Ethereum-compatible**, meaning all accounts and transactions follow Ethereum standards and can be used with supported Ethereum libraries.
-
-Our EVM blockchain resides on a **Geth node**, which the application communicates with via a configurable JSON-RPC endpoint.
-
 ### Wallet Description
 
 > **Note:** This description describes the current wallet system in the application, but for maximum simplicity we can consider integrating Alloy instead.
