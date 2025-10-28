@@ -8,6 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::command;
 use tokio::sync::{Mutex, RwLock};
 use tracing::info;
+use crate::pool_p2p::P2P_POOL_MANAGER;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MiningPool {
@@ -274,16 +275,28 @@ pub async fn join_mining_pool(pool_id: String, address: String) -> Result<Joined
     }
     drop(current_pool);
 
-    // Find the pool
+    // Find the pool - check multiple sources
     let pools = AVAILABLE_POOLS.lock().await;
     let user_pools = USER_CREATED_POOLS.lock().await;
 
-    let pool = pools
+    let mut pool_option = pools
         .iter()
         .chain(user_pools.iter())
         .find(|p| p.id == pool_id)
-        .cloned()
-        .ok_or_else(|| "Pool not found".to_string())?;
+        .cloned();
+    
+    // If not found in static pools, check P2P pool manager
+    if pool_option.is_none() {
+        if let Some(manager) = P2P_POOL_MANAGER.lock().await.as_ref() {
+            let p2p_pools = manager.list_local_pools().await;
+            pool_option = p2p_pools.into_iter().find(|p| p.id == pool_id);
+            if pool_option.is_some() {
+                info!("Found pool {} in P2P storage", pool_id);
+            }
+        }
+    }
+    
+    let pool = pool_option.ok_or_else(|| "Pool not found".to_string())?;
 
     if matches!(pool.status, PoolStatus::Offline) {
         return Err("Pool is currently offline".to_string());
