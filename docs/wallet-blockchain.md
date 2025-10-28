@@ -84,7 +84,6 @@ Handles communication with the Ethereum-compatible blockchain via **JSON-RPC** b
 - `getBalance(address)` — Queries wallet balance from Geth
 - `sendRawTransaction(txSigned)` — Submits signed transaction via Geth
 - `getTransactionStatus(txHash)` — Checks transaction status through Geth
-- `getGasPrice()` — Optionally queries current gas price from Geth
 
 > **Note:** This is a general guideline. The actual implementation can differ.
 
