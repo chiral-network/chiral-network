@@ -833,6 +833,12 @@ struct DhtMetrics {
     last_reservation_failure: Option<SystemTime>,
     reservation_renewals: u64,
     reservation_evictions: u64,
+    total_relays_in_pool: usize,
+    relay_connection_attempts: u64,
+    relay_connection_successes: u64,
+    relay_connection_failures: u64,
+    relay_health_score: f64,
+    active_relay_count: usize,
     // DCUtR metrics
     dcutr_enabled: bool,
     dcutr_hole_punch_attempts: u64,
@@ -869,6 +875,12 @@ pub struct DhtMetricsSnapshot {
     pub last_reservation_failure: Option<u64>,
     pub reservation_renewals: u64,
     pub reservation_evictions: u64,
+    pub total_relays_in_pool: usize,
+    pub relay_connection_attempts: u64,
+    pub relay_connection_successes: u64,
+    pub relay_connection_failures: u64,
+    pub relay_health_score: f64,
+    pub active_relay_count: usize,
     // DCUtR metrics
     pub dcutr_enabled: bool,
     pub dcutr_hole_punch_attempts: u64,
@@ -1343,6 +1355,12 @@ impl DhtMetricsSnapshot {
             last_reservation_failure,
             reservation_renewals,
             reservation_evictions,
+            total_relays_in_pool,
+            relay_connection_attempts,
+            relay_connection_successes,
+            relay_connection_failures,
+            relay_health_score,
+            active_relay_count,
             // DCUtR metrics
             dcutr_enabled,
             dcutr_hole_punch_attempts,
@@ -1400,6 +1418,12 @@ impl DhtMetricsSnapshot {
             last_reservation_failure: last_reservation_failure.and_then(to_secs),
             reservation_renewals,
             reservation_evictions,
+            total_relays_in_pool,
+            relay_connection_attempts,
+            relay_connection_successes,
+            relay_connection_failures,
+            relay_health_score,
+            active_relay_count,
             // DCUtR metrics
             dcutr_enabled,
             dcutr_hole_punch_attempts,
@@ -1692,6 +1716,19 @@ async fn run_dht_node(
         tracing::info!("Using {} filtered relay candidates", filtered_relays.len());
         for (i, (pid, addr)) in filtered_relays.iter().take(5).enumerate() {
             tracing::info!("   Filtered {}: {} via {}", i + 1, pid, addr);
+        }
+    }
+
+    // First, dial all relay addresses to establish connections
+    for (pid, addr) in &filtered_relays {
+        tracing::info!("🔌 Dialing relay {} at {}", pid, addr);
+        match swarm.dial(addr.clone()) {
+            Ok(_) => {
+                tracing::info!("✅ Dial initiated for relay {}", pid);
+            }
+            Err(e) => {
+                tracing::warn!("⚠️  Failed to dial relay {}: {:?}", pid, e);
+            }
         }
     }
 
@@ -2593,6 +2630,18 @@ async fn run_dht_node(
                                 };
 
                                 if should_request {
+                                    // Update metrics when attempting relay connection
+                                    {
+                                        let mgr = proxy_mgr.lock().await;
+                                        let total_relays = mgr.relay_ready.len() + mgr.relay_pending.len();
+                                        let active_relays = mgr.relay_ready.len();
+                                        drop(mgr);
+                                        let mut m = metrics.lock().await;
+                                        m.relay_connection_attempts += 1;
+                                        m.total_relays_in_pool = total_relays;
+                                        m.active_relay_count = active_relays;
+                                    }
+
                                     if let Some(relay_addr) = build_relay_listen_addr(&multiaddr) {
                                         match swarm.listen_on(relay_addr.clone()) {
                                             Ok(_) => {
@@ -2614,6 +2663,24 @@ async fn run_dht_node(
                                                 );
                                                 let mut mgr = proxy_mgr.lock().await;
                                                 mgr.relay_pending.remove(&peer_id);
+                                                let total_relays = mgr.relay_ready.len() + mgr.relay_pending.len();
+                                                let active_relays = mgr.relay_ready.len();
+                                                drop(mgr);
+
+                                                // Update metrics on failure
+                                                {
+                                                    let mut m = metrics.lock().await;
+                                                    m.relay_connection_failures += 1;
+                                                    m.total_relays_in_pool = total_relays;
+                                                    m.active_relay_count = active_relays;
+                                                    m.last_reservation_failure = Some(SystemTime::now());
+                                                    // Recalculate health score
+                                                    let total_attempts = m.relay_connection_successes + m.relay_connection_failures;
+                                                    if total_attempts > 0 {
+                                                        m.relay_health_score = (m.relay_connection_successes as f64 / total_attempts as f64) * 100.0;
+                                                    }
+                                                }
+
                                                 let _ = event_tx
                                                     .send(DhtEvent::ProxyStatus {
                                                         id: peer_id.to_string(),
@@ -2805,6 +2872,8 @@ async fn run_dht_node(
                                 info!("✅ Relay reservation accepted from {}", relay_peer_id);
                                 let mut mgr = proxy_mgr.lock().await;
                                 let newly_ready = mgr.mark_relay_ready(relay_peer_id);
+                                let total_relays = mgr.relay_ready.len() + mgr.relay_pending.len();
+                                let active_relays = mgr.relay_ready.len();
                                 drop(mgr);
 
                                 // Update AutoRelay metrics
@@ -2814,6 +2883,14 @@ async fn run_dht_node(
                                     m.relay_reservation_status = Some("accepted".to_string());
                                     m.last_reservation_success = Some(SystemTime::now());
                                     m.reservation_renewals += 1;
+                                    m.relay_connection_successes += 1;
+                                    m.total_relays_in_pool = total_relays;
+                                    m.active_relay_count = active_relays;
+                                    // Calculate health score based on success/failure ratio
+                                    let total_attempts = m.relay_connection_successes + m.relay_connection_failures;
+                                    if total_attempts > 0 {
+                                        m.relay_health_score = (m.relay_connection_successes as f64 / total_attempts as f64) * 100.0;
+                                    }
                                 }
 
                                 if newly_ready {
@@ -4958,6 +5035,7 @@ impl DhtService {
         enable_autorelay: bool,
         preferred_relays: Vec<String>,
         enable_relay_server: bool,
+        relay_server_alias: Option<String>,
         blockstore_db_path: Option<&Path>,
     ) -> Result<Self, Box<dyn Error>> {
         // ---- Hotfix: finalize AutoRelay flag (bootstrap OFF + ENV OFF)
@@ -5111,7 +5189,11 @@ impl DhtService {
 
         // Relay server configuration
         let relay_server_behaviour = if enable_relay_server {
-            info!("🔁 Relay server enabled - this node can relay traffic for others");
+            if let Some(alias) = &relay_server_alias {
+                info!("🔁 Relay server '{}' enabled - this node can relay traffic for others", alias);
+            } else {
+                info!("🔁 Relay server enabled - this node can relay traffic for others");
+            }
             Some(relay::Behaviour::new(
                 local_peer_id,
                 relay::Config::default(),
@@ -6022,6 +6104,10 @@ impl DhtService {
         DhtMetricsSnapshot::from(metrics, peer_count)
     }
 
+    pub async fn get_health(&self) -> Option<DhtMetricsSnapshot> {
+        Some(self.metrics_snapshot().await)
+    }
+
     pub async fn store_block(&self, cid: Cid, data: Vec<u8>) -> Result<(), String> {
         self.cmd_tx
             .send(DhtCommand::StoreBlock { cid, data })
@@ -6797,7 +6883,8 @@ mod tests {
             false,      // enable_autorelay
             Vec::new(), // preferred_relays
             false,      // enable_relay_server
-            None,
+            None,       // relay_server_alias
+            None,       // blockstore_db_path
         )
         .await
         {
@@ -6872,4 +6959,221 @@ mod tests {
         let guard = metrics.lock().await;
         assert_eq!(guard.listen_addrs.len(), 2);
     }
+}
+
+// ============================================================================
+// NAT Traversal Validation & Public IP Detection
+// ============================================================================
+
+/// Detect public IP address using multiple external services
+/// Returns the detected public IP or an error if detection fails
+pub async fn detect_public_ip() -> Result<String, String> {
+    use reqwest;
+
+    // List of public IP detection services
+    let services = vec![
+        "https://api.ipify.org",
+        "https://icanhazip.com",
+        "https://ifconfig.me/ip",
+        "https://checkip.amazonaws.com",
+    ];
+
+    for service in services {
+        match reqwest::get(service).await {
+            Ok(response) => {
+                if let Ok(ip) = response.text().await {
+                    let ip = ip.trim().to_string();
+                    // Validate that it's a valid IPv4 address
+                    if let Ok(parsed_ip) = ip.parse::<std::net::Ipv4Addr>() {
+                        // Make sure it's not a private IP
+                        if !is_private_or_loopback_v4(parsed_ip) {
+                            info!("Detected public IP: {} (via {})", ip, service);
+                            return Ok(ip);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                debug!("Failed to detect IP via {}: {}", service, e);
+                continue;
+            }
+        }
+    }
+
+    Err("Failed to detect public IP from any service".to_string())
+}
+
+/// DCUtR validation result with detailed metrics
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DCUtRValidation {
+    pub enabled: bool,
+    pub total_attempts: u64,
+    pub successes: u64,
+    pub failures: u64,
+    pub success_rate: f64,
+    pub last_success_ago_secs: Option<u64>,
+    pub last_failure_ago_secs: Option<u64>,
+    pub status: String,
+    pub recommendations: Vec<String>,
+}
+
+impl DhtService {
+    /// Validate DCUtR (hole-punching) configuration and performance
+    pub async fn validate_dcutr(&self) -> DCUtRValidation {
+        let metrics = self.metrics.lock().await;
+
+        let total_attempts = metrics.dcutr_hole_punch_attempts;
+        let successes = metrics.dcutr_hole_punch_successes;
+        let failures = metrics.dcutr_hole_punch_failures;
+
+        let success_rate = if total_attempts > 0 {
+            (successes as f64 / total_attempts as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let now = SystemTime::now();
+        let last_success_ago_secs = metrics.last_dcutr_success.and_then(|t| {
+            now.duration_since(t).ok().map(|d| d.as_secs())
+        });
+        let last_failure_ago_secs = metrics.last_dcutr_failure.and_then(|t| {
+            now.duration_since(t).ok().map(|d| d.as_secs())
+        });
+
+        // Determine status
+        let status = if !metrics.dcutr_enabled {
+            "disabled".to_string()
+        } else if total_attempts == 0 {
+            "not_tested".to_string()
+        } else if success_rate >= 70.0 {
+            "excellent".to_string()
+        } else if success_rate >= 40.0 {
+            "good".to_string()
+        } else if success_rate >= 20.0 {
+            "poor".to_string()
+        } else {
+            "failing".to_string()
+        };
+
+        // Generate recommendations
+        let mut recommendations = Vec::new();
+
+        if !metrics.dcutr_enabled {
+            recommendations.push("Enable AutoNAT to activate DCUtR hole-punching".to_string());
+        } else if total_attempts == 0 {
+            recommendations.push("No hole-punch attempts yet. Connect to more peers behind NAT.".to_string());
+        } else if success_rate < 40.0 {
+            recommendations.push("Low success rate. Check firewall settings.".to_string());
+            recommendations.push("Ensure UPnP is enabled on your router if available.".to_string());
+            recommendations.push("Consider setting up port forwarding manually.".to_string());
+        }
+
+        if metrics.reachability_state != NatReachabilityState::Public {
+            recommendations.push("Node is behind NAT. Direct connections may be limited.".to_string());
+        }
+
+        if metrics.active_relay_peer_id.is_none() && metrics.autorelay_enabled {
+            recommendations.push("No active relay connection. This may limit NAT traversal.".to_string());
+        }
+
+        DCUtRValidation {
+            enabled: metrics.dcutr_enabled,
+            total_attempts,
+            successes,
+            failures,
+            success_rate,
+            last_success_ago_secs,
+            last_failure_ago_secs,
+            status,
+            recommendations,
+        }
+    }
+
+    /// Get port forwarding configuration suggestions
+    pub async fn get_port_forwarding_config(&self) -> PortForwardingConfig {
+        let metrics = self.metrics.lock().await;
+
+        // Try to detect public IP
+        let public_ip = match detect_public_ip().await {
+            Ok(ip) => Some(ip),
+            Err(_) => None,
+        };
+
+        // Get local listening addresses
+        let listen_addrs = metrics.listen_addrs.clone();
+
+        // Extract port from listen addresses
+        let mut ports = Vec::new();
+        for addr_str in &listen_addrs {
+            if let Ok(addr) = addr_str.parse::<Multiaddr>() {
+                for component in addr.iter() {
+                    if let Protocol::Tcp(port) = component {
+                        ports.push(port);
+                    }
+                }
+            }
+        }
+
+        let primary_port = ports.first().copied();
+
+        PortForwardingConfig {
+            public_ip,
+            local_ip: get_local_ip(),
+            primary_port,
+            listen_addresses: listen_addrs,
+            reachability: metrics.reachability_state,
+            nat_status: if metrics.reachability_state == NatReachabilityState::Public {
+                "Direct connection available".to_string()
+            } else {
+                "Behind NAT - port forwarding recommended".to_string()
+            },
+            instructions: generate_port_forwarding_instructions(primary_port),
+        }
+    }
+}
+
+/// Port forwarding configuration information
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortForwardingConfig {
+    pub public_ip: Option<String>,
+    pub local_ip: Option<String>,
+    pub primary_port: Option<u16>,
+    pub listen_addresses: Vec<String>,
+    pub reachability: NatReachabilityState,
+    pub nat_status: String,
+    pub instructions: Vec<String>,
+}
+
+/// Get local IP address
+fn get_local_ip() -> Option<String> {
+    use local_ip_address::local_ip;
+
+    match local_ip() {
+        Ok(ip) => Some(ip.to_string()),
+        Err(_) => None,
+    }
+}
+
+/// Generate port forwarding instructions
+fn generate_port_forwarding_instructions(port: Option<u16>) -> Vec<String> {
+    let mut instructions = Vec::new();
+
+    if let Some(p) = port {
+        instructions.push(format!("1. Log into your router's admin panel (usually 192.168.1.1 or 192.168.0.1)"));
+        instructions.push(format!("2. Navigate to Port Forwarding or Virtual Server section"));
+        instructions.push(format!("3. Create a new port forwarding rule:"));
+        instructions.push(format!("   - External Port: {}", p));
+        instructions.push(format!("   - Internal Port: {}", p));
+        instructions.push(format!("   - Protocol: TCP"));
+        instructions.push(format!("   - Internal IP: Your local machine IP"));
+        instructions.push(format!("4. Save the configuration and restart your router if needed"));
+        instructions.push(format!("5. Set CHIRAL_PUBLIC_IP environment variable to your public IP"));
+        instructions.push(format!("6. Restart Chiral Network to advertise the external address"));
+    } else {
+        instructions.push("No port detected. Ensure DHT service is running.".to_string());
+    }
+
+    instructions
 }

@@ -937,6 +937,7 @@ async fn start_dht_node(
     enable_autorelay: Option<bool>,
     preferred_relays: Option<Vec<String>>,
     enable_relay_server: Option<bool>,
+    relay_server_alias: Option<String>,
 ) -> Result<String, String> {
     {
         let dht_guard = state.dht.lock().await;
@@ -1002,7 +1003,8 @@ async fn start_dht_node(
         cache_size_mb,
         /* enable AutoRelay (after hotfix) */ final_enable_autorelay,
         preferred_relays.unwrap_or_default(),
-        is_bootstrap.unwrap_or(false), // enable_relay_server only on bootstrap
+        enable_relay_server.unwrap_or(false), // enable_relay_server from user settings
+        relay_server_alias, // relay server public alias/name
         Some(&async_blockstore_path),
     )
     .await
