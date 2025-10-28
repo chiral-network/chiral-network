@@ -133,7 +133,7 @@ Handles communication with the Ethereum-compatible blockchain via **JSON-RPC** b
 └──────────────────────────────────────────┘
 ```
 
-## 5.1 Network Setup (Simplified)
+## 5.1 Network Setup
 
 - **Type:** Ethereum-compatible (EVM-based)
   - Wallet and transactions follow Ethereum standards (addresses, accounts, transactions).
@@ -230,7 +230,37 @@ Handles communication with the Ethereum-compatible blockchain via **JSON-RPC** b
   - **“File Uploads”**
   - **“File Downloads”**
 
-## **7. Summary**
+## **7. Separation of Wallet & Blockchain Layer from File-Sharing Logic**
+
+Keeping the **Wallet & Blockchain Layer** separate from upload/download logic provides several key benefits:
+
+### 7.1 Modularity
+
+- The wallet and blockchain logic can evolve independently of the file-sharing features.
+- You can swap blockchain implementations, upgrade dependencies, or change RPC endpoints without touching file transfer code.
+
+### 7.2 Maintainability
+
+- Bugs, security issues, or updates in one layer do not directly affect the other.
+- Smaller, well-defined modules are easier to test and debug.
+
+### 7.3 Security
+
+- Sensitive information such as private keys never needs to leave the wallet layer.
+- Upload/download logic only interacts with signed transactions or payment proofs, reducing the risk of exposing keys.
+
+### 7.4 Flexibility
+
+- The file-sharing system can integrate with other blockchains in the future.
+
+### 7.5 Simplified Development
+
+- Developers working on file transfer features do not need to understand Ethereum transaction mechanics.
+- Blockchain developers can focus on payments, balances, and smart contracts without managing file flows.
+
+> **Summary:** Decoupling ensures a clear separation of concerns, improving security, maintainability, and adaptability of the Chiral Network.
+
+## **8. Summary**
 
 The **Wallet & Blockchain Layer** in Chiral Network provides:
 
