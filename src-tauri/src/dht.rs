@@ -4410,16 +4410,14 @@ async fn handle_identify_event(
                 }
             }
 
-            let listen_addrs = info.listen_addrs.clone();
-
-            // identify::Event::Received { peer_id, info, .. } => { ... }
+            // Process listen addresses
             for addr in info.listen_addrs.iter() {
-                    // Filter out unreachable addresses (Docker IPs, private IPs without relay)
-                    if is_unreachable_address(addr) {
-                        debug!("  🚫 Skipping unreachable addr: {}", addr);
-                        continue;
-                    }
-                    
+                // Filter out unreachable addresses (Docker IPs, private IPs without relay)
+                if is_unreachable_address(addr) {
+                    debug!("  🚫 Skipping unreachable addr: {}", addr);
+                    continue;
+                }
+                
                 info!("  📍 Peer {} listen addr: {}", peer_id, addr);
 
                 if ma_plausibly_reachable(addr) {
@@ -4433,50 +4431,36 @@ async fn handle_identify_event(
                         peer_id, addr
                     );
                 }
-                // for addr in info.listen_addrs {
-                for addr in listen_addrs.iter() {
-                    // Filter out unreachable addresses (Docker IPs, private IPs without relay)
-                    if is_unreachable_address(addr) {
-                        debug!("  🚫 Skipping unreachable addr: {}", addr);
-                        continue;
-                    }
-                    
-                    info!("  📍 Peer {} listen addr: {}", peer_id, addr);
-                    if not_loopback(&addr) {
-                        swarm
-                            .behaviour_mut()
-                            .kademlia
-                            .add_address(&peer_id, addr.clone());
+            }
 
-                // Relay Setting: from candidate's "public base", create /p2p-circuit
-                if enable_autorelay && is_relay_candidate(&peer_id, relay_candidates) {
-                    if let Some(base_str) = relay_candidates
-                        .iter()
-                        .find(|s| s.contains(&peer_id.to_string()))
-                    {
-                        if let Ok(base) = base_str.parse::<Multiaddr>() {
-                            if let Some(relay_addr) = build_relay_listen_addr(&base) {
-                                info!(
-                                    "📡 Attempting to listen via relay {} at {}",
-                                    peer_id, relay_addr
+            // Relay Setting: from candidate's "public base", create /p2p-circuit
+            if enable_autorelay && is_relay_candidate(&peer_id, relay_candidates) {
+                if let Some(base_str) = relay_candidates
+                    .iter()
+                    .find(|s| s.contains(&peer_id.to_string()))
+                {
+                    if let Ok(base) = base_str.parse::<Multiaddr>() {
+                        if let Some(relay_addr) = build_relay_listen_addr(&base) {
+                            info!(
+                                "📡 Attempting to listen via relay {} at {}",
+                                peer_id, relay_addr
+                            );
+                            if let Err(e) = swarm.listen_on(relay_addr.clone()) {
+                                warn!(
+                                    "Failed to listen on relay address {}: {}",
+                                    relay_addr, e
                                 );
-                                if let Err(e) = swarm.listen_on(relay_addr.clone()) {
-                                    warn!(
-                                        "Failed to listen on relay address {}: {}",
-                                        relay_addr, e
-                                    );
-                                } else {
-                                    info!("📡 Attempting to listen via relay peer {}", peer_id);
-                                }
                             } else {
-                                debug!("⚠️ Could not derive relay listen addr from base: {}", base);
+                                info!("📡 Attempting to listen via relay peer {}", peer_id);
                             }
                         } else {
-                            debug!("⚠️ Invalid relay base multiaddr: {}", base_str);
+                            debug!("⚠️ Could not derive relay listen addr from base: {}", base);
                         }
                     } else {
-                        debug!("⚠️ No relay base in preferred_relays for {}", peer_id);
+                        debug!("⚠️ Invalid relay base multiaddr: {}", base_str);
                     }
+                } else {
+                    debug!("⚠️ No relay base in preferred_relays for {}", peer_id);
                 }
             }
         }
