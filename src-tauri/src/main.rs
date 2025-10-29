@@ -2190,7 +2190,11 @@ async fn upload_file_to_network(
 
     if let Some(ft) = ft {
         // Upload the file
-        let file_name = file_path.split('/').last().unwrap_or(&file_path);
+        let c = file_path.clone();
+        let file_name = Path::new(&c)
+            .file_name()             // returns Option<&OsStr>
+            .and_then(|s| s.to_str()) // convert OsStr -> &str
+            .unwrap_or(&file_path);   // fallback to whole path if not found
 
         ft.upload_file_with_account(
             file_path.clone(),

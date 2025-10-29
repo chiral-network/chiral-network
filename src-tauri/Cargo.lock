@@ -604,7 +604,7 @@ checksum = "d86b93f97252c47b41663388e6d155714a9d0c398b99f1005cbc5f978b29f445"
 [[package]]
 name = "beetswap"
 version = "0.4.1"
-source = "git+https://github.com/totoro-ming-lin/beetswap.git?branch=older-version#9de7ea8bbef95d64a22dc13da8f26cb573aca4d4"
+source = "git+https://github.com/totoro-ming-lin/beetswap.git?branch=new#e614ef9605c34cbf8ee191b83a29277504dc7168"
 dependencies = [
  "asynchronous-codec",
  "blockstore",

@@ -563,7 +563,7 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
       priority: 'normal' as const,
       version: metadata.version, // Preserve version info if available
       seeders: metadata.seeders.length, // Convert array length to number
-      seederAddresses: metadata.seeders, // Store the actual seeder peer IDs
+      seederAddresses: metadata.seeders, // Array that only contains selected seeder rather than all seeders
       uploaderAddress: metadata.uploaderAddress, // Store uploader's wallet address
       // Pass encryption info to the download item
       isEncrypted: metadata.isEncrypted,

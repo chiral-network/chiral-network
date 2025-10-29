@@ -159,7 +159,7 @@
   // Calculate price based on file size and price per MB
   function calculateFilePrice(sizeInBytes: number): number {
     const sizeInMB = sizeInBytes / 1_048_576; // Convert bytes to MB
-    const pricePerMb = $settings.pricePerMb || 0.001;
+    const pricePerMb = $settings.pricePerMb || 0;
     return parseFloat((sizeInMB * pricePerMb).toFixed(6)); // Round to 6 decimal places
   }
 
