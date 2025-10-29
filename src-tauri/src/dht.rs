@@ -2169,37 +2169,8 @@ async fn run_dht_node(
                             Ok(cid) => cid.clone(),
                             Err(e) => { let _ = event_tx.send(DhtEvent::Error(e)).await; continue; }
                         };
-
-                        info!("🔽 Starting Bitswap download for file: {} (root CID: {})", file_metadata.file_name, root_cid);
-                        info!("📊 File has {} known seeders: {:?}", file_metadata.seeders.len(), file_metadata.seeders);
-
-                        // Check if we're connected to any seeders
-                        let connected = connected_peers.lock().await;
-                        let connected_seeders: Vec<_> = file_metadata.seeders.iter()
-                            .filter(|seeder| {
-                                if let Ok(peer_id) = seeder.parse::<PeerId>() {
-                                    connected.contains(&peer_id)
-                                } else {
-                                    false
-                                }
-                            })
-                            .collect();
-
-                        if connected_seeders.is_empty() {
-                            warn!("⚠️  Not connected to any seeders for file {}!", file_metadata.file_name);
-                            warn!("   Available seeders: {:?}", file_metadata.seeders);
-                            warn!("   Connected peers: {:?}", connected.iter().map(|p| p.to_string()).collect::<Vec<_>>());
-                            let _ = event_tx.send(DhtEvent::Error(
-                                format!("Not connected to any seeders for file {}. Please ensure at least one seeder is online and connected.", file_metadata.file_name)
-                            )).await;
-                            continue;
-                        }
-
-                        info!("✅ Connected to {}/{} seeders", connected_seeders.len(), file_metadata.seeders.len());
-
                         // Request the root block which contains the CIDs
                         let root_query_id = swarm.behaviour_mut().bitswap.get(&root_cid);
-                        info!("📤 Sent Bitswap GET request for root block (query_id: {:?})", root_query_id);
 
                         file_metadata.download_path = Some(download_path);
                         // Store the root query ID to handle when we get the root block

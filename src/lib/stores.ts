@@ -475,5 +475,5 @@ export const settings = writable<AppSettings>({
   autoUpdate: true,
   enableBandwidthScheduling: false,
   bandwidthSchedules: [],
-  pricePerMb: 0.001, // Default price: 0.001 Chiral per MB
+  pricePerMb: 0, // Default price: 0, until ability to set pricePerMb is there, then change to 0.001 Chiral per MB
 });
