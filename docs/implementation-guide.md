@@ -432,6 +432,22 @@ pub async fn download_file(
 }
 ```
 
+### Running the Bootstrap DHT Node
+
+To keep discovery healthy, run at least one headless instance flagged as the bootstrap node:
+
+```bash
+# From the repo root
+./run-bootstrap.sh --port 4001 --log-level info --enable-geth
+```
+
+The script builds (if necessary) and launches `chiral-network --headless --is-bootstrap`, which:
+
+- Disables provider record storage and AutoRelay so the node stays focused on routing DHT traffic
+- Starts the bundled Geth process when `--enable-geth` (or `ENABLE_GETH=true`) is supplied so the bootstrap host maintains local chain state; keep mining disabled so this node remains a neutral router
+
+Regular peers should omit `--is-bootstrap`; they rely on the configured `bootstrap_nodes` list to dial the bootstrap instance and populate their routing tables.
+
 ## Phase 4: Integration Testing
 
 ### NAT reachability instrumentation

@@ -314,6 +314,7 @@
   let hoveredPoint: MiningHistoryPoint | null = null;
   let hoveredIndex: number | null = null;
 
+
   onMount(async () => {
     try{
       getVersion()
@@ -398,46 +399,48 @@
       const [rate, block] = await Promise.all([
         invoke('get_miner_hashrate') as Promise<string>,
         invoke('get_current_block') as Promise<number>
-      ])
-      
+      ]);
+
       currentBlock = block
-      
-      // Try to get real hash rate from logs if standard API returns 0
+
+      // Always try to get continuous hash rate estimates when mining
+      let finalHashRate = rate;
+
+      // If RPC returns 0 but we're mining, show "Mining Active"
       if (rate === '0 H/s' && $miningState.isMining) {
-        try {
-          // Get mining performance from logs
-          const [blocksFound, hashRateFromLogs] = await invoke('get_miner_performance', { 
-            dataDir: './bin/geth-data' 
-          }) as [number, number]
-          
-          if (hashRateFromLogs > 0) {
-            // Use actual hash rate from logs
-            $miningState.hashRate = formatHashRate(hashRateFromLogs)
-            $miningState.blocksFound = blocksFound;
-          
-            
-          } else if ($miningState.activeThreads > 0) {
-            // Fall back to simulation if no log data yet
-            const elapsed = (Date.now() - sessionStartTime) / 1000 // seconds
-            const baseRate = $miningState.activeThreads * 85000 // 85 KH/s per thread
-            const variation = Math.sin(elapsed / 10) * baseRate * 0.1 // ±10% variation
-            const simulatedRate = baseRate + variation
-            $miningState.hashRate = `~${formatHashRate(simulatedRate)}`
-          }
-        } catch (perfError) {
-          // If performance fetch fails, fall back to simulation
-          if ($miningState.activeThreads > 0) {
-            const elapsed = (Date.now() - sessionStartTime) / 1000
-            const baseRate = $miningState.activeThreads * 85000
-            const variation = Math.sin(elapsed / 10) * baseRate * 0.1
-            const simulatedRate = baseRate + variation
-            $miningState.hashRate = `~${formatHashRate(simulatedRate)}`
-          }
-        }
-      } else if (rate !== '0 H/s') {
-        // Use actual rate if available from standard API
-        $miningState.hashRate = rate
+        finalHashRate = "Mining Active";
       }
+
+
+      if ($miningState.isMining) {
+        try {
+          // Get continuous hash rate estimates from backend
+          const [, hashRateFromLogs] = await invoke('get_miner_performance', {
+            dataDir: './bin/geth-data'
+          }) as [number, number]
+
+          // Handle backend response properly
+
+          if (hashRateFromLogs === 0) {
+            // Mining active but no blocks mined yet - show status
+            finalHashRate = $miningState.hashRate === "0 H/s" ? "Mining Active" : $miningState.hashRate;
+          } else {
+            // Have actual hash rate data from block mining
+            finalHashRate = formatHashRate(hashRateFromLogs);
+          }
+
+        } catch (perfError) {
+          console.log('Performance fetch failed:', perfError);
+          // If performance fetch fails, keep current rate
+          finalHashRate = $miningState.hashRate || rate;
+        }
+      }
+      
+      $miningState.hashRate = finalHashRate;
+
+      // Force reactivity by triggering store update every time
+      miningState.set($miningState);
+
       
       // Convert hashRate string to number for chart
       let hashRateNum = 0

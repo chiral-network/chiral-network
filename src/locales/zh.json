@@ -748,6 +748,12 @@
     "powerUsage": "能耗",
     "hw": "硬件",
     "temperature": "温度",
+    "temperatureStatus": {
+      "critical": "严重",
+      "hot": "高温",
+      "warm": "温暖",
+      "normal": "正常"
+    },
     "control": "挖矿控制",
     "active": "挖矿中",
     "stopped": "挖矿已停止",
@@ -1092,6 +1098,9 @@
       "retrying": "正在重试 {hash} 下载（第 {attempt}/{max} 次尝试）",
       "recovered": "{hash} 下载在 {retries} 次重试后恢复（{duration} 毫秒）",
       "failed": "{hash} 下载在 {attempts} 次尝试后失败"
-    }
+    },
+    "selectProtocol": "选择协议",
+    "currentProtocol": "当前协议",
+    "changeProtocol": "更改协议"
   }
 }

@@ -563,7 +563,7 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
       priority: 'normal' as const,
       version: metadata.version, // Preserve version info if available
       seeders: metadata.seeders.length, // Convert array length to number
-      seederAddresses: metadata.seeders, // Store the actual seeder peer IDs
+      seederAddresses: metadata.seeders, // Array that only contains selected seeder rather than all seeders
       uploaderAddress: metadata.uploaderAddress, // Store uploader's wallet address
       // Pass encryption info to the download item
       isEncrypted: metadata.isEncrypted,
@@ -728,6 +728,11 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
         }
       }
     }
+  }
+
+  // Auto-clear completed downloads when setting is enabled
+  $: if (autoClearCompleted) {
+    files.update(f => f.filter(file => file.status !== 'completed'))
   }
 
   // New function to download from search results
@@ -1836,14 +1841,6 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
                         <Badge class="text-xs font-semibold bg-muted-foreground/20 text-foreground border-0 px-2 py-0.5">
                           {formatFileSize(file.size)}
                         </Badge>
-                        <!-- Price Badge -->
-                        {#if file.status === 'queued' || file.status === 'downloading'}
-                          {@const price = paymentService.calculateDownloadCost(file.size)}
-                          <Badge class="text-xs font-semibold bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 border-0 px-2 py-0.5 flex items-center gap-1">
-                            <Coins class="h-3 w-3" />
-                            {price.toFixed(8)} Chiral
-                          </Badge>
-                        {/if}
                       </div>
                       <div class="flex items-center gap-x-3 gap-y-1 mt-1">
                         <p class="text-xs text-muted-foreground truncate">{$t('download.file.hash')}: {file.hash}</p>

@@ -724,6 +724,12 @@
     "powerUsage": "전력 사용량",
     "hw": "H/W",
     "temperature": "온도",
+    "temperatureStatus": {
+      "critical": "심각",
+      "hot": "뜨거움",
+      "warm": "따뜻함",
+      "normal": "정상"
+    },
     "control": "채굴 제어",
     "active": "채굴 활성",
     "stopped": "채굴 중지",
@@ -1068,6 +1074,9 @@
       "retrying": "{hash} 다운로드 재시도 중 (시도 {attempt}/{max})",
       "recovered": "{hash} 다운로드가 {retries}번의 재시도 후 복구되었습니다 ({duration} ms)",
       "failed": "{hash} 다운로드가 {attempts}번의 시도 후 실패했습니다"
-    }
+    },
+    "selectProtocol": "프로토콜 선택",
+    "currentProtocol": "현재 프로토콜",
+    "changeProtocol": "프로토콜 변경"
   }
 }

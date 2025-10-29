@@ -2169,37 +2169,21 @@ async fn run_dht_node(
                             Ok(cid) => cid.clone(),
                             Err(e) => { let _ = event_tx.send(DhtEvent::Error(e)).await; continue; }
                         };
-
-                        info!("🔽 Starting Bitswap download for file: {} (root CID: {})", file_metadata.file_name, root_cid);
-                        info!("📊 File has {} known seeders: {:?}", file_metadata.seeders.len(), file_metadata.seeders);
-
-                        // Check if we're connected to any seeders
-                        let connected = connected_peers.lock().await;
-                        let connected_seeders: Vec<_> = file_metadata.seeders.iter()
-                            .filter(|seeder| {
-                                if let Ok(peer_id) = seeder.parse::<PeerId>() {
-                                    connected.contains(&peer_id)
-                                } else {
-                                    false
-                                }
-                            })
-                            .collect();
-
-                        if connected_seeders.is_empty() {
-                            warn!("⚠️  Not connected to any seeders for file {}!", file_metadata.file_name);
-                            warn!("   Available seeders: {:?}", file_metadata.seeders);
-                            warn!("   Connected peers: {:?}", connected.iter().map(|p| p.to_string()).collect::<Vec<_>>());
-                            let _ = event_tx.send(DhtEvent::Error(
-                                format!("Not connected to any seeders for file {}. Please ensure at least one seeder is online and connected.", file_metadata.file_name)
-                            )).await;
-                            continue;
-                        }
-
-                        info!("✅ Connected to {}/{} seeders", connected_seeders.len(), file_metadata.seeders.len());
+                        let Some(first_seeder) = file_metadata.seeders.get(0) else {
+                            let _ = event_tx.send(DhtEvent::Error("No seeders found".to_string())).await;
+                            return;
+                        };
+                        
+                        let peer_id = match PeerId::from_str(first_seeder) {
+                            Ok(id) => id.clone(),
+                            Err(e) => {
+                                let _ = event_tx.send(DhtEvent::Error(e.to_string())).await;
+                                return;
+                            }
+                        };
 
                         // Request the root block which contains the CIDs
-                        let root_query_id = swarm.behaviour_mut().bitswap.get(&root_cid);
-                        info!("📤 Sent Bitswap GET request for root block (query_id: {:?})", root_query_id);
+                        let root_query_id = swarm.behaviour_mut().bitswap.get_from(&root_cid, peer_id);
 
                         file_metadata.download_path = Some(download_path);
                         // Store the root query ID to handle when we get the root block
@@ -3008,9 +2992,14 @@ async fn run_dht_node(
 
                                         // Create queries map for this file's data blocks
                                         let mut file_queries = HashMap::new();
+                                        let peer_id = match PeerId::from_str(&metadata.seeders[0]) {
+                                            Ok(id) => id.clone(),
+                                            Err(e) => {let _ = event_tx.send(DhtEvent::Error(e.to_string())).await; continue; }
+                                        };
 
                                         for (i, cid) in cids.iter().enumerate() {
-                                            let block_query_id = swarm.behaviour_mut().bitswap.get(cid);
+                                            // Request the root block which contains the CIDs
+                                            let block_query_id = swarm.behaviour_mut().bitswap.get_from(&cid, peer_id);
                                             file_queries.insert(block_query_id, i as u32);
                                         }
 
@@ -6772,6 +6761,153 @@ async fn get_available_download_path(path: PathBuf) -> PathBuf {
         }
 
         counter += 1;
+    }
+}
+
+/// Represents the data parsed from a magnet URI.
+#[derive(Debug, PartialEq, Eq)]
+pub struct MagnetData {
+    pub info_hash: String,
+    pub display_name: Option<String>,
+    pub trackers: Vec<String>,
+}
+
+/// Parses a magnet URI string into a `MagnetData` struct.
+///
+/// This function extracts the info hash (btih), display name (dn),
+/// and tracker URLs (tr) from a standard magnet link.
+///
+/// # Examples
+///
+/// ```
+/// let magnet_uri = "magnet:?xt=urn:btih:b263275b1e3138b29596356533f685c33103575c&dn=My+Awesome+File&tr=udp%3A%2F%2Ftracker.openbittorrent.com%3A80";
+/// let magnet_data = parse_magnet_uri(magnet_uri).unwrap();
+/// assert_eq!(magnet_data.info_hash, "b263275b1e3138b29596356533f685c33103575c");
+/// assert_eq!(magnet_data.display_name, Some("My Awesome File".to_string()));
+/// assert_eq!(magnet_data.trackers, vec!["udp://tracker.openbittorrent.com:80".to_string()]);
+/// ```
+pub fn parse_magnet_uri(uri: &str) -> Result<MagnetData, String> {
+    if !uri.starts_with("magnet:?") {
+        return Err("Invalid magnet URI: must start with 'magnet:?'".to_string());
+    }
+
+    let params_str = &uri[8..];
+    let params: HashMap<String, Vec<String>> = url::form_urlencoded::parse(params_str.as_bytes())
+        .into_owned()
+        .fold(HashMap::new(), |mut acc, (key, val)| {
+            acc.entry(key).or_default().push(val);
+            acc
+        });
+
+    let info_hash = params
+        .get("xt")
+        .and_then(|xts| {
+            xts.iter().find_map(|xt| {
+                xt.strip_prefix("urn:btih:")
+                    .map(|hash| hash.to_lowercase())
+            })
+        })
+        .ok_or_else(|| "Magnet URI is missing 'xt' (info hash) parameter".to_string())?;
+
+    let display_name = params.get("dn").and_then(|dns| dns.first().cloned());
+
+    let trackers = params.get("tr").cloned().unwrap_or_default();
+
+    Ok(MagnetData {
+        info_hash,
+        display_name,
+        trackers,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sha1::{Digest as Sha1Digest, Sha1};
+
+    #[test]
+    fn test_parse_magnet_uri_full() {
+        let magnet = "magnet:?xt=urn:btih:b263275b1e3138b29596356533f685c33103575c&dn=My+Awesome+File.txt&tr=udp%3A%2F%2Ftracker.openbittorrent.com%3A80&tr=udp%3A%2F%2Ftracker.leechers-paradise.org%3A6969";
+        let result = parse_magnet_uri(magnet).unwrap();
+        assert_eq!(
+            result,
+            MagnetData {
+                info_hash: "b263275b1e3138b29596356533f685c33103575c".to_string(),
+                display_name: Some("My Awesome File.txt".to_string()),
+                trackers: vec![
+                    "udp://tracker.openbittorrent.com:80".to_string(),
+                    "udp://tracker.leechers-paradise.org:6969".to_string(),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_magnet_uri_minimal() {
+        let magnet = "magnet:?xt=urn:btih:b263275b1e3138b29596356533f685c33103575c";
+        let result = parse_magnet_uri(magnet).unwrap();
+        assert_eq!(
+            result,
+            MagnetData {
+                info_hash: "b263275b1e3138b29596356533f685c33103575c".to_string(),
+                display_name: None,
+                trackers: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_magnet_uri_case_insensitivity() {
+        let magnet = "magnet:?XT=urn:btih:B263275B1E3138B29596356533F685C33103575C";
+        let result = parse_magnet_uri(magnet).unwrap();
+        assert_eq!(
+            result.info_hash,
+            "b263275b1e3138b29596356533f685c33103575c"
+        );
+    }
+
+    #[test]
+    fn test_parse_magnet_uri_invalid() {
+        assert!(parse_magnet_uri("http://example.com").is_err());
+        assert!(parse_magnet_uri("magnet:?dn=MyFile").is_err());
+    }
+
+    #[test]
+    fn test_torrent_piece_hash_verification() {
+        // Simulate a torrent file with 3 pieces.
+        // Piece size is 16 bytes for this test.
+        let piece_size = 16;
+
+        let piece1_data = b"This is piece 1."; // 16 bytes
+        let piece2_data = b"This is piece 2!"; // 16 bytes
+        let piece3_data = b"Short piece."; // 12 bytes
+
+        // In a real torrent, these hashes would be in the .torrent file's `info.pieces` field.
+        let mut hasher = Sha1::new();
+        hasher.update(piece1_data);
+        let expected_hash1 = hasher.finalize_reset();
+
+        hasher.update(piece2_data);
+        let expected_hash2 = hasher.finalize_reset();
+
+        hasher.update(piece3_data);
+        let expected_hash3 = hasher.finalize();
+
+        // Simulate receiving the pieces (e.g., from peers).
+        let received_piece1 = piece1_data.to_vec();
+        let received_piece2 = piece2_data.to_vec();
+        let received_piece3 = piece3_data.to_vec();
+
+        // Verify each piece.
+        let mut verifier = Sha1::new();
+        verifier.update(&received_piece1);
+        assert_eq!(verifier.finalize_reset(), expected_hash1);
+
+        verifier.update(&received_piece2);
+        assert_eq!(verifier.finalize_reset(), expected_hash2);
+
+        verifier.update(&received_piece3);
+        assert_eq!(verifier.finalize(), expected_hash3);
     }
 }
 
