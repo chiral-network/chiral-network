@@ -1,5 +1,3 @@
-# IMPORTANT: This document needs full revision. We don't yet have a reputation system design, which should be a high-priority item.
-
 # Reputation System
 
 > **Status:** MVP design for transaction-backed reputation. Uptime, storage, and relay metrics will ship later as extensions once out-of-band evidence is available.
