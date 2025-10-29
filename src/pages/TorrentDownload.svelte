@@ -226,7 +226,7 @@
         placeholder="magnet:?xt=urn:btih:..."
         class="flex-grow p-2 border rounded-md bg-background"
       />
-      <button on:click={startDownload} disabled={!magnetLink.trim()} class="px-4 py-2 bg-primary text-primary-foreground rounded-md disabled:opacity-50">Download</button>
+      <button on:click={startDownload} disabled={!magnetLink.trim()} class="px-4 py-2 bg-primary text-primary-foreground rounded-md disabled:opacity-50 hover:bg-primary/90 transition-colors">Download</button>
     </div>
   </div>
 
@@ -255,7 +255,7 @@
         on:change={handleDownloadFileSelect}
         class="hidden"
       />
-      <button on:click={startDownload} disabled={!downloadSelectedFileName} class="px-4 py-2 bg-primary text-primary-foreground rounded-md disabled:opacity-50">Download</button>
+      <button on:click={startDownload} disabled={!downloadSelectedFileName} class="px-4 py-2 bg-primary text-primary-foreground rounded-md disabled:opacity-50 hover:bg-primary/90 transition-colors">Download</button>
     </div>
   </div>
 
@@ -275,7 +275,7 @@
         on:change={handleSeedFileSelect}
         class="hidden"
       />
-      <button on:click={startSeeding} disabled={!seedSelectedFileName} class="px-4 py-2 bg-green-600 text-white rounded-md disabled:opacity-50">Seed File</button>
+      <button on:click={startSeeding} disabled={!seedSelectedFileName} class="px-4 py-2 bg-green-600 text-white rounded-md disabled:opacity-50 hover:bg-green-700 transition-colors">Seed File</button>
     </div>
     {#if newlySeededMagnet}
       <div class="mt-4 p-3 bg-background rounded-md border">
