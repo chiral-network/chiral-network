@@ -3,7 +3,8 @@
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { onMount, onDestroy } from 'svelte';
   import { Upload, Play, Pause, CheckCircle2, Copy, Share2 } from 'lucide-svelte';
-  import { toast } from '$lib/stores/toastStore';
+  // Use the same `showToast` function as other pages for consistency
+  import { showToast } from '$lib/toast';
 
   // --- Types and State ---
   type TorrentStatus = 'downloading' | 'paused' | 'seeding' | 'complete' | 'error';
@@ -110,8 +111,8 @@
     }
     try {
       // In a real implementation, you'd pass the full file path.
-      const result = await invokeCommand('seed_file', { fileName: seedSelectedFileName });
-      toast.success(`Successfully started seeding ${seedSelectedFileName}!`);
+      await invokeCommand('seed_file', { fileName: seedSelectedFileName });
+      showToast(`Successfully started seeding ${seedSelectedFileName}!`, 'success');
       seedSelectedFileName = null;
       if (seedFileInput) seedFileInput.value = '';
     } catch (error) {
@@ -160,7 +161,7 @@
             ? { ...t, status: 'complete', progress: 100, name: finalName } 
             : t
         );
-        toast.success(`Download complete: ${finalName}`);
+        showToast(`Download complete: ${finalName}`, 'success');
       });
     };
     setupListener();
@@ -205,8 +206,9 @@
   }
 
   function copyToClipboard(text: string) {
-    navigator.clipboard.writeText(text);
-    toast.info('Copied to clipboard!');
+    if (!text) return;
+    navigator.clipboard.writeText(text)
+      .then(() => showToast('Copied to clipboard!', 'success'));
   }
 
 </script>
