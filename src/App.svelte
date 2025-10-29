@@ -1,6 +1,6 @@
 <script lang="ts">
     import './styles/globals.css'
-    import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Mail, Server, Share2 } from 'lucide-svelte'
+    import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Mail, Server, Share2, Link } from 'lucide-svelte'
     import UploadPage from './pages/Upload.svelte'
     import DownloadPage from './pages/Download.svelte'
     import ProxyPage from './pages/Proxy.svelte'
@@ -13,6 +13,7 @@
     import ReputationPage from './pages/Reputation.svelte'
     import MessagesPage from './pages/Messages.svelte'
     import RelayPage from './pages/Relay.svelte'
+    import HttpSharingPage from './pages/HttpSharing.svelte'
     import NotFound from './pages/NotFound.svelte'
     import ProxySelfTest from './routes/proxy-self-test.svelte'
     import { networkStatus, settings, userLocation, wallet } from './lib/stores'
@@ -251,6 +252,7 @@
       menuItems = [
         { id: 'download', label: $t('nav.download'), icon: Download },
         { id: 'upload', label: $t('nav.upload'), icon: Upload },
+        { id: 'http-sharing', label: 'HTTP Sharing', icon: Link },
         { id: 'torrents', label: 'Torrents', icon: Share2 },
         { id: 'messages', label: 'Messages', icon: Mail },
         { id: 'network', label: $t('nav.network'), icon: Globe },
@@ -279,6 +281,10 @@
       {
         path: "upload",
         component: UploadPage
+      },
+      {
+        path: "http-sharing",
+        component: HttpSharingPage
       },
       {
         path: "torrents",

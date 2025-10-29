@@ -23,8 +23,10 @@ pub mod net;
 mod peer_selection;
 mod pool;
 mod proxy_latency;
+mod signaling_server;
 mod stream_auth;
 mod webrtc_service;
+mod http_file_server;
 
 use crate::commands::auth::{
     cleanup_expired_proxy_auth_tokens, generate_proxy_auth_token, revoke_proxy_auth_token,
@@ -82,6 +84,7 @@ use std::{
 };
 use sysinfo::{Components, System};
 use tauri::{
+    async_runtime::JoinHandle as TauriJoinHandle,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State,
@@ -236,6 +239,12 @@ struct AppState {
 
     // New field for streaming upload sessions
     upload_sessions: Arc<Mutex<std::collections::HashMap<String, StreamingUploadSession>>>,
+
+    // WebSocket signaling server handle (using StdMutex for sync access in setup)
+    signaling_server_handle: StdMutex<Option<TauriJoinHandle<()>>>,
+
+    // HTTP file server handle
+    http_file_server_handle: StdMutex<Option<TauriJoinHandle<()>>>,
 
     // Proxy authentication tokens storage
     proxy_auth_tokens: Arc<Mutex<std::collections::HashMap<String, ProxyAuthToken>>>,
@@ -4130,6 +4139,12 @@ fn main() {
             // Initialize upload sessions
             upload_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
 
+            // Initialize signaling server handle
+            signaling_server_handle: StdMutex::new(None),
+
+            // Initialize HTTP file server handle
+            http_file_server_handle: StdMutex::new(None),
+
             // Initialize proxy authentication tokens
             proxy_auth_tokens: Arc::new(Mutex::new(std::collections::HashMap::new())),
 
@@ -4296,7 +4311,19 @@ fn main() {
             get_relay_reputation_stats,
             set_relay_alias,
             get_relay_alias,
-            get_multiaddresses
+            get_multiaddresses,
+            // HTTP file sharing commands
+            commands::http_file::upload_file_http,
+            commands::http_file::download_file_http,
+            commands::http_file::list_files_http,
+            commands::http_file::get_file_metadata_http,
+            commands::http_file::check_http_server_health,
+            // Network info commands
+            commands::network_info::get_public_ip,
+            commands::network_info::get_local_ip,
+            commands::network_info::setup_upnp_port_forwarding,
+            commands::network_info::remove_upnp_port_forwarding,
+            commands::network_info::get_network_info
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -4431,6 +4458,44 @@ fn main() {
             // NOTE: You must add `start_proof_of_storage_watcher` to the invoke_handler call in the
             // real code where you register other commands. For brevity the snippet above shows where to add it.
 
+            // Start WebSocket signaling server on port 9000
+            info!("Starting WebSocket signaling server on port 9000...");
+            let signaling_server = signaling_server::SignalingServer::new(9000);
+            let signaling_handle = tauri::async_runtime::spawn(async move {
+                if let Err(e) = signaling_server.run().await {
+                    error!("Signaling server error: {}", e);
+                }
+            });
+
+            // Store the handle in AppState for cleanup on exit
+            if let Some(state) = app.try_state::<AppState>() {
+                *state.signaling_server_handle.lock().unwrap() = Some(signaling_handle);
+            }
+
+            info!("WebSocket signaling server started");
+
+            // Start HTTP file server on port 8080
+            info!("Starting HTTP file server on port 8080...");
+            let data_dir = app
+                .path()
+                .app_data_dir()
+                .expect("Failed to get app data dir");
+            let http_storage_dir = data_dir.join("http_files");
+
+            let http_server = http_file_server::HttpFileServer::new(8080, http_storage_dir);
+            let http_handle = tauri::async_runtime::spawn(async move {
+                if let Err(e) = http_server.run().await {
+                    error!("HTTP file server error: {}", e);
+                }
+            });
+
+            // Store the handle in AppState for cleanup on exit
+            if let Some(state) = app.try_state::<AppState>() {
+                *state.http_file_server_handle.lock().unwrap() = Some(http_handle);
+            }
+
+            info!("HTTP file server started");
+
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -4441,9 +4506,26 @@ fn main() {
                 // Don't prevent exit, let it proceed naturally
             }
             tauri::RunEvent::Exit => {
-                println!("App exiting, cleaning up geth...");
-                // Stop geth before exiting
+                println!("App exiting, cleaning up...");
+
                 if let Some(state) = app_handle.try_state::<AppState>() {
+                    // Stop signaling server
+                    if let Ok(mut handle) = state.signaling_server_handle.try_lock() {
+                        if let Some(h) = handle.take() {
+                            h.abort();
+                            println!("WebSocket signaling server stopped on exit");
+                        }
+                    }
+
+                    // Stop HTTP file server
+                    if let Ok(mut handle) = state.http_file_server_handle.try_lock() {
+                        if let Some(h) = handle.take() {
+                            h.abort();
+                            println!("HTTP file server stopped on exit");
+                        }
+                    }
+
+                    // Stop geth
                     if let Ok(mut geth) = state.geth.try_lock() {
                         let _ = geth.stop();
                         println!("Geth node stopped on exit");
