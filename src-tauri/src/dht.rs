@@ -2169,10 +2169,19 @@ async fn run_dht_node(
                             Ok(cid) => cid.clone(),
                             Err(e) => { let _ = event_tx.send(DhtEvent::Error(e)).await; continue; }
                         };
-                        let peer_id = match PeerId::from_str(&file_metadata.seeders[0]) {
-                            Ok(id) => id.clone(),
-                            Err(e) => {let _ = event_tx.send(DhtEvent::Error(e.to_string())).await; continue; }
+                        let Some(first_seeder) = file_metadata.seeders.get(0) else {
+                            let _ = event_tx.send(DhtEvent::Error("No seeders found".to_string())).await;
+                            return;
                         };
+                        
+                        let peer_id = match PeerId::from_str(first_seeder) {
+                            Ok(id) => id.clone(),
+                            Err(e) => {
+                                let _ = event_tx.send(DhtEvent::Error(e.to_string())).await;
+                                return;
+                            }
+                        };
+
                         // Request the root block which contains the CIDs
                         let root_query_id = swarm.behaviour_mut().bitswap.get_from(&root_cid, peer_id);
 
