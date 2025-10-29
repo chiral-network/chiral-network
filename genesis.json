@@ -10,7 +10,8 @@
     "petersburgBlock": 0,
     "istanbulBlock": 0,
     "berlinBlock": 0,
-    "londonBlock": 0
+    "londonBlock": 0,
+    "ethash": {}
   },
   "difficulty": "0x400000",
   "gasLimit": "0x47b760",

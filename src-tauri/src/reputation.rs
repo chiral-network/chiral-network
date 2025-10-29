@@ -368,7 +368,7 @@ impl ReputationDhtService {
             trackers: None,
         };
 
-        dht_service.publish_file(metadata).await
+        dht_service.publish_file(metadata, None).await
     }
 
     pub async fn retrieve_reputation_events(
@@ -425,7 +425,7 @@ impl ReputationDhtService {
             trackers: None,
         };
 
-        dht_service.publish_file(metadata).await
+        dht_service.publish_file(metadata, None).await
     }
 }
 

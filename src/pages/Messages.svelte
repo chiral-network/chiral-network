@@ -22,14 +22,8 @@
 
   function selectConversation(peerId: string) {
     selectedPeerId = peerId;
-    // TODO: Load actual messages for this peer
-    messages = [
-      { from: "them", text: "Hey, how is it going?" },
-      { from: "me", text: "Pretty good, working on the new messaging feature." },
-      { from: "them", text: "Nice! How is it coming along?" },
-      { from: "me", text: "Almost there. Just need to wire up the UI." },
-      { from: "them", text: "See you tomorrow!" },
-    ];
+    // TODO: Load actual messages for this peer - for now using empty array
+    messages = [];
     newMessage = "";
     scrollToBottom();
   }
