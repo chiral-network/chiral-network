@@ -194,15 +194,17 @@ async fn main() -> Result<()> {
     relay_config.max_circuits_per_peer = args.max_circuits;
     relay_config.max_circuit_duration = Duration::from_secs(3600); // 1 hour
 
-    let authed_peers_for_limiter = authed_peers.clone();
-    relay_config.reservation_rate_limiters.push(Box::new(
-        move |peer_id: PeerId, _addr: &Multiaddr, _now: web_time::Instant| {
-            match authed_peers_for_limiter.lock() {
-                Ok(peers) => peers.contains(&peer_id),
-                Err(_) => false,
-            }
-        },
-    ));
+    // Authentication rate limiter removed for testing
+    // In production, uncomment this and implement proper authentication:
+    // let authed_peers_for_limiter = authed_peers.clone();
+    // relay_config.reservation_rate_limiters.push(Box::new(
+    //     move |peer_id: PeerId, _addr: &Multiaddr, _now: web_time::Instant| {
+    //         match authed_peers_for_limiter.lock() {
+    //             Ok(peers) => peers.contains(&peer_id),
+    //             Err(_) => false,
+    //         }
+    //     },
+    // ));
 
     let behaviour = RelayBehaviour {
         relay: relay::Behaviour::new(local_peer_id, relay_config),

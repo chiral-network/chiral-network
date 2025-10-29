@@ -225,6 +225,11 @@
   $: hasChanges = JSON.stringify(localSettings) !== JSON.stringify(savedSettings);
 
   async function saveSettings() {
+    // Map trustedProxyRelays to preferredRelays for consistency
+    if (localSettings.trustedProxyRelays?.length) {
+      localSettings.preferredRelays = localSettings.trustedProxyRelays;
+    }
+
     // Save local changes to the Svelte store
     settings.set(localSettings);
 
