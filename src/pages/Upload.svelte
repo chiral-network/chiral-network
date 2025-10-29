@@ -26,6 +26,7 @@
   import {
     loadSeedList,
     saveSeedList,
+    clearSeedList,
     type SeedRecord,
   } from "$lib/services/seedPersistence";
   import { t } from "svelte-i18n";
@@ -255,8 +256,19 @@
   }
 
   onMount(async () => {
+
     // Make storage refresh non-blocking on startup to prevent UI hanging
     setTimeout(() => refreshAvailableStorage(), 100);
+
+
+    // Clear persisted seed list on startup to prevent ghost files from other nodes
+    try {
+      await clearSeedList();
+      console.log("Cleared persisted seed list to prevent cross-node file display");
+    } catch (e) {
+      console.warn("Failed to clear persisted seed list", e);
+    }
+
 
     // Restore persisted seeding list (if any)
     try {

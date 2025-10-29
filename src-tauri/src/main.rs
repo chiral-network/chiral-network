@@ -4296,7 +4296,8 @@ fn main() {
             get_relay_reputation_stats,
             set_relay_alias,
             get_relay_alias,
-            get_multiaddresses
+            get_multiaddresses,
+            clear_seed_list
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -5212,4 +5213,13 @@ async fn get_multiaddresses(state: State<'_, AppState>) -> Result<Vec<String>, S
     } else {
         Ok(Vec::new())
     }
+}
+
+
+#[tauri::command]
+async fn clear_seed_list() -> Result<(), String> {
+    // Since you're using localStorage fallback, this command just needs to exist
+    // The actual clearing happens in the frontend via localStorage.removeItem()
+    // This command is here for consistency if you add file-based storage later
+    Ok(())
 }
