@@ -23,7 +23,7 @@ use anyhow::Result;
 use clap::Parser;
 use futures::StreamExt;
 use libp2p::{
-    autonat, identify, identity,
+    autonat::v2 as autonat, identify, identity,
     multiaddr::Protocol,
     noise, ping, relay,
     swarm::{NetworkBehaviour, SwarmEvent},
@@ -96,8 +96,8 @@ impl From<ping::Event> for RelayBehaviourEvent {
 impl From<identify::Event> for RelayBehaviourEvent {
     fn from(e: identify::Event) -> Self { RelayBehaviourEvent::Identify(e) }
 }
-impl From<autonat::Event> for RelayBehaviourEvent {
-    fn from(_e: autonat::Event) -> Self { RelayBehaviourEvent::Autonat(()) }
+impl From<autonat::server::Event> for RelayBehaviourEvent {
+    fn from(_e: autonat::server::Event) -> Self { RelayBehaviourEvent::Autonat(()) }
 }
 impl From<RequestResponseEvent<RelayAuthRequest, RelayAuthResponse>> for RelayBehaviourEvent {
     fn from(e: RequestResponseEvent<RelayAuthRequest, RelayAuthResponse>) -> Self {
@@ -111,7 +111,7 @@ struct RelayBehaviour {
     relay: relay::Behaviour,
     ping: ping::Behaviour,
     identify: identify::Behaviour,
-    autonat: autonat::Behaviour,
+    autonat: autonat::server::Behaviour,
     relay_auth: RequestResponse<RelayAuthCodec>,
 }
 
@@ -211,7 +211,10 @@ async fn main() -> Result<()> {
             "/chiral/relay/1.0.0".to_string(),
             local_key.public(),
         )),
-        autonat: autonat::Behaviour::new(local_peer_id, autonat::Config::default()),
+        autonat: {
+            use rand::rngs::OsRng;
+            autonat::server::Behaviour::new(OsRng)
+        },
         relay_auth,
     };
 

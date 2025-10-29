@@ -225,10 +225,6 @@
   $: hasChanges = JSON.stringify(localSettings) !== JSON.stringify(savedSettings);
 
   async function saveSettings() {
-    if (!isValid || maxStorageError || storagePathError) {
-      return;
-    }
-
     // Save local changes to the Svelte store
     settings.set(localSettings);
 
@@ -1354,6 +1350,7 @@ function sectionMatches(section: string, query: string) {
               <textarea
                 id="autonat-servers"
                 bind:value={autonatServersText}
+                on:input={updateAutonatServers}
                 on:blur={updateAutonatServers}
                 placeholder="/ip4/1.2.3.4/tcp/4001/p2p/QmPeerId&#10;One multiaddr per line"
                 rows="3"
@@ -1638,9 +1635,9 @@ function sectionMatches(section: string, query: string) {
       <Button
         size="xs"
         on:click={saveSettings}
-        disabled={!hasChanges || maxStorageError || storagePathError || !isValid}
-      
-        class={`transition-colors duration-200 ${!hasChanges || maxStorageError || storagePathError || !isValid ? "cursor-not-allowed opacity-50" : ""}`}
+        disabled={!hasChanges}
+
+        class={`transition-colors duration-200 ${!hasChanges ? "cursor-not-allowed opacity-50" : ""}`}
       >
         <Save class="h-4 w-4 mr-2" />
         {$t("actions.save")}
