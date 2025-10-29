@@ -21,7 +21,9 @@
   let downloadError = '';
   let downloadSuccess = '';
 
-  let serverUrl = 'http://localhost:8080';
+  // let serverUrl = 'http://localhost:8080';
+  let serverUrl = '';
+
 
   let tunnelInfo: any = null;
   let isTunnelStarting = false;
@@ -43,6 +45,9 @@
       isLoadingNetwork = false;
     }
   }
+
+  
+
 
   async function selectFile() {
     try {
@@ -71,7 +76,7 @@
     try {
       uploadResult = await invoke('upload_file_http', {
         filePath: uploadFilePath,
-        serverUrl: 'http://localhost:8080'
+        serverUrl: normalizeBase(serverUrl)
       });
       console.log('Upload result:', uploadResult);
 
@@ -92,7 +97,7 @@
     isLoadingFiles = true;
     try {
       sharedFiles = await invoke('list_files_http', {
-        serverUrl: 'http://localhost:8080'
+        serverUrl: normalizeBase(serverUrl)
       });
       console.log('Shared files:', sharedFiles);
     } catch (error) {
@@ -129,6 +134,33 @@
     }
   }
 
+  function normalizeBase(input?: string): string {
+    const cand = (input || '').trim();
+    const fromTunnel = (tunnelInfo?.public_url || '').trim();
+    const fromBackend = (networkInfo?.httpServerUrl || '').trim();
+    const base = cand || fromTunnel || fromBackend || (typeof window !== 'undefined' ? window.location.origin : '');
+    return base.replace(/\/+$/, '');
+  }
+
+  function resolveDownloadUrl(downloadUrl?: string): string {
+    if (!downloadUrl) return '';
+    const base = normalizeBase(serverUrl);
+    // 1) 서버가 상대경로로 주는 경우: "/download/<hash>"
+    if (downloadUrl.startsWith('/')) return `${base}${downloadUrl}`;
+    try {
+      const u = new URL(downloadUrl);
+      // 2) 서버가 "http://0.0.0.0:8080/..." 또는 localhost로 준 경우 → 호스트만 교체
+      if (u.hostname === '0.0.0.0' || u.hostname === 'localhost') {
+        return `${base}${u.pathname}${u.search || ''}${u.hash || ''}`;
+      }
+      // 3) 이미 올바른 절대 URL이면 그대로 반환
+      return u.toString();
+    } catch {
+      // 4) 그냥 해시만 들어온 경우 등 → /download/<hash>로 조합
+      return `${base}/download/${encodeURIComponent(downloadUrl.trim())}`;
+    }
+  }
+
   function copyToClipboard(text: string) {
     navigator.clipboard.writeText(text).then(() => {
       alert('Copied to clipboard!');
@@ -162,11 +194,10 @@
     tunnelError = '';
     try {
       const publicUrl = await invoke('start_tunnel_auto', { port: 8080 });
-      console.log('🌐 Tunnel started:', publicUrl);
-
-      // Get tunnel info
       tunnelInfo = await invoke('get_tunnel_info');
-      console.log('Tunnel info:', tunnelInfo);
+      // ★ 퍼블릭 URL을 곧장 BASE로 사용
+      serverUrl = (tunnelInfo?.public_url || publicUrl || '').toString();
+      console.log('🌐 Tunnel started:', serverUrl);
     } catch (error: any) {
       tunnelError = error.toString();
       console.error('Tunnel error:', error);
@@ -410,12 +441,12 @@
                 <div class="flex items-center gap-2 mt-1">
                   <input
                     type="text"
-                    value={getPublicUrl(uploadResult.download_url)}
+                    value={resolveDownloadUrl(uploadResult?.download_url)}
                     readonly
                     class="input input-sm flex-1 font-mono text-xs"
                   />
                   <button
-                    on:click={() => copyToClipboard(getPublicUrl(uploadResult.download_url))}
+                    on:click={() => copyToClipboard(resolveDownloadUrl(uploadResult?.download_url))}
                     class="btn btn-sm"
                   >
                     <Copy class="w-4 h-4" />
@@ -459,7 +490,7 @@
                 </div>
               </div>
               <button
-                on:click={() => copyToClipboard(getPublicUrl(file.download_url))}
+                on:click={() => copyToClipboard(resolveDownloadUrl(file.download_url))}
                 class="btn btn-sm"
                 title="Copy public URL"
               >
