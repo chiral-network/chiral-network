@@ -312,7 +312,11 @@ sudo journalctl -u chiral-relay -f
 
 ### Step 7: Configure Your Main App
 
+**Important**: The Google Cloud relay is NOT hardcoded - you must configure it manually through Settings to use it.
+
 1. Copy the full multiaddr from relay logs (format: `/ip4/YOUR_IP/tcp/4001/p2p/12D3KooW...`)
+   - Example: `/ip4/34.41.241.133/tcp/4001/p2p/12D3KooWEqLehCCY28NPieRjj2bbovqai1LW5bp19ZeMMa3DLLNG`
+
 2. In your main Chiral Network app:
    - Go to **Settings** → **Network Settings**
    - Scroll to **NAT Traversal Configuration**
@@ -321,7 +325,10 @@ sudo journalctl -u chiral-relay -f
    - In **Preferred Relay Nodes** textarea, paste the same multiaddr
    - Enable **AutoRelay** toggle
    - Click **Save Settings**
+
 3. Restart DHT in **Network** page
+
+**Note**: The app uses a default bootstrap node by default. Your Google Cloud relay is an optional enhancement that you can configure for better NAT traversal and testing.
 
 ### Step 8: Test Connection
 
