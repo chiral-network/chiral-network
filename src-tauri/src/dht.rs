@@ -2169,8 +2169,12 @@ async fn run_dht_node(
                             Ok(cid) => cid.clone(),
                             Err(e) => { let _ = event_tx.send(DhtEvent::Error(e)).await; continue; }
                         };
+                        let peer_id = match PeerId::from_str(&file_metadata.seeders[0]) {
+                            Ok(id) => id.clone(),
+                            Err(e) => {let _ = event_tx.send(DhtEvent::Error(e.to_string())).await; continue; }
+                        };
                         // Request the root block which contains the CIDs
-                        let root_query_id = swarm.behaviour_mut().bitswap.get(&root_cid);
+                        let root_query_id = swarm.behaviour_mut().bitswap.get_from(&root_cid, peer_id);
 
                         file_metadata.download_path = Some(download_path);
                         // Store the root query ID to handle when we get the root block
@@ -2979,9 +2983,14 @@ async fn run_dht_node(
 
                                         // Create queries map for this file's data blocks
                                         let mut file_queries = HashMap::new();
+                                        let peer_id = match PeerId::from_str(&metadata.seeders[0]) {
+                                            Ok(id) => id.clone(),
+                                            Err(e) => {let _ = event_tx.send(DhtEvent::Error(e.to_string())).await; continue; }
+                                        };
 
                                         for (i, cid) in cids.iter().enumerate() {
-                                            let block_query_id = swarm.behaviour_mut().bitswap.get(cid);
+                                            // Request the root block which contains the CIDs
+                                            let block_query_id = swarm.behaviour_mut().bitswap.get_from(&cid, peer_id);
                                             file_queries.insert(block_query_id, i as u32);
                                         }
 
