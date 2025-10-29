@@ -279,3 +279,267 @@ const bestPeers = await PeerSelectionService.selectPeersForDownload(
 - [Network Protocol](network-protocol.md) - Peer discovery details
 - [File Sharing](file-sharing.md) - Transfer workflows
 - [User Guide](user-guide.md) - Using the Reputation page
+
+## Hybrid Reputation System with Economic Security (Staking + Challenge)
+
+### Overview
+
+A scalable reputation system combining off-chain event collection with on-chain anchoring. **Key decision**: Relay nodes act as aggregators and upload snapshots only for transfers they relay; regular nodes do not upload snapshots (they only sign events). **Anchoring is required** for uploaded snapshots: relays must stake tokens and accept a challenge period. Aggregators earn from transaction fees and block rewards.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     HYBRID REPUTATION SYSTEM                     │
+└─────────────────────────────────────────────────────────────────┘
+                                 │
+        ┌────────────────────────┼────────────────────────┐
+        │                        │                        │
+┌───────▼────────┐    ┌──────────▼─────────┐    ┌────────▼────────┐
+│  File Transfer │    │    Aggregators     │    │    Blockchain   │
+│    (Users)     │    │ (Relay Nodes 24/7) │    │   (Anchoring)   │
+└───────┬────────┘    └──────────┬─────────┘    └────────┬────────┘
+        │                        │                        │
+        │ 1. Sign events         │ 3. Collect & validate  │
+        │    (secp256k1)         │    events per epoch    │
+        │                        │                        │
+        │ 2. Pay tx fee    ──────┼───> Transaction Pool   │
+        │    (secp256k1)         │                        │
+        │                        │ 4. Compute Merkle tree │
+        ▼                        │    (SHA-256)           │
+   DHT Metadata ◄─────────────────┤                        │
+                                 │ 5. Publish to DHT      │
+                                 │    {epoch, merkle_root}│
+                                 │                        │
+                                 │ 6. Anchor on-chain     │
+                                 │    + Stake deposit     │
+                                 └────────────────────────┤
+                                                          │
+                           ┌──────────────────────────────┤
+                           │                              │
+                    ┌──────▼──────┐              ┌────────▼────────┐
+                    │   Honest    │              │   Dishonest     │
+                    │ Aggregator  │              │  Aggregator     │
+                    └──────┬──────┘              └────────┬────────┘
+                           │                              │
+                  Challenge Period                        │
+                           │                      User Challenges
+                           ▼                              │
+                   ✅ No Challenges                       ▼
+                   • Withdraw stake         ❌ Challenge Success
+                   • Receive pool rewards   • Lose stake
+                   • Continue earning       • Reward → Challenger
+                                            • Reputation destroyed
+```
+
+### 1. Goals
+
+- **Scalability**: Off-chain first (DHT), required on-chain anchors per epoch
+- **Economic Security**: Aggregators stake tokens, users can challenge false events
+- **Sustainability**: Transaction fees + block rewards fund aggregators
+- **Decentralization**: Multiple independent aggregators, client-side weighting
+
+### 2. Actors
+
+- **Downloader/Seeder**: Sign transfer events and payments (secp256k1)
+- **Relay/Aggregator**: Relay servers that facilitate NAT traversal and act as aggregators
+  - Always-online assumption (24/7 uptime expected)
+  - Collect only relayed transfer events they directly facilitated
+  - Compute Merkle trees and publish snapshots
+  - Must anchor snapshots on-chain with stake; subject to challenge window
+
+### 3. Event Types
+
+```
+EVENT FLOW:
+
+┌──────────────┐                           ┌──────────────┐
+│  Downloader  │                           │    Seeder    │
+└──────┬───────┘                           └──────┬───────┘
+       │                                          │
+       │ 1. Session Request (signed)              │
+       │  {file_hash, chunks, nonce, sig_down}    │
+       ├─────────────────────────────────────────>│
+       │                                          │
+       │            2. Transfer Data              │
+       │<─────────────────────────────────────────┤
+       │                                          │
+       │                                          │
+    SUCCESS PATH ✅              FAILURE PATH ❌
+       │                                          │
+       │ 3a. Success Receipt                      │ 3b. Nonpayment Event
+       │  • dual-signed                           │  • seeder-signed only
+       │  • sig_down + sig_seed                   │  • includes session_request_sig
+       │  • +reputation                           │  • -reputation
+       ▼                                          ▼
+   
+       Events observed by Relay during transfer
+                              │
+                              ▼
+                       Relay/Aggregator
+                              │
+                    (Collects both types)
+```
+
+**Success Receipt** (dual-signed):
+- Contains: file_hash, chunks, bytes, latency, timestamp, peer_ids
+- Signatures: downloader + seeder (secp256k1)
+- Purpose: Proof of successful transfer for positive reputation
+
+**Nonpayment/Abort** (seeder-signed, binds to downloader's session_request):
+- Contains: session_request_sig (from downloader), delivered vs requested bytes, reason
+- Signatures: seeder (secp256k1)
+- Purpose: Proof of payment failure for negative reputation
+- **Anti-fabrication**: Seeder must reference downloader's signed session request
+
+**Relay Co-signature** (optional): Relay adds third signature (secp256k1) for attestation
+
+### 4. Snapshot Process
+
+**Event Collection (Relay-only uploads):**
+- Only relay servers upload snapshots
+- Included events: transfers relayed by the server (success receipts, nonpayment/abort)
+- Excluded events: direct transfers not relayed by the server
+
+**Per Epoch** (default 6h):
+1. Relay collects signed events from transfers it relayed
+2. Validates signatures (secp256k1), deduplicates, filters malformed
+3. Computes Merkle tree → `merkle_root`
+4. Stores full payload off-chain or serves via HTTP
+5. Publishes metadata to DHT: `{epoch_id, merkle_root, aggregator_sig}`
+6. Anchors `merkle_root` on-chain with stake (required; subject to challenge period)
+
+### 5. Aggregator Economics
+
+**Revenue Model:**
+- **Transaction fees**: Small percentage of file transfer payments auto-collected
+- **Block rewards**: Portion of mining rewards allocated to aggregator pool
+- Revenue distributed among active aggregators who anchor snapshots
+
+**Cost Structure:**
+- Stake deposit (refundable if honest)
+- Gas fees for on-chain anchoring (L2 preferred for cost efficiency)
+- Infrastructure (server, bandwidth, storage)
+
+**Economic Incentive:**
+- Revenue from fees and block rewards exceeds operational costs
+- Makes aggregation profitable for relay nodes with existing infrastructure
+- Relay nodes already incur most costs (24/7 server operation)
+
+**Cold Start Consideration:**
+- Early network may require bootstrapping mechanisms
+- Initial relays may operate at subsidy until transaction volume grows
+- Progressive transition to self-sustaining economics as network scales
+
+**Who Uploads Snapshots?**
+- **Relay nodes only** (acting as aggregators)
+  - Upload snapshots for transfers they relayed
+  - Must stake tokens to anchor on-chain and earn rewards
+- **Regular nodes**
+  - Do not upload snapshots
+  - Only sign their own transfer events (used by relays in snapshots)
+
+### 6. Staking and Challenge System
+
+```
+CHALLENGE FLOW:
+
+Aggregator                     Blockchain                    Victim/Challenger
+    │                              │                              │
+    │ 1. Anchor snapshot           │                              │
+    │    + Stake deposit           │                              │
+    ├─────────────────────────────>│                              │
+    │                              │                              │
+    │        Challenge Period Starts                              │
+    │                              │                              │
+    │                              │  2. Monitor snapshots        │
+    │                              │<─────────────────────────────┤
+    │                              │                              │
+    │                              │  3. Find false event!        │
+    │                              │     (nonpayment claim)       │
+    │                              │                              │
+    │                              │  4. Submit challenge:        │
+    │                              │     • Merkle proof           │
+    │                              │     • Payment tx hash        │
+    │                              │<─────────────────────────────┤
+    │                              │                              │
+    │                              │  5. Smart contract verifies: │
+    │                              │     • Event in Merkle tree?  │
+    │                              │     • Payment exists?        │
+    │                              │     ✅ YES → Challenge valid │
+    │                              │                              │
+    │  ❌ SLASHED                  │                              │
+    │  • Lose stake                │                              │
+    │  • Reputation destroyed      │   6. Distribute stake:       │
+    │                              │      • Majority burned       │
+    │                              │      • Portion → Victim ────>│ ✅ Reward
+    │                              │                              │
+    │  Future revenue lost:        │                              │
+    │  (permanent ban)             │                              │
+    ▼                              ▼                              ▼
+
+IF NO CHALLENGE after period:
+    Aggregator withdraws stake + receives pool rewards
+```
+
+**Challenge Types:**
+1. **INVALID_SIGNATURE**: Event signature fails verification
+2. **FABRICATED_SESSION**: Nonpayment event without session request binding
+3. **DUPLICATE_EVENT**: Same event included multiple times
+4. **EXCLUDED_EVENT**: Valid event deliberately omitted
+
+**Economic Security:**
+- Attack cost: Stake loss + permanent revenue loss (banned from aggregating)
+- Attack gain: Minimal (temporary reputation damage to competitor)
+- Result: Economically irrational (cost >> gain)
+- Honest behavior incentivized through continued revenue stream
+
+### 7. Multi-Signature Quorum (Optional)
+
+For higher trust, M-of-N aggregators co-sign snapshots off-chain before anchoring. Benefits:
+- Multiple independent validators → higher confidence
+- Progressive slashing (only dishonest signers slashed if challenged)
+- Clients weight quorum snapshots higher
+
+### 8. Client Consumption
+
+1. Discover snapshots via DHT (require on-chain anchor)
+2. Fetch payload by CID, verify signatures and Merkle root; confirm on-chain anchor matches
+3. Sample-verify events (5-10%), full verification on disputes
+4. Weight snapshots by: aggregator reputation, stake, quorum, historical accuracy
+5. Fold events into local reputation: success → +rep, nonpayment → -rep
+6. Conflict resolution: prefer later epoch, stronger quorum, higher stake
+
+### 9. Design Considerations
+
+**Privacy:**
+- No IP addresses, only peer IDs and file hashes
+- No raw chunk data, only indices/counts
+- Optional session ID salting per epoch
+
+**Scalability:**
+- Off-chain storage (DHT + IPFS-like)
+- ≤1 tx/aggregator/epoch, prefer L2
+- Parallel aggregators, client-side weighting
+- Sample verification (5-10%), full only on disputes
+
+**Failure Handling:**
+- Chain down → temporarily defer publishing (relay queues snapshot until L2 available)
+- Aggregator Byzantine → downweight/ignore, use others
+- CID unavailable → skip snapshot, prefer mirrors
+
+**Defaults:**
+- Epoch: 6h | Hash: SHA-256 | Sig: secp256k1
+- Anchor: L2-first (required) | Challenge period: configurable
+
+**Phase 0**: DHT + signed events only, no economics
+**Phase 1**: Add Merkle snapshots + transaction fee mechanism
+**Phase 2**: On-chain anchors + staking + challenges + block rewards
+**Phase 3**: Multi-sig quorum, dynamic parameters, optimizations
+
+### 11. Summary
+
+**Key Advantages:**
+- **Scalability**: Off-chain first (DHT), on-chain only for anchors (≤1 tx/epoch)
+- **Security**: Staking + challenges make attacks costly (stake loss + permanent revenue loss)
+- **Sustainability**: Transaction fees + block rewards fund aggregators
+- **Decentralization**: Multiple aggregators, client-side weighting, no single authority
+- **User Defense**: Victims can challenge false events with cryptographic proof and receive reward
