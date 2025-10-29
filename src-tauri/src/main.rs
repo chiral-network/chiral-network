@@ -27,6 +27,7 @@ mod signaling_server;
 mod stream_auth;
 mod webrtc_service;
 mod http_file_server;
+mod tunnel_service;
 
 use crate::commands::auth::{
     cleanup_expired_proxy_auth_tokens, generate_proxy_auth_token, revoke_proxy_auth_token,
@@ -4323,7 +4324,13 @@ fn main() {
             commands::network_info::get_local_ip,
             commands::network_info::setup_upnp_port_forwarding,
             commands::network_info::remove_upnp_port_forwarding,
-            commands::network_info::get_network_info
+            commands::network_info::get_network_info,
+            // Tunnel commands
+            commands::tunnel::start_tunnel,
+            commands::tunnel::start_tunnel_auto,
+            commands::tunnel::stop_tunnel,
+            commands::tunnel::get_tunnel_info,
+            commands::tunnel::get_available_providers
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())

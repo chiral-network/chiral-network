@@ -23,6 +23,10 @@
 
   let serverUrl = 'http://localhost:8080';
 
+  let tunnelInfo: any = null;
+  let isTunnelStarting = false;
+  let tunnelError = '';
+
   async function setupNetwork() {
     isLoadingNetwork = true;
     networkError = '';
@@ -152,6 +156,43 @@
   function formatTimestamp(timestamp: number) {
     return new Date(timestamp * 1000).toLocaleString();
   }
+
+  async function startTunnel() {
+    isTunnelStarting = true;
+    tunnelError = '';
+    try {
+      const publicUrl = await invoke('start_tunnel_auto', { port: 8080 });
+      console.log('🌐 Tunnel started:', publicUrl);
+
+      // Get tunnel info
+      tunnelInfo = await invoke('get_tunnel_info');
+      console.log('Tunnel info:', tunnelInfo);
+    } catch (error: any) {
+      tunnelError = error.toString();
+      console.error('Tunnel error:', error);
+    } finally {
+      isTunnelStarting = false;
+    }
+  }
+
+  async function stopTunnel() {
+    try {
+      await invoke('stop_tunnel');
+      tunnelInfo = null;
+      console.log('🛑 Tunnel stopped');
+    } catch (error: any) {
+      tunnelError = error.toString();
+      console.error('Stop tunnel error:', error);
+    }
+  }
+
+  async function refreshTunnelInfo() {
+    try {
+      tunnelInfo = await invoke('get_tunnel_info');
+    } catch (error) {
+      console.error('Error getting tunnel info:', error);
+    }
+  }
 </script>
 
 <div class="container mx-auto p-6 max-w-6xl">
@@ -230,6 +271,86 @@
             <span>UPnP failed. You may need to manually configure port forwarding on your router.</span>
           </div>
         {/if}
+      {/if}
+    </div>
+  </div>
+
+  <!-- Internet Tunnel Section -->
+  <div class="card mb-6">
+    <div class="card-header">
+      <h2 class="text-xl font-semibold flex items-center gap-2">
+        <Globe class="w-5 h-5" />
+        Internet Sharing Tunnel
+      </h2>
+    </div>
+    <div class="card-body">
+      <p class="text-sm text-muted-foreground mb-4">
+        Enable a tunnel to share files over the internet even behind firewalls. This uses localtunnel to create a public URL.
+      </p>
+
+      {#if !tunnelInfo || !tunnelInfo.is_active}
+        <button
+          on:click={startTunnel}
+          disabled={isTunnelStarting}
+          class="btn btn-primary mb-4"
+        >
+          {#if isTunnelStarting}
+            Starting Tunnel...
+          {:else}
+            Start Internet Tunnel
+          {/if}
+        </button>
+      {:else}
+        <div class="space-y-4">
+          <div class="alert alert-success">
+            <CheckCircle class="w-5 h-5" />
+            <div class="flex-1">
+              <div class="font-semibold mb-2">Tunnel Active!</div>
+              <div class="text-sm">
+                <div><strong>Public URL:</strong></div>
+                <div class="flex items-center gap-2 mt-1">
+                  <input
+                    type="text"
+                    value={tunnelInfo.public_url || ''}
+                    readonly
+                    class="input input-sm flex-1 font-mono text-xs"
+                  />
+                  <button
+                    on:click={() => copyToClipboard(tunnelInfo.public_url || '')}
+                    class="btn btn-sm"
+                  >
+                    <Copy class="w-4 h-4" />
+                  </button>
+                </div>
+                <div class="mt-2 text-xs text-muted-foreground">
+                  Share this URL with anyone to let them access your files over the internet.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <button
+            on:click={stopTunnel}
+            class="btn btn-secondary"
+          >
+            Stop Tunnel
+          </button>
+        </div>
+      {/if}
+
+      {#if tunnelError}
+        <div class="alert alert-error">
+          <XCircle class="w-5 h-5" />
+          <div class="flex-1">
+            <div class="font-semibold mb-1">Tunnel Error</div>
+            <div class="text-sm">{tunnelError}</div>
+            {#if tunnelError.includes('not installed')}
+              <div class="mt-2 text-xs">
+                Install localtunnel with: <code class="bg-black/10 px-1 py-0.5 rounded">npm install -g localtunnel</code>
+              </div>
+            {/if}
+          </div>
+        </div>
       {/if}
     </div>
   </div>
