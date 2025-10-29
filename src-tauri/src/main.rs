@@ -96,6 +96,9 @@ use crate::manager::ChunkManager; // Import the ChunkManager
                                   // For key encoding
 use blockstore::block::Block;
 use x25519_dalek::{PublicKey, StaticSecret}; // For key handling
+use suppaftp::FtpStream;
+use std::io::Write;
+use crate::dht::FtpSourceInfo;
 
 /// Detect MIME type from file extension
 fn detect_mime_type_from_filename(filename: &str) -> Option<String> {
@@ -2282,6 +2285,55 @@ async fn upload_file_to_network(
     }
 }
 
+#[tauri::command]
+async fn start_ftp_download(
+    url: String,
+    output_path: String,
+    username: Option<String>,
+    password: Option<String>,
+) -> Result<String, String> {
+    let parsed = url::Url::parse(&url).map_err(|e| e.to_string())?;
+    let host = parsed.host_str().ok_or("Invalid FTP URL")?;
+    let path = parsed.path();
+
+    // Connect to FTP
+    let mut ftp = FtpStream::connect((host, 21))
+        .map_err(|e| format!("Failed to connect to FTP server: {}", e))?;
+
+    // Login
+    if let (Some(user), Some(pass)) = (username.clone(), password.clone()) {
+        ftp.login(&user, &pass)
+            .map_err(|e| format!("FTP login failed: {}", e))?;
+    } else {
+        ftp.login("anonymous", "anonymous")
+            .map_err(|e| format!("Anonymous login failed: {}", e))?;
+    }
+
+    // Create output file
+    let mut file = std::fs::File::create(&output_path)
+        .map_err(|e| format!("Failed to create output file: {}", e))?;
+
+    // Retrieve file and stream in chunks
+    ftp.retr(path, |mut reader| {
+        let mut buffer = [0u8; 65536]; // 64 KB
+        loop {
+            let bytes_read = reader
+                .read(&mut buffer)
+                .map_err(|e| suppaftp::FtpError::ConnectionError(e))?;
+            if bytes_read == 0 {
+                break; // End of file
+            }
+            file.write_all(&buffer[..bytes_read])
+                .map_err(|e| suppaftp::FtpError::ConnectionError(e))?;
+        }
+        Ok(())
+    })
+    .map_err(|e| format!("FTP RETR failed: {}", e))?;
+
+    ftp.quit().ok();
+
+    Ok(format!("Downloaded successfully to {}", output_path))
+}
 
 #[tauri::command]
 async fn download_blocks_from_network(
@@ -4155,6 +4207,7 @@ fn main() {
             start_file_transfer_service,
             download_file_from_network,
             upload_file_to_network,
+            start_ftp_download,
             download_blocks_from_network,
             start_multi_source_download,
             cancel_multi_source_download,
@@ -4579,6 +4632,7 @@ async fn upload_and_publish_file(
     file_path: String,
     file_name: Option<String>,
     recipient_public_key: Option<String>,
+    ftp_source: Option<String>,
 ) -> Result<UploadResult, String> {
     // 1. Process file with ChunkManager (encrypt, chunk, build Merkle tree)
     let manifest = encrypt_file_for_recipient(
@@ -4642,6 +4696,24 @@ async fn upload_and_publish_file(
             )
             .await?;
 
+        let mut metadata = metadata;
+        if let Some(ftp_url) = ftp_source {
+            metadata.ftp_sources = Some(vec![FtpSourceInfo {
+                url: ftp_url,
+                username: None,
+                password: None,
+                supports_resume: false, // or true if known
+                file_size: 0,           // placeholder, could update later
+                is_available: true,
+                last_checked: Some(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                ),
+            }]);
+        }
+            
         println!("📦 BACKEND: Created versioned metadata");
 
         let version = metadata.version.unwrap_or(1);
