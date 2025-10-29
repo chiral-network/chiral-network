@@ -26,3 +26,6 @@ pub mod proxy_latency;
 pub mod stream_auth;
 // Reputation system
 pub mod reputation;
+
+// WebSocket signaling server for WebRTC
+pub mod signaling_server;

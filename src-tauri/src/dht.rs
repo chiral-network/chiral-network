@@ -3454,8 +3454,17 @@ async fn run_dht_node(
                         }
                     }
                     SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                        // Skip logging self-connection attempts and common benign errors
+                        let error_str = error.to_string();
+                        let is_self_connection = error_str.contains("127.0.0.1") || error_str.contains("Invalid argument (os error 22)");
+                        let is_local_loopback = if let Some(pid) = peer_id {
+                            pid == *swarm.local_peer_id()
+                        } else {
+                            false
+                        };
+
                         if let Ok(mut m) = metrics.try_lock() {
-                            m.last_error = Some(error.to_string());
+                            m.last_error = Some(error_str.clone());
                             m.last_error_at = Some(SystemTime::now());
                             if let Some(pid) = peer_id {
                                 if bootstrap_peer_ids.contains(&pid) {
@@ -3465,38 +3474,48 @@ async fn run_dht_node(
                         }
 
                         if let Some(pid) = peer_id {
-                            error!("❌ Outgoing connection error to {}: {}", pid, error);
+                            // Only log if it's not a self-connection attempt
+                            if !is_self_connection && !is_local_loopback {
+                                error!("❌ Outgoing connection error to {}: {}", pid, error);
+
+                                let is_bootstrap = bootstrap_peer_ids.contains(&pid);
+                                if error_str.contains("rsa") {
+                                    error!("   ℹ Hint: This node uses RSA keys. Enable 'rsa' feature if needed.");
+                                } else if error_str.contains("Timeout") {
+                                    if is_bootstrap {
+                                        warn!("   ℹ Hint: Bootstrap nodes may be unreachable or overloaded.");
+                                    } else {
+                                        warn!("   ℹ Hint: Peer may be unreachable (timeout).");
+                                    }
+                                } else if error_str.contains("Connection refused") {
+                                    if is_bootstrap {
+                                        warn!("   ℹ Hint: Bootstrap nodes are not accepting connections.");
+                                    } else {
+                                        warn!("   ℹ Hint: Peer is not accepting connections.");
+                                    }
+                                } else if error_str.contains("Transport") {
+                                    warn!("   ℹ Hint: Transport protocol negotiation failed.");
+                                }
+                            } else {
+                                // Silently ignore self-connection attempts
+                                debug!("Skipped self-connection attempt to {}", pid);
+                            }
 
                             // If the error contains a multiaddr, check if it's plausibly reachable
-                            if let Some(bad_ma) = extract_multiaddr_from_error_str(&error.to_string()) {
+                            if let Some(bad_ma) = extract_multiaddr_from_error_str(&error_str) {
                                 if !ma_plausibly_reachable(&bad_ma) {
                                     swarm.behaviour_mut().kademlia.remove_address(&pid, &bad_ma);
                                     debug!("🧹 Removed unreachable addr for {}: {}", pid, bad_ma);
                                 }
                             }
-
-                            let is_bootstrap = bootstrap_peer_ids.contains(&pid);
-                            if error.to_string().contains("rsa") {
-                                error!("   ℹ Hint: This node uses RSA keys. Enable 'rsa' feature if needed.");
-                            } else if error.to_string().contains("Timeout") {
-                                if is_bootstrap {
-                                    warn!("   ℹ Hint: Bootstrap nodes may be unreachable or overloaded.");
-                                } else {
-                                    warn!("   ℹ Hint: Peer may be unreachable (timeout).");
-                                }
-                            } else if error.to_string().contains("Connection refused") {
-                                if is_bootstrap {
-                                    warn!("   ℹ Hint: Bootstrap nodes are not accepting connections.");
-                                } else {
-                                    warn!("   ℹ Hint: Peer is not accepting connections.");
-                                }
-                            } else if error.to_string().contains("Transport") {
-                                warn!("   ℹ Hint: Transport protocol negotiation failed.");
-                            }
-                        } else {
+                        } else if !is_self_connection {
                             error!("❌ Outgoing connection error to unknown peer: {}", error);
                         }
-                        let _ = event_tx.send(DhtEvent::Error(format!("Connection failed: {}", error))).await;
+
+                        // Don't send error events for self-connection attempts
+                        if !is_self_connection && !is_local_loopback {
+                            let _ = event_tx.send(DhtEvent::Error(format!("Connection failed: {}", error))).await;
+                        }
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::ProxyRr(ev)) => {
                         use libp2p::request_response::{Event as RREvent, Message};
