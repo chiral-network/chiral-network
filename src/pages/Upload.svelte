@@ -41,6 +41,8 @@
   import Label from "$lib/components/ui/label.svelte";
   import Input from "$lib/components/ui/input.svelte";
   import { selectedProtocol as protocolStore } from "$lib/stores/protocolStore";
+  import { paymentService } from '$lib/services/paymentService';
+
 
   const tr = (k: string, params?: Record<string, any>): string =>
     (get(t) as (key: string, params?: any) => string)(k, params);
@@ -422,8 +424,8 @@
                     fileData,
                   },
                 );
-
-                const filePrice = calculateFilePrice(file.size);
+                const filePrice = await paymentService.calculateDownloadCost(file.size);
+                // const filePrice = calculateFilePrice(file.size);
 
                 console.log("🔍 Uploading file with calculated price:", filePrice, "for", file.size, "bytes");
 
@@ -663,7 +665,7 @@
 
           // Get file size to calculate price
           const fileSize = await invoke<number>('get_file_size', { filePath });
-          const price = calculateFilePrice(fileSize);
+          const price = await paymentService.calculateDownloadCost(fileSize);
 
           let existingVersions: any[] = [];
           try {
@@ -1412,7 +1414,7 @@
                           {#if file.price !== undefined && file.price !== null}
                             <div
                               class="flex items-center gap-1.5 bg-green-500/10 text-green-600 border border-green-500/20 font-medium px-2.5 py-1 rounded-md"
-                              title="Price calculated at {$settings.pricePerMb} Chiral per MB"
+                              title="Price calculated dynamically based on network hash power"
                             >
                               <DollarSign class="h-3.5 w-3.5" />
                               <span class="text-sm"
