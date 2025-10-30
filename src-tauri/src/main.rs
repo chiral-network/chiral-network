@@ -4700,11 +4700,6 @@ fn get_logs_directory(app: tauri::AppHandle) -> Result<String, String> {
     Ok(logs_dir.to_string_lossy().to_string())
 }
 
-#[tauri::command]
-fn check_directory_exists(path: String) -> bool {
-    Path::new(&path).is_dir()
-}
-
 #[cfg(not(test))]
 fn main() {
     // Don't initialize tracing subscriber here - we'll do it in setup() after loading settings
