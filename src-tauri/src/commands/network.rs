@@ -1,4 +1,5 @@
 use tauri::command;
+use tracing::info;
 use serde::Serialize;
 use crate::ethereum::{
     get_network_hashrate,
@@ -30,9 +31,14 @@ pub async fn get_full_network_stats(address: Option<String>)-> Result<FullNetwor
         get_peer_count(),
     );
 
-    let hashrate = hashrate_res
+    let hashrate_str = hashrate_res
     .map_err(|e| format!("Failed to get hashrate: {}", e))?;
+    info!("📊 BACKEND: Network hashrate (string): {}", hashrate_str);
 
+    // Convert string to numeric value
+    let hashrate = parse_hashrate(&hashrate_str).unwrap_or(0.0);
+    info!("📊 BACKEND: Network hashrate (number): {}", hashrate);
+    
     let difficulty = difficulty_res
         .map_err(|e| format!("Failed to get difficulty: {}", e))?
         .parse::<f64>()
@@ -67,4 +73,23 @@ pub async fn get_full_network_stats(address: Option<String>)-> Result<FullNetwor
         peer_count: active_miners,
         blocks_mined,
     })
+}
+
+fn parse_hashrate(formatted: &str) -> Option<f64> {
+    // Split the string into the number and the unit
+    let parts: Vec<&str> = formatted.split_whitespace().collect();
+    if parts.len() != 2 {
+        return None;
+    }
+
+    let value: f64 = parts[0].parse().ok()?;
+    let multiplier = match parts[1] {
+        "H/s" => 1.0,
+        "KH/s" => 1_000.0,
+        "MH/s" => 1_000_000.0,
+        "GH/s" => 1_000_000_000.0,
+        _ => return None,
+    };
+
+    Some(value * multiplier)
 }

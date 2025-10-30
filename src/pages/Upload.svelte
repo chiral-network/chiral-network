@@ -1414,7 +1414,7 @@
                           {#if file.price !== undefined && file.price !== null}
                             <div
                               class="flex items-center gap-1.5 bg-green-500/10 text-green-600 border border-green-500/20 font-medium px-2.5 py-1 rounded-md"
-                              title="Price calculated at {$settings.pricePerMb} Chiral per MB"
+                              title="Price calculated dynamically based on network hash power"
                             >
                               <DollarSign class="h-3.5 w-3.5" />
                               <span class="text-sm"

@@ -154,13 +154,17 @@ static async getDynamicPricePerMB(normalizationFactor = 1): Promise<number> {
     }>('get_full_network_stats');
 
     const { network_difficulty, network_hashrate, active_miners, power_usage } = stats;
+    if (network_hashrate <= 0) return 0;
 
-    // --- Compute intermediate values ---
+    // --- Average hash power per miner ---
     const avgHashPower = active_miners > 0 ? network_hashrate / active_miners : network_hashrate;
+
+    // unit cost of one hash for this miner, normalized to the average mining power
+    // basically for this miner, how expensive is each hash compared to the network average
     const baseHashCost = power_usage / Math.max(avgHashPower, 1);
 
-    // --- Dynamic formula ---
-    const pricePerMB = (baseHashCost / avgHashPower) * normalizationFactor;
+    // --- Price per MB (scaled by difficulty) ---
+    const pricePerMB = (baseHashCost / avgHashPower) * network_difficulty * normalizationFactor;
 
     console.log('📊 Dynamic pricing inputs:', {
       difficulty: network_difficulty,
