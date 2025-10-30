@@ -431,6 +431,8 @@ export interface AppSettings {
   autoUpdate: boolean;
   enableBandwidthScheduling: boolean;
   bandwidthSchedules: BandwidthScheduleEntry[];
+  enableFileLogging: boolean; // Enable file-based logging
+  maxLogSizeMB: number; // Maximum size of a single log file in MB
   pricePerMb: number; // Price per MB in Chiral (e.g., 0.001)
 }
 
@@ -475,5 +477,7 @@ export const settings = writable<AppSettings>({
   autoUpdate: true,
   enableBandwidthScheduling: false,
   bandwidthSchedules: [],
+  enableFileLogging: false, // Disabled by default
+  maxLogSizeMB: 10, // 10 MB per log file by default
   pricePerMb: 0, // Default price: 0, until ability to set pricePerMb is there, then change to 0.001 Chiral per MB
 });
