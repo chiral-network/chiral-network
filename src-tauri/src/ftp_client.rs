@@ -168,35 +168,26 @@ impl FtpClient {
             native_tls::TlsConnector::new().context("Failed to create TLS connector")?,
         );
 
-        // Connect with timeout by first creating a TCP stream with timeout,
-        // then wrapping it with TLS
-        let addr = format!("{}:{}", host, port)
-            .to_socket_addrs()
-            .context("Failed to resolve FTPS server address")?
-            .next()
-            .context("No addresses found for FTPS server")?;
+        // Note: connect_secure_implicit doesn't support timeout directly,
+        // so we use the deprecated method but set timeouts after connection
+        let mut ftp_stream = NativeTlsFtpStream::connect_secure_implicit(
+            format!("{}:{}", host, port),
+            tls_connector,
+            &host
+        )
+        .context("Failed to connect to FTPS server")?;
 
-        let tcp_stream = std::net::TcpStream::connect_timeout(&addr, timeout)
-            .context("Failed to connect to FTPS server")?;
-
-        // Set read/write timeouts on TCP stream before TLS wrapping
-        tcp_stream
+        // Set read/write timeouts on the underlying TCP stream after connection
+        ftp_stream
+            .get_ref()
             .set_read_timeout(Some(timeout))
             .context("Failed to set read timeout")?;
-        tcp_stream
+        ftp_stream
+            .get_ref()
             .set_write_timeout(Some(timeout))
             .context("Failed to set write timeout")?;
 
-        // Wrap TCP stream with TLS
-        let tls_stream = tls_connector
-            .connect(&host, tcp_stream)
-            .context("Failed to establish TLS connection")?;
-
-        // Create FTP stream from TLS stream
-        let mut ftp_stream = NativeTlsFtpStream::connect_with_stream(tls_stream)
-            .context("Failed to create FTPS stream")?;
-
-        debug!("TLS connection established");
+        debug!("FTPS connection established with timeout configured");
 
         // Login
         let (username, password) = Self::get_credentials(source_info)?;
