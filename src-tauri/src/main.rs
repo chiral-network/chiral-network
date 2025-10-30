@@ -4960,7 +4960,7 @@ fn main() {
             save_app_settings,
             update_log_config,
             get_logs_directory,
-            check_directory_exists
+            check_directory_exists,
             get_multiaddresses,
             clear_seed_list
         ])
