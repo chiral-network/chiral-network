@@ -4786,7 +4786,8 @@ fn main() {
             set_relay_alias,
             get_relay_alias,
             get_multiaddresses,
-            clear_seed_list
+            clear_seed_list,
+            get_full_network_stats
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
