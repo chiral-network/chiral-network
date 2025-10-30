@@ -5,12 +5,13 @@
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import { ShieldCheck, ShieldX, Globe, Activity, Plus, Power, Trash2 } from 'lucide-svelte'
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { proxyNodes, connectProxy, disconnectProxy, removeProxy, listProxies, getProxyOptimizationStatus } from '$lib/proxy';
   import { ProxyLatencyOptimizationService } from '$lib/services/proxyLatencyOptimization';
   import { t } from 'svelte-i18n'
   import DropDown from '$lib/components/ui/dropDown.svelte'
   import { ProxyAuthService } from '$lib/proxyAuth';
+  import { privacyStore, proxyRoutingService, initializeProxyRouting, persistPrivacyProfile } from '$lib/services/proxyRoutingService';
   
   let newNodeAddress = ''
   let proxyEnabled = true
@@ -18,8 +19,8 @@
   let addressError = ''
   let showConfirmDialog = false
   let nodeToRemove: any = null
-  let connectionTimeouts = new Map<string, NodeJS.Timeout>()
-  let reconnectIntervals = new Map<string, NodeJS.Timeout>()
+  let connectionTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
+  let reconnectIntervals = new Map<string, ReturnType<typeof setInterval>>()
   let autoReconnectEnabled = true
   let performanceHistory = new Map<string, {
     totalAttempts: number
@@ -35,10 +36,13 @@
   let isTestingOptimization = false
   let testResults = ""
   
+  const LS_PROXY_ENABLED = 'proxy.enabled';
+  const LS_PROXY_AUTO_RECONNECT = 'proxy.autoReconnect';
   const ipv4Regex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):[0-9]{1,5}$/
   const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.([a-zA-Z]{2,}|[a-zA-Z]{2,}\.[a-zA-Z]{2,}):[0-9]{1,5}$/
   const enodeRegex = /^enode:\/\/[a-fA-F0-9]{128}@(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):[0-9]{1,5}$/
   let statusFilter = 'all'
+  let sortBy: 'status' | 'latency' | 'bandwidth' = 'status'
   
   $: statusOptions = [
     { value: 'all', label: $t('All') },
@@ -46,6 +50,12 @@
     { value: 'offline', label: $t('Offline') },
     { value: 'connecting', label: $t('Connecting') },
     { value: 'error', label: 'Error' }
+  ]
+
+  $: sortOptions = [
+    { value: 'status', label: $t('Sort by status') },
+    { value: 'latency', label: $t('Sort by latency') },
+    { value: 'bandwidth', label: $t('Sort by bandwidth') }
   ]
 
   $: filteredNodes = $proxyNodes.filter(node => {
@@ -57,14 +67,32 @@
 
   
   $: sortedNodes = [...filteredNodes].sort((a, b) => {
-      const statusOrder: Record<string, number> = { 'online': 1, 'connecting': 2, 'offline': 3, 'error': 4 };
-      const aOrder = statusOrder[a.status || 'offline'] || 5;
-      const bOrder = statusOrder[b.status || 'offline'] || 5;
-      return aOrder - bOrder;
+      if (sortBy === 'status') {
+        // Preserve upstream status precedence and include error state with a safe fallback
+        const statusOrder: Record<string, number> = { online: 1, connecting: 2, offline: 3, error: 4 }
+        const aOrder = statusOrder[(a.status as string) || 'offline'] ?? 5
+        const bOrder = statusOrder[(b.status as string) || 'offline'] ?? 5
+        return aOrder - bOrder
+      }
+
+      if (sortBy === 'latency') {
+        // Ascending: lower latency first; undefined latencies go to the end
+        const aLat = a.latency ?? Number.POSITIVE_INFINITY
+        const bLat = b.latency ?? Number.POSITIVE_INFINITY
+        return aLat - bLat
+      }
+
+      // Sort by effective bandwidth (derived from latency): higher first; unknowns last
+      const aBw = a.latency != null ? Math.round(100 - a.latency) : Number.NEGATIVE_INFINITY
+      const bBw = b.latency != null ? Math.round(100 - b.latency) : Number.NEGATIVE_INFINITY
+      return bBw - aBw
   });
 
   
   onMount(() => {
+      // Initialize proxy routing with stored privacy preferences
+      initializeProxyRouting();
+      
       listProxies();
       
       // Initialize proxy latency optimization
@@ -72,7 +100,18 @@
 
       // Clean up expired authentication tokens
       ProxyAuthService.cleanupExpiredTokens();
+
+      // Restore preferences
+      try {
+      const pe = localStorage.getItem(LS_PROXY_ENABLED);
+      if (pe !== null) proxyEnabled = pe === 'true';
+      const ar = localStorage.getItem(LS_PROXY_AUTO_RECONNECT);
+      if (ar !== null) autoReconnectEnabled = ar === 'true';
+      } catch {}
   });
+
+  localStorage.setItem(LS_PROXY_ENABLED, String(proxyEnabled));
+  localStorage.setItem(LS_PROXY_AUTO_RECONNECT, String(autoReconnectEnabled));
 
   function validateAddress(address: string): { valid: boolean; error: string } {
       if (!address || address.trim() === '') {
@@ -386,6 +425,19 @@
       }
   }
 
+// Clear pending timeouts when not connecting and stop auto-reconnect once online
+ $: {
+   $proxyNodes.forEach(node => {
+     if (!node.address) return
+     if (node.status !== 'connecting') {
+       clearConnectionTimeout(node.address)
+     }
+     if (node.status === 'online') {
+       stopAutoReconnect(node.address)
+     }
+   })
+}
+
   // Track successful connections when nodes come online
   $: {
       $proxyNodes.forEach(node => {
@@ -403,7 +455,16 @@
           }
       })
   }
+//Clean up timers on component destroy
+onDestroy(() => {
+   connectionTimeouts.forEach(t => clearTimeout(t))
+   reconnectIntervals.forEach(i => clearInterval(i))
+   connectionTimeouts.clear()
+   reconnectIntervals.clear()
+ })
 </script>
+
+
 
 <!-- Confirmation Dialog -->
 {#if showConfirmDialog && nodeToRemove}
@@ -561,40 +622,158 @@
       </div>
     </div>
 
-    
-    <div class="space-y-4">
+    <!-- Privacy Settings Section -->
+    <div class="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
+      <div class="flex items-center justify-between">
         <div>
-            <Label for="new-node">{$t('proxy.addNode')}</Label>
-            <div class="flex gap-2 mt-2">
-                <Input
-                    id="new-node"
-                    bind:value={newNodeAddress}
-                    placeholder="example.com:8080 or enode://..."
-                    class="flex-1 {isAddressValid || newNodeAddress === '' ? '' : 'border border-red-500 focus:ring-red-500'}"
-                />
-                <Button on:click={addNode} disabled={!isAddressValid || !newNodeAddress}>
-                    <Plus class="h-4 w-4 mr-2" />
-                    {$t('proxy.addNodeButton')}
-                </Button>
-            </div>
-            {#if addressError}
-                <p class="text-sm text-red-500 mt-1">{addressError}</p>
-            {/if}
+          <h3 class="text-md font-semibold mb-4 flex items-center gap-2">
+            <ShieldCheck class="h-5 w-5" />
+            Privacy Settings
+          </h3>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <!-- Anonymous Mode Toggle -->
+        <div class="flex items-center justify-between p-4 border border-gray-200 dark:border-gray-700 rounded-lg">
+          <div>
+            <Label class="text-sm font-medium">{$t('proxy.anonymousMode') || 'Anonymous Mode'}</Label>
+            <p class="text-xs text-gray-500 mt-1">Route through anonymous proxies</p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={$privacyStore.anonymousMode}
+            on:click={() => {
+              const newProfile = {
+                anonymous: !$privacyStore.anonymousMode,
+                multiHop: $privacyStore.multiHopEnabled
+              };
+              proxyRoutingService.setPrivacyProfile(newProfile);
+              persistPrivacyProfile(newProfile);
+            }}
+            class="group relative inline-flex h-6 w-11 items-center rounded-full transition-all duration-300
+               {$privacyStore.anonymousMode ? 'bg-blue-500' : 'bg-gray-300'}"
+          >
+            <span
+              class="inline-block h-4 w-4 transform rounded-full bg-white transition-all duration-300
+                 {$privacyStore.anonymousMode ? 'translate-x-6' : 'translate-x-1'}"
+            />
+          </button>
         </div>
 
+        <!-- Multi-Hop Toggle -->
+        <div class="flex items-center justify-between p-4 border border-gray-200 dark:border-gray-700 rounded-lg">
+          <div>
+            <Label class="text-sm font-medium">{$t('proxy.multiHop') || 'Multi-Hop Routing'}</Label>
+            <p class="text-xs text-gray-500 mt-1">Route through multiple proxy nodes</p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={$privacyStore.multiHopEnabled}
+            on:click={() => {
+              const newProfile = {
+                anonymous: $privacyStore.anonymousMode,
+                multiHop: !$privacyStore.multiHopEnabled
+              };
+              proxyRoutingService.setPrivacyProfile(newProfile);
+              persistPrivacyProfile(newProfile);
+            }}
+            class="group relative inline-flex h-6 w-11 items-center rounded-full transition-all duration-300
+               {$privacyStore.multiHopEnabled ? 'bg-purple-500' : 'bg-gray-300'}"
+          >
+            <span
+              class="inline-block h-4 w-4 transform rounded-full bg-white transition-all duration-300
+                 {$privacyStore.multiHopEnabled ? 'translate-x-6' : 'translate-x-1'}"
+            />
+          </button>
+        </div>
+      </div>
+
+      <!-- Privacy Profile Display -->
+      <div class="mt-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+        <p class="text-sm text-blue-900 dark:text-blue-100">
+          <strong>Current Privacy Mode:</strong>
+          {#if $privacyStore.anonymousMode && $privacyStore.multiHopEnabled}
+            Maximum Privacy (Anonymous + Multi-Hop)
+          {:else if $privacyStore.anonymousMode}
+            Anonymous Mode
+          {:else if $privacyStore.multiHopEnabled}
+            Multi-Hop Routing
+          {:else}
+            Standard Mode
+          {/if}
+        </p>
+      </div>
+    </div>
+
+    <!-- Proxy Stats -->
+    <div class="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
+      <h3 class="text-md font-semibold mb-4 flex items-center gap-2">
+        <Activity class="h-5 w-5" />
+        Proxy Routing Stats
+      </h3>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="p-4 border border-gray-200 dark:border-gray-700 rounded-lg">
+          <p class="text-xs text-gray-500">Available Proxies</p>
+          <p class="text-2xl font-bold">{proxyRoutingService.getStatistics().availableProxies}</p>
+        </div>
+        <div class="p-4 border border-gray-200 dark:border-gray-700 rounded-lg">
+          <p class="text-xs text-gray-500">Total Routes</p>
+          <p class="text-2xl font-bold">{proxyRoutingService.getStatistics().totalRoutes}</p>
+        </div>
+        <div class="p-4 border border-gray-200 dark:border-gray-700 rounded-lg">
+          <p class="text-xs text-gray-500">Privacy Profile</p>
+          <p class="text-sm font-medium">{$privacyStore.anonymousMode ? 'Anon' : 'Standard'} {$privacyStore.multiHopEnabled ? '+ Multi' : ''}</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add Node Input Section -->
+    <div class="space-y-4">
+      <div>
+          <Label for="new-node">{$t('proxy.addNode')}</Label>
+          <div class="flex gap-2 mt-2">
+              <Input
+                  id="new-node"
+                  bind:value={newNodeAddress}
+                  placeholder="example.com:8080 or enode://..."
+                  class="flex-1 {isAddressValid || newNodeAddress === '' ? '' : 'border border-red-500 focus:ring-red-500'}"
+                  on:keydown={(e) => {
+                   if (e.key === 'Enter' && isAddressValid && newNodeAddress) addNode()
+                  }}
+              />
+              <Button on:click={addNode} disabled={!isAddressValid || !newNodeAddress}>
+                  <Plus class="h-4 w-4 mr-2" />
+                  {$t('proxy.addNodeButton')}
+              </Button>
+          </div>
+          {#if addressError}
+              <p class="text-sm text-red-500 mt-1">{addressError}</p>
+          {/if}
+      </div>
     </div>
   </Card>
   
   <Card class="p-6">
-    <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold">{$t('proxy.proxyNodes')}</h2>
-        <div class="w-40 flex-shrink-0">
-            <DropDown
-                bind:value={statusFilter}
-                options={statusOptions}
-            />
-        </div>
+  <div class="flex items-center justify-between mb-4 gap-3">
+    <h2 class="text-lg font-semibold">{$t('proxy.proxyNodes')}</h2>
+    <div class="flex items-center gap-2">
+      <div class="w-40">
+        <DropDown
+          bind:value={statusFilter}
+          options={statusOptions}
+        />
+      </div>
+      <div class="w-44">
+        <DropDown
+          bind:value={sortBy}
+          options={sortOptions}
+        />
+      </div>
     </div>
+  </div>
     <div class="space-y-3">
       {#each sortedNodes as node}
         <div class="p-4 bg-secondary rounded-lg border border-border/50 hover:border-border transition-colors">

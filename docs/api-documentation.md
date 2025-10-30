@@ -59,7 +59,7 @@ encryption_key: string (optional)
 ```json
 {
   "success": true,
-  "file_hash": "0xa7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456",
+  "file_hash": "a7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456",
   "chunks": [
     {
       "index": 0,
@@ -105,7 +105,7 @@ GET /api/v1/files/{file_hash}/info
 
 ```json
 {
-  "file_hash": "0xa7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456",
+  "file_hash": "a7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456",
   "file_name": "document.pdf",
   "file_size": 10485760,
   "mime_type": "application/pdf",
@@ -159,7 +159,7 @@ GET /api/v1/files/list
 {
   "files": [
     {
-      "file_hash": "0xa7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456",
+      "file_hash": "a7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456",
       "name": "document.pdf",
       "size": 10485760,
       "uploaded_at": 1234567890,
@@ -360,8 +360,8 @@ GET /api/v1/blockchain/block/{block_number}
   "parentHash": "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
   "timestamp": 1234567890,
   "miner": "0x742d35Cc6634C0532925a3b8D0C9e0c8b346b983",
-  "difficulty": "0x20000",
-  "gasLimit": "0x7A1200",
+  "difficulty": "0x400000",
+  "gasLimit": "0x47b760",
   "gasUsed": "0x5208",
   "transactions": [
     {
@@ -574,7 +574,7 @@ ws.onopen = () => {
     JSON.stringify({
       type: "subscribe",
       channels: ["blocks", "transactions", "peers", "files"],
-    }),
+    })
   );
 };
 ```
@@ -632,7 +632,7 @@ ws.onopen = () => {
 {
   "type": "file_progress",
   "data": {
-    "file_hash": "0xa7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456",
+    "file_hash": "a7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456",
     "action": "upload" | "download",
     "progress": 75.5,
     "speed": 1048576,
@@ -670,7 +670,7 @@ ws.onopen = () => {
 ```json
 {
   "type": "request_chunk",
-  "file_hash": "0xa7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456",
+  "file_hash": "a7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456",
   "chunk_index": 5,
   "peer_id": "12D3KooWExample"
 }
@@ -730,7 +730,7 @@ ws.onopen = () => {
   "jsonrpc": "2.0",
   "method": "chiral_getFileInfo",
   "params": [
-    "0xa7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456"
+    "a7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a1098765432100abcdef123456"
   ],
   "id": 1
 }
@@ -766,19 +766,19 @@ ws.onopen = () => {
 
 ### Application Error Codes
 
-| Code | Name               | Description                   |
-| ---- | ------------------ | ----------------------------- |
-| 1000 | NETWORK_ERROR      | Network connectivity issue    |
-| 1001 | TIMEOUT            | Operation timed out           |
-| 1002 | INVALID_HASH       | Invalid file hash format      |
-| 1003 | FILE_NOT_FOUND     | File not in network           |
-| 1004 | INSUFFICIENT_FUNDS | Not enough balance            |
-| 1005 | PERMISSION_DENIED  | Access not authorized         |
+| Code | Name               | Description                    |
+| ---- | ------------------ | ------------------------------ |
+| 1000 | NETWORK_ERROR      | Network connectivity issue     |
+| 1001 | TIMEOUT            | Operation timed out            |
+| 1002 | INVALID_HASH       | Invalid file hash format       |
+| 1003 | FILE_NOT_FOUND     | File not in network            |
+| 1004 | INSUFFICIENT_FUNDS | Not enough balance             |
+| 1005 | PERMISSION_DENIED  | Access not authorized          |
 | 1006 | STORAGE_FULL       | Node provider capacity reached |
-| 1007 | INVALID_CHUNK      | Chunk verification failed     |
-| 1008 | PEER_UNREACHABLE   | Cannot connect to peer        |
-| 1009 | INVALID_SIGNATURE  | Transaction signature invalid |
-| 1010 | NONCE_TOO_LOW      | Transaction nonce too low     |
+| 1007 | INVALID_CHUNK      | Chunk verification failed      |
+| 1008 | PEER_UNREACHABLE   | Cannot connect to peer         |
+| 1009 | INVALID_SIGNATURE  | Transaction signature invalid  |
+| 1010 | NONCE_TOO_LOW      | Transaction nonce too low      |
 
 ## Rate Limiting
 
@@ -910,4 +910,9 @@ func main() {
 ```
 
 ## Testing
+
 Testing API documentation to be added here later.
+
+### Desktop Command Reference
+
+For Tauri command documentation (local desktop functionality), see the dedicated [Tauri Command Reference](tauri-commands.md).

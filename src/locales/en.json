@@ -5,6 +5,19 @@
   "settings.autorelay.relays": "Preferred Relay Nodes",
   "settings.autorelay.description": "Enter relay node addresses (one per line). Leave empty to use bootstrap nodes.",
   "settings.searchPlaceholder": "Search settings...",
+  "settings.diagnostics.title": "Diagnostics",
+  "settings.diagnostics.description": "Run checks for environment, storage, and connectivity.",
+  "settings.diagnostics.run": "Run diagnostics",
+  "settings.diagnostics.running": "Running…",
+  "settings.diagnostics.environment": "Environment",
+  "settings.diagnostics.i18nStorage": "Language storage",
+  "settings.diagnostics.bootstrapNodes": "Bootstrap nodes",
+  "settings.diagnostics.privacyConfig": "Privacy routing configuration",
+  "settings.diagnostics.privacyNeedsTrusted": "Add at least one trusted proxy relay when privacy mode is enabled.",
+  "settings.diagnostics.copyReport": "Copy report",
+  "settings.diagnostics.copied": "Diagnostics copied",
+  "settings.diagnostics.copyFailed": "Copy failed",
+  "settings.diagnostics.resultsTitle": "Results",
   "badges.unsaved": "Unsaved changes",
   "storage.title": "Storage",
   "storage.location": "Storage Location",
@@ -347,7 +360,8 @@
       "resume": "Resume",
       "remove": "Remove",
       "cancel": "Cancel",
-      "showInFolder": "Show in Folder"
+      "showInFolder": "Show in Folder",
+      "retry": "Retry"
     },
     "notifications": {
       "enterHash": "Please enter a file hash to start downloading.",
@@ -403,7 +417,10 @@
       "retrying": "Retrying download for {hash} (attempt {attempt} of {max})",
       "recovered": "Recovered download for {hash} after {retries} retries ({duration} ms)",
       "failed": "Download failed for {hash} after {attempts} attempts"
-    }
+    },
+    "selectProtocol": "Select Protocol",
+    "currentProtocol": "Current Protocol",
+    "changeProtocol": "Change Protocol"
   },
   "regions.usEast": "US East",
   "regions.usWest": "US West",
@@ -482,7 +499,7 @@
   "wallet": {
     "title": "Chiral Network Wallet",
     "balance": "Balance",
-    "totalEarned": "Total Earned",
+    "totalEarned": "Total Mined",
     "totalSpent": "Total Spent",
     "address": "Chiral Address",
     "qrModal": {

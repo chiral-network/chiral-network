@@ -105,6 +105,12 @@ pub struct ChunkManager {
     storage_path: PathBuf,
 }
 
+/// The result of a canonical, one-time encryption of a file.
+pub struct CanonicalEncryptionResult {
+    pub manifest: FileManifest,
+    pub canonical_aes_key: [u8; 32],
+}
+
 impl ChunkManager {
     pub fn new(storage_path: PathBuf) -> Self {
         ChunkManager {
@@ -113,12 +119,31 @@ impl ChunkManager {
         }
     }
 
-    // The function now takes the recipient's public key and returns the encrypted key bundle
     pub fn chunk_and_encrypt_file(
         &self,
         file_path: &Path,
         recipient_public_key: &PublicKey,
     ) -> Result<FileManifest, String> {
+        let canonical_result = self.chunk_and_encrypt_file_canonical(file_path)?;
+        let mut manifest = canonical_result.manifest;
+        let canonical_aes_key = canonical_result.canonical_aes_key;
+
+        let encrypted_bundle =
+            encrypt_aes_key(&canonical_aes_key, recipient_public_key)?;
+
+        manifest.encrypted_key_bundle = Some(encrypted_bundle);
+
+        Ok(manifest)
+    }
+
+    /// Encrypts a file once with a new, canonical AES key.
+    /// This function is the first step in publishing a new encrypted file. It returns the manifest
+    /// (which is public and key-agnostic) and the raw AES key, which the caller MUST store securely.
+    pub fn chunk_and_encrypt_file_canonical(
+        &self,
+        file_path: &Path,
+    ) -> Result<CanonicalEncryptionResult, String> {
+        // 1. Generate a new, single-use canonical AES key for the entire file.
         let mut key_bytes = [0u8; 32];
         OsRng.fill_bytes(&mut key_bytes);
         let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
@@ -136,11 +161,12 @@ impl ChunkManager {
             }
 
             let chunk_data = &buffer[..bytes_read];
+            // Hash the original, unencrypted chunk for the Merkle root.
             let chunk_hash_bytes = Sha256Hasher::hash(chunk_data);
             chunk_hashes.push(chunk_hash_bytes);
-            let chunk_hash_hex = hex::encode(chunk_hash_bytes); // This is the original hash
+            let chunk_hash_hex = hex::encode(chunk_hash_bytes);
 
-            // Encrypt the chunk
+            // Encrypt the chunk with the canonical key.
             let encrypted_chunk_with_nonce = self.encrypt_chunk(chunk_data, &key)?;
             let encrypted_chunk_hash = Self::hash_data(&encrypted_chunk_with_nonce);
             self.save_chunk(&encrypted_chunk_hash, &encrypted_chunk_with_nonce)
@@ -157,17 +183,21 @@ impl ChunkManager {
             index += 1;
         }
 
-        // Build the Merkle tree from the chunk hashes to get the root hash.
+        // Build the Merkle tree from the original chunk hashes.
         let merkle_tree = MerkleTree::<Sha256Hasher>::from_leaves(&chunk_hashes);
         let merkle_root = merkle_tree.root().ok_or("Failed to compute Merkle root")?;
 
-        // Encrypt the file's AES key with the recipient's public key.
-        let encrypted_key_bundle = encrypt_aes_key(&key_bytes, recipient_public_key)?;
-
-        Ok(FileManifest {
+        // Create a key-agnostic manifest. The key bundle will be added later for each recipient.
+        let manifest = FileManifest {
             merkle_root: hex::encode(merkle_root),
             chunks: chunks_info,
-            encrypted_key_bundle: Some(encrypted_key_bundle),
+            encrypted_key_bundle: None,
+        };
+
+        // Return the manifest AND the raw AES key for secure storage by the caller.
+        Ok(CanonicalEncryptionResult {
+            manifest,
+            canonical_aes_key: key_bytes,
         })
     }
 
@@ -195,15 +225,17 @@ impl ChunkManager {
         if chunk_path.exists() {
             // Already present, skip writing
             // Prime the L1 cache anyway
-            let mut cache = L1_CACHE.lock().unwrap();
-            cache.put(hash.to_string(), data_with_nonce.to_vec());
+            if let Ok(mut cache) = L1_CACHE.lock() {
+                cache.put(hash.to_string(), data_with_nonce.to_vec());
+            }
             return Ok(());
         }
         fs::write(&chunk_path, data_with_nonce)?;
         // Prime the L1 cache
         {
-            let mut cache = L1_CACHE.lock().unwrap();
-            cache.put(hash.to_string(), data_with_nonce.to_vec());
+            if let Ok(mut cache) = L1_CACHE.lock() {
+                cache.put(hash.to_string(), data_with_nonce.to_vec());
+            }
         }
         Ok(())
     }
@@ -211,17 +243,19 @@ impl ChunkManager {
     pub fn read_chunk(&self, hash: &str) -> Result<Vec<u8>, Error> {
         // Check L1 cache first
         {
-            let mut cache = L1_CACHE.lock().unwrap();
-            if let Some(data) = cache.get(hash) {
-                return Ok(data.clone());
+            if let Ok(mut cache) = L1_CACHE.lock() {
+                if let Some(data) = cache.get(hash) {
+                    return Ok(data.clone());
+                }
             }
         }
         // Fallback to disk
         let data = fs::read(self.storage_path.join(hash))?;
         // Populate L1 cache
         {
-            let mut cache = L1_CACHE.lock().unwrap();
-            cache.put(hash.to_string(), data.clone());
+            if let Ok(mut cache) = L1_CACHE.lock() {
+                cache.put(hash.to_string(), data.clone());
+            }
         }
         Ok(data)
     }
@@ -378,48 +412,57 @@ impl ChunkManager {
         Ok((proof_indices, proof_hashes_hex, all_chunk_hashes.len()))
     }
 
-    /// Verifies a downloaded chunk against the file's Merkle root using a proof.
-    /// This is called by a downloader node to ensure chunk integrity.
-    pub fn verify_chunk(
-        &self,
-        merkle_root_hex: &str,
-        chunk_info: &ChunkInfo,
-        chunk_data: &[u8],
-        proof_indices: &[usize],
-        proof_hashes_hex: &[String],
-        total_leaves_count: usize,
-    ) -> Result<bool, String> {
-        // 1. Verify the chunk's own hash.
-        let calculated_hash = Sha256Hasher::hash(chunk_data);
-        if hex::encode(calculated_hash) != chunk_info.hash {
-            return Ok(false); // The chunk data does not match its expected hash.
-        }
-
-        // 2. Decode hex strings to bytes for Merkle proof verification.
-        let merkle_root: [u8; 32] = hex::decode(merkle_root_hex)
-            .map_err(|e| e.to_string())?
-            .try_into()
-            .map_err(|_| "Invalid Merkle root length".to_string())?;
-
-        let proof_hashes: Vec<[u8; 32]> = proof_hashes_hex
-            .iter()
-            .map(|h| {
-                hex::decode(h)
-                    .map_err(|e| e.to_string())?
-                    .try_into()
-                    .map_err(|_| "Invalid proof hash length".to_string())
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-
-        // 3. Construct a Merkle proof object and verify it against the root.
-        let proof = rs_merkle::MerkleProof::<Sha256Hasher>::new(proof_hashes);
-        Ok(proof.verify(
-            merkle_root,
-            proof_indices,
-            &[calculated_hash],
-            total_leaves_count,
-        ))
+    /// Verifies a downloaded chunk against the file's Merkle root using a proof. (DEPRECATED)
+    /// This is now a wrapper around the standalone `verify_chunk_with_proof` function.
+    #[deprecated(
+        since = "0.1.0",
+        note = "Please use the standalone `verify_chunk_with_proof` function instead"
+    )]
+    pub fn verify_chunk(&self, merkle_root_hex: &str, chunk_info: &ChunkInfo, chunk_data: &[u8], proof_indices: &[usize], proof_hashes_hex: &[String], total_leaves_count: usize) -> Result<bool, String> {
+        verify_chunk_with_proof(merkle_root_hex, &chunk_info.hash, chunk_data, proof_indices, proof_hashes_hex, total_leaves_count)
     }
+}
+
+/// Verifies a downloaded chunk against its expected hash and a Merkle root using a proof.
+/// This is a standalone utility function for ensuring chunk integrity.
+pub fn verify_chunk_with_proof(
+    merkle_root_hex: &str,
+    expected_chunk_hash_hex: &str,
+    chunk_data: &[u8],
+    proof_indices: &[usize],
+    proof_hashes_hex: &[String],
+    total_leaves_count: usize,
+) -> Result<bool, String> {
+    // 1. Verify the chunk's own hash.
+    let calculated_hash_bytes = Sha256Hasher::hash(chunk_data);
+    if hex::encode(calculated_hash_bytes) != expected_chunk_hash_hex {
+        return Ok(false); // The chunk data does not match its expected hash.
+    }
+
+    // 2. Decode hex strings to bytes for Merkle proof verification.
+    let merkle_root: [u8; 32] = hex::decode(merkle_root_hex)
+        .map_err(|e| e.to_string())?
+        .try_into()
+        .map_err(|_| "Invalid Merkle root length".to_string())?;
+
+    let proof_hashes: Vec<[u8; 32]> = proof_hashes_hex
+        .iter()
+        .map(|h| {
+            hex::decode(h)
+                .map_err(|e| e.to_string())?
+                .try_into()
+                .map_err(|_| "Invalid proof hash length".to_string())
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    // 3. Construct a Merkle proof object and verify it against the root.
+    let proof = rs_merkle::MerkleProof::<Sha256Hasher>::new(proof_hashes);
+    Ok(proof.verify(
+        merkle_root,
+        proof_indices,
+        &[calculated_hash_bytes],
+        total_leaves_count,
+    ))
 }
 
 #[cfg(test)]
@@ -676,10 +719,10 @@ mod tests {
         let original_chunk_data = &buffer[..bytes_read];
 
         // 6. Verify the chunk using the proof.
-        let is_valid = manager
-            .verify_chunk(
+        let is_valid = 
+            verify_chunk_with_proof(
                 &manifest.merkle_root,
-                chunk_info,
+                &chunk_info.hash,
                 original_chunk_data,
                 &proof_indices,
                 &proof_hashes,
@@ -695,10 +738,9 @@ mod tests {
         // 7. Negative test: Verify that tampered data fails verification.
         let mut tampered_data = original_chunk_data.to_vec();
         tampered_data[0] = tampered_data[0].wrapping_add(1); // Modify one byte
-        let is_tampered_valid = manager
-            .verify_chunk(
+        let is_tampered_valid = verify_chunk_with_proof(
                 &manifest.merkle_root,
-                chunk_info,
+                &chunk_info.hash,
                 &tampered_data,
                 &proof_indices,
                 &proof_hashes,

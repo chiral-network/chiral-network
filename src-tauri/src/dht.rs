@@ -1,4 +1,71 @@
-use crate::manager::Sha256Hasher;
+use crate::encryption::EncryptedAesKeyBundle;
+use x25519_dalek::PublicKey;
+use serde_bytes;
+
+// ------ Key Request Protocol Implementation ------
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyRequestProtocol;
+
+impl AsRef<str> for KeyRequestProtocol {
+    fn as_ref(&self) -> &str {
+        "/chiral/key-request/1.0.0"
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct KeyRequestCodec;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct KeyRequest {
+    pub merkle_root: String,
+    #[serde(with = "serde_bytes")]
+    pub recipient_public_key: Vec<u8>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct KeyResponse {
+    pub encrypted_bundle: Option<EncryptedAesKeyBundle>,
+    pub error: Option<String>,
+}
+
+#[async_trait::async_trait]
+impl rr::Codec for KeyRequestCodec {
+    type Protocol = KeyRequestProtocol;
+    type Request = KeyRequest;
+    type Response = KeyResponse;
+
+    async fn read_request<T>(&mut self, _: &Self::Protocol, io: &mut T) -> std::io::Result<Self::Request>
+    where
+        T: FAsyncRead + Unpin + Send,
+    {
+        let data = read_framed(io).await?;
+        serde_json::from_slice(&data).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    }
+
+    async fn read_response<T>(&mut self, _: &Self::Protocol, io: &mut T) -> std::io::Result<Self::Response>
+    where
+        T: FAsyncRead + Unpin + Send,
+    {
+        let data = read_framed(io).await?;
+        serde_json::from_slice(&data).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    }
+
+    async fn write_request<T>(&mut self, _: &Self::Protocol, io: &mut T, request: Self::Request) -> std::io::Result<()>
+    where
+        T: FAsyncWrite + Unpin + Send,
+    {
+        let data = serde_json::to_vec(&request).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        write_framed(io, data).await
+    }
+
+    async fn write_response<T>(&mut self, _: &Self::Protocol, io: &mut T, response: Self::Response) -> std::io::Result<()>
+    where
+        T: FAsyncWrite + Unpin + Send,
+    {
+        let data = serde_json::to_vec(&response).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        write_framed(io, data).await
+    }
+}
 use async_std::fs;
 use async_std::path::Path;
 use async_trait::async_trait;
@@ -35,6 +102,7 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::peer_selection::{PeerMetrics, PeerSelectionService, SelectionStrategy};
 use crate::webrtc_service::{get_webrtc_service, FileChunk};
+use crate::manager::Sha256Hasher;
 use std::io::{self};
 use tokio_socks::tcp::Socks5Stream;
 
@@ -49,6 +117,7 @@ use std::error::Error;
 // Trait alias to abstract over async I/O types used by proxy transport
 pub trait AsyncIo: FAsyncRead + FAsyncWrite + Unpin + Send {}
 impl<T: FAsyncRead + FAsyncWrite + Unpin + Send> AsyncIo for T {}
+use anyhow::Result;
 
 use libp2p::{
     autonat::v2,
@@ -75,9 +144,9 @@ const EXPECTED_PROTOCOL_VERSION: &str = "/chiral/1.0.0";
 const MAX_MULTIHASH_LENGHT: usize = 64;
 pub const RAW_CODEC: u64 = 0x55;
 /// Heartbeat interval (how often we refresh our provider entry).
-const FILE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+const FILE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15); // More frequent updates
 /// File seeder TTL – if no heartbeat lands within this window, drop the entry.
-const FILE_HEARTBEAT_TTL: Duration = Duration::from_secs(60);
+const FILE_HEARTBEAT_TTL: Duration = Duration::from_secs(90); // Longer TTL with grace period
 pub struct PendingKeywordIndex;
 
 /// Extracts a set of unique, searchable keywords from a filename.
@@ -109,27 +178,86 @@ pub struct FileMetadata {
     pub merkle_root: String,
     pub file_name: String,
     pub file_size: u64,
+    #[serde(skip)]
     pub file_data: Vec<u8>, // holds the actual file data
     pub seeders: Vec<String>,
     pub created_at: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
     /// Whether the file is encrypted
     pub is_encrypted: bool,
     /// The encryption method used (e.g., "AES-256-GCM")
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub encryption_method: Option<String>,
     /// Fingerprint of the encryption key for identification.
     /// This is now deprecated in favor of the merkle_root.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub key_fingerprint: Option<String>,
     // --- VERSIONING FIELDS ---
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     /// The root CID(s) for retrieving the file from Bitswap. Usually one.
     pub cids: Option<Vec<Cid>>,
     /// For encrypted files, this contains the encrypted AES key and other info.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub encrypted_key_bundle: Option<crate::encryption::EncryptedAesKeyBundle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ftp_sources: Option<Vec<FtpSourceInfo>>,
     pub is_root: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub download_path: Option<String>,
+    /// Price in Chiral tokens set by the uploader
+    #[serde(default)]
+    pub price: Option<f64>,
+    /// Ethereum address of the uploader (for payment)
+    #[serde(default)]
+    pub uploader_address: Option<String>,
+    /// The SHA-1 info hash for BitTorrent compatibility.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub info_hash: Option<String>,
+    /// A list of BitTorrent tracker URLs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trackers: Option<Vec<String>>,
 }
+
+/// FTP source information for a file
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FtpSourceInfo {
+    /// Full FTP URL (e.g., "ftp://ftp.example.com/path/to/file.bin")
+    pub url: String,
+    /// Optional username (None means anonymous)
+    pub username: Option<String>,
+    /// Optional password (stored temporarily, not persisted to DHT for security)
+    /// This should be provided at download time, not stored in DHT
+    #[serde(skip_serializing, skip_deserializing)]
+    pub password: Option<String>,
+    /// Whether this FTP server supports resume (REST command)
+    pub supports_resume: bool,
+    /// Last known file size on this FTP server
+    pub file_size: u64,
+    /// Server availability (updated based on connection attempts)
+    pub last_checked: Option<u64>,  // Unix timestamp
+    pub is_available: bool,
+}
+
+impl FtpSourceInfo {
+    /// Creates a copy of the struct suitable for DHT storage, stripping the password.
+    pub fn for_dht_storage(&self) -> Self {
+        Self {
+            url: self.url.clone(),
+            username: self.username.clone(),
+            password: None,  // Always None for DHT storage
+            supports_resume: self.supports_resume,
+            file_size: self.file_size,
+            last_checked: self.last_checked,
+            is_available: self.is_available,
+        }
+    }
+}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -152,14 +280,130 @@ fn unix_timestamp() -> u64 {
         .as_secs()
 }
 
+fn merge_heartbeats(mut a: Vec<SeederHeartbeat>, mut b: Vec<SeederHeartbeat>) -> Vec<SeederHeartbeat> {
+    let mut merged = Vec::new();
+    let mut seen_peers = std::collections::HashSet::new();
+    let now = unix_timestamp();
+
+    // Create sets to track which peers appear in both vectors
+    let a_peers: HashSet<String> = a.iter().map(|hb| hb.peer_id.clone()).collect();
+    let b_peers: HashSet<String> = b.iter().map(|hb| hb.peer_id.clone()).collect();
+    let common_peers: HashSet<_> = a_peers.intersection(&b_peers).cloned().collect();
+
+    // Filter and collect entries in one pass instead of using retain
+    let filtered_a: Vec<_> = a.into_iter()
+        .filter(|hb| {
+            common_peers.contains(&hb.peer_id) || 
+            hb.expires_at > now.saturating_sub(30) // 30s grace period
+        })
+        .collect();
+
+    let filtered_b: Vec<_> = b.into_iter()
+        .filter(|hb| {
+            common_peers.contains(&hb.peer_id) || 
+            hb.expires_at > now.saturating_sub(30) // 30s grace period
+        })
+        .collect();
+
+    // Now work with the filtered vectors
+    a = filtered_a;
+    b = filtered_b;
+
+    // Sort both vectors by peer_id for deterministic merging
+    a.sort_by(|x, y| x.peer_id.cmp(&y.peer_id));
+    b.sort_by(|x, y| x.peer_id.cmp(&y.peer_id));
+
+    let mut a_iter = a.into_iter();
+    let mut b_iter = b.into_iter();
+    
+    let mut next_a = a_iter.next();
+    let mut next_b = b_iter.next();
+
+    while let (Some(a_entry), Some(b_entry)) = (&next_a, &next_b) {
+        match a_entry.peer_id.cmp(&b_entry.peer_id) {
+            std::cmp::Ordering::Equal => {
+                // For equal peer IDs, create a merged entry that:
+                // 1. Takes the most recent heartbeat timestamp
+                // 2. Uses the latest expiry time
+                // 3. Extends the expiry if it's an active seeder (recent heartbeat)
+                let latest_heartbeat = std::cmp::max(a_entry.last_heartbeat, b_entry.last_heartbeat);
+                let latest_expiry = std::cmp::max(a_entry.expires_at, b_entry.expires_at);
+                
+                // If this is an active seeder (recent heartbeat), extend its expiry
+                let new_expiry = if now.saturating_sub(latest_heartbeat) < FILE_HEARTBEAT_INTERVAL.as_secs() {
+                    now.saturating_add(FILE_HEARTBEAT_TTL.as_secs())
+                } else {
+                    latest_expiry
+                };
+                
+                let entry = SeederHeartbeat {
+                    peer_id: a_entry.peer_id.clone(),
+                    expires_at: new_expiry,
+                    last_heartbeat: latest_heartbeat,
+                };
+                
+                if !seen_peers.contains(&entry.peer_id) {
+                    seen_peers.insert(entry.peer_id.clone());
+                    merged.push(entry);
+                }
+                
+                next_a = a_iter.next();
+                next_b = b_iter.next();
+            }
+            std::cmp::Ordering::Less => {
+                if !seen_peers.contains(&a_entry.peer_id) {
+                    seen_peers.insert(a_entry.peer_id.clone());
+                    merged.push(a_entry.clone());
+                }
+                next_a = a_iter.next();
+            }
+            std::cmp::Ordering::Greater => {
+                if !seen_peers.contains(&b_entry.peer_id) {
+                    seen_peers.insert(b_entry.peer_id.clone());
+                    merged.push(b_entry.clone());
+                }
+                next_b = b_iter.next();
+            }
+        }
+    }
+
+    // Add remaining entries from a
+    while let Some(entry) = next_a {
+        if !seen_peers.contains(&entry.peer_id) {
+            seen_peers.insert(entry.peer_id.clone());
+            merged.push(entry);
+        }
+        next_a = a_iter.next();
+    }
+
+    // Add remaining entries from b
+    while let Some(entry) = next_b {
+        if !seen_peers.contains(&entry.peer_id) {
+            seen_peers.insert(entry.peer_id.clone());
+            merged.push(entry);
+        }
+        next_b = b_iter.next();
+    }
+
+    merged
+}
+
 fn prune_heartbeats(mut entries: Vec<SeederHeartbeat>, now: u64) -> Vec<SeederHeartbeat> {
-    entries.retain(|hb| hb.expires_at > now);
+    // Add a more generous grace period to prevent premature pruning
+    // Use 30 seconds which is between the heartbeat interval (15s) and TTL (90s)
+    let prune_threshold = now.saturating_sub(30); // 30 second grace period
+    entries.retain(|hb| hb.expires_at > prune_threshold);
     entries.sort_by(|a, b| a.peer_id.cmp(&b.peer_id));
     entries
 }
 
 fn upsert_heartbeat(entries: &mut Vec<SeederHeartbeat>, peer_id: &str, now: u64) {
     let expires_at = now.saturating_add(FILE_HEARTBEAT_TTL.as_secs());
+    
+    // First remove any expired entries
+    entries.retain(|hb| hb.expires_at > now);
+    
+    // Then update or add the new heartbeat
     if let Some(entry) = entries.iter_mut().find(|hb| hb.peer_id == peer_id) {
         entry.expires_at = expires_at;
         entry.last_heartbeat = now;
@@ -170,6 +414,9 @@ fn upsert_heartbeat(entries: &mut Vec<SeederHeartbeat>, peer_id: &str, now: u64)
             last_heartbeat: now,
         });
     }
+    
+    // Sort by peer_id for consistent ordering
+    entries.sort_by(|a, b| a.peer_id.cmp(&b.peer_id));
 }
 
 fn heartbeats_to_peer_list(entries: &[SeederHeartbeat]) -> Vec<String> {
@@ -231,6 +478,7 @@ struct DhtBehaviour {
     ping: ping::Behaviour,
     proxy_rr: rr::Behaviour<ProxyCodec>,
     webrtc_signaling_rr: rr::Behaviour<WebRTCSignalingCodec>,
+    key_request: rr::Behaviour<KeyRequestCodec>,
     autonat_client: toggle::Toggle<v2::client::Behaviour>,
     autonat_server: toggle::Toggle<v2::server::Behaviour>,
     relay_client: relay::client::Behaviour,
@@ -279,13 +527,21 @@ pub enum DhtCommand {
         cid: Cid,
         data: Vec<u8>,
     },
-    StoreBlocks {
-        blocks: Vec<(Cid, Vec<u8>)>,
-        root_cid: Cid,
-        metadata: FileMetadata,
+        StoreBlocks {
+            blocks: Vec<(Cid, Vec<u8>)>, 
+            root_cid: Cid,
+            metadata: FileMetadata,
+        },
+        RequestFileAccess {
+            seeder: PeerId,
+            merkle_root: String,
+            recipient_public_key: PublicKey,
+            sender: oneshot::Sender<Result<EncryptedAesKeyBundle, String>>,
+        },
+    AnnounceTorrent {
+        info_hash: String,
     },
-}
-
+    }
 #[derive(Debug, Clone, Serialize)]
 pub enum DhtEvent {
     // PeerDiscovered(String),
@@ -353,6 +609,10 @@ pub enum DhtEvent {
         chunk_index: u32,
         total_chunks: u32,
         chunk_size: usize,
+    },
+    PaymentNotificationReceived {
+        from_peer: String,
+        payload: serde_json::Value,
     },
 }
 
@@ -1297,7 +1557,8 @@ async fn run_dht_node(
     bootstrap_peer_ids: HashSet<PeerId>,
 ) {
     // Track peers that support relay (discovered via identify protocol)
-    let relay_capable_peers: Arc<Mutex<HashMap<PeerId, Vec<Multiaddr>>>> = Arc::new(Mutex::new(HashMap::new()));
+    let relay_capable_peers: Arc<Mutex<HashMap<PeerId, Vec<Multiaddr>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
     let mut dht_maintenance_interval = tokio::time::interval(Duration::from_secs(30 * 60));
     dht_maintenance_interval.tick().await;
     // fast heartbeat-driven updater: run at FILE_HEARTBEAT_INTERVAL to keep provider records fresh
@@ -1560,7 +1821,11 @@ async fn run_dht_node(
                                         parent_hash: json_val.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                         cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
                                         encrypted_key_bundle: json_val.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
+                                        info_hash: json_val.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                        trackers: json_val.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
                                         is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
+                                        price: json_val.get("price").and_then(|v| v.as_f64()),
+                                        uploader_address: json_val.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                         ..Default::default()
                                     };
                                     let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
@@ -1599,7 +1864,9 @@ async fn run_dht_node(
                                 println!("block {} size={} cid={}", idx, block.data().len(), cid);
 
                                 match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(cid.clone(), block.data().to_vec()){
-                                    Ok(_) => {},
+                                    Ok(_) => {
+                                        info!("📦 Stored block {} (size: {} bytes) in Bitswap blockstore", cid, block.data().len());
+                                    },
                                     Err(e) => {
                                         error!("failed to store block {}: {}", cid, e);
                                         let _ = event_tx.send(DhtEvent::Error(format!("failed to store block {}: {}", cid, e))).await;
@@ -1611,7 +1878,13 @@ async fn run_dht_node(
 
                             // Build the Merkle tree from original chunk hashes
                             let merkle_tree = MerkleTree::<Sha256Hasher>::from_leaves(&original_chunk_hashes);
-                            let merkle_root = merkle_tree.root().ok_or("Failed to compute Merkle root").unwrap();
+                            let merkle_root = match merkle_tree.root().ok_or("Failed to compute Merkle root") {
+                                Ok(root) => root,
+                                Err(e) => {
+                                    eprintln!("Merkle root computation failed: {}", e);
+                                    return;
+                                }
+                            };
 
                             // Create root block containing just the CIDs
                             let root_block_data = match serde_json::to_vec(&block_cids) {
@@ -1624,8 +1897,10 @@ async fn run_dht_node(
 
                             // Store root block in Bitswap
                             let root_cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&root_block_data));
-                            match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(root_cid.clone(), root_block_data) {
-                                Ok(_) => {},
+                            match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(root_cid.clone(), root_block_data.clone()) {
+                                Ok(_) => {
+                                    info!("🌳 Stored ROOT block {} (size: {} bytes, contains {} CIDs) in Bitswap blockstore", root_cid, root_block_data.len(), block_cids.len());
+                                },
                                 Err(e) => {
                                     error!("failed to store root block: {}", e);
                                     let _ = event_tx.send(DhtEvent::Error(format!("failed to store root block: {}", e))).await;
@@ -1663,6 +1938,8 @@ async fn run_dht_node(
                         metadata.seeders = heartbeats_to_peer_list(&active_heartbeats);
 
                         // Store minimal metadata in DHT
+                        println!("💾 DHT: About to serialize metadata with price: {:?}, uploader: {:?}", metadata.price, metadata.uploader_address);
+
                         let dht_metadata = serde_json::json!({
                             "file_hash":metadata.merkle_root,
                             "merkle_root": metadata.merkle_root,
@@ -1677,9 +1954,15 @@ async fn run_dht_node(
                             "parent_hash": metadata.parent_hash,
                             "cids": metadata.cids, // The root CID for Bitswap
                             "encrypted_key_bundle": metadata.encrypted_key_bundle,
+                            "info_hash": metadata.info_hash,
+                            "trackers": metadata.trackers,
                             "seeders": metadata.seeders,
                             "seederHeartbeats": active_heartbeats,
+                            "price": metadata.price,
+                            "uploader_address": metadata.uploader_address,
                         });
+
+                        println!("💾 DHT: Serialized metadata JSON: {}", serde_json::to_string(&dht_metadata).unwrap_or_else(|_| "error".to_string()));
 
                         {
                             let mut cache = seeder_heartbeats_cache.lock().await;
@@ -1692,6 +1975,16 @@ async fn run_dht_node(
                             );
                         }
 
+                        let record_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
+                        {
+                            let mut pending = pending_heartbeat_updates.lock().await;
+                            pending.insert(metadata.merkle_root.clone());
+                        }
+                        swarm
+                            .behaviour_mut()
+                            .kademlia
+                            .get_record(record_key.clone());
+
                         let dht_record_data = match serde_json::to_vec(&dht_metadata) {
                             Ok(data) => data,
                             Err(e) => {
@@ -1700,17 +1993,29 @@ async fn run_dht_node(
                             }
                         };
 
-                        let key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
                         let record = Record {
-                                    key,
+                                    key: record_key.clone(),
                                     value: dht_record_data,
                                     publisher: Some(peer_id),
                                     expires: None,
                                 };
 
-                        match swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One){
+                        // Determine appropriate quorum based on number of connected peers
+                        let connected_peers_count = connected_peers.lock().await.len();
+                        let min_replication_peers = 3; // Require at least 3 peers for stronger replication
+                        
+                        let quorum = if connected_peers_count >= min_replication_peers {
+                            info!("Using Quorum::All for file {} ({} peers available)", metadata.merkle_root, connected_peers_count);
+                            kad::Quorum::All
+                        } else {
+                            info!("Using Quorum::One for file {} (only {} peers available)", metadata.merkle_root, connected_peers_count);
+                            kad::Quorum::One
+                        };
+
+                        match swarm.behaviour_mut().kademlia.put_record(record, quorum) {
                             Ok(query_id) => {
-                                info!("started providing file: {}, query id: {:?}", metadata.merkle_root, query_id);
+                                info!("started providing file: {}, query id: {:?} with quorum {:?}", 
+                                    metadata.merkle_root, query_id, quorum);
                             }
                             Err(e) => {
                                 error!("failed to start providing file {}: {}", metadata.merkle_root, e);
@@ -1796,6 +2101,8 @@ async fn run_dht_node(
                             "cids": metadata.cids,
                             "encrypted_key_bundle": metadata.encrypted_key_bundle,
                             "version": metadata.version,
+                            "info_hash": metadata.info_hash,
+                            "trackers": metadata.trackers,
                             "parent_hash": metadata.parent_hash,
                             "seeders": metadata.seeders,
                             "seederHeartbeats": active_heartbeats,
@@ -1812,9 +2119,25 @@ async fn run_dht_node(
                             );
                         }
 
-                        let record_value = serde_json::to_vec(&dht_metadata).map_err(|e| e.to_string()).unwrap();
+                        let record_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
+                        {
+                            let mut pending = pending_heartbeat_updates.lock().await;
+                            pending.insert(metadata.merkle_root.clone());
+                        }
+                        swarm
+                            .behaviour_mut()
+                            .kademlia
+                            .get_record(record_key.clone());
+
+                        let record_value = match serde_json::to_vec(&dht_metadata).map_err(|e| e.to_string()) {
+                            Ok(val) => val,
+                            Err(e) => {
+                                warn!("Failed to serialize DHT metadata: {}", e);
+                                continue;
+                            }
+                        };
                         let record = Record {
-                            key: kad::RecordKey::new(&metadata.merkle_root.as_bytes()),
+                            key: record_key.clone(),
                             value: record_value,
                             publisher: Some(peer_id),
                             expires: None,
@@ -1846,8 +2169,21 @@ async fn run_dht_node(
                             Ok(cid) => cid.clone(),
                             Err(e) => { let _ = event_tx.send(DhtEvent::Error(e)).await; continue; }
                         };
+                        let Some(first_seeder) = file_metadata.seeders.get(0) else {
+                            let _ = event_tx.send(DhtEvent::Error("No seeders found".to_string())).await;
+                            return;
+                        };
+                        
+                        let peer_id = match PeerId::from_str(first_seeder) {
+                            Ok(id) => id.clone(),
+                            Err(e) => {
+                                let _ = event_tx.send(DhtEvent::Error(e.to_string())).await;
+                                return;
+                            }
+                        };
+
                         // Request the root block which contains the CIDs
-                        let root_query_id = swarm.behaviour_mut().bitswap.get(&root_cid);
+                        let root_query_id = swarm.behaviour_mut().bitswap.get_from(&root_cid, peer_id);
 
                         file_metadata.download_path = Some(download_path);
                         // Store the root query ID to handle when we get the root block
@@ -1952,23 +2288,37 @@ async fn run_dht_node(
                                 expires: None,
                             };
 
-                            match swarm
-                                .behaviour_mut()
-                                .kademlia
-                                .put_record(record, kad::Quorum::One)
-                            {
-                                Ok(query_id) => {
-                                    debug!(
-                                        "Refreshed heartbeat for {} (query id: {:?})",
-                                        file_hash, query_id
-                                    );
-                                }
-                                Err(e) => {
-                                    error!(
-                                        "Failed to update heartbeat record for {}: {}",
-                                        file_hash, e
-                                    );
-                                }
+                            // Determine appropriate quorum based on number of connected peers
+                        let connected_peers_count = connected_peers.lock().await.len();
+                        let min_replication_peers = 3; // Require at least 3 peers for stronger replication
+                        
+                        let quorum = if connected_peers_count >= min_replication_peers {
+                            debug!("Using Quorum::All for heartbeat update of {} ({} peers available)", 
+                                file_hash, connected_peers_count);
+                            kad::Quorum::All
+                        } else {
+                            debug!("Using Quorum::One for heartbeat update of {} (only {} peers available)", 
+                                file_hash, connected_peers_count);
+                            kad::Quorum::One
+                        };
+
+                        match swarm
+                            .behaviour_mut()
+                            .kademlia
+                            .put_record(record, quorum)
+                        {
+                            Ok(query_id) => {
+                                debug!(
+                                    "Refreshed heartbeat for {} with quorum {:?} (query id: {:?})",
+                                    file_hash, quorum, query_id
+                                );
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Failed to update heartbeat record for {}: {}",
+                                    file_hash, e
+                                );
+                            }
                             }
 
                             let provider_key = kad::RecordKey::new(&file_hash.as_bytes());
@@ -2108,6 +2458,12 @@ async fn run_dht_node(
                                             // Build proper circuit relay address
                                             // Format: /ip4/{relay_ip}/tcp/{relay_port}/p2p/{relay_peer_id}/p2p-circuit/p2p/{target_peer_id}
                                             let mut circuit_addr = relay_addr.clone();
+
+                                            // Ensure the relay address includes the relay peer ID
+                                            if !circuit_addr.iter().any(|p| matches!(p, Protocol::P2p(_))) {
+                                                circuit_addr.push(Protocol::P2p(relay_peer_id));
+                                            }
+
                                             circuit_addr.push(Protocol::P2pCircuit);
                                             circuit_addr.push(Protocol::P2p(peer_id));
 
@@ -2368,6 +2724,22 @@ async fn run_dht_node(
                             }
                         }
                     }
+                    Some(DhtCommand::RequestFileAccess { .. }) => {
+                        todo!();
+                    }
+                    Some(DhtCommand::AnnounceTorrent { info_hash }) => {
+                        let key = kad::RecordKey::new(&info_hash);
+                        match swarm.behaviour_mut().kademlia.start_providing(key) {
+                            Ok(query_id) => {
+                                info!("Started providing torrent with info_hash: {}, query_id: {:?}", info_hash, query_id);
+                                let _ = event_tx.send(DhtEvent::Info(format!("Announced torrent: {}", info_hash))).await;
+                            }
+                            Err(e) => {
+                                error!("Failed to start providing torrent {}: {}", info_hash, e);
+                                let _ = event_tx.send(DhtEvent::Error(format!("Failed to announce torrent: {}", e))).await;
+                            }
+                        }
+                    }
                     None => {
                         info!("DHT command channel closed; shutting down node task");
                         break 'outer;
@@ -2608,10 +2980,11 @@ async fn run_dht_node(
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) => match bitswap {
                         beetswap::Event::GetQueryResponse { query_id, data } => {
+                            info!("📥 Received Bitswap block (query_id: {:?}, size: {} bytes)", query_id, data.len());
 
                             // Check if this is a root block query first
                             if let Some(metadata) = root_query_mapping.lock().await.remove(&query_id) {
-                                info!("This is a ROOT BLOCK for file: {}", metadata.merkle_root);
+                                info!("✅ This is a ROOT BLOCK for file: {}", metadata.merkle_root);
 
                                 // This is the root block containing CIDs - parse and request all data blocks
                                 match serde_json::from_slice::<Vec<Cid>>(&data) {
@@ -2619,9 +2992,14 @@ async fn run_dht_node(
 
                                         // Create queries map for this file's data blocks
                                         let mut file_queries = HashMap::new();
+                                        let peer_id = match PeerId::from_str(&metadata.seeders[0]) {
+                                            Ok(id) => id.clone(),
+                                            Err(e) => {let _ = event_tx.send(DhtEvent::Error(e.to_string())).await; continue; }
+                                        };
 
                                         for (i, cid) in cids.iter().enumerate() {
-                                            let block_query_id = swarm.behaviour_mut().bitswap.get(cid);
+                                            // Request the root block which contains the CIDs
+                                            let block_query_id = swarm.behaviour_mut().bitswap.get_from(&cid, peer_id);
                                             file_queries.insert(block_query_id, i as u32);
                                         }
 
@@ -2638,7 +3016,13 @@ async fn run_dht_node(
                                         info!("Chunk offsets: {:?}", chunk_offsets);
 
                                         info!("About to create ActiveDownload for file: {}", metadata.merkle_root);
-                                        let download_path = PathBuf::from_str(metadata.download_path.as_ref().expect("Error: download_path not defined"));
+                                        let download_path = match metadata.download_path.as_ref() {
+                                            Some(path_str) => PathBuf::from_str(path_str),
+                                            None => {
+                                                error!("Download path not defined for file: {}", metadata.merkle_root);
+                                                return;
+                                            }
+                                        };
                                         let download_path = match download_path {
                                             Ok(path) => get_available_download_path(path).await,
                                             Err(e) => {
@@ -2686,7 +3070,7 @@ async fn run_dht_node(
                                 }
                             } else {
                                 // This is a data block query - find the corresponding file and handle it
-                                
+
                                 let mut completed_downloads = Vec::new();
 
                                 // Check all active downloads for this query_id
@@ -2709,26 +3093,50 @@ async fn run_dht_node(
                                                 });
 
 
-                                            match active_download.write_chunk(chunk_index, &data, offset) {
-                                                Ok(_) => {
-                                                    info!("Successfully wrote chunk {}/{} for file {}",
-                                                        chunk_index + 1,
-                                                        active_download.total_chunks,
-                                                        file_hash);
-
-                                                    let _ = event_tx.send(DhtEvent::BitswapChunkDownloaded {
-                                                        file_hash: file_hash.clone(),
-                                                        chunk_index,
-                                                        total_chunks: active_download.total_chunks,
-                                                        chunk_size: data.len(),
-                                                    }).await;
-                                                }
-                                                Err(e) => {
-                                                    error!("Failed to write chunk {} to disk for file {}: {}",
-                                                        chunk_index, file_hash, e);
-                                                    break;
-                                                }
+                                            if let Err(e) = active_download.write_chunk(chunk_index, &data, offset) {
+                                                error!("Failed to write chunk {} to disk for file {}: {}",
+                                                    chunk_index, file_hash, e);
+                                                break;
                                             }
+
+                                            info!("Successfully wrote chunk {}/{} for file {}",
+                                                chunk_index + 1,
+                                                active_download.total_chunks,
+                                                file_hash);
+
+                                            let _ = event_tx.send(DhtEvent::BitswapChunkDownloaded {
+                                                file_hash: file_hash.clone(),
+                                                chunk_index,
+                                                total_chunks: active_download.total_chunks,
+                                                chunk_size: data.len(),
+                                            }).await;
+
+                                            // --- Reputation System Integration ---
+                                            // Reward the peer who sent this chunk.
+                                            // The `peer` ID is part of the GetQueryResponse event.
+                                            // The `peer` field was removed. We get the seeder from the metadata.
+                                            let seeder = match active_download.metadata.seeders.first() {
+                                                Some(s) => s.clone(),
+                                                None => continue, // Should not happen if we got a response
+                                            };
+
+                                            let _ = event_tx.send(DhtEvent::ReputationEvent {
+                                                peer_id: seeder.to_string(),
+                                                event_type: "TorrentChunkSeeded".to_string(),
+                                                impact: 2.0, // Use the default impact from EventType
+                                                data: serde_json::json!({
+                                                    "file_hash": file_hash,
+                                                    "chunk_index": chunk_index,
+                                                    "chunk_size": data.len(),
+                                                    "timestamp": unix_timestamp(),
+                                                }),
+                                            }).await;
+                                            debug!(
+                                                "Rewarded peer {} for seeding chunk {} of file {}",
+                                                seeder,
+                                                chunk_index,
+                                                file_hash
+                                            );
 
                                            // In the "all chunks downloaded" section:
                                             if active_download.is_complete() {
@@ -2773,9 +3181,12 @@ async fn run_dht_node(
                                 }
                             }
                         }
-                        beetswap::Event::GetQueryError { query_id, error } => {
+                        beetswap::Event::GetQueryError {
+                            query_id,
+                            error,
+                        } => {
                             // Handle Bitswap query error
-                            warn!("Bitswap query {:?} failed: {:?}", query_id, error);
+                            error!("❌ Bitswap query {:?} failed: {:?}", query_id, error);
 
                             // Clean up any active downloads that contain this failed query
                             {
@@ -3015,7 +3426,11 @@ async fn run_dht_node(
                                         parent_hash: json_val.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                         cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
                                         encrypted_key_bundle: json_val.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
+                                        info_hash: json_val.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                        trackers: json_val.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
                                         is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
+                                        price: json_val.get("price").and_then(|v| v.as_f64()),
+                                        uploader_address: json_val.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                         ..Default::default()
                                     };
                                     let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
@@ -3100,7 +3515,23 @@ async fn run_dht_node(
                                     }).await;
                                     let EchoRequest(data) = request;
 
-                                    // 2) Showing received data to UI
+                                    // Check if this is a payment notification
+                                    if let Ok(json_str) = std::str::from_utf8(&data) {
+                                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
+                                            if parsed.get("type").and_then(|v| v.as_str()) == Some("payment_notification") {
+                                                // This is a payment notification, emit special event
+                                                if let Some(payload) = parsed.get("payload") {
+                                                    info!("💰 Received payment notification from peer {}: {:?}", peer, payload);
+                                                    let _ = event_tx.send(DhtEvent::PaymentNotificationReceived {
+                                                        from_peer: peer.to_string(),
+                                                        payload: payload.clone(),
+                                                    }).await;
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // 2) Showing received data to UI (for non-payment messages)
                                     let preview = std::str::from_utf8(&data).ok().map(|s| s.to_string());
                                     let _ = event_tx.send(DhtEvent::EchoReceived {
                                         from: peer.to_string(),
@@ -3406,26 +3837,58 @@ async fn handle_kademlia_event(
                                 }
 
                                 let active_heartbeats = prune_heartbeats(heartbeat_entries, now);
-                                let mut seeder_strings =
-                                    heartbeats_to_peer_list(&active_heartbeats);
+                                let active_seeders = heartbeats_to_peer_list(&active_heartbeats);
 
-                                if seeder_strings.is_empty() && !fallback_seeders.is_empty() {
-                                    seeder_strings = fallback_seeders.clone();
+                                let existing_entry = {
+                                    let cache = seeder_heartbeats_cache.lock().await;
+                                    cache.get(file_hash).cloned()
+                                };
+
+                                let merged_heartbeats = if let Some(entry) = existing_entry {
+                                    merge_heartbeats(entry.heartbeats, active_heartbeats.clone())
+                                } else {
+                                    active_heartbeats.clone()
+                                };
+
+                                let mut merged_seeders = heartbeats_to_peer_list(&merged_heartbeats);
+                                if merged_seeders.is_empty() && !fallback_seeders.is_empty() {
+                                    merged_seeders = fallback_seeders.clone();
+                                }
+
+                                let recorded_seeders_set: HashSet<String> =
+                                    active_seeders.into_iter().collect();
+                                let merged_seeders_set: HashSet<String> =
+                                    merged_seeders.iter().cloned().collect();
+
+                                let mut needs_publish = pending_refresh;
+                                if merged_seeders_set != recorded_seeders_set {
+                                    needs_publish = true;
                                 }
 
                                 let mut updated_metadata_json = metadata_json.clone();
                                 updated_metadata_json["seeders"] = serde_json::Value::Array(
-                                    seeder_strings
+                                    merged_seeders
                                         .iter()
                                         .cloned()
                                         .map(serde_json::Value::String)
                                         .collect(),
                                 );
                                 updated_metadata_json["seederHeartbeats"] =
-                                    serde_json::to_value(&active_heartbeats)
+                                    serde_json::to_value(&merged_heartbeats)
                                         .unwrap_or_else(|_| serde_json::Value::Array(vec![]));
 
-                                let serialized_refresh = if pending_refresh {
+                                {
+                                    let mut cache = seeder_heartbeats_cache.lock().await;
+                                    cache.insert(
+                                        file_hash.to_string(),
+                                        FileHeartbeatCacheEntry {
+                                            heartbeats: merged_heartbeats.clone(),
+                                            metadata: updated_metadata_json.clone(),
+                                        },
+                                    );
+                                }
+
+                                let serialized_refresh = if needs_publish {
                                     match serde_json::to_vec(&updated_metadata_json) {
                                         Ok(bytes) => Some(bytes),
                                         Err(e) => {
@@ -3439,17 +3902,6 @@ async fn handle_kademlia_event(
                                 } else {
                                     None
                                 };
-
-                                {
-                                    let mut cache = seeder_heartbeats_cache.lock().await;
-                                    cache.insert(
-                                        file_hash.to_string(),
-                                        FileHeartbeatCacheEntry {
-                                            heartbeats: active_heartbeats.clone(),
-                                            metadata: updated_metadata_json.clone(),
-                                        },
-                                    );
-                                }
 
                                 if let Some(bytes) = serialized_refresh {
                                     let key = kad::RecordKey::new(&file_hash.as_bytes());
@@ -3487,13 +3939,13 @@ async fn handle_kademlia_event(
                                     file_name: file_name.to_string(),
                                     file_size,
                                     file_data: Vec::new(), // Will be populated during download
-                                    seeders: if seeder_strings.is_empty() {
+                                    seeders: if merged_seeders.is_empty() {
                                         peer_from_record
                                             .clone()
                                             .into_iter()
                                             .collect::<Vec<String>>()
                                     } else {
-                                        seeder_strings
+                                        merged_seeders.clone()
                                     },
                                     created_at,
                                     mime_type: metadata_json
@@ -3533,12 +3985,23 @@ async fn handle_kademlia_event(
                                             >(v.clone())
                                             .unwrap_or(None)
                                         }),
+                                    info_hash: metadata_json.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                    trackers: metadata_json.get("trackers").and_then(|v| {
+                                        serde_json::from_value::<Option<Vec<String>>>(v.clone()).unwrap_or(None)
+                                    }),
                                     is_root: metadata_json
                                         .get("is_root")
                                         .and_then(|v| v.as_bool())
                                         .unwrap_or(true),
+                                    price: metadata_json.get("price").and_then(|v| v.as_f64()),
+                                    uploader_address: metadata_json
+                                        .get("uploader_address")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string()),
                                     ..Default::default()
                                 };
+
+                                println!("🔎 DHT: Retrieved metadata from DHT - price: {:?}, uploader: {:?}", metadata.price, metadata.uploader_address);
 
                                 let notify_metadata = metadata.clone();
                                 let file_hash = notify_metadata.merkle_root.clone();
@@ -3768,10 +4231,15 @@ async fn handle_identify_event(
             let supports_relay = info.protocols.iter().any(|p| p.as_ref() == hop_proto);
 
             if supports_relay {
-                info!("🛰️ Peer {} supports relay (HOP protocol advertised)", peer_id);
+                info!(
+                    "🛰️ Peer {} supports relay (HOP protocol advertised)",
+                    peer_id
+                );
 
                 // Store this peer as relay-capable with its listen addresses
-                let reachable_addrs: Vec<Multiaddr> = info.listen_addrs.iter()
+                let reachable_addrs: Vec<Multiaddr> = info
+                    .listen_addrs
+                    .iter()
                     .filter(|addr| ma_plausibly_reachable(addr))
                     .cloned()
                     .collect();
@@ -3779,7 +4247,11 @@ async fn handle_identify_event(
                 if !reachable_addrs.is_empty() {
                     let mut relay_peers = relay_capable_peers.lock().await;
                     relay_peers.insert(peer_id, reachable_addrs.clone());
-                    info!("✅ Added {} to relay-capable peers list ({} addresses)", peer_id, reachable_addrs.len());
+                    info!(
+                        "✅ Added {} to relay-capable peers list ({} addresses)",
+                        peer_id,
+                        reachable_addrs.len()
+                    );
                     for (i, addr) in reachable_addrs.iter().enumerate().take(3) {
                         info!("   Relay address {}: {}", i + 1, addr);
                     }
@@ -4340,7 +4812,8 @@ impl ActiveDownload {
     }
 
     fn write_chunk(&self, chunk_index: u32, data: &[u8], offset: u64) -> std::io::Result<()> {
-        let mut mmap = self.mmap.lock().unwrap();
+        let mut mmap = self.mmap.lock()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Mutex lock failed: {}", e)))?;
         let start = offset as usize;
         let end = start + data.len();
 
@@ -4352,22 +4825,29 @@ impl ActiveDownload {
         }
 
         mmap[start..end].copy_from_slice(data);
-        self.received_chunks.lock().unwrap().insert(chunk_index);
+        self.received_chunks.lock()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Mutex lock failed: {}", e)))?
+            .insert(chunk_index);
 
         Ok(())
     }
 
     fn is_complete(&self) -> bool {
         self.queries.is_empty()
-            && self.received_chunks.lock().unwrap().len() == self.total_chunks as usize
+            && self.received_chunks.lock()
+                .map(|chunks| chunks.len() == self.total_chunks as usize)
+                .unwrap_or(false)
     }
 
     fn flush(&self) -> std::io::Result<()> {
-        self.mmap.lock().unwrap().flush()
+        self.mmap.lock()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Mutex lock failed: {}", e)))?
+            .flush()
     }
 
     fn read_complete_file(&self) -> std::io::Result<Vec<u8>> {
-        let mmap = self.mmap.lock().unwrap();
+        let mmap = self.mmap.lock()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Mutex lock failed: {}", e)))?;
         Ok(mmap.to_vec())
     }
 
@@ -4377,7 +4857,9 @@ impl ActiveDownload {
         self.flush()?;
 
         // Drop the mmap to release the file handle
-        drop(self.mmap.lock().unwrap());
+        if let Ok(mmap_guard) = self.mmap.lock() {
+            drop(mmap_guard);
+        }
 
         info!(
             "Renaming {:?} to {:?}",
@@ -4406,12 +4888,16 @@ impl ActiveDownload {
     }
 
     fn progress(&self) -> f32 {
-        let received = self.received_chunks.lock().unwrap().len() as f32;
+        let received = self.received_chunks.lock()
+            .map(|chunks| chunks.len())
+            .unwrap_or(0) as f32;
         received / self.total_chunks as f32
     }
 
     fn chunks_received(&self) -> usize {
-        self.received_chunks.lock().unwrap().len()
+        self.received_chunks.lock()
+            .map(|chunks| chunks.len())
+            .unwrap_or(0)
     }
 }
 
@@ -4572,7 +5058,11 @@ impl DhtService {
             "/chiral/webrtc-signaling/1.0.0".to_string(),
             rr::ProtocolSupport::Full,
         ));
-        let webrtc_signaling_rr = rr::Behaviour::new(webrtc_protocols, rr_cfg);
+        let webrtc_signaling_rr = rr::Behaviour::new(webrtc_protocols, rr_cfg.clone());
+
+        let key_request_protocols =
+            std::iter::once((KeyRequestProtocol, rr::ProtocolSupport::Full));
+        let key_request = rr::Behaviour::new(key_request_protocols, rr_cfg);
 
         let probe_interval = autonat_probe_interval.unwrap_or(Duration::from_secs(30));
         let autonat_client_behaviour = if enable_autonat {
@@ -4628,6 +5118,7 @@ impl DhtService {
             ping: Ping::new(ping::Config::new()),
             proxy_rr,
             webrtc_signaling_rr,
+            key_request,
             autonat_client: autonat_client_toggle,
             autonat_server: autonat_server_toggle,
             relay_client: relay_client_behaviour,
@@ -4674,12 +5165,17 @@ impl DhtService {
         // Use the new relay-aware transport builder
         let transport = build_transport_with_relay(&local_key, relay_transport, proxy_address)?;
 
+        // Extract behaviour or return error if already taken
+        let behaviour_instance = behaviour.take().ok_or_else(|| {
+            Box::<dyn Error>::from("behaviour already taken")
+        })?;
+
         // Create the swarm
         let mut swarm = SwarmBuilder::with_existing_identity(local_key)
             .with_tokio()
             .with_other_transport(|_| Ok(transport))
-            .expect("Failed to create libp2p transport")
-            .with_behaviour(move |_| behaviour.take().expect("behaviour already taken"))?
+            .map_err(|e| format!("Failed to create libp2p transport: {}", e))?
+            .with_behaviour(move |_| behaviour_instance)?
             .with_swarm_config(
                 |c| c.with_idle_connection_timeout(Duration::from_secs(300)), // 5 minutes
             )
@@ -4956,7 +5452,14 @@ impl DhtService {
         debug!("Heartbeat tracking stopped for {}", file_hash);
     }
 
-    pub async fn publish_file(&self, metadata: FileMetadata) -> Result<(), String> {
+    pub async fn publish_file(&self, mut metadata: FileMetadata,ftp_sources: Option<Vec<FtpSourceInfo>>,) -> Result<(), String> {
+        // Add FTP sources to metadata before publishing
+        if let Some(sources) = ftp_sources {
+            metadata.ftp_sources = Some(
+                sources.into_iter().map(|s| s.for_dht_storage()).collect()
+            );
+        }
+
         let (response_tx, response_rx) = oneshot::channel();
 
         self.cmd_tx
@@ -4999,6 +5502,8 @@ impl DhtService {
     }
 
     /// Get all versions for a file name, sorted by version (desc)
+    /// Matching is performed case-insensitively so uploads that differ only by
+    /// filename case are treated as versions of the same file name.
     pub async fn get_versions_by_file_name(
         &self,
         file_name: String,
@@ -5011,9 +5516,12 @@ impl DhtService {
         let all = self.get_all_file_metadata().await?;
         info!("📁 Backend: Retrieved {} total files from cache", all.len());
 
+        // Perform case-insensitive match on file name to group versions regardless of case
+        let target = file_name.to_lowercase();
+
         let mut versions: Vec<FileMetadata> = all
             .into_iter()
-            .filter(|m| m.file_name == file_name) // Remove is_root filter - get all versions
+            .filter(|m| m.file_name.to_lowercase() == target) // case-insensitive match - get all versions
             .collect();
 
         info!(
@@ -5060,17 +5568,35 @@ impl DhtService {
         is_encrypted: bool,
         encryption_method: Option<String>,
         key_fingerprint: Option<String>,
+        price: Option<f64>,
+        uploader_address: Option<String>,
     ) -> Result<FileMetadata, String> {
         let latest = self
             .get_latest_version_by_file_name(file_name.clone())
             .await?;
 
+        // When a latest version for the same filename exists, only increment the version
+        // if the merkle root (content identifier) is different. If the merkle root is
+        // identical we return the same version to avoid creating duplicate versions
+        // for the same content.
         let (version, parent_hash, is_root) = match latest {
-            Some(ref prev) => (
-                prev.version.map(|v| v + 1).unwrap_or(2),
-                Some(prev.merkle_root.clone()),
-                false, // not root if there was a previous version
-            ),
+            Some(ref prev) => {
+                if prev.merkle_root == file_hash {
+                    // Same content: keep same version and parent/is_root values
+                    (
+                        prev.version.unwrap_or(1),
+                        prev.parent_hash.clone(),
+                        prev.is_root,
+                    )
+                } else {
+                    // Different content: increment version and set parent to previous merkle root
+                    (
+                        prev.version.map(|v| v + 1).unwrap_or(2),
+                        Some(prev.merkle_root.clone()),
+                        false, // not root if there was a previous version
+                    )
+                }
+            }
             None => (1, None, true), // root if first version
         };
         Ok(FileMetadata {
@@ -5090,6 +5616,11 @@ impl DhtService {
             cids: None,
             is_root,
             download_path: None,
+            price,
+            uploader_address,
+            ftp_sources: None,
+            info_hash: None,
+            trackers: None,
         })
     }
 
@@ -5127,6 +5658,13 @@ impl DhtService {
 
         self.start_file_heartbeat(&file_hash).await?;
         Ok(())
+    }
+
+    pub async fn announce_torrent(&self, info_hash: String) -> Result<(), String> {
+        self.cmd_tx
+            .send(DhtCommand::AnnounceTorrent { info_hash })
+            .await
+            .map_err(|e| e.to_string())
     }
 
     pub async fn search_file(&self, file_hash: String) -> Result<(), String> {
@@ -5201,7 +5739,7 @@ impl DhtService {
                         pending.remove(&file_hash);
                     }
                 }
-                Err("Search timed out".into())
+                return Err("Search timed out".into())
             }
         }
     }
@@ -5232,6 +5770,28 @@ impl DhtService {
 
     pub async fn get_peer_id(&self) -> String {
         self.peer_id.clone()
+    }
+
+    /// Get multiaddresses for this node (including the peer ID)
+    pub async fn get_multiaddresses(&self) -> Vec<String> {
+        let metrics = self.metrics.lock().await;
+        let peer_id = &self.peer_id;
+
+        metrics.listen_addrs
+            .iter()
+            .filter(|addr| {
+                // Filter out loopback addresses
+                !addr.contains("127.0.0.1") && !addr.contains("::1")
+            })
+            .map(|addr| {
+                // Add peer ID if not already present
+                if addr.contains("/p2p/") {
+                    addr.clone()
+                } else {
+                    format!("{}/p2p/{}", addr, peer_id)
+                }
+            })
+            .collect()
     }
 
     pub async fn get_peer_count(&self) -> usize {
@@ -6201,6 +6761,153 @@ async fn get_available_download_path(path: PathBuf) -> PathBuf {
         }
 
         counter += 1;
+    }
+}
+
+/// Represents the data parsed from a magnet URI.
+#[derive(Debug, PartialEq, Eq)]
+pub struct MagnetData {
+    pub info_hash: String,
+    pub display_name: Option<String>,
+    pub trackers: Vec<String>,
+}
+
+/// Parses a magnet URI string into a `MagnetData` struct.
+///
+/// This function extracts the info hash (btih), display name (dn),
+/// and tracker URLs (tr) from a standard magnet link.
+///
+/// # Examples
+///
+/// ```
+/// let magnet_uri = "magnet:?xt=urn:btih:b263275b1e3138b29596356533f685c33103575c&dn=My+Awesome+File&tr=udp%3A%2F%2Ftracker.openbittorrent.com%3A80";
+/// let magnet_data = parse_magnet_uri(magnet_uri).unwrap();
+/// assert_eq!(magnet_data.info_hash, "b263275b1e3138b29596356533f685c33103575c");
+/// assert_eq!(magnet_data.display_name, Some("My Awesome File".to_string()));
+/// assert_eq!(magnet_data.trackers, vec!["udp://tracker.openbittorrent.com:80".to_string()]);
+/// ```
+pub fn parse_magnet_uri(uri: &str) -> Result<MagnetData, String> {
+    if !uri.starts_with("magnet:?") {
+        return Err("Invalid magnet URI: must start with 'magnet:?'".to_string());
+    }
+
+    let params_str = &uri[8..];
+    let params: HashMap<String, Vec<String>> = url::form_urlencoded::parse(params_str.as_bytes())
+        .into_owned()
+        .fold(HashMap::new(), |mut acc, (key, val)| {
+            acc.entry(key).or_default().push(val);
+            acc
+        });
+
+    let info_hash = params
+        .get("xt")
+        .and_then(|xts| {
+            xts.iter().find_map(|xt| {
+                xt.strip_prefix("urn:btih:")
+                    .map(|hash| hash.to_lowercase())
+            })
+        })
+        .ok_or_else(|| "Magnet URI is missing 'xt' (info hash) parameter".to_string())?;
+
+    let display_name = params.get("dn").and_then(|dns| dns.first().cloned());
+
+    let trackers = params.get("tr").cloned().unwrap_or_default();
+
+    Ok(MagnetData {
+        info_hash,
+        display_name,
+        trackers,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sha1::{Digest as Sha1Digest, Sha1};
+
+    #[test]
+    fn test_parse_magnet_uri_full() {
+        let magnet = "magnet:?xt=urn:btih:b263275b1e3138b29596356533f685c33103575c&dn=My+Awesome+File.txt&tr=udp%3A%2F%2Ftracker.openbittorrent.com%3A80&tr=udp%3A%2F%2Ftracker.leechers-paradise.org%3A6969";
+        let result = parse_magnet_uri(magnet).unwrap();
+        assert_eq!(
+            result,
+            MagnetData {
+                info_hash: "b263275b1e3138b29596356533f685c33103575c".to_string(),
+                display_name: Some("My Awesome File.txt".to_string()),
+                trackers: vec![
+                    "udp://tracker.openbittorrent.com:80".to_string(),
+                    "udp://tracker.leechers-paradise.org:6969".to_string(),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_magnet_uri_minimal() {
+        let magnet = "magnet:?xt=urn:btih:b263275b1e3138b29596356533f685c33103575c";
+        let result = parse_magnet_uri(magnet).unwrap();
+        assert_eq!(
+            result,
+            MagnetData {
+                info_hash: "b263275b1e3138b29596356533f685c33103575c".to_string(),
+                display_name: None,
+                trackers: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_magnet_uri_case_insensitivity() {
+        let magnet = "magnet:?XT=urn:btih:B263275B1E3138B29596356533F685C33103575C";
+        let result = parse_magnet_uri(magnet).unwrap();
+        assert_eq!(
+            result.info_hash,
+            "b263275b1e3138b29596356533f685c33103575c"
+        );
+    }
+
+    #[test]
+    fn test_parse_magnet_uri_invalid() {
+        assert!(parse_magnet_uri("http://example.com").is_err());
+        assert!(parse_magnet_uri("magnet:?dn=MyFile").is_err());
+    }
+
+    #[test]
+    fn test_torrent_piece_hash_verification() {
+        // Simulate a torrent file with 3 pieces.
+        // Piece size is 16 bytes for this test.
+        let piece_size = 16;
+
+        let piece1_data = b"This is piece 1."; // 16 bytes
+        let piece2_data = b"This is piece 2!"; // 16 bytes
+        let piece3_data = b"Short piece."; // 12 bytes
+
+        // In a real torrent, these hashes would be in the .torrent file's `info.pieces` field.
+        let mut hasher = Sha1::new();
+        hasher.update(piece1_data);
+        let expected_hash1 = hasher.finalize_reset();
+
+        hasher.update(piece2_data);
+        let expected_hash2 = hasher.finalize_reset();
+
+        hasher.update(piece3_data);
+        let expected_hash3 = hasher.finalize();
+
+        // Simulate receiving the pieces (e.g., from peers).
+        let received_piece1 = piece1_data.to_vec();
+        let received_piece2 = piece2_data.to_vec();
+        let received_piece3 = piece3_data.to_vec();
+
+        // Verify each piece.
+        let mut verifier = Sha1::new();
+        verifier.update(&received_piece1);
+        assert_eq!(verifier.finalize_reset(), expected_hash1);
+
+        verifier.update(&received_piece2);
+        assert_eq!(verifier.finalize_reset(), expected_hash2);
+
+        verifier.update(&received_piece3);
+        assert_eq!(verifier.finalize(), expected_hash3);
     }
 }
 

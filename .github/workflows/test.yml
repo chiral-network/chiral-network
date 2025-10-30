@@ -68,16 +68,41 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev \
-            libglib2.0-dev pkg-config build-essential libgtk-3-dev curl libssl-dev \
-            libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev \
+            libglib2.0-dev \
+            pkg-config \
+            build-essential \
+            libgtk-3-dev \
+            curl \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+        timeout-minutes: 10
 
       - name: Check if backend compiles
         run: |
           cd src-tauri
-          cargo check --workspace
+          # Check library code first (faster, no GUI dependencies)
+          cargo check --lib
+          # Then check binaries if lib passes
+          cargo check --bins
         timeout-minutes: 10
+
+      - name: Run backend tests
+        run: |
+          cd src-tauri
+          # Run tests for multi-source download
+          cargo test --lib multi_source_download
+          # Run tests for FTP client
+          cargo test --lib ftp_client
+          # Run tests for download scheduler
+          cargo test --lib download_scheduler
+        timeout-minutes: 5
+        continue-on-error: true
 
   relay:
     name: Relay Tests

@@ -8,9 +8,12 @@ pub mod commands;
 pub mod analytics;
 mod blockchain_listener;
 mod dht;
+mod download_scheduler;
+mod download_source;
 mod encryption;
 mod ethereum;
 mod file_transfer;
+mod ftp_client;
 mod geth_downloader;
 mod headless;
 mod keystore;
@@ -84,7 +87,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State,
 };
-use tokio::time::{Duration as TokioDuration};
+use tokio::time::Duration as TokioDuration;
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{debug, error, info, warn};
@@ -94,6 +97,9 @@ use crate::manager::ChunkManager; // Import the ChunkManager
                                   // For key encoding
 use blockstore::block::Block;
 use x25519_dalek::{PublicKey, StaticSecret}; // For key handling
+use suppaftp::FtpStream;
+use std::io::Write;
+use crate::dht::FtpSourceInfo;
 
 // Settings structure for backend use
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -316,6 +322,9 @@ struct AppState {
     // Stream authentication service
     stream_auth: Arc<Mutex<StreamAuthService>>,
 
+    // New field for storing canonical AES keys for files being seeded
+    canonical_aes_keys: Arc<Mutex<std::collections::HashMap<String, [u8; 32]>>>,
+
     // Proof-of-Storage watcher background handle and contract address
     // make these clonable so we can .clone() and move into spawned tasks
     proof_watcher: Arc<Mutex<Option<JoinHandle<()>>>>,
@@ -454,6 +463,155 @@ async fn get_disk_space(path: String) -> Result<u64, String> {
 #[tauri::command]
 async fn get_account_balance(address: String) -> Result<String, String> {
     get_balance(&address).await
+}
+
+#[tauri::command]
+async fn get_user_balance(state: State<'_, AppState>) -> Result<String, String> {
+    let account = get_active_account(&state).await?;
+    get_balance(&account).await
+}
+
+#[tauri::command]
+async fn can_afford_download(state: State<'_, AppState>, price: f64) -> Result<bool, String> {
+    let account = get_active_account(&state).await?;
+    let balance_str = get_balance(&account).await?;
+    let balance = balance_str.parse::<f64>()
+        .map_err(|e| format!("Failed to parse balance: {}", e))?;
+    Ok(balance >= price)
+}
+
+#[tauri::command]
+async fn process_download_payment(
+    state: State<'_, AppState>,
+    uploader_address: String,
+    price: f64,
+) -> Result<String, String> {
+    // Get the active account address
+    let account = get_active_account(&state).await?;
+
+    // Get the private key from state
+    let private_key = {
+        let key_guard = state.active_account_private_key.lock().await;
+        key_guard
+            .clone()
+            .ok_or("No private key available. Please log in again.")?
+    };
+
+    // Send the payment transaction
+    ethereum::send_transaction(&account, &uploader_address, price, &private_key).await
+}
+
+#[tauri::command]
+async fn record_download_payment(
+    app: tauri::AppHandle,
+    file_hash: String,
+    file_name: String,
+    file_size: u64,
+    seeder_wallet_address: String,
+    seeder_peer_id: String,
+    downloader_address: String,
+    amount: f64,
+    transaction_id: u64,
+    transaction_hash: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    println!(
+        "📝 Download payment recorded: {} Chiral to wallet {} (peer: {}) tx: {}",
+        amount, seeder_wallet_address, seeder_peer_id, transaction_hash
+    );
+
+    // Send P2P payment notification message to the seeder's peer
+    #[derive(Clone, serde::Serialize, serde::Deserialize)]
+    struct PaymentNotificationMessage {
+        file_hash: String,
+        file_name: String,
+        file_size: u64,
+        downloader_address: String,
+        seeder_wallet_address: String,
+        amount: f64,
+        transaction_id: u64,
+        transaction_hash: String,
+    }
+
+    let payment_msg = PaymentNotificationMessage {
+        file_hash,
+        file_name,
+        file_size,
+        downloader_address,
+        seeder_wallet_address: seeder_wallet_address.clone(),
+        amount,
+        transaction_id,
+        transaction_hash: transaction_hash.clone(),
+    };
+
+    // Serialize the payment message
+    let payment_json = serde_json::to_string(&payment_msg)
+        .map_err(|e| format!("Failed to serialize payment message: {}", e))?;
+
+    // Emit local event for payment notification (works on same machine for testing)
+    app.emit("seeder_payment_received", payment_msg.clone())
+        .map_err(|e| format!("Failed to emit payment notification: {}", e))?;
+
+    println!("✅ Payment notification emitted locally for seeder: {}", seeder_wallet_address);
+
+    // Send P2P payment notification to the seeder's peer
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    if let Some(dht) = dht {
+        // Convert payment message to JSON
+        let notification_json = serde_json::to_value(&payment_msg)
+            .map_err(|e| format!("Failed to serialize payment notification: {}", e))?;
+
+        // Wrap in a payment notification envelope so receiver can identify it
+        let wrapped_message = serde_json::json!({
+            "type": "payment_notification",
+            "payload": notification_json
+        });
+
+        // Send via DHT to the seeder's peer ID
+        match dht.send_message_to_peer(&seeder_peer_id, wrapped_message).await {
+            Ok(_) => {
+                println!("✅ P2P payment notification sent to peer: {}", seeder_peer_id);
+            }
+            Err(e) => {
+                // Don't fail the whole operation if P2P message fails
+                println!("⚠️ Failed to send P2P payment notification: {}. Seeder will see payment when they check blockchain.", e);
+            }
+        }
+    } else {
+        println!("⚠️ DHT not available, payment notification only sent locally");
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn record_seeder_payment(
+    _file_hash: String,
+    _file_name: String,
+    _file_size: u64,
+    _downloader_address: String,
+    _amount: f64,
+    _transaction_id: u64,
+) -> Result<(), String> {
+    // Log the seeder payment receipt for analytics/audit purposes
+    println!("💰 Seeder payment received: {} Chiral from {}", _amount, _downloader_address);
+    Ok(())
+}
+
+#[tauri::command]
+async fn check_payment_notifications(
+    _wallet_address: String,
+    _state: State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    // NOTE: This command is kept for compatibility but not used anymore
+    // Payment notifications are now handled via local events (seeder_payment_received)
+    // For testing on same machine, the event system works fine
+    // For cross-peer payments, this would need to be implemented with P2P messaging
+    Ok(vec![])
 }
 
 #[tauri::command]
@@ -615,7 +773,10 @@ async fn upload_versioned_file(
     is_encrypted: bool,
     encryption_method: Option<String>,
     key_fingerprint: Option<String>,
+    price: Option<f64>,
 ) -> Result<FileMetadata, String> {
+    // Get the active account address
+    let account = get_active_account(&state).await?;
     let dht_opt = { state.dht.lock().await.as_ref().cloned() };
     if let Some(dht) = dht_opt {
         // --- FIX: Calculate file_hash using file_transfer helper
@@ -626,7 +787,7 @@ async fn upload_versioned_file(
 
         let created_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
         // Use the DHT versioning helper to fill in parent_hash/version
@@ -642,6 +803,8 @@ async fn upload_versioned_file(
                 is_encrypted,
                 encryption_method,
                 key_fingerprint,
+                price,
+                Some(account.clone()),
             )
             .await?;
 
@@ -655,7 +818,7 @@ async fn upload_versioned_file(
                 .await;
         }
 
-        dht.publish_file(metadata.clone()).await?;
+        dht.publish_file(metadata.clone(), None).await?;
         Ok(metadata)
     } else {
         Err("DHT not running".into())
@@ -803,8 +966,9 @@ async fn get_miner_logs(data_dir: String, lines: usize) -> Result<Vec<String>, S
 
 #[tauri::command]
 async fn get_miner_performance(data_dir: String) -> Result<(u64, f64), String> {
-    get_mining_performance(&data_dir)
+    get_mining_performance(&data_dir).await
 }
+
 lazy_static! {
     static ref BLOCKS_CACHE: StdMutex<Option<(String, u64, Instant)>> = StdMutex::new(None);
 }
@@ -813,7 +977,8 @@ lazy_static! {
 async fn get_blocks_mined(address: String) -> Result<u64, String> {
     // Check cache (directly return within 500ms)
     {
-        let cache = BLOCKS_CACHE.lock().unwrap();
+        let cache = BLOCKS_CACHE.lock()
+            .map_err(|e| format!("Failed to acquire blocks cache lock: {}", e))?;
         if let Some((cached_addr, cached_blocks, cached_time)) = cache.as_ref() {
             if cached_addr == &address && cached_time.elapsed() < Duration::from_millis(500) {
                 return Ok(*cached_blocks);
@@ -826,7 +991,8 @@ async fn get_blocks_mined(address: String) -> Result<u64, String> {
 
     // Update Cache
     {
-        let mut cache = BLOCKS_CACHE.lock().unwrap();
+        let mut cache = BLOCKS_CACHE.lock()
+            .map_err(|e| format!("Failed to acquire blocks cache lock for update: {}", e))?;
         *cache = Some((address, blocks, Instant::now()));
     }
 
@@ -1084,7 +1250,7 @@ async fn start_dht_node(
                             .unwrap_or_else(|| {
                                 std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap()
+                                    .unwrap_or(std::time::Duration::from_secs(0))
                                     .as_secs()
                             });
 
@@ -1112,6 +1278,24 @@ async fn start_dht_node(
                             "chunkSize": chunk_size,
                         });
                         let _ = app_handle.emit("bitswap_chunk_downloaded", payload);
+                    },
+                    DhtEvent::PaymentNotificationReceived { from_peer, payload } => {
+                        println!("💰 Payment notification received from peer {}: {:?}", from_peer, payload);
+                        // Convert payload to match the expected format for seeder_payment_received
+                        if let Ok(notification) = serde_json::from_value::<serde_json::Value>(payload.clone()) {
+                            let formatted_payload = serde_json::json!({
+                                "file_hash": notification.get("file_hash").and_then(|v| v.as_str()).unwrap_or(""),
+                                "file_name": notification.get("file_name").and_then(|v| v.as_str()).unwrap_or(""),
+                                "file_size": notification.get("file_size").and_then(|v| v.as_u64()).unwrap_or(0),
+                                "downloader_address": notification.get("downloader_address").and_then(|v| v.as_str()).unwrap_or(""),
+                                "seeder_wallet_address": notification.get("seeder_wallet_address").and_then(|v| v.as_str()).unwrap_or(""),
+                                "amount": notification.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                                "transaction_id": notification.get("transaction_id").and_then(|v| v.as_u64()).unwrap_or(0),
+                            });
+                            // Emit the same event that local payments use
+                            let _ = app_handle.emit("seeder_payment_received", formatted_payload);
+                            println!("✅ Payment notification forwarded to frontend");
+                        }
                     },
                     _ => {}
                 }
@@ -1176,6 +1360,12 @@ async fn connect_to_peer(state: State<'_, AppState>, peer_address: String) -> Re
     } else {
         Err("DHT node is not running".to_string())
     }
+}
+
+#[tauri::command]
+async fn is_dht_running(state: State<'_, AppState>) -> Result<bool, String> {
+    let dht_guard = state.dht.lock().await;
+    Ok(dht_guard.is_some())
 }
 
 #[tauri::command]
@@ -1447,6 +1637,9 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                 DhtEvent::BitswapChunkDownloaded { file_hash, chunk_index, total_chunks, chunk_size } => {
                     format!("bitswap_chunk_downloaded:{}:{}:{}:{}", file_hash, chunk_index, total_chunks, chunk_size)
                 },
+                DhtEvent::PaymentNotificationReceived { from_peer, payload } => {
+                    format!("payment_notification_received:{}:{:?}", from_peer, payload)
+                },
                 DhtEvent::ReputationEvent {
                     peer_id,
                     event_type,
@@ -1484,6 +1677,495 @@ enum TemperatureMethod {
 }
 
 #[tauri::command]
+async fn get_power_consumption() -> Option<f32> {
+    tokio::task::spawn_blocking(move || {
+        use std::sync::OnceLock;
+        use std::time::Instant;
+        use tracing::info;
+
+        static LAST_UPDATE: OnceLock<std::sync::Mutex<Option<Instant>>> = OnceLock::new();
+        static POWER_HISTORY: OnceLock<std::sync::Mutex<Vec<(Instant, f32)>>> = OnceLock::new();
+        static WORKING_METHOD: OnceLock<std::sync::Mutex<Option<PowerMethod>>> = OnceLock::new();
+
+        let last_update_mutex = LAST_UPDATE.get_or_init(|| std::sync::Mutex::new(None));
+        let power_history_mutex = POWER_HISTORY.get_or_init(|| std::sync::Mutex::new(Vec::new()));
+        let working_method_mutex = WORKING_METHOD.get_or_init(|| std::sync::Mutex::new(None));
+
+        // Check if we have a cached working method and if it's still working
+        if let Ok(mut working_method) = working_method_mutex.lock() {
+            if let Some(ref method) = *working_method {
+                if let Some(power) = try_power_method(method) {
+                    return Some(smooth_power(power));
+                }
+                // Method stopped working, clear cache
+                *working_method = None;
+            }
+        }
+
+        // Try all methods to find one that works and cache it
+        let methods_to_try = vec![
+            PowerMethod::Systemstat,
+            PowerMethod::Sysinfo,
+        ];
+
+        for method in methods_to_try {
+            if let Some(power) = try_power_method(&method) {
+                // Cache the working method
+                let mut working_method = working_method_mutex.lock().ok()?;
+                *working_method = Some(method.clone());
+                return Some(smooth_power(power));
+            }
+        }
+
+        // Try Windows-specific methods if basic ones failed
+        #[cfg(target_os = "windows")]
+        {
+            if let Some((power, method)) = get_windows_power() {
+                if let Ok(mut working_method) = working_method_mutex.lock() {
+                    *working_method = Some(method);
+                }
+                return Some(smooth_power(power));
+            }
+        }
+
+        // Try Linux-specific methods if basic ones failed
+        #[cfg(target_os = "linux")]
+        {
+            if let Some((power, method)) = get_linux_power() {
+                if let Ok(mut working_method) = working_method_mutex.lock() {
+                    *working_method = Some(method);
+                }
+                return Some(smooth_power(power));
+            }
+        }
+
+        // Final fallback: return None when power monitoring is unavailable
+        // Only log the info message once to avoid spamming logs
+        static POWER_WARNING_LOGGED: OnceLock<()> = OnceLock::new();
+
+        POWER_WARNING_LOGGED.get_or_init(|| {
+            info!("Power consumption monitoring not available on this system. Using estimated values.");
+        });
+
+        None
+    })
+    .await // Await the result of the blocking task
+    .unwrap_or(None)
+}
+
+#[derive(Clone, Debug)]
+enum PowerMethod {
+    Sysinfo,
+    Systemstat,
+}
+
+fn smooth_power(raw_power: f32) -> f32 {
+    use std::sync::OnceLock;
+    use std::time::Instant;
+
+    static POWER_HISTORY: OnceLock<std::sync::Mutex<Vec<(Instant, f32)>>> = OnceLock::new();
+
+    let power_history_mutex = POWER_HISTORY.get_or_init(|| std::sync::Mutex::new(Vec::new()));
+
+    // Helper function to add power reading to history and return smoothed value
+    let now = Instant::now();
+    let mut history = match power_history_mutex.lock() {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::error!("Failed to acquire power history lock: {}", e);
+            return raw_power; // Return raw power if lock fails
+        }
+    };
+
+    // Add current reading
+    history.push((now, raw_power));
+
+    // Keep only last 10 readings within 60 seconds
+    history.retain(|(time, _)| now.duration_since(*time).as_secs() < 60);
+    if history.len() > 10 {
+        history.remove(0);
+    }
+
+    // Return smoothed power (weighted average, recent readings have more weight)
+    if history.len() == 1 {
+        raw_power
+    } else {
+        let total_weight: f32 = (1..=history.len()).map(|i| i as f32).sum();
+        let weighted_sum: f32 = history.iter().enumerate()
+            .map(|(i, (_, power))| power * (i + 1) as f32)
+            .sum();
+        weighted_sum / total_weight
+    }
+}
+
+fn try_power_method(method: &PowerMethod) -> Option<f32> {
+    match method {
+        PowerMethod::Sysinfo => {
+            // Note: sysinfo doesn't currently support power consumption monitoring
+            // This is a placeholder for future sysinfo versions
+            None
+        }
+        PowerMethod::Systemstat => {
+            // systemstat also doesn't support power consumption directly
+            // This could be extended with platform-specific implementations
+            None
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn get_windows_power() -> Option<(f32, PowerMethod)> {
+    // Try multiple methods to get Windows power consumption
+
+    // Method 1: Use PowerShell to query performance counters
+    if let Some(power) = get_windows_power_via_powershell() {
+        return Some((power, PowerMethod::Systemstat));
+    }
+
+    // Method 2: Try WMI queries for power information
+    if let Some(power) = get_windows_power_via_wmi() {
+        return Some((power, PowerMethod::Systemstat));
+    }
+
+    // Method 3: Try Windows Performance Counters directly
+    if let Some(power) = get_windows_power_via_perf_counters() {
+        return Some((power, PowerMethod::Systemstat));
+    }
+
+    // Method 4: Try direct Windows API calls or system information
+    if let Some(power) = get_windows_power_via_system_info() {
+        return Some((power, PowerMethod::Systemstat));
+    }
+
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn get_windows_power_via_powershell() -> Option<f32> {
+    use std::process::Command;
+
+    // Try to get CPU power consumption via Windows Performance Counters using PowerShell
+    let ps_script = r#"
+    try {
+        # Get CPU power consumption from performance counters
+        $counter = Get-Counter -Counter "\Processor Information(_Total)\% Processor Performance" -ErrorAction Stop
+        $cpuUsage = $counter.CounterSamples.CookedValue
+
+        # Estimate power based on CPU usage (this is an approximation, but better than nothing)
+        # TDP for typical CPUs: assume 65W base + usage-based scaling
+        $basePower = 65.0
+        $usagePower = ($cpuUsage / 100.0) * 35.0  # Additional power based on usage
+        $totalPower = $basePower + $usagePower
+
+        # Output the power value
+        [math]::Round($totalPower, 2)
+    } catch {
+        $null
+    }
+    "#;
+
+    if let Ok(output) = Command::new("powershell")
+        .args(["-Command", ps_script])
+        .output()
+    {
+        if output.status.success() {
+            if let Ok(output_str) = String::from_utf8(output.stdout) {
+                let power_str = output_str.trim();
+                if let Ok(power) = power_str.parse::<f32>() {
+                    if power > 0.0 && power < 500.0 { // Reasonable power range for CPU
+                        return Some(power);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn get_windows_power_via_wmi() -> Option<f32> {
+    use std::process::Command;
+
+    // Try WMI to get battery information (for laptops) or power scheme info
+    let wmi_script = r#"
+    try {
+        # Try to get battery discharge rate (for laptops)
+        $battery = Get-WmiObject -Class Win32_Battery -ErrorAction Stop | Select-Object -First 1
+        if ($battery -and $battery.EstimatedChargeRemaining -ne $null -and $battery.EstimatedRunTime -ne $null) {
+            # Calculate current power draw from battery
+            $remainingTimeHours = $battery.EstimatedRunTime / 60.0
+            if ($remainingTimeHours -gt 0) {
+                # Estimate power consumption based on battery capacity and remaining time
+                # This is approximate but gives real power usage for battery-powered systems
+                $power = 0.0
+                if ($battery.DesignCapacity -gt 0) {
+                    $power = $battery.DesignCapacity / $remainingTimeHours
+                    if ($power -gt 0 -and $power -lt 200) {
+                        [math]::Round($power, 2)
+                        exit 0
+                    }
+                }
+            }
+        }
+
+        # Fallback: Try to get active power scheme information
+        $scheme = Get-WmiObject -Class Win32_PowerPlan -Filter "IsActive=True" -ErrorAction Stop
+        if ($scheme) {
+            # This doesn't give actual power consumption, but we can use it as a fallback indicator
+            # Return a default power consumption based on power scheme
+            if ($scheme.ElementName -like "*High Performance*") {
+                85.0
+            } elseif ($scheme.ElementName -like "*Balanced*") {
+                65.0
+            } elseif ($scheme.ElementName -like "*Power Saver*") {
+                45.0
+            } else {
+                65.0
+            }
+        } else {
+            $null
+        }
+    } catch {
+        $null
+    }
+    "#;
+
+    if let Ok(output) = Command::new("powershell")
+        .args(["-Command", wmi_script])
+        .output()
+    {
+        if output.status.success() {
+            if let Ok(output_str) = String::from_utf8(output.stdout) {
+                let power_str = output_str.trim();
+                if !power_str.is_empty() && power_str != "null" {
+                    if let Ok(power) = power_str.parse::<f32>() {
+                        if power > 0.0 && power < 200.0 { // Reasonable power range
+                            return Some(power);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn get_windows_power_via_perf_counters() -> Option<f32> {
+    use std::process::Command;
+
+    // Try to get more detailed performance counter data
+    let perf_script = r#"
+    try {
+        # Get multiple CPU-related performance counters
+        $counters = @(
+            "\Processor(_Total)\% Processor Time",
+            "\Processor Information(_Total)\% Processor Performance"
+        )
+
+        $results = Get-Counter -Counter $counters -SampleInterval 1 -MaxSamples 1 -ErrorAction Stop
+
+        $cpuTime = 0.0
+        $cpuPerformance = 0.0
+
+        foreach ($sample in $results.CounterSamples) {
+            if ($sample.Path -like "*% Processor Time*") {
+                $cpuTime = $sample.CookedValue
+            } elseif ($sample.Path -like "*% Processor Performance*") {
+                $cpuPerformance = $sample.CookedValue
+            }
+        }
+
+        # Calculate power based on CPU activity
+        # Base TDP assumption: 65W for typical desktop CPU
+        $baseTDP = 65.0
+
+        # Scale based on CPU performance percentage
+        $power = $baseTDP * ($cpuPerformance / 100.0)
+
+        # Ensure minimum power draw even when idle
+        $power = [math]::Max($power, 35.0)
+
+        [math]::Round($power, 2)
+    } catch {
+        $null
+    }
+    "#;
+
+    if let Ok(output) = Command::new("powershell")
+        .args(["-Command", perf_script])
+        .output()
+    {
+        if output.status.success() {
+            if let Ok(output_str) = String::from_utf8(output.stdout) {
+                let power_str = output_str.trim();
+                if let Ok(power) = power_str.parse::<f32>() {
+                    if power > 0.0 && power < 500.0 { // Reasonable power range
+                        return Some(power);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn get_windows_power_via_system_info() -> Option<f32> {
+    use std::process::Command;
+
+    // Try to get system information and estimate power based on actual hardware
+    let system_info_script = r#"
+    try {
+        # Get CPU information
+        $cpu = Get-WmiObject -Class Win32_Processor -ErrorAction Stop | Select-Object -First 1
+        $cpuName = $cpu.Name
+        $cpuCores = $cpu.NumberOfCores
+        $cpuThreads = $cpu.NumberOfLogicalProcessors
+
+        # Get current CPU usage
+        $cpuUsage = (Get-WmiObject -Class Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'").PercentProcessorTime
+
+        # Estimate TDP based on CPU model (this is more accurate than generic assumptions)
+        $estimatedTDP = 65.0  # Default
+
+        if ($cpuName -match "Intel.*Core.*i[3579]-1[0-9][0-9][0-9][0-9]") {
+            # Intel 12th/13th/14th gen high-end CPUs
+            $estimatedTDP = 125.0
+        } elseif ($cpuName -match "Intel.*Core.*i[3579]-[0-9][0-9][0-9][0-9]") {
+            # Intel 12th/13th/14th gen mainstream CPUs
+            $estimatedTDP = 65.0
+        } elseif ($cpuName -match "Intel.*Core.*i[3579]-[0-9][0-9][0-9]") {
+            # Intel 10th/11th gen CPUs
+            $estimatedTDP = 65.0
+        } elseif ($cpuName -match "AMD.*Ryzen.*[79][0-9][0-9][0-9]") {
+            # AMD Ryzen 7000/9000 series
+            $estimatedTDP = 65.0
+        } elseif ($cpuName -match "AMD.*Ryzen.*[3579][0-9][0-9][0-9]") {
+            # AMD Ryzen 3000/5000/7000 series
+            $estimatedTDP = 65.0
+        } elseif ($cpuName -match "Threadripper") {
+            # AMD Threadripper
+            $estimatedTDP = 280.0
+        }
+
+        # Get RAM information and add its power consumption
+        $ramModules = Get-WmiObject -Class Win32_PhysicalMemory -ErrorAction Stop
+        $totalRamGB = 0
+        foreach ($module in $ramModules) {
+            $totalRamGB += [math]::Round($module.Capacity / 1GB, 0)
+        }
+
+        # Estimate RAM power consumption (about 2-3W per 8GB DDR4)
+        $ramPower = [math]::Ceiling($totalRamGB / 8) * 2.5
+
+        # Get GPU information (if dedicated GPU)
+        $gpuPower = 0.0
+        $gpus = Get-WmiObject -Class Win32_VideoController -ErrorAction Stop | Where-Object { $_.AdapterRAM -gt 0 }
+        foreach ($gpu in $gpus) {
+            if ($gpu.Name -notmatch "Microsoft Basic Display") {
+                # Estimate GPU power based on VRAM
+                $vramGB = [math]::Round($gpu.AdapterRAM / 1GB, 0)
+                if ($gpu.Name -match "RTX|GeForce") {
+                    $gpuPower += [math]::Max(50.0, $vramGB * 10.0)  # NVIDIA GPUs
+                } elseif ($gpu.Name -match "Radeon|RX") {
+                    $gpuPower += [math]::Max(40.0, $vramGB * 8.0)   # AMD GPUs
+                } else {
+                    $gpuPower += 30.0  # Generic dedicated GPU
+                }
+            }
+        }
+
+        # Calculate current power based on CPU usage
+        $cpuPower = $estimatedTDP * ($cpuUsage / 100.0)
+        $cpuPower = [math]::Max($cpuPower, $estimatedTDP * 0.3)  # Minimum 30% of TDP even when idle
+
+        # Total system power
+        $totalPower = $cpuPower + $ramPower + $gpuPower
+
+        # Add a small base system power for motherboard, drives, etc.
+        $totalPower += 25.0
+
+        [math]::Round($totalPower, 2)
+    } catch {
+        $null
+    }
+    "#;
+
+    if let Ok(output) = Command::new("powershell")
+        .args(["-Command", system_info_script])
+        .output()
+    {
+        if output.status.success() {
+            if let Ok(output_str) = String::from_utf8(output.stdout) {
+                let power_str = output_str.trim();
+                if let Ok(power) = power_str.parse::<f32>() {
+                    if power > 20.0 && power < 1000.0 { // Reasonable power range for full system
+                        return Some(power);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn get_linux_power() -> Option<(f32, PowerMethod)> {
+    use std::fs;
+
+    // Try RAPL (Running Average Power Limit) interface on Intel systems
+    // This provides power consumption for CPU package and DRAM
+
+    let rapl_paths = [
+        "/sys/class/powercap/intel-rapl:0/energy_uj", // CPU package
+        "/sys/class/powercap/intel-rapl/energy_uj",   // Alternative path
+    ];
+
+    static mut LAST_ENERGY: Option<(u64, Instant)> = None;
+    static mut LAST_POWER: f32 = 0.0;
+
+    for path in &rapl_paths {
+        if let Ok(energy_str) = fs::read_to_string(path) {
+            if let Ok(energy_uj) = energy_str.trim().parse::<u64>() {
+                let now = Instant::now();
+
+                unsafe {
+                    if let Some((last_energy, last_time)) = LAST_ENERGY {
+                        let time_diff = now.duration_since(last_time).as_secs_f64();
+                        if time_diff > 0.0 {
+                            let energy_diff = if energy_uj >= last_energy {
+                                energy_uj - last_energy
+                            } else {
+                                // Counter wrapped around
+                                (u64::MAX - last_energy) + energy_uj
+                            };
+
+                            let power_watts = (energy_diff as f64 / 1_000_000.0) / time_diff; // Convert µJ to J, then to W
+
+                            if power_watts > 0.0 && power_watts < 1000.0 { // Reasonable power range
+                                LAST_POWER = power_watts as f32;
+                                LAST_ENERGY = Some((energy_uj, now));
+                                return Some((power_watts as f32, PowerMethod::Systemstat));
+                            }
+                        }
+                    } else {
+                        // First reading, store and wait for next
+                        LAST_ENERGY = Some((energy_uj, now));
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+#[tauri::command]
 async fn get_cpu_temperature() -> Option<f32> {
     tokio::task::spawn_blocking(move || {
         use std::sync::OnceLock;
@@ -1500,7 +2182,7 @@ async fn get_cpu_temperature() -> Option<f32> {
         let temp_history_mutex = TEMP_HISTORY.get_or_init(|| std::sync::Mutex::new(Vec::new()));
 
         {
-            let mut last_update = last_update_mutex.lock().unwrap();
+            let mut last_update = last_update_mutex.lock().ok()?;
             if let Some(last) = *last_update {
                 if last.elapsed() < MINIMUM_CPU_UPDATE_INTERVAL {
                     return None;
@@ -1512,7 +2194,13 @@ async fn get_cpu_temperature() -> Option<f32> {
         // Helper function to add temperature to history and return smoothed value
         let smooth_temperature = |raw_temp: f32| -> f32 {
             let now = Instant::now();
-            let mut history = temp_history_mutex.lock().unwrap();
+            let mut history = match temp_history_mutex.lock() {
+                Ok(h) => h,
+                Err(e) => {
+                    tracing::error!("Failed to acquire temperature history lock: {}", e);
+                    return raw_temp; // Return raw temp if lock fails
+                }
+            };
 
             // Add current reading
             history.push((now, raw_temp));
@@ -1538,14 +2226,14 @@ async fn get_cpu_temperature() -> Option<f32> {
 
         // Try cached working method first
         {
-            let working_method = working_method_mutex.lock().unwrap();
+            let working_method = working_method_mutex.lock().ok()?;
             if let Some(ref method) = *working_method {
                 if let Some(temp) = try_temperature_method(method) {
                     return Some(smooth_temperature(temp));
                 }
                 // Method stopped working, clear cache
                 drop(working_method);
-                let mut working_method = working_method_mutex.lock().unwrap();
+                let mut working_method = working_method_mutex.lock().ok()?;
                 *working_method = None;
             }
         }
@@ -1562,7 +2250,7 @@ async fn get_cpu_temperature() -> Option<f32> {
         for method in methods_to_try {
             if let Some(temp) = try_temperature_method(&method) {
                 // Cache the working method
-                let mut working_method = working_method_mutex.lock().unwrap();
+                let mut working_method = working_method_mutex.lock().ok()?;
                 *working_method = Some(method.clone());
                 return Some(smooth_temperature(temp));
             }
@@ -1572,8 +2260,9 @@ async fn get_cpu_temperature() -> Option<f32> {
         #[cfg(target_os = "linux")]
         {
             if let Some((temp, method)) = get_linux_temperature_advanced() {
-                let mut working_method = working_method_mutex.lock().unwrap();
-                *working_method = Some(method);
+                if let Ok(mut working_method) = working_method_mutex.lock() {
+                    *working_method = Some(method);
+                }
                 return Some(smooth_temperature(temp));
             }
         }
@@ -1853,10 +2542,11 @@ fn get_windows_temperature() -> Option<f32> {
                     if temp_celsius > 0.0 && temp_celsius < 150.0 {
                         // Log success only once
                         let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
-                        let mut logged = log_state.lock().unwrap();
-                        if !*logged {
-                            info!("✅ Temperature sensor detected via WMI HighPrecision: {:.1}°C", temp_celsius);
-                            *logged = true;
+                        if let Ok(mut logged) = log_state.lock() {
+                            if !*logged {
+                                info!("✅ Temperature sensor detected via WMI HighPrecision: {:.1}°C", temp_celsius);
+                                *logged = true;
+                            }
                         }
                         return Some(temp_celsius);
                     }
@@ -1880,10 +2570,11 @@ fn get_windows_temperature() -> Option<f32> {
                     let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
                     if temp_celsius > 0.0 && temp_celsius < 150.0 {
                         let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
-                        let mut logged = log_state.lock().unwrap();
-                        if !*logged {
-                            info!("✅ Temperature sensor detected via WMI CurrentTemperature: {:.1}°C", temp_celsius);
-                            *logged = true;
+                        if let Ok(mut logged) = log_state.lock() {
+                            if !*logged {
+                                info!("✅ Temperature sensor detected via WMI CurrentTemperature: {:.1}°C", temp_celsius);
+                                *logged = true;
+                            }
                         }
                         return Some(temp_celsius);
                     }
@@ -1907,10 +2598,11 @@ fn get_windows_temperature() -> Option<f32> {
                     let temp_celsius = (temp_tenths_kelvin / 10.0) - 273.15;
                     if temp_celsius > 0.0 && temp_celsius < 150.0 {
                         let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
-                        let mut logged = log_state.lock().unwrap();
-                        if !*logged {
-                            info!("✅ Temperature sensor detected via MSAcpi: {:.1}°C", temp_celsius);
-                            *logged = true;
+                        if let Ok(mut logged) = log_state.lock() {
+                            if !*logged {
+                                info!("✅ Temperature sensor detected via MSAcpi: {:.1}°C", temp_celsius);
+                                *logged = true;
+                            }
                         }
                         return Some(temp_celsius);
                     }
@@ -1921,10 +2613,11 @@ fn get_windows_temperature() -> Option<f32> {
 
     // Log only once when no sensor is found
     let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
-    let mut logged = log_state.lock().unwrap();
-    if !*logged {
-        info!("⚠️ No WMI temperature sensors detected. Temperature monitoring disabled.");
-        *logged = true;
+    if let Ok(mut logged) = log_state.lock() {
+        if !*logged {
+            info!("⚠️ No WMI temperature sensors detected. Temperature monitoring disabled.");
+            *logged = true;
+        }
     }
 
     None
@@ -1933,6 +2626,26 @@ fn get_windows_temperature() -> Option<f32> {
 #[tauri::command]
 fn detect_locale() -> String {
     sys_locale::get_locale().unwrap_or_else(|| "en-US".into())
+}
+
+#[tauri::command]
+fn get_default_storage_path(app: tauri::AppHandle) -> Result<String, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Could not get app data directory: {}", e))?;
+
+    let storage_path = app_data_dir.join("Storage");
+
+    storage_path
+        .to_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "Failed to convert path to string".to_string())
+}
+
+#[tauri::command]
+fn check_directory_exists(path: String) -> bool {
+    Path::new(&path).is_dir()
 }
 
 #[tauri::command]
@@ -2026,7 +2739,10 @@ async fn start_file_transfer_service(
 async fn upload_file_to_network(
     state: State<'_, AppState>,
     file_path: String,
+    price: Option<f64>,
 ) -> Result<(), String> {
+    println!("🔍 BACKEND: upload_file_to_network called with price: {:?}", price);
+
     // Get the active account address
     let account = get_active_account(&state).await?;
 
@@ -2045,12 +2761,16 @@ async fn upload_file_to_network(
 
     if let Some(ft) = ft {
         // Upload the file
-        let file_name = file_path.split('/').last().unwrap_or(&file_path);
+        let c = file_path.clone();
+        let file_name = Path::new(&c)
+            .file_name()             // returns Option<&OsStr>
+            .and_then(|s| s.to_str()) // convert OsStr -> &str
+            .unwrap_or(&file_path);   // fallback to whole path if not found
 
         ft.upload_file_with_account(
             file_path.clone(),
             file_name.to_string(),
-            Some(account),
+            Some(account.clone()),
             Some(private_key),
         )
         .await
@@ -2088,13 +2808,49 @@ async fn upload_file_to_network(
                 version: Some(1),
                 cids: None,
                 encrypted_key_bundle: None,
+                price,
+                uploader_address: Some(account.clone()),
                 ..Default::default()
             };
+          
+          // Prepare a timestamp for metadata
+            let created_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or(std::time::Duration::from_secs(0))
+                .as_secs();
 
-            match dht.publish_file(metadata.clone()).await {
-                Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
-                Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
-            };
+            // Use DHT helper to prepare versioned metadata so version and parent_hash are computed
+            match dht
+                .prepare_versioned_metadata(
+                    file_hash.clone(),
+                    file_name.to_string(),
+                    file_data.len() as u64,
+                    file_data.clone(),
+                    created_at,
+                    None,  // mime_type
+                    None,  // encrypted_key_bundle
+                    false, // is_encrypted
+                    None,  // encryption_method
+                    None,  // key_fingerprint
+                    price, // Add price parameter
+                    Some(account.clone()), // Add uploader_address parameter
+                )
+                .await
+            {
+                Ok(metadata) => {
+                    // Store file data locally for seeding
+                    ft.store_file_data(file_hash.clone(), file_name.to_string(), file_data.clone())
+                        .await;
+
+                    match dht.publish_file(metadata.clone(), None).await {
+                        Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
+                        Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to prepare versioned metadata: {}", e);
+                }
+            }
 
             Ok(())
         } else {
@@ -2103,6 +2859,56 @@ async fn upload_file_to_network(
     } else {
         Err("File transfer service is not running".to_string())
     }
+}
+
+#[tauri::command]
+async fn start_ftp_download(
+    url: String,
+    output_path: String,
+    username: Option<String>,
+    password: Option<String>,
+) -> Result<String, String> {
+    let parsed = url::Url::parse(&url).map_err(|e| e.to_string())?;
+    let host = parsed.host_str().ok_or("Invalid FTP URL")?;
+    let path = parsed.path();
+
+    // Connect to FTP
+    let mut ftp = FtpStream::connect((host, 21))
+        .map_err(|e| format!("Failed to connect to FTP server: {}", e))?;
+
+    // Login
+    if let (Some(user), Some(pass)) = (username.clone(), password.clone()) {
+        ftp.login(&user, &pass)
+            .map_err(|e| format!("FTP login failed: {}", e))?;
+    } else {
+        ftp.login("anonymous", "anonymous")
+            .map_err(|e| format!("Anonymous login failed: {}", e))?;
+    }
+
+    // Create output file
+    let mut file = std::fs::File::create(&output_path)
+        .map_err(|e| format!("Failed to create output file: {}", e))?;
+
+    // Retrieve file and stream in chunks
+    ftp.retr(path, |mut reader| {
+        let mut buffer = [0u8; 65536]; // 64 KB
+        loop {
+            let bytes_read = reader
+                .read(&mut buffer)
+                .map_err(|e| suppaftp::FtpError::ConnectionError(e))?;
+            if bytes_read == 0 {
+                break; // End of file
+            }
+            file.write_all(&buffer[..bytes_read])
+                .map_err(|e| suppaftp::FtpError::ConnectionError(e))?;
+        }
+        Ok(())
+    })
+    .map_err(|e| format!("FTP RETR failed: {}", e))?;
+
+    ftp.quit().ok();
+
+    Ok(format!("Downloaded successfully to {}", output_path))
 }
 
 #[tauri::command]
@@ -2394,7 +3200,7 @@ async fn save_temp_file_for_upload(
     // Create unique temp file path
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or(Duration::from_secs(0))
         .as_nanos();
     let temp_file_path = temp_dir.join(format!("{}_{}", timestamp, file_name));
 
@@ -2403,6 +3209,14 @@ async fn save_temp_file_for_upload(
         .map_err(|e| format!("Failed to write temp file: {}", e))?;
 
     Ok(temp_file_path.to_string_lossy().to_string())
+}
+
+/// Get file size in bytes
+#[tauri::command]
+async fn get_file_size(file_path: String) -> Result<u64, String> {
+    let metadata = fs::metadata(&file_path)
+        .map_err(|e| format!("Failed to get file metadata: {}", e))?;
+    Ok(metadata.len())
 }
 
 #[tauri::command]
@@ -2424,7 +3238,7 @@ async fn start_streaming_upload(
         "upload_{}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_nanos()
     );
 
@@ -2523,7 +3337,7 @@ async fn upload_file_chunk(
         // Create minimal metadata (without file_data to avoid DHT size limits)
         let created_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
         let metadata = dht::FileMetadata {
@@ -2543,6 +3357,11 @@ async fn upload_file_chunk(
             parent_hash: None,
             is_root: true,
             download_path: None,
+            price: None,
+            uploader_address: None,
+            ftp_sources: None,
+            info_hash: None,
+            trackers: None,
         };
 
         // Store complete file data locally for seeding
@@ -2568,7 +3387,7 @@ async fn upload_file_chunk(
 
         // Publish to DHT
         if let Some(dht) = dht_opt {
-            dht.publish_file(metadata.clone()).await?;
+            dht.publish_file(metadata.clone(), None).await?;
         } else {
             return Err("DHT not running".into());
         }
@@ -3566,7 +4385,7 @@ async fn queue_transaction(
         "tx_{}",
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(Duration::from_secs(0))
             .as_millis()
     );
 
@@ -3577,7 +4396,7 @@ async fn queue_transaction(
         amount,
         timestamp: SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(Duration::from_secs(0))
             .as_secs(),
     };
 
@@ -3898,17 +4717,28 @@ fn main() {
     // For headless mode, initialize basic console logging
     if args.headless {
         use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+        let mut filter = EnvFilter::from_default_env();
+        
+        // Add directives with safe fallback
+        if let Ok(directive) = "chiral_network=info".parse() {
+            filter = filter.add_directive(directive);
+        }
+        if let Ok(directive) = "libp2p=warn".parse() {
+            filter = filter.add_directive(directive);
+        }
+        if let Ok(directive) = "libp2p_kad=warn".parse() {
+            filter = filter.add_directive(directive);
+        }
+        if let Ok(directive) = "libp2p_swarm=warn".parse() {
+            filter = filter.add_directive(directive);
+        }
+        if let Ok(directive) = "libp2p_mdns=warn".parse() {
+            filter = filter.add_directive(directive);
+        }
         
         tracing_subscriber::registry()
             .with(fmt::layer())
-            .with(
-                EnvFilter::from_default_env()
-                    .add_directive("chiral_network=info".parse().unwrap())
-                    .add_directive("libp2p=warn".parse().unwrap())
-                    .add_directive("libp2p_kad=warn".parse().unwrap())
-                    .add_directive("libp2p_swarm=warn".parse().unwrap())
-                    .add_directive("libp2p_mdns=warn".parse().unwrap()),
-            )
+            .with(filter)
             .init();
             
         println!("Running in headless mode...");
@@ -3963,6 +4793,9 @@ fn main() {
             // Initialize stream authentication
             stream_auth: Arc::new(Mutex::new(crate::stream_auth::StreamAuthService::new())),
 
+            // Initialize the new map for AES keys
+            canonical_aes_keys: Arc::new(Mutex::new(std::collections::HashMap::new())),
+
             // Proof-of-Storage watcher background handle and contract address
             // make these clonable so we can .clone() and move into spawned tasks
             proof_watcher: Arc::new(Mutex::new(None)),
@@ -3981,6 +4814,12 @@ fn main() {
             create_chiral_account,
             import_chiral_account,
             has_active_account,
+            get_user_balance,
+            can_afford_download,
+            process_download_payment,
+            record_download_payment,
+            record_seeder_payment,
+            check_payment_notifications,
             get_network_peer_count,
             start_geth_node,
             stop_geth_node,
@@ -3999,6 +4838,7 @@ fn main() {
             queue_transaction,
             get_transaction_queue_status,
             get_cpu_temperature,
+            get_power_consumption,
             is_geth_running,
             check_geth_binary,
             get_geth_status,
@@ -4023,6 +4863,8 @@ fn main() {
             connect_to_peer,
             get_dht_events,
             detect_locale,
+            get_default_storage_path,
+            check_directory_exists,
             get_dht_health,
             get_dht_peer_count,
             get_dht_peer_id,
@@ -4031,6 +4873,7 @@ fn main() {
             start_file_transfer_service,
             download_file_from_network,
             upload_file_to_network,
+            start_ftp_download,
             download_blocks_from_network,
             start_multi_source_download,
             cancel_multi_source_download,
@@ -4086,8 +4929,10 @@ fn main() {
             get_contribution_history,
             reset_analytics,
             save_temp_file_for_upload,
+            get_file_size,
             encrypt_file_for_self_upload,
             encrypt_file_for_recipient,
+            //request_file_access,
             upload_and_publish_file,
             decrypt_and_reassemble_file,
             create_auth_session,
@@ -4116,6 +4961,8 @@ fn main() {
             update_log_config,
             get_logs_directory,
             check_directory_exists
+            get_multiaddresses,
+            clear_seed_list
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -4256,8 +5103,12 @@ fn main() {
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &hide_i, &quit_i])?;
 
+            let icon = app.default_window_icon()
+                .ok_or("Failed to get default window icon")?
+                .clone();
+
             let tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(icon)
                 .menu(&menu)
                 .tooltip("Chiral Network")
                 .show_menu_on_left_click(false)
@@ -4308,8 +5159,8 @@ fn main() {
 
             // Get the main window and ensure it's visible
             if let Some(window) = app.get_webview_window("main") {
-                window.show().unwrap();
-                window.set_focus().unwrap();
+                let _ = window.show();
+                let _ = window.set_focus();
 
                 let app_handle = app.handle().clone();
                 window.on_window_event(move |event| {
@@ -4448,8 +5299,21 @@ async fn encrypt_file_for_recipient(
         PublicKey::from(&secret_key)
     };
 
+    let private_key_hex = state
+        .active_account_private_key
+        .lock()
+        .await
+        .clone()
+        .ok_or("No account is currently active. Please log in.")?;
+
     // Run the encryption in a blocking task to avoid blocking the async runtime
     tokio::task::spawn_blocking(move || {
+        let pk_bytes = hex::decode(private_key_hex.trim_start_matches("0x"))
+            .map_err(|_| "Invalid private key format".to_string())?;
+        let secret_key = StaticSecret::from(
+            <[u8; 32]>::try_from(pk_bytes).map_err(|_| "Private key is not 32 bytes")?,
+        );
+
         // Initialize ChunkManager with proper app data directory
         let manager = ChunkManager::new(chunk_storage_path);
 
@@ -4472,6 +5336,35 @@ async fn encrypt_file_for_recipient(
     .map_err(|e| format!("Encryption task failed: {}", e))?
 }
 
+// #[tauri::command]
+// async fn request_file_access(
+//     state: State<'_, AppState>,
+//     seeder_peer_id: String,
+//     merkle_root: String,
+// ) -> Result<String, String> {
+//     let dht = state.dht.lock().await.as_ref().cloned().ok_or("DHT not running")?;
+//
+//     // 1. Get own public key
+//     let private_key_hex = state
+//         .active_account_private_key
+//         .lock()
+//         .await
+//         .clone()
+//         .ok_or("No active account to derive public key from.")?;
+//     let pk_bytes = hex::decode(private_key_hex.trim_start_matches("0x")).map_err(|_| "Invalid private key format")?;
+//     let secret_key = StaticSecret::from(<[u8; 32]>::try_from(pk_bytes).map_err(|_| "Private key is not 32 bytes")?);
+//     let public_key = PublicKey::from(&secret_key);
+//
+//     // 2. Parse seeder peer id
+//     let seeder = seeder_peer_id.parse().map_err(|_| "Invalid seeder peer ID")?;
+//
+//     // 3. Call the new DHT service method
+//     let bundle = dht.request_aes_key(seeder, merkle_root, public_key).await?;
+//
+//     // 4. Serialize the bundle to send to the frontend
+//     serde_json::to_string(&bundle).map_err(|e| e.to_string())
+// }
+
 /// Unified upload command: processes file with ChunkManager and auto-publishes to DHT
 /// Returns file metadata for frontend use
 #[derive(serde::Serialize)]
@@ -4492,6 +5385,7 @@ async fn upload_and_publish_file(
     file_path: String,
     file_name: Option<String>,
     recipient_public_key: Option<String>,
+    ftp_source: Option<String>,
 ) -> Result<UploadResult, String> {
     // 1. Process file with ChunkManager (encrypt, chunk, build Merkle tree)
     let manifest = encrypt_file_for_recipient(
@@ -4502,7 +5396,7 @@ async fn upload_and_publish_file(
     )
     .await?;
 
-    // 2. Get file name (use provided name or extract from path)
+    // 2. Get file name and size
     let file_name = file_name.unwrap_or_else(|| {
         std::path::Path::new(&file_path)
             .file_name()
@@ -4550,8 +5444,30 @@ async fn upload_and_publish_file(
                 true,                            // is_encrypted
                 Some("AES-256-GCM".to_string()), // Encryption method
                 None,                            // key_fingerprint (deprecated)
+                None,                            // price
+                None,                            // uploader_address
             )
             .await?;
+
+        let mut metadata = metadata;
+        if let Some(ftp_url) = ftp_source {
+            metadata.ftp_sources = Some(vec![FtpSourceInfo {
+                url: ftp_url,
+                username: None,
+                password: None,
+                supports_resume: false, // or true if known
+                file_size: 0,           // placeholder, could update later
+                is_available: true,
+                last_checked: Some(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                ),
+            }]);
+        }
+            
+        println!("📦 BACKEND: Created versioned metadata");
 
         let version = metadata.version.unwrap_or(1);
 
@@ -4570,7 +5486,7 @@ async fn upload_and_publish_file(
                 .await; // Store with Merkle root as key
         }
 
-        dht.publish_file(metadata).await?;
+        dht.publish_file(metadata, None).await?;
         version
     } else {
         1 // Default to v1 if DHT not running
@@ -5034,4 +5950,23 @@ async fn get_relay_alias(
 ) -> Result<Option<String>, String> {
     let aliases = state.relay_aliases.lock().await;
     Ok(aliases.get(&peer_id).cloned())
+}
+
+#[tauri::command]
+async fn get_multiaddresses(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let dht_guard = state.dht.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        Ok(dht.get_multiaddresses().await)
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+
+#[tauri::command]
+async fn clear_seed_list() -> Result<(), String> {
+    // Since you're using localStorage fallback, this command just needs to exist
+    // The actual clearing happens in the frontend via localStorage.removeItem()
+    // This command is here for consistency if you add file-based storage later
+    Ok(())
 }

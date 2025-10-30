@@ -13,9 +13,9 @@
 | **Initial Difficulty**    | 0x400000              | Starting mining difficulty           |
 | **Difficulty Adjustment** | Per block             | Dynamic difficulty adjustment        |
 | **Mining Algorithm**      | Ethash                | ASIC-resistant proof-of-work         |
-| **Initial Reward**        | 2 ETH                 | Block reward initially               |
+| **Initial Reward**        | 2 Chiral              | Block reward initially               |
 | **Max Supply**            | No limit              | Inflationary supply model            |
-| **Precision**             | 18 decimals           | Smallest unit: 1 wei (10^-18 ETH)    |
+| **Precision**             | 18 decimals           | Smallest unit: 1 wei (10^-18 Chiral) |
 | **Coinbase**              | 0x0000...0000         | Initial coinbase address             |
 | **Extra Data**            | "Keep on keeping on!" | Genesis message (0x4b656570...)      |
 
@@ -251,14 +251,14 @@ Message Structure:
 
 ### Algorithms
 
-| Purpose                | Algorithm   | Parameters                |
-| ---------------------- | ----------- | ------------------------- |
-| **File Hashing**       | Keccak-256  | 256-bit output            |
-| **File Encryption**    | AES-256-GCM | 256-bit key, 96-bit nonce |
-| **Key Derivation**     | PBKDF2      | SHA-256, 100k iterations  |
-| **Digital Signatures** | ECDSA       | secp256k1 curve           |
-| **Account Addresses**  | Keccak-256  | Last 20 bytes of hash     |
-| **Random Generation**  | CSPRNG      | System entropy            |
+| Purpose                | Algorithm   | Parameters                          |
+| ---------------------- | ----------- | ----------------------------------- |
+| **File Hashing**       | SHA-256     | 256-bit output, plain hex (no `0x`) |
+| **File Encryption**    | AES-256-GCM | 256-bit key, 96-bit nonce           |
+| **Key Derivation**     | PBKDF2      | SHA-256, 100k iterations            |
+| **Digital Signatures** | ECDSA       | secp256k1 curve                     |
+| **Account Addresses**  | Keccak-256  | Last 20 bytes of hash (with `0x`)   |
+| **Random Generation**  | CSPRNG      | System entropy                      |
 
 ### Key Management
 
@@ -274,10 +274,10 @@ Master Key (from mnemonic)
 
 ### Transaction Types
 
-| Type                | Description          | Base Gas Cost |
-| ------------------- | -------------------- | ------------- |
-| **Transfer**        | Send coins           | 21,000 gas    |
-| **File Access**     | Access stored file   | 30,000 gas    |
+| Type            | Description        | Base Gas Cost |
+| --------------- | ------------------ | ------------- |
+| **Transfer**    | Send coins         | 21,000 gas    |
+| **File Access** | Access stored file | 30,000 gas    |
 
 ### Transaction Structure
 
@@ -343,12 +343,14 @@ Handshake {
 
 ### File Hash Format
 
-The file hash is the hex-encoded SHA-256 Merkle root of the file's original chunks. It is a standard 64-character hexadecimal string.
+The file hash is the hex-encoded SHA-256 Merkle root of the file's original chunks. It is a standard 64-character hexadecimal string **without** the `0x` prefix.
 
 **Format**: `<merkle_root_hash>`
 **Example**: `7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a17d8f9e8c7b6a5d4f3e2d1c0`
 
-- **Hash**: SHA-256 Merkle root in hex (64 chars)
+- **Hash**: SHA-256 Merkle root in hex (64 chars, no `0x` prefix)
+
+**Note**: File hashes do NOT use the `0x` prefix. This distinguishes them from Ethereum-style addresses and blockchain hashes, which DO use the `0x` prefix.
 
 (Note: The `version` of a file is tracked as a separate field in the DHT Record, not as part of the hash string itself.)
 
@@ -366,18 +368,18 @@ Example: 0x742d35Cc6634C0532925a3b8D0C9e0c8b346b983
 
 ### System Error Codes
 
-| Code | Name               | Description                   |
-| ---- | ------------------ | ----------------------------- |
-| 1000 | NETWORK_ERROR      | Network connectivity issue    |
-| 1001 | TIMEOUT            | Operation timed out           |
-| 1002 | INVALID_HASH       | Invalid file hash format      |
-| 1003 | FILE_NOT_FOUND     | File not in network           |
-| 1004 | INSUFFICIENT_FUNDS | Not enough balance            |
-| 1005 | PERMISSION_DENIED  | Access not authorized         |
+| Code | Name               | Description                                |
+| ---- | ------------------ | ------------------------------------------ |
+| 1000 | NETWORK_ERROR      | Network connectivity issue                 |
+| 1001 | TIMEOUT            | Operation timed out                        |
+| 1002 | INVALID_HASH       | Invalid file hash format                   |
+| 1003 | FILE_NOT_FOUND     | File not in network                        |
+| 1004 | INSUFFICIENT_FUNDS | Not enough balance                         |
+| 1005 | PERMISSION_DENIED  | Access not authorized                      |
 | 1006 | STORAGE_FULL       | Local storage capacity reached (this peer) |
-| 1007 | INVALID_CHUNK      | Chunk verification failed     |
-| 1008 | DHT_TIMEOUT        | DHT lookup timeout            |
-| 1009 | PEER_UNREACHABLE   | Cannot connect to peer        |
+| 1007 | INVALID_CHUNK      | Chunk verification failed                  |
+| 1008 | DHT_TIMEOUT        | DHT lookup timeout                         |
+| 1009 | PEER_UNREACHABLE   | Cannot connect to peer                     |
 
 ## Quality of Service
 

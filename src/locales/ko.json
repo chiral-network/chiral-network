@@ -1,6 +1,19 @@
 {
   "settings.title": "설정",
   "settings.subtitle": "Chiral Network 환경을 구성하세요.",
+  "settings.diagnostics.title": "진단",
+  "settings.diagnostics.description": "환경, 저장소, 연결 상태를 점검합니다.",
+  "settings.diagnostics.run": "진단 실행",
+  "settings.diagnostics.running": "실행 중…",
+  "settings.diagnostics.environment": "환경",
+  "settings.diagnostics.i18nStorage": "언어 저장소",
+  "settings.diagnostics.bootstrapNodes": "부트스트랩 노드",
+  "settings.diagnostics.privacyConfig": "프라이버시 라우팅 설정",
+  "settings.diagnostics.privacyNeedsTrusted": "프라이버시 모드가 켜져 있으면 신뢰할 수 있는 프록시를 추가하세요.",
+  "settings.diagnostics.copyReport": "보고서 복사",
+  "settings.diagnostics.copied": "진단 보고서를 복사했습니다",
+  "settings.diagnostics.copyFailed": "복사 실패",
+  "settings.diagnostics.resultsTitle": "결과",
   "settings.searchPlaceholder": "설정 검색...",
   "badges.unsaved": "저장되지 않은 변경사항",
   "storage.title": "스토리지",
@@ -711,6 +724,12 @@
     "powerUsage": "전력 사용량",
     "hw": "H/W",
     "temperature": "온도",
+    "temperatureStatus": {
+      "critical": "심각",
+      "hot": "뜨거움",
+      "warm": "따뜻함",
+      "normal": "정상"
+    },
     "control": "채굴 제어",
     "active": "채굴 활성",
     "stopped": "채굴 중지",
@@ -1055,6 +1074,9 @@
       "retrying": "{hash} 다운로드 재시도 중 (시도 {attempt}/{max})",
       "recovered": "{hash} 다운로드가 {retries}번의 재시도 후 복구되었습니다 ({duration} ms)",
       "failed": "{hash} 다운로드가 {attempts}번의 시도 후 실패했습니다"
-    }
+    },
+    "selectProtocol": "프로토콜 선택",
+    "currentProtocol": "현재 프로토콜",
+    "changeProtocol": "프로토콜 변경"
   }
 }

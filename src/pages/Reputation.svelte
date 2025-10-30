@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { t } from 'svelte-i18n';
   import { TrustLevel, type PeerReputation, type ReputationAnalytics } from '$lib/types/reputation';
   import ReputationCard from '$lib/components/ReputationCard.svelte';
@@ -9,15 +9,52 @@
   import Button from '$lib/components/ui/button.svelte';
   import PeerSelectionService, { type PeerMetrics as BackendPeerMetrics } from '$lib/services/peerSelectionService';
   import { invoke } from '@tauri-apps/api/core';
+  import { debounce } from '$lib/utils/debounce';
+
+  // LocalStorage keys for persisted UI state
+  const STORAGE_KEY_SHOW_ANALYTICS = 'chiral.reputation.showAnalytics';
+  const STORAGE_KEY_SHOW_RELAY_LEADERBOARD = 'chiral.reputation.showRelayLeaderboard';
+
+  // Load persisted UI toggles from localStorage
+  function loadPersistedToggles() {
+    if (typeof window === 'undefined') return { showAnalytics: true, showRelayLeaderboard: true };
+    
+    try {
+      const storedAnalytics = window.localStorage.getItem(STORAGE_KEY_SHOW_ANALYTICS);
+      const storedLeaderboard = window.localStorage.getItem(STORAGE_KEY_SHOW_RELAY_LEADERBOARD);
+      
+      return {
+        showAnalytics: storedAnalytics !== null ? storedAnalytics === 'true' : true,
+        showRelayLeaderboard: storedLeaderboard !== null ? storedLeaderboard === 'true' : true
+      };
+    } catch (e) {
+      console.warn('Failed to load persisted UI toggles:', e);
+      return { showAnalytics: true, showRelayLeaderboard: true };
+    }
+  }
+
+  // Persist UI toggle to localStorage
+  function persistToggle(key: string, value: boolean) {
+    if (typeof window === 'undefined') return;
+    
+    try {
+      window.localStorage.setItem(key, String(value));
+    } catch (e) {
+      console.warn('Failed to persist UI toggle:', e);
+    }
+  }
+
+  const persistedToggles = loadPersistedToggles();
 
   // State
   let peers: PeerReputation[] = [];
   let analytics: ReputationAnalytics;
   let sortBy: 'score' | 'interactions' | 'lastSeen' = 'score';
   let searchQuery = '';
+  let debouncedSearchQuery = ''; // Debounced version for filtering
   let isLoading = true;
-  let showAnalytics = true;
-  let showRelayLeaderboard = true;
+  let showAnalytics = persistedToggles.showAnalytics;
+  let showRelayLeaderboard = persistedToggles.showRelayLeaderboard;
   let currentPage = 1;
   const peersPerPage = 8;
 
@@ -35,6 +72,29 @@
   let pendingSelectedTrustLevels: TrustLevel[] = [];
   let pendingFilterEncryptionSupported: boolean | null = null;
   let pendingMinUptime = 0;
+
+  // Previous filter/sort values for detecting actual changes
+  let prevSelectedTrustLevels: TrustLevel[] = [];
+  let prevFilterEncryptionSupported: boolean | null = null;
+  let prevMinUptime = 0;
+  let prevSortBy: 'score' | 'interactions' | 'lastSeen' = 'score';
+
+  // Debounced search handler
+  const updateDebouncedSearch = debounce((query: string) => {
+    debouncedSearchQuery = query;
+  }, 300);
+
+  // Watch search query and update debounced version
+  $: updateDebouncedSearch(searchQuery);
+
+  // Persist UI toggles when they change
+  $: {
+    persistToggle(STORAGE_KEY_SHOW_ANALYTICS, showAnalytics);
+  }
+  
+  $: {
+    persistToggle(STORAGE_KEY_SHOW_RELAY_LEADERBOARD, showRelayLeaderboard);
+  }
 
   function openFilters() {
     // Sync pending state with applied state when opening
@@ -55,6 +115,13 @@
     pendingSelectedTrustLevels = [];
     pendingFilterEncryptionSupported = null;
     pendingMinUptime = 0;
+  }
+
+  // Close filter dropdown on escape key
+  function handleKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape' && isFilterOpen) {
+      isFilterOpen = false;
+    }
   }
 
   // Action to detect clicks outside an element
@@ -205,7 +272,7 @@
   $: filteredPeers = peers
     .filter(peer => {
       const matchesTrustLevel = selectedTrustLevels.length === 0 || selectedTrustLevels.includes(peer.trustLevel);
-      const matchesSearch = searchQuery === '' || peer.peerId.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesSearch = debouncedSearchQuery === '' || peer.peerId.toLowerCase().includes(debouncedSearchQuery.toLowerCase());
       const matchesEncryption = filterEncryptionSupported === null || peer.metrics.encryptionSupported === filterEncryptionSupported;
       const matchesUptime = peer.metrics.uptime >= minUptime;
 
@@ -231,10 +298,27 @@
     currentPage = totalPages;
   }
 
-  // Reset to page 1 when filters or search change
-  $: if (searchQuery || selectedTrustLevels || filterEncryptionSupported || minUptime || sortBy) {
-    currentPage = 1;
+  // Reset to page 1 only when filters or sort ACTUALLY change (not on every reactive update)
+  $: {
+    const filtersChanged = 
+      JSON.stringify(selectedTrustLevels) !== JSON.stringify(prevSelectedTrustLevels) ||
+      filterEncryptionSupported !== prevFilterEncryptionSupported ||
+      minUptime !== prevMinUptime ||
+      sortBy !== prevSortBy ||
+      debouncedSearchQuery !== (prevDebouncedSearchQuery || '');
+    
+    if (filtersChanged) {
+      currentPage = 1;
+      prevSelectedTrustLevels = [...selectedTrustLevels];
+      prevFilterEncryptionSupported = filterEncryptionSupported;
+      prevMinUptime = minUptime;
+      prevSortBy = sortBy;
+      prevDebouncedSearchQuery = debouncedSearchQuery;
+    }
   }
+
+  // Track previous debounced search for comparison
+  let prevDebouncedSearchQuery = '';
 
   onMount(() => {
     loadPeersFromBackend();
@@ -245,8 +329,15 @@
     setTimeout(() => { loadPeersFromBackend(); loadMyRelayStats(); }, 1500);
     // Periodic refresh to keep data live
     const interval = setInterval(() => { loadPeersFromBackend(); loadMyRelayStats(); }, 10000);
+    
+    // Add escape key listener
+    window.addEventListener('keydown', handleKeydown);
+    
     isLoading = false;
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('keydown', handleKeydown);
+    };
   });
 
   async function refreshData() {
@@ -359,10 +450,15 @@
       <!-- Filters and Sort Controls -->
       <div class="flex items-center justify-between mb-4 gap-2 flex-wrap">
         <!-- Filter Dropdown -->
-        <div class="relative">
-          <Button variant="outline" class="sm:w-auto" on:click={openFilters}>{$t('reputation.filters')}</Button>
+        <div class="relative" use:clickOutside>
+          <Button
+            variant="outline"
+            class="sm:w-auto"
+            on:click={() => (isFilterOpen ? (isFilterOpen = false) : openFilters())}
+            aria-haspopup="true"
+            aria-expanded={isFilterOpen}
+          >{$t('reputation.filters')}</Button>
           {#if isFilterOpen}
-            <div use:clickOutside>
               <Card class="absolute top-full mt-2 p-6 w-72 z-10">
                 <div class="space-y-6">
                   <!-- Trust Level Filter -->
@@ -412,7 +508,6 @@
                   <Button on:click={applyFilters}>{$t('reputation.apply')}</Button>
                 </div>
               </Card>
-            </div>
           {/if}
         </div>
 

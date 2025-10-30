@@ -166,7 +166,7 @@ impl StreamAuthService {
             sequence: 0,
             last_activity: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or(std::time::Duration::from_secs(0))
                 .as_secs(),
         };
 
@@ -191,7 +191,7 @@ impl StreamAuthService {
         session.sequence += 1;
         session.last_activity = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
         // Create message to sign
@@ -244,7 +244,7 @@ impl StreamAuthService {
         // Check timestamp (should be recent)
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
         if now.saturating_sub(auth_msg.timestamp) > self.session_timeout {
             warn!(
@@ -292,7 +292,7 @@ impl StreamAuthService {
     pub fn cleanup_expired_sessions(&mut self) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
         let expired: Vec<String> = self
@@ -450,7 +450,7 @@ impl StreamAuthService {
         // Create exchange state
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
         let exchange_state = KeyExchangeState {
@@ -499,7 +499,7 @@ impl StreamAuthService {
         // Validate request
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
         if now > request.timestamp + self.exchange_timeout {
@@ -634,7 +634,7 @@ impl StreamAuthService {
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
         // Create authenticated session
@@ -744,7 +744,7 @@ impl StreamAuthService {
     pub fn cleanup_expired_exchanges(&mut self) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
         let expired: Vec<String> = self

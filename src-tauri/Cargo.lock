@@ -604,7 +604,7 @@ checksum = "d86b93f97252c47b41663388e6d155714a9d0c398b99f1005cbc5f978b29f445"
 [[package]]
 name = "beetswap"
 version = "0.4.1"
-source = "git+https://github.com/totoro-ming-lin/beetswap.git?branch=older-version#9de7ea8bbef95d64a22dc13da8f26cb573aca4d4"
+source = "git+https://github.com/totoro-ming-lin/beetswap.git?branch=new#e614ef9605c34cbf8ee191b83a29277504dc7168"
 dependencies = [
  "asynchronous-codec",
  "blockstore",
@@ -1058,6 +1058,7 @@ version = "0.1.0"
 dependencies = [
  "aes",
  "aes-gcm",
+ "anyhow",
  "async-std",
  "async-trait",
  "base64 0.21.7",
@@ -1083,15 +1084,18 @@ dependencies = [
  "libp2p",
  "memmap2",
  "multihash-codetable",
+ "native-tls",
  "pbkdf2 0.12.2",
  "rand 0.8.5",
  "reqwest 0.11.27",
  "rs_merkle",
  "secp256k1",
  "serde",
+ "serde_bytes",
  "serde_json",
  "sha2",
  "sha3",
+ "suppaftp",
  "sys-locale",
  "sysinfo",
  "systemstat",
@@ -1112,6 +1116,7 @@ dependencies = [
  "totp-rs",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid 1.18.1",
  "webrtc",
  "x25519-dalek",
@@ -4073,6 +4078,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "507460a910eb7b32ee961886ff48539633b788a36b65692b95f225b844c82553"
 dependencies = [
  "regex-automata",
+]
+
+[[package]]
+name = "lazy-regex"
+version = "3.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60c7310b93682b36b98fa7ea4de998d3463ccbebd94d935d6b48ba5b6ffa7126"
+dependencies = [
+ "lazy-regex-proc_macros",
+ "once_cell",
+ "regex",
+]
+
+[[package]]
+name = "lazy-regex-proc_macros"
+version = "3.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ba01db5ef81e17eb10a5e0f2109d1b3a3e29bac3070fdbd7d156bf7dbd206a1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "regex",
+ "syn 2.0.106",
 ]
 
 [[package]]
@@ -7809,6 +7837,20 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
+
+[[package]]
+name = "suppaftp"
+version = "5.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb79a5b76543d896dbec5c0fd9a28c0ca9a0d4e764c438c37f8463c96e4a8bf2"
+dependencies = [
+ "chrono",
+ "futures-lite",
+ "lazy-regex",
+ "log",
+ "native-tls",
+ "thiserror 1.0.69",
+]
 
 [[package]]
 name = "svm-rs"

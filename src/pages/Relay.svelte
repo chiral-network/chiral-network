@@ -4,9 +4,11 @@
   import { invoke } from '@tauri-apps/api/core';
   import { settings } from '$lib/stores';
   import { dhtService } from '$lib/dht';
+  import { relayErrorService } from '$lib/services/relayErrorService';
   import Card from '$lib/components/ui/card.svelte';
   import Button from '$lib/components/ui/button.svelte';
   import Label from '$lib/components/ui/label.svelte';
+  import RelayErrorMonitor from '$lib/components/RelayErrorMonitor.svelte';
   import { Wifi, WifiOff, Server, Settings as SettingsIcon } from 'lucide-svelte';
 
   // Relay server status
@@ -14,6 +16,7 @@
   let relayServerRunning = false;
   let isToggling = false;
   let dhtIsRunning = false;
+  let relayServerAlias = '';
 
   // AutoRelay client settings
   let autoRelayEnabled = true;
@@ -28,6 +31,7 @@
         relayServerEnabled = loadedSettings.enableRelayServer ?? false;
         autoRelayEnabled = loadedSettings.enableAutorelay ?? true;
         preferredRelaysText = (loadedSettings.preferredRelays || []).join('\n');
+        relayServerAlias = loadedSettings.relayServerAlias ?? '';
       } catch (e) {
         console.error('Failed to load settings:', e);
       }
@@ -64,6 +68,7 @@
         .split('\n')
         .map((r) => r.trim())
         .filter((r) => r.length > 0),
+      relayServerAlias: relayServerAlias.trim(),
     };
 
     localStorage.setItem('chiralSettings', JSON.stringify(currentSettings));
@@ -106,6 +111,7 @@
         enableAutorelay: currentSettings.enableAutorelay,
         preferredRelays: currentSettings.preferredRelays || [],
         enableRelayServer: relayServerEnabled,
+        relayServerAlias: currentSettings.relayServerAlias || '',
         chunkSizeKb: currentSettings.chunkSize,
         cacheSizeMb: currentSettings.cacheSize,
       });
@@ -129,8 +135,32 @@
     saveSettings();
   }
 
-  onMount(() => {
-    loadSettings();
+  onMount(async () => {
+    await loadSettings();
+
+    // Initialize relay error service with preferred relays
+    const preferredRelays = preferredRelaysText
+      .split('\n')
+      .map((r) => r.trim())
+      .filter((r) => r.length > 0);
+
+    if (preferredRelays.length > 0 || autoRelayEnabled) {
+      await relayErrorService.initialize(preferredRelays, autoRelayEnabled);
+
+      // Attempt to connect to best relay if AutoRelay is enabled
+      if (autoRelayEnabled && dhtIsRunning) {
+        try {
+          const result = await relayErrorService.connectToRelay();
+          if (result.success) {
+            console.log('Successfully connected to relay via error service');
+          } else {
+            console.warn('Failed to connect to relay:', result.error);
+          }
+        } catch (error) {
+          console.error('Error connecting to relay:', error);
+        }
+      }
+    }
   });
 </script>
 
@@ -174,6 +204,22 @@
           </ul>
         </div>
 
+        <div>
+          <Label for="relay-alias">Relay Server Alias (Public Name)</Label>
+          <input
+            type="text"
+            id="relay-alias"
+            bind:value={relayServerAlias}
+            on:blur={saveSettings}
+            placeholder="e.g., Alice's Fast Relay 🚀"
+            maxlength="50"
+            class="w-full border rounded-md p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <p class="text-xs text-gray-500 mt-1">
+            This friendly name will appear in logs and when other nodes bootstrap through your relay
+          </p>
+        </div>
+
         {#if !dhtIsRunning}
           <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
             <p class="text-sm font-semibold text-yellow-900">
@@ -205,11 +251,19 @@
         </div>
 
         {#if relayServerRunning}
-          <div class="bg-green-50 border border-green-200 rounded-lg p-3">
+          <div class="bg-green-50 border border-green-200 rounded-lg p-4">
             <p class="text-sm font-semibold text-green-900">
               {$t('relay.server.activeMessage')}
             </p>
-            <p class="text-xs text-green-700 mt-1">
+            {#if relayServerAlias.trim()}
+              <div class="mt-2 flex items-center gap-2">
+                <span class="text-xs text-green-700">Broadcasting as:</span>
+                <span class="text-sm font-bold text-green-900 bg-green-100 px-2 py-1 rounded">
+                  {relayServerAlias}
+                </span>
+              </div>
+            {/if}
+            <p class="text-xs text-green-700 mt-2">
               {$t('relay.server.earningReputation')}
             </p>
           </div>
@@ -268,4 +322,12 @@
       </div>
     </Card>
   </div>
+
+  <!-- Relay Error Monitor -->
+  {#if autoRelayEnabled && dhtIsRunning}
+    <div class="mt-6">
+      <h2 class="text-2xl font-bold text-gray-900 mb-4">Relay Health & Monitoring</h2>
+      <RelayErrorMonitor />
+    </div>
+  {/if}
 </div>

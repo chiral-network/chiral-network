@@ -90,7 +90,7 @@ impl AnalyticsService {
     pub fn new() -> Self {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
         Self {
@@ -138,7 +138,7 @@ impl AnalyticsService {
         bandwidth.upload_bytes += bytes;
         bandwidth.last_updated = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
         let mut contribution = self.resource_contribution.lock().await;
@@ -153,7 +153,7 @@ impl AnalyticsService {
         bandwidth.download_bytes += bytes;
         bandwidth.last_updated = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
         self.maybe_record_history().await;
@@ -267,7 +267,7 @@ impl AnalyticsService {
     async fn maybe_record_history(&self) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
         let mut last_update = self.last_history_update.lock().await;
@@ -365,7 +365,7 @@ impl AnalyticsService {
     pub async fn reset_stats(&self) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
         *self.current_bandwidth.lock().await = BandwidthStats {
