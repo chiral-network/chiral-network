@@ -14,7 +14,7 @@
     RefreshCw,
     Database,
     Languages,
-    FileText
+    FileText,
     Activity,
     CheckCircle,
     AlertTriangle,
