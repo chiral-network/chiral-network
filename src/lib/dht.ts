@@ -234,6 +234,12 @@ export class DhtService {
             unlistenPromise.then((unlistenFn) => unlistenFn());
           },
         );
+
+        // Add timeout to reject the promise if publishing takes too long
+        setTimeout(() => {
+          reject(new Error("File publishing timeout - no published_file event received"));
+          unlistenPromise.then((unlistenFn) => unlistenFn());
+        }, 120000); // 2 minute timeout for file publishing
       });
 
       // Trigger the backend upload with price
