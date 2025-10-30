@@ -41,6 +41,7 @@ export interface FileMetadata {
   seeders: string[];
   createdAt: number;
   merkleRoot?: string;
+  downloadPath?: string;
   mimeType?: string;
   isEncrypted: boolean;
   encryptionMethod?: string;
@@ -256,11 +257,19 @@ export class DhtService {
     }
   }
 
-  async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
-    try {
-      console.log("Initiating download for file:", fileMetadata.fileHash);
-      
-      // Get storage path from settings
+async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
+  try {
+    console.log("Initiating download for file:", fileMetadata.fileHash);
+    
+    // Use the downloadPath from metadata if provided, otherwise fall back to settings
+    let resolvedStoragePath: string;
+    
+    if (fileMetadata.downloadPath) {
+      // Use the path that was already selected by the user in the file dialog
+      resolvedStoragePath = fileMetadata.downloadPath;
+      console.log("Using provided download path:", resolvedStoragePath);
+    } else {
+      // Fallback to settings path (old behavior)
       const stored = localStorage.getItem("chiralSettings");
       let storagePath = "."; // Default fallback
 
@@ -274,13 +283,15 @@ export class DhtService {
       }
       
       // Construct full file path
-      let resolvedStoragePath = storagePath;
       if (storagePath.startsWith("~")) {
         const home = await homeDir();
         resolvedStoragePath = storagePath.replace("~", home);
+      } else {
+        resolvedStoragePath = storagePath;
       }
       resolvedStoragePath += "/" + fileMetadata.fileName;
-
+      console.log("Using settings storage path:", resolvedStoragePath);
+    }
       // IMPORTANT: Set up the event listener BEFORE invoking the backend
       // to avoid race condition where event fires before we're listening
       const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {

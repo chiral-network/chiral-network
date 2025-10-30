@@ -3139,24 +3139,29 @@ async fn run_dht_node(
                                             );
 
                                            // In the "all chunks downloaded" section:
-                                            if active_download.is_complete() {
-                                                // Flush and finalize the file (rename .tmp to final name)
-                                                // No need to check for encryption at this level, handle decryption
-                                                // inside DownloadedFile event or some other handler above this level.
-                                                info!("Finalizing file...");
-                                                match active_download.finalize() {
-                                                    Ok(_) => {
-                                                        info!("Successfully finalized file");
-                                                    }
-                                                    Err(e) => {
-                                                        error!("Failed to finalize file {}: {}", file_hash, e);
-                                                        break;
-                                                    }
-                                                }
-                                                // no longer storing file data in completed metadata because file is being written directly to disk
-                                                let completed_metadata = active_download.metadata.clone();
-                                                completed_downloads.push(completed_metadata);
-                                            }
+                                            // In the "all chunks downloaded" section:
+if active_download.is_complete() {
+    // Flush and finalize the file
+    info!("Finalizing file...");
+    match active_download.finalize() {
+        Ok(_) => {
+            info!("Successfully finalized file");
+        }
+        Err(e) => {
+            error!("Failed to finalize file {}: {}", file_hash, e);
+            break;
+        }
+    }
+    
+    // Create completed metadata with the correct absolute path
+    let mut completed_metadata = active_download.metadata.clone();
+    completed_metadata.download_path = Some(
+        active_download.final_file_path
+            .to_string_lossy()
+            .to_string()
+    );
+    completed_downloads.push(completed_metadata);
+}
                                             break;
                                         }
                                     }
@@ -6738,7 +6743,11 @@ async fn get_available_download_path(path: PathBuf) -> PathBuf {
         return path;
     }
 
-    let parent = path.parent().unwrap_or(Path::new(".").into());
+    let parent = match path.parent() {
+        Some(p) => p,
+        None => return path, // If no parent, return original path
+    };
+    
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
     let extension = path.extension().and_then(|s| s.to_str());
 
