@@ -26,7 +26,7 @@
   let error = '' 
 
   // Network statistics
-  let networkHashRate = '0 H/s'
+  let networkHashRate = 0
   let networkDifficulty = '0'
   let blockReward = 2 // Chiral per block
   let peerCount = 0
@@ -477,7 +477,7 @@
   try {
     if (isGethRunning) {
       const promises: Promise<any>[] = [
-        invoke('get_network_stats') as Promise<[string, string]>,
+        invoke('get_network_stats') as Promise<[string, number]>,
         invoke('get_current_block') as Promise<number>,
         invoke('get_network_peer_count') as Promise<number>
       ]
@@ -1354,7 +1354,7 @@
       <div class="space-y-3">
         <div class="flex justify-between items-center">
           <span class="text-sm text-muted-foreground">{$t('mining.networkHashRate')}</span>
-          <Badge variant="outline">{networkHashRate}</Badge>
+          <Badge variant="outline">{networkHashRate} H/s</Badge>
         </div>
         <div class="flex justify-between items-center">
           <span class="text-sm text-muted-foreground">{$t('mining.networkDifficulty')}</span>
