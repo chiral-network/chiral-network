@@ -1100,6 +1100,50 @@
     "fileManagementWebNotAvailable": "Управление файлами недоступно в веб-версии",
     "fileDialogError": "Не удалось открыть диалог выбора файлов"
   },
+  "torrent": {
+    "title": "Торренты",
+    "magnetLink": {
+      "title": "С магнитной ссылки",
+      "description": "Вставьте магнитную ссылку для начала загрузки.",
+      "placeholder": "magnet:?xt=urn:btih:...",
+      "download": "Скачать"
+    },
+    "or": "Или",
+    "torrentFile": {
+      "title": "С файла .torrent",
+      "description": "Загрузите файл .torrent с вашего компьютера.",
+      "choosePlaceholder": "Выберите файл .torrent...",
+      "download": "Скачать",
+      "invalidFile": "Пожалуйста, выберите корректный файл .torrent."
+    },
+    "seed": {
+      "title": "Создать и раздавать торрент",
+      "description": "Выберите локальный файл для раздачи в сети.",
+      "choosePlaceholder": "Выберите файл для раздачи...",
+      "button": "Раздавать файл",
+      "shareMagnet": "Поделитесь этой магнитной ссылкой:",
+      "noFileSelected": "Пожалуйста, выберите файл для раздачи.",
+      "success": "Успешно начата раздача {fileName}!",
+      "error": "Ошибка раздачи файла: {error}"
+    },
+    "activeTransfers": {
+      "title": "Активные передачи",
+      "filterAll": "Все",
+      "filterChiral": "Chiral",
+      "filterBitTorrent": "BitTorrent",
+      "noTransfers": "Нет активных передач.",
+      "peers": "Пиры:",
+      "eta": "Осталось:"
+    },
+    "download": {
+      "error": "Ошибка: {error}",
+      "noIdentifier": "Пожалуйста, предоставьте магнитную ссылку или выберите файл .torrent.",
+      "complete": "Загрузка завершена: {fileName}"
+    },
+    "clipboard": {
+      "copied": "Скопировано в буфер обмена!"
+    }
+  },
   "bandwidthScheduling": {
     "title": "Планирование пропускной способности",
     "enable": "Включить планирование пропускной способности",

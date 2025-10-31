@@ -1156,6 +1156,50 @@
     "fileManagementWebNotAvailable": "File management not available in web version",
     "fileDialogError": "Failed to open file dialog"
   },
+  "torrent": {
+    "title": "Torrents",
+    "magnetLink": {
+      "title": "From Magnet Link",
+      "description": "Paste a magnet link to start downloading.",
+      "placeholder": "magnet:?xt=urn:btih:...",
+      "download": "Download"
+    },
+    "or": "Or",
+    "torrentFile": {
+      "title": "From .torrent File",
+      "description": "Upload a .torrent file from your computer.",
+      "choosePlaceholder": "Choose a .torrent file...",
+      "download": "Download",
+      "invalidFile": "Please select a valid .torrent file."
+    },
+    "seed": {
+      "title": "Create & Seed Torrent",
+      "description": "Select a local file to share with the network.",
+      "choosePlaceholder": "Choose a file to seed...",
+      "button": "Seed File",
+      "shareMagnet": "Share this magnet link:",
+      "noFileSelected": "Please select a file to seed.",
+      "success": "Successfully started seeding {fileName}!",
+      "error": "Error seeding file: {error}"
+    },
+    "activeTransfers": {
+      "title": "Active Transfers",
+      "filterAll": "All",
+      "filterChiral": "Chiral",
+      "filterBitTorrent": "BitTorrent",
+      "noTransfers": "No active transfers.",
+      "peers": "Peers:",
+      "eta": "ETA:"
+    },
+    "download": {
+      "error": "Error: {error}",
+      "noIdentifier": "Please provide a magnet link or select a .torrent file.",
+      "complete": "Download complete: {fileName}"
+    },
+    "clipboard": {
+      "copied": "Copied to clipboard!"
+    }
+  },
   "bandwidthScheduling": {
     "title": "Bandwidth Scheduling",
     "enable": "Enable Bandwidth Scheduling",

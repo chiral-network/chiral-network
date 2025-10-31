@@ -1159,5 +1159,49 @@
     "fileManagementTooltip": "La gestión de archivos requiere aplicación de escritorio",
     "fileManagementWebNotAvailable": "Gestión de archivos no disponible en versión web",
     "fileDialogError": "Error al abrir el diálogo de archivos"
+  },
+  "torrent": {
+    "title": "Torrents",
+    "magnetLink": {
+      "title": "Desde Enlace Magnet",
+      "description": "Pega un enlace magnet para comenzar la descarga.",
+      "placeholder": "magnet:?xt=urn:btih:...",
+      "download": "Descargar"
+    },
+    "or": "O",
+    "torrentFile": {
+      "title": "Desde Archivo .torrent",
+      "description": "Sube un archivo .torrent desde tu computadora.",
+      "choosePlaceholder": "Elige un archivo .torrent...",
+      "download": "Descargar",
+      "invalidFile": "Por favor selecciona un archivo .torrent válido."
+    },
+    "seed": {
+      "title": "Crear y Compartir Torrent",
+      "description": "Selecciona un archivo local para compartir con la red.",
+      "choosePlaceholder": "Elige un archivo para compartir...",
+      "button": "Compartir Archivo",
+      "shareMagnet": "Comparte este enlace magnet:",
+      "noFileSelected": "Por favor selecciona un archivo para compartir.",
+      "success": "¡Se comenzó a compartir {fileName} exitosamente!",
+      "error": "Error al compartir archivo: {error}"
+    },
+    "activeTransfers": {
+      "title": "Transferencias Activas",
+      "filterAll": "Todos",
+      "filterChiral": "Chiral",
+      "filterBitTorrent": "BitTorrent",
+      "noTransfers": "No hay transferencias activas.",
+      "peers": "Pares:",
+      "eta": "Tiempo estimado:"
+    },
+    "download": {
+      "error": "Error: {error}",
+      "noIdentifier": "Por favor proporciona un enlace magnet o selecciona un archivo .torrent.",
+      "complete": "Descarga completa: {fileName}"
+    },
+    "clipboard": {
+      "copied": "¡Copiado al portapapeles!"
+    }
   }
 }

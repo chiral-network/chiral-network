@@ -999,6 +999,50 @@
     "fileManagementWebNotAvailable": "웹 버전에서는 파일 관리를 사용할 수 없습니다",
     "fileDialogError": "파일 대화 상자를 열지 못했습니다"
   },
+  "torrent": {
+    "title": "토렌트",
+    "magnetLink": {
+      "title": "마그넷 링크에서",
+      "description": "마그넷 링크를 붙여넣어 다운로드를 시작하세요.",
+      "placeholder": "magnet:?xt=urn:btih:...",
+      "download": "다운로드"
+    },
+    "or": "또는",
+    "torrentFile": {
+      "title": ".torrent 파일에서",
+      "description": "컴퓨터에서 .torrent 파일을 업로드하세요.",
+      "choosePlaceholder": ".torrent 파일 선택...",
+      "download": "다운로드",
+      "invalidFile": "올바른 .torrent 파일을 선택하세요."
+    },
+    "seed": {
+      "title": "토렌트 생성 및 시딩",
+      "description": "네트워크와 공유할 로컬 파일을 선택하세요.",
+      "choosePlaceholder": "시딩할 파일 선택...",
+      "button": "파일 시딩",
+      "shareMagnet": "이 마그넷 링크를 공유하세요:",
+      "noFileSelected": "시딩할 파일을 선택하세요.",
+      "success": "{fileName} 시딩을 성공적으로 시작했습니다!",
+      "error": "파일 시딩 오류: {error}"
+    },
+    "activeTransfers": {
+      "title": "활성 전송",
+      "filterAll": "전체",
+      "filterChiral": "Chiral",
+      "filterBitTorrent": "BitTorrent",
+      "noTransfers": "활성 전송이 없습니다.",
+      "peers": "피어:",
+      "eta": "예상 시간:"
+    },
+    "download": {
+      "error": "오류: {error}",
+      "noIdentifier": "마그넷 링크를 제공하거나 .torrent 파일을 선택하세요.",
+      "complete": "다운로드 완료: {fileName}"
+    },
+    "clipboard": {
+      "copied": "클립보드에 복사되었습니다!"
+    }
+  },
   "download": {
     "title": "파일 다운로드",
     "subtitle": "해시를 사용하여 Chiral 네트워크에서 파일 다운로드",

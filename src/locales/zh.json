@@ -1023,6 +1023,50 @@
     "fileManagementWebNotAvailable": "网页版不支持文件管理",
     "fileDialogError": "无法打开文件对话框"
   },
+  "torrent": {
+    "title": "种子",
+    "magnetLink": {
+      "title": "从磁力链接",
+      "description": "粘贴磁力链接以开始下载。",
+      "placeholder": "magnet:?xt=urn:btih:...",
+      "download": "下载"
+    },
+    "or": "或",
+    "torrentFile": {
+      "title": "从 .torrent 文件",
+      "description": "从您的计算机上传 .torrent 文件。",
+      "choosePlaceholder": "选择 .torrent 文件...",
+      "download": "下载",
+      "invalidFile": "请选择有效的 .torrent 文件。"
+    },
+    "seed": {
+      "title": "创建并做种",
+      "description": "选择本地文件与网络分享。",
+      "choosePlaceholder": "选择要做种的文件...",
+      "button": "做种文件",
+      "shareMagnet": "分享此磁力链接：",
+      "noFileSelected": "请选择要做种的文件。",
+      "success": "成功开始做种 {fileName}！",
+      "error": "做种文件错误：{error}"
+    },
+    "activeTransfers": {
+      "title": "活动传输",
+      "filterAll": "全部",
+      "filterChiral": "Chiral",
+      "filterBitTorrent": "BitTorrent",
+      "noTransfers": "没有活动传输。",
+      "peers": "节点：",
+      "eta": "预计时间："
+    },
+    "download": {
+      "error": "错误：{error}",
+      "noIdentifier": "请提供磁力链接或选择 .torrent 文件。",
+      "complete": "下载完成：{fileName}"
+    },
+    "clipboard": {
+      "copied": "已复制到剪贴板！"
+    }
+  },
   "download": {
     "title": "下载文件",
     "subtitle": "使用哈希从 Chiral 网络下载文件",
