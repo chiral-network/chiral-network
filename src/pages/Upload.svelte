@@ -342,7 +342,7 @@
 
         if (!$etcAccount) {
           showToast(
-            "Please create or import an account to upload files",
+            tr("upload.requireAccount"),
             "warning",
           );
           return;
@@ -350,7 +350,7 @@
 
         if (isUploading) {
           showToast(
-            "Upload already in progress. Please wait for the current upload to complete.",
+            tr("upload.uploadInProgress"),
             "warning",
           );
           return;
@@ -361,7 +361,7 @@
         if (droppedFiles.length > 0) {
           if (!isTauri) {
             showToast(
-              "File upload is only available in the desktop app",
+              tr("upload.desktopOnly"),
               "error",
             );
             return;
@@ -386,7 +386,7 @@
               const fileName = file.name.toLowerCase();
               if (blockedExtensions.some((ext) => fileName.endsWith(ext))) {
                 showToast(
-                  `${file.name}: Executable files are not allowed for security reasons`,
+                  tr("upload.executableBlocked", { values: { name: file.name } }),
                   "error",
                 );
                 blockedCount++;
@@ -394,7 +394,7 @@
               }
 
               if (file.size === 0) {
-                showToast(`${file.name}: File is empty`, "error");
+                showToast(tr("upload.emptyFile", { values: { name: file.name } }), "error");
                 blockedCount++;
                 continue;
               }
@@ -502,12 +502,12 @@
               const isDhtRunning = dhtService.getPeerId() !== null;
               if (isDhtRunning) {
                 showToast(
-                  "Files published to DHT network for sharing!",
+                  tr("upload.publishedToDHT"),
                   "success",
                 );
               } else {
                 showToast(
-                  "Files stored locally. Start DHT network to share with others.",
+                  tr("upload.storedLocally"),
                   "info",
                 );
               }
@@ -516,7 +516,7 @@
           } catch (error) {
             console.error("Error handling dropped files:", error);
             showToast(
-              'Error processing dropped files. Please try again or use the "Add Files" button instead.',
+              tr("upload.uploadError"),
               "error",
             );
           } finally {
@@ -593,7 +593,7 @@
   async function openFileDialog() {
     if (!$etcAccount) {
       showToast(
-        "Please create or import an account to upload files",
+        tr("upload.requireAccount"),
         "warning",
       );
       return;
@@ -620,7 +620,7 @@
   async function removeFile(fileHash: string) {
     if (!isTauri) {
       showToast(
-        "File management is only available in the desktop app",
+        tr("upload.fileManagementDesktopOnly"),
         "error",
       );
       return;
@@ -649,7 +649,7 @@
   async function addFilesFromPaths(paths: string[]) {
     if (!$etcAccount) {
       showToast(
-        "Please create or import an account to upload files",
+        tr("upload.requireAccount"),
         "warning",
       );
       return;
@@ -735,13 +735,13 @@
           if (existed) {
             duplicateCount++;
             showToast(
-              `${fileName} already exists; updated to v${metadata.version}`,
+              tr("upload.fileUpdated", { values: { name: fileName, version: metadata.version } }),
               "info",
             );
           } else {
             addedCount++;
             showToast(
-              `${fileName} uploaded as v${metadata.version} (new file)`,
+              tr("upload.fileUploadedNew", { values: { name: fileName, version: metadata.version } }),
               "success",
             );
           }
@@ -858,10 +858,10 @@
     if (addedCount > 0) {
       const isDhtRunning = dhtService.getPeerId() !== null;
       if (isDhtRunning) {
-        showToast("Files published to DHT network for sharing!", "success");
+        showToast(tr("upload.publishedToDHT"), "success");
       } else {
         showToast(
-          "Files stored locally. Start DHT network to share with others.",
+          tr("upload.storedLocally"),
           "info",
         );
       }
@@ -877,7 +877,7 @@
 
   async function handleCopy(hash: string) {
     await navigator.clipboard.writeText(hash);
-    showToast("File hash copied to clipboard!", "success");
+    showToast(tr("upload.hashCopiedClipboard"), "success");
   }
 
   async function showVersionHistory(fileName: string) {
@@ -886,7 +886,7 @@
         fileName,
       })) as any[];
       if (versions.length === 0) {
-        showToast("No version history found for this file", "info");
+        showToast(tr("upload.noVersionHistory"), "info");
         return;
       }
 
@@ -897,9 +897,9 @@
         )
         .join("\n");
 
-      showToast(`Version history for ${fileName}:\n${versionList}`, "info");
+      showToast(tr("upload.versionHistoryTitle", { values: { name: fileName, list: versionList } }), "info");
     } catch (error) {
-      showToast("Failed to load version history", "error");
+      showToast(tr("upload.versionHistoryError"), "error");
     }
   }
 </script>
@@ -950,10 +950,10 @@
     <Card class="p-4">
       <div class="text-center">
         <p class="text-sm font-semibold text-foreground mb-2">
-          Desktop App Required
+          {$t("upload.desktopAppRequired")}
         </p>
         <p class="text-sm text-muted-foreground">
-          Storage monitoring requires the desktop application
+          {$t("upload.storageMonitoringDesktopOnly")}
         </p>
       </div>
     </Card>
@@ -1180,9 +1180,9 @@
                         : 'text-foreground'}"
                   >
                     {isDragging
-                      ? "✨ Drop files here!"
+                      ? $t("upload.dropFilesHere")
                       : isUploading
-                        ? "🔄 Uploading files..."
+                        ? $t("upload.uploadingFiles")
                         : $t("upload.dropFiles")}
                   </h3>
 
@@ -1191,13 +1191,13 @@
                   >
                     {isDragging
                       ? isTauri
-                        ? "Release to upload your files instantly"
-                        : "Drag and drop not available in web version"
+                        ? $t("upload.releaseToUpload")
+                        : $t("upload.dragDropWebNotAvailable")
                       : isUploading
-                        ? "Please wait while your files are being processed..."
+                        ? $t("upload.pleaseWaitProcessing")
                         : isTauri
                           ? $t("upload.dropFilesHint")
-                          : "Drag and drop requires desktop app"}
+                          : $t("upload.dragDropRequiresDesktop")}
                   </p>
 
                   {#if !isDragging}
@@ -1219,16 +1219,15 @@
                           <Plus
                             class="h-5 w-5 mr-2 group-hover:rotate-90 transition-transform duration-300"
                           />
-                          {isUploading ? "Uploading..." : $t("upload.addFiles")}
+                          {isUploading ? $t("upload.uploading") : $t("upload.addFiles")}
                         </button>
                       {:else}
                         <div class="text-center">
                           <p class="text-sm text-muted-foreground mb-3">
-                            File upload requires the desktop app
+                            {$t("upload.fileUploadDesktopApp")}
                           </p>
                           <p class="text-xs text-muted-foreground">
-                            Download the desktop version to upload and share
-                            files
+                            {$t("upload.downloadDesktopApp")}
                           </p>
                         </div>
                       {/if}
@@ -1286,12 +1285,12 @@
                       on:click={openFileDialog}
                     >
                       <Plus class="h-4 w-4 mr-2" />
-                      {isUploading ? "Uploading..." : $t("upload.addMoreFiles")}
+                      {isUploading ? $t("upload.uploading") : $t("upload.addMoreFiles")}
                     </button>
                   {:else}
                     <div class="text-center">
                       <p class="text-xs text-muted-foreground">
-                        Desktop app required for file management
+                        {$t("upload.desktopManagementRequired")}
                       </p>
                     </div>
                   {/if}
@@ -1339,7 +1338,7 @@
                               {#if file.version}
                                 <Badge
                                   class="bg-blue-100 text-blue-800 text-xs px-2 py-0.5 cursor-pointer hover:bg-blue-200 transition-colors"
-                                  title="v{file.version} - Click to view version history"
+                                  title={$t("upload.versionHistoryTooltip", { values: { version: file.version } })}
                                   on:click={() => showVersionHistory(file.name)}
                                 >
                                   v{file.version}
@@ -1349,10 +1348,10 @@
                               {#if file.isEncrypted}
                                 <Badge
                                   class="bg-purple-100 text-purple-800 text-xs px-2 py-0.5 flex items-center gap-1"
-                                  title="This file is encrypted end-to-end"
+                                  title={$t("upload.encryptedEndToEnd")}
                                 >
                                   <Lock class="h-3 w-3" />
-                                  Encrypted
+                                  {$t("upload.encryption.encryptedBadge")}
                                 </Badge>
                               {/if}
 
@@ -1361,7 +1360,7 @@
                                   class="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"
                                 ></div>
                                 <span class="text-xs text-green-600 font-medium"
-                                  >Active</span
+                                  >{$t("upload.active")}</span
                                 >
                               </div>
                             </div>
@@ -1370,7 +1369,7 @@
                               class="flex flex-wrap items-center gap-3 text-xs text-muted-foreground"
                             >
                               <div class="flex items-center gap-1">
-                                <span class="opacity-60">Hash:</span>
+                                <span class="opacity-60">{$t("upload.hashLabel")}</span>
                                 <code
                                   class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono"
                                 >
@@ -1414,7 +1413,7 @@
                           {#if file.price !== undefined && file.price !== null}
                             <div
                               class="flex items-center gap-1.5 bg-green-500/10 text-green-600 border border-green-500/20 font-medium px-2.5 py-1 rounded-md"
-                              title="Price calculated dynamically based on network hash power"
+                              title={$t("upload.priceTooltip")}
                             >
                               <DollarSign class="h-3.5 w-3.5" />
                               <span class="text-sm"
@@ -1441,7 +1440,7 @@
                               <div
                                 class="w-1.5 h-1.5 bg-blue-500 rounded-full mr-1.5"
                               ></div>
-                              Stored Locally
+                              {$t("upload.storedLocallyBadge")}
                             </Badge>
                           {/if}
 
@@ -1480,8 +1479,8 @@
                           {:else}
                             <div
                               class="p-2 text-muted-foreground/50 cursor-not-allowed"
-                              title="File management requires desktop app"
-                              aria-label="File management not available in web version"
+                              title={$t("upload.fileManagementTooltip")}
+                              aria-label={$t("upload.fileManagementWebNotAvailable")}
                             >
                               <X class="h-4 w-4" />
                             </div>
