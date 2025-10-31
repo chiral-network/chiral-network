@@ -45,9 +45,23 @@ export type WebRTCSession = {
 };
 
 const defaultIceServers: IceServer[] = [
-  // Keep simple/stable STUN servers (avoid query params which some browsers reject)
+  // STUN servers (for NAT traversal - free public servers)
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:global.stun.twilio.com:3478" },
+
+  // TURN server (for relay when P2P fails - your Google Cloud VM)
+  // TODO: Replace with your actual VM IP and credentials
+  {
+    urls: "turn:YOUR_VM_IP:3478",
+    username: "chiral",
+    credential: "YOUR_PASSWORD"
+  },
+  // TLS TURN (more secure)
+  {
+    urls: "turns:YOUR_VM_IP:5349",
+    username: "chiral",
+    credential: "YOUR_PASSWORD"
+  }
 ];
 
 function sanitizeIceServers(servers: IceServer[]): IceServer[] {

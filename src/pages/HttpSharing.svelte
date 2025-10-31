@@ -36,6 +36,12 @@
       networkInfo = await invoke('get_network_info', { port: 8080 });
       console.log('Network info:', networkInfo);
 
+      // Use local IP for server URL (more reliable than public IP)
+      if (networkInfo.localIp) {
+        serverUrl = `http://${networkInfo.localIp}:8080`;
+        console.log('Using local IP for server:', serverUrl);
+      }
+
       // Also load shared files
       await loadSharedFiles();
     } catch (error: any) {
@@ -137,7 +143,11 @@
   function normalizeBase(input?: string): string {
     const cand = (input || '').trim();
     const fromTunnel = (tunnelInfo?.public_url || '').trim();
-    const fromBackend = (networkInfo?.httpServerUrl || '').trim();
+
+    // Prefer local IP over public IP for reliability
+    const localIpUrl = networkInfo?.localIp ? `http://${networkInfo.localIp}:8080` : '';
+    const fromBackend = localIpUrl || (networkInfo?.httpServerUrl || '').trim();
+
     const base = cand || fromTunnel || fromBackend || (typeof window !== 'undefined' ? window.location.origin : '');
     return base.replace(/\/+$/, '');
   }
@@ -275,12 +285,22 @@
 
           <div class="info-box">
             <div class="text-sm text-muted-foreground mb-1">Local IP</div>
-            <div class="font-mono font-semibold">{networkInfo.localIp}</div>
+            <div class="font-mono font-semibold flex items-center gap-2">
+              {networkInfo.localIp}
+              <button on:click={() => copyToClipboard(`http://${networkInfo.localIp}:8080`)} class="btn-icon">
+                <Copy class="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
           <div class="info-box">
-            <div class="text-sm text-muted-foreground mb-1">HTTP Server URL</div>
-            <div class="font-mono text-sm break-all">{networkInfo.httpServerUrl}</div>
+            <div class="text-sm text-muted-foreground mb-1">Local Server URL (Use This)</div>
+            <div class="font-mono text-sm break-all flex items-center gap-2">
+              <span class="flex-1">http://{networkInfo.localIp}:8080</span>
+              <button on:click={() => copyToClipboard(`http://${networkInfo.localIp}:8080`)} class="btn-icon">
+                <Copy class="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
           <div class="info-box">

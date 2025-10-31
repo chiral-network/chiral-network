@@ -68,7 +68,8 @@ pub struct SignalingServer {
 
 impl SignalingServer {
     pub fn new(port: u16) -> Self {
-        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        // Bind to 0.0.0.0 to accept connections from any network interface
+        let addr = SocketAddr::from(([0, 0, 0, 0], port));
         Self {
             addr,
             peers: Arc::new(Mutex::new(HashMap::new())),

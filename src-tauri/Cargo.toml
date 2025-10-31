@@ -13,6 +13,10 @@ name = "chiral_network"
 path = "src/lib.rs"
 crate-type = ["lib"]
 
+[[bin]]
+name = "signaling-server"
+path = "src/bin/signaling_server.rs"
+
 [build-dependencies]
 tauri-build = { version = "2.0", features = [] }
 
