@@ -207,3 +207,5 @@ After deploying a relay, configure it in your Chiral Network app:
 - [Security & Privacy](security-privacy.md) - Privacy features
 - [Deployment Guide](deployment-guide.md) - Production setup
 - [relay/DEPLOYMENT.md](../relay/DEPLOYMENT.md) - Advanced relay deployment
+- [AutoNAT v2 Package](https://www.npmjs.com/package/@libp2p/autonat-v2/v/1.0.0-5ed83dd69) - libp2p AutoNAT v2 specification
+- [Circuit Relay Documentation](https://docs.libp2p.io/concepts/nat/circuit-relay/) - libp2p Circuit Relay protocol
