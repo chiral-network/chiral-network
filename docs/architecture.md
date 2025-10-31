@@ -258,7 +258,9 @@ Uses established public protocols for data transfer, with payments settled separ
 
 When a downloader initiates a file transfer using a public protocol like HTTP or BitTorrent, the following sequence of events occurs:
 
-1.  **Peer Discovery via Chiral DHT:** The downloader queries the Chiral DHT to identify seeders for the desired content.
+1.  **Peer Discovery and Protocol Selection:** The downloader queries the Chiral DHT to find peers seeding the content. The DHT returns a list of seeders, each advertising the protocol(s) they support (e.g., HTTP, BitTorrent).
+    *   **Seeder-Side:** Seeders advertise a default protocol based on their network capability (HTTP for public IPs, WebTorrent for those behind a NAT).
+    *   **Downloader-Side:** The downloader analyzes the list of available seeders and protocols, and selects the optimal protocol(s) based on factors like user preference, network conditions, and file characteristics. The client can decide to use multiple protocols simultaneously from different peers to maximize speed.
 2.  **Peer Handshake and Price Negotiation:** The downloader and seeder(s) establish a connection. A handshake process is performed, during which they agree upon the terms of the transfer, including pricing. This negotiation is facilitated through DHT messages (the exact mechanism is to be defined).
 3.  **Initiation of Download:** Once terms are agreed upon, the downloader can commence the download from the seeder using one or both of the following methods (the default is to be determined):
     *   **Public Protocol:** The transfer occurs directly over the specified public protocol (e.g., HTTP, BitTorrent).
