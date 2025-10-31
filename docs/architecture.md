@@ -254,6 +254,17 @@ Uses established public protocols for data transfer, with payments settled separ
 - **WebTorrent**: Browser-compatible WebRTC
 - **ed2k**: eDonkey2000 multi-source
 
+**Public Protocol Interaction Flow:**
+
+When a downloader initiates a file transfer using a public protocol like HTTP or BitTorrent, the following sequence of events occurs:
+
+1.  **Peer Discovery via Chiral DHT:** The downloader queries the Chiral DHT to identify seeders for the desired content.
+2.  **Peer Handshake and Price Negotiation:** The downloader and seeder(s) establish a connection. A handshake process is performed, during which they agree upon the terms of the transfer, including pricing. This negotiation is facilitated through DHT messages (the exact mechanism is to be defined).
+3.  **Initiation of Download:** Once terms are agreed upon, the downloader can commence the download from the seeder using one or both of the following methods (the default is to be determined):
+    *   **Public Protocol:** The transfer occurs directly over the specified public protocol (e.g., HTTP, BitTorrent).
+    *   **Private Protocol:** The transfer is wrapped within the Chiral private protocol.
+4.  **Parallel Downloading from Public Sources:** Concurrently with the above steps, the downloader can also fetch parts of the file from its original public source (e.g., the public BitTorrent network), enabling multi-source downloads.
+
 **Default Protocol Selection by Network Capability**:
 
 ```
@@ -614,6 +625,28 @@ Disadvantages vs WebTorrent for NAT'd nodes:
 - DHT may be slower than WebRTC STUN/TURN
 
 [Decision Point]: WebTorrent (browser-friendly) vs BitTorrent (efficient) for NAT default?
+
+###### Chiral Client Identification in BitTorrent Swarms
+
+To enable Chiral clients to identify and prioritize each other within a public BitTorrent swarm, a custom extension to the BitTorrent protocol can be implemented, based on BEP 10 (BitTorrent Extension Protocol). This allows for the addition of new features without breaking compatibility with standard clients.
+
+**Proposed Mechanism:**
+
+1.  **Handshake Extension:** During the standard BitTorrent handshake, Chiral clients will set a reserved bit to indicate support for protocol extensions.
+2.  **Extended Handshake:** Immediately following the handshake, an "extended" handshake message is sent. In this message, Chiral clients will include a "chiral" identifier in the list of supported extensions.
+3.  **Identification Message:** If two peers both support the "chiral" extension, they can then exchange custom messages. A Chiral client can send a message containing its Chiral peer ID and reputation score from the Chiral DHT.
+4.  **Prioritization:** Once a peer is verified as a Chiral client, the application can prioritize it for piece requests, creating a "fast lane" for transfers between Chiral users.
+
+Standard BitTorrent clients that do not support this extension will simply ignore it, ensuring full compatibility with the public swarm. In a pay-first model, recorded transactions on the Chiral blockchain ledger may also be used as a verification measure.
+
+###### Note: Private BitTorrent Networks
+
+We may need to have a discussion on whether the program should configure Chiral clients to block all non-Chiral peers, creating a private BitTorrent network. This approach comes with some trade-offs/concerns:
+
+*   **Harming the BitTorrent Network:** The primary advantage of BitTorrent integration is access to the large public swarm. Blocking non-Chiral peers would negatively impace this, possibly casuing harm to the the health of the public torrent network.
+*   **Tracker Penalities/Backlash:** If Chiral clients download from the public swarm but refuse to upload to public peers, they are acting as sole "leeches." This may be seen as a challenge to the cooperative spirit of BitTorrent. Some trackers may even ban clients with poor share ratios.
+
+The recommended approach seems to be the hybrid model: **prioritize Chiral clients but maintain compatibility with the public swarm.** 
 ```
 
 The BitTorrent protocol is integrated as a primary method for file transfer, leveraging the global BitTorrent network to enhance multi-source download capabilities. It acts as an additional source within `multi_source_download.rs`, coordinated by a central `ProtocolManager`.
@@ -625,7 +658,36 @@ It is crucial to understand that the Chiral P2P network (built on libp2p) and th
 - **Chiral P2P Network (libp2p)**: Used to find other Chiral peers, manage reputation, and coordinate transfers and payments within the Chiral ecosystem.
 - **Public BitTorrent Network**: The global, public swarm of all BitTorrent clients. The Chiral client connects to this network to download and seed files like a standard BitTorrent client.
 
-This dual-network approach allows the `ProtocolManager` to query both networks simultaneously, combining the speed and trust of the private Chiral network with the vast reach of the public one for faster, more resilient downloads.
+This dual-network approach allows the `ProtocolManager` to query both networks simultaneously, combining the speed and trust of the private Chiral network with the vast reach of the public one for faster, more resilient downloads. The system is designed to prioritize connections to other Chiral clients, ensuring that users within the Chiral ecosystem benefit from higher speeds and reliability.
+
+###### Example: Hybrid BitTorrent Download
+
+This example illustrates how the Chiral client can download a file by simultaneously sourcing chunks from both the public BitTorrent network and from other Chiral peers who are also seeding the same torrent.
+
+**Scenario:** A user wants to download a large file, `large-dataset.zip`, which is available as a public torrent.
+
+1.  **Initiating the Download:** The user adds the magnet link for `large-dataset.zip` to the Chiral client.
+
+2.  **Dual-Network Peer Discovery:** The `ProtocolManager` initiates two peer discovery processes in parallel:
+    *   **Public BitTorrent Network:** The `BitTorrentHandler` connects to the public BitTorrent DHT and trackers specified in the magnet link. It discovers a list of public peers (seeders and leechers) in the global swarm.
+    *   **Chiral DHT:** The client queries the Chiral DHT with the torrent's info hash. It discovers a Chiral peer, "Peer C," who has a high reputation and is also seeding this file within the Chiral network.
+
+3.  **Chunk Allocation and Download:** The `multi_source_download` engine allocates chunks to be downloaded from the different sources based on availability and peer reputation:
+    *   **Public Peers (BitTorrent):** The engine identifies that a group of public peers can provide chunks 1-50. It instructs the `BitTorrentHandler` to download these chunks from the public swarm.
+    *   **Chiral Peer (Chiral Network):** The engine sees that "Peer C" can provide chunks 51-100 and has a high reputation score. It prioritizes this peer for the remaining chunks.
+
+4.  **Simultaneous Download and Verification:** The Chiral client downloads chunks from both sources concurrently:
+    *   Chunks 1-50 are downloaded from the public BitTorrent swarm using the standard BitTorrent protocol.
+    *   Chunks 51-100 are downloaded from "Peer C" through the Chiral network's protocol.
+    *   As each chunk is downloaded, its hash is verified against the torrent's metadata to ensure integrity.
+
+5.  **Payment Settlement:**
+    *   **Public Peers:** No direct payment is made to the public peers, as this follows the standard BitTorrent tit-for-tat sharing model.
+    *   **Chiral Peer:** Depends on model type, but a **pay-first model may be favorable**.
+        - **(download first, pay later)** After the download from "Peer C" is complete and verified, a payment transaction is created and sent to "Peer C"'s wallet on the Chiral blockchain for the chunks they provided.
+        - **(pay first, download later)** A payment transaction is sent to "Peer C" and recorded on the Chiral blockchain specified chunks. This transaction is used as verification for receiver's payment of services.
+
+**Outcome:** By leveraging both the public BitTorrent network and the trusted, high-speed Chiral network, the user completes the download significantly faster and more reliably than using either network alone.
 
 ###### Key Architectural Components
 
