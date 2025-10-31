@@ -4,7 +4,6 @@
 )]
 
 pub mod commands;
-
 pub mod analytics;
 mod blockchain_listener;
 mod dht;
@@ -35,6 +34,7 @@ use crate::commands::proxy::{
     disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
     proxy_echo, proxy_remove, ProxyNode,
 };
+use crate::commands::network::get_full_network_stats;
 use crate::stream_auth::{
     AuthMessage, HmacKeyExchangeConfirmation, HmacKeyExchangeRequest, HmacKeyExchangeResponse,
     StreamAuthService,
@@ -874,7 +874,7 @@ async fn get_current_block() -> Result<u64, String> {
 async fn get_network_stats() -> Result<(String, String), String> {
     let difficulty = get_network_difficulty().await?;
     let hashrate = get_network_hashrate().await?;
-    Ok((difficulty, hashrate))
+    Ok((difficulty, hashrate.to_string()))
 }
 
 #[tauri::command]
@@ -1593,7 +1593,6 @@ enum TemperatureMethod {
     #[cfg(target_os = "linux")]
     LinuxHwmon(String),
 }
-
 #[tauri::command]
 async fn get_power_consumption() -> Option<f32> {
     tokio::task::spawn_blocking(move || {
@@ -4787,7 +4786,8 @@ fn main() {
             set_relay_alias,
             get_relay_alias,
             get_multiaddresses,
-            clear_seed_list
+            clear_seed_list,
+            get_full_network_stats
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -5128,8 +5128,10 @@ async fn upload_and_publish_file(
     file_path: String,
     file_name: Option<String>,
     recipient_public_key: Option<String>,
+    price: Option<f64>,
     ftp_source: Option<String>,
 ) -> Result<UploadResult, String> {
+    info!("📦 BACKEND: Starting upload_and_publish_file for price {:?}", price);
     // 1. Process file with ChunkManager (encrypt, chunk, build Merkle tree)
     let manifest = encrypt_file_for_recipient(
         app.clone(),
@@ -5187,7 +5189,7 @@ async fn upload_and_publish_file(
                 true,                            // is_encrypted
                 Some("AES-256-GCM".to_string()), // Encryption method
                 None,                            // key_fingerprint (deprecated)
-                None,                            // price
+                price,                            // price
                 None,                            // uploader_address
             )
             .await?;
