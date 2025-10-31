@@ -1453,6 +1453,7 @@ pub async fn get_recent_mined_blocks(
     Ok(out)
 }
 
+#[tauri::command]
 pub async fn get_network_hashrate() -> Result<String, String> {
     let client = reqwest::Client::new();
 
@@ -1559,6 +1560,7 @@ pub async fn get_network_hashrate() -> Result<String, String> {
 
     Ok(formatted)
 }
+
 
 pub async fn send_transaction(
     from_address: &str,

@@ -36,13 +36,18 @@
     $miningState.sessionStartTime || Date.now() : 
     Date.now()
   let estimatedTimeToBlock = 0
-  $: powerConsumption = $miningState.activeThreads * 15
-  $: efficiency = $miningState.hashRate === '0 H/s' ? 0 : parseHashRate($miningState.hashRate) / powerConsumption
+  $: powerConsumption = hasRealPower ? realPowerConsumption : 0
+  $: efficiency = ($miningState.hashRate === '0 H/s' || !hasRealPower) ? 0 : parseHashRate($miningState.hashRate) / powerConsumption
   let temperature = 0.0
   let hasRealTemperature = false
   let temperatureLoading = true // Add loading state for temperature checks
   let hasCompletedFirstCheck = false // Track if we've completed the first temperature check
   let temperatureUnit: 'C' | 'F' = 'C'
+
+  // Power monitoring
+  let realPowerConsumption = 0.0
+  let hasRealPower = false
+  let powerLoading = true
 
   // Uptime tick (forces template to re-render every second while mining)
   let uptimeNow: number = Date.now()
@@ -337,6 +342,7 @@
     }
     if (isTauri) {
       await updateCpuTemperature()
+      await updatePowerConsumption()
     }
     
     // Initialize pool state
@@ -367,6 +373,7 @@
       await updateNetworkStats();
       if (isTauri) {
         await updateCpuTemperature();
+        await updatePowerConsumption();
       }
     }, 1000) as unknown as number;
   })  
@@ -506,7 +513,7 @@
     if (!hasCompletedFirstCheck) {
       temperatureLoading = true
     }
-    
+
     try {
       const temp = await invoke('get_cpu_temperature') as number
       if (temp && temp > 0) {
@@ -522,6 +529,30 @@
       if (!hasCompletedFirstCheck) {
         temperatureLoading = false
         hasCompletedFirstCheck = true
+      }
+    }
+  }
+
+  async function updatePowerConsumption() {
+    // Only show loading state for the very first check
+    if (!hasCompletedFirstCheck) {
+      powerLoading = true
+    }
+
+    try {
+      const power = await invoke('get_power_consumption') as number
+      if (power && power > 0) {
+        realPowerConsumption = power
+        hasRealPower = true
+      } else {
+        hasRealPower = false
+      }
+    } catch (e) {
+      console.error('Failed to get power consumption:', e)
+      hasRealPower = false
+    } finally {
+      if (!hasCompletedFirstCheck) {
+        powerLoading = false
       }
     }
   }
@@ -1022,10 +1053,17 @@
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">{$t('mining.powerUsage')}</p>
-          <p class="text-2xl font-bold">{powerConsumption.toFixed(0)}W</p>
-          <p class="text-xs text-muted-foreground mt-1">
-            {efficiency.toFixed(2)} {$t('mining.hw')}
-          </p>
+          {#if hasRealPower}
+            <p class="text-2xl font-bold">{powerConsumption.toFixed(0)}W</p>
+            <p class="text-xs text-muted-foreground mt-1">
+              {efficiency.toFixed(2)} {$t('mining.hw')}
+            </p>
+          {:else}
+            <p class="text-2xl font-bold text-gray-500">N/A</p>
+            <p class="text-xs text-muted-foreground mt-1">
+              {$t('mining.hw')}
+            </p>
+          {/if}
         </div>
         <div class="p-2 bg-amber-500/10 rounded-lg">
           <Zap class="h-5 w-5 text-amber-500" />
@@ -1057,7 +1095,7 @@
                 {temperature > 85 ? $t('mining.temperatureStatus.critical') : temperature > 75 ? $t('mining.temperatureStatus.hot') : temperature > 65 ? $t('mining.temperatureStatus.warm') : $t('mining.temperatureStatus.normal')}
               </p>
             {:else}
-              <Progress value={0} max={100} class="h-2 opacity-30" />
+              <Progress value={0} max={100} class="h-2 bg-gray-200 [&>div]:bg-gray-400 [&>div]:opacity-50" />
               <p class="text-xs text-muted-foreground mt-1">Hardware sensor not available</p>
             {/if}
           </div>
