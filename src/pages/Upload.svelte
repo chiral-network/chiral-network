@@ -26,6 +26,7 @@
   import {
     loadSeedList,
     saveSeedList,
+    clearSeedList,
     type SeedRecord,
   } from "$lib/services/seedPersistence";
   import { t } from "svelte-i18n";
@@ -40,6 +41,8 @@
   import Label from "$lib/components/ui/label.svelte";
   import Input from "$lib/components/ui/input.svelte";
   import { selectedProtocol as protocolStore } from "$lib/stores/protocolStore";
+  import { paymentService } from '$lib/services/paymentService';
+
 
   const tr = (k: string, params?: Record<string, any>): string =>
     (get(t) as (key: string, params?: any) => string)(k, params);
@@ -159,7 +162,7 @@
   // Calculate price based on file size and price per MB
   function calculateFilePrice(sizeInBytes: number): number {
     const sizeInMB = sizeInBytes / 1_048_576; // Convert bytes to MB
-    const pricePerMb = $settings.pricePerMb || 0.001;
+    const pricePerMb = $settings.pricePerMb || 0;
     return parseFloat((sizeInMB * pricePerMb).toFixed(6)); // Round to 6 decimal places
   }
 
@@ -255,8 +258,19 @@
   }
 
   onMount(async () => {
+
     // Make storage refresh non-blocking on startup to prevent UI hanging
     setTimeout(() => refreshAvailableStorage(), 100);
+
+
+    // Clear persisted seed list on startup to prevent ghost files from other nodes
+    try {
+      await clearSeedList();
+      console.log("Cleared persisted seed list to prevent cross-node file display");
+    } catch (e) {
+      console.warn("Failed to clear persisted seed list", e);
+    }
+
 
     // Restore persisted seeding list (if any)
     try {
@@ -410,8 +424,8 @@
                     fileData,
                   },
                 );
-
-                const filePrice = calculateFilePrice(file.size);
+                const filePrice = await paymentService.calculateDownloadCost(file.size);
+                // const filePrice = calculateFilePrice(file.size);
 
                 console.log("🔍 Uploading file with calculated price:", filePrice, "for", file.size, "bytes");
 
@@ -651,7 +665,7 @@
 
           // Get file size to calculate price
           const fileSize = await invoke<number>('get_file_size', { filePath });
-          const price = calculateFilePrice(fileSize);
+          const price = await paymentService.calculateDownloadCost(fileSize);
 
           let existingVersions: any[] = [];
           try {
@@ -1233,7 +1247,7 @@
             {:else}
               <!-- Shared Files Header -->
               <div
-                class="flex flex-wrap items-center justify-between gap-4 mb-4"
+                class="flex flex-wrap items-center justify-between gap-4 mb-4 px-4"
               >
                 <div>
                   <h2 class="text-lg font-semibold">
@@ -1286,10 +1300,10 @@
 
               <!-- File List -->
               {#if $files.filter((f) => f.status === "seeding" || f.status === "uploaded").length > 0}
-                <div class="space-y-3 relative">
+                <div class="space-y-3 relative px-4">
                   {#each $files.filter((f) => f.status === "seeding" || f.status === "uploaded") as file}
                     <div
-                      class="group relative bg-gradient-to-r from-card to-card/80 border border-border/50 rounded-xl p-4 hover:shadow-lg hover:border-border transition-all duration-300 hover:scale-[1.01] overflow-hidden"
+                      class="group relative bg-gradient-to-r from-card to-card/80 border border-border/50 rounded-xl p-4 hover:shadow-lg hover:border-border transition-all duration-300 overflow-hidden"
                     >
                       <div
                         class="absolute inset-0 bg-gradient-to-r from-primary/5 via-transparent to-secondary/5 opacity-0 group-hover:opacity-100 transition-opacity duration-300"
@@ -1400,7 +1414,7 @@
                           {#if file.price !== undefined && file.price !== null}
                             <div
                               class="flex items-center gap-1.5 bg-green-500/10 text-green-600 border border-green-500/20 font-medium px-2.5 py-1 rounded-md"
-                              title="Price calculated at {$settings.pricePerMb} Chiral per MB"
+                              title="Price calculated dynamically based on network hash power"
                             >
                               <DollarSign class="h-3.5 w-3.5" />
                               <span class="text-sm"

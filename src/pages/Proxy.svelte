@@ -12,6 +12,7 @@
   import DropDown from '$lib/components/ui/dropDown.svelte'
   import { ProxyAuthService } from '$lib/proxyAuth';
   import { privacyStore, proxyRoutingService, initializeProxyRouting, persistPrivacyProfile } from '$lib/services/proxyRoutingService';
+  import { computeProxyWeight } from '$lib/services/routingWeights';
   
   let newNodeAddress = ''
   let proxyEnabled = true
@@ -42,7 +43,7 @@
   const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.([a-zA-Z]{2,}|[a-zA-Z]{2,}\.[a-zA-Z]{2,}):[0-9]{1,5}$/
   const enodeRegex = /^enode:\/\/[a-fA-F0-9]{128}@(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):[0-9]{1,5}$/
   let statusFilter = 'all'
-  let sortBy: 'status' | 'latency' | 'bandwidth' = 'status'
+  let sortBy: 'status' | 'latency' | 'bandwidth' | 'smart' = 'status'
   
   $: statusOptions = [
     { value: 'all', label: $t('All') },
@@ -55,7 +56,8 @@
   $: sortOptions = [
     { value: 'status', label: $t('Sort by status') },
     { value: 'latency', label: $t('Sort by latency') },
-    { value: 'bandwidth', label: $t('Sort by bandwidth') }
+    { value: 'bandwidth', label: $t('Sort by bandwidth') },
+    { value: 'smart', label: $t('Sort by smart (quality)') }
   ]
 
   $: filteredNodes = $proxyNodes.filter(node => {
@@ -82,10 +84,25 @@
         return aLat - bLat
       }
 
-      // Sort by effective bandwidth (derived from latency): higher first; unknowns last
-      const aBw = a.latency != null ? Math.round(100 - a.latency) : Number.NEGATIVE_INFINITY
-      const bBw = b.latency != null ? Math.round(100 - b.latency) : Number.NEGATIVE_INFINITY
-      return bBw - aBw
+      if (sortBy === 'bandwidth') {
+        const aBw = a.latency != null ? Math.round(100 - a.latency) : Number.NEGATIVE_INFINITY
+        const bBw = b.latency != null ? Math.round(100 - b.latency) : Number.NEGATIVE_INFINITY
+        return bBw - aBw
+      }
+      // smart
+      const aW = computeProxyWeight({
+        latencyMs: a.latency,
+        uptimePct: getUptimePct(a.address),
+        status: a.status as any,
+        recentFailures: getRecentFailures(a.address),
+      })
+      const bW = computeProxyWeight({
+        latencyMs: b.latency,
+        uptimePct: getUptimePct(b.address),
+        status: b.status as any,
+        recentFailures: getRecentFailures(b.address),
+      })
+      return bW - aW
   });
 
   
@@ -355,6 +372,19 @@
               });
           });
       }
+  }
+
+  function getUptimePct(address: string | undefined) {
+    if (!address) return 0
+    const stats = getPerformanceStats(address)
+    return stats.uptimePercentage ?? 0
+  }
+
+  function getRecentFailures(address: string | undefined) {
+    if (!address) return 0
+    const stats = getPerformanceStats(address)
+    const failures = stats.totalAttempts - stats.successfulConnections
+    return Math.max(0, failures)
   }
 
   // Proxy latency optimization functions

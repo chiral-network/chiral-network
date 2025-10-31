@@ -26,29 +26,23 @@ The Chiral Network implements a multi-layered protocol stack combining blockchai
 
 ### 1. Peer Discovery Protocol
 
-#### Bootstrap Process
+#### Bootstrap Process (Current Implementation)
 
-```
-1. Connect to Seed Nodes
-   Seeds: [
-     "/ip4/seed1.chiral.network/tcp/30304/p2p/QmNodeId1",
-     "/ip4/seed2.chiral.network/tcp/30304/p2p/QmNodeId2",
-     "/ip6/seed3.chiral.network/tcp/30304/p2p/QmNodeId3"
-   ]
+1. **Connect to the bootstrap DHT node**  
+   Every node loads the configured `bootstrap_nodes` list (currently a single multiaddress such as `/ip4/bootstrap.chiral.network/tcp/4001/p2p/QmBootstrap`) and dials it on startup. That node runs the same libp2p/Kademlia behaviour as any other peer but is flagged with `is_bootstrap=true`, kept online permanently, and is configured not to publish provider records so it acts purely as a router.
 
-2. Request Peer List
-   → FIND_NODE(self.id)
-   ← NODES(peer_list[20])
+2. **Seed the local routing table**  
+   Once the connection succeeds, we add the bootstrap peer ID and address into the local Kademlia table. No custom “peer list” RPC is issued—the bootstrap node simply shares the peers it already knows through standard Kademlia gossip.
 
-3. Connect to Peers
-   For each peer in list:
-     → CONNECT(peer.address)
-     ← ACCEPT/REJECT
+3. **Run the initial Kademlia bootstrap walk**  
+   After the connection is established, the client immediately invokes `kademlia.bootstrap()`. This kicks off the built-in random walk (successive `FIND_NODE` queries) using the bootstrap node as the starting point, which populates the routing table with additional peers and providers.
 
-4. Maintain Routing Table
-   Periodic: PING all peers
-   On failure: Remove and replace
-```
+4. **Keep the table fresh**  
+   Non-bootstrap peers continue to run the periodic bootstrap loop (1 s interval) while the node is up, ensuring they resync with the network if entries age out. The dedicated bootstrap node disables this interval, but it remains available so new peers can repeat steps 1–3 at any time.
+
+##### Operational Notes
+- The bootstrap node exposes only the libp2p/DHT service (no extra REST endpoints) and listens on the same ports as any peer.
+- Today the network relies on a single bootstrap address; adding secondary bootstrap nodes is recommended to avoid a single point of failure.
 
 #### Message Format
 

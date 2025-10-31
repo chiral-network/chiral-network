@@ -3,7 +3,7 @@
   import Card from '$lib/components/ui/card.svelte';
   import Button from '$lib/components/ui/button.svelte';
   import Badge from '$lib/components/ui/badge.svelte';
-  import { Server, Zap, TrendingUp, DollarSign, Clock, X, Download } from 'lucide-svelte';
+  import { Server, Zap, TrendingUp, DollarSign, Clock, X, Download, Globe, Wifi } from 'lucide-svelte';
   import { toHumanReadableSize } from '$lib/utils';
 
   export let show = false;
@@ -12,6 +12,7 @@
   export let peers: PeerInfo[];
   export let mode: 'auto' | 'manual' = 'auto';
   export let autoSelectionInfo: Array<{peerId: string; score: number; metrics: any}> | null = null;
+  export let protocol: 'http' | 'webrtc' = 'http'; // Default to HTTP for WebRTC flow
 
   const dispatch = createEventDispatcher<{
     confirm: void;
@@ -114,6 +115,36 @@
               {peers.length} {peers.length === 1 ? 'Peer' : 'Peers'} Available
             </Badge>
           </div>
+        </div>
+
+        <!-- Protocol Selection (HTTP vs WebRTC only - Bitswap doesn't use peer selection) -->
+        <div class="space-y-2">
+          <label class="text-sm font-semibold text-foreground/90">Transfer Protocol</label>
+          <div class="flex gap-2">
+            <Button
+              variant={protocol === 'http' ? 'default' : 'outline'}
+              size="sm"
+              on:click={() => protocol = 'http'}
+            >
+              <Globe class="h-4 w-4 mr-2" />
+              HTTP
+            </Button>
+            <Button
+              variant={protocol === 'webrtc' ? 'default' : 'outline'}
+              size="sm"
+              on:click={() => protocol = 'webrtc'}
+            >
+              <Wifi class="h-4 w-4 mr-2" />
+              WebRTC
+            </Button>
+          </div>
+          <p class="text-xs text-muted-foreground">
+            {#if protocol === 'http'}
+              HTTP: Simple and fast for nodes with public IP addresses
+            {:else if protocol === 'webrtc'}
+              WebRTC: Peer-to-peer with NAT traversal (works behind firewalls)
+            {/if}
+          </p>
         </div>
 
         <!-- Mode Toggle -->

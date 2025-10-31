@@ -141,8 +141,6 @@
   $: if ($etcAccount && isGethRunning) {
     fetchBalance()
   }
-  // Note: Transaction filtering is handled by the display logic below
-  // All transactions in the store are shown in the history
   // Filter transactions to show only those related to current account
   $: if ($etcAccount) {
     const accountTransactions = $transactions.filter(tx =>

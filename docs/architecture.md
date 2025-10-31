@@ -39,6 +39,153 @@ Each layer communicates through well-defined interfaces, allowing for independen
 4. **Choice**: Users select best protocol for their network while payments remain consistent
 5. **Testing**: Test data transfer and payments independently
 
+---
+
+### Protocol Abstraction and Management
+
+**`ProtocolManager`** and **`IContentProtocol`** unify all content exchange operations under a consistent API, abstracting away the protocol-specific details. This ensures a consistent **UX** and provides a contract for developing new protocols. This should evolve as new features are needed.
+
+---
+
+#### `IContentProtocol` Interface
+
+Defines mandatory capabilities for any content protocol. Implementations like **Bitswap** must provide these methods:
+
+```typescript
+export interface IContentProtocol {
+  /** Get the protocol name */
+  getName(): Protocol;
+
+  /** Get peers serving the content */
+  getPeersServing(identification: FileIdentification): Promise<PeerInfo[]>;
+
+  /** Retrieve metadata for a file/content */
+  getFileMetadata(identification: FileIdentification): Promise<FileMetadata | null>;
+
+  /** Download content from a peer */
+  getContentFrom(
+    peerId: string,
+    identification: FileIdentification,
+    progressUpdate: ProgressUpdate,
+    outputPath?: string
+  ): Promise<Uint8Array | Void>;
+
+  /** Start seeding/sharing content */
+  startSeeding(
+    filePathOrData: string | Uint8Array,
+    progressUpdate: ProgressUpdate
+  ): Promise<FileMetadata>;
+
+  /** Stop seeding/sharing content */
+  stopSeeding(identification: FileIdentification): Promise<boolean>;
+
+  /** Pause an ongoing download */
+  pauseDownload(identification: FileIdentification): Promise<boolean>;
+
+  /** Resume a paused download */
+  resumeDownload(identification: FileIdentification): Promise<boolean>;
+
+  /** Cancel an ongoing download */
+  cancelDownload(identification: FileIdentification): Promise<boolean>;
+}
+```
+
+---
+
+#### `ProtocolManager` Class
+
+The **`ProtocolManager`** is the gateway for all protocol interactions. It manages multiple protocol implementations and delegates operations to the active protocol.
+
+##### Key Methods
+
+| Method                                   | Description                                                                              |
+| :--------------------------------------- | :--------------------------------------------------------------------------------------- |
+| `constructor(initialProtocol: Protocol)` | Registers available protocols (e.g., `BitSwapProtocol`) and sets the active protocol.    |
+| `setProtocol(protocol: Protocol)`        | Switches the currently active protocol.                                                  |
+| `getProtocolImpl(): IContentProtocol`    | Returns the active protocol implementation.                                              |
+| `getPeersServing(..)`                    | Delegates to the active protocol to list available peers.                                |
+| `downloadFile(..)`                       | Convenience method: fetches peers if needed and downloads from the preferred/first peer. |
+| `uploadFile(..)`                         | Convenience method: seeds content via the active protocol.                               |
+| `stopSharing(..)`                        | Stops seeding/sharing content.                                                           |
+| `pauseDownload(..)`                      | Pauses an ongoing download.                                                              |
+| `resumeDownload(..)`                     | Resumes a paused download.                                                               |
+| `cancelDownload(..)`                     | Cancels an ongoing download.                                                             |
+| `cleanup(): Promise<void>`               | Calls cleanup for all registered protocols for proper shutdown.                          |
+
+```typescript
+export class ProtocolManager {
+  private currentProtocol: IContentProtocol;
+  private protocols: Map<Protocol, IContentProtocol>;
+
+  constructor(initialProtocol: Protocol = Protocol.Bitswap) {
+    this.protocols = new Map();
+    this.protocols.set(Protocol.Bitswap, new BitSwapProtocol());
+
+    const protocol = this.protocols.get(initialProtocol);
+    if (!protocol) {
+      throw new Error(`Protocol ${initialProtocol} not found`);
+    }
+    this.currentProtocol = protocol;
+  }
+
+  setProtocol(protocol: Protocol): void {
+    this.currentProtocol = protocol
+  }
+
+  getProtocol(): Protocol {
+    return this.currentProtocol.getName();
+  }
+
+  getProtocolImpl(): IContentProtocol {
+    return this.currentProtocol;
+  }
+
+  // Convenience methods delegating to current protocol (getPeersServing, downloadFile, uploadFile, etc.)
+  // ...
+}
+```
+
+#### Example Usage in BitSwap
+
+* `get_peers_serving(identification: filemetadata)`
+
+  * Invokes a Tauri command that calls `kademlia.get_providers(identification.merkel_root)`.
+  * Returns a list of peers currently serving the content.
+
+* `get_file_metadata(identification: string (merkel_root))`
+
+  * Queries the DHT for metadata associated with the content.
+  * In Bitswap, this involves retrieving the FileMetadata structure using `kademlia.get`.
+
+* `get_content_from(peerId, identification, progress_update)`
+
+  * Invokes `bitswap.get_from(identification, peerId)` in the swarm event loop.
+  * Calls `progress_update(receivedChunks / totalChunks)` as chunks are received.
+  * Returns void, `progress_update(1)` invoked when download completes.
+
+* `start_seeding(identification, file_path | data, progress_update)`
+  * File path as input
+  * Generates `FileMetadata` and inserts it into the DHT.
+  * Chunks the file and stores blocks in the on-disk blockstore.
+  * Calls `progress_update` as each chunk is stored.
+  * Returns FileMetaData
+
+* `stop_seeding(identification)`
+
+  * Removes the file metadata from the DHT.
+  * Deletes associated chunks from the on-disk blockstore.
+  * **Note:** If multiple files share the same CID, a reference count mechanism should decrement instead of deleting the blocks.
+
+* `pause_download_for(identification)` / `resume_download_for(identification)` / `cancel_download_for(identification)`
+
+  * Standard operations to control ongoing downloads.
+  * Returns true if success
+
+* `set_protocol(protocol)`
+
+  * Switches the active protocol for all subsequent operations.
+
+
 ### How It Works
 
 The network supports **two protocol styles** for file transfer and payment.

@@ -1,19 +1,20 @@
 // src/lib/stores/protocolStore.ts
-import { writable } from 'svelte/store';
+import { writable } from "svelte/store";
 
-type Protocol = 'WebRTC' | 'Bitswap' | null;
+type Protocol = "WebRTC" | "Bitswap" | null;
 
 // Check if we're in a browser environment
-const isBrowser = typeof window !== 'undefined' && typeof localStorage !== 'undefined';
+const isBrowser =
+  typeof window !== "undefined" && typeof localStorage !== "undefined";
 
 // Initialize from localStorage if available
 const getInitialProtocol = (): Protocol => {
   if (isBrowser) {
     try {
-      const stored = localStorage.getItem('selectedProtocol');
+      const stored = localStorage.getItem("selectedProtocol");
       return (stored as Protocol) || null;
     } catch (e) {
-      console.warn('Failed to read from localStorage:', e);
+      console.warn("Failed to read from localStorage:", e);
       return null;
     }
   }
@@ -21,7 +22,7 @@ const getInitialProtocol = (): Protocol => {
 };
 
 function createProtocolStore() {
-  const { subscribe, set, update } = writable<Protocol>(getInitialProtocol());
+  const { subscribe, set } = writable<Protocol>(getInitialProtocol());
 
   return {
     subscribe,
@@ -29,12 +30,12 @@ function createProtocolStore() {
       if (isBrowser) {
         try {
           if (value) {
-            localStorage.setItem('selectedProtocol', value);
+            localStorage.setItem("selectedProtocol", value);
           } else {
-            localStorage.removeItem('selectedProtocol');
+            localStorage.removeItem("selectedProtocol");
           }
         } catch (e) {
-          console.warn('Failed to write to localStorage:', e);
+          console.warn("Failed to write to localStorage:", e);
         }
       }
       set(value);
@@ -42,13 +43,13 @@ function createProtocolStore() {
     reset: () => {
       if (isBrowser) {
         try {
-          localStorage.removeItem('selectedProtocol');
+          localStorage.removeItem("selectedProtocol");
         } catch (e) {
-          console.warn('Failed to remove from localStorage:', e);
+          console.warn("Failed to remove from localStorage:", e);
         }
       }
       set(null);
-    }
+    },
   };
 }
 

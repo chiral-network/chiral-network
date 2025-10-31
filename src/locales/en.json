@@ -360,7 +360,8 @@
       "resume": "Resume",
       "remove": "Remove",
       "cancel": "Cancel",
-      "showInFolder": "Show in Folder"
+      "showInFolder": "Show in Folder",
+      "retry": "Retry"
     },
     "notifications": {
       "enterHash": "Please enter a file hash to start downloading.",
@@ -416,7 +417,10 @@
       "retrying": "Retrying download for {hash} (attempt {attempt} of {max})",
       "recovered": "Recovered download for {hash} after {retries} retries ({duration} ms)",
       "failed": "Download failed for {hash} after {attempts} attempts"
-    }
+    },
+    "selectProtocol": "Select Protocol",
+    "currentProtocol": "Current Protocol",
+    "changeProtocol": "Change Protocol"
   },
   "regions.usEast": "US East",
   "regions.usWest": "US West",
