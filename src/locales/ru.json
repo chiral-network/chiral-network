@@ -1100,6 +1100,17 @@
     "fileManagementWebNotAvailable": "Управление файлами недоступно в веб-версии",
     "fileDialogError": "Не удалось открыть диалог выбора файлов"
   },
+  "messages": {
+    "title": "Сообщения",
+    "subtitle": "Безопасно общайтесь со своими пирами.",
+    "conversations": "Контакты",
+    "searchPlaceholder": "Поиск контактов...",
+    "inputPlaceholder": "Введите зашифрованное сообщение...",
+    "selectConversation": "Выберите разговор для начала обмена сообщениями",
+    "peer": "Пир",
+    "endToEndEncrypted": "Сквозное шифрование",
+    "refreshPeerList": "Обновить список пиров"
+  },
   "torrent": {
     "title": "Торренты",
     "magnetLink": {
