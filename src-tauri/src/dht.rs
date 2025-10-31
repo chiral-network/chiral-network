@@ -1,4 +1,5 @@
 use crate::encryption::EncryptedAesKeyBundle;
+use crate::download_source::HttpSourceInfo;
 use x25519_dalek::PublicKey;
 use serde_bytes;
 
@@ -206,6 +207,9 @@ pub struct FileMetadata {
     pub encrypted_key_bundle: Option<crate::encryption::EncryptedAesKeyBundle>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ftp_sources: Option<Vec<FtpSourceInfo>>,
+    /// HTTP sources for downloading the file (HTTP Range request endpoints)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http_sources: Option<Vec<HttpSourceInfo>>,
     pub is_root: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub download_path: Option<String>,
@@ -1826,6 +1830,7 @@ async fn run_dht_node(
                                         is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
                                         price: json_val.get("price").and_then(|v| v.as_f64()),
                                         uploader_address: json_val.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                        http_sources: json_val.get("http_sources").and_then(|v| {serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)}),
                                         ..Default::default()
                                     };
                                     let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
@@ -1960,6 +1965,7 @@ async fn run_dht_node(
                             "seederHeartbeats": active_heartbeats,
                             "price": metadata.price,
                             "uploader_address": metadata.uploader_address,
+                            "http_sources": metadata.http_sources,
                         });
 
                         println!("💾 DHT: Serialized metadata JSON: {}", serde_json::to_string(&dht_metadata).unwrap_or_else(|_| "error".to_string()));
@@ -3436,6 +3442,7 @@ if active_download.is_complete() {
                                         is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
                                         price: json_val.get("price").and_then(|v| v.as_f64()),
                                         uploader_address: json_val.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                        http_sources: json_val.get("http_sources").and_then(|v| {serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)}),
                                         ..Default::default()
                                     };
                                     let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
@@ -3999,6 +4006,9 @@ async fn handle_kademlia_event(
                                         .and_then(|v| v.as_bool())
                                         .unwrap_or(true),
                                     price: metadata_json.get("price").and_then(|v| v.as_f64()),
+                                    http_sources: metadata_json.get("http_sources").and_then(|v| {
+                                            serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)
+                                    }),
                                     uploader_address: metadata_json
                                         .get("uploader_address")
                                         .and_then(|v| v.as_str())
@@ -5624,6 +5634,7 @@ impl DhtService {
             price,
             uploader_address,
             ftp_sources: None,
+            http_sources: None,
             info_hash: None,
             trackers: None,
         })

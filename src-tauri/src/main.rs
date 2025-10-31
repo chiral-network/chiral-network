@@ -15,6 +15,8 @@ mod file_transfer;
 mod ftp_client;
 mod geth_downloader;
 mod headless;
+mod http_download;
+mod http_server;
 mod keystore;
 mod manager;
 mod multi_source_download;
@@ -84,7 +86,7 @@ use sysinfo::{Components, System};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Emitter, Manager, State,
+    Emitter, Listener, Manager, State,
 };
 use tokio::time::Duration as TokioDuration;
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
@@ -239,6 +241,10 @@ struct AppState {
 
     // Proxy authentication tokens storage
     proxy_auth_tokens: Arc<Mutex<std::collections::HashMap<String, ProxyAuthToken>>>,
+
+    // HTTP server for serving chunks and keys
+    http_server_state: Arc<http_server::HttpServerState>,
+    http_server_addr: Arc<Mutex<Option<std::net::SocketAddr>>>,
 
     // Stream authentication service
     stream_auth: Arc<Mutex<StreamAuthService>>,
@@ -3277,6 +3283,7 @@ async fn upload_file_chunk(
             price: None,
             uploader_address: None,
             ftp_sources: None,
+            http_sources: None,
             info_hash: None,
             trackers: None,
         };
@@ -4535,6 +4542,142 @@ async fn reset_analytics(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+// ============================================================================
+// HTTP Server Commands - Serve files via HTTP protocol
+// ============================================================================
+
+/// Start HTTP server for serving encrypted chunks and file manifests
+///
+/// The server will listen on the specified port and serve files that have been
+/// registered via `register_manifest_for_http()`.
+///
+/// Returns the actual bound address (useful if port 0 was used for auto-assignment)
+#[tauri::command]
+async fn start_http_server(
+    state: State<'_, AppState>,
+    port: u16,
+) -> Result<String, String> {
+    // Check if server is already running
+    {
+        let addr_lock = state.http_server_addr.lock().await;
+        if addr_lock.is_some() {
+            return Err("HTTP server is already running".to_string());
+        }
+    }
+
+    let bind_addr: std::net::SocketAddr = ([0, 0, 0, 0], port).into();
+
+    tracing::info!("Starting HTTP server on {}", bind_addr);
+
+    // Start the server
+    let server_state = state.http_server_state.clone();
+    let bound_addr = http_server::start_server(server_state, bind_addr)
+        .await
+        .map_err(|e| format!("Failed to start HTTP server: {}", e))?;
+
+    // Store the bound address
+    {
+        let mut addr_lock = state.http_server_addr.lock().await;
+        *addr_lock = Some(bound_addr);
+    }
+
+    Ok(format!("http://{}", bound_addr))
+}
+
+/// Stop HTTP server
+#[tauri::command]
+async fn stop_http_server(state: State<'_, AppState>) -> Result<(), String> {
+    let mut addr_lock = state.http_server_addr.lock().await;
+
+    if addr_lock.is_none() {
+        return Err("HTTP server is not running".to_string());
+    }
+
+    tracing::info!("Stopping HTTP server");
+
+    // TODO: Implement graceful shutdown
+    // For now, just clear the address (server task will continue running)
+    *addr_lock = None;
+
+    Ok(())
+}
+
+/// Get HTTP server status
+#[tauri::command]
+async fn get_http_server_status(
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let addr_lock = state.http_server_addr.lock().await;
+
+    match &*addr_lock {
+        Some(addr) => Ok(serde_json::json!({
+            "running": true,
+            "address": format!("http://{}", addr)
+        })),
+        None => Ok(serde_json::json!({
+            "running": false,
+            "address": null
+        })),
+    }
+}
+
+/// Download a file via HTTP protocol using Range requests
+///
+/// This uses HTTP Range headers (RFC 7233) to download file chunks in parallel,
+/// without requiring pre-chunking or manifest endpoints.
+///
+/// Flow:
+/// 1. Fetch file metadata from HTTP server
+/// 2. Calculate byte ranges (256KB chunks)
+/// 3. Download chunks in parallel using Range headers
+/// 4. Reassemble chunks into final file
+///
+/// Files are downloaded as-is (encrypted if they were encrypted).
+/// Decryption happens at a higher level when needed.
+///
+/// Emits `http_download_progress` events with progress updates.
+#[tauri::command]
+async fn download_file_http(
+    app: tauri::AppHandle,
+    seeder_url: String,
+    merkle_root: String,
+    output_path: String,
+) -> Result<(), String> {
+    tracing::info!(
+        "Starting HTTP Range-based download: {} from {}",
+        merkle_root,
+        seeder_url
+    );
+
+    // Create progress channel
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel(100);
+
+    // Spawn progress event emitter
+    let app_handle = app.clone();
+    tokio::spawn(async move {
+        while let Some(progress) = progress_rx.recv().await {
+            let _ = app_handle.emit("http_download_progress", &progress);
+        }
+    });
+
+    // Create HTTP download client (Range-based, no chunk storage needed)
+    let client = http_download::HttpDownloadClient::new();
+
+    // Start download using Range requests
+    client
+        .download_file(
+            &seeder_url,
+            &merkle_root,
+            std::path::Path::new(&output_path),
+            Some(progress_tx),
+        )
+        .await?;
+
+    tracing::info!("HTTP download completed: {}", output_path);
+
+    Ok(())
+}
+
 #[cfg(not(test))]
 fn main() {
     // Initialize logging for debug builds
@@ -4620,6 +4763,16 @@ fn main() {
 
             // Initialize proxy authentication tokens
             proxy_auth_tokens: Arc::new(Mutex::new(std::collections::HashMap::new())),
+
+            // Initialize HTTP server state (uses same storage as FileTransferService)
+            http_server_state: Arc::new(http_server::HttpServerState::new({
+                // Use same storage directory as FileTransferService (files/, not chunks/)
+                use directories::ProjectDirs;
+                ProjectDirs::from("com", "chiral-network", "chiral-network")
+                    .map(|dirs| dirs.data_dir().join("files"))
+                    .unwrap_or_else(|| std::env::current_dir().unwrap().join("files"))
+            })),
+            http_server_addr: Arc::new(Mutex::new(None)),
 
             // Initialize stream authentication
             stream_auth: Arc::new(Mutex::new(crate::stream_auth::StreamAuthService::new())),
@@ -4756,6 +4909,11 @@ fn main() {
             get_resource_contribution,
             get_contribution_history,
             reset_analytics,
+            // HTTP server commands
+            start_http_server,
+            stop_http_server,
+            get_http_server_status,
+            download_file_http,
             save_temp_file_for_upload,
             get_file_size,
             encrypt_file_for_self_upload,
@@ -4921,6 +5079,36 @@ fn main() {
 
             // NOTE: You must add `start_proof_of_storage_watcher` to the invoke_handler call in the
             // real code where you register other commands. For brevity the snippet above shows where to add it.
+
+            // Auto-start HTTP server
+            // Spawn directly in setup() - no need to wait for window events
+            {
+                let app_handle = app.handle().clone();
+
+                tauri::async_runtime::spawn(async move {
+                    // Small delay to ensure state is fully initialized
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+                    if let Some(state) = app_handle.try_state::<AppState>() {
+                        let bind_addr: std::net::SocketAddr = ([0, 0, 0, 0], 8080).into();
+
+                        tracing::info!("Auto-starting HTTP server on port 8080...");
+
+                        match http_server::start_server(state.http_server_state.clone(), bind_addr).await {
+                            Ok(bound_addr) => {
+                                let mut addr_lock = state.http_server_addr.lock().await;
+                                *addr_lock = Some(bound_addr);
+                                tracing::info!("HTTP server started at http://{}", bound_addr);
+                                println!("✅ HTTP server listening on http://{}", bound_addr);
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to start HTTP server: {}", e);
+                                eprintln!("⚠️  HTTP server failed to start: {}", e);
+                            }
+                        }
+                    }
+                });
+            }
 
             Ok(())
         })
@@ -5177,7 +5365,7 @@ async fn upload_and_publish_file(
         // Use prepare_versioned_metadata to handle version incrementing and parent_hash
         let mime_type = detect_mime_type_from_filename(&file_name)
             .unwrap_or_else(|| "application/octet-stream".to_string());
-        let metadata = dht
+        let mut metadata = dht
             .prepare_versioned_metadata(
                 manifest.merkle_root.clone(), // This is the Merkle root
                 file_name.clone(),
@@ -5193,6 +5381,24 @@ async fn upload_and_publish_file(
                 None,                            // uploader_address
             )
             .await?;
+
+        // Add HTTP source if HTTP server is running
+        let http_addr = state.http_server_addr.lock().await;
+        if let Some(addr) = *http_addr {
+            // Get actual local IP instead of 0.0.0.0
+            let port = addr.port();
+            let local_ip = crate::headless::get_local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
+            let http_url = format!("http://{}:{}", local_ip, port);
+
+            metadata.http_sources = Some(vec![download_source::HttpSourceInfo {
+                url: http_url.clone(),
+                auth_header: None,
+                verify_ssl: false,
+                headers: None,
+                timeout_secs: Some(30),
+            }]);
+            tracing::info!("Added HTTP source to metadata: {} (local IP: {})", http_url, local_ip);
+        }
 
         let mut metadata = metadata;
         if let Some(ftp_url) = ftp_source {
@@ -5237,7 +5443,21 @@ async fn upload_and_publish_file(
         1 // Default to v1 if DHT not running
     };
 
-    // 5. Return metadata to frontend
+
+    // 6. Register file with HTTP server for Range-based serving
+    state
+        .http_server_state
+        .register_file(http_server::HttpFileMetadata {
+            hash: manifest.merkle_root.clone(),
+            name: file_name.clone(),
+            size: file_size,
+            encrypted: true,
+        })
+        .await;
+
+    tracing::info!("Registered file for HTTP serving: {} ({})", file_name, manifest.merkle_root);
+
+    // 7. Return metadata to frontend
     Ok(UploadResult {
         merkle_root: manifest.merkle_root,
         file_name,
