@@ -183,7 +183,8 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         final_enable_autorelay,
         args.relay.clone(),
         args.is_bootstrap, // enable_relay_server on bootstrap
-        None,
+        None,              // relay_server_alias (could be added as CLI arg)
+        None,              // blockstore_db_path
     )
     .await?;
     let peer_id = dht_service.get_peer_id().await;
