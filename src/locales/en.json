@@ -1030,6 +1030,8 @@
     "refreshData": "Refresh Data",
     "hideAnalytics": "Hide Analytics",
     "showAnalytics": "Show Analytics",
+    "hideRelayLeaderboard": "Hide Relay Leaderboard",
+    "showRelayLeaderboard": "Show Relay Leaderboard",
     "loading": "Loading reputation data...",
     "viewPeers": "Peer Reputation",
     "viewRelays": "Relay Leaderboard",
@@ -1095,6 +1097,34 @@
       "StorageOffered": "Storage Offered",
       "MaliciousBehaviorReport": "Malicious Behavior Report",
       "FileShared": "File Shared"
+    },
+    "myRelay": {
+      "title": "Your Relay Reputation",
+      "subtitle": "Your node is running as a relay server",
+      "rankOf": "Rank of {total}",
+      "reputationScore": "Reputation Score",
+      "successfulCircuits": "Successful Circuits",
+      "reservations": "Reservations"
+    },
+    "pagination": {
+      "showing": "Showing {start}-{end} of {total} peers",
+      "previous": "Previous",
+      "next": "Next"
+    },
+    "card": {
+      "daysAgo": "{days}d ago",
+      "hoursAgo": "{hours}h ago",
+      "minutesAgo": "{minutes}m ago",
+      "justNow": "Just now",
+      "reputationScore": "Reputation Score",
+      "transfers": "Transfers",
+      "interactions": "Interactions",
+      "latency": "Latency",
+      "bandwidth": "Bandwidth",
+      "uptime": "Uptime",
+      "encryption": "Encryption",
+      "supported": "Supported",
+      "notSupported": "Not Supported"
     }
   },
   "relay": {

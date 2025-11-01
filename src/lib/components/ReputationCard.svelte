@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from 'svelte-i18n';
   import { TrustLevel, type PeerReputation } from '$lib/types/reputation';
   import Badge from '$lib/components/ui/badge.svelte';
   import Card from '$lib/components/ui/card.svelte';
@@ -45,17 +46,18 @@
   };
 
   // Format last seen time
-  const formatLastSeen = (date: Date): string => {
+  let formatLastSeen: (date: Date) => string;
+  $: formatLastSeen = (date: Date): string => {
     const now = new Date();
     const diff = now.getTime() - date.getTime();
     const minutes = Math.floor(diff / 60000);
     const hours = Math.floor(minutes / 60);
     const days = Math.floor(hours / 24);
 
-    if (days > 0) return `${days}d ago`;
-    if (hours > 0) return `${hours}h ago`;
-    if (minutes > 0) return `${minutes}m ago`;
-    return 'Just now';
+    if (days > 0) return $t('reputation.card.daysAgo', { values: { days } });
+    if (hours > 0) return $t('reputation.card.hoursAgo', { values: { hours } });
+    if (minutes > 0) return $t('reputation.card.minutesAgo', { values: { minutes } });
+    return $t('reputation.card.justNow');
   };
 
   // Calculate success rate and star rating
@@ -87,7 +89,7 @@
       </div>
     </div>
     <Badge class={`${getTrustLevelColor(peer.trustLevel)}`}>
-      {peer.trustLevel}
+      {$t(`reputation.trustLevels.${peer.trustLevel}`)}
     </Badge>
   </div>
 
@@ -95,13 +97,13 @@
     <!-- Score and Success Rate -->
     <div class="flex justify-between items-center">
       <div>
-        <p class="text-xs text-gray-500">Reputation Score</p>
+        <p class="text-xs text-gray-500">{$t('reputation.card.reputationScore')}</p>
         <p class={`text-lg font-bold ${getScoreColor(peer.trustLevel)}`}>
           {starRating.toFixed(1)}/5.0
         </p>
       </div>
       <div class="text-right">
-        <p class="text-xs text-gray-500">Transfers</p>
+        <p class="text-xs text-gray-500">{$t('reputation.card.transfers')}</p>
         <p class="text-sm font-semibold text-gray-900">
           {peer.successfulInteractions}/{peer.totalInteractions}
         </p>
@@ -126,33 +128,33 @@
     <!-- Metrics Grid -->
     <div class="grid grid-cols-4 gap-3 text-xs">
       <div class="flex justify-between w-full col-span-2">
-        <span class="text-gray-500">Interactions:</span>
+        <span class="text-gray-500">{$t('reputation.card.interactions')}:</span>
         <span class="font-medium">{peer.totalInteractions}</span>
       </div>
       <div class="flex justify-between w-full col-span-2">
-        <span class="text-gray-500">Latency:</span>
+        <span class="text-gray-500">{$t('reputation.card.latency')}:</span>
         <span class="font-medium">{latencyLabel(peer.metrics.averageLatency)}</span>
       </div>
       <div class="flex justify-between w-full col-span-2">
-        <span class="text-gray-500">Bandwidth:</span>
+        <span class="text-gray-500">{$t('reputation.card.bandwidth')}:</span>
         <span class="font-medium">{bandwidthLabel(peer.metrics.bandwidth)}</span>
       </div>
       <div class="flex justify-between w-full col-span-2">
-        <span class="text-gray-500">Uptime:</span>
+        <span class="text-gray-500">{$t('reputation.card.uptime')}:</span>
         <span class="font-medium">{uptimeLabel(peer.metrics.uptime)}</span>
       </div>
     </div>
 
     <!-- Encryption Support -->
     <div class="flex items-center justify-between pt-2 border-t border-gray-100">
-      <span class="text-xs text-gray-500">Encryption</span>
+      <span class="text-xs text-gray-500">{$t('reputation.card.encryption')}</span>
       <div class="flex items-center space-x-1">
         {#if peer.metrics.encryptionSupported}
           <div class="w-2 h-2 bg-green-500 rounded-full"></div>
-          <span class="text-xs text-green-600 font-medium">Supported</span>
+          <span class="text-xs text-green-600 font-medium">{$t('reputation.card.supported')}</span>
         {:else}
           <div class="w-2 h-2 bg-red-500 rounded-full"></div>
-          <span class="text-xs text-red-600 font-medium">Not Supported</span>
+          <span class="text-xs text-red-600 font-medium">{$t('reputation.card.notSupported')}</span>
         {/if}
       </div>
     </div>

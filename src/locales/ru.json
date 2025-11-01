@@ -1025,6 +1025,8 @@
     "refreshData": "Обновить данные",
     "hideAnalytics": "Скрыть аналитику",
     "showAnalytics": "Показать аналитику",
+    "hideRelayLeaderboard": "Скрыть таблицу лидеров ретрансляторов",
+    "showRelayLeaderboard": "Показать таблицу лидеров ретрансляторов",
     "loading": "Загрузка данных о репутации...",
     "searchPeers": "Поиск узлов",
     "searchPlaceholder": "Поиск по ID узла...",
@@ -1088,6 +1090,34 @@
       "StorageOffered": "Предложено хранилище",
       "MaliciousBehaviorReport": "Отчет о вредоносном поведении",
       "FileShared": "Файл поделен"
+    },
+    "myRelay": {
+      "title": "Ваша репутация ретранслятора",
+      "subtitle": "Ваш узел работает как сервер ретрансляции",
+      "rankOf": "Ранг из {total}",
+      "reputationScore": "Показатель репутации",
+      "successfulCircuits": "Успешные цепи",
+      "reservations": "Резервации"
+    },
+    "pagination": {
+      "showing": "Показано {start}-{end} из {total} узлов",
+      "previous": "Предыдущая",
+      "next": "Следующая"
+    },
+    "card": {
+      "daysAgo": "{days} дн. назад",
+      "hoursAgo": "{hours} ч. назад",
+      "minutesAgo": "{minutes} мин. назад",
+      "justNow": "Только что",
+      "reputationScore": "Показатель репутации",
+      "transfers": "Передачи",
+      "interactions": "Взаимодействия",
+      "latency": "Задержка",
+      "bandwidth": "Пропускная способность",
+      "uptime": "Время работы",
+      "encryption": "Шифрование",
+      "supported": "Поддерживается",
+      "notSupported": "Не поддерживается"
     }
   },
   "relay": {

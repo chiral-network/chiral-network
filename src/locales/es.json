@@ -940,6 +940,8 @@
     "refreshData": "Actualizar datos",
     "hideAnalytics": "Ocultar análisis",
     "showAnalytics": "Mostrar análisis",
+    "hideRelayLeaderboard": "Ocultar tabla de clasificación de relays",
+    "showRelayLeaderboard": "Mostrar tabla de clasificación de relays",
     "loading": "Cargando datos de reputación...",
     "searchPeers": "Buscar pares",
     "searchPlaceholder": "Buscar por ID de par...",
@@ -978,6 +980,55 @@
       "recentEvents": "Eventos recientes",
       "topPerformers": "Mejores desempeños",
       "interactions": "{count} interacciones"
+    },
+    "pageTitle": "Sistema de Reputación - Red Chiral",
+    "sortBy": "Ordenar por",
+    "trustLevels": {
+      "Trusted": "Confiable",
+      "High": "Alto",
+      "Medium": "Medio",
+      "Low": "Bajo",
+      "Unknown": "Desconocido"
+    },
+    "eventTypes": {
+      "FileTransferSuccess": "Transferencia de archivo exitosa",
+      "FileTransferFailure": "Fallo en transferencia de archivo",
+      "PaymentSuccess": "Pago exitoso",
+      "PaymentFailure": "Fallo en pago",
+      "ConnectionEstablished": "Conexión establecida",
+      "ConnectionLost": "Conexión perdida",
+      "DhtQueryAnswered": "Consulta DHT respondida",
+      "StorageOffered": "Almacenamiento ofrecido",
+      "MaliciousBehaviorReport": "Reporte de comportamiento malicioso",
+      "FileShared": "Archivo compartido"
+    },
+    "myRelay": {
+      "title": "Tu reputación como relay",
+      "subtitle": "Tu nodo está funcionando como servidor relay",
+      "rankOf": "Rango de {total}",
+      "reputationScore": "Puntuación de reputación",
+      "successfulCircuits": "Circuitos exitosos",
+      "reservations": "Reservas"
+    },
+    "pagination": {
+      "showing": "Mostrando {start}-{end} de {total} pares",
+      "previous": "Anterior",
+      "next": "Siguiente"
+    },
+    "card": {
+      "daysAgo": "hace {days}d",
+      "hoursAgo": "hace {hours}h",
+      "minutesAgo": "hace {minutes}m",
+      "justNow": "Ahora mismo",
+      "reputationScore": "Puntuación de reputación",
+      "transfers": "Transferencias",
+      "interactions": "Interacciones",
+      "latency": "Latencia",
+      "bandwidth": "Ancho de banda",
+      "uptime": "Tiempo activo",
+      "encryption": "Cifrado",
+      "supported": "Soportado",
+      "notSupported": "No soportado"
     }
   },
   "relay": {

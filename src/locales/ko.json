@@ -924,6 +924,8 @@
     "refreshData": "데이터 새로고침",
     "hideAnalytics": "분석 숨기기",
     "showAnalytics": "분석 표시",
+    "hideRelayLeaderboard": "릴레이 리더보드 숨기기",
+    "showRelayLeaderboard": "릴레이 리더보드 표시",
     "loading": "평판 데이터 로딩 중...",
     "searchPeers": "피어 검색",
     "searchPlaceholder": "피어 ID로 검색...",
@@ -987,6 +989,34 @@
       "StorageOffered": "저장 공간 제공",
       "MaliciousBehaviorReport": "악의적 행동 보고",
       "FileShared": "파일 공유"
+    },
+    "myRelay": {
+      "title": "내 릴레이 평판",
+      "subtitle": "노드가 릴레이 서버로 실행 중입니다",
+      "rankOf": "{total}개 중 순위",
+      "reputationScore": "평판 점수",
+      "successfulCircuits": "성공한 회로",
+      "reservations": "예약"
+    },
+    "pagination": {
+      "showing": "{total}개 피어 중 {start}-{end}개 표시",
+      "previous": "이전",
+      "next": "다음"
+    },
+    "card": {
+      "daysAgo": "{days}일 전",
+      "hoursAgo": "{hours}시간 전",
+      "minutesAgo": "{minutes}분 전",
+      "justNow": "방금",
+      "reputationScore": "평판 점수",
+      "transfers": "전송",
+      "interactions": "상호작용",
+      "latency": "지연",
+      "bandwidth": "대역폭",
+      "uptime": "가동 시간",
+      "encryption": "암호화",
+      "supported": "지원됨",
+      "notSupported": "지원되지 않음"
     }
   },
   "relay": {
