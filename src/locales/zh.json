@@ -720,6 +720,10 @@
     "status": "代理状态",
     "active": "活跃",
     "inactive": "非活跃",
+    "protected": "受保护",
+    "vulnerable": "易受攻击",
+    "secured": "已保护",
+    "disabled": "已禁用",
     "activeNodes": "活跃节点",
     "totalBandwidth": "总带宽",
     "settings": "代理设置",
@@ -733,9 +737,85 @@
     "latency": "延迟",
     "disconnect": "断开连接",
     "connect": "连接",
+    "connecting": "连接中...",
+    "retry": "重试",
     "remove": "移除",
     "alreadyAdded": "该代理地址已添加！",
-    "autoReconnect": "自动重连"
+    "autoReconnect": "自动重连",
+    "validation": {
+      "emptyAddress": "地址不能为空",
+      "noSpaces": "地址不能包含空格",
+      "invalidEnode": "无效的enode格式（enode://[128字符十六进制]@ip:端口）",
+      "missingPort": "地址必须包含端口（例如：example.com:8080）",
+      "invalidHostname": "无效的主机名",
+      "invalidPort": "端口必须在1-65535之间",
+      "systemPort": "避免使用系统端口（使用1024+）",
+      "invalidFormat": "无效的IP地址或域名格式"
+    },
+    "errors": {
+      "connectionTimeout": "连接超时",
+      "optimizationUnavailable": "❌ 优化状态不可用",
+      "tauriUnavailable": "❌ Tauri API不可用。请在桌面应用程序中运行此测试，而不是在浏览器中。"
+    },
+    "dialog": {
+      "confirmRemoval": "确认移除",
+      "confirmMessage": "确认移除代理节点",
+      "cancel": "取消",
+      "remove": "移除"
+    },
+    "privacy": {
+      "title": "隐私设置",
+      "anonymousMode": "匿名模式",
+      "anonymousModeDesc": "通过匿名代理路由",
+      "multiHop": "多跳路由",
+      "multiHopDesc": "通过多个代理节点路由",
+      "currentMode": "当前隐私模式：",
+      "maxPrivacy": "最大隐私（匿名+多跳）",
+      "anonymousOnly": "匿名模式",
+      "multiHopOnly": "多跳路由",
+      "standardMode": "标准模式"
+    },
+    "stats": {
+      "title": "代理路由统计",
+      "availableProxies": "可用代理",
+      "totalRoutes": "总路由数",
+      "privacyProfile": "隐私配置",
+      "anon": "匿名",
+      "standard": "标准",
+      "multi": "多跳",
+      "plusMulti": "+ 多跳"
+    },
+    "nodeInfo": {
+      "address": "代理节点地址",
+      "peerId": "DHT节点ID",
+      "reliability": "可靠性",
+      "success": "成功",
+      "attempts": "次尝试",
+      "mbps": "Mbps",
+      "ms": "毫秒",
+      "placeholder": "example.com:8080 或 enode://..."
+    },
+    "optimization": {
+      "title": "代理延迟优化",
+      "currentStatus": "当前状态",
+      "refreshStatus": "刷新状态",
+      "proveOptimization": "证明优化有效",
+      "runningTests": "运行测试中...",
+      "testResults": "测试结果"
+    },
+    "statusFilter": {
+      "all": "全部",
+      "online": "在线",
+      "offline": "离线",
+      "connecting": "连接中",
+      "error": "错误"
+    },
+    "sortOptions": {
+      "status": "按状态排序",
+      "latency": "按延迟排序",
+      "bandwidth": "按带宽排序",
+      "smart": "按智能排序（质量）"
+    }
   },
   "mining": {
     "title": "挖矿",

@@ -797,6 +797,10 @@
     "status": "Статус прокси",
     "active": "Активен",
     "inactive": "Неактивен",
+    "protected": "Защищён",
+    "vulnerable": "Уязвим",
+    "secured": "Защищено",
+    "disabled": "Отключено",
     "activeNodes": "Активные узлы",
     "totalBandwidth": "Общая пропускная способность",
     "settings": "Настройки прокси",
@@ -810,9 +814,85 @@
     "latency": "Задержка",
     "disconnect": "Отключить",
     "connect": "Подключить",
+    "connecting": "Подключение...",
+    "retry": "Повторить",
     "remove": "Удалить",
     "alreadyAdded": "Этот прокси-адрес уже добавлен!",
-    "autoReconnect": "Автоподключение"
+    "autoReconnect": "Автоподключение",
+    "validation": {
+      "emptyAddress": "Адрес не может быть пустым",
+      "noSpaces": "Адрес не может содержать пробелы",
+      "invalidEnode": "Неверный формат enode (enode://[128-char-hex]@ip:port)",
+      "missingPort": "Адрес должен включать порт (например, example.com:8080)",
+      "invalidHostname": "Неверное имя хоста",
+      "invalidPort": "Порт должен быть между 1-65535",
+      "systemPort": "Избегайте системных портов (используйте 1024+)",
+      "invalidFormat": "Неверный формат IP-адреса или домена"
+    },
+    "errors": {
+      "connectionTimeout": "Тайм-аут соединения",
+      "optimizationUnavailable": "❌ Статус оптимизации недоступен",
+      "tauriUnavailable": "❌ API Tauri недоступен. Пожалуйста, запустите этот тест в настольном приложении, а не в браузере."
+    },
+    "dialog": {
+      "confirmRemoval": "Подтвердить удаление",
+      "confirmMessage": "Подтвердите удаление прокси-узла",
+      "cancel": "Отмена",
+      "remove": "Удалить"
+    },
+    "privacy": {
+      "title": "Настройки приватности",
+      "anonymousMode": "Анонимный режим",
+      "anonymousModeDesc": "Маршрутизация через анонимные прокси",
+      "multiHop": "Мультихоп-маршрутизация",
+      "multiHopDesc": "Маршрутизация через несколько прокси-узлов",
+      "currentMode": "Текущий режим приватности:",
+      "maxPrivacy": "Максимальная приватность (Анонимный + Мультихоп)",
+      "anonymousOnly": "Анонимный режим",
+      "multiHopOnly": "Мультихоп-маршрутизация",
+      "standardMode": "Стандартный режим"
+    },
+    "stats": {
+      "title": "Статистика прокси-маршрутизации",
+      "availableProxies": "Доступные прокси",
+      "totalRoutes": "Всего маршрутов",
+      "privacyProfile": "Профиль приватности",
+      "anon": "Анон",
+      "standard": "Стандарт",
+      "multi": "Мульти",
+      "plusMulti": "+ Мульти-хоп"
+    },
+    "nodeInfo": {
+      "address": "Адрес прокси-узла",
+      "peerId": "ID узла DHT",
+      "reliability": "Надёжность",
+      "success": "Успешно",
+      "attempts": "попыток",
+      "mbps": "Мбит/с",
+      "ms": "мс",
+      "placeholder": "example.com:8080 или enode://..."
+    },
+    "optimization": {
+      "title": "Оптимизация задержки прокси",
+      "currentStatus": "Текущий статус",
+      "refreshStatus": "Обновить статус",
+      "proveOptimization": "Доказать работу оптимизации",
+      "runningTests": "Выполнение тестов...",
+      "testResults": "Результаты теста"
+    },
+    "statusFilter": {
+      "all": "Все",
+      "online": "Онлайн",
+      "offline": "Оффлайн",
+      "connecting": "Подключение",
+      "error": "Ошибка"
+    },
+    "sortOptions": {
+      "status": "Сортировать по статусу",
+      "latency": "Сортировать по задержке",
+      "bandwidth": "Сортировать по пропускной способности",
+      "smart": "Сортировать по качеству"
+    }
   },
   "mining": {
     "title": "Майнинг",

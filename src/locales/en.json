@@ -802,6 +802,10 @@
     "status": "Proxy Status",
     "active": "Active",
     "inactive": "Inactive",
+    "protected": "Protected",
+    "vulnerable": "Vulnerable",
+    "secured": "Secured",
+    "disabled": "Disabled",
     "activeNodes": "Active Nodes",
     "totalBandwidth": "Total Bandwidth",
     "settings": "Proxy Settings",
@@ -815,9 +819,85 @@
     "latency": "Latency",
     "disconnect": "Disconnect",
     "connect": "Connect",
+    "connecting": "Connecting...",
+    "retry": "Retry",
     "remove": "Remove",
     "alreadyAdded": "This proxy address is already added!",
-    "autoReconnect": "Auto-reconnect"
+    "autoReconnect": "Auto-reconnect",
+    "validation": {
+      "emptyAddress": "Address cannot be empty",
+      "noSpaces": "Address cannot contain spaces",
+      "invalidEnode": "Invalid enode format (enode://[128-char-hex]@ip:port)",
+      "missingPort": "Address must include port (e.g., example.com:8080)",
+      "invalidHostname": "Invalid hostname",
+      "invalidPort": "Port must be between 1-65535",
+      "systemPort": "Avoid system ports (use 1024+)",
+      "invalidFormat": "Invalid IP address or domain format"
+    },
+    "errors": {
+      "connectionTimeout": "Connection timeout",
+      "optimizationUnavailable": "❌ Optimization status unavailable",
+      "tauriUnavailable": "❌ Tauri API not available. Please run this test in the desktop application, not the browser."
+    },
+    "dialog": {
+      "confirmRemoval": "Confirm Removal",
+      "confirmMessage": "Confirm the removal of proxy node",
+      "cancel": "Cancel",
+      "remove": "Remove"
+    },
+    "privacy": {
+      "title": "Privacy Settings",
+      "anonymousMode": "Anonymous Mode",
+      "anonymousModeDesc": "Route through anonymous proxies",
+      "multiHop": "Multi-Hop Routing",
+      "multiHopDesc": "Route through multiple proxy nodes",
+      "currentMode": "Current Privacy Mode:",
+      "maxPrivacy": "Maximum Privacy (Anonymous + Multi-Hop)",
+      "anonymousOnly": "Anonymous Mode",
+      "multiHopOnly": "Multi-Hop Routing",
+      "standardMode": "Standard Mode"
+    },
+    "stats": {
+      "title": "Proxy Routing Stats",
+      "availableProxies": "Available Proxies",
+      "totalRoutes": "Total Routes",
+      "privacyProfile": "Privacy Profile",
+      "anon": "Anon",
+      "standard": "Standard",
+      "multi": "Multi",
+      "plusMulti": "+ Multi-Hop"
+    },
+    "nodeInfo": {
+      "address": "Proxy Node Address",
+      "peerId": "DHT Peer ID",
+      "reliability": "Reliability",
+      "success": "Success",
+      "attempts": "attempts",
+      "mbps": "Mbps",
+      "ms": "ms",
+      "placeholder": "example.com:8080 or enode://..."
+    },
+    "optimization": {
+      "title": "Proxy Latency Optimization",
+      "currentStatus": "Current Status",
+      "refreshStatus": "Refresh Status",
+      "proveOptimization": "Prove Optimization Works",
+      "runningTests": "Running Proof Tests...",
+      "testResults": "Test Results"
+    },
+    "statusFilter": {
+      "all": "All",
+      "online": "Online",
+      "offline": "Offline",
+      "connecting": "Connecting",
+      "error": "Error"
+    },
+    "sortOptions": {
+      "status": "Sort by status",
+      "latency": "Sort by latency",
+      "bandwidth": "Sort by bandwidth",
+      "smart": "Sort by smart (quality)"
+    }
   },
   "mining": {
     "title": "Mining",

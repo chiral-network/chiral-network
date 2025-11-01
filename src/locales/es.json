@@ -711,6 +711,10 @@
     "status": "Estado del proxy",
     "active": "Activo",
     "inactive": "Inactivo",
+    "protected": "Protegido",
+    "vulnerable": "Vulnerable",
+    "secured": "Asegurado",
+    "disabled": "Deshabilitado",
     "activeNodes": "Nodos activos",
     "totalBandwidth": "Ancho de banda total",
     "settings": "Configuración de proxy",
@@ -724,9 +728,85 @@
     "latency": "Latencia",
     "disconnect": "Desconectar",
     "connect": "Conectar",
+    "connecting": "Conectando...",
+    "retry": "Reintentar",
     "remove": "Eliminar",
     "alreadyAdded": "¡Esta dirección de proxy ya se ha agregado!",
-    "autoReconnect": "Reconexión automática"
+    "autoReconnect": "Reconexión automática",
+    "validation": {
+      "emptyAddress": "La dirección no puede estar vacía",
+      "noSpaces": "La dirección no puede contener espacios",
+      "invalidEnode": "Formato enode inválido (enode://[128-char-hex]@ip:puerto)",
+      "missingPort": "La dirección debe incluir el puerto (ej., ejemplo.com:8080)",
+      "invalidHostname": "Nombre de host inválido",
+      "invalidPort": "El puerto debe estar entre 1-65535",
+      "systemPort": "Evita puertos del sistema (usa 1024+)",
+      "invalidFormat": "Formato de dirección IP o dominio inválido"
+    },
+    "errors": {
+      "connectionTimeout": "Tiempo de conexión agotado",
+      "optimizationUnavailable": "❌ Estado de optimización no disponible",
+      "tauriUnavailable": "❌ API de Tauri no disponible. Por favor ejecuta esta prueba en la aplicación de escritorio, no en el navegador."
+    },
+    "dialog": {
+      "confirmRemoval": "Confirmar eliminación",
+      "confirmMessage": "Confirma la eliminación del nodo proxy",
+      "cancel": "Cancelar",
+      "remove": "Eliminar"
+    },
+    "privacy": {
+      "title": "Configuración de privacidad",
+      "anonymousMode": "Modo anónimo",
+      "anonymousModeDesc": "Enrutar a través de proxies anónimos",
+      "multiHop": "Enrutamiento multi-salto",
+      "multiHopDesc": "Enrutar a través de múltiples nodos proxy",
+      "currentMode": "Modo de privacidad actual:",
+      "maxPrivacy": "Privacidad máxima (Anónimo + Multi-salto)",
+      "anonymousOnly": "Modo anónimo",
+      "multiHopOnly": "Enrutamiento multi-salto",
+      "standardMode": "Modo estándar"
+    },
+    "stats": {
+      "title": "Estadísticas de enrutamiento proxy",
+      "availableProxies": "Proxies disponibles",
+      "totalRoutes": "Rutas totales",
+      "privacyProfile": "Perfil de privacidad",
+      "anon": "Anón",
+      "standard": "Estándar",
+      "multi": "Multi",
+      "plusMulti": "+ Multi-Salto"
+    },
+    "nodeInfo": {
+      "address": "Dirección del nodo proxy",
+      "peerId": "ID de par DHT",
+      "reliability": "Fiabilidad",
+      "success": "Éxito",
+      "attempts": "intentos",
+      "mbps": "Mbps",
+      "ms": "ms",
+      "placeholder": "ejemplo.com:8080 o enode://..."
+    },
+    "optimization": {
+      "title": "Optimización de latencia del proxy",
+      "currentStatus": "Estado actual",
+      "refreshStatus": "Actualizar estado",
+      "proveOptimization": "Probar que funciona la optimización",
+      "runningTests": "Ejecutando pruebas...",
+      "testResults": "Resultados de la prueba"
+    },
+    "statusFilter": {
+      "all": "Todos",
+      "online": "En línea",
+      "offline": "Desconectado",
+      "connecting": "Conectando",
+      "error": "Error"
+    },
+    "sortOptions": {
+      "status": "Ordenar por estado",
+      "latency": "Ordenar por latencia",
+      "bandwidth": "Ordenar por ancho de banda",
+      "smart": "Ordenar por inteligente (calidad)"
+    }
   },
   "mining": {
     "title": "Minería",
