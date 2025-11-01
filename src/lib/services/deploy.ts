@@ -1,5 +1,5 @@
-import hre from "hardhat";
-const { ethers } = hre;
+// @ts-nocheck - Hardhat deployment script, not used in production
+import { ethers } from "hardhat";
 
 async function main() {
   // The challenge interval in blocks.
