@@ -320,7 +320,7 @@ static async getDynamicPricePerMB(normalizationFactor = 1): Promise<number> {
         txHash: transactionHash,
         date: new Date(),
         description: `Download: ${fileName}`,
-        status: 'completed'
+        status: 'success'
       };
 
       console.log('📝 Creating transaction:', newTransaction);
@@ -416,7 +416,7 @@ static async getDynamicPricePerMB(normalizationFactor = 1): Promise<number> {
         txHash: transactionHash,
         date: new Date(),
         description: `Upload payment: ${fileName}`,
-        status: 'completed'
+        status: 'success'
       };
 
       // Add transaction to history with persistence
@@ -436,10 +436,10 @@ static async getDynamicPricePerMB(normalizationFactor = 1): Promise<number> {
         wallet.update(w => {
           const allTxs = get(transactions);
           const totalReceived = allTxs
-            .filter((tx) => tx.status === 'completed' && tx.type === 'received')
+            .filter((tx) => tx.status === 'success' && tx.type === 'received')
             .reduce((sum, tx) => sum + tx.amount, 0);
           const totalSpent = allTxs
-            .filter((tx) => tx.status === 'completed' && tx.type === 'sent')
+            .filter((tx) => tx.status === 'success' && tx.type === 'sent')
             .reduce((sum, tx) => sum + tx.amount, 0);
 
           const updated = {
