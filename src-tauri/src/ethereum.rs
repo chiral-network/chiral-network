@@ -713,8 +713,8 @@ pub async fn get_hashrate() -> Result<String, String> {
             "id": 1
         });
 
-        if let Ok(gethashrate_response) = client
-            .post("http://127.0.0.1:8545")
+        if let Ok(gethashrate_response) = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&gethashrate_payload)
             .send()
             .await
