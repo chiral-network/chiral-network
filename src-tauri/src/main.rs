@@ -88,7 +88,7 @@ use sysinfo::{Components, System};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Emitter, Listener, Manager, State,
+    Emitter, Manager, State,
 };
 use tokio::time::Duration as TokioDuration;
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
@@ -1138,6 +1138,13 @@ async fn start_dht_node(
                             serde_json::json!({ "from": from, "text": utf8, "bytes": bytes });
                         let _ = app_handle.emit("proxy_echo_rx", payload);
                     }
+                    DhtEvent::BootstrapCompleted { num_remaining, success } => {
+                        let payload = serde_json::json!({
+                            "numRemaining": num_remaining,
+                            "success": success,
+                        });
+                        let _ = app_handle.emit("bootstrap_completed", payload);
+                    }
                     DhtEvent::PeerRtt { peer, rtt_ms } => {
                         // NOTE: if from dht.rs only sends rtt for known proxies, then this is fine.
                         // If it can send rtt for any peer, we need to first check if it's generated from ProxyStatus
@@ -1591,6 +1598,9 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                     }))
                     .unwrap_or_else(|_| "{}".to_string());
                     format!("reputation_event:{}", json)
+                }
+                DhtEvent::BootstrapCompleted { num_remaining, success } => {
+                    format!("bootstrap_completed:{}:{}", num_remaining, success)
                 }
             })
             .collect();

@@ -608,6 +608,10 @@ pub enum DhtEvent {
         impact: f64,
         data: serde_json::Value,
     },
+    BootstrapCompleted {
+        num_remaining: u32,
+        success: bool,
+    },
     BitswapChunkDownloaded {
         file_hash: String,
         chunk_index: u32,
@@ -4223,6 +4227,27 @@ async fn handle_kademlia_event(
                             )));
                         }
                     }
+                }
+                QueryResult::Bootstrap(Ok(ok)) => {
+                    info!(
+                        "✅ Bootstrap completed successfully. {} peers remaining.",
+                        ok.num_remaining
+                    );
+                    let _ = event_tx
+                        .send(DhtEvent::BootstrapCompleted {
+                            num_remaining: ok.num_remaining,
+                            success: true,
+                        })
+                        .await;
+                }
+                QueryResult::Bootstrap(Err(err)) => {
+                    warn!("⚠ Bootstrap query failed: {:?}", err);
+                    let _ = event_tx
+                        .send(DhtEvent::BootstrapCompleted {
+                            num_remaining: 0,
+                            success: false,
+                        })
+                        .await;
                 }
                 _ => {}
             }
