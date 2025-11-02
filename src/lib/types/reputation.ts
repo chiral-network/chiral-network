@@ -1,87 +1,101 @@
-export interface PeerReputation {
-  peerId: string;
-  trustLevel: TrustLevel;
-  score: number;
-  totalInteractions: number;
-  successfulInteractions: number;
-  lastSeen: Date;
-  reputationHistory: ReputationEvent[];
-  metrics: PeerMetrics;
-}
-
-export enum TrustLevel {
-  Unknown = 'Unknown',
-  Low = 'Low',
-  Medium = 'Medium',
-  High = 'High',
-  Trusted = 'Trusted'
-}
+// TypeScript interfaces for Blockchain Reputation System
+// This file defines the data structures used in the frontend
 
 export interface ReputationEvent {
-  id: string;
-  type: EventType;
   peerId: string;
-  raterPeerId: string; // Node that created this event
-  timestamp: Date;
-  data: Record<string, any>;
-  impact: number; // -1 to 1, negative for bad events, positive for good events
-  signature: string; // Ed25519 signature for verification
-  epoch?: number; // Epoch this event belongs to
+  eventType: ReputationEventType;
+  timestamp: number;
+  metadata: Record<string, string>;
+  signature: string;
 }
 
-export enum EventType {
+export enum ReputationEventType {
   FileTransferSuccess = 'FileTransferSuccess',
   FileTransferFailure = 'FileTransferFailure',
-  PaymentSuccess = 'PaymentSuccess',
-  PaymentFailure = 'PaymentFailure',
   ConnectionEstablished = 'ConnectionEstablished',
   ConnectionLost = 'ConnectionLost',
-  DhtQueryAnswered = 'DhtQueryAnswered',
-  StorageOffered = 'StorageOffered',
-  MaliciousBehaviorReport = 'MaliciousBehaviorReport',
-  FileShared = 'FileShared'
+  MaliciousBehavior = 'MaliciousBehavior',
 }
 
-export interface PeerMetrics {
-  averageLatency: number;
-  bandwidth: number;
+export interface ReputationEpoch {
+  epochId: number;
+  startTime: number;
+  endTime: number;
+  events: ReputationEvent[];
+  merkleRoot: string;
+  signature: string;
+  blockchainTxHash?: string;
+}
+
+export interface BlockchainReputationData {
+  peerId: string;
+  score: number;
+  verificationStatus: VerificationStatus;
+  epochCount: number;
+  totalEvents: number;
+  lastVerified: number;
+  merkleProof?: string;
+}
+
+export enum VerificationStatus {
+  Verified = 'Verified',
+  Pending = 'Pending',
+  Failed = 'Failed',
+  NotAvailable = 'NotAvailable',
+}
+
+export interface BlockchainReputationEpoch {
+  epochId: number;
+  timestamp: number;
+  eventCount: number;
+  merkleRoot: string;
+  txHash: string;
+  verificationStatus: VerificationStatus;
+}
+
+export interface BlockchainReputationAnalytics {
+  totalPeers: number;
+  verifiedPeers: number;
+  averageBlockchainScore: number;
+  verificationSuccessRate: number;
+  blockchainConnectivityStatus: string;
+  recentEpochs: BlockchainReputationEpoch[];
+  reputationDistribution: {
+    excellent: number; // 0.8-1.0
+    good: number;       // 0.6-0.8
+    fair: number;       // 0.4-0.6
+    poor: number;       // 0.2-0.4
+    bad: number;        // 0.0-0.2
+  };
+}
+
+// Existing interfaces (for reference)
+export enum TrustLevel {
+  High = 'High',
+  Medium = 'Medium',
+  Low = 'Low',
+  Unknown = 'Unknown',
+}
+
+export interface PeerReputation {
+  peerId: string;
+  score: number;
+  trustLevel: TrustLevel;
+  interactions: number;
+  lastSeen: number;
   uptime: number;
-  storageOffered: number;
-  filesShared: number;
   encryptionSupported: boolean;
+  blockchainReputation?: BlockchainReputationData;
 }
 
 export interface ReputationAnalytics {
   totalPeers: number;
-  trustedPeers: number;
   averageScore: number;
-  topPerformers: PeerReputation[];
-  recentEvents: ReputationEvent[];
   trustLevelDistribution: Record<TrustLevel, number>;
-}
-
-// New types for Merkle tree and epoch management
-export interface ReputationEpoch {
-  epochId: number;
-  merkleRoot: string;
-  timestamp: number;
-  blockNumber?: number;
-  eventCount: number;
-  submitter: string;
-}
-
-export interface MerkleProof {
-  leafIndex: number;
-  proofHashes: string[];
-  totalLeaves: number;
-}
-
-export interface ReputationEventData {
-  id: string;
-  peerId: string;
-  raterPeerId: string;
-  type: EventType;
-  timestamp: number;
-  data: Record<string, any>;
-  impact: number;
+  topPerformers: PeerReputation[];
+  recentActivity: Array<{
+    timestamp: number;
+    event: string;
+    peerId: string;
+  }>;
 }
