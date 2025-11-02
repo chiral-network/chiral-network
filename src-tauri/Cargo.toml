@@ -42,6 +42,7 @@ ctr = "0.9"
 hmac = "0.12"
 directories = "5.0"
 reqwest = { version = "0.11", features = ["json", "blocking", "stream"] }
+url = "2.5"
 chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1", features = ["full"] }
 flate2 = "1.0"
@@ -65,8 +66,13 @@ glob = "0.3"
 rs_merkle = "1.5.0"
 tokio-socks = "0.5.1"
 
+# FTP client for FTP download support (sync API)
+# Using 5.3 for compatibility with connect_secure_implicit() method
+suppaftp = { version = "5.3", features = ["native-tls", "secure", "deprecated"] }
+native-tls = "0.2"
+
 # Bitswap and related dependencies
-beetswap = { git = "https://github.com/totoro-ming-lin/beetswap.git", branch = "older-version" }
+beetswap = { git = "https://github.com/totoro-ming-lin/beetswap.git", branch = "new" }
 multihash-codetable = { version = "0.1", features = ["blake3", "sha2", "sha3"] }
 cid = { version = "0.11.1", features = ["serde-codec"] }
 blockstore = { version = "0.7.1", features = ["redb"] }
@@ -89,6 +95,10 @@ tokio-util = { version = "0.7", features = ["compat"] }
 bip_metainfo = "0.7.0"
 uuid = { version = "1.18.1", features = ["v4", "serde"] }
 url = "2.5.7"
+
+# HTTP server dependencies
+axum = { version = "0.7", features = ["macros"] }
+tower-http = { version = "0.5", features = ["cors"] }
 
 [dev-dependencies]
 tempfile = "3.8"

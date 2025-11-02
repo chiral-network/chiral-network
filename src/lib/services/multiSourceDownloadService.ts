@@ -7,13 +7,48 @@ export interface ChunkInfo {
   hash: string;
 }
 
-export interface PeerAssignment {
+// Download source types
+export interface P2pSourceInfo {
   peerId: string;
+  multiaddr?: string;
+  reputation?: number;
+  supportsEncryption: boolean;
+  protocol?: string;
+}
+
+export interface HttpSourceInfo {
+  url: string;
+  authHeader?: string;
+  verifySsl: boolean;
+  headers?: Array<[string, string]>;
+  timeoutSecs?: number;
+}
+
+export interface FtpSourceInfo {
+  url: string;
+  username?: string;
+  encryptedPassword?: string;
+  passiveMode: boolean;
+  useFtps: boolean;
+  timeoutSecs?: number;
+}
+
+export type DownloadSource =
+  | { type: 'p2p'; p2p: P2pSourceInfo }
+  | { type: 'http'; http: HttpSourceInfo }
+  | { type: 'ftp'; ftp: FtpSourceInfo };
+
+export interface SourceAssignment {
+  source: DownloadSource;
   chunks: number[];
   status: 'Connecting' | 'Connected' | 'Downloading' | 'Failed' | 'Completed';
   connectedAt?: number;
   lastActivity?: number;
 }
+
+// Legacy type for backwards compatibility
+/** @deprecated Use SourceAssignment instead */
+export type PeerAssignment = SourceAssignment;
 
 export interface MultiSourceProgress {
   fileHash: string;
@@ -22,10 +57,10 @@ export interface MultiSourceProgress {
   downloadedSize: number;
   totalChunks: number;
   completedChunks: number;
-  activePeers: number;
+  activeSources: number;
   downloadSpeedBps: number;
   etaSeconds?: number;
-  peerAssignments: PeerAssignment[];
+  sourceAssignments: SourceAssignment[];
 }
 
 export interface MultiSourceDownloadOptions {
@@ -154,8 +189,8 @@ export class MultiSourceDownloadService {
     const percentage = this.getCompletionPercentage(progress);
     const speed = this.formatSpeed(progress.downloadSpeedBps);
     const eta = this.formatETA(progress.etaSeconds);
-    
-    return `${percentage}% - ${speed} - ${progress.activePeers} peers - ETA: ${eta}`;
+
+    return `${percentage}% - ${speed} - ${progress.activeSources} sources - ETA: ${eta}`;
   }
 
   /**

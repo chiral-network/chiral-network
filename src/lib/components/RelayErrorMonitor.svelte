@@ -74,47 +74,47 @@
   function getErrorTypeLabel(type: RelayErrorType): string {
     switch (type) {
       case RelayErrorType.CONNECTION_REFUSED:
-        return 'Connection Refused';
+        return $t('relay.monitor.errorTypes.connectionRefused');
       case RelayErrorType.CONNECTION_TIMEOUT:
-        return 'Timeout';
+        return $t('relay.monitor.errorTypes.timeout');
       case RelayErrorType.RESERVATION_FAILED:
-        return 'Reservation Failed';
+        return $t('relay.monitor.errorTypes.reservationFailed');
       case RelayErrorType.RESERVATION_EXPIRED:
-        return 'Expired';
+        return $t('relay.monitor.errorTypes.expired');
       case RelayErrorType.RELAY_OVERLOADED:
-        return 'Overloaded';
+        return $t('relay.monitor.errorTypes.overloaded');
       case RelayErrorType.RELAY_UNREACHABLE:
-        return 'Unreachable';
+        return $t('relay.monitor.errorTypes.unreachable');
       case RelayErrorType.NETWORK_ERROR:
-        return 'Network Error';
+        return $t('relay.monitor.errorTypes.networkError');
       case RelayErrorType.AUTHENTICATION_FAILED:
-        return 'Auth Failed';
+        return $t('relay.monitor.errorTypes.authFailed');
       case RelayErrorType.PROTOCOL_ERROR:
-        return 'Protocol Error';
+        return $t('relay.monitor.errorTypes.protocolError');
       default:
-        return 'Unknown';
+        return $t('relay.monitor.errorTypes.unknown');
     }
   }
 
   function formatTimestamp(timestamp: number | null): string {
-    if (!timestamp) return 'Never';
+    if (!timestamp) return $t('relay.monitor.time.never');
     const date = new Date(timestamp);
     const now = Date.now();
     const diff = now - timestamp;
 
-    if (diff < 60000) return 'Just now';
-    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+    if (diff < 60000) return $t('relay.monitor.time.justNow');
+    if (diff < 3600000) return $t('relay.monitor.time.minutesAgo', { values: { minutes: Math.floor(diff / 60000) } });
+    if (diff < 86400000) return $t('relay.monitor.time.hoursAgo', { values: { hours: Math.floor(diff / 3600000) } });
     return date.toLocaleString();
   }
 
   function formatReservationExpiry(expiry: number | null): string {
-    if (!expiry) return 'N/A';
+    if (!expiry) return $t('relay.monitor.time.na');
     const remaining = expiry - Date.now();
-    if (remaining < 0) return 'Expired';
-    if (remaining < 60000) return `${Math.floor(remaining / 1000)}s`;
-    if (remaining < 3600000) return `${Math.floor(remaining / 60000)}m`;
-    return `${Math.floor(remaining / 3600000)}h`;
+    if (remaining < 0) return $t('relay.monitor.time.expired');
+    if (remaining < 60000) return $t('relay.monitor.time.seconds', { values: { seconds: Math.floor(remaining / 1000) } });
+    if (remaining < 3600000) return $t('relay.monitor.time.minutes', { values: { minutes: Math.floor(remaining / 60000) } });
+    return $t('relay.monitor.time.hours', { values: { hours: Math.floor(remaining / 3600000) } });
   }
 
   function truncateId(id: string): string {
@@ -126,30 +126,30 @@
 <div class="space-y-6">
   <!-- Stats Overview -->
   <Card class="p-6">
-    <h3 class="text-lg font-semibold mb-4">Relay Pool Statistics</h3>
+    <h3 class="text-lg font-semibold mb-4">{$t('relay.monitor.statsTitle')}</h3>
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
       <div class="text-center">
         <div class="text-3xl font-bold text-blue-600">{$relayStats.totalRelays}</div>
-        <div class="text-sm text-gray-600">Total Relays</div>
+        <div class="text-sm text-gray-600">{$t('relay.monitor.totalRelays')}</div>
       </div>
       <div class="text-center">
         <div class="text-3xl font-bold text-green-600">{$relayStats.connectedRelays}</div>
-        <div class="text-sm text-gray-600">Connected</div>
+        <div class="text-sm text-gray-600">{$t('relay.monitor.connected')}</div>
       </div>
       <div class="text-center">
         <div class="text-3xl font-bold text-yellow-600">{$relayStats.healthyRelays}</div>
-        <div class="text-sm text-gray-600">Healthy</div>
+        <div class="text-sm text-gray-600">{$t('relay.monitor.healthy')}</div>
       </div>
       <div class="text-center">
         <div class="text-3xl font-bold text-red-600">{$relayStats.totalErrors}</div>
-        <div class="text-sm text-gray-600">Total Errors</div>
+        <div class="text-sm text-gray-600">{$t('relay.monitor.totalErrors')}</div>
       </div>
     </div>
 
     {#if $relayStats.avgHealthScore}
       <div class="mt-4">
         <div class="flex items-center justify-between mb-2">
-          <span class="text-sm font-medium">Average Health Score</span>
+          <span class="text-sm font-medium">{$t('relay.monitor.avgHealthScore')}</span>
           <span class="text-sm font-bold">{$relayStats.avgHealthScore.toFixed(1)}%</span>
         </div>
         <div class="w-full bg-gray-200 rounded-full h-2.5">
@@ -166,28 +166,28 @@
   {#if $activeRelay}
     <Card class="p-6">
       <div class="flex items-center justify-between mb-4">
-        <h3 class="text-lg font-semibold">Active Relay</h3>
-        <Badge variant="default" class="bg-green-500">Connected</Badge>
+        <h3 class="text-lg font-semibold">{$t('relay.monitor.activeRelayTitle')}</h3>
+        <Badge variant="default" class="bg-green-500">{$t('relay.monitor.connectedBadge')}</Badge>
       </div>
       <div class="space-y-2">
         <div class="flex justify-between">
-          <span class="text-sm text-gray-600">Peer ID:</span>
+          <span class="text-sm text-gray-600">{$t('relay.monitor.peerId')}</span>
           <span class="text-sm font-mono">{truncateId($activeRelay.id)}</span>
         </div>
         <div class="flex justify-between">
-          <span class="text-sm text-gray-600">Health Score:</span>
+          <span class="text-sm text-gray-600">{$t('relay.monitor.healthScore')}</span>
           <span class="text-sm font-semibold">{$activeRelay.healthScore}%</span>
         </div>
         <div class="flex justify-between">
-          <span class="text-sm text-gray-600">Avg Latency:</span>
+          <span class="text-sm text-gray-600">{$t('relay.monitor.avgLatency')}</span>
           <span class="text-sm">{$activeRelay.avgLatency.toFixed(0)}ms</span>
         </div>
         <div class="flex justify-between">
-          <span class="text-sm text-gray-600">Reservation:</span>
+          <span class="text-sm text-gray-600">{$t('relay.monitor.reservation')}</span>
           <span class="text-sm">{formatReservationExpiry($activeRelay.reservationExpiry)}</span>
         </div>
         <div class="flex justify-between">
-          <span class="text-sm text-gray-600">Success Rate:</span>
+          <span class="text-sm text-gray-600">{$t('relay.monitor.successRate')}</span>
           <span class="text-sm">
             {$activeRelay.totalAttempts > 0
               ? (($activeRelay.totalSuccesses / $activeRelay.totalAttempts) * 100).toFixed(1)
@@ -200,11 +200,11 @@
 
   <!-- Relay Pool -->
   <Card class="p-6">
-    <h3 class="text-lg font-semibold mb-4">Relay Pool ({$relayPool.size})</h3>
+    <h3 class="text-lg font-semibold mb-4">{$t('relay.monitor.relayPoolTitle')} ({$relayPool.size})</h3>
     {#if $relayPool.size === 0}
       <div class="text-center py-8 text-gray-500">
         <WifiOff class="w-12 h-12 mx-auto mb-2 opacity-50" />
-        <p>No relays in pool</p>
+        <p>{$t('relay.monitor.noRelaysInPool')}</p>
       </div>
     {:else}
       <div class="space-y-3">
@@ -218,7 +218,7 @@
                 />
                 <span class="font-mono text-sm font-medium">{truncateId(relay.id)}</span>
                 {#if relay.isPrimary}
-                  <Badge variant="default" class="text-xs">Primary</Badge>
+                  <Badge variant="default" class="text-xs">{$t('relay.monitor.primaryBadge')}</Badge>
                 {/if}
               </div>
               <div class="flex items-center gap-2">
@@ -233,25 +233,25 @@
             </div>
 
             <div class="grid grid-cols-2 gap-2 text-xs text-gray-600 mb-2">
-              <div>State: <span class="font-medium">{relay.state}</span></div>
-              <div>Latency: <span class="font-medium">{relay.avgLatency.toFixed(0)}ms</span></div>
+              <div>{$t('relay.monitor.state')} <span class="font-medium">{relay.state}</span></div>
+              <div>{$t('relay.monitor.latency')} <span class="font-medium">{relay.avgLatency.toFixed(0)}ms</span></div>
               <div>
-                Attempts: <span class="font-medium">{relay.totalAttempts}</span> / Successes: <span
+                {$t('relay.monitor.attempts')} <span class="font-medium">{relay.totalAttempts}</span> / {$t('relay.monitor.successes')} <span
                   class="font-medium">{relay.totalSuccesses}</span
                 >
               </div>
-              <div>Failures: <span class="font-medium text-red-600">{relay.consecutiveFailures}</span></div>
+              <div>{$t('relay.monitor.failures')} <span class="font-medium text-red-600">{relay.consecutiveFailures}</span></div>
             </div>
 
             {#if relay.lastSuccess}
               <div class="text-xs text-gray-500">
-                Last success: {formatTimestamp(relay.lastSuccess)}
+                {$t('relay.monitor.lastSuccess')} {formatTimestamp(relay.lastSuccess)}
               </div>
             {/if}
 
             {#if relay.errors.length > 0}
               <div class="mt-2 pt-2 border-t">
-                <div class="text-xs font-medium text-red-600 mb-1">Recent Errors:</div>
+                <div class="text-xs font-medium text-red-600 mb-1">{$t('relay.monitor.recentErrorsLabel')}</div>
                 {#each relay.errors.slice(0, 3) as error}
                   <div class="text-xs text-gray-600 flex items-center gap-1">
                     <AlertTriangle class="w-3 h-3 text-red-500" />
@@ -270,12 +270,12 @@
   {#if $errorLog.length > 0}
     <Card class="p-6">
       <div class="flex items-center justify-between mb-4">
-        <h3 class="text-lg font-semibold">Recent Errors</h3>
+        <h3 class="text-lg font-semibold">{$t('relay.monitor.recentErrorsTitle')}</h3>
         <button
           class="text-sm text-blue-600 hover:text-blue-800"
           on:click={() => relayErrorService.clearErrorLog()}
         >
-          Clear
+          {$t('relay.monitor.clearButton')}
         </button>
       </div>
       <div class="space-y-2 max-h-64 overflow-y-auto">
@@ -287,7 +287,7 @@
             </div>
             <div class="text-sm text-gray-700">{error.message}</div>
             <div class="text-xs text-gray-500 mt-1">
-              Relay: {truncateId(error.relayId)} • Retry: {error.retryCount}
+              {$t('relay.monitor.relayLabel')} {truncateId(error.relayId)} • {$t('relay.monitor.retryLabel')} {error.retryCount}
             </div>
           </div>
         {/each}

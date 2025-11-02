@@ -42,6 +42,7 @@
   let showPeerSelectionModal = false;
   let selectedFile: FileMetadata | null = null;
   let peerSelectionMode: 'auto' | 'manual' = 'auto';
+  let selectedProtocol: 'http' | 'webrtc' = 'http';
   let availablePeers: PeerInfo[] = [];
   let autoSelectionInfo: Array<{peerId: string; score: number; metrics: any}> | null = null;
 
@@ -544,20 +545,74 @@
       );
     }
 
-    // Create metadata with selected peers and allocation
-    const fileWithSelectedPeers: FileMetadata & { peerAllocation?: any[] } = {
-      ...selectedFile,
-      seeders: selectedPeers,  // Override with selected peers
-      peerAllocation
-    };
+    // Route download based on selected protocol
+    if (selectedProtocol === 'http') {
+      // HTTP download flow
+      await handleHttpDownload(selectedFile, selectedPeers);
+    } else {
+      // WebRTC download flow (existing)
+      console.log(`🔍 DEBUG: Initiating WebRTC download for file: ${selectedFile.fileName}`);
 
-    // Dispatch to parent (Download.svelte)
-    dispatch('download', fileWithSelectedPeers);
+      const fileWithSelectedPeers: FileMetadata & { peerAllocation?: any[] } = {
+        ...selectedFile,
+        seeders: selectedPeers,  // Override with selected peers
+        peerAllocation
+      };
+
+      // Dispatch to parent (Download.svelte)
+      dispatch('download', fileWithSelectedPeers);
+    }
 
     // Close modal and reset state
     showPeerSelectionModal = false;
     selectedFile = null;
-    pushMessage(`Starting download with ${selectedPeers.length} selected peer${selectedPeers.length === 1 ? '' : 's'}`, 'info', 3000);
+    pushMessage(`Starting ${selectedProtocol.toUpperCase()} download with ${selectedPeers.length} selected peer${selectedPeers.length === 1 ? '' : 's'}`, 'info', 3000);
+  }
+
+  // Handle HTTP download
+  async function handleHttpDownload(file: FileMetadata, selectedPeerIds: string[]) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const { save } = await import('@tauri-apps/plugin-dialog');
+
+      // Show file save dialog
+      const outputPath = await save({
+        defaultPath: file.fileName,
+        filters: [{
+          name: 'All Files',
+          extensions: ['*']
+        }]
+      });
+
+      if (!outputPath) {
+        pushMessage('Download cancelled by user', 'info');
+        return;
+      }
+
+      // For HTTP, use the first selected peer
+      // Get HTTP URL from DHT metadata
+      const firstPeer = selectedPeerIds[0];
+      if (!firstPeer) {
+        throw new Error('No peers selected for HTTP download');
+      }
+
+      // Get HTTP URL from file metadata (published to DHT)
+      const seederUrl = file.httpSources?.[0]?.url || `http://localhost:8080`;
+      const merkleRoot = file.fileHash || file.merkleRoot || '';
+
+      console.log(`📡 Starting HTTP download from ${seederUrl}`);
+      await invoke('download_file_http', {
+        seederUrl,
+        merkleRoot,
+        outputPath
+      });
+
+      pushMessage(`HTTP download started successfully`, 'success');
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      pushMessage(`HTTP download failed: ${errorMessage}`, 'error', 6000);
+      console.error('HTTP download failed:', error);
+    }
   }
 
   // Cancel peer selection
@@ -721,7 +776,7 @@
               <SearchResultCard
                 metadata={latestMetadata}
                 on:copy={handleCopy}
-                on:download={event => dispatch('download', event.detail)}
+                on:download={event => handleFileDownload(event.detail)}
                 isBitswap={isBitswap}
               />
               <p class="text-xs text-muted-foreground">
@@ -758,6 +813,7 @@
   fileSize={selectedFile?.fileSize || 0}
   bind:peers={availablePeers}
   bind:mode={peerSelectionMode}
+  bind:protocol={selectedProtocol}
   autoSelectionInfo={autoSelectionInfo}
   on:confirm={confirmPeerSelection}
   on:cancel={cancelPeerSelection}

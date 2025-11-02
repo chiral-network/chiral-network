@@ -15,7 +15,8 @@
     import RelayPage from './pages/Relay.svelte'
     import NotFound from './pages/NotFound.svelte'
     import ProxySelfTest from './routes/proxy-self-test.svelte'
-    import { networkStatus, settings, userLocation, wallet } from './lib/stores'
+import { networkStatus, settings, userLocation, wallet, activeBandwidthLimits } from './lib/stores'
+import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
     import {onMount, setContext} from 'svelte';
     import { tick } from 'svelte';
@@ -28,7 +29,8 @@
     import { bandwidthScheduler } from '$lib/services/bandwidthScheduler';
     import { detectUserRegion } from '$lib/services/geolocation';
     import { paymentService } from '$lib/services/paymentService';
-    import { listen } from '@tauri-apps/api/event';
+import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
     // gets path name not entire url:
     // ex: http://locatlhost:1420/download -> /download
     
@@ -44,14 +46,70 @@
       currentPage = getPathName(window.location.pathname);
     }
     
-    let currentPage = getPathName(window.location.pathname);
-    let loading = true;
-    
-    onMount(() => {
-      let stopNetworkMonitoring: () => void = () => {};
-      let unlistenSeederPayment: (() => void) | null = null;
+let currentPage = getPathName(window.location.pathname);
+let loading = true;
+let schedulerRunning = false;
+let unsubscribeScheduler: (() => void) | null = null;
+let unsubscribeBandwidth: (() => void) | null = null;
+let lastAppliedBandwidthSignature: string | null = null;
 
-      (async () => {
+const syncBandwidthScheduler = (config: AppSettings) => {
+  const enabledSchedules = config.bandwidthSchedules?.filter(
+    (entry) => entry.enabled
+  ) ?? [];
+  const shouldRun = config.enableBandwidthScheduling && enabledSchedules.length > 0;
+
+  if (shouldRun) {
+    if (!schedulerRunning) {
+      bandwidthScheduler.start();
+      schedulerRunning = true;
+    }
+    bandwidthScheduler.forceUpdate();
+    return;
+  }
+
+  if (schedulerRunning) {
+    bandwidthScheduler.stop();
+    schedulerRunning = false;
+  } else {
+    // Ensure limits reflect the defaults when scheduler is idle.
+    bandwidthScheduler.forceUpdate();
+  }
+};
+
+const pushBandwidthLimits = (limits: ActiveBandwidthLimits) => {
+  const uploadKbps = Math.max(0, Math.floor(limits.uploadLimitKbps || 0));
+  const downloadKbps = Math.max(0, Math.floor(limits.downloadLimitKbps || 0));
+  const signature = `${uploadKbps}:${downloadKbps}`;
+
+  if (signature === lastAppliedBandwidthSignature) {
+    return;
+  }
+
+  lastAppliedBandwidthSignature = signature;
+
+  if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) {
+    return;
+  }
+
+  invoke("set_bandwidth_limits", {
+    uploadKbps,
+    downloadKbps,
+  }).catch((error) => {
+    console.error("Failed to apply bandwidth limits:", error);
+  });
+};
+    
+  onMount(() => {
+    let stopNetworkMonitoring: () => void = () => {};
+    let unlistenSeederPayment: (() => void) | null = null;
+
+    unsubscribeScheduler = settings.subscribe(syncBandwidthScheduler);
+    syncBandwidthScheduler(get(settings));
+    unsubscribeBandwidth = activeBandwidthLimits.subscribe(pushBandwidthLimits);
+    pushBandwidthLimits(get(activeBandwidthLimits));
+
+    (async () => {
         // Initialize payment service to load wallet and transactions
         paymentService.initialize();
 
@@ -156,10 +214,6 @@
           console.error('Failed to initialize backend services:', error);
         }
 
-        // Start bandwidth scheduler
-        bandwidthScheduler.start();
-        console.log('Bandwidth scheduler started.');
-
         // set the currentPage var
         syncFromUrl();
 
@@ -171,14 +225,67 @@
       const onPop = () => syncFromUrl();
       window.addEventListener('popstate', onPop);
 
+      // keyboard shortcuts
+      const handleKeyDown = (event: KeyboardEvent) => {
+        // Ctrl/Cmd + , - Open Settings
+        if ((event.ctrlKey || event.metaKey) && event.key === ',') {
+          event.preventDefault();
+          currentPage = 'settings';
+          goto('/settings');
+          return;
+        }
+
+        // Ctrl/Cmd + R - Refresh current page
+        if ((event.ctrlKey || event.metaKey) && event.key === 'r') {
+          event.preventDefault();
+          window.location.reload();
+          return;
+        }
+
+        // F5 - Reload application
+        if (event.key === 'F5') {
+          event.preventDefault();
+          window.location.reload();
+          return;
+        }
+
+        // F11 - Toggle fullscreen (desktop)
+        if (event.key === 'F11') {
+          event.preventDefault();
+          if (document.fullscreenElement) {
+            document.exitFullscreen();
+          } else {
+            document.documentElement.requestFullscreen();
+          }
+          return;
+        }
+      };
+
+      window.addEventListener('keydown', handleKeyDown);
+
       // cleanup
       return () => {
         window.removeEventListener('popstate', onPop);
+        window.removeEventListener('keydown', handleKeyDown);
         stopNetworkMonitoring();
-        bandwidthScheduler.stop();
+        if (schedulerRunning) {
+          bandwidthScheduler.stop();
+          schedulerRunning = false;
+        } else {
+          bandwidthScheduler.forceUpdate();
+        }
         if (unlistenSeederPayment) {
           unlistenSeederPayment();
         }
+        if (unsubscribeScheduler) {
+          unsubscribeScheduler();
+          unsubscribeScheduler = null;
+        }
+        if (unsubscribeBandwidth) {
+          unsubscribeBandwidth();
+          unsubscribeBandwidth = null;
+        }
+        lastAppliedBandwidthSignature = null;
       };
     })
 

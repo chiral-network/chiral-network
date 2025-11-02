@@ -13,6 +13,20 @@ import { get } from 'svelte/store';
 import { invoke } from '@tauri-apps/api/core';
 import { walletService } from '$lib/wallet';
 
+// type FullNetworkStats = {
+//   network_difficulty: number
+//   network_hashrate: number
+//   active_miners: number
+//   power_usage: number
+//   current_block: number
+//   peer_count: number
+//   blocks_mined?: number
+// }
+
+// const stats = await invoke<FullNetworkStats>('get_network_stats', {
+//   address: $etcAccount?.address
+// })
+
 // Helper functions for localStorage persistence
 function saveWalletToStorage(walletData: any) {
   try {
@@ -107,11 +121,70 @@ export class PaymentService {
   /**
    * Calculate the cost of downloading a file based on its size
    */
-  static calculateDownloadCost(fileSizeInBytes: number): number {
-    const pricePerMb = get(settings).pricePerMb || 0.001;
-    const sizeInMB = fileSizeInBytes / (1024 * 1024);
-    return parseFloat((sizeInMB * pricePerMb).toFixed(8)); // Support 8 decimal places
+  // static calculateDownloadCost(fileSizeInBytes: number): number {
+  //   const pricePerMb = get(settings).pricePerMb || 0.001;
+  //   const sizeInMB = fileSizeInBytes / (1024 * 1024);
+  //   return parseFloat((sizeInMB * pricePerMb).toFixed(8)); // Support 8 decimal places
+  // }
+
+  //calculate dynamic download cost
+  static async calculateDownloadCost(fileSizeInBytes: number): Promise<number> {
+  const normalizationFactor = 1.2; // can be tuned based on desired pricing
+  const dynamicPricePerMb = await this.getDynamicPricePerMB(normalizationFactor);
+
+  const sizeInMB = fileSizeInBytes / (1024 * 1024);
+  const cost = sizeInMB * dynamicPricePerMb;
+
+  console.log(`💰 File size ${sizeInMB.toFixed(3)} MB @ ${dynamicPricePerMb} = ${cost}`);
+
+  return parseFloat(cost.toFixed(8));
+}
+
+  /**
+ * Fetch dynamic network metrics and calculate real-time price per MB
+ * based on current Ethereum conditions
+ */
+static async getDynamicPricePerMB(normalizationFactor = 1): Promise<number> {
+  try {
+    const stats = await invoke<{
+      network_difficulty: number;
+      network_hashrate: number;
+      active_miners: number;
+      power_usage: number;
+    }>('get_full_network_stats');
+
+    const { network_difficulty, network_hashrate, active_miners, power_usage } = stats;
+    if (network_hashrate <= 0) return 0;
+
+    // --- Average hash power per miner ---
+    const avgHashPower = active_miners > 0 ? network_hashrate / active_miners : network_hashrate;
+
+    // unit cost of one hash for this miner, normalized to the average mining power
+    // basically for this miner, how expensive is each hash compared to the network average
+    const baseHashCost = power_usage / Math.max(avgHashPower, 1);
+
+    // --- Price per MB (scaled by difficulty) ---
+    const pricePerMB = (baseHashCost / avgHashPower) * network_difficulty * normalizationFactor;
+
+    console.log('📊 Dynamic pricing inputs:', {
+      difficulty: network_difficulty,
+      hashrate: network_hashrate,
+      active_miners,
+      power_usage,
+      avgHashPower,
+      baseHashCost,
+      normalizationFactor,
+      pricePerMB
+    });
+
+    return parseFloat(pricePerMB.toFixed(8));
+  } catch (error) {
+    console.warn('⚠️ Failed to fetch dynamic pricing from network:', error);
+    // fallback to static price from settings
+    return 0.001;
   }
+}
+
 
   /**
    * Check if the downloader has sufficient balance
@@ -154,7 +227,7 @@ export class PaymentService {
         };
       }
 
-      const amount = this.calculateDownloadCost(fileSize);
+      const amount = await this.calculateDownloadCost(fileSize);
 
       if (!seederAddress || !this.WALLET_ADDRESS_REGEX.test(seederAddress)) {
         console.error('❌ Invalid seeder wallet address for payment', {
@@ -321,7 +394,8 @@ export class PaymentService {
         };
       }
 
-      const amount = this.calculateDownloadCost(fileSize);
+      const amount = await this.calculateDownloadCost(fileSize);
+
 
       // Get current wallet state
       const currentWallet = get(wallet);
@@ -421,15 +495,16 @@ export class PaymentService {
   /**
    * Get payment details for a file without processing it
    */
-  static getPaymentDetails(fileSizeInBytes: number): {
+  static async getPaymentDetails(fileSizeInBytes: number): Promise<{
     amount: number;
     pricePerMb: number;
     sizeInMB: number;
     formattedAmount: string;
-  } {
+  }> {
     const pricePerMb = get(settings).pricePerMb || 0.001;
     const sizeInMB = fileSizeInBytes / (1024 * 1024);
-    const amount = this.calculateDownloadCost(fileSizeInBytes);
+    const amount = await this.calculateDownloadCost(fileSizeInBytes);
+    console.log(`Download cost: ${amount.toFixed(8)} Chiral`);
 
     return {
       amount,
@@ -442,12 +517,12 @@ export class PaymentService {
   /**
    * Validate if a payment can be processed
    */
-  static validatePayment(fileSizeInBytes: number): {
+  static async validatePayment(fileSizeInBytes: number): Promise<{
     valid: boolean;
     amount: number;
     error?: string;
-  } {
-    const amount = this.calculateDownloadCost(fileSizeInBytes);
+  }> {
+    const amount = await this.calculateDownloadCost(fileSizeInBytes);
     const currentBalance = get(wallet).balance;
 
     if (amount <= 0) {

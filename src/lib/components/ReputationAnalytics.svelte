@@ -235,7 +235,7 @@
         {#if hoveredSlice}
           <div class="pointer-events-none fixed z-50 px-2 py-1 rounded text-xs bg-gray-900 text-white shadow"
             style={`left:${tooltipX + 10}px; top:${tooltipY + 10}px;`}>
-            {hoveredSlice.level}: {hoveredSlice.count}
+            {$t(`reputation.trustLevels.${hoveredSlice.level}`)}: {hoveredSlice.count}
           </div>
         {/if}
       </div>
@@ -244,7 +244,7 @@
           {#each trustLevelData as { level }}
             <div class="flex items-center gap-2 justify-center">
               <span class="w-3 h-3 rounded-full" style={`background-color: ${colorByLevel[level]}`}></span>
-              <span class="text-sm text-gray-700">{level}</span>
+              <span class="text-sm text-gray-700">{$t(`reputation.trustLevels.${level}`)}</span>
             </div>
           {/each}
         </div>
@@ -319,7 +319,7 @@
           </div>
           <div class="flex items-center space-x-2 shrink-0 sm:flex-row flex-row sm:w-auto w-full sm:justify-end justify-start">
             <Badge class={getTrustLevelColor(peer.trustLevel).replace('bg-', 'bg-').replace('text-', 'text-')}>
-              {peer.trustLevel}
+              {$t(`reputation.trustLevels.${peer.trustLevel}`)}
             </Badge>
             <span class="text-sm font-semibold text-gray-900">
               {(peer.score * 5).toFixed(1)}/5.0 ⭐

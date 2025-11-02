@@ -720,6 +720,10 @@
     "status": "代理状态",
     "active": "活跃",
     "inactive": "非活跃",
+    "protected": "受保护",
+    "vulnerable": "易受攻击",
+    "secured": "已保护",
+    "disabled": "已禁用",
     "activeNodes": "活跃节点",
     "totalBandwidth": "总带宽",
     "settings": "代理设置",
@@ -733,9 +737,85 @@
     "latency": "延迟",
     "disconnect": "断开连接",
     "connect": "连接",
+    "connecting": "连接中...",
+    "retry": "重试",
     "remove": "移除",
     "alreadyAdded": "该代理地址已添加！",
-    "autoReconnect": "自动重连"
+    "autoReconnect": "自动重连",
+    "validation": {
+      "emptyAddress": "地址不能为空",
+      "noSpaces": "地址不能包含空格",
+      "invalidEnode": "无效的enode格式（enode://[128字符十六进制]@ip:端口）",
+      "missingPort": "地址必须包含端口（例如：example.com:8080）",
+      "invalidHostname": "无效的主机名",
+      "invalidPort": "端口必须在1-65535之间",
+      "systemPort": "避免使用系统端口（使用1024+）",
+      "invalidFormat": "无效的IP地址或域名格式"
+    },
+    "errors": {
+      "connectionTimeout": "连接超时",
+      "optimizationUnavailable": "❌ 优化状态不可用",
+      "tauriUnavailable": "❌ Tauri API不可用。请在桌面应用程序中运行此测试，而不是在浏览器中。"
+    },
+    "dialog": {
+      "confirmRemoval": "确认移除",
+      "confirmMessage": "确认移除代理节点",
+      "cancel": "取消",
+      "remove": "移除"
+    },
+    "privacy": {
+      "title": "隐私设置",
+      "anonymousMode": "匿名模式",
+      "anonymousModeDesc": "通过匿名代理路由",
+      "multiHop": "多跳路由",
+      "multiHopDesc": "通过多个代理节点路由",
+      "currentMode": "当前隐私模式：",
+      "maxPrivacy": "最大隐私（匿名+多跳）",
+      "anonymousOnly": "匿名模式",
+      "multiHopOnly": "多跳路由",
+      "standardMode": "标准模式"
+    },
+    "stats": {
+      "title": "代理路由统计",
+      "availableProxies": "可用代理",
+      "totalRoutes": "总路由数",
+      "privacyProfile": "隐私配置",
+      "anon": "匿名",
+      "standard": "标准",
+      "multi": "多跳",
+      "plusMulti": "+ 多跳"
+    },
+    "nodeInfo": {
+      "address": "代理节点地址",
+      "peerId": "DHT节点ID",
+      "reliability": "可靠性",
+      "success": "成功",
+      "attempts": "次尝试",
+      "mbps": "Mbps",
+      "ms": "毫秒",
+      "placeholder": "example.com:8080 或 enode://..."
+    },
+    "optimization": {
+      "title": "代理延迟优化",
+      "currentStatus": "当前状态",
+      "refreshStatus": "刷新状态",
+      "proveOptimization": "证明优化有效",
+      "runningTests": "运行测试中...",
+      "testResults": "测试结果"
+    },
+    "statusFilter": {
+      "all": "全部",
+      "online": "在线",
+      "offline": "离线",
+      "connecting": "连接中",
+      "error": "错误"
+    },
+    "sortOptions": {
+      "status": "按状态排序",
+      "latency": "按延迟排序",
+      "bandwidth": "按带宽排序",
+      "smart": "按智能排序（质量）"
+    }
   },
   "mining": {
     "title": "挖矿",
@@ -748,6 +828,12 @@
     "powerUsage": "能耗",
     "hw": "硬件",
     "temperature": "温度",
+    "temperatureStatus": {
+      "critical": "严重",
+      "hot": "高温",
+      "warm": "温暖",
+      "normal": "正常"
+    },
     "control": "挖矿控制",
     "active": "挖矿中",
     "stopped": "挖矿已停止",
@@ -862,6 +948,8 @@
     "refreshData": "刷新数据",
     "hideAnalytics": "隐藏分析",
     "showAnalytics": "显示分析",
+    "hideRelayLeaderboard": "隐藏中继排行榜",
+    "showRelayLeaderboard": "显示中继排行榜",
     "loading": "加载信誉数据中...",
     "searchPeers": "搜索节点",
     "searchPlaceholder": "按节点 ID 搜索...",
@@ -925,6 +1013,152 @@
       "StorageOffered": "存储已提供",
       "MaliciousBehaviorReport": "恶意行为报告",
       "FileShared": "文件已共享"
+    },
+    "myRelay": {
+      "title": "您的中继信誉",
+      "subtitle": "您的节点正在作为中继服务器运行",
+      "rankOf": "排名 {total}",
+      "reputationScore": "信誉分数",
+      "successfulCircuits": "成功电路",
+      "reservations": "预留"
+    },
+    "pagination": {
+      "showing": "显示 {start}-{end}，共 {total} 个节点",
+      "previous": "上一页",
+      "next": "下一页"
+    },
+    "card": {
+      "daysAgo": "{days}天前",
+      "hoursAgo": "{hours}小时前",
+      "minutesAgo": "{minutes}分钟前",
+      "justNow": "刚刚",
+      "reputationScore": "信誉分数",
+      "transfers": "传输",
+      "interactions": "交互次数",
+      "latency": "延迟",
+      "bandwidth": "带宽",
+      "uptime": "运行时间",
+      "encryption": "加密",
+      "supported": "支持",
+      "notSupported": "不支持"
+    }
+  },
+  "relay": {
+    "title": "中继基础设施",
+    "subtitle": "管理中继服务器和网络连接",
+    "server": {
+      "title": "中继服务器",
+      "subtitle": "帮助节点通过你的节点连接",
+      "running": "运行中",
+      "stopped": "已停止",
+      "description": "运行中继服务器来帮助NAT后面的节点连接到网络并获得声誉。",
+      "benefit1": "帮助节点获得声誉点数",
+      "benefit2": "改善网络连接性和去中心化",
+      "benefit3": "主动中继电路时使用带宽",
+      "enable": "启用中继服务器",
+      "disable": "禁用中继服务器",
+      "start": "启动服务器",
+      "stop": "停止服务器",
+      "starting": "启动中...",
+      "enabling": "启用中...",
+      "disabling": "禁用中...",
+      "activeMessage": "你的中继服务器正在运行并帮助节点！",
+      "earningReputation": "你正在为每次成功连接赚取声誉。",
+      "aliasLabel": "中继服务器别名（公开名称）",
+      "aliasPlaceholder": "例如：Alice的快速中继 🚀",
+      "aliasHint": "此友好名称将出现在日志中，以及其他节点通过你的中继启动时",
+      "dhtNotRunning": "DHT 网络未运行",
+      "dhtNotRunningHint": "请先从网络页面启动网络。",
+      "broadcastingAs": "广播为："
+    },
+    "client": {
+      "title": "AutoRelay 客户端",
+      "subtitle": "需要时通过中继节点连接",
+      "enableAutorelay": "启用 Circuit Relay v2（AutoRelay）",
+      "preferredRelays": "首选中继节点（可选）",
+      "preferredRelaysPlaceholder": "/ip4/relay.example.com/tcp/4001/p2p/QmRelayId\n每行一个多地址",
+      "preferredRelaysHint": "留空以使用引导节点作为中继",
+      "howItWorks": "工作原理：",
+      "description": "AutoRelay 在你处于 NAT 或防火墙后面时自动通过中继节点连接，确保你始终可以参与网络。"
+    },
+    "monitoring": {
+      "title": "中继健康和监控"
+    },
+    "errors": {
+      "dhtNotRunning": "DHT 未运行。请先从网络页面启动网络。",
+      "toggleFailed": "切换中继服务器失败：{error}"
+    },
+    "monitor": {
+      "statsTitle": "中继池统计",
+      "totalRelays": "总中继数",
+      "connected": "已连接",
+      "healthy": "健康",
+      "totalErrors": "总错误数",
+      "avgHealthScore": "平均健康分数",
+      "activeRelayTitle": "活动中继",
+      "connectedBadge": "已连接",
+      "peerId": "节点ID：",
+      "healthScore": "健康分数：",
+      "avgLatency": "平均延迟：",
+      "reservation": "预留：",
+      "successRate": "成功率：",
+      "relayPoolTitle": "中继池",
+      "noRelaysInPool": "池中无中继",
+      "primaryBadge": "主要",
+      "state": "状态：",
+      "latency": "延迟：",
+      "attempts": "尝试：",
+      "successes": "成功：",
+      "failures": "失败：",
+      "lastSuccess": "上次成功：",
+      "recentErrorsLabel": "最近错误：",
+      "recentErrorsTitle": "最近错误",
+      "clearButton": "清除",
+      "relayLabel": "中继：",
+      "retryLabel": "重试：",
+      "errorTypes": {
+        "connectionRefused": "连接被拒绝",
+        "timeout": "超时",
+        "reservationFailed": "预留失败",
+        "expired": "已过期",
+        "overloaded": "过载",
+        "unreachable": "无法到达",
+        "networkError": "网络错误",
+        "authFailed": "认证失败",
+        "protocolError": "协议错误",
+        "unknown": "未知"
+      },
+      "time": {
+        "never": "从未",
+        "justNow": "刚刚",
+        "minutesAgo": "{minutes}分钟前",
+        "hoursAgo": "{hours}小时前",
+        "na": "不适用",
+        "expired": "已过期",
+        "seconds": "{seconds}秒",
+        "minutes": "{minutes}分",
+        "hours": "{hours}时"
+      }
+    },
+    "leaderboard": {
+      "title": "顶级中继服务器",
+      "subtitle": "基于声誉的中继节点排名",
+      "refresh": "刷新",
+      "refreshing": "刷新中...",
+      "loading": "加载中继声誉数据...",
+      "rank": "排名",
+      "peerId": "节点ID",
+      "score": "分数",
+      "circuits": "电路",
+      "bandwidth": "带宽",
+      "uptime": "运行时间",
+      "points": "分",
+      "lastSeen": "最后在线",
+      "totalRelays": "总中继数",
+      "badgedRelays": "带徽章的中继",
+      "totalCircuits": "总电路数",
+      "noRelays": "未找到中继服务器",
+      "noRelaysDesc": "开始运行中继服务器以出现在排行榜上"
     }
   },
   "upload": {
@@ -974,6 +1208,102 @@
       "publicKeyHint": "输入接收者的 X25519 公钥（十六进制格式，64 个字符）。文件将被加密，只有他们可以解密。留空表示为自己加密。",
       "invalidPublicKey": "⚠️ 公钥格式无效。必须是 64 个十六进制字符。",
       "encryptedBadge": "已加密"
+    },
+    "currentProtocol": "当前协议",
+    "changeProtocol": "更改协议",
+    "selectProtocol": "选择协议",
+    "webrtcDescription": "使用 WebRTC 的快速点对点传输",
+    "bitswapDescription": "与 IPFS 兼容的区块交换协议",
+    "requireAccount": "请创建或导入账户以上传文件",
+    "uploadInProgress": "上传正在进行中。请等待当前上传完成。",
+    "desktopOnly": "文件上传仅在桌面应用中可用",
+    "executableBlocked": "{name}：出于安全原因不允许可执行文件",
+    "emptyFile": "{name}：文件为空",
+    "publishedToDHT": "文件已发布到 DHT 网络进行分享！",
+    "storedLocally": "文件已本地存储。启动 DHT 网络以与他人分享。",
+    "uploadError": "处理拖放文件时出错。请重试或使用「添加文件」按钮。",
+    "fileManagementDesktopOnly": "文件管理仅在桌面应用中可用",
+    "fileUpdated": "{name} 已存在；已更新到 v{version}",
+    "fileUploadedNew": "{name} 已作为 v{version} 上传（新文件）",
+    "hashCopiedClipboard": "文件哈希已复制到剪贴板！",
+    "noVersionHistory": "未找到此文件的版本历史",
+    "versionHistoryTitle": "{name} 的版本历史：\n{list}",
+    "versionHistoryError": "加载版本历史失败",
+    "desktopAppRequired": "需要桌面应用",
+    "storageMonitoringDesktopOnly": "存储监控需要桌面应用程序",
+    "dropFilesHere": "✨ 在此处拖放文件！",
+    "uploadingFiles": "🔄 正在上传文件...",
+    "releaseToUpload": "释放以立即上传文件",
+    "dragDropWebNotAvailable": "网页版不支持拖放功能",
+    "pleaseWaitProcessing": "文件正在处理中，请稍候...",
+    "dragDropRequiresDesktop": "拖放功能需要桌面应用",
+    "uploading": "上传中...",
+    "fileUploadDesktopApp": "文件上传需要桌面应用",
+    "downloadDesktopApp": "下载桌面版以上传和分享文件",
+    "desktopManagementRequired": "文件管理需要桌面应用",
+    "versionHistoryTooltip": "v{version} - 点击查看版本历史",
+    "encryptedEndToEnd": "此文件已端到端加密",
+    "active": "活跃",
+    "hashLabel": "哈希：",
+    "priceTooltip": "价格根据网络算力动态计算",
+    "storedLocallyBadge": "本地存储",
+    "fileManagementTooltip": "文件管理需要桌面应用",
+    "fileManagementWebNotAvailable": "网页版不支持文件管理",
+    "fileDialogError": "无法打开文件对话框"
+  },
+  "messages": {
+    "title": "消息",
+    "subtitle": "与您的节点安全通信。",
+    "conversations": "联系人",
+    "searchPlaceholder": "搜索联系人...",
+    "inputPlaceholder": "输入加密消息...",
+    "selectConversation": "选择对话以开始发送消息",
+    "peer": "节点",
+    "endToEndEncrypted": "端到端加密",
+    "refreshPeerList": "刷新节点列表"
+  },
+  "torrent": {
+    "title": "种子",
+    "magnetLink": {
+      "title": "从磁力链接",
+      "description": "粘贴磁力链接以开始下载。",
+      "placeholder": "magnet:?xt=urn:btih:...",
+      "download": "下载"
+    },
+    "or": "或",
+    "torrentFile": {
+      "title": "从 .torrent 文件",
+      "description": "从您的计算机上传 .torrent 文件。",
+      "choosePlaceholder": "选择 .torrent 文件...",
+      "download": "下载",
+      "invalidFile": "请选择有效的 .torrent 文件。"
+    },
+    "seed": {
+      "title": "创建并做种",
+      "description": "选择本地文件与网络分享。",
+      "choosePlaceholder": "选择要做种的文件...",
+      "button": "做种文件",
+      "shareMagnet": "分享此磁力链接：",
+      "noFileSelected": "请选择要做种的文件。",
+      "success": "成功开始做种 {fileName}！",
+      "error": "做种文件错误：{error}"
+    },
+    "activeTransfers": {
+      "title": "活动传输",
+      "filterAll": "全部",
+      "filterChiral": "Chiral",
+      "filterBitTorrent": "BitTorrent",
+      "noTransfers": "没有活动传输。",
+      "peers": "节点：",
+      "eta": "预计时间："
+    },
+    "download": {
+      "error": "错误：{error}",
+      "noIdentifier": "请提供磁力链接或选择 .torrent 文件。",
+      "complete": "下载完成：{fileName}"
+    },
+    "clipboard": {
+      "copied": "已复制到剪贴板！"
     }
   },
   "download": {
@@ -1092,6 +1422,9 @@
       "retrying": "正在重试 {hash} 下载（第 {attempt}/{max} 次尝试）",
       "recovered": "{hash} 下载在 {retries} 次重试后恢复（{duration} 毫秒）",
       "failed": "{hash} 下载在 {attempts} 次尝试后失败"
-    }
+    },
+    "selectProtocol": "选择协议",
+    "currentProtocol": "当前协议",
+    "changeProtocol": "更改协议"
   }
 }

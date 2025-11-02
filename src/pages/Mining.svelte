@@ -36,13 +36,18 @@
     $miningState.sessionStartTime || Date.now() : 
     Date.now()
   let estimatedTimeToBlock = 0
-  $: powerConsumption = $miningState.activeThreads * 15
-  $: efficiency = $miningState.hashRate === '0 H/s' ? 0 : parseHashRate($miningState.hashRate) / powerConsumption
+  $: powerConsumption = hasRealPower ? realPowerConsumption : 0
+  $: efficiency = ($miningState.hashRate === '0 H/s' || !hasRealPower) ? 0 : parseHashRate($miningState.hashRate) / powerConsumption
   let temperature = 0.0
   let hasRealTemperature = false
   let temperatureLoading = true // Add loading state for temperature checks
   let hasCompletedFirstCheck = false // Track if we've completed the first temperature check
   let temperatureUnit: 'C' | 'F' = 'C'
+
+  // Power monitoring
+  let realPowerConsumption = 0.0
+  let hasRealPower = false
+  let powerLoading = true
 
   // Uptime tick (forces template to re-render every second while mining)
   let uptimeNow: number = Date.now()
@@ -314,6 +319,7 @@
   let hoveredPoint: MiningHistoryPoint | null = null;
   let hoveredIndex: number | null = null;
 
+
   onMount(async () => {
     try{
       getVersion()
@@ -336,6 +342,7 @@
     }
     if (isTauri) {
       await updateCpuTemperature()
+      await updatePowerConsumption()
     }
     
     // Initialize pool state
@@ -366,6 +373,7 @@
       await updateNetworkStats();
       if (isTauri) {
         await updateCpuTemperature();
+        await updatePowerConsumption();
       }
     }, 1000) as unknown as number;
   })  
@@ -398,46 +406,48 @@
       const [rate, block] = await Promise.all([
         invoke('get_miner_hashrate') as Promise<string>,
         invoke('get_current_block') as Promise<number>
-      ])
-      
+      ]);
+
       currentBlock = block
-      
-      // Try to get real hash rate from logs if standard API returns 0
+
+      // Always try to get continuous hash rate estimates when mining
+      let finalHashRate = rate;
+
+      // If RPC returns 0 but we're mining, show "Mining Active"
       if (rate === '0 H/s' && $miningState.isMining) {
-        try {
-          // Get mining performance from logs
-          const [blocksFound, hashRateFromLogs] = await invoke('get_miner_performance', { 
-            dataDir: './bin/geth-data' 
-          }) as [number, number]
-          
-          if (hashRateFromLogs > 0) {
-            // Use actual hash rate from logs
-            $miningState.hashRate = formatHashRate(hashRateFromLogs)
-            $miningState.blocksFound = blocksFound;
-          
-            
-          } else if ($miningState.activeThreads > 0) {
-            // Fall back to simulation if no log data yet
-            const elapsed = (Date.now() - sessionStartTime) / 1000 // seconds
-            const baseRate = $miningState.activeThreads * 85000 // 85 KH/s per thread
-            const variation = Math.sin(elapsed / 10) * baseRate * 0.1 // ±10% variation
-            const simulatedRate = baseRate + variation
-            $miningState.hashRate = `~${formatHashRate(simulatedRate)}`
-          }
-        } catch (perfError) {
-          // If performance fetch fails, fall back to simulation
-          if ($miningState.activeThreads > 0) {
-            const elapsed = (Date.now() - sessionStartTime) / 1000
-            const baseRate = $miningState.activeThreads * 85000
-            const variation = Math.sin(elapsed / 10) * baseRate * 0.1
-            const simulatedRate = baseRate + variation
-            $miningState.hashRate = `~${formatHashRate(simulatedRate)}`
-          }
-        }
-      } else if (rate !== '0 H/s') {
-        // Use actual rate if available from standard API
-        $miningState.hashRate = rate
+        finalHashRate = "Mining Active";
       }
+
+
+      if ($miningState.isMining) {
+        try {
+          // Get continuous hash rate estimates from backend
+          const [, hashRateFromLogs] = await invoke('get_miner_performance', {
+            dataDir: './bin/geth-data'
+          }) as [number, number]
+
+          // Handle backend response properly
+
+          if (hashRateFromLogs === 0) {
+            // Mining active but no blocks mined yet - show status
+            finalHashRate = $miningState.hashRate === "0 H/s" ? "Mining Active" : $miningState.hashRate;
+          } else {
+            // Have actual hash rate data from block mining
+            finalHashRate = formatHashRate(hashRateFromLogs);
+          }
+
+        } catch (perfError) {
+          console.log('Performance fetch failed:', perfError);
+          // If performance fetch fails, keep current rate
+          finalHashRate = $miningState.hashRate || rate;
+        }
+      }
+      
+      $miningState.hashRate = finalHashRate;
+
+      // Force reactivity by triggering store update every time
+      miningState.set($miningState);
+
       
       // Convert hashRate string to number for chart
       let hashRateNum = 0
@@ -503,7 +513,7 @@
     if (!hasCompletedFirstCheck) {
       temperatureLoading = true
     }
-    
+
     try {
       const temp = await invoke('get_cpu_temperature') as number
       if (temp && temp > 0) {
@@ -519,6 +529,30 @@
       if (!hasCompletedFirstCheck) {
         temperatureLoading = false
         hasCompletedFirstCheck = true
+      }
+    }
+  }
+
+  async function updatePowerConsumption() {
+    // Only show loading state for the very first check
+    if (!hasCompletedFirstCheck) {
+      powerLoading = true
+    }
+
+    try {
+      const power = await invoke('get_power_consumption') as number
+      if (power && power > 0) {
+        realPowerConsumption = power
+        hasRealPower = true
+      } else {
+        hasRealPower = false
+      }
+    } catch (e) {
+      console.error('Failed to get power consumption:', e)
+      hasRealPower = false
+    } finally {
+      if (!hasCompletedFirstCheck) {
+        powerLoading = false
       }
     }
   }
@@ -1019,10 +1053,17 @@
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">{$t('mining.powerUsage')}</p>
-          <p class="text-2xl font-bold">{powerConsumption.toFixed(0)}W</p>
-          <p class="text-xs text-muted-foreground mt-1">
-            {efficiency.toFixed(2)} {$t('mining.hw')}
-          </p>
+          {#if hasRealPower}
+            <p class="text-2xl font-bold">{powerConsumption.toFixed(0)}W</p>
+            <p class="text-xs text-muted-foreground mt-1">
+              {efficiency.toFixed(2)} {$t('mining.hw')}
+            </p>
+          {:else}
+            <p class="text-2xl font-bold text-gray-500">N/A</p>
+            <p class="text-xs text-muted-foreground mt-1">
+              {$t('mining.hw')}
+            </p>
+          {/if}
         </div>
         <div class="p-2 bg-amber-500/10 rounded-lg">
           <Zap class="h-5 w-5 text-amber-500" />
@@ -1054,7 +1095,7 @@
                 {temperature > 85 ? $t('mining.temperatureStatus.critical') : temperature > 75 ? $t('mining.temperatureStatus.hot') : temperature > 65 ? $t('mining.temperatureStatus.warm') : $t('mining.temperatureStatus.normal')}
               </p>
             {:else}
-              <Progress value={0} max={100} class="h-2 opacity-30" />
+              <Progress value={0} max={100} class="h-2 bg-gray-200 [&>div]:bg-gray-400 [&>div]:opacity-50" />
               <p class="text-xs text-muted-foreground mt-1">Hardware sensor not available</p>
             {/if}
           </div>

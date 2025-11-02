@@ -234,7 +234,7 @@ bucket_size = 20
 
 ### 3. DHT Configuration (Decentralized)
 
-No centralized servers required - peer discovery handled via DHT
+Peer discovery flows through the Kademlia DHT. In production we keep at least one bootstrap DHT node online so fresh peers can join immediately; if every bootstrap node goes offline, existing peers stay connected but new peers cannot discover the mesh until a replacement comes up.
 
 # API
 
@@ -289,10 +289,29 @@ chiral-node tools genesis \
 
 ### 2. Bootstrap Nodes
 
-#### Deploy Bootstrap Node
+#### Deploy Bootstrap DHT + Geth
 
 ```bash
-# Start bootstrap node with Geth
+# Run the dedicated bootstrap DHT node and bundled geth process
+# --enable-geth keeps a local Ethereum node online for RPC/state access (no mining).
+./run-bootstrap.sh \
+  --port 4001 \
+  --log-level info \
+  --enable-geth \
+  --geth-data-dir ./bootnode-data \
+  --secret "<optional stable peer-id seed>"
+```
+
+- `run-bootstrap.sh` builds `chiral-network` (if needed) and launches `--headless --is-bootstrap`, which disables provider storage and AutoRelay so the node stays focused on routing DHT traffic.
+- Pass `--enable-geth` (or set `ENABLE_GETH=true`) so the bootstrap host keeps a local Geth process online for RPC/state; leave mining disabled to keep the bootstrap focused on routing.
+- Keep at least one bootstrap instance running at all times. Plan to provision multiple bootstrap nodes/IPs to avoid a single point of failure.
+
+#### Optional: Stand-alone Geth Utilities
+
+If you need to manage the bundled geth process manually, the usual commands still apply:
+
+```bash
+# Start geth manually (rare outside debugging)
 geth --datadir ./bootnode-data \
   --networkid 98765 \
   --port 30304 \

@@ -529,6 +529,73 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
+name = "axum"
+version = "0.7.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edca88bc138befd0323b20752846e6587272d3b03b0343c8ea28a6f819e6e71f"
+dependencies = [
+ "async-trait",
+ "axum-core",
+ "axum-macros",
+ "bytes",
+ "futures-util",
+ "http 1.3.1",
+ "http-body 1.0.1",
+ "http-body-util",
+ "hyper 1.7.0",
+ "hyper-util",
+ "itoa",
+ "matchit",
+ "memchr",
+ "mime",
+ "percent-encoding",
+ "pin-project-lite",
+ "rustversion",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "serde_urlencoded",
+ "sync_wrapper 1.0.2",
+ "tokio",
+ "tower",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
+name = "axum-core"
+version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09f2bd6146b97ae3359fa0cc6d6b376d9539582c7b4220f041a33ec24c226199"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures-util",
+ "http 1.3.1",
+ "http-body 1.0.1",
+ "http-body-util",
+ "mime",
+ "pin-project-lite",
+ "rustversion",
+ "sync_wrapper 1.0.2",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
+name = "axum-macros"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57d123550fa8d071b7255cb0cc04dc302baa6c8c4a79f55701552684d8399bce"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
+]
+
+[[package]]
 name = "backtrace"
 version = "0.3.76"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -604,7 +671,7 @@ checksum = "d86b93f97252c47b41663388e6d155714a9d0c398b99f1005cbc5f978b29f445"
 [[package]]
 name = "beetswap"
 version = "0.4.1"
-source = "git+https://github.com/totoro-ming-lin/beetswap.git?branch=older-version#9de7ea8bbef95d64a22dc13da8f26cb573aca4d4"
+source = "git+https://github.com/totoro-ming-lin/beetswap.git?branch=new#e614ef9605c34cbf8ee191b83a29277504dc7168"
 dependencies = [
  "asynchronous-codec",
  "blockstore",
@@ -1140,6 +1207,7 @@ dependencies = [
  "anyhow",
  "async-std",
  "async-trait",
+ "axum",
  "base64 0.21.7",
  "beetswap",
  "bendy",
@@ -1166,6 +1234,7 @@ dependencies = [
  "libp2p",
  "memmap2",
  "multihash-codetable",
+ "native-tls",
  "pbkdf2 0.12.2",
  "rand 0.8.5",
  "reqwest 0.11.27",
@@ -1177,6 +1246,7 @@ dependencies = [
  "sha1",
  "sha2",
  "sha3",
+ "suppaftp",
  "sys-locale",
  "sysinfo",
  "systemstat",
@@ -1195,6 +1265,7 @@ dependencies = [
  "tokio-tungstenite",
  "tokio-util",
  "totp-rs",
+ "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -3640,6 +3711,7 @@ dependencies = [
  "http 1.3.1",
  "http-body 1.0.1",
  "httparse",
+ "httpdate",
  "itoa",
  "pin-project-lite",
  "pin-utils",
@@ -4283,6 +4355,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "507460a910eb7b32ee961886ff48539633b788a36b65692b95f225b844c82553"
 dependencies = [
  "regex-automata",
+]
+
+[[package]]
+name = "lazy-regex"
+version = "3.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60c7310b93682b36b98fa7ea4de998d3463ccbebd94d935d6b48ba5b6ffa7126"
+dependencies = [
+ "lazy-regex-proc_macros",
+ "once_cell",
+ "regex",
+]
+
+[[package]]
+name = "lazy-regex-proc_macros"
+version = "3.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ba01db5ef81e17eb10a5e0f2109d1b3a3e29bac3070fdbd7d156bf7dbd206a1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "regex",
+ "syn 2.0.106",
 ]
 
 [[package]]
@@ -5000,6 +5095,12 @@ name = "maybe-uninit"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60302e4db3a61da70c0cb7991976248362f30319e88850c487b9b95bbf059e00"
+
+[[package]]
+name = "matchit"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e7465ac9959cc2b1404e8e2367b43684a6d13790fe23056cc8c6c5a6b7bcb94"
 
 [[package]]
 name = "md-5"
@@ -7180,7 +7281,7 @@ dependencies = [
  "tokio 1.48.0",
  "tokio-util",
  "tower",
- "tower-http",
+ "tower-http 0.6.6",
  "tower-service",
  "url",
  "wasm-bindgen",
@@ -7850,6 +7951,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_path_to_error"
+version = "0.1.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10a9ff822e371bb5403e391ecd83e182e0e77ba7f6fe0160b795797109d1b457"
+dependencies = [
+ "itoa",
+ "serde",
+ "serde_core",
+]
+
+[[package]]
 name = "serde_repr"
 version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8343,6 +8455,20 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
+
+[[package]]
+name = "suppaftp"
+version = "5.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb79a5b76543d896dbec5c0fd9a28c0ca9a0d4e764c438c37f8463c96e4a8bf2"
+dependencies = [
+ "chrono",
+ "futures-lite",
+ "lazy-regex",
+ "log",
+ "native-tls",
+ "thiserror 1.0.69",
+]
 
 [[package]]
 name = "svm-rs"
@@ -9524,6 +9650,23 @@ dependencies = [
  "tokio 1.48.0",
  "tower-layer",
  "tower-service",
+ "tracing",
+]
+
+[[package]]
+name = "tower-http"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e9cd434a998747dd2c4276bc96ee2e0c7a2eadf3cae88e52be55a05fa9053f5"
+dependencies = [
+ "bitflags 2.9.4",
+ "bytes",
+ "http 1.3.1",
+ "http-body 1.0.1",
+ "http-body-util",
+ "pin-project-lite",
+ "tower-layer",
+ "tower-service",
 ]
 
 [[package]]
@@ -9562,6 +9705,7 @@ version = "0.1.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "784e0ac535deb450455cbfa28a6f0df145ea1bb7ae51b821cf5e7927fdcfbdd0"
 dependencies = [
+ "log",
  "pin-project-lite",
  "tracing-attributes",
  "tracing-core",

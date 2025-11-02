@@ -199,8 +199,8 @@ The Mining page displays:
 
 - **Hash Rate Chart**: Historical hashrate over time
 - **Blocks Found**: List of blocks you've mined
-- **Power Usage**: Estimated power consumption (mock data)
-- **Efficiency**: Hash/watt ratio (mock data)
+- **Power Usage**: Real power consumption (when available) or N/A when unavailable
+- **Efficiency**: Hash/watt ratio (based on real power consumption when available)
 - **Session Statistics**: Current mining session details
 
 ## Transactions

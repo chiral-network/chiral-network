@@ -12,6 +12,7 @@
   import DropDown from '$lib/components/ui/dropDown.svelte'
   import { ProxyAuthService } from '$lib/proxyAuth';
   import { privacyStore, proxyRoutingService, initializeProxyRouting, persistPrivacyProfile } from '$lib/services/proxyRoutingService';
+  import { computeProxyWeight } from '$lib/services/routingWeights';
   
   let newNodeAddress = ''
   let proxyEnabled = true
@@ -32,7 +33,7 @@
   }>()
   
   // Proxy latency optimization variables
-  let optimizationStatus = "🔄 Loading optimization status..."
+  let optimizationStatus = ""
   let isTestingOptimization = false
   let testResults = ""
   
@@ -42,7 +43,7 @@
   const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.([a-zA-Z]{2,}|[a-zA-Z]{2,}\.[a-zA-Z]{2,}):[0-9]{1,5}$/
   const enodeRegex = /^enode:\/\/[a-fA-F0-9]{128}@(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):[0-9]{1,5}$/
   let statusFilter = 'all'
-  let sortBy: 'status' | 'latency' | 'bandwidth' = 'status'
+  let sortBy: 'status' | 'latency' | 'bandwidth' | 'smart' = 'status'
   
   $: statusOptions = [
     { value: 'all', label: $t('All') },
@@ -55,7 +56,8 @@
   $: sortOptions = [
     { value: 'status', label: $t('Sort by status') },
     { value: 'latency', label: $t('Sort by latency') },
-    { value: 'bandwidth', label: $t('Sort by bandwidth') }
+    { value: 'bandwidth', label: $t('Sort by bandwidth') },
+    { value: 'smart', label: $t('Sort by smart (quality)') }
   ]
 
   $: filteredNodes = $proxyNodes.filter(node => {
@@ -82,10 +84,25 @@
         return aLat - bLat
       }
 
-      // Sort by effective bandwidth (derived from latency): higher first; unknowns last
-      const aBw = a.latency != null ? Math.round(100 - a.latency) : Number.NEGATIVE_INFINITY
-      const bBw = b.latency != null ? Math.round(100 - b.latency) : Number.NEGATIVE_INFINITY
-      return bBw - aBw
+      if (sortBy === 'bandwidth') {
+        const aBw = a.latency != null ? Math.round(100 - a.latency) : Number.NEGATIVE_INFINITY
+        const bBw = b.latency != null ? Math.round(100 - b.latency) : Number.NEGATIVE_INFINITY
+        return bBw - aBw
+      }
+      // smart
+      const aW = computeProxyWeight({
+        latencyMs: a.latency,
+        uptimePct: getUptimePct(a.address),
+        status: a.status as any,
+        recentFailures: getRecentFailures(a.address),
+      })
+      const bW = computeProxyWeight({
+        latencyMs: b.latency,
+        uptimePct: getUptimePct(b.address),
+        status: b.status as any,
+        recentFailures: getRecentFailures(b.address),
+      })
+      return bW - aW
   });
 
   
@@ -115,13 +132,13 @@
 
   function validateAddress(address: string): { valid: boolean; error: string } {
       if (!address || address.trim() === '') {
-          return { valid: false, error: 'Address cannot be empty' }
+          return { valid: false, error: $t('proxy.validation.emptyAddress') }
       }
 
       const trimmed = address.trim()
 
       if (trimmed.includes(' ')) {
-          return { valid: false, error: 'Address cannot contain spaces' }
+          return { valid: false, error: $t('proxy.validation.noSpaces') }
       }
 
       // Check for enode format first
@@ -129,32 +146,32 @@
           if (enodeRegex.test(trimmed)) {
               return { valid: true, error: '' }
           } else {
-              return { valid: false, error: 'Invalid enode format (enode://[128-char-hex]@ip:port)' }
+              return { valid: false, error: $t('proxy.validation.invalidEnode') }
           }
       }
 
       // Standard host:port validation
       if (!trimmed.includes(':')) {
-          return { valid: false, error: 'Address must include port (e.g., example.com:8080)' }
+          return { valid: false, error: $t('proxy.validation.missingPort') }
       }
 
       const [host, portStr] = trimmed.split(':')
 
       if (!host) {
-          return { valid: false, error: 'Invalid hostname' }
+          return { valid: false, error: $t('proxy.validation.invalidHostname') }
       }
 
       const port = parseInt(portStr)
       if (isNaN(port) || port < 1 || port > 65535) {
-          return { valid: false, error: 'Port must be between 1-65535' }
+          return { valid: false, error: $t('proxy.validation.invalidPort') }
       }
 
       if (port < 1024 && port !== 80 && port !== 443) {
-          return { valid: false, error: 'Avoid system ports (use 1024+)' }
+          return { valid: false, error: $t('proxy.validation.systemPort') }
       }
 
       if (!ipv4Regex.test(trimmed) && !domainRegex.test(trimmed)) {
-          return { valid: false, error: 'Invalid IP address or domain format' }
+          return { valid: false, error: $t('proxy.validation.invalidFormat') }
       }
 
       return { valid: true, error: '' }
@@ -205,7 +222,7 @@
           proxyNodes.update(nodes => {
               return nodes.map(node =>
                   node.address === address && node.status === 'connecting'
-                      ? { ...node, status: 'error' as const, error: 'Connection timeout' }
+                      ? { ...node, status: 'error' as const, error: $t('proxy.errors.connectionTimeout') }
                       : node
               )
           })
@@ -357,24 +374,37 @@
       }
   }
 
+  function getUptimePct(address: string | undefined) {
+    if (!address) return 0
+    const stats = getPerformanceStats(address)
+    return stats.uptimePercentage ?? 0
+  }
+
+  function getRecentFailures(address: string | undefined) {
+    if (!address) return 0
+    const stats = getPerformanceStats(address)
+    const failures = stats.totalAttempts - stats.successfulConnections
+    return Math.max(0, failures)
+  }
+
   // Proxy latency optimization functions
   async function updateOptimizationStatus() {
       try {
           optimizationStatus = await getProxyOptimizationStatus();
       } catch (e) {
           console.error('Failed to get optimization status:', e);
-          optimizationStatus = '❌ Optimization status unavailable';
+          optimizationStatus = $t('proxy.errors.optimizationUnavailable');
       }
   }
 
   async function testProxyLatencyOptimization() {
     isTestingOptimization = true;
     testResults = "";
-    
+
     try {
       const isTauriAvailable = await ProxyLatencyOptimizationService.isTauriAvailable();
       if (!isTauriAvailable) {
-        testResults = "❌ Tauri API not available. Please run this test in the desktop application, not the browser.";
+        testResults = $t('proxy.errors.tauriUnavailable');
         return;
       }
 
@@ -470,17 +500,17 @@ onDestroy(() => {
 {#if showConfirmDialog && nodeToRemove}
   <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
     <div class="bg-white rounded-lg p-6 max-w-md w-full mx-4 overflow-hidden">
-      <h3 class="text-lg font-semibold mb-4">Confirm Removal</h3>
+      <h3 class="text-lg font-semibold mb-4">{$t('proxy.dialog.confirmRemoval')}</h3>
       <p class="text-muted-foreground mb-6 break-words">
-        Confirm the removal of proxy node <span class="font-medium">{nodeToRemove.address}</span>
+        {$t('proxy.dialog.confirmMessage')} <span class="font-medium">{nodeToRemove.address}</span>
       </p>
       <div class="flex gap-3 justify-center">
         <Button variant="outline" on:click={cancelRemoveNode}>
-          Cancel
+          {$t('proxy.dialog.cancel')}
         </Button>
         <Button variant="destructive" on:click={confirmRemoveNode}>
           <Trash2 class="h-4 w-4 mr-2" />
-          Remove
+          {$t('proxy.dialog.remove')}
         </Button>
       </div>
     </div>
@@ -513,12 +543,12 @@ onDestroy(() => {
           {#if proxyEnabled}
             <div class="flex items-center gap-1 mt-1">
               <div class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-              <span class="text-xs text-green-600 font-medium">Protected</span>
+              <span class="text-xs text-green-600 font-medium">{$t('proxy.protected')}</span>
             </div>
           {:else}
             <div class="flex items-center gap-1 mt-1">
               <div class="w-2 h-2 bg-red-500 rounded-full"></div>
-              <span class="text-xs text-red-600 font-medium">Vulnerable</span>
+              <span class="text-xs text-red-600 font-medium">{$t('proxy.vulnerable')}</span>
             </div>
           {/if}
         </div>
@@ -557,12 +587,12 @@ onDestroy(() => {
         {#if proxyEnabled}
           <div class="flex items-center gap-1 px-2 py-1 bg-green-100 rounded-full">
             <ShieldCheck class="h-3 w-3 text-green-600" />
-            <span class="text-xs text-green-600 font-medium">Secured</span>
+            <span class="text-xs text-green-600 font-medium">{$t('proxy.secured')}</span>
           </div>
         {:else}
           <div class="flex items-center gap-1 px-2 py-1 bg-red-100 rounded-full">
             <ShieldX class="h-3 w-3 text-red-600" />
-            <span class="text-xs text-red-600 font-medium">Disabled</span>
+            <span class="text-xs text-red-600 font-medium">{$t('proxy.disabled')}</span>
           </div>
         {/if}
       </div>
@@ -628,7 +658,7 @@ onDestroy(() => {
         <div>
           <h3 class="text-md font-semibold mb-4 flex items-center gap-2">
             <ShieldCheck class="h-5 w-5" />
-            Privacy Settings
+            {$t('proxy.privacy.title')}
           </h3>
         </div>
       </div>
@@ -637,8 +667,8 @@ onDestroy(() => {
         <!-- Anonymous Mode Toggle -->
         <div class="flex items-center justify-between p-4 border border-gray-200 dark:border-gray-700 rounded-lg">
           <div>
-            <Label class="text-sm font-medium">{$t('proxy.anonymousMode') || 'Anonymous Mode'}</Label>
-            <p class="text-xs text-gray-500 mt-1">Route through anonymous proxies</p>
+            <Label class="text-sm font-medium">{$t('proxy.privacy.anonymousMode')}</Label>
+            <p class="text-xs text-gray-500 mt-1">{$t('proxy.privacy.anonymousModeDesc')}</p>
           </div>
           <button
             type="button"
@@ -665,8 +695,8 @@ onDestroy(() => {
         <!-- Multi-Hop Toggle -->
         <div class="flex items-center justify-between p-4 border border-gray-200 dark:border-gray-700 rounded-lg">
           <div>
-            <Label class="text-sm font-medium">{$t('proxy.multiHop') || 'Multi-Hop Routing'}</Label>
-            <p class="text-xs text-gray-500 mt-1">Route through multiple proxy nodes</p>
+            <Label class="text-sm font-medium">{$t('proxy.privacy.multiHop')}</Label>
+            <p class="text-xs text-gray-500 mt-1">{$t('proxy.privacy.multiHopDesc')}</p>
           </div>
           <button
             type="button"
@@ -694,15 +724,15 @@ onDestroy(() => {
       <!-- Privacy Profile Display -->
       <div class="mt-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
         <p class="text-sm text-blue-900 dark:text-blue-100">
-          <strong>Current Privacy Mode:</strong>
+          <strong>{$t('proxy.privacy.currentMode')}</strong>
           {#if $privacyStore.anonymousMode && $privacyStore.multiHopEnabled}
-            Maximum Privacy (Anonymous + Multi-Hop)
+            {$t('proxy.privacy.maxPrivacy')}
           {:else if $privacyStore.anonymousMode}
-            Anonymous Mode
+            {$t('proxy.privacy.anonymousOnly')}
           {:else if $privacyStore.multiHopEnabled}
-            Multi-Hop Routing
+            {$t('proxy.privacy.multiHopOnly')}
           {:else}
-            Standard Mode
+            {$t('proxy.privacy.standardMode')}
           {/if}
         </p>
       </div>
@@ -712,20 +742,20 @@ onDestroy(() => {
     <div class="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
       <h3 class="text-md font-semibold mb-4 flex items-center gap-2">
         <Activity class="h-5 w-5" />
-        Proxy Routing Stats
+        {$t('proxy.stats.title')}
       </h3>
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div class="p-4 border border-gray-200 dark:border-gray-700 rounded-lg">
-          <p class="text-xs text-gray-500">Available Proxies</p>
+          <p class="text-xs text-gray-500">{$t('proxy.stats.availableProxies')}</p>
           <p class="text-2xl font-bold">{proxyRoutingService.getStatistics().availableProxies}</p>
         </div>
         <div class="p-4 border border-gray-200 dark:border-gray-700 rounded-lg">
-          <p class="text-xs text-gray-500">Total Routes</p>
+          <p class="text-xs text-gray-500">{$t('proxy.stats.totalRoutes')}</p>
           <p class="text-2xl font-bold">{proxyRoutingService.getStatistics().totalRoutes}</p>
         </div>
         <div class="p-4 border border-gray-200 dark:border-gray-700 rounded-lg">
-          <p class="text-xs text-gray-500">Privacy Profile</p>
-          <p class="text-sm font-medium">{$privacyStore.anonymousMode ? 'Anon' : 'Standard'} {$privacyStore.multiHopEnabled ? '+ Multi' : ''}</p>
+          <p class="text-xs text-gray-500">{$t('proxy.stats.privacyProfile')}</p>
+          <p class="text-sm font-medium">{$privacyStore.anonymousMode ? $t('proxy.stats.anon') : $t('proxy.stats.standard')} {$privacyStore.multiHopEnabled ? $t('proxy.stats.plusMulti') : ''}</p>
         </div>
       </div>
     </div>
@@ -781,7 +811,7 @@ onDestroy(() => {
                       <div class="min-w-0 flex-1">
                         <div class="mb-1">
                           <p class="text-xs text-muted-foreground">
-                            {node.address ? 'Proxy Node Address' : 'DHT Peer ID'}
+                            {node.address ? $t('proxy.nodeInfo.address') : $t('proxy.nodeInfo.dhtPeerId')}
                           </p>
                         </div>
                         <p class="font-mono text-sm font-medium text-foreground break-all" title={node.address || node.id}>
@@ -821,7 +851,7 @@ onDestroy(() => {
             {#if node.address}
               {@const stats = getPerformanceStats(node.address)}
               <div class="text-center p-2 rounded bg-background border border-border/30">
-                <p class="text-xs text-muted-foreground">Reliability</p>
+                <p class="text-xs text-muted-foreground">{$t('proxy.nodeInfo.reliability')}</p>
                 <p class="text-sm font-bold {
                   stats.uptimePercentage >= 80 ? 'text-green-600' :
                   stats.uptimePercentage >= 60 ? 'text-yellow-600' :
@@ -839,9 +869,9 @@ onDestroy(() => {
                 </div>
               </div>
               <div class="text-center p-2 rounded bg-background border border-border/30">
-                <p class="text-xs text-muted-foreground">Success</p>
+                <p class="text-xs text-muted-foreground">{$t('proxy.nodeInfo.success')}</p>
                 <p class="text-sm font-bold text-gray-600">{stats.successfulConnections}/{stats.totalAttempts}</p>
-                <p class="text-xs text-muted-foreground">attempts</p>
+                <p class="text-xs text-muted-foreground">{$t('proxy.nodeInfo.attempts')}</p>
               </div>
             {:else}
               <div class="col-span-2"></div>
@@ -857,8 +887,8 @@ onDestroy(() => {
             >
               <Power class="h-3 w-3 mr-1" />
               {node.status === 'online' ? $t('proxy.disconnect') :
-               node.status === 'connecting' ? 'Connecting...' :
-               node.status === 'error' ? 'Retry' :
+               node.status === 'connecting' ? $t('proxy.connecting') :
+               node.status === 'error' ? $t('proxy.retry') :
                $t('proxy.connect')}
             </Button>
             <Button
@@ -881,33 +911,33 @@ onDestroy(() => {
     <div class="space-y-3">
       <div class="flex items-center gap-2">
         <Activity class="h-5 w-5 text-purple-600" />
-        <h3 class="text-lg font-semibold text-purple-800">Proxy Latency Optimization</h3>
+        <h3 class="text-lg font-semibold text-purple-800">{$t('proxy.optimization.title')}</h3>
       </div>
-      
+
       <div class="bg-white/60 rounded-lg p-4 space-y-3">
         <div>
-          <h4 class="text-sm font-medium text-gray-700 mb-2">Current Status</h4>
+          <h4 class="text-sm font-medium text-gray-700 mb-2">{$t('proxy.optimization.currentStatus')}</h4>
           <p class="text-sm font-medium">{optimizationStatus}</p>
           <div class="flex gap-2 mt-1">
-            <button 
+            <button
               class="text-xs text-purple-600 hover:text-purple-800"
               on:click={updateOptimizationStatus}
             >
-              Refresh Status
+              {$t('proxy.optimization.refreshStatus')}
             </button>
-            <button 
+            <button
               class="text-xs text-green-600 hover:text-green-800 px-2 py-1 bg-green-50 rounded disabled:opacity-50"
               on:click={testProxyLatencyOptimization}
               disabled={isTestingOptimization}
             >
-              {isTestingOptimization ? "Running Proof Tests..." : "Prove Optimization Works"}
+              {isTestingOptimization ? $t('proxy.optimization.runningTests') : $t('proxy.optimization.proveOptimization')}
             </button>
           </div>
         </div>
-        
+
         {#if testResults}
           <div class="mt-3">
-            <h4 class="text-sm font-medium text-gray-700 mb-2">Test Results</h4>
+            <h4 class="text-sm font-medium text-gray-700 mb-2">{$t('proxy.optimization.testResults')}</h4>
             <div class="bg-gray-100 rounded p-3 max-h-40 overflow-y-auto">
               <pre class="text-xs text-gray-800 whitespace-pre-wrap">{testResults}</pre>
             </div>

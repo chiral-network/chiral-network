@@ -82,7 +82,8 @@
   let gethStatusCardRef: { refresh?: () => Promise<void> } | null = null
   
   // DHT variables
-  let dhtStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
+  //let dhtStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
+  let dhtStatus: 'disconnected' | 'connecting' | 'connected' | 'loading' = 'loading'
   let dhtPeerId: string | null = null
   let dhtPort = 4001
   let dhtBootstrapNodes: string[] = []
@@ -495,14 +496,27 @@
     } catch (error: any) {
       console.error('Failed to start DHT:', error)
       dhtStatus = 'disconnected'
-      dhtError = error.toString ? error.toString() : String(error)
-      dhtEvents = [...dhtEvents, `✗ Failed to start DHT: ${dhtError}`]
+      let errorMessage = error.toString ? error.toString() : String(error)
+      
+      // Handle port already in use error (Windows error 10048)
+      if (errorMessage.includes('10048') || errorMessage.includes('address already in use') || errorMessage.includes('Address in use')) {
+        errorMessage = `Port ${dhtPort} is already in use. Try stopping the DHT first, or choose a different port.`
+        dhtEvents = [...dhtEvents, `✗ Port conflict detected on ${dhtPort}`]
+        dhtEvents = [...dhtEvents, `💡 Try clicking "Stop DHT" first, or change the port number`]
+      } else if (errorMessage.includes('already running')) {
+        errorMessage = 'DHT is already running. Try stopping it first.'
+        dhtEvents = [...dhtEvents, `⚠ DHT already running - click "Stop DHT" to restart`]
+      }
+      
+      dhtError = errorMessage
+      dhtEvents = [...dhtEvents, `✗ Failed to start DHT: ${errorMessage}`]
     }
   }
 
   // Ensure UI reflects backend DHT state when returning to this tab
   async function syncDhtStatusOnMount() {
     if (!isTauri) return
+    dhtStatus = 'loading'
     try {
       const backendPeerId = await invoke<string | null>('get_dht_peer_id')
       if (backendPeerId) {
@@ -523,12 +537,22 @@
           dhtPeerCount = await dhtService.getPeerCount()
         }
 
-        // Set status and resume polling if needed
-        dhtStatus = dhtPeerCount > 0 ? 'connected' : 'disconnected'
+        // IMPORTANT: If backend is running (has peer ID), show 'connected' or 'connecting'
+        // Never show 'disconnected' just because peer count is 0
+        if (dhtPeerCount > 0) {
+          dhtStatus = 'connected'
+        } else {
+          // Backend is running but no peers yet - show 'connecting' not 'disconnected'
+          dhtStatus = 'connecting'
+        }
         startDhtPolling()
+      } else {
+        // Backend is not running at all
+        dhtStatus = 'disconnected'
       }
     } catch (e) {
       console.warn('Failed to sync DHT status on mount:', e)
+      dhtStatus = 'disconnected'
     }
   }
   
@@ -576,12 +600,18 @@
         }
 
         // Update connection status based on peer count
-        if (dhtStatus === 'connected' && peerCount === 0) {
-          dhtStatus = 'disconnected'
-          dhtEvents = [...dhtEvents, '⚠ Lost connection to all peers']
-        } else if (dhtStatus === 'disconnected' && peerCount > 0) {
-          dhtStatus = 'connected'
-          dhtEvents = [...dhtEvents, `✓ Reconnected to ${peerCount} peer(s)`]
+        // IMPORTANT: Never set to 'disconnected' while backend is running
+        if (peerCount === 0) {
+          // If backend is running but no peers, show 'connecting' not 'disconnected'
+          if (dhtStatus === 'connected') {
+            dhtStatus = 'connecting'
+            dhtEvents = [...dhtEvents, '⚠ Lost connection to all peers']
+          }
+        } else {
+          if (dhtStatus !== 'connected') {
+            dhtStatus = 'connected'
+            dhtEvents = [...dhtEvents, `✓ Reconnected to ${peerCount} peer(s)`]
+          }
         }
 
         // Auto-refresh connected peers list every 5 seconds (every ~2.5 poll cycles)
@@ -617,19 +647,31 @@
     }
     
     try {
+      // Stop polling first to prevent race conditions
+      if (dhtPollInterval) {
+        clearInterval(dhtPollInterval)
+        dhtPollInterval = undefined
+      }
+      
       await dhtService.stop()
       dhtStatus = 'disconnected'
       dhtPeerId = null
       dhtError = null
       connectionAttempts = 0
-      dhtEvents = [...dhtEvents, `✓ DHT stopped`]
+      dhtEvents = [...dhtEvents, `✓ DHT stopped - port ${dhtPort} released`]
       dhtHealth = null
       copiedListenAddr = null
       lastNatState = null
       lastNatConfidence = null
+      
+      // Small delay to ensure port is fully released
+      await new Promise(resolve => setTimeout(resolve, 500))
     } catch (error) {
       console.error('Failed to stop DHT:', error)
       dhtEvents = [...dhtEvents, `✗ Failed to stop DHT: ${error}`]
+      // Even if stop failed, clear local state
+      dhtStatus = 'disconnected'
+      dhtPeerId = null
     }
   }
 
@@ -1430,6 +1472,9 @@
         {:else if dhtStatus === 'connecting'}
           <div class="h-2 w-2 bg-yellow-500 rounded-full animate-pulse"></div>
           <span class="text-sm text-yellow-600">{$t('network.status.connecting')}</span>
+        {:else if dhtStatus === 'loading'}
+          <div class="h-2 w-2 bg-blue-500 rounded-full animate-pulse"></div>
+          <span class="text-sm text-blue-600">Loading...</span>
         {:else}
           <div class="h-2 w-2 bg-red-500 rounded-full"></div>
           <span class="text-sm text-red-600">{$t('network.status.disconnected')}</span>
@@ -1438,7 +1483,12 @@
     </div>
     
     <div class="space-y-3">
-      {#if dhtStatus === 'disconnected'}
+      {#if dhtStatus === 'loading'}
+        <div class="text-center py-8">
+          <Wifi class="h-12 w-12 text-blue-500 mx-auto mb-2 animate-spin" />
+          <p class="text-sm text-muted-foreground">Checking DHT status...</p>
+        </div>
+      {:else if dhtStatus === 'disconnected'}
         <div class="text-center py-4">
           <Wifi class="h-12 w-12 text-muted-foreground mx-auto mb-2" />
           <p class="text-sm text-muted-foreground mb-3">{$t('network.dht.notConnected')}</p>

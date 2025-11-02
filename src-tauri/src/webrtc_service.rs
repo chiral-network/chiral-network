@@ -1,6 +1,7 @@
 use crate::encryption::{decrypt_aes_key, encrypt_aes_key, EncryptedAesKeyBundle, FileEncryption};
 use crate::file_transfer::FileTransferService;
 use crate::keystore::Keystore;
+use crate::bandwidth::BandwidthController;
 use crate::manager::{ChunkInfo, FileManifest};
 use crate::stream_auth::{AuthMessage, StreamAuthService};
 use aes_gcm::aead::Aead;
@@ -201,6 +202,7 @@ pub struct WebRTCService {
     keystore: Arc<Mutex<Keystore>>,
     active_private_key: Arc<Mutex<Option<String>>>,
     stream_auth: Arc<Mutex<StreamAuthService>>, // Stream authentication
+    bandwidth: Arc<BandwidthController>,
 }
 
 impl WebRTCService {
@@ -208,6 +210,7 @@ impl WebRTCService {
         app_handle: tauri::AppHandle,
         file_transfer_service: Arc<FileTransferService>,
         keystore: Arc<Mutex<Keystore>>,
+        bandwidth: Arc<BandwidthController>,
     ) -> Result<Self, String> {
         let (cmd_tx, cmd_rx) = mpsc::channel(100);
         let (event_tx, event_rx) = mpsc::channel(100);
@@ -225,6 +228,7 @@ impl WebRTCService {
             keystore.clone(),
             active_private_key.clone(),
             stream_auth.clone(),
+            bandwidth.clone(),
         ));
 
         Ok(WebRTCService {
@@ -237,6 +241,7 @@ impl WebRTCService {
             keystore,
             active_private_key,
             stream_auth,
+            bandwidth,
         })
     }
 
@@ -255,6 +260,7 @@ impl WebRTCService {
         keystore: Arc<Mutex<Keystore>>,
         active_private_key: Arc<Mutex<Option<String>>>,
         stream_auth: Arc<Mutex<StreamAuthService>>,
+        bandwidth: Arc<BandwidthController>,
     ) {
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
@@ -269,6 +275,7 @@ impl WebRTCService {
                         &keystore,
                         &active_private_key,
                         &stream_auth,
+                        &bandwidth,
                     )
                     .await;
                 }
@@ -287,11 +294,12 @@ impl WebRTCService {
                         &connections,
                         &keystore,
                         &stream_auth,
+                        &bandwidth,
                     )
                     .await;
                 }
                 WebRTCCommand::SendFileChunk { peer_id, chunk } => {
-                    Self::handle_send_chunk(&peer_id, &chunk, &connections).await;
+                    Self::handle_send_chunk(&peer_id, &chunk, &connections, &bandwidth).await;
                 }
                 WebRTCCommand::RequestFileChunk {
                     peer_id,
@@ -324,6 +332,7 @@ impl WebRTCService {
         keystore: &Arc<Mutex<Keystore>>,
         active_private_key: &Arc<Mutex<Option<String>>>,
         stream_auth: &Arc<Mutex<StreamAuthService>>,
+        bandwidth: &Arc<BandwidthController>,
     ) {
         info!("Establishing WebRTC connection with peer: {}", peer_id);
 
@@ -372,6 +381,7 @@ impl WebRTCService {
         let keystore_clone = keystore.clone();
         let active_private_key_clone = Arc::new(active_private_key.clone());
         let stream_auth_clone = stream_auth.clone();
+        let bandwidth_clone = bandwidth.clone();
 
         let app_handle_clone = app_handle.clone();
         data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
@@ -382,6 +392,7 @@ impl WebRTCService {
             let keystore = keystore_clone.clone();
             let active_private_key = active_private_key_clone.clone();
             let stream_auth = stream_auth_clone.clone();
+            let bandwidth = bandwidth_clone.clone();
 
             let app_handle_for_task = app_handle_clone.clone();
             Box::pin(async move {
@@ -395,6 +406,7 @@ impl WebRTCService {
                     &active_private_key,
                     &stream_auth,
                     app_handle_for_task,
+                    bandwidth,
                 )
                 .await;
             })
@@ -586,6 +598,7 @@ impl WebRTCService {
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
         keystore: &Arc<Mutex<Keystore>>,
         stream_auth: &Arc<Mutex<StreamAuthService>>,
+        bandwidth: &Arc<BandwidthController>,
     ) {
         info!(
             "Handling file request from peer {}: {}",
@@ -611,6 +624,7 @@ impl WebRTCService {
                 connections,
                 keystore,
                 stream_auth,
+                bandwidth,
             )
             .await
             {
@@ -637,7 +651,10 @@ impl WebRTCService {
         peer_id: &str,
         chunk: &FileChunk,
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
+        bandwidth: &Arc<BandwidthController>,
     ) {
+        bandwidth.acquire_upload(chunk.data.len()).await;
+
         let mut conns = connections.lock().await;
         if let Some(connection) = conns.get_mut(peer_id) {
             if let Some(dc) = &connection.data_channel {
@@ -695,6 +712,7 @@ impl WebRTCService {
         active_private_key: &Arc<Mutex<Option<String>>>,
         stream_auth: &Arc<Mutex<StreamAuthService>>,
         app_handle: tauri::AppHandle,
+        bandwidth: Arc<BandwidthController>,
     ) {
         if let Ok(text) = std::str::from_utf8(&msg.data) {
             // Try to parse as FileChunk
@@ -709,6 +727,8 @@ impl WebRTCService {
                     keystore,
                     &active_private_key,
                     stream_auth,
+                    &app_handle,
+                    &bandwidth,
                 )
                 .await;
                 let _ = event_tx
@@ -735,6 +755,7 @@ impl WebRTCService {
                     connections,
                     keystore,
                     stream_auth,
+                    &bandwidth,
                 )
                 .await;
             }
@@ -756,6 +777,7 @@ impl WebRTCService {
                             connections,
                             keystore,
                             stream_auth,
+                            &bandwidth,
                         )
                         .await;
                     }
@@ -880,6 +902,8 @@ impl WebRTCService {
                             keystore,
                             &active_private_key,
                             stream_auth,
+                            &app_handle,
+                            &bandwidth,
                         )
                         .await;
                     }
@@ -904,6 +928,7 @@ impl WebRTCService {
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
         keystore: &Arc<Mutex<Keystore>>,
         stream_auth: &Arc<Mutex<StreamAuthService>>,
+        bandwidth: &Arc<BandwidthController>,
     ) -> Result<(), String> {
         // Get file data from local storage
         let file_data = match file_transfer_service
@@ -1034,7 +1059,7 @@ impl WebRTCService {
             };
 
             // Send chunk via WebRTC data channel
-            Self::handle_send_chunk(peer_id, &chunk, connections).await;
+            Self::handle_send_chunk(peer_id, &chunk, connections, bandwidth).await;
 
             // Update progress
             {
@@ -1100,6 +1125,8 @@ impl WebRTCService {
         _keystore: &Arc<Mutex<Keystore>>,
         active_private_key: &Arc<Mutex<Option<String>>>,
         stream_auth: &Arc<Mutex<StreamAuthService>>,
+        app_handle: &tauri::AppHandle,
+        bandwidth: &Arc<BandwidthController>,
     ) {
         // 1. Verify stream authentication first
         if let Some(ref auth_msg) = chunk.auth_message {
@@ -1148,11 +1175,14 @@ impl WebRTCService {
         };
 
         // Verify chunk checksum
+        let chunk_len = final_chunk_data.len();
         let calculated_checksum = Self::calculate_chunk_checksum(&final_chunk_data);
         if calculated_checksum != chunk.checksum {
             warn!("Chunk checksum mismatch for file {}", chunk.file_hash);
             return;
         }
+
+        bandwidth.acquire_download(chunk_len).await;
 
         let mut conns = connections.lock().await;
         if let Some(connection) = conns.get_mut(peer_id) {
@@ -1173,6 +1203,7 @@ impl WebRTCService {
                         file_transfer_service,
                         event_tx,
                         peer_id,
+                        &app_handle,
                     )
                     .await;
                 }
@@ -1181,35 +1212,53 @@ impl WebRTCService {
     }
 
     async fn assemble_file_from_chunks(
-        file_hash: &str,
-        chunks: &HashMap<u32, FileChunk>,
-        file_transfer_service: &Arc<FileTransferService>,
-        event_tx: &mpsc::Sender<WebRTCEvent>,
-        peer_id: &str,
+    file_hash: &str,
+    chunks: &HashMap<u32, FileChunk>,
+    file_transfer_service: &Arc<FileTransferService>,
+    event_tx: &mpsc::Sender<WebRTCEvent>,
+    peer_id: &str,
+    app_handle: &tauri::AppHandle, // Add this parameter
     ) {
-        // Sort chunks by index
-        let mut sorted_chunks: Vec<_> = chunks.values().collect();
-        sorted_chunks.sort_by_key(|c| c.chunk_index);
+    // Sort chunks by index
+    let mut sorted_chunks: Vec<_> = chunks.values().collect();
+    sorted_chunks.sort_by_key(|c| c.chunk_index);
 
-        // Concatenate chunk data
-        let mut file_data = Vec::new();
-        for chunk in sorted_chunks {
-            file_data.extend_from_slice(&chunk.data);
-        }
+    // Get file name from the first chunk
+    let file_name = sorted_chunks
+        .first()
+        .map(|c| c.file_hash.clone())
+        .unwrap_or_else(|| format!("downloaded_{}", file_hash));
 
-        // Store the assembled file
-        let file_name = format!("downloaded_{}", file_hash);
-        file_transfer_service
-            .store_file_data(file_hash.to_string(), file_name, file_data)
-            .await;
-
-        let _ = event_tx
-            .send(WebRTCEvent::TransferCompleted {
-                peer_id: peer_id.to_string(),
-                file_hash: file_hash.to_string(),
-            })
-            .await;
+    // Concatenate chunk data
+    let mut file_data = Vec::new();
+    for chunk in sorted_chunks {
+        file_data.extend_from_slice(&chunk.data);
     }
+
+    let file_size = file_data.len();
+
+    // Store the assembled file internally
+    file_transfer_service
+        .store_file_data(file_hash.to_string(), file_name.clone(), file_data.clone())
+        .await;
+
+    // NEW: Emit event to frontend with complete file data
+    if let Err(e) = app_handle.emit("webrtc_download_complete", serde_json::json!({
+        "fileHash": file_hash,
+        "fileName": file_name,
+        "fileSize": file_size,
+        "data": file_data, // Send the actual file data
+    })) {
+        error!("Failed to emit webrtc_download_complete event: {}", e);
+    }
+
+    let _ = event_tx
+        .send(WebRTCEvent::TransferCompleted {
+            peer_id: peer_id.to_string(),
+            file_hash: file_hash.to_string(),
+        })
+        .await;
+}
 
     fn calculate_chunk_checksum(data: &[u8]) -> String {
         let mut hasher = Sha256::default();
@@ -1253,6 +1302,7 @@ impl WebRTCService {
         let keystore_clone = Arc::new(self.keystore.clone());
         let active_private_key_clone = Arc::new(self.active_private_key.clone());
         let stream_auth_clone = Arc::new(self.stream_auth.clone());
+        let bandwidth_clone = self.bandwidth.clone();
 
         let app_handle_clone = self.app_handle.clone();
         data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
@@ -1263,6 +1313,7 @@ impl WebRTCService {
             let keystore = keystore_clone.clone();
             let active_private_key = active_private_key_clone.clone();
             let stream_auth = stream_auth_clone.clone();
+            let bandwidth = bandwidth_clone.clone();
 
             let app_handle_for_task = app_handle_clone.clone();
             Box::pin(async move {
@@ -1276,6 +1327,7 @@ impl WebRTCService {
                     &active_private_key,
                     &stream_auth,
                     app_handle_for_task,
+                    bandwidth,
                 )
                 .await;
             })
@@ -1421,6 +1473,7 @@ impl WebRTCService {
         let keystore_clone = Arc::new(self.keystore.clone());
         let active_private_key_clone = Arc::new(self.active_private_key.clone());
         let stream_auth_clone = Arc::new(self.stream_auth.clone());
+        let bandwidth_clone = self.bandwidth.clone();
 
         let app_handle_clone = self.app_handle.clone();
         data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
@@ -1431,6 +1484,7 @@ impl WebRTCService {
             let keystore = keystore_clone.clone();
             let active_private_key = active_private_key_clone.clone();
             let stream_auth = stream_auth_clone.clone();
+            let bandwidth = bandwidth_clone.clone();
 
             let app_handle_for_task = app_handle_clone.clone();
             Box::pin(async move {
@@ -1444,6 +1498,7 @@ impl WebRTCService {
                     &active_private_key,
                     &stream_auth,
                     app_handle_for_task,
+                    bandwidth,
                 )
                 .await;
             })
@@ -1734,10 +1789,12 @@ pub async fn init_webrtc_service(
     file_transfer_service: Arc<FileTransferService>,
     app_handle: tauri::AppHandle,
     keystore: Arc<Mutex<Keystore>>,
+    bandwidth: Arc<BandwidthController>,
 ) -> Result<(), String> {
     let mut service = WEBRTC_SERVICE.lock().await;
     if service.is_none() {
-        let webrtc_service = WebRTCService::new(app_handle, file_transfer_service, keystore).await?;
+        let webrtc_service =
+            WebRTCService::new(app_handle, file_transfer_service, keystore, bandwidth).await?;
         *service = Some(Arc::new(webrtc_service));
     }
     Ok(())

@@ -31,7 +31,7 @@
   import { showToast } from "$lib/toast";
   import { invoke } from "@tauri-apps/api/core";
   import Expandable from "$lib/components/ui/Expandable.svelte";
-  import { settings, type AppSettings } from "$lib/stores";
+import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   import { bandwidthScheduler } from "$lib/services/bandwidthScheduler";
 
   let showResetConfirmModal = false;
@@ -151,6 +151,36 @@
 
   let anonymousModeRestore: PrivacySnapshot | null = null;
 
+  const formatBandwidthLimit = (limitKbps: number): string => {
+    if (!Number.isFinite(limitKbps) || limitKbps <= 0) {
+      return "Unlimited";
+    }
+    return `${limitKbps} KB/s`;
+  };
+
+  function formatNextChange(timestamp?: number): string {
+    if (!timestamp || !Number.isFinite(timestamp)) {
+      return "Not scheduled";
+    }
+
+    const deltaMs = timestamp - Date.now();
+    if (deltaMs <= 0) {
+      return new Date(timestamp).toLocaleString();
+    }
+
+    const deltaMinutes = Math.round(deltaMs / 60000);
+    if (deltaMinutes < 60) {
+      return `in ${deltaMinutes} min`;
+    }
+
+    const deltaHours = Math.round(deltaMs / 3600000);
+    if (deltaHours < 24) {
+      return `in ${deltaHours} hr`;
+    }
+
+    return new Date(timestamp).toLocaleString();
+  }
+
   function capturePrivacySnapshot(): void {
     if (anonymousModeRestore !== null) {
       return;
@@ -225,8 +255,9 @@
   $: hasChanges = JSON.stringify(localSettings) !== JSON.stringify(savedSettings);
 
   async function saveSettings() {
-    if (!isValid || maxStorageError || storagePathError) {
-      return;
+    // Map trustedProxyRelays to preferredRelays for consistency
+    if (localSettings.trustedProxyRelays?.length) {
+      localSettings.preferredRelays = localSettings.trustedProxyRelays;
     }
 
     // Save local changes to the Svelte store
@@ -1067,6 +1098,26 @@ function sectionMatches(section: string, query: string) {
         </p>
 
         {#if localSettings.enableBandwidthScheduling}
+          <div class="mt-3 rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-900">
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div class="text-sm font-semibold text-blue-800">Current limits</div>
+              <div class="text-[0.75rem] uppercase tracking-wide">
+                {#if $activeBandwidthLimits.source === "schedule"}
+                  Active schedule: {$activeBandwidthLimits.scheduleName ?? "Unnamed schedule"}
+                {:else}
+                  Default limits in effect
+                {/if}
+              </div>
+            </div>
+            <div class="mt-2 grid gap-2 sm:grid-cols-2">
+              <div>Upload: {formatBandwidthLimit($activeBandwidthLimits.uploadLimitKbps)}</div>
+              <div>Download: {formatBandwidthLimit($activeBandwidthLimits.downloadLimitKbps)}</div>
+            </div>
+            <div class="mt-2">
+              Next change: {formatNextChange($activeBandwidthLimits.nextChangeAt)}
+            </div>
+          </div>
+
           <div class="space-y-3 mt-4">
             {#each localSettings.bandwidthSchedules as schedule, index}
               <div class="p-4 border rounded-lg bg-muted/30">
@@ -1354,6 +1405,7 @@ function sectionMatches(section: string, query: string) {
               <textarea
                 id="autonat-servers"
                 bind:value={autonatServersText}
+                on:input={updateAutonatServers}
                 on:blur={updateAutonatServers}
                 placeholder="/ip4/1.2.3.4/tcp/4001/p2p/QmPeerId&#10;One multiaddr per line"
                 rows="3"
@@ -1638,9 +1690,9 @@ function sectionMatches(section: string, query: string) {
       <Button
         size="xs"
         on:click={saveSettings}
-        disabled={!hasChanges || maxStorageError || storagePathError || !isValid}
-      
-        class={`transition-colors duration-200 ${!hasChanges || maxStorageError || storagePathError || !isValid ? "cursor-not-allowed opacity-50" : ""}`}
+        disabled={!hasChanges}
+
+        class={`transition-colors duration-200 ${!hasChanges ? "cursor-not-allowed opacity-50" : ""}`}
       >
         <Save class="h-4 w-4 mr-2" />
         {$t("actions.save")}

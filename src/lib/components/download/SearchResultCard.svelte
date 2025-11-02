@@ -25,6 +25,8 @@
   let showDecryptDialog = false;
   let showDownloadConfirmDialog = false;
   let showPaymentConfirmDialog = false;
+  let showSeedersSelection = false;
+  let selectedSeederIndex: number | null = null;
 
   // Use reactive wallet balance from store
   $: userBalance = $wallet.balance;
@@ -63,12 +65,24 @@
 
   async function handleDownload() {
     // Always show initial download confirmation dialog first
+    // showDownloadConfirmDialog = true;
+    const freshSeeders = await dhtService.getSeedersForFile(metadata.fileHash);
+    metadata.seeders = freshSeeders; 
+    console.log("🔍 DEBUG: Seeders fetched:", freshSeeders);
+    showSeedersSelection = true
+
+  }
+
+  async function confirmSeeder() {
+    showSeedersSelection = false;
+    console.log("SELECTED SEEDER: ", selectedSeederIndex);
+
     showDownloadConfirmDialog = true;
   }
 
-  function confirmDownload() {
+  async function confirmDownload() {
     showDownloadConfirmDialog = false;
-
+    
     // If already seeding and paid, show payment confirmation
     if (isSeeding && metadata.price && metadata.price > 0) {
       showPaymentConfirmDialog = true;
@@ -93,6 +107,8 @@
   async function proceedWithDownload() {
     // Just dispatch the download event - let Download.svelte handle starting the actual download
     // This ensures the file is added to the store before chunks start arriving
+    const copy = structuredClone(metadata);
+    copy.seeders = [copy.seeders[selectedSeederIndex?selectedSeederIndex:0]];
     dispatch("download", metadata);
     console.log("🔍 DEBUG: Dispatched download event for file:", metadata.fileName);
   }
@@ -508,6 +524,53 @@
           class="flex-1 {!canAfford ? 'opacity-50 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}"
         >
           {canAfford ? 'Confirm Payment' : 'Insufficient Funds'}
+        </Button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if showSeedersSelection}
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+    <div class="bg-background rounded-lg shadow-lg p-6 w-full max-w-md border border-border">
+      <h2 class="text-xl font-bold mb-4 text-center">Select a Seeder</h2>
+
+      {#if metadata.seeders && metadata.seeders.length > 0}
+        <p class="text-sm text-muted-foreground text-center mb-4">
+          Found {metadata.seeders.length} available peer{metadata.seeders.length === 1 ? '' : 's'}. Choose one to start the download.
+        </p>
+        <div class="space-y-2 max-h-60 overflow-auto pr-1 mb-6">
+          {#each metadata.seeders as seeder, index}
+            <label
+              class="flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors {selectedSeederIndex !== null && +selectedSeederIndex === index ? 'bg-blue-500/10 border-blue-500/50' : 'border-border hover:bg-muted/50'}"
+            >
+              <input
+                type="radio"
+                name="seeder-selection"
+                value={index}
+                bind:group={selectedSeederIndex}
+                class="h-4 w-4 mt-1 text-blue-600 focus:ring-blue-500 border-gray-300"
+              />
+              <div class="flex-1">
+                <code class="text-xs font-mono break-all">{seeder}</code>
+              </div>
+            </label>
+          {/each}
+        </div>
+      {:else}
+        <div class="p-4 bg-red-500/10 rounded-lg border border-red-500/30 mb-6">
+          <p class="text-sm text-red-600 text-center">
+            No online seeders found for this file at the moment. Please try again later.
+          </p>
+        </div>
+      {/if}
+
+      <div class="flex gap-3">
+        <Button variant="outline" on:click={() => { showSeedersSelection = false; selectedSeederIndex = null; }} class="flex-1">
+          Cancel
+        </Button>
+        <Button on:click={confirmSeeder} disabled={selectedSeederIndex === null || metadata.seeders?.length === 0} class="flex-1 bg-blue-600 hover:bg-blue-700">
+          Confirm
         </Button>
       </div>
     </div>

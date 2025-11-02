@@ -33,6 +33,14 @@ export interface DhtConfig {
   relayServerAlias?: string; // Public alias for relay server (appears in logs and bootstrap)
 }
 
+export interface HttpSourceInfo {
+  url: string;
+  authHeader?: string;
+  verifySsl: boolean;
+  headers?: Array<[string, string]>;
+  timeoutSecs?: number;
+}
+
 export interface FileMetadata {
   fileHash: string;
   fileName: string;
@@ -41,6 +49,7 @@ export interface FileMetadata {
   seeders: string[];
   createdAt: number;
   merkleRoot?: string;
+  downloadPath?: string;
   mimeType?: string;
   isEncrypted: boolean;
   encryptionMethod?: string;
@@ -51,6 +60,7 @@ export interface FileMetadata {
   cids?: string[];
   price?: number;
   uploaderAddress?: string;
+  httpSources?: HttpSourceInfo[];
 }
 
 export interface FileManifestForJs {
@@ -234,6 +244,12 @@ export class DhtService {
             unlistenPromise.then((unlistenFn) => unlistenFn());
           },
         );
+
+        // Add timeout to reject the promise if publishing takes too long
+        setTimeout(() => {
+          reject(new Error("File publishing timeout - no published_file event received"));
+          unlistenPromise.then((unlistenFn) => unlistenFn());
+        }, 120000); // 2 minute timeout for file publishing
       });
 
       // Trigger the backend upload with price
@@ -250,11 +266,19 @@ export class DhtService {
     }
   }
 
-  async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
-    try {
-      console.log("Initiating download for file:", fileMetadata.fileHash);
-      
-      // Get storage path from settings
+async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
+  try {
+    console.log("Initiating download for file:", fileMetadata.fileHash);
+    
+    // Use the downloadPath from metadata if provided, otherwise fall back to settings
+    let resolvedStoragePath: string;
+    
+    if (fileMetadata.downloadPath) {
+      // Use the path that was already selected by the user in the file dialog
+      resolvedStoragePath = fileMetadata.downloadPath;
+      console.log("Using provided download path:", resolvedStoragePath);
+    } else {
+      // Fallback to settings path (old behavior)
       const stored = localStorage.getItem("chiralSettings");
       let storagePath = "."; // Default fallback
 
@@ -268,13 +292,15 @@ export class DhtService {
       }
       
       // Construct full file path
-      let resolvedStoragePath = storagePath;
       if (storagePath.startsWith("~")) {
         const home = await homeDir();
         resolvedStoragePath = storagePath.replace("~", home);
+      } else {
+        resolvedStoragePath = storagePath;
       }
       resolvedStoragePath += "/" + fileMetadata.fileName;
-
+      console.log("Using settings storage path:", resolvedStoragePath);
+    }
       // IMPORTANT: Set up the event listener BEFORE invoking the backend
       // to avoid race condition where event fires before we're listening
       const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {

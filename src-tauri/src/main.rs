@@ -4,15 +4,20 @@
 )]
 
 pub mod commands;
-
 pub mod analytics;
+mod bandwidth;
 mod blockchain_listener;
 mod dht;
+mod download_scheduler;
+mod download_source;
 mod encryption;
 mod ethereum;
 mod file_transfer;
+mod ftp_client;
 mod geth_downloader;
 mod headless;
+mod http_download;
+mod http_server;
 mod keystore;
 mod manager;
 mod multi_source_download;
@@ -32,6 +37,8 @@ use crate::commands::proxy::{
     disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
     proxy_echo, proxy_remove, ProxyNode,
 };
+use crate::commands::network::get_full_network_stats;
+use crate::bandwidth::BandwidthController;
 use crate::stream_auth::{
     AuthMessage, HmacKeyExchangeConfirmation, HmacKeyExchangeRequest, HmacKeyExchangeResponse,
     StreamAuthService,
@@ -81,7 +88,7 @@ use sysinfo::{Components, System};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Emitter, Manager, State,
+    Emitter, Listener, Manager, State,
 };
 use tokio::time::Duration as TokioDuration;
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
@@ -93,6 +100,9 @@ use crate::manager::ChunkManager; // Import the ChunkManager
                                   // For key encoding
 use blockstore::block::Block;
 use x25519_dalek::{PublicKey, StaticSecret}; // For key handling
+use suppaftp::FtpStream;
+use std::io::Write;
+use crate::dht::FtpSourceInfo;
 
 /// Detect MIME type from file extension
 fn detect_mime_type_from_filename(filename: &str) -> Option<String> {
@@ -222,6 +232,7 @@ struct AppState {
     multi_source_pump: Mutex<Option<JoinHandle<()>>>,
     socks5_proxy_cli: Mutex<Option<String>>,
     analytics: Arc<analytics::AnalyticsService>,
+    bandwidth: Arc<BandwidthController>,
 
     // New fields for transaction queue
     transaction_queue: Arc<Mutex<VecDeque<QueuedTransaction>>>,
@@ -233,6 +244,10 @@ struct AppState {
 
     // Proxy authentication tokens storage
     proxy_auth_tokens: Arc<Mutex<std::collections::HashMap<String, ProxyAuthToken>>>,
+
+    // HTTP server for serving chunks and keys
+    http_server_state: Arc<http_server::HttpServerState>,
+    http_server_addr: Arc<Mutex<Option<std::net::SocketAddr>>>,
 
     // Stream authentication service
     stream_auth: Arc<Mutex<StreamAuthService>>,
@@ -607,6 +622,16 @@ async fn test_backend_connection(state: State<'_, AppState>) -> Result<String, S
 }
 
 #[tauri::command]
+async fn set_bandwidth_limits(
+    upload_kbps: u64,
+    download_kbps: u64,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.bandwidth.set_limits(upload_kbps, download_kbps).await;
+    Ok(())
+}
+
+#[tauri::command]
 async fn establish_webrtc_connection(
     state: State<'_, AppState>,
     peer_id: String,
@@ -730,7 +755,7 @@ async fn upload_versioned_file(
                 .await;
         }
 
-        dht.publish_file(metadata.clone()).await?;
+        dht.publish_file(metadata.clone(), None).await?;
         Ok(metadata)
     } else {
         Err("DHT not running".into())
@@ -868,7 +893,7 @@ async fn get_current_block() -> Result<u64, String> {
 async fn get_network_stats() -> Result<(String, String), String> {
     let difficulty = get_network_difficulty().await?;
     let hashrate = get_network_hashrate().await?;
-    Ok((difficulty, hashrate))
+    Ok((difficulty, hashrate.to_string()))
 }
 
 #[tauri::command]
@@ -878,8 +903,9 @@ async fn get_miner_logs(data_dir: String, lines: usize) -> Result<Vec<String>, S
 
 #[tauri::command]
 async fn get_miner_performance(data_dir: String) -> Result<(u64, f64), String> {
-    get_mining_performance(&data_dir)
+    get_mining_performance(&data_dir).await
 }
+
 lazy_static! {
     static ref BLOCKS_CACHE: StdMutex<Option<(String, u64, Instant)>> = StdMutex::new(None);
 }
@@ -1586,6 +1612,494 @@ enum TemperatureMethod {
     #[cfg(target_os = "linux")]
     LinuxHwmon(String),
 }
+#[tauri::command]
+async fn get_power_consumption() -> Option<f32> {
+    tokio::task::spawn_blocking(move || {
+        use std::sync::OnceLock;
+        use std::time::Instant;
+        use tracing::info;
+
+        static LAST_UPDATE: OnceLock<std::sync::Mutex<Option<Instant>>> = OnceLock::new();
+        static POWER_HISTORY: OnceLock<std::sync::Mutex<Vec<(Instant, f32)>>> = OnceLock::new();
+        static WORKING_METHOD: OnceLock<std::sync::Mutex<Option<PowerMethod>>> = OnceLock::new();
+
+        let last_update_mutex = LAST_UPDATE.get_or_init(|| std::sync::Mutex::new(None));
+        let power_history_mutex = POWER_HISTORY.get_or_init(|| std::sync::Mutex::new(Vec::new()));
+        let working_method_mutex = WORKING_METHOD.get_or_init(|| std::sync::Mutex::new(None));
+
+        // Check if we have a cached working method and if it's still working
+        if let Ok(mut working_method) = working_method_mutex.lock() {
+            if let Some(ref method) = *working_method {
+                if let Some(power) = try_power_method(method) {
+                    return Some(smooth_power(power));
+                }
+                // Method stopped working, clear cache
+                *working_method = None;
+            }
+        }
+
+        // Try all methods to find one that works and cache it
+        let methods_to_try = vec![
+            PowerMethod::Systemstat,
+            PowerMethod::Sysinfo,
+        ];
+
+        for method in methods_to_try {
+            if let Some(power) = try_power_method(&method) {
+                // Cache the working method
+                let mut working_method = working_method_mutex.lock().ok()?;
+                *working_method = Some(method.clone());
+                return Some(smooth_power(power));
+            }
+        }
+
+        // Try Windows-specific methods if basic ones failed
+        #[cfg(target_os = "windows")]
+        {
+            if let Some((power, method)) = get_windows_power() {
+                if let Ok(mut working_method) = working_method_mutex.lock() {
+                    *working_method = Some(method);
+                }
+                return Some(smooth_power(power));
+            }
+        }
+
+        // Try Linux-specific methods if basic ones failed
+        #[cfg(target_os = "linux")]
+        {
+            if let Some((power, method)) = get_linux_power() {
+                if let Ok(mut working_method) = working_method_mutex.lock() {
+                    *working_method = Some(method);
+                }
+                return Some(smooth_power(power));
+            }
+        }
+
+        // Final fallback: return None when power monitoring is unavailable
+        // Only log the info message once to avoid spamming logs
+        static POWER_WARNING_LOGGED: OnceLock<()> = OnceLock::new();
+
+        POWER_WARNING_LOGGED.get_or_init(|| {
+            info!("Power consumption monitoring not available on this system. Using estimated values.");
+        });
+
+        None
+    })
+    .await // Await the result of the blocking task
+    .unwrap_or(None)
+}
+
+#[derive(Clone, Debug)]
+enum PowerMethod {
+    Sysinfo,
+    Systemstat,
+}
+
+fn smooth_power(raw_power: f32) -> f32 {
+    use std::sync::OnceLock;
+    use std::time::Instant;
+
+    static POWER_HISTORY: OnceLock<std::sync::Mutex<Vec<(Instant, f32)>>> = OnceLock::new();
+
+    let power_history_mutex = POWER_HISTORY.get_or_init(|| std::sync::Mutex::new(Vec::new()));
+
+    // Helper function to add power reading to history and return smoothed value
+    let now = Instant::now();
+    let mut history = match power_history_mutex.lock() {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::error!("Failed to acquire power history lock: {}", e);
+            return raw_power; // Return raw power if lock fails
+        }
+    };
+
+    // Add current reading
+    history.push((now, raw_power));
+
+    // Keep only last 10 readings within 60 seconds
+    history.retain(|(time, _)| now.duration_since(*time).as_secs() < 60);
+    if history.len() > 10 {
+        history.remove(0);
+    }
+
+    // Return smoothed power (weighted average, recent readings have more weight)
+    if history.len() == 1 {
+        raw_power
+    } else {
+        let total_weight: f32 = (1..=history.len()).map(|i| i as f32).sum();
+        let weighted_sum: f32 = history.iter().enumerate()
+            .map(|(i, (_, power))| power * (i + 1) as f32)
+            .sum();
+        weighted_sum / total_weight
+    }
+}
+
+fn try_power_method(method: &PowerMethod) -> Option<f32> {
+    match method {
+        PowerMethod::Sysinfo => {
+            // Note: sysinfo doesn't currently support power consumption monitoring
+            // This is a placeholder for future sysinfo versions
+            None
+        }
+        PowerMethod::Systemstat => {
+            // systemstat also doesn't support power consumption directly
+            // This could be extended with platform-specific implementations
+            None
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn get_windows_power() -> Option<(f32, PowerMethod)> {
+    // Try multiple methods to get Windows power consumption
+
+    // Method 1: Use PowerShell to query performance counters
+    if let Some(power) = get_windows_power_via_powershell() {
+        return Some((power, PowerMethod::Systemstat));
+    }
+
+    // Method 2: Try WMI queries for power information
+    if let Some(power) = get_windows_power_via_wmi() {
+        return Some((power, PowerMethod::Systemstat));
+    }
+
+    // Method 3: Try Windows Performance Counters directly
+    if let Some(power) = get_windows_power_via_perf_counters() {
+        return Some((power, PowerMethod::Systemstat));
+    }
+
+    // Method 4: Try direct Windows API calls or system information
+    if let Some(power) = get_windows_power_via_system_info() {
+        return Some((power, PowerMethod::Systemstat));
+    }
+
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn get_windows_power_via_powershell() -> Option<f32> {
+    use std::process::Command;
+
+    // Try to get CPU power consumption via Windows Performance Counters using PowerShell
+    let ps_script = r#"
+    try {
+        # Get CPU power consumption from performance counters
+        $counter = Get-Counter -Counter "\Processor Information(_Total)\% Processor Performance" -ErrorAction Stop
+        $cpuUsage = $counter.CounterSamples.CookedValue
+
+        # Estimate power based on CPU usage (this is an approximation, but better than nothing)
+        # TDP for typical CPUs: assume 65W base + usage-based scaling
+        $basePower = 65.0
+        $usagePower = ($cpuUsage / 100.0) * 35.0  # Additional power based on usage
+        $totalPower = $basePower + $usagePower
+
+        # Output the power value
+        [math]::Round($totalPower, 2)
+    } catch {
+        $null
+    }
+    "#;
+
+    if let Ok(output) = Command::new("powershell")
+        .args(["-Command", ps_script])
+        .output()
+    {
+        if output.status.success() {
+            if let Ok(output_str) = String::from_utf8(output.stdout) {
+                let power_str = output_str.trim();
+                if let Ok(power) = power_str.parse::<f32>() {
+                    if power > 0.0 && power < 500.0 { // Reasonable power range for CPU
+                        return Some(power);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn get_windows_power_via_wmi() -> Option<f32> {
+    use std::process::Command;
+
+    // Try WMI to get battery information (for laptops) or power scheme info
+    let wmi_script = r#"
+    try {
+        # Try to get battery discharge rate (for laptops)
+        $battery = Get-WmiObject -Class Win32_Battery -ErrorAction Stop | Select-Object -First 1
+        if ($battery -and $battery.EstimatedChargeRemaining -ne $null -and $battery.EstimatedRunTime -ne $null) {
+            # Calculate current power draw from battery
+            $remainingTimeHours = $battery.EstimatedRunTime / 60.0
+            if ($remainingTimeHours -gt 0) {
+                # Estimate power consumption based on battery capacity and remaining time
+                # This is approximate but gives real power usage for battery-powered systems
+                $power = 0.0
+                if ($battery.DesignCapacity -gt 0) {
+                    $power = $battery.DesignCapacity / $remainingTimeHours
+                    if ($power -gt 0 -and $power -lt 200) {
+                        [math]::Round($power, 2)
+                        exit 0
+                    }
+                }
+            }
+        }
+
+        # Fallback: Try to get active power scheme information
+        $scheme = Get-WmiObject -Class Win32_PowerPlan -Filter "IsActive=True" -ErrorAction Stop
+        if ($scheme) {
+            # This doesn't give actual power consumption, but we can use it as a fallback indicator
+            # Return a default power consumption based on power scheme
+            if ($scheme.ElementName -like "*High Performance*") {
+                85.0
+            } elseif ($scheme.ElementName -like "*Balanced*") {
+                65.0
+            } elseif ($scheme.ElementName -like "*Power Saver*") {
+                45.0
+            } else {
+                65.0
+            }
+        } else {
+            $null
+        }
+    } catch {
+        $null
+    }
+    "#;
+
+    if let Ok(output) = Command::new("powershell")
+        .args(["-Command", wmi_script])
+        .output()
+    {
+        if output.status.success() {
+            if let Ok(output_str) = String::from_utf8(output.stdout) {
+                let power_str = output_str.trim();
+                if !power_str.is_empty() && power_str != "null" {
+                    if let Ok(power) = power_str.parse::<f32>() {
+                        if power > 0.0 && power < 200.0 { // Reasonable power range
+                            return Some(power);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn get_windows_power_via_perf_counters() -> Option<f32> {
+    use std::process::Command;
+
+    // Try to get more detailed performance counter data
+    let perf_script = r#"
+    try {
+        # Get multiple CPU-related performance counters
+        $counters = @(
+            "\Processor(_Total)\% Processor Time",
+            "\Processor Information(_Total)\% Processor Performance"
+        )
+
+        $results = Get-Counter -Counter $counters -SampleInterval 1 -MaxSamples 1 -ErrorAction Stop
+
+        $cpuTime = 0.0
+        $cpuPerformance = 0.0
+
+        foreach ($sample in $results.CounterSamples) {
+            if ($sample.Path -like "*% Processor Time*") {
+                $cpuTime = $sample.CookedValue
+            } elseif ($sample.Path -like "*% Processor Performance*") {
+                $cpuPerformance = $sample.CookedValue
+            }
+        }
+
+        # Calculate power based on CPU activity
+        # Base TDP assumption: 65W for typical desktop CPU
+        $baseTDP = 65.0
+
+        # Scale based on CPU performance percentage
+        $power = $baseTDP * ($cpuPerformance / 100.0)
+
+        # Ensure minimum power draw even when idle
+        $power = [math]::Max($power, 35.0)
+
+        [math]::Round($power, 2)
+    } catch {
+        $null
+    }
+    "#;
+
+    if let Ok(output) = Command::new("powershell")
+        .args(["-Command", perf_script])
+        .output()
+    {
+        if output.status.success() {
+            if let Ok(output_str) = String::from_utf8(output.stdout) {
+                let power_str = output_str.trim();
+                if let Ok(power) = power_str.parse::<f32>() {
+                    if power > 0.0 && power < 500.0 { // Reasonable power range
+                        return Some(power);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn get_windows_power_via_system_info() -> Option<f32> {
+    use std::process::Command;
+
+    // Try to get system information and estimate power based on actual hardware
+    let system_info_script = r#"
+    try {
+        # Get CPU information
+        $cpu = Get-WmiObject -Class Win32_Processor -ErrorAction Stop | Select-Object -First 1
+        $cpuName = $cpu.Name
+        $cpuCores = $cpu.NumberOfCores
+        $cpuThreads = $cpu.NumberOfLogicalProcessors
+
+        # Get current CPU usage
+        $cpuUsage = (Get-WmiObject -Class Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'").PercentProcessorTime
+
+        # Estimate TDP based on CPU model (this is more accurate than generic assumptions)
+        $estimatedTDP = 65.0  # Default
+
+        if ($cpuName -match "Intel.*Core.*i[3579]-1[0-9][0-9][0-9][0-9]") {
+            # Intel 12th/13th/14th gen high-end CPUs
+            $estimatedTDP = 125.0
+        } elseif ($cpuName -match "Intel.*Core.*i[3579]-[0-9][0-9][0-9][0-9]") {
+            # Intel 12th/13th/14th gen mainstream CPUs
+            $estimatedTDP = 65.0
+        } elseif ($cpuName -match "Intel.*Core.*i[3579]-[0-9][0-9][0-9]") {
+            # Intel 10th/11th gen CPUs
+            $estimatedTDP = 65.0
+        } elseif ($cpuName -match "AMD.*Ryzen.*[79][0-9][0-9][0-9]") {
+            # AMD Ryzen 7000/9000 series
+            $estimatedTDP = 65.0
+        } elseif ($cpuName -match "AMD.*Ryzen.*[3579][0-9][0-9][0-9]") {
+            # AMD Ryzen 3000/5000/7000 series
+            $estimatedTDP = 65.0
+        } elseif ($cpuName -match "Threadripper") {
+            # AMD Threadripper
+            $estimatedTDP = 280.0
+        }
+
+        # Get RAM information and add its power consumption
+        $ramModules = Get-WmiObject -Class Win32_PhysicalMemory -ErrorAction Stop
+        $totalRamGB = 0
+        foreach ($module in $ramModules) {
+            $totalRamGB += [math]::Round($module.Capacity / 1GB, 0)
+        }
+
+        # Estimate RAM power consumption (about 2-3W per 8GB DDR4)
+        $ramPower = [math]::Ceiling($totalRamGB / 8) * 2.5
+
+        # Get GPU information (if dedicated GPU)
+        $gpuPower = 0.0
+        $gpus = Get-WmiObject -Class Win32_VideoController -ErrorAction Stop | Where-Object { $_.AdapterRAM -gt 0 }
+        foreach ($gpu in $gpus) {
+            if ($gpu.Name -notmatch "Microsoft Basic Display") {
+                # Estimate GPU power based on VRAM
+                $vramGB = [math]::Round($gpu.AdapterRAM / 1GB, 0)
+                if ($gpu.Name -match "RTX|GeForce") {
+                    $gpuPower += [math]::Max(50.0, $vramGB * 10.0)  # NVIDIA GPUs
+                } elseif ($gpu.Name -match "Radeon|RX") {
+                    $gpuPower += [math]::Max(40.0, $vramGB * 8.0)   # AMD GPUs
+                } else {
+                    $gpuPower += 30.0  # Generic dedicated GPU
+                }
+            }
+        }
+
+        # Calculate current power based on CPU usage
+        $cpuPower = $estimatedTDP * ($cpuUsage / 100.0)
+        $cpuPower = [math]::Max($cpuPower, $estimatedTDP * 0.3)  # Minimum 30% of TDP even when idle
+
+        # Total system power
+        $totalPower = $cpuPower + $ramPower + $gpuPower
+
+        # Add a small base system power for motherboard, drives, etc.
+        $totalPower += 25.0
+
+        [math]::Round($totalPower, 2)
+    } catch {
+        $null
+    }
+    "#;
+
+    if let Ok(output) = Command::new("powershell")
+        .args(["-Command", system_info_script])
+        .output()
+    {
+        if output.status.success() {
+            if let Ok(output_str) = String::from_utf8(output.stdout) {
+                let power_str = output_str.trim();
+                if let Ok(power) = power_str.parse::<f32>() {
+                    if power > 20.0 && power < 1000.0 { // Reasonable power range for full system
+                        return Some(power);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn get_linux_power() -> Option<(f32, PowerMethod)> {
+    use std::fs;
+
+    // Try RAPL (Running Average Power Limit) interface on Intel systems
+    // This provides power consumption for CPU package and DRAM
+
+    let rapl_paths = [
+        "/sys/class/powercap/intel-rapl:0/energy_uj", // CPU package
+        "/sys/class/powercap/intel-rapl/energy_uj",   // Alternative path
+    ];
+
+    static mut LAST_ENERGY: Option<(u64, Instant)> = None;
+    static mut LAST_POWER: f32 = 0.0;
+
+    for path in &rapl_paths {
+        if let Ok(energy_str) = fs::read_to_string(path) {
+            if let Ok(energy_uj) = energy_str.trim().parse::<u64>() {
+                let now = Instant::now();
+
+                unsafe {
+                    if let Some((last_energy, last_time)) = LAST_ENERGY {
+                        let time_diff = now.duration_since(last_time).as_secs_f64();
+                        if time_diff > 0.0 {
+                            let energy_diff = if energy_uj >= last_energy {
+                                energy_uj - last_energy
+                            } else {
+                                // Counter wrapped around
+                                (u64::MAX - last_energy) + energy_uj
+                            };
+
+                            let power_watts = (energy_diff as f64 / 1_000_000.0) / time_diff; // Convert µJ to J, then to W
+
+                            if power_watts > 0.0 && power_watts < 1000.0 { // Reasonable power range
+                                LAST_POWER = power_watts as f32;
+                                LAST_ENERGY = Some((energy_uj, now));
+                                return Some((power_watts as f32, PowerMethod::Systemstat));
+                            }
+                        }
+                    } else {
+                        // First reading, store and wait for next
+                        LAST_ENERGY = Some((energy_uj, now));
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
 
 #[tauri::command]
 async fn get_cpu_temperature() -> Option<f32> {
@@ -2097,6 +2611,7 @@ async fn start_file_transfer_service(
         app.app_handle().clone(),
         ft_arc.clone(),
         state.keystore.clone(),
+        state.bandwidth.clone(),
     )
     .await
     .map_err(|e| format!("Failed to start WebRTC service: {}", e))?;
@@ -2183,7 +2698,11 @@ async fn upload_file_to_network(
 
     if let Some(ft) = ft {
         // Upload the file
-        let file_name = file_path.split('/').last().unwrap_or(&file_path);
+        let c = file_path.clone();
+        let file_name = Path::new(&c)
+            .file_name()             // returns Option<&OsStr>
+            .and_then(|s| s.to_str()) // convert OsStr -> &str
+            .unwrap_or(&file_path);   // fallback to whole path if not found
 
         ft.upload_file_with_account(
             file_path.clone(),
@@ -2260,7 +2779,7 @@ async fn upload_file_to_network(
                     ft.store_file_data(file_hash.clone(), file_name.to_string(), file_data.clone())
                         .await;
 
-                    match dht.publish_file(metadata.clone()).await {
+                    match dht.publish_file(metadata.clone(), None).await {
                         Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
                         Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
                     }
@@ -2279,6 +2798,55 @@ async fn upload_file_to_network(
     }
 }
 
+#[tauri::command]
+async fn start_ftp_download(
+    url: String,
+    output_path: String,
+    username: Option<String>,
+    password: Option<String>,
+) -> Result<String, String> {
+    let parsed = url::Url::parse(&url).map_err(|e| e.to_string())?;
+    let host = parsed.host_str().ok_or("Invalid FTP URL")?;
+    let path = parsed.path();
+
+    // Connect to FTP
+    let mut ftp = FtpStream::connect((host, 21))
+        .map_err(|e| format!("Failed to connect to FTP server: {}", e))?;
+
+    // Login
+    if let (Some(user), Some(pass)) = (username.clone(), password.clone()) {
+        ftp.login(&user, &pass)
+            .map_err(|e| format!("FTP login failed: {}", e))?;
+    } else {
+        ftp.login("anonymous", "anonymous")
+            .map_err(|e| format!("Anonymous login failed: {}", e))?;
+    }
+
+    // Create output file
+    let mut file = std::fs::File::create(&output_path)
+        .map_err(|e| format!("Failed to create output file: {}", e))?;
+
+    // Retrieve file and stream in chunks
+    ftp.retr(path, |mut reader| {
+        let mut buffer = [0u8; 65536]; // 64 KB
+        loop {
+            let bytes_read = reader
+                .read(&mut buffer)
+                .map_err(|e| suppaftp::FtpError::ConnectionError(e))?;
+            if bytes_read == 0 {
+                break; // End of file
+            }
+            file.write_all(&buffer[..bytes_read])
+                .map_err(|e| suppaftp::FtpError::ConnectionError(e))?;
+        }
+        Ok(())
+    })
+    .map_err(|e| format!("FTP RETR failed: {}", e))?;
+
+    ftp.quit().ok();
+
+    Ok(format!("Downloaded successfully to {}", output_path))
+}
 
 #[tauri::command]
 async fn download_blocks_from_network(
@@ -2729,6 +3297,7 @@ async fn upload_file_chunk(
             price: None,
             uploader_address: None,
             ftp_sources: None,
+            http_sources: None,
             info_hash: None,
             trackers: None,
         };
@@ -2756,7 +3325,7 @@ async fn upload_file_chunk(
 
         // Publish to DHT
         if let Some(dht) = dht_opt {
-            dht.publish_file(metadata.clone()).await?;
+            dht.publish_file(metadata.clone(), None).await?;
         } else {
             return Err("DHT not running".into());
         }
@@ -3987,6 +4556,142 @@ async fn reset_analytics(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+// ============================================================================
+// HTTP Server Commands - Serve files via HTTP protocol
+// ============================================================================
+
+/// Start HTTP server for serving encrypted chunks and file manifests
+///
+/// The server will listen on the specified port and serve files that have been
+/// registered via `register_manifest_for_http()`.
+///
+/// Returns the actual bound address (useful if port 0 was used for auto-assignment)
+#[tauri::command]
+async fn start_http_server(
+    state: State<'_, AppState>,
+    port: u16,
+) -> Result<String, String> {
+    // Check if server is already running
+    {
+        let addr_lock = state.http_server_addr.lock().await;
+        if addr_lock.is_some() {
+            return Err("HTTP server is already running".to_string());
+        }
+    }
+
+    let bind_addr: std::net::SocketAddr = ([0, 0, 0, 0], port).into();
+
+    tracing::info!("Starting HTTP server on {}", bind_addr);
+
+    // Start the server
+    let server_state = state.http_server_state.clone();
+    let bound_addr = http_server::start_server(server_state, bind_addr)
+        .await
+        .map_err(|e| format!("Failed to start HTTP server: {}", e))?;
+
+    // Store the bound address
+    {
+        let mut addr_lock = state.http_server_addr.lock().await;
+        *addr_lock = Some(bound_addr);
+    }
+
+    Ok(format!("http://{}", bound_addr))
+}
+
+/// Stop HTTP server
+#[tauri::command]
+async fn stop_http_server(state: State<'_, AppState>) -> Result<(), String> {
+    let mut addr_lock = state.http_server_addr.lock().await;
+
+    if addr_lock.is_none() {
+        return Err("HTTP server is not running".to_string());
+    }
+
+    tracing::info!("Stopping HTTP server");
+
+    // TODO: Implement graceful shutdown
+    // For now, just clear the address (server task will continue running)
+    *addr_lock = None;
+
+    Ok(())
+}
+
+/// Get HTTP server status
+#[tauri::command]
+async fn get_http_server_status(
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let addr_lock = state.http_server_addr.lock().await;
+
+    match &*addr_lock {
+        Some(addr) => Ok(serde_json::json!({
+            "running": true,
+            "address": format!("http://{}", addr)
+        })),
+        None => Ok(serde_json::json!({
+            "running": false,
+            "address": null
+        })),
+    }
+}
+
+/// Download a file via HTTP protocol using Range requests
+///
+/// This uses HTTP Range headers (RFC 7233) to download file chunks in parallel,
+/// without requiring pre-chunking or manifest endpoints.
+///
+/// Flow:
+/// 1. Fetch file metadata from HTTP server
+/// 2. Calculate byte ranges (256KB chunks)
+/// 3. Download chunks in parallel using Range headers
+/// 4. Reassemble chunks into final file
+///
+/// Files are downloaded as-is (encrypted if they were encrypted).
+/// Decryption happens at a higher level when needed.
+///
+/// Emits `http_download_progress` events with progress updates.
+#[tauri::command]
+async fn download_file_http(
+    app: tauri::AppHandle,
+    seeder_url: String,
+    merkle_root: String,
+    output_path: String,
+) -> Result<(), String> {
+    tracing::info!(
+        "Starting HTTP Range-based download: {} from {}",
+        merkle_root,
+        seeder_url
+    );
+
+    // Create progress channel
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel(100);
+
+    // Spawn progress event emitter
+    let app_handle = app.clone();
+    tokio::spawn(async move {
+        while let Some(progress) = progress_rx.recv().await {
+            let _ = app_handle.emit("http_download_progress", &progress);
+        }
+    });
+
+    // Create HTTP download client (Range-based, no chunk storage needed)
+    let client = http_download::HttpDownloadClient::new();
+
+    // Start download using Range requests
+    client
+        .download_file(
+            &seeder_url,
+            &merkle_root,
+            std::path::Path::new(&output_path),
+            Some(progress_tx),
+        )
+        .await?;
+
+    tracing::info!("HTTP download completed: {}", output_path);
+
+    Ok(())
+}
+
 #[cfg(not(test))]
 fn main() {
     // Initialize logging for debug builds
@@ -4061,6 +4766,7 @@ fn main() {
             multi_source_pump: Mutex::new(None),
             socks5_proxy_cli: Mutex::new(args.socks5_proxy),
             analytics: Arc::new(analytics::AnalyticsService::new()),
+            bandwidth: Arc::new(BandwidthController::new()),
 
             // Initialize transaction queue
             transaction_queue: Arc::new(Mutex::new(VecDeque::new())),
@@ -4072,6 +4778,16 @@ fn main() {
 
             // Initialize proxy authentication tokens
             proxy_auth_tokens: Arc::new(Mutex::new(std::collections::HashMap::new())),
+
+            // Initialize HTTP server state (uses same storage as FileTransferService)
+            http_server_state: Arc::new(http_server::HttpServerState::new({
+                // Use same storage directory as FileTransferService (files/, not chunks/)
+                use directories::ProjectDirs;
+                ProjectDirs::from("com", "chiral-network", "chiral-network")
+                    .map(|dirs| dirs.data_dir().join("files"))
+                    .unwrap_or_else(|| std::env::current_dir().unwrap().join("files"))
+            })),
+            http_server_addr: Arc::new(Mutex::new(None)),
 
             // Initialize stream authentication
             stream_auth: Arc::new(Mutex::new(crate::stream_auth::StreamAuthService::new())),
@@ -4118,6 +4834,7 @@ fn main() {
             queue_transaction,
             get_transaction_queue_status,
             get_cpu_temperature,
+            get_power_consumption,
             is_geth_running,
             check_geth_binary,
             get_geth_status,
@@ -4152,6 +4869,7 @@ fn main() {
             start_file_transfer_service,
             download_file_from_network,
             upload_file_to_network,
+            start_ftp_download,
             download_blocks_from_network,
             start_multi_source_download,
             cancel_multi_source_download,
@@ -4192,6 +4910,7 @@ fn main() {
             upload_versioned_file,
             get_file_versions_by_name,
             test_backend_connection,
+            set_bandwidth_limits,
             establish_webrtc_connection,
             send_webrtc_file_request,
             get_webrtc_connection_status,
@@ -4206,6 +4925,11 @@ fn main() {
             get_resource_contribution,
             get_contribution_history,
             reset_analytics,
+            // HTTP server commands
+            start_http_server,
+            stop_http_server,
+            get_http_server_status,
+            download_file_http,
             save_temp_file_for_upload,
             get_file_size,
             encrypt_file_for_self_upload,
@@ -4235,7 +4959,9 @@ fn main() {
             get_relay_reputation_stats,
             set_relay_alias,
             get_relay_alias,
-            get_multiaddresses
+            get_multiaddresses,
+            clear_seed_list,
+            get_full_network_stats
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -4369,6 +5095,36 @@ fn main() {
 
             // NOTE: You must add `start_proof_of_storage_watcher` to the invoke_handler call in the
             // real code where you register other commands. For brevity the snippet above shows where to add it.
+
+            // Auto-start HTTP server
+            // Spawn directly in setup() - no need to wait for window events
+            {
+                let app_handle = app.handle().clone();
+
+                tauri::async_runtime::spawn(async move {
+                    // Small delay to ensure state is fully initialized
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+                    if let Some(state) = app_handle.try_state::<AppState>() {
+                        let bind_addr: std::net::SocketAddr = ([0, 0, 0, 0], 8080).into();
+
+                        tracing::info!("Auto-starting HTTP server on port 8080...");
+
+                        match http_server::start_server(state.http_server_state.clone(), bind_addr).await {
+                            Ok(bound_addr) => {
+                                let mut addr_lock = state.http_server_addr.lock().await;
+                                *addr_lock = Some(bound_addr);
+                                tracing::info!("HTTP server started at http://{}", bound_addr);
+                                println!("✅ HTTP server listening on http://{}", bound_addr);
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to start HTTP server: {}", e);
+                                eprintln!("⚠️  HTTP server failed to start: {}", e);
+                            }
+                        }
+                    }
+                });
+            }
 
             Ok(())
         })
@@ -4576,7 +5332,10 @@ async fn upload_and_publish_file(
     file_path: String,
     file_name: Option<String>,
     recipient_public_key: Option<String>,
+    price: Option<f64>,
+    ftp_source: Option<String>,
 ) -> Result<UploadResult, String> {
+    info!("📦 BACKEND: Starting upload_and_publish_file for price {:?}", price);
     // 1. Process file with ChunkManager (encrypt, chunk, build Merkle tree)
     let manifest = encrypt_file_for_recipient(
         app.clone(),
@@ -4622,7 +5381,7 @@ async fn upload_and_publish_file(
         // Use prepare_versioned_metadata to handle version incrementing and parent_hash
         let mime_type = detect_mime_type_from_filename(&file_name)
             .unwrap_or_else(|| "application/octet-stream".to_string());
-        let metadata = dht
+        let mut metadata = dht
             .prepare_versioned_metadata(
                 manifest.merkle_root.clone(), // This is the Merkle root
                 file_name.clone(),
@@ -4634,11 +5393,47 @@ async fn upload_and_publish_file(
                 true,                            // is_encrypted
                 Some("AES-256-GCM".to_string()), // Encryption method
                 None,                            // key_fingerprint (deprecated)
-                None,                            // price
+                price,                            // price
                 None,                            // uploader_address
             )
             .await?;
 
+        // Add HTTP source if HTTP server is running
+        let http_addr = state.http_server_addr.lock().await;
+        if let Some(addr) = *http_addr {
+            // Get actual local IP instead of 0.0.0.0
+            let port = addr.port();
+            let local_ip = crate::headless::get_local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
+            let http_url = format!("http://{}:{}", local_ip, port);
+
+            metadata.http_sources = Some(vec![download_source::HttpSourceInfo {
+                url: http_url.clone(),
+                auth_header: None,
+                verify_ssl: false,
+                headers: None,
+                timeout_secs: Some(30),
+            }]);
+            tracing::info!("Added HTTP source to metadata: {} (local IP: {})", http_url, local_ip);
+        }
+
+        let mut metadata = metadata;
+        if let Some(ftp_url) = ftp_source {
+            metadata.ftp_sources = Some(vec![FtpSourceInfo {
+                url: ftp_url,
+                username: None,
+                password: None,
+                supports_resume: false, // or true if known
+                file_size: 0,           // placeholder, could update later
+                is_available: true,
+                last_checked: Some(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                ),
+            }]);
+        }
+            
         println!("📦 BACKEND: Created versioned metadata");
 
         let version = metadata.version.unwrap_or(1);
@@ -4658,13 +5453,27 @@ async fn upload_and_publish_file(
                 .await; // Store with Merkle root as key
         }
 
-        dht.publish_file(metadata).await?;
+        dht.publish_file(metadata, None).await?;
         version
     } else {
         1 // Default to v1 if DHT not running
     };
 
-    // 5. Return metadata to frontend
+
+    // 6. Register file with HTTP server for Range-based serving
+    state
+        .http_server_state
+        .register_file(http_server::HttpFileMetadata {
+            hash: manifest.merkle_root.clone(),
+            name: file_name.clone(),
+            size: file_size,
+            encrypted: true,
+        })
+        .await;
+
+    tracing::info!("Registered file for HTTP serving: {} ({})", file_name, manifest.merkle_root);
+
+    // 7. Return metadata to frontend
     Ok(UploadResult {
         merkle_root: manifest.merkle_root,
         file_name,
@@ -5132,4 +5941,13 @@ async fn get_multiaddresses(state: State<'_, AppState>) -> Result<Vec<String>, S
     } else {
         Ok(Vec::new())
     }
+}
+
+
+#[tauri::command]
+async fn clear_seed_list() -> Result<(), String> {
+    // Since you're using localStorage fallback, this command just needs to exist
+    // The actual clearing happens in the frontend via localStorage.removeItem()
+    // This command is here for consistency if you add file-based storage later
+    Ok(())
 }

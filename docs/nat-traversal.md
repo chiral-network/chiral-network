@@ -5,6 +5,55 @@
 
 Chiral Network implements comprehensive NAT traversal solutions to ensure connectivity between peers regardless of network configuration.
 
+## Understanding NAT Traversal Protocols
+
+### AutoNAT v2 vs Circuit Relay v2
+
+These are two **independent** libp2p protocols serving different purposes:
+
+**AutoNAT v2** (Reachability Detection):
+- **Does NOT require relay** - completely independent protocol
+- **Purpose**: Detects if your node is behind NAT (Public/Private/Unknown status)
+- **How it works**: Other peers try to dial you back directly on your observed addresses
+- **Security**: Cannot use relay connections for dial-back (libp2p security requirement)
+- **Built-in libp2p protocol**: Enable by configuring AutoNAT behavior in NetworkBehaviour
+
+**Circuit Relay v2** (NAT Traversal):
+- **Requires publicly reachable relay nodes**
+- **Purpose**: Forwards traffic between NAT'd peers who cannot connect directly
+- **How it works**:
+  - NAT'd peer (A) requests reservation with relay (R)
+  - Relay R listens for incoming connections on A's behalf
+  - When peer B wants to connect to A, B connects to relay R, which relays traffic
+- **End-to-end encrypted**: Relay cannot read or tamper with traffic (inspired by TURN protocol)
+- **Built-in libp2p protocol**: Enable by configuring relay behavior in NetworkBehaviour
+- **Decentralized**: Any public node can opt-in to relay mode
+
+**Key Takeaway**: Both are core libp2p features - no third-party services needed. The relay is simply running libp2p relay protocol, not a centralized service.
+
+## Implementation Progress
+
+### ✅ Phase 1: NAT Traversal Infrastructure (Completed)
+- Circuit Relay v2 implemented and tested across different networks
+- AutoNAT v2 for reachability detection
+- Relay server mode (any public node can act as relay)
+- Cross-network connectivity verified through relay circuits
+
+**Current State**: Peers can communicate through relay, but requires **manual multiaddress sharing** (peer-ID discovery).
+
+### 🔄 Phase 2: Content-Based Discovery (Next Step)
+- **Goal**: Automatic peer discovery by file hash using DHT
+- **Implementation Needed**:
+  - When sharing a file: `put_record("file:SHA256_HASH", peer_relay_circuit_address)`
+  - When searching for a file: `get_record("file:SHA256_HASH")` returns peer addresses
+  - NAT'd peers publish their relay circuit addresses to DHT
+- **Result**: Fully decentralized P2P file sharing - no manual address exchange needed
+
+### 📋 Phase 3: Optimization (Future)
+- WebRTC direct connections after initial relay handshake
+- DCUtR (Direct Connection Upgrade through Relay) for hole punching
+- Relay as fallback only, not primary transfer method
+
 ## Current Implementation Status
 
 ### ✅ Implemented Features
@@ -28,11 +77,8 @@ Chiral Network implements comprehensive NAT traversal solutions to ensure connec
 - Persistent tracking of externally observed addresses
 - Address change detection and logging
 
-#### 4. SOCKS5 Proxy Integration
-- P2P traffic routing through SOCKS5 proxies
-- CLI flag: `--socks5-proxy <address>`
 
-### ✅ GUI Configuration (Recently Implemented)
+### ✅ GUI Configuration 
 
 #### 1. Settings UI for NAT Traversal
 - AutoNAT toggle with configurable probe interval (10-300s)
@@ -54,12 +100,11 @@ Chiral Network implements comprehensive NAT traversal solutions to ensure connec
 - Simple checkbox toggle in Settings → Network Settings
 - Enable your node to accept relay reservations from NAT'd peers
 - Help establish circuits for peers behind restrictive NATs
-- Earn reputation points for your node
 - Uses bandwidth when actively relaying connections
 - Can be disabled at any time without affecting relay client functionality
 - Disabled by default (users must opt-in)
 
-### ✅ Public Relay Infrastructure (Recently Implemented)
+### ✅ Public Relay Infrastructure
 
 #### 1. Dedicated Circuit Relay v2 Daemon
 - Standalone relay node binary (`chiral-relay`)
@@ -84,18 +129,6 @@ Chiral Network implements comprehensive NAT traversal solutions to ensure connec
 - Cloud deployment guides (AWS, GCP, DigitalOcean)
 - Prometheus metrics integration
 
-## ❌ Not Yet Implemented
-
-1. **Advanced Security**
-   - Relay reservation authentication
-   - Rate limiting for AutoNAT probes
-   - Anti-amplification safeguards
-
-2. **Resilience Testing**
-   - End-to-end NAT traversal scenarios
-   - Private↔Public connection tests
-   - Private↔Private relay/hole-punch tests
-   - Failure fallback validation
 
 ## Headless Mode NAT Configuration
 
@@ -131,49 +164,48 @@ For symmetric NAT traversal using Direct Connection Upgrade through Relay protoc
 ### 3. Circuit Relay (fallback)
 For restrictive NATs where hole punching fails. Connections are relayed through trusted relay nodes.
 
-### 4. SOCKS5 Proxy (privacy)
-For anonymous routing when privacy is the primary concern.
 
-## Configuration Best Practices
 
-### For Public Nodes
-- Enable Relay Server mode to help the network
-- Keep AutoNAT enabled for reachability monitoring
-- Configure port forwarding if possible for better performance
+## Deploying Your Own Relay Node
 
-### For NAT'd Nodes
-- Enable AutoRelay for automatic relay discovery
-- Add trusted relay nodes to preferred relays list
-- Monitor reachability status regularly
+For testing NAT traversal or contributing relay infrastructure to the network, you can deploy your own relay node:
 
-### For Privacy-Focused Nodes
-- Use SOCKS5 proxy (e.g., Tor)
-- Enable anonymous mode in settings
-- Use Circuit Relay v2 to hide IP addresses
-- Disable AutoNAT or use custom AutoNAT servers
+### Quick Start
 
-## Troubleshooting
+The relay daemon (`chiral-relay`) is located in `relay/` directory. Basic usage:
 
-### Peer Connection Issues
-1. Check reachability status in Network page
-2. Verify AutoNAT is enabled and probing
-3. Ensure relay reservations are active
-4. Check firewall and router settings
+```bash
+cd relay
+cargo build --release
+./target/release/chiral-relay --port 4001 --external-address /ip4/YOUR_PUBLIC_IP/tcp/4001
+```
 
-### Relay Server Not Working
-1. Verify DHT is running
-2. Check relay server toggle is enabled
-3. Restart DHT after enabling relay mode
-4. Monitor relay reputation in Reputation page
+### Cloud Deployment
 
-### SOCKS5 Proxy Issues
-1. Verify proxy address and port
-2. Test proxy connectivity separately
-3. Check proxy supports P2P traffic
-4. Review proxy authentication settings
+For production relay deployment on cloud providers (Google Cloud, AWS, DigitalOcean, etc.), see:
+
+**[relay/DEPLOYMENT.md](../relay/DEPLOYMENT.md)** - Complete deployment guide including:
+- Cloud provider setup (GCP, AWS, DigitalOcean)
+- Firewall configuration
+- systemd service setup
+- Docker/docker-compose configs
+- Monitoring and metrics
+
+### Configure Relay in Main App
+
+After deploying a relay, configure it in your Chiral Network app:
+
+1. Copy the relay's full multiaddr: `/ip4/YOUR_IP/tcp/4001/p2p/12D3KooW...`
+2. Go to **Settings** → **Network Settings**
+3. Paste multiaddr into **Preferred Relay Nodes**
+4. Enable **AutoRelay** toggle
+5. Save and restart DHT
 
 ## See Also
 
 - [Network Protocol](network-protocol.md) - P2P networking details
 - [Security & Privacy](security-privacy.md) - Privacy features
 - [Deployment Guide](deployment-guide.md) - Production setup
+- [relay/DEPLOYMENT.md](../relay/DEPLOYMENT.md) - Advanced relay deployment
+- [AutoNAT v2 Package](https://www.npmjs.com/package/@libp2p/autonat-v2/v/1.0.0-5ed83dd69) - libp2p AutoNAT v2 specification
+- [Circuit Relay Documentation](https://docs.libp2p.io/concepts/nat/circuit-relay/) - libp2p Circuit Relay protocol

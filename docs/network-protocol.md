@@ -26,29 +26,23 @@ The Chiral Network implements a multi-layered protocol stack combining blockchai
 
 ### 1. Peer Discovery Protocol
 
-#### Bootstrap Process
+#### Bootstrap Process (Current Implementation)
 
-```
-1. Connect to Seed Nodes
-   Seeds: [
-     "/ip4/seed1.chiral.network/tcp/30304/p2p/QmNodeId1",
-     "/ip4/seed2.chiral.network/tcp/30304/p2p/QmNodeId2",
-     "/ip6/seed3.chiral.network/tcp/30304/p2p/QmNodeId3"
-   ]
+1. **Connect to the bootstrap DHT node**  
+   Every node loads the configured `bootstrap_nodes` list (currently a single multiaddress such as `/ip4/bootstrap.chiral.network/tcp/4001/p2p/QmBootstrap`) and dials it on startup. That node runs the same libp2p/Kademlia behaviour as any other peer but is flagged with `is_bootstrap=true`, kept online permanently, and is configured not to publish provider records so it acts purely as a router.
 
-2. Request Peer List
-   → FIND_NODE(self.id)
-   ← NODES(peer_list[20])
+2. **Seed the local routing table**  
+   Once the connection succeeds, we add the bootstrap peer ID and address into the local Kademlia table. No custom “peer list” RPC is issued—the bootstrap node simply shares the peers it already knows through standard Kademlia gossip.
 
-3. Connect to Peers
-   For each peer in list:
-     → CONNECT(peer.address)
-     ← ACCEPT/REJECT
+3. **Run the initial Kademlia bootstrap walk**  
+   After the connection is established, the client immediately invokes `kademlia.bootstrap()`. This kicks off the built-in random walk (successive `FIND_NODE` queries) using the bootstrap node as the starting point, which populates the routing table with additional peers and providers.
 
-4. Maintain Routing Table
-   Periodic: PING all peers
-   On failure: Remove and replace
-```
+4. **Keep the table fresh**  
+   Non-bootstrap peers continue to run the periodic bootstrap loop (1 s interval) while the node is up, ensuring they resync with the network if entries age out. The dedicated bootstrap node disables this interval, but it remains available so new peers can repeat steps 1–3 at any time.
+
+##### Operational Notes
+- The bootstrap node exposes only the libp2p/DHT service (no extra REST endpoints) and listens on the same ports as any peer.
+- Today the network relies on a single bootstrap address; adding secondary bootstrap nodes is recommended to avoid a single point of failure.
 
 #### Message Format
 
@@ -366,6 +360,55 @@ fn generate_proof(challenge: Challenge) -> Proof {
     }
 }
 ```
+
+### 6. Multi-Network Integration: Chiral and BitTorrent
+
+To enhance file availability and download speed, the Chiral client integrates with the public BitTorrent network. This creates a hybrid system where the client can fetch file pieces from both the private, reputation-based Chiral P2P network and the massive, public BitTorrent swarm simultaneously.
+
+#### Dual-Network Orchestration
+
+The system does **not** merge the two networks. Instead, the `ProtocolManager` acts as an orchestrator, managing two parallel network handlers:
+
+1.  **Chiral P2P Handler**: Interacts with the libp2p-based Kademlia DHT to find and communicate with other Chiral peers.
+2.  **BitTorrent Handler**: Interacts with the public BitTorrent DHT (Mainline DHT) and public trackers to find and communicate with standard BitTorrent clients.
+
+This allows the Chiral client to source file pieces from a high-reputation Chiral peer and a public torrent swarm at the same time, with the `multi_source_download` engine assembling the final file from all incoming pieces.
+
+#### DHT Modifications for Torrent Discovery
+
+To enable Chiral peers to discover torrent-based sources from each other, the Chiral DHT protocol is extended:
+
+1.  **Extended DHT Record**: The metadata record stored in the Chiral DHT is modified to include an optional `info_hash` field. This allows a Chiral peer to associate a file's Content ID (CID) with a corresponding BitTorrent info hash.
+
+    ```protobuf
+    // Extended FileMetadata in Chiral DHT
+    message FileMetadata {
+      string file_hash = 1;      // SHA-256 hash (CID)
+      // ... other fields
+      optional string info_hash = 8; // BitTorrent info hash (SHA-1)
+    }
+    ```
+
+2.  **Dual Lookup Logic**: The DHT interface is expanded with new lookup functions:
+    *   `search_by_cid(cid: String)`: The standard lookup that resolves a file's CID to a list of Chiral peers.
+    *   `search_by_infohash(info_hash: String)`: A new function that allows finding Chiral peers who have registered a specific torrent info hash.
+
+3.  **Torrent Announcement**: A new DHT operation is added to allow a peer to advertise that it can serve a file via BitTorrent.
+
+    ```rust
+    // Pseudocode for announcing a torrent source
+    fn announce_torrent(cid: String, info_hash: String) {
+        // 1. Retrieve the existing metadata record for the CID.
+        let mut metadata = dht.get(cid);
+        // 2. Add or update the info_hash.
+        metadata.info_hash = Some(info_hash);
+        // 3. Store the updated record back into the DHT.
+        dht.put(cid, metadata);
+    }
+    ```
+
+These extensions enable a Chiral client to first discover a file via its CID, and then, from the returned metadata, discover that the file is *also* available on the public BitTorrent network via its info hash. This bridges the two networks, enabling the powerful multi-source downloading feature.
+
 ## Network Protocols
 
 ### 1. libp2p Integration

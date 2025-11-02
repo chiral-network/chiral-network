@@ -391,6 +391,24 @@ export interface BandwidthScheduleEntry {
   enabled: boolean;
 }
 
+export interface ActiveBandwidthLimits {
+  uploadLimitKbps: number;
+  downloadLimitKbps: number;
+  source: "default" | "schedule";
+  scheduleId?: string;
+  scheduleName?: string;
+  nextChangeAt?: number;
+}
+
+const defaultActiveBandwidthLimits: ActiveBandwidthLimits = {
+  uploadLimitKbps: 0,
+  downloadLimitKbps: 0,
+  source: "default",
+  nextChangeAt: undefined,
+  scheduleId: undefined,
+  scheduleName: undefined,
+};
+
 // Interface for Application Settings
 export interface AppSettings {
   storagePath: string;
@@ -475,5 +493,9 @@ export const settings = writable<AppSettings>({
   autoUpdate: true,
   enableBandwidthScheduling: false,
   bandwidthSchedules: [],
-  pricePerMb: 0.001, // Default price: 0.001 Chiral per MB
+  pricePerMb: 0.001, // Default price: 0.001, until ability to set pricePerMb is there, then change to 0.001 Chiral per MB
 });
+
+export const activeBandwidthLimits = writable<ActiveBandwidthLimits>(
+  defaultActiveBandwidthLimits
+);

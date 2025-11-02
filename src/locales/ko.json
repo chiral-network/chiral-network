@@ -696,6 +696,10 @@
     "status": "프록시 상태",
     "active": "활성",
     "inactive": "비활성",
+    "protected": "보호됨",
+    "vulnerable": "취약함",
+    "secured": "보안됨",
+    "disabled": "비활성화됨",
     "activeNodes": "활성 노드",
     "totalBandwidth": "총 대역폭",
     "settings": "프록시 설정",
@@ -709,9 +713,85 @@
     "latency": "지연 시간",
     "disconnect": "연결 끊기",
     "connect": "연결",
+    "connecting": "연결 중...",
+    "retry": "재시도",
     "remove": "제거",
     "alreadyAdded": "이 프록시 주소는 이미 추가되었습니다!",
-    "autoReconnect": "자동 재연결"
+    "autoReconnect": "자동 재연결",
+    "validation": {
+      "emptyAddress": "주소는 비워둘 수 없습니다",
+      "noSpaces": "주소에는 공백이 포함될 수 없습니다",
+      "invalidEnode": "잘못된 enode 형식 (enode://[128자-16진수]@ip:포트)",
+      "missingPort": "주소에는 포트가 포함되어야 합니다 (예: example.com:8080)",
+      "invalidHostname": "잘못된 호스트명",
+      "invalidPort": "포트는 1-65535 사이여야 합니다",
+      "systemPort": "시스템 포트 사용 피하기 (1024+ 사용)",
+      "invalidFormat": "잘못된 IP 주소 또는 도메인 형식"
+    },
+    "errors": {
+      "connectionTimeout": "연결 시간 초과",
+      "optimizationUnavailable": "❌ 최적화 상태를 사용할 수 없음",
+      "tauriUnavailable": "❌ Tauri API를 사용할 수 없습니다. 브라우저가 아닌 데스크톱 앱에서 이 테스트를 실행하세요."
+    },
+    "dialog": {
+      "confirmRemoval": "제거 확인",
+      "confirmMessage": "프록시 노드 제거 확인",
+      "cancel": "취소",
+      "remove": "제거"
+    },
+    "privacy": {
+      "title": "프라이버시 설정",
+      "anonymousMode": "익명 모드",
+      "anonymousModeDesc": "익명 프록시를 통해 라우팅",
+      "multiHop": "멀티홉 라우팅",
+      "multiHopDesc": "여러 프록시 노드를 통해 라우팅",
+      "currentMode": "현재 프라이버시 모드:",
+      "maxPrivacy": "최대 프라이버시 (익명 + 멀티홉)",
+      "anonymousOnly": "익명 모드",
+      "multiHopOnly": "멀티홉 라우팅",
+      "standardMode": "표준 모드"
+    },
+    "stats": {
+      "title": "프록시 라우팅 통계",
+      "availableProxies": "사용 가능한 프록시",
+      "totalRoutes": "총 경로",
+      "privacyProfile": "프라이버시 프로필",
+      "anon": "익명",
+      "standard": "표준",
+      "multi": "멀티",
+      "plusMulti": "+ 멀티홉"
+    },
+    "nodeInfo": {
+      "address": "프록시 노드 주소",
+      "peerId": "DHT 피어 ID",
+      "reliability": "신뢰성",
+      "success": "성공",
+      "attempts": "시도",
+      "mbps": "Mbps",
+      "ms": "ms",
+      "placeholder": "example.com:8080 또는 enode://..."
+    },
+    "optimization": {
+      "title": "프록시 지연 시간 최적화",
+      "currentStatus": "현재 상태",
+      "refreshStatus": "상태 새로고침",
+      "proveOptimization": "최적화 작동 증명",
+      "runningTests": "테스트 실행 중...",
+      "testResults": "테스트 결과"
+    },
+    "statusFilter": {
+      "all": "전체",
+      "online": "온라인",
+      "offline": "오프라인",
+      "connecting": "연결 중",
+      "error": "오류"
+    },
+    "sortOptions": {
+      "status": "상태별 정렬",
+      "latency": "지연 시간별 정렬",
+      "bandwidth": "대역폭별 정렬",
+      "smart": "스마트 정렬 (품질)"
+    }
   },
   "mining": {
     "title": "채굴",
@@ -724,6 +804,12 @@
     "powerUsage": "전력 사용량",
     "hw": "H/W",
     "temperature": "온도",
+    "temperatureStatus": {
+      "critical": "심각",
+      "hot": "뜨거움",
+      "warm": "따뜻함",
+      "normal": "정상"
+    },
     "control": "채굴 제어",
     "active": "채굴 활성",
     "stopped": "채굴 중지",
@@ -838,6 +924,8 @@
     "refreshData": "데이터 새로고침",
     "hideAnalytics": "분석 숨기기",
     "showAnalytics": "분석 표시",
+    "hideRelayLeaderboard": "릴레이 리더보드 숨기기",
+    "showRelayLeaderboard": "릴레이 리더보드 표시",
     "loading": "평판 데이터 로딩 중...",
     "searchPeers": "피어 검색",
     "searchPlaceholder": "피어 ID로 검색...",
@@ -901,6 +989,152 @@
       "StorageOffered": "저장 공간 제공",
       "MaliciousBehaviorReport": "악의적 행동 보고",
       "FileShared": "파일 공유"
+    },
+    "myRelay": {
+      "title": "내 릴레이 평판",
+      "subtitle": "노드가 릴레이 서버로 실행 중입니다",
+      "rankOf": "{total}개 중 순위",
+      "reputationScore": "평판 점수",
+      "successfulCircuits": "성공한 회로",
+      "reservations": "예약"
+    },
+    "pagination": {
+      "showing": "{total}개 피어 중 {start}-{end}개 표시",
+      "previous": "이전",
+      "next": "다음"
+    },
+    "card": {
+      "daysAgo": "{days}일 전",
+      "hoursAgo": "{hours}시간 전",
+      "minutesAgo": "{minutes}분 전",
+      "justNow": "방금",
+      "reputationScore": "평판 점수",
+      "transfers": "전송",
+      "interactions": "상호작용",
+      "latency": "지연",
+      "bandwidth": "대역폭",
+      "uptime": "가동 시간",
+      "encryption": "암호화",
+      "supported": "지원됨",
+      "notSupported": "지원되지 않음"
+    }
+  },
+  "relay": {
+    "title": "릴레이 인프라",
+    "subtitle": "릴레이 서버 및 네트워크 연결 관리",
+    "server": {
+      "title": "릴레이 서버",
+      "subtitle": "노드를 통해 피어 연결 지원",
+      "running": "실행 중",
+      "stopped": "중지됨",
+      "description": "NAT 뒤에 있는 피어가 네트워크에 연결하도록 돕고 평판을 얻기 위해 릴레이 서버를 실행하세요.",
+      "benefit1": "피어를 돕고 평판 포인트를 획득",
+      "benefit2": "네트워크 연결성 및 분산화 개선",
+      "benefit3": "회로를 적극적으로 릴레이할 때 대역폭 사용",
+      "enable": "릴레이 서버 활성화",
+      "disable": "릴레이 서버 비활성화",
+      "start": "서버 시작",
+      "stop": "서버 중지",
+      "starting": "시작 중...",
+      "enabling": "활성화 중...",
+      "disabling": "비활성화 중...",
+      "activeMessage": "릴레이 서버가 활성화되어 피어를 돕고 있습니다!",
+      "earningReputation": "성공적인 연결마다 평판을 얻고 있습니다.",
+      "aliasLabel": "릴레이 서버 별칭 (공개 이름)",
+      "aliasPlaceholder": "예: Alice의 빠른 릴레이 🚀",
+      "aliasHint": "이 친근한 이름은 로그에 표시되며 다른 노드가 릴레이를 통해 부트스트랩할 때 나타납니다",
+      "dhtNotRunning": "DHT 네트워크가 실행되지 않음",
+      "dhtNotRunningHint": "먼저 네트워크 페이지에서 네트워크를 시작하세요.",
+      "broadcastingAs": "다음으로 브로드캐스팅:"
+    },
+    "client": {
+      "title": "AutoRelay 클라이언트",
+      "subtitle": "필요할 때 릴레이 노드를 통해 연결",
+      "enableAutorelay": "Circuit Relay v2 (AutoRelay) 활성화",
+      "preferredRelays": "선호 릴레이 노드 (선택사항)",
+      "preferredRelaysPlaceholder": "/ip4/relay.example.com/tcp/4001/p2p/QmRelayId\n한 줄에 하나의 멀티주소",
+      "preferredRelaysHint": "릴레이로 부트스트랩 노드를 사용하려면 비워두세요",
+      "howItWorks": "작동 방식:",
+      "description": "AutoRelay는 NAT 또는 방화벽 뒤에 있을 때 자동으로 릴레이 노드를 통해 연결하여 항상 네트워크에 참여할 수 있도록 합니다."
+    },
+    "monitoring": {
+      "title": "릴레이 상태 및 모니터링"
+    },
+    "errors": {
+      "dhtNotRunning": "DHT가 실행 중이 아닙니다. 네트워크 페이지에서 먼저 네트워크를 시작하세요.",
+      "toggleFailed": "릴레이 서버 전환 실패: {error}"
+    },
+    "monitor": {
+      "statsTitle": "릴레이 풀 통계",
+      "totalRelays": "총 릴레이",
+      "connected": "연결됨",
+      "healthy": "정상",
+      "totalErrors": "총 오류",
+      "avgHealthScore": "평균 상태 점수",
+      "activeRelayTitle": "활성 릴레이",
+      "connectedBadge": "연결됨",
+      "peerId": "피어 ID:",
+      "healthScore": "상태 점수:",
+      "avgLatency": "평균 지연:",
+      "reservation": "예약:",
+      "successRate": "성공률:",
+      "relayPoolTitle": "릴레이 풀",
+      "noRelaysInPool": "풀에 릴레이가 없습니다",
+      "primaryBadge": "주요",
+      "state": "상태:",
+      "latency": "지연:",
+      "attempts": "시도:",
+      "successes": "성공:",
+      "failures": "실패:",
+      "lastSuccess": "마지막 성공:",
+      "recentErrorsLabel": "최근 오류:",
+      "recentErrorsTitle": "최근 오류",
+      "clearButton": "지우기",
+      "relayLabel": "릴레이:",
+      "retryLabel": "재시도:",
+      "errorTypes": {
+        "connectionRefused": "연결 거부됨",
+        "timeout": "시간 초과",
+        "reservationFailed": "예약 실패",
+        "expired": "만료됨",
+        "overloaded": "과부하",
+        "unreachable": "연결 불가",
+        "networkError": "네트워크 오류",
+        "authFailed": "인증 실패",
+        "protocolError": "프로토콜 오류",
+        "unknown": "알 수 없음"
+      },
+      "time": {
+        "never": "없음",
+        "justNow": "방금",
+        "minutesAgo": "{minutes}분 전",
+        "hoursAgo": "{hours}시간 전",
+        "na": "해당 없음",
+        "expired": "만료됨",
+        "seconds": "{seconds}초",
+        "minutes": "{minutes}분",
+        "hours": "{hours}시간"
+      }
+    },
+    "leaderboard": {
+      "title": "상위 릴레이 서버",
+      "subtitle": "평판 기반 릴레이 노드 순위",
+      "refresh": "새로고침",
+      "refreshing": "새로고침 중...",
+      "loading": "릴레이 평판 데이터 로딩 중...",
+      "rank": "순위",
+      "peerId": "피어 ID",
+      "score": "점수",
+      "circuits": "회로",
+      "bandwidth": "대역폭",
+      "uptime": "가동 시간",
+      "points": "점",
+      "lastSeen": "마지막 접속",
+      "totalRelays": "총 릴레이",
+      "badgedRelays": "배지 있는 릴레이",
+      "totalCircuits": "총 회로",
+      "noRelays": "릴레이 서버를 찾을 수 없음",
+      "noRelaysDesc": "리더보드에 나타나려면 릴레이 서버를 실행하세요"
     }
   },
   "upload": {
@@ -950,6 +1184,102 @@
       "publicKeyHint": "수신자의 X25519 공개 키를 입력하세요 (16진수 형식, 64자). 파일이 암호화되어 수신자만 해독할 수 있습니다. 비워두면 자신을 위해 암호화됩니다.",
       "invalidPublicKey": "⚠️ 공개 키 형식이 잘못되었습니다. 64자리 16진수여야 합니다.",
       "encryptedBadge": "암호화됨"
+    },
+    "currentProtocol": "현재 프로토콜",
+    "changeProtocol": "프로토콜 변경",
+    "selectProtocol": "프로토콜 선택",
+    "webrtcDescription": "WebRTC를 사용한 빠른 P2P 전송",
+    "bitswapDescription": "IPFS 호환 블록 교환 프로토콜",
+    "requireAccount": "파일을 업로드하려면 계정을 만들거나 가져오세요",
+    "uploadInProgress": "업로드가 진행 중입니다. 현재 업로드가 완료될 때까지 기다려주세요.",
+    "desktopOnly": "파일 업로드는 데스크톱 앱에서만 사용할 수 있습니다",
+    "executableBlocked": "{name}: 보안상의 이유로 실행 파일은 허용되지 않습니다",
+    "emptyFile": "{name}: 파일이 비어있습니다",
+    "publishedToDHT": "파일이 공유를 위해 DHT 네트워크에 게시되었습니다!",
+    "storedLocally": "파일이 로컬에 저장되었습니다. 다른 사용자와 공유하려면 DHT 네트워크를 시작하세요.",
+    "uploadError": "드롭한 파일 처리 중 오류가 발생했습니다. 다시 시도하거나 \"파일 추가\" 버튼을 사용하세요.",
+    "fileManagementDesktopOnly": "파일 관리는 데스크톱 앱에서만 사용할 수 있습니다",
+    "fileUpdated": "{name}이(가) 이미 존재합니다; v{version}(으)로 업데이트되었습니다",
+    "fileUploadedNew": "{name}이(가) v{version}(으)로 업로드되었습니다 (새 파일)",
+    "hashCopiedClipboard": "파일 해시가 클립보드에 복사되었습니다!",
+    "noVersionHistory": "이 파일에 대한 버전 기록을 찾을 수 없습니다",
+    "versionHistoryTitle": "{name}에 대한 버전 기록:\n{list}",
+    "versionHistoryError": "버전 기록을 불러오지 못했습니다",
+    "desktopAppRequired": "데스크톱 앱 필요",
+    "storageMonitoringDesktopOnly": "저장 공간 모니터링은 데스크톱 애플리케이션이 필요합니다",
+    "dropFilesHere": "✨ 여기에 파일을 드롭하세요!",
+    "uploadingFiles": "🔄 파일 업로드 중...",
+    "releaseToUpload": "파일을 즉시 업로드하려면 놓으세요",
+    "dragDropWebNotAvailable": "웹 버전에서는 드래그 앤 드롭을 사용할 수 없습니다",
+    "pleaseWaitProcessing": "파일 처리 중입니다. 잠시만 기다려주세요...",
+    "dragDropRequiresDesktop": "드래그 앤 드롭은 데스크톱 앱이 필요합니다",
+    "uploading": "업로드 중...",
+    "fileUploadDesktopApp": "파일 업로드는 데스크톱 앱이 필요합니다",
+    "downloadDesktopApp": "파일을 업로드하고 공유하려면 데스크톱 버전을 다운로드하세요",
+    "desktopManagementRequired": "파일 관리를 위해 데스크톱 앱이 필요합니다",
+    "versionHistoryTooltip": "v{version} - 버전 기록을 보려면 클릭하세요",
+    "encryptedEndToEnd": "이 파일은 종단 간 암호화되어 있습니다",
+    "active": "활성",
+    "hashLabel": "해시:",
+    "priceTooltip": "네트워크 해시 파워를 기반으로 가격이 동적으로 계산됩니다",
+    "storedLocallyBadge": "로컬에 저장됨",
+    "fileManagementTooltip": "파일 관리는 데스크톱 앱이 필요합니다",
+    "fileManagementWebNotAvailable": "웹 버전에서는 파일 관리를 사용할 수 없습니다",
+    "fileDialogError": "파일 대화 상자를 열지 못했습니다"
+  },
+  "messages": {
+    "title": "메시지",
+    "subtitle": "피어와 안전하게 통신하세요.",
+    "conversations": "연락처",
+    "searchPlaceholder": "연락처 검색...",
+    "inputPlaceholder": "암호화된 메시지를 입력하세요...",
+    "selectConversation": "대화를 선택하여 메시지를 시작하세요",
+    "peer": "피어",
+    "endToEndEncrypted": "종단 간 암호화",
+    "refreshPeerList": "피어 목록 새로고침"
+  },
+  "torrent": {
+    "title": "토렌트",
+    "magnetLink": {
+      "title": "마그넷 링크에서",
+      "description": "마그넷 링크를 붙여넣어 다운로드를 시작하세요.",
+      "placeholder": "magnet:?xt=urn:btih:...",
+      "download": "다운로드"
+    },
+    "or": "또는",
+    "torrentFile": {
+      "title": ".torrent 파일에서",
+      "description": "컴퓨터에서 .torrent 파일을 업로드하세요.",
+      "choosePlaceholder": ".torrent 파일 선택...",
+      "download": "다운로드",
+      "invalidFile": "올바른 .torrent 파일을 선택하세요."
+    },
+    "seed": {
+      "title": "토렌트 생성 및 시딩",
+      "description": "네트워크와 공유할 로컬 파일을 선택하세요.",
+      "choosePlaceholder": "시딩할 파일 선택...",
+      "button": "파일 시딩",
+      "shareMagnet": "이 마그넷 링크를 공유하세요:",
+      "noFileSelected": "시딩할 파일을 선택하세요.",
+      "success": "{fileName} 시딩을 성공적으로 시작했습니다!",
+      "error": "파일 시딩 오류: {error}"
+    },
+    "activeTransfers": {
+      "title": "활성 전송",
+      "filterAll": "전체",
+      "filterChiral": "Chiral",
+      "filterBitTorrent": "BitTorrent",
+      "noTransfers": "활성 전송이 없습니다.",
+      "peers": "피어:",
+      "eta": "예상 시간:"
+    },
+    "download": {
+      "error": "오류: {error}",
+      "noIdentifier": "마그넷 링크를 제공하거나 .torrent 파일을 선택하세요.",
+      "complete": "다운로드 완료: {fileName}"
+    },
+    "clipboard": {
+      "copied": "클립보드에 복사되었습니다!"
     }
   },
   "download": {
@@ -1068,6 +1398,9 @@
       "retrying": "{hash} 다운로드 재시도 중 (시도 {attempt}/{max})",
       "recovered": "{hash} 다운로드가 {retries}번의 재시도 후 복구되었습니다 ({duration} ms)",
       "failed": "{hash} 다운로드가 {attempts}번의 시도 후 실패했습니다"
-    }
+    },
+    "selectProtocol": "프로토콜 선택",
+    "currentProtocol": "현재 프로토콜",
+    "changeProtocol": "프로토콜 변경"
   }
 }

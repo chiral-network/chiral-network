@@ -22,14 +22,8 @@
 
   function selectConversation(peerId: string) {
     selectedPeerId = peerId;
-    // TODO: Load actual messages for this peer
-    messages = [
-      { from: "them", text: "Hey, how is it going?" },
-      { from: "me", text: "Pretty good, working on the new messaging feature." },
-      { from: "them", text: "Nice! How is it coming along?" },
-      { from: "me", text: "Almost there. Just need to wire up the UI." },
-      { from: "them", text: "See you tomorrow!" },
-    ];
+    // TODO: Load actual messages for this peer - for now using empty array
+    messages = [];
     newMessage = "";
     scrollToBottom();
   }
@@ -78,8 +72,8 @@
 <div class="flex flex-col h-full">
   <!-- Header -->
   <div class="mb-6">
-    <h1 class="text-3xl font-bold">{$t('messages.title', { default: 'Messages' })}</h1>
-    <p class="text-muted-foreground mt-2">{$t('messages.subtitle', { default: 'Communicate securely with your peers.' })}</p>
+    <h1 class="text-3xl font-bold">{$t('messages.title')}</h1>
+    <p class="text-muted-foreground mt-2">{$t('messages.subtitle')}</p>
   </div>
 
   <!-- Main Content Area -->
@@ -89,16 +83,16 @@
       <div class="p-4 border-b bg-card flex justify-between items-center">
         <h2 class="text-lg font-semibold flex items-center gap-2">
           <Mail class="h-5 w-5 text-muted-foreground" />
-          {$t('messages.conversations', { default: 'Contacts' })}
+          {$t('messages.conversations')}
         </h2>
-        <Button variant="ghost" size="icon" on:click={fetchPeers} disabled={isLoadingPeers} aria-label="Refresh peer list">
+        <Button variant="ghost" size="icon" on:click={fetchPeers} disabled={isLoadingPeers} aria-label={$t('messages.refreshPeerList')}>
           <RefreshCw class="h-4 w-4 {isLoadingPeers ? 'animate-spin' : ''}" />
         </Button>
       </div>
       <div class="p-4 border-b">
         <div class="relative">
           <Search class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input placeholder={$t('messages.searchPlaceholder', { default: 'Search contacts...' })} class="pl-9" />
+          <Input placeholder={$t('messages.searchPlaceholder')} class="pl-9" />
         </div>
       </div>
       <div class="overflow-y-auto flex-1">
@@ -118,7 +112,7 @@
             <div class="flex-1 min-w-0">
               <div class="flex justify-between items-center mb-1">
                 <p class="font-semibold truncate" title={conv.peerId}>
-                  Peer <span class="font-mono text-sm">{conv.peerId.slice(0, 8)}...{conv.peerId.slice(-4)}</span>
+                  {$t('messages.peer')} <span class="font-mono text-sm">{conv.peerId.slice(0, 8)}...{conv.peerId.slice(-4)}</span>
                 </p>
                 <p class="text-xs text-muted-foreground flex-shrink-0 ml-2">{formatDistanceToNow(new Date(conv.lastSeen * 1000), { addSuffix: true })}</p>
               </div>
@@ -143,9 +137,9 @@
           </div>
           <div>
             <p class="font-semibold" title={selectedPeerId}>
-              Peer <span class="font-mono text-sm">{selectedPeerId.slice(0, 12)}...{selectedPeerId.slice(-6)}</span>
+              {$t('messages.peer')} <span class="font-mono text-sm">{selectedPeerId.slice(0, 12)}...{selectedPeerId.slice(-6)}</span>
             </p>
-            <p class="text-xs text-muted-foreground">End-to-end encrypted</p>
+            <p class="text-xs text-muted-foreground">{$t('messages.endToEndEncrypted')}</p>
           </div>
         </div>
 
@@ -163,11 +157,11 @@
         <!-- Input Area -->
         <div class="p-4 border-t bg-card">
           <form on:submit|preventDefault={sendMessage} class="flex items-center gap-3">
-            <Input 
-              bind:value={newMessage} 
-              placeholder={$t('messages.inputPlaceholder', { default: 'Type an encrypted message...' })} 
-              class="flex-1" 
-              autocomplete="off" 
+            <Input
+              bind:value={newMessage}
+              placeholder={$t('messages.inputPlaceholder')}
+              class="flex-1"
+              autocomplete="off"
             />
             <Button type="submit" disabled={!newMessage.trim()} class="flex-shrink-0">
               <Send class="h-4 w-4" />
@@ -177,7 +171,7 @@
       {:else}
         <div class="flex-1 flex flex-col items-center justify-center text-muted-foreground p-6">
           <Mail class="h-16 w-16 mb-4 opacity-50" />
-          <p class="text-lg">{$t('messages.selectConversation', { default: 'Select a conversation to start messaging' })}</p>
+          <p class="text-lg">{$t('messages.selectConversation')}</p>
         </div>
       {/if}
     </div>

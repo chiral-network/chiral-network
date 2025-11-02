@@ -363,11 +363,12 @@ impl ReputationDhtService {
             price: None,
             uploader_address: None,
             ftp_sources: None,
+            http_sources: None,
             info_hash: None,
             trackers: None,
         };
 
-        dht_service.publish_file(metadata).await
+        dht_service.publish_file(metadata, None).await
     }
 
     pub async fn retrieve_reputation_events(
@@ -419,11 +420,12 @@ impl ReputationDhtService {
             price: None,
             uploader_address: None,
             ftp_sources: None,
+            http_sources: None,
             info_hash: None,
             trackers: None,
         };
 
-        dht_service.publish_file(metadata).await
+        dht_service.publish_file(metadata, None).await
     }
 }
 

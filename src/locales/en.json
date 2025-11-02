@@ -360,7 +360,8 @@
       "resume": "Resume",
       "remove": "Remove",
       "cancel": "Cancel",
-      "showInFolder": "Show in Folder"
+      "showInFolder": "Show in Folder",
+      "retry": "Retry"
     },
     "notifications": {
       "enterHash": "Please enter a file hash to start downloading.",
@@ -416,7 +417,10 @@
       "retrying": "Retrying download for {hash} (attempt {attempt} of {max})",
       "recovered": "Recovered download for {hash} after {retries} retries ({duration} ms)",
       "failed": "Download failed for {hash} after {attempts} attempts"
-    }
+    },
+    "selectProtocol": "Select Protocol",
+    "currentProtocol": "Current Protocol",
+    "changeProtocol": "Change Protocol"
   },
   "regions.usEast": "US East",
   "regions.usWest": "US West",
@@ -798,6 +802,10 @@
     "status": "Proxy Status",
     "active": "Active",
     "inactive": "Inactive",
+    "protected": "Protected",
+    "vulnerable": "Vulnerable",
+    "secured": "Secured",
+    "disabled": "Disabled",
     "activeNodes": "Active Nodes",
     "totalBandwidth": "Total Bandwidth",
     "settings": "Proxy Settings",
@@ -811,9 +819,85 @@
     "latency": "Latency",
     "disconnect": "Disconnect",
     "connect": "Connect",
+    "connecting": "Connecting...",
+    "retry": "Retry",
     "remove": "Remove",
     "alreadyAdded": "This proxy address is already added!",
-    "autoReconnect": "Auto-reconnect"
+    "autoReconnect": "Auto-reconnect",
+    "validation": {
+      "emptyAddress": "Address cannot be empty",
+      "noSpaces": "Address cannot contain spaces",
+      "invalidEnode": "Invalid enode format (enode://[128-char-hex]@ip:port)",
+      "missingPort": "Address must include port (e.g., example.com:8080)",
+      "invalidHostname": "Invalid hostname",
+      "invalidPort": "Port must be between 1-65535",
+      "systemPort": "Avoid system ports (use 1024+)",
+      "invalidFormat": "Invalid IP address or domain format"
+    },
+    "errors": {
+      "connectionTimeout": "Connection timeout",
+      "optimizationUnavailable": "❌ Optimization status unavailable",
+      "tauriUnavailable": "❌ Tauri API not available. Please run this test in the desktop application, not the browser."
+    },
+    "dialog": {
+      "confirmRemoval": "Confirm Removal",
+      "confirmMessage": "Confirm the removal of proxy node",
+      "cancel": "Cancel",
+      "remove": "Remove"
+    },
+    "privacy": {
+      "title": "Privacy Settings",
+      "anonymousMode": "Anonymous Mode",
+      "anonymousModeDesc": "Route through anonymous proxies",
+      "multiHop": "Multi-Hop Routing",
+      "multiHopDesc": "Route through multiple proxy nodes",
+      "currentMode": "Current Privacy Mode:",
+      "maxPrivacy": "Maximum Privacy (Anonymous + Multi-Hop)",
+      "anonymousOnly": "Anonymous Mode",
+      "multiHopOnly": "Multi-Hop Routing",
+      "standardMode": "Standard Mode"
+    },
+    "stats": {
+      "title": "Proxy Routing Stats",
+      "availableProxies": "Available Proxies",
+      "totalRoutes": "Total Routes",
+      "privacyProfile": "Privacy Profile",
+      "anon": "Anon",
+      "standard": "Standard",
+      "multi": "Multi",
+      "plusMulti": "+ Multi-Hop"
+    },
+    "nodeInfo": {
+      "address": "Proxy Node Address",
+      "peerId": "DHT Peer ID",
+      "reliability": "Reliability",
+      "success": "Success",
+      "attempts": "attempts",
+      "mbps": "Mbps",
+      "ms": "ms",
+      "placeholder": "example.com:8080 or enode://..."
+    },
+    "optimization": {
+      "title": "Proxy Latency Optimization",
+      "currentStatus": "Current Status",
+      "refreshStatus": "Refresh Status",
+      "proveOptimization": "Prove Optimization Works",
+      "runningTests": "Running Proof Tests...",
+      "testResults": "Test Results"
+    },
+    "statusFilter": {
+      "all": "All",
+      "online": "Online",
+      "offline": "Offline",
+      "connecting": "Connecting",
+      "error": "Error"
+    },
+    "sortOptions": {
+      "status": "Sort by status",
+      "latency": "Sort by latency",
+      "bandwidth": "Sort by bandwidth",
+      "smart": "Sort by smart (quality)"
+    }
   },
   "mining": {
     "title": "Mining",
@@ -946,6 +1030,8 @@
     "refreshData": "Refresh Data",
     "hideAnalytics": "Hide Analytics",
     "showAnalytics": "Show Analytics",
+    "hideRelayLeaderboard": "Hide Relay Leaderboard",
+    "showRelayLeaderboard": "Show Relay Leaderboard",
     "loading": "Loading reputation data...",
     "viewPeers": "Peer Reputation",
     "viewRelays": "Relay Leaderboard",
@@ -1011,6 +1097,34 @@
       "StorageOffered": "Storage Offered",
       "MaliciousBehaviorReport": "Malicious Behavior Report",
       "FileShared": "File Shared"
+    },
+    "myRelay": {
+      "title": "Your Relay Reputation",
+      "subtitle": "Your node is running as a relay server",
+      "rankOf": "Rank of {total}",
+      "reputationScore": "Reputation Score",
+      "successfulCircuits": "Successful Circuits",
+      "reservations": "Reservations"
+    },
+    "pagination": {
+      "showing": "Showing {start}-{end} of {total} peers",
+      "previous": "Previous",
+      "next": "Next"
+    },
+    "card": {
+      "daysAgo": "{days}d ago",
+      "hoursAgo": "{hours}h ago",
+      "minutesAgo": "{minutes}m ago",
+      "justNow": "Just now",
+      "reputationScore": "Reputation Score",
+      "transfers": "Transfers",
+      "interactions": "Interactions",
+      "latency": "Latency",
+      "bandwidth": "Bandwidth",
+      "uptime": "Uptime",
+      "encryption": "Encryption",
+      "supported": "Supported",
+      "notSupported": "Not Supported"
     }
   },
   "relay": {
@@ -1026,20 +1140,89 @@
       "benefit2": "Improve network connectivity and decentralization",
       "benefit3": "Uses bandwidth when actively relaying circuits",
       "enable": "Enable Relay Server",
+      "disable": "Disable Relay Server",
       "start": "Start Server",
       "stop": "Stop Server",
       "starting": "Starting...",
+      "enabling": "Enabling...",
+      "disabling": "Disabling...",
       "activeMessage": "Your relay server is active and helping peers!",
-      "earningReputation": "You're earning reputation for each successful connection."
+      "earningReputation": "You're earning reputation for each successful connection.",
+      "aliasLabel": "Relay Server Alias (Public Name)",
+      "aliasPlaceholder": "e.g., Alice's Fast Relay 🚀",
+      "aliasHint": "This friendly name will appear in logs and when other nodes bootstrap through your relay",
+      "dhtNotRunning": "DHT Network Not Running",
+      "dhtNotRunningHint": "Please start the network from the Network page first.",
+      "broadcastingAs": "Broadcasting as:"
     },
     "client": {
       "title": "AutoRelay Client",
       "subtitle": "Connect through relay nodes when needed",
       "enableAutorelay": "Enable Circuit Relay v2 (AutoRelay)",
       "preferredRelays": "Preferred Relay Nodes (optional)",
+      "preferredRelaysPlaceholder": "/ip4/relay.example.com/tcp/4001/p2p/QmRelayId\nOne multiaddr per line",
       "preferredRelaysHint": "Leave empty to use bootstrap nodes as relays",
       "howItWorks": "How it works:",
       "description": "AutoRelay automatically connects through relay nodes when you're behind a NAT or firewall, ensuring you can always participate in the network."
+    },
+    "monitoring": {
+      "title": "Relay Health & Monitoring"
+    },
+    "errors": {
+      "dhtNotRunning": "DHT is not running. Please start the network first from the Network page.",
+      "toggleFailed": "Failed to toggle relay server: {error}"
+    },
+    "monitor": {
+      "statsTitle": "Relay Pool Statistics",
+      "totalRelays": "Total Relays",
+      "connected": "Connected",
+      "healthy": "Healthy",
+      "totalErrors": "Total Errors",
+      "avgHealthScore": "Average Health Score",
+      "activeRelayTitle": "Active Relay",
+      "connectedBadge": "Connected",
+      "peerId": "Peer ID:",
+      "healthScore": "Health Score:",
+      "avgLatency": "Avg Latency:",
+      "reservation": "Reservation:",
+      "successRate": "Success Rate:",
+      "relayPoolTitle": "Relay Pool",
+      "noRelaysInPool": "No relays in pool",
+      "primaryBadge": "Primary",
+      "state": "State:",
+      "latency": "Latency:",
+      "attempts": "Attempts:",
+      "successes": "Successes:",
+      "failures": "Failures:",
+      "lastSuccess": "Last success:",
+      "recentErrorsLabel": "Recent Errors:",
+      "recentErrorsTitle": "Recent Errors",
+      "clearButton": "Clear",
+      "relayLabel": "Relay:",
+      "retryLabel": "Retry:",
+      "errorTypes": {
+        "connectionRefused": "Connection Refused",
+        "timeout": "Timeout",
+        "reservationFailed": "Reservation Failed",
+        "expired": "Expired",
+        "overloaded": "Overloaded",
+        "unreachable": "Unreachable",
+        "networkError": "Network Error",
+        "authFailed": "Auth Failed",
+        "protocolError": "Protocol Error",
+        "unknown": "Unknown"
+      },
+      "time": {
+        "never": "Never",
+        "justNow": "Just now",
+        "minutesAgo": "{minutes}m ago",
+        "hoursAgo": "{hours}h ago",
+        "na": "N/A",
+        "expired": "Expired",
+        "seconds": "{seconds}s",
+        "minutes": "{minutes}m",
+        "hours": "{hours}h"
+      }
     },
     "leaderboard": {
       "title": "Top Relay Servers",
@@ -1112,8 +1295,100 @@
     },
     "currentProtocol": "Current Protocol",
     "changeProtocol": "Change Protocol",
+    "selectProtocol": "Select Protocol",
     "webrtcDescription": "Fast peer-to-peer transfers using WebRTC",
-    "bitswapDescription": "IPFS-compatible block exchange protocol"
+    "bitswapDescription": "IPFS-compatible block exchange protocol",
+    "requireAccount": "Please create or import an account to upload files",
+    "uploadInProgress": "Upload already in progress. Please wait for the current upload to complete.",
+    "desktopOnly": "File upload is only available in the desktop app",
+    "executableBlocked": "{name}: Executable files are not allowed for security reasons",
+    "emptyFile": "{name}: File is empty",
+    "publishedToDHT": "Files published to DHT network for sharing!",
+    "storedLocally": "Files stored locally. Start DHT network to share with others.",
+    "uploadError": "Error processing dropped files. Please try again or use the \"Add Files\" button instead.",
+    "fileManagementDesktopOnly": "File management is only available in the desktop app",
+    "fileUpdated": "{name} already exists; updated to v{version}",
+    "fileUploadedNew": "{name} uploaded as v{version} (new file)",
+    "hashCopiedClipboard": "File hash copied to clipboard!",
+    "noVersionHistory": "No version history found for this file",
+    "versionHistoryTitle": "Version history for {name}:\n{list}",
+    "versionHistoryError": "Failed to load version history",
+    "desktopAppRequired": "Desktop App Required",
+    "storageMonitoringDesktopOnly": "Storage monitoring requires the desktop application",
+    "dropFilesHere": "✨ Drop files here!",
+    "uploadingFiles": "🔄 Uploading files...",
+    "releaseToUpload": "Release to upload your files instantly",
+    "dragDropWebNotAvailable": "Drag and drop not available in web version",
+    "pleaseWaitProcessing": "Please wait while your files are being processed...",
+    "dragDropRequiresDesktop": "Drag and drop requires desktop app",
+    "uploading": "Uploading...",
+    "fileUploadDesktopApp": "File upload requires the desktop app",
+    "downloadDesktopApp": "Download the desktop version to upload and share files",
+    "desktopManagementRequired": "Desktop app required for file management",
+    "versionHistoryTooltip": "v{version} - Click to view version history",
+    "encryptedEndToEnd": "This file is encrypted end-to-end",
+    "active": "Active",
+    "hashLabel": "Hash:",
+    "priceTooltip": "Price calculated dynamically based on network hash power",
+    "storedLocallyBadge": "Stored Locally",
+    "fileManagementTooltip": "File management requires desktop app",
+    "fileManagementWebNotAvailable": "File management not available in web version",
+    "fileDialogError": "Failed to open file dialog"
+  },
+  "messages": {
+    "title": "Messages",
+    "subtitle": "Communicate securely with your peers.",
+    "conversations": "Contacts",
+    "searchPlaceholder": "Search contacts...",
+    "inputPlaceholder": "Type an encrypted message...",
+    "selectConversation": "Select a conversation to start messaging",
+    "peer": "Peer",
+    "endToEndEncrypted": "End-to-end encrypted",
+    "refreshPeerList": "Refresh peer list"
+  },
+  "torrent": {
+    "title": "Torrents",
+    "magnetLink": {
+      "title": "From Magnet Link",
+      "description": "Paste a magnet link to start downloading.",
+      "placeholder": "magnet:?xt=urn:btih:...",
+      "download": "Download"
+    },
+    "or": "Or",
+    "torrentFile": {
+      "title": "From .torrent File",
+      "description": "Upload a .torrent file from your computer.",
+      "choosePlaceholder": "Choose a .torrent file...",
+      "download": "Download",
+      "invalidFile": "Please select a valid .torrent file."
+    },
+    "seed": {
+      "title": "Create & Seed Torrent",
+      "description": "Select a local file to share with the network.",
+      "choosePlaceholder": "Choose a file to seed...",
+      "button": "Seed File",
+      "shareMagnet": "Share this magnet link:",
+      "noFileSelected": "Please select a file to seed.",
+      "success": "Successfully started seeding {fileName}!",
+      "error": "Error seeding file: {error}"
+    },
+    "activeTransfers": {
+      "title": "Active Transfers",
+      "filterAll": "All",
+      "filterChiral": "Chiral",
+      "filterBitTorrent": "BitTorrent",
+      "noTransfers": "No active transfers.",
+      "peers": "Peers:",
+      "eta": "ETA:"
+    },
+    "download": {
+      "error": "Error: {error}",
+      "noIdentifier": "Please provide a magnet link or select a .torrent file.",
+      "complete": "Download complete: {fileName}"
+    },
+    "clipboard": {
+      "copied": "Copied to clipboard!"
+    }
   },
   "bandwidthScheduling": {
     "title": "Bandwidth Scheduling",

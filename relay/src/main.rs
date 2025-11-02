@@ -23,7 +23,7 @@ use anyhow::Result;
 use clap::Parser;
 use futures::StreamExt;
 use libp2p::{
-    autonat, identify, identity,
+    autonat::v2 as autonat, identify, identity,
     multiaddr::Protocol,
     noise, ping, relay,
     swarm::{NetworkBehaviour, SwarmEvent},
@@ -96,8 +96,8 @@ impl From<ping::Event> for RelayBehaviourEvent {
 impl From<identify::Event> for RelayBehaviourEvent {
     fn from(e: identify::Event) -> Self { RelayBehaviourEvent::Identify(e) }
 }
-impl From<autonat::Event> for RelayBehaviourEvent {
-    fn from(_e: autonat::Event) -> Self { RelayBehaviourEvent::Autonat(()) }
+impl From<autonat::server::Event> for RelayBehaviourEvent {
+    fn from(_e: autonat::server::Event) -> Self { RelayBehaviourEvent::Autonat(()) }
 }
 impl From<RequestResponseEvent<RelayAuthRequest, RelayAuthResponse>> for RelayBehaviourEvent {
     fn from(e: RequestResponseEvent<RelayAuthRequest, RelayAuthResponse>) -> Self {
@@ -111,7 +111,7 @@ struct RelayBehaviour {
     relay: relay::Behaviour,
     ping: ping::Behaviour,
     identify: identify::Behaviour,
-    autonat: autonat::Behaviour,
+    autonat: autonat::server::Behaviour,
     relay_auth: RequestResponse<RelayAuthCodec>,
 }
 
@@ -194,15 +194,17 @@ async fn main() -> Result<()> {
     relay_config.max_circuits_per_peer = args.max_circuits;
     relay_config.max_circuit_duration = Duration::from_secs(3600); // 1 hour
 
-    let authed_peers_for_limiter = authed_peers.clone();
-    relay_config.reservation_rate_limiters.push(Box::new(
-        move |peer_id: PeerId, _addr: &Multiaddr, _now: web_time::Instant| {
-            match authed_peers_for_limiter.lock() {
-                Ok(peers) => peers.contains(&peer_id),
-                Err(_) => false,
-            }
-        },
-    ));
+    // Authentication rate limiter removed for testing
+    // In production, uncomment this and implement proper authentication:
+    // let authed_peers_for_limiter = authed_peers.clone();
+    // relay_config.reservation_rate_limiters.push(Box::new(
+    //     move |peer_id: PeerId, _addr: &Multiaddr, _now: web_time::Instant| {
+    //         match authed_peers_for_limiter.lock() {
+    //             Ok(peers) => peers.contains(&peer_id),
+    //             Err(_) => false,
+    //         }
+    //     },
+    // ));
 
     let behaviour = RelayBehaviour {
         relay: relay::Behaviour::new(local_peer_id, relay_config),
@@ -211,7 +213,10 @@ async fn main() -> Result<()> {
             "/chiral/relay/1.0.0".to_string(),
             local_key.public(),
         )),
-        autonat: autonat::Behaviour::new(local_peer_id, autonat::Config::default()),
+        autonat: {
+            use rand::rngs::OsRng;
+            autonat::server::Behaviour::new(OsRng)
+        },
         relay_auth,
     };
 
