@@ -360,6 +360,55 @@ fn generate_proof(challenge: Challenge) -> Proof {
     }
 }
 ```
+
+### 6. Multi-Network Integration: Chiral and BitTorrent
+
+To enhance file availability and download speed, the Chiral client integrates with the public BitTorrent network. This creates a hybrid system where the client can fetch file pieces from both the private, reputation-based Chiral P2P network and the massive, public BitTorrent swarm simultaneously.
+
+#### Dual-Network Orchestration
+
+The system does **not** merge the two networks. Instead, the `ProtocolManager` acts as an orchestrator, managing two parallel network handlers:
+
+1.  **Chiral P2P Handler**: Interacts with the libp2p-based Kademlia DHT to find and communicate with other Chiral peers.
+2.  **BitTorrent Handler**: Interacts with the public BitTorrent DHT (Mainline DHT) and public trackers to find and communicate with standard BitTorrent clients.
+
+This allows the Chiral client to source file pieces from a high-reputation Chiral peer and a public torrent swarm at the same time, with the `multi_source_download` engine assembling the final file from all incoming pieces.
+
+#### DHT Modifications for Torrent Discovery
+
+To enable Chiral peers to discover torrent-based sources from each other, the Chiral DHT protocol is extended:
+
+1.  **Extended DHT Record**: The metadata record stored in the Chiral DHT is modified to include an optional `info_hash` field. This allows a Chiral peer to associate a file's Content ID (CID) with a corresponding BitTorrent info hash.
+
+    ```protobuf
+    // Extended FileMetadata in Chiral DHT
+    message FileMetadata {
+      string file_hash = 1;      // SHA-256 hash (CID)
+      // ... other fields
+      optional string info_hash = 8; // BitTorrent info hash (SHA-1)
+    }
+    ```
+
+2.  **Dual Lookup Logic**: The DHT interface is expanded with new lookup functions:
+    *   `search_by_cid(cid: String)`: The standard lookup that resolves a file's CID to a list of Chiral peers.
+    *   `search_by_infohash(info_hash: String)`: A new function that allows finding Chiral peers who have registered a specific torrent info hash.
+
+3.  **Torrent Announcement**: A new DHT operation is added to allow a peer to advertise that it can serve a file via BitTorrent.
+
+    ```rust
+    // Pseudocode for announcing a torrent source
+    fn announce_torrent(cid: String, info_hash: String) {
+        // 1. Retrieve the existing metadata record for the CID.
+        let mut metadata = dht.get(cid);
+        // 2. Add or update the info_hash.
+        metadata.info_hash = Some(info_hash);
+        // 3. Store the updated record back into the DHT.
+        dht.put(cid, metadata);
+    }
+    ```
+
+These extensions enable a Chiral client to first discover a file via its CID, and then, from the returned metadata, discover that the file is *also* available on the public BitTorrent network via its info hash. This bridges the two networks, enabling the powerful multi-source downloading feature.
+
 ## Network Protocols
 
 ### 1. libp2p Integration
