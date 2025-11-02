@@ -90,7 +90,7 @@ Chiral Network supports downloading from multiple peers simultaneously:
   - Prevent rare pieces from missing: Since we prioritize the rarest pieces first, we ensure that rate pieces don’t go missing from the network even when the seeder leaves
 
 How to compute the rarest piece? There are two ways (borrowed from BitTorrent Protocols)
-  - **Have** messages: a peer in the network broadcasts which pieces of the file it is
+  - **Have** messages: a peer in the network broadcasts which pieces of the file it has
     - When a peer downloads a piece completely and becomes a seeder, it sends a “have” message to all of its peers. This way, every other peer internally keeps a record of which peer keeps what piece
 - **Bitfield** messages: during the initial handshake, a peer sends a Bitfield message that contains the pieces that it holds
   - When 2 peers handshake, we send another message right after called the Bitfield message. This is basically an array of bits with 0s or 1s where 1 represents the pieces that it has and 0 representing the pieces that it doesn’t have. After exchanging the bitfield messages, the peer computes the rarest piece and prioritizes downloading of that piece first. 
