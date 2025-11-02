@@ -1,6 +1,11 @@
 import { get } from 'svelte/store';
-import { settings } from '$lib/stores';
-import type { BandwidthScheduleEntry } from '$lib/stores';
+import { settings, activeBandwidthLimits } from '$lib/stores';
+import type { BandwidthScheduleEntry, ActiveBandwidthLimits } from '$lib/stores';
+
+type ScheduleMatch = {
+  schedule: BandwidthScheduleEntry;
+  day: number;
+};
 
 /**
  * Bandwidth Scheduler Service
@@ -15,6 +20,7 @@ export class BandwidthSchedulerService {
   
   private currentUploadLimit: number = 0;
   private currentDownloadLimit: number = 0;
+  private currentScheduleId: string | null = null;
 
   private constructor() {}
 
@@ -53,6 +59,12 @@ export class BandwidthSchedulerService {
       this.checkInterval = null;
       console.log('Bandwidth scheduler stopped');
     }
+
+    const currentSettings = get(settings);
+    this.applyLimits(currentSettings.uploadBandwidth, currentSettings.downloadBandwidth, {
+      source: "default",
+      nextChangeAt: null,
+    });
   }
 
   /**
@@ -61,38 +73,42 @@ export class BandwidthSchedulerService {
   private checkAndApplySchedule() {
     const currentSettings = get(settings);
 
-    // If bandwidth scheduling is disabled, use the default limits
-    if (!currentSettings.enableBandwidthScheduling) {
-      this.currentUploadLimit = currentSettings.uploadBandwidth;
-      this.currentDownloadLimit = currentSettings.downloadBandwidth;
-      return;
-    }
-
     const now = new Date();
     const currentTime = this.formatTime(now);
     const currentDay = now.getDay(); // 0-6, where 0 = Sunday
+    const enabledSchedules = currentSettings.bandwidthSchedules?.filter(
+      (entry) => entry.enabled
+    ) ?? [];
 
-    // Find active schedule
-    const activeSchedule = this.findActiveSchedule(
-      currentSettings.bandwidthSchedules,
-      currentTime,
-      currentDay
+    const activeMatch = currentSettings.enableBandwidthScheduling
+      ? this.findActiveSchedule(enabledSchedules, currentTime, currentDay)
+      : null;
+
+    const nextChangeAt = this.computeNextChangeTimestamp(
+      now,
+      enabledSchedules,
+      activeMatch
     );
 
-    if (activeSchedule) {
-      // Apply schedule limits
-      this.currentUploadLimit = activeSchedule.uploadLimit;
-      this.currentDownloadLimit = activeSchedule.downloadLimit;
-      
-      console.log(`Applied bandwidth schedule "${activeSchedule.name}":`, {
-        upload: activeSchedule.uploadLimit === 0 ? 'unlimited' : `${activeSchedule.uploadLimit} KB/s`,
-        download: activeSchedule.downloadLimit === 0 ? 'unlimited' : `${activeSchedule.downloadLimit} KB/s`,
-      });
-    } else {
-      // No active schedule, use default settings
-      this.currentUploadLimit = currentSettings.uploadBandwidth;
-      this.currentDownloadLimit = currentSettings.downloadBandwidth;
+    // Find active schedule
+    if (activeMatch) {
+      this.applyLimits(
+        activeMatch.schedule.uploadLimit,
+        activeMatch.schedule.downloadLimit,
+        {
+          source: "schedule",
+          schedule: activeMatch.schedule,
+          nextChangeAt,
+        }
+      );
+      return;
     }
+
+    // No active schedule or scheduling disabled: fall back to defaults.
+    this.applyLimits(currentSettings.uploadBandwidth, currentSettings.downloadBandwidth, {
+      source: "default",
+      nextChangeAt,
+    });
   }
 
   /**
@@ -102,18 +118,17 @@ export class BandwidthSchedulerService {
     schedules: BandwidthScheduleEntry[],
     currentTime: string,
     currentDay: number
-  ): BandwidthScheduleEntry | null {
+  ): ScheduleMatch | null {
     // Filter to only enabled schedules for today
     const applicableSchedules = schedules.filter(
       (schedule) =>
-        schedule.enabled &&
         schedule.daysOfWeek.includes(currentDay)
     );
 
     // Find schedules where current time falls within the range
     for (const schedule of applicableSchedules) {
       if (this.isTimeInRange(currentTime, schedule.startTime, schedule.endTime)) {
-        return schedule;
+        return { schedule, day: currentDay };
       }
     }
 
@@ -188,6 +203,181 @@ export class BandwidthSchedulerService {
    */
   forceUpdate() {
     this.checkAndApplySchedule();
+  }
+
+  private applyLimits(
+    uploadLimit: number,
+    downloadLimit: number,
+    meta: {
+      source: ActiveBandwidthLimits["source"];
+      schedule?: BandwidthScheduleEntry;
+      nextChangeAt?: number | null;
+    }
+  ) {
+    this.currentUploadLimit = uploadLimit;
+    this.currentDownloadLimit = downloadLimit;
+    this.currentScheduleId = meta.schedule?.id ?? null;
+
+    const limits: ActiveBandwidthLimits = {
+      uploadLimitKbps: uploadLimit,
+      downloadLimitKbps: downloadLimit,
+      source: meta.source,
+      scheduleId: meta.schedule?.id ?? undefined,
+      scheduleName: meta.schedule?.name ?? undefined,
+      nextChangeAt: meta.nextChangeAt ?? undefined,
+    };
+
+    activeBandwidthLimits.set(limits);
+
+    if (meta.schedule) {
+      console.log(`Applied bandwidth schedule "${meta.schedule.name}":`, {
+        upload: uploadLimit === 0 ? "unlimited" : `${uploadLimit} KB/s`,
+        download: downloadLimit === 0 ? "unlimited" : `${downloadLimit} KB/s`,
+        nextChangeAt: meta.nextChangeAt,
+      });
+    }
+  }
+
+  private computeNextChangeTimestamp(
+    now: Date,
+    schedules: BandwidthScheduleEntry[],
+    activeMatch: ScheduleMatch | null
+  ): number | null {
+    let candidate: number | null = null;
+
+    if (activeMatch) {
+      const endTs = this.getActiveOccurrenceEndTimestamp(
+        activeMatch.schedule,
+        now,
+        activeMatch.day
+      );
+      if (endTs !== null && endTs > now.getTime()) {
+        candidate = endTs;
+      }
+    }
+
+    for (const schedule of schedules) {
+      for (const day of schedule.daysOfWeek) {
+        const startTs = this.getNextOccurrenceTimestamp(
+          schedule.startTime,
+          day,
+          now
+        );
+        if (startTs !== null && startTs > now.getTime()) {
+          if (candidate === null || startTs < candidate) {
+            candidate = startTs;
+          }
+        }
+      }
+    }
+
+    return candidate;
+  }
+
+  private getNextOccurrenceTimestamp(
+    time: string,
+    day: number,
+    reference: Date
+  ): number | null {
+    if (time.trim().length === 0) {
+      return null;
+    }
+
+    const [hours, minutes] = time.split(":").map(Number);
+    const occurrence = new Date(reference);
+    const diff = (day - reference.getDay() + 7) % 7;
+    occurrence.setDate(occurrence.getDate() + diff);
+    occurrence.setHours(hours, minutes, 0, 0);
+
+    if (occurrence <= reference) {
+      occurrence.setDate(occurrence.getDate() + 7);
+    }
+
+    return occurrence.getTime();
+  }
+
+  private getActiveOccurrenceEndTimestamp(
+    schedule: BandwidthScheduleEntry,
+    reference: Date,
+    activeDay: number
+  ): number | null {
+    const durationMinutes = this.getScheduleDurationMinutes(schedule);
+    if (durationMinutes <= 0) {
+      return null;
+    }
+
+    const startTs = this.getMostRecentOccurrenceTimestamp(
+      schedule.startTime,
+      schedule.daysOfWeek,
+      reference,
+      activeDay
+    );
+
+    if (startTs === null) {
+      return null;
+    }
+
+    return startTs + durationMinutes * 60 * 1000;
+  }
+
+  private getMostRecentOccurrenceTimestamp(
+    time: string,
+    days: number[],
+    reference: Date,
+    preferredDay: number
+  ): number | null {
+    if (time.trim().length === 0 || days.length === 0) {
+      return null;
+    }
+
+    const [hours, minutes] = time.split(":").map(Number);
+    let latest: number | null = null;
+
+    const orderedDays = [
+      preferredDay,
+      ...days.filter((day) => day !== preferredDay),
+    ];
+
+    for (const day of orderedDays) {
+      const occurrence = new Date(reference);
+      const diff = (reference.getDay() - day + 7) % 7;
+      occurrence.setDate(occurrence.getDate() - diff);
+      occurrence.setHours(hours, minutes, 0, 0);
+
+      if (occurrence > reference) {
+        occurrence.setDate(occurrence.getDate() - 7);
+      }
+
+      const timestamp = occurrence.getTime();
+      if (timestamp <= reference.getTime()) {
+        if (latest === null || timestamp > latest) {
+          latest = timestamp;
+        }
+      }
+    }
+
+    return latest;
+  }
+
+  private getScheduleDurationMinutes(schedule: BandwidthScheduleEntry): number {
+    const startMinutes = this.timeToMinutes(schedule.startTime);
+    const endMinutes = this.timeToMinutes(schedule.endTime);
+
+    if (isNaN(startMinutes) || isNaN(endMinutes)) {
+      return 0;
+    }
+
+    if (startMinutes === endMinutes) {
+      // Treat as full-day schedule
+      return 24 * 60;
+    }
+
+    if (startMinutes < endMinutes) {
+      return endMinutes - startMinutes;
+    }
+
+    // Crosses midnight
+    return 24 * 60 - startMinutes + endMinutes;
   }
 }
 
