@@ -1656,6 +1656,17 @@ async fn get_power_consumption() -> Option<f32> {
             }
         }
 
+        // Try Mac-specific methods if basic ones failed
+        #[cfg(target_os = "macos")]
+        {
+            if let Some((power, method)) = get_mac_power() {
+                if let Ok(mut working_method) = working_method_mutex.lock() {
+                    *working_method = Some(method);
+                }
+                return Some(smooth_power(power));
+            }
+        }
+
         // Final fallback: return None when power monitoring is unavailable
         // Only log the info message once to avoid spamming logs
         static POWER_WARNING_LOGGED: OnceLock<()> = OnceLock::new();
@@ -2079,6 +2090,175 @@ fn get_linux_power() -> Option<(f32, PowerMethod)> {
         }
     }
 
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn get_mac_power() -> Option<(f32, PowerMethod)> {
+    use std::time::Instant;
+    
+    // Static variables to track power readings over time
+    static mut LAST_CPU_USAGE: Option<(f32, Instant)> = None;
+    static mut LAST_POWER: f32 = 0.0;
+    
+    // Try to get power from SMC (System Management Controller)
+    // SMC provides direct hardware power readings on Mac systems
+    if let Some(power) = get_mac_power_from_smc() {
+        return Some((power, PowerMethod::Systemstat));
+    }
+    
+    // Fallback: Estimate power based on CPU usage
+    // This is less accurate but works when SMC access is unavailable
+    if let Some(power) = get_mac_power_from_cpu_usage() {
+        return Some((power, PowerMethod::Sysinfo));
+    }
+    
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn get_mac_power_from_smc() -> Option<f32> {
+    // Try to read power consumption from SMC
+    // The SMC provides real-time power metrics on Mac hardware
+    
+    // SMC key for CPU power: "PCPC" (Package CPU Power)
+    // SMC key for total power: "PSTR" (Power System Total)
+    
+    match smc::SMC::new() {
+        Ok(mut smc) => {
+            // Try different SMC keys for power readings
+            let power_keys = [
+                "PCPC", // Package CPU Power
+                "PSTR", // Power System Total  
+                "PC0C", // CPU Core 0 Power
+                "PCTR", // CPU Total Residency
+            ];
+            
+            for key in power_keys.iter() {
+                if let Ok(value) = smc.read_val(key) {
+                    // SMC power values are typically in watts (float)
+                    // Try to parse as float
+                    if let Ok(power) = value.parse::<f32>() {
+                        if power > 0.0 && power < 500.0 {
+                            return Some(power);
+                        }
+                    }
+                }
+            }
+            
+            // Alternative: Try reading CPU package power differently
+            // Some Macs report power in different formats
+            if let Ok(info) = smc.read_key_info("PCPC") {
+                // Try to extract power value from the key info
+                // SMC values might need conversion based on data type
+                match smc.read("PCPC") {
+                    Ok(data) => {
+                        // Try to interpret the raw data as power reading
+                        // SMC typically uses flt (float) type for power
+                        if data.len() >= 4 {
+                            // Convert bytes to float (big-endian)
+                            let mut bytes = [0u8; 4];
+                            bytes.copy_from_slice(&data[..4]);
+                            let power = f32::from_be_bytes(bytes);
+                            
+                            if power > 0.0 && power < 500.0 {
+                                return Some(power);
+                            }
+                        }
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+        Err(_) => {
+            // SMC not available or no permissions
+        }
+    }
+    
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn get_mac_power_from_cpu_usage() -> Option<f32> {
+    use std::process::Command;
+    
+    // Use system commands to estimate power consumption
+    // Method 1: Get CPU usage and estimate from TDP
+    
+    // Get CPU usage percentage
+    let cpu_usage_output = Command::new("sh")
+        .arg("-c")
+        .arg("ps -A -o %cpu | awk '{s+=$1} END {print s}'")
+        .output();
+    
+    if let Ok(output) = cpu_usage_output {
+        if output.status.success() {
+            if let Ok(usage_str) = String::from_utf8(output.stdout) {
+                if let Ok(cpu_usage) = usage_str.trim().parse::<f32>() {
+                    // Get system info to estimate TDP
+                    let sysctl_output = Command::new("sysctl")
+                        .arg("-n")
+                        .arg("machdep.cpu.brand_string")
+                        .output();
+                    
+                    let mut estimated_tdp = 15.0; // Default for MacBook
+                    
+                    if let Ok(sysctl_out) = sysctl_output {
+                        if let Ok(cpu_brand) = String::from_utf8(sysctl_out.stdout) {
+                            // Estimate TDP based on CPU model
+                            if cpu_brand.contains("M1") || cpu_brand.contains("M2") || cpu_brand.contains("M3") {
+                                // Apple Silicon - very efficient
+                                estimated_tdp = 20.0; // M-series chips are low power
+                            } else if cpu_brand.contains("Intel") {
+                                // Intel Mac
+                                if cpu_brand.contains("i9") {
+                                    estimated_tdp = 45.0;
+                                } else if cpu_brand.contains("i7") {
+                                    estimated_tdp = 28.0;
+                                } else if cpu_brand.contains("i5") {
+                                    estimated_tdp = 20.0;
+                                } else {
+                                    estimated_tdp = 15.0;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Get number of cores to adjust estimation
+                    let core_count_output = Command::new("sysctl")
+                        .arg("-n")
+                        .arg("hw.ncpu")
+                        .output();
+                    
+                    let mut num_cores = 4.0;
+                    if let Ok(core_out) = core_count_output {
+                        if let Ok(cores_str) = String::from_utf8(core_out.stdout) {
+                            if let Ok(cores) = cores_str.trim().parse::<f32>() {
+                                num_cores = cores;
+                            }
+                        }
+                    }
+                    
+                    // Calculate power consumption
+                    // cpu_usage is total across all cores, so normalize by core count
+                    let normalized_usage = cpu_usage / num_cores;
+                    let cpu_power = estimated_tdp * (normalized_usage / 100.0);
+                    
+                    // Add base system power (display, memory, etc.)
+                    let base_power = 5.0; // Base system power for Mac
+                    let total_power = cpu_power + base_power;
+                    
+                    // Ensure minimum power draw
+                    let final_power = total_power.max(estimated_tdp * 0.2); // At least 20% of TDP
+                    
+                    if final_power > 0.0 && final_power < 200.0 {
+                        return Some(final_power);
+                    }
+                }
+            }
+        }
+    }
+    
     None
 }
 

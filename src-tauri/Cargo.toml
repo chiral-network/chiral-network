@@ -67,6 +67,10 @@ rs_merkle = "1.5.0"
 tokio-util = { version = "0.7", features = ["compat"] }
 tokio-socks = "0.5"
 
+# Mac-specific dependencies for power monitoring
+[target.'cfg(target_os = "macos")'.dependencies]
+smc = "0.2.4"
+
 # FTP client for FTP download support (sync API)
 # Using 5.3 for compatibility with connect_secure_implicit() method
 suppaftp = { version = "5.3", features = ["native-tls", "secure", "deprecated"] }
