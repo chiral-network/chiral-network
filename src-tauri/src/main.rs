@@ -2135,38 +2135,31 @@ fn get_mac_power_from_smc() -> Option<f32> {
             ];
             
             for key in power_keys.iter() {
-                if let Ok(value) = smc.read_val(key) {
-                    // SMC power values are typically in watts (float)
-                    // Try to parse as float
-                    if let Ok(power) = value.parse::<f32>() {
+                // Use read_key method which returns raw bytes
+                if let Ok(data) = smc.read_key(key) {
+                    // SMC power values are typically 4-byte floats (big-endian)
+                    if data.len() >= 4 {
+                        // Convert bytes to float (big-endian)
+                        let mut bytes = [0u8; 4];
+                        bytes.copy_from_slice(&data[..4]);
+                        let power = f32::from_be_bytes(bytes);
+                        
+                        // Validate power range (0-500W is reasonable for Mac systems)
                         if power > 0.0 && power < 500.0 {
                             return Some(power);
                         }
                     }
-                }
-            }
-            
-            // Alternative: Try reading CPU package power differently
-            // Some Macs report power in different formats
-            if let Ok(info) = smc.read_key_info("PCPC") {
-                // Try to extract power value from the key info
-                // SMC values might need conversion based on data type
-                match smc.read("PCPC") {
-                    Ok(data) => {
-                        // Try to interpret the raw data as power reading
-                        // SMC typically uses flt (float) type for power
-                        if data.len() >= 4 {
-                            // Convert bytes to float (big-endian)
-                            let mut bytes = [0u8; 4];
-                            bytes.copy_from_slice(&data[..4]);
-                            let power = f32::from_be_bytes(bytes);
-                            
-                            if power > 0.0 && power < 500.0 {
-                                return Some(power);
-                            }
+                    
+                    // Try alternative interpretation as 2-byte integer (some SMC keys use sp78 format)
+                    // sp78 format: 1 sign bit, 7 integer bits, 8 fractional bits
+                    if data.len() >= 2 {
+                        let raw = u16::from_be_bytes([data[0], data[1]]);
+                        let power = (raw as f32) / 256.0; // Convert from sp78 format
+                        
+                        if power > 0.0 && power < 500.0 {
+                            return Some(power);
                         }
                     }
-                    Err(_) => {}
                 }
             }
         }
