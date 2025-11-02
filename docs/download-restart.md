@@ -156,14 +156,16 @@ HTTP, FTP, and any future byte-range-capable transports conform to this trait so
 - Emit `416 Range Not Satisfiable` when the requested range exceeds the file size. The client re-probes the total size via `HEAD` or `bytes=0-0`. If the persisted offset is larger than the reported size we discard the partial data, restart from zero, and notify the user.
 - Preserve a stable strong `ETag` for the lifetime of the file. Weak ETags (`W/`) signal that safe resume is impossible; the client restarts from zero. When only `Last-Modified` is present we allow resume but log the higher risk because coarse timestamps can miss mid-second mutations.
 - Serve plain `GET` responses for initial downloads; range support is mandatory only for resume operations.
+- Respond with `3xx` redirects only if future work explicitly enables mirrors; today we treat any redirect as an error, surface a warning, and restart from zero.
 
 ### 5.4 Seeder handshake and lease (DHT control plane)
 
 - The downloader sends a `HandshakeRequest` DHT message to the seeder with `{file_id, download_id, epoch, requester_peer_id}`.
-- The seeder validates that the file is still hosted, confirms a strong `ETag`, and answers with a signed `HandshakeAck` (`HandshakeAck{ file_id, download_id, etag, size, epoch, lease_exp, resume_token }`).
+- The seeder validates that the file is still hosted, confirms a strong `ETag`, and answers with a signed `HandshakeAck` (`HandshakeAck{ file_id, download_id, etag, size, epoch, lease_exp, lease_issued_at, resume_token }`).
 - `resume_token` is a JWS (Ed25519) containing: `sub=file_id`, `aud=seeder_peer_id`, `download_id`, `etag`, `epoch`, `iat`, `nbf`, `exp`, `scp:"resume"`, `kid`.
 - Default lease window: 4 hours (`exp - iat = 14,400 s`). Minimum 5 minutes, maximum 24 hours. Downloader renews when `exp - now <= max(60 s, 10% of lease)` with jitter.
 - Allowed clock skew between client and seeder `Date` header: ±5 minutes. Tokens outside this tolerance are rejected with `DownloadError::Invalid`.
+- `lease_issued_at` provides the canonical server clock; clients never rely on HTTP `Date` headers for timing.
 - Weak ETags are rejected; Last-Modified-only sources trigger a clean restart request instead of issuing a token.
 - Redirects/CDN mirrors are not supported; the token’s `aud` must match the seeder peer id that serves HTTP.
 - Renewal uses the same DHT channel. On success the seeder returns a fresh `resume_token` with a new `exp`.
