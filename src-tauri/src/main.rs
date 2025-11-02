@@ -2118,26 +2118,28 @@ fn get_mac_power() -> Option<(f32, PowerMethod)> {
 
 #[cfg(target_os = "macos")]
 fn get_mac_power_from_smc() -> Option<f32> {
-    use four_char_code::four_char_code;
-    
     // Try to read power consumption from SMC
     // The SMC provides real-time power metrics on Mac hardware
     
     match smc::SMC::new() {
         Ok(mut smc) => {
             // Try different SMC keys for power readings
-            // SMC key for CPU power: "PCPC" (Package CPU Power)
-            // SMC key for total power: "PSTR" (Power System Total)
-            let power_keys = [
-                four_char_code!("PCPC"), // Package CPU Power
-                four_char_code!("PSTR"), // Power System Total  
-                four_char_code!("PC0C"), // CPU Core 0 Power
-                four_char_code!("PCTR"), // CPU Total Residency
+            // We need to use the raw u32 values for the keys to avoid version conflicts
+            // SMC keys are 4-character codes converted to u32 (big-endian)
+            // "PCPC" = 0x50435043, "PSTR" = 0x50535452, etc.
+            let power_key_codes: &[u32] = &[
+                0x50435043, // "PCPC" - Package CPU Power
+                0x50535452, // "PSTR" - Power System Total  
+                0x50433043, // "PC0C" - CPU Core 0 Power
+                0x50435452, // "PCTR" - CPU Total Residency
             ];
             
-            for key in power_keys.iter() {
+            for key_code in power_key_codes {
+                // Convert u32 to FourCharCode - this uses the version from smc crate
+                let key = smc::FourCharCode(*key_code);
+                
                 // Use read_key method which returns raw bytes
-                if let Ok(data) = smc.read_key(*key) {
+                if let Ok(data) = smc.read_key(key) {
                     // SMC power values are typically 4-byte floats (big-endian)
                     if data.len() >= 4 {
                         // Convert bytes to float (big-endian)
