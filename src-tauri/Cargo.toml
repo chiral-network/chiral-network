@@ -80,12 +80,15 @@ webrtc = "0.10"
 tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
 tauri-plugin-fs = "2.4.2"
 ed25519-dalek = { version = "2.2.0", features = ["rand_core", "serde"] }
+x25519-dalek = { version = "2.0.0", features = ["static_secrets"] }
+curve25519-dalek = "4.1.1"
 memmap2 = "0.9"
 serde_bytes = "0.11.19"
 anyhow = "1.0.100"
 tokio-util = { version = "0.7", features = ["compat"] }
 bip_metainfo = "0.7.0"
 uuid = { version = "1.18.1", features = ["v4", "serde"] }
+url = "2.5.7"
 
 [dev-dependencies]
 tempfile = "3.8"
