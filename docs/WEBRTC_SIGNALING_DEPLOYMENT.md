@@ -2,9 +2,79 @@
 
 ## Overview
 
-WebRTC P2P infrastructure is **already implemented** in the codebase. The only missing piece is deploying the signaling server to Google Cloud VM to enable **real peer-to-peer connections across different networks**.
+WebRTC P2P infrastructure is **already implemented** in the codebase. The only missing piece is deploying the **signaling server** to Google Cloud VM to enable **real peer-to-peer connections across different networks**.
 
 ---
+
+## What is Signaling in WebRTC?
+
+WebRTC enables **direct peer-to-peer connections** between browsers, but there's a chicken-and-egg problem: **how do two peers find each other to establish a direct connection?**
+
+### The Paradox
+
+```
+Peer A wants to connect to Peer B
+  ↓
+But Peer A doesn't know Peer B's IP address
+  ↓
+And Peer B doesn't know Peer A's IP address
+  ↓
+How do they establish a direct connection?
+```
+
+### The Solution: Signaling
+
+**Signaling** is the process of coordinating communication between peers **before** the P2P connection exists. Think of it as an "introduction service."
+
+### How Signaling Works
+
+```
+1. Discovery Phase (via Signaling Server)
+   Peer A ──► [Signaling Server] ◄── Peer B
+              "I want to connect!"
+
+2. Exchange Connection Info (via Signaling Server)
+   Peer A ──► SDP Offer ──► [Server] ──► Peer B
+   Peer A ◄── SDP Answer ◄─ [Server] ◄── Peer B
+
+   Peer A ──► ICE Candidates ──► [Server] ──► Peer B
+   (These contain IP addresses discovered via STUN)
+
+3. Direct P2P Connection Established
+   Peer A ◄═══════════════════════════════► Peer B
+   (Signaling server no longer involved)
+```
+
+### What Gets Exchanged via Signaling
+
+**SDP (Session Description Protocol):**
+- Media capabilities (audio, video, data channels)
+- Codecs supported
+- Connection preferences
+- "Offer" from initiator, "Answer" from receiver
+
+**ICE Candidates:**
+- Possible network paths to reach each peer
+- Public IP addresses (discovered via STUN servers)
+- Local IP addresses
+- Relay addresses (if using TURN servers)
+
+### Key Points
+
+1. **Signaling is NOT standardized by WebRTC**
+   - WebRTC handles the P2P connection
+   - Developers choose how to implement signaling (WebSocket, HTTP, DHT, etc.)
+   - Our choice: WebSocket server
+
+2. **Signaling only needed for setup**
+   - Used only to exchange SDP/ICE candidates
+   - Once P2P connection established, signaling server is no longer used
+   - Actual file data transfers directly peer-to-peer
+
+3. **Signaling server sees no file data**
+   - Only sees connection metadata (SDP/ICE)
+   - Cannot read, modify, or intercept file transfers
+   - Very low bandwidth requirements
 
 ## Current State Analysis
 
