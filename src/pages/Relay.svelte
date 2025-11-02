@@ -77,7 +77,7 @@
 
   async function toggleRelayServer() {
     if (!dhtIsRunning) {
-      alert('DHT is not running. Please start the network first from the Network page.');
+      alert($t('relay.errors.dhtNotRunning'));
       return;
     }
 
@@ -122,7 +122,7 @@
       console.log(`Relay server ${relayServerEnabled ? 'enabled' : 'disabled'}`);
     } catch (error) {
       console.error('Failed to toggle relay server:', error);
-      alert(`Failed to toggle relay server: ${error}`);
+      alert($t('relay.errors.toggleFailed', { values: { error } }));
       // Revert on error
       relayServerEnabled = !relayServerEnabled;
       await saveSettings();
@@ -205,28 +205,28 @@
         </div>
 
         <div>
-          <Label for="relay-alias">Relay Server Alias (Public Name)</Label>
+          <Label for="relay-alias">{$t('relay.server.aliasLabel')}</Label>
           <input
             type="text"
             id="relay-alias"
             bind:value={relayServerAlias}
             on:blur={saveSettings}
-            placeholder="e.g., Alice's Fast Relay 🚀"
+            placeholder={$t('relay.server.aliasPlaceholder')}
             maxlength="50"
             class="w-full border rounded-md p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
           <p class="text-xs text-gray-500 mt-1">
-            This friendly name will appear in logs and when other nodes bootstrap through your relay
+            {$t('relay.server.aliasHint')}
           </p>
         </div>
 
         {#if !dhtIsRunning}
           <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
             <p class="text-sm font-semibold text-yellow-900">
-              DHT Network Not Running
+              {$t('relay.server.dhtNotRunning')}
             </p>
             <p class="text-xs text-yellow-700 mt-1">
-              Please start the network from the Network page first.
+              {$t('relay.server.dhtNotRunningHint')}
             </p>
           </div>
         {/if}
@@ -239,13 +239,13 @@
             class="w-full"
           >
             {#if isToggling}
-              {relayServerEnabled ? 'Disabling...' : 'Enabling...'}
+              {relayServerEnabled ? $t('relay.server.disabling') : $t('relay.server.enabling')}
             {:else if relayServerEnabled}
               <WifiOff class="w-4 h-4 mr-2" />
-              Disable Relay Server
+              {$t('relay.server.disable')}
             {:else}
               <Wifi class="w-4 h-4 mr-2" />
-              Enable Relay Server
+              {$t('relay.server.enable')}
             {/if}
           </Button>
         </div>
@@ -257,7 +257,7 @@
             </p>
             {#if relayServerAlias.trim()}
               <div class="mt-2 flex items-center gap-2">
-                <span class="text-xs text-green-700">Broadcasting as:</span>
+                <span class="text-xs text-green-700">{$t('relay.server.broadcastingAs')}</span>
                 <span class="text-sm font-bold text-green-900 bg-green-100 px-2 py-1 rounded">
                   {relayServerAlias}
                 </span>
@@ -301,7 +301,7 @@
               id="preferred-relays"
               bind:value={preferredRelaysText}
               on:blur={updatePreferredRelays}
-              placeholder="/ip4/relay.example.com/tcp/4001/p2p/QmRelayId&#10;One multiaddr per line"
+              placeholder={$t('relay.client.preferredRelaysPlaceholder')}
               rows="4"
               class="font-mono text-sm w-full border rounded-md p-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
             ></textarea>
@@ -326,7 +326,7 @@
   <!-- Relay Error Monitor -->
   {#if autoRelayEnabled && dhtIsRunning}
     <div class="mt-6">
-      <h2 class="text-2xl font-bold text-gray-900 mb-4">Relay Health & Monitoring</h2>
+      <h2 class="text-2xl font-bold text-gray-900 mb-4">{$t('relay.monitoring.title')}</h2>
       <RelayErrorMonitor />
     </div>
   {/if}
