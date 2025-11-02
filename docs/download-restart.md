@@ -41,6 +41,9 @@ pub type DownloadId = String;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DownloadState {
     Idle,
+    Handshake,
+    HandshakeRetry,
+    LeaseRenewDue,
     PreparingHead,
     HeadBackoff,
     Restarting,
@@ -50,6 +53,7 @@ pub enum DownloadState {
     PersistingProgress,
     Paused,
     AwaitingResume,
+    LeaseExpired,
     VerifyingSha,
     FinalizingIo,
     Completed,
@@ -153,6 +157,22 @@ HTTP, FTP, and any future byte-range-capable transports conform to this trait so
 - Preserve a stable strong `ETag` for the lifetime of the file. Weak ETags (`W/`) signal that safe resume is impossible; the client restarts from zero. When only `Last-Modified` is present we allow resume but log the higher risk because coarse timestamps can miss mid-second mutations.
 - Serve plain `GET` responses for initial downloads; range support is mandatory only for resume operations.
 
+### 5.4 Seeder handshake and lease (DHT control plane)
+
+- The downloader sends a `HandshakeRequest` DHT message to the seeder with `{file_id, download_id, epoch, requester_peer_id}`.
+- The seeder validates that the file is still hosted, confirms a strong `ETag`, and answers with a signed `HandshakeAck` (`HandshakeAck{ file_id, download_id, etag, size, epoch, lease_exp, resume_token }`).
+- `resume_token` is a JWS (Ed25519) containing: `sub=file_id`, `aud=seeder_peer_id`, `download_id`, `etag`, `epoch`, `iat`, `nbf`, `exp`, `scp:"resume"`, `kid`.
+- Default lease window: 4 hours (`exp - iat = 14,400 s`). Minimum 5 minutes, maximum 24 hours. Downloader renews when `exp - now <= max(60 s, 10% of lease)` with jitter.
+- Allowed clock skew between client and seeder `Date` header: ±5 minutes. Tokens outside this tolerance are rejected with `DownloadError::Invalid`.
+- Weak ETags are rejected; Last-Modified-only sources trigger a clean restart request instead of issuing a token.
+- Redirects/CDN mirrors are not supported; the token’s `aud` must match the seeder peer id that serves HTTP.
+- Renewal uses the same DHT channel. On success the seeder returns a fresh `resume_token` with a new `exp`.
+- JWKS endpoint: `/.well-known/chiral/jwks.json` served by the seeder. Keys are rotated with a 48-hour overlap window; clients cache by `ETag` and `Cache-Control`.
+- Failure handling:
+  - `401` / invalid token → move to `HandshakeRetry`, keep bytes, redo handshake.
+  - `403` (aud/scope/kid mismatch) → fail closed, surface error.
+  - `429` / `5xx` → exponential backoff with jitter before `HandshakeRetry`.
+
 ## 6. On-disk format
 
 - `<destination_path>.part`: binary data stream written sequentially from byte `0`.
@@ -184,6 +204,8 @@ Generation and validation rules:
 
 ## 7. Client algorithm
 
+- **Handshake / `Handshake`:** send a `HandshakeRequest` via the DHT, verify the signed `HandshakeAck`, cache `resume_token`, `lease_exp`, and server clock (`Date`). Enter `HandshakeRetry` with exponential backoff on timeout, malformed signatures, or 4xx/5xx errors.
+- **Lease renew / `LeaseRenewDue`:** when `lease_exp - now <= max(60 s, 10% of lease)` and the download is still active, send a renewal DHT message; upon success swap in the new token, otherwise continue streaming until expiry and transition to `LeaseExpired`.
 - **Start / `PreparingHead`:** issue `HEAD`, record strong `ETag`, `Last-Modified`, and `Content-Length` when present. If length is missing, immediately probe with `GET Range: bytes=0-0` and parse `Content-Range` to establish the total; fail only when both responses omit the size.
 - **Retry / `HeadBackoff`:** on transient network or 5xx responses, retry `HEAD` (and the optional probe) with bounded exponential backoff (base 1 s, max 30 s) while updating telemetry so operators can see the retry count.
 - **Reset / `Restarting`:** when headers disagree with stored metadata, when the server returns `200 OK` without `Content-Range` to a resume request, when a weak `ETag` (`W/`) is observed, or when a `416 Range Not Satisfiable` indicates our offset is beyond the probed size. In the `416` path we re-run the size probe to confirm the reported total before deleting partial artifacts, logging the reason, zeroing the offset, and returning to `PreparingHead`.
@@ -207,22 +229,34 @@ Error code mapping:
 ## 8. State machine
 
 ```
-Setup and guardrails
+Control plane and setup
 
 [Idle]
-  └─ start_download → [PreparingHead]
-        ├─ transient_error → [HeadBackoff] → retry → [PreparingHead]
-        └─ headers_ok → [PreflightStorage]
-               ├─ disk_full/open_fail → [Restarting] → cleanup → [PreparingHead]
-               └─ space_ok → [ValidatingMetadata]
-                      ├─ version or length mismatch → [Restarting] → cleanup → [PreparingHead]
-                      └─ metadata_ok → [Downloading]
+  └─ start_download → [Handshake]
+        ├─ success → [PreparingHead]
+        ├─ transient_error → [HandshakeRetry] → retry → [Handshake]
+        └─ lease_expired → [Handshake] (request fresh token)
+
+[PreparingHead]
+  ├─ transient_error → [HeadBackoff] → retry → [PreparingHead]
+  ├─ weak_etag/size_unknown → [Restarting] → cleanup → [PreparingHead]
+  └─ headers_ok → [PreflightStorage]
+
+[PreflightStorage]
+  ├─ disk_full/open_fail → [Restarting] → cleanup → [PreparingHead]
+  └─ space_ok → [ValidatingMetadata]
+
+[ValidatingMetadata]
+  ├─ version or length mismatch → [Restarting] → cleanup → [PreparingHead]
+  └─ metadata_ok → [Downloading]
 
 Streaming and resume
 
 [Downloading]
   ├─ chunk flushed → [PersistingProgress] → fsync ok → [Downloading]
-  ├─ range 200 without Content-Range / weak ETag / 416 w/ offset > size → [Restarting] → cleanup → [PreparingHead]
+  ├─ lease_renew_due → [LeaseRenewDue] → renew_ok → [Downloading]
+  ├─ lease_expired → [LeaseExpired] → [Handshake]
+  ├─ range 200 without Content-Range / weak ETag / 416 w/ offset > size / RangeUnsupported → [Restarting] → cleanup → [PreparingHead]
   └─ pause or shutdown → [Paused] → relaunch → [AwaitingResume] → resume → [PreparingHead]
 
 Finish and failure
@@ -238,14 +272,15 @@ Finish and failure
 ```
 
 Key transitions and safeguards:
-- `start_download` moves the downloader from `Idle` into `PreparingHead`, gathers headers, and uses the range probe when length is missing.
+- `start_download` moves the downloader from `Idle` into `Handshake` where we obtain a signed resume token, then into `PreparingHead` to gather validators and probe for size.
 - Weak ETags, missing size data after probing, a `200 OK` response to a range resume, or a `416` with an offset beyond the reported total all redirect to `Restarting`, deleting partial data and starting from byte zero.
-- Disk checks in `PreflightStorage` and `PersistingProgress` raise `DownloadError::DiskFull`, leave artifacts untouched, and surface guidance to free space.
+- Disk checks in `PreflightStorage` and `PersistingProgress` raise `DownloadError::DiskFull`, leave artifacts untouched, and surface guidance to free space; advisory OS locks prevent concurrent writers.
+- Lease renewal happens in `LeaseRenewDue`, refreshing the token before expiry. An expired lease moves to `LeaseExpired`, triggering `Handshake` while keeping previously downloaded bytes.
 - `Paused` persists metadata on every transition so relaunching into `AwaitingResume` is deterministic. Auto-resume or UI actions run back through validation before re-entering `Downloading`.
 - The integrity path keeps resuming safe: we only enter `VerifyingSha` when the byte count matches the expected size, we store the computed hash regardless of caller input, and any mismatch moves to `Failed` with instructions to restart.
 - `FinalizingIo` performs an atomic rename when the destination is on the same volume; if not, we copy the temp file, `fsync`, and replace the target, ensuring no torn writes reach the user.
 
-App crashes or manual exits persist `.meta.json` at every state transition (`PreparingHead`, `PreflightStorage`, `ValidatingMetadata`, `Downloading`, `PersistingProgress`, `Paused`, `AwaitingResume`) so a relaunch can safely continue or restart according to the rules above.
+App crashes or manual exits persist `.meta.json` at every state transition (`Handshake`, `PreparingHead`, `PreflightStorage`, `ValidatingMetadata`, `Downloading`, `LeaseRenewDue`, `PersistingProgress`, `Paused`, `AwaitingResume`) so a relaunch can safely continue or restart according to the rules above.
 
 ## 9. Security & safety
 
@@ -274,6 +309,8 @@ App crashes or manual exits persist `.meta.json` at every state transition (`Pre
   - Crash during the fsync window, restart the process, and ensure metadata survives with a consistent resume.
   - Simulate power loss mid-chunk, causing the `.part` file to be longer than metadata, and confirm we restart safely.
   - Fill the disk mid-download and check that `DownloadError::DiskFull` reaches the UI and that partial data remains intact for inspection.
+  - Validate DHT handshake success, rejection of weak ETags, and renewal just before expiry with ±5 minute clock skew.
+  - Let a lease expire mid-stream, ensure the client enters `LeaseExpired`, re-handshakes, and resumes without losing data.
 - **Demo harness**
   - Provide `demo/http-transfer.sh` that launches Node A's HTTP server, triggers a download on Node B, pauses at 50%, restarts the Tauri backend, then resumes and finishes.
   - Record a short screen capture (≤60 s) showing start → pause → resume → finished hash to share in class.
@@ -292,7 +329,7 @@ App crashes or manual exits persist `.meta.json` at every state transition (`Pre
 - `.meta.json` and `.part` files are cleaned up after successful completion, and the final file matches the expected SHA-256 when provided.
 - Resume logic handles `200` without `Content-Range`, weak ETags, and `416` responses by restarting from zero with clear user messaging.
 - Metadata versioning (`version == 1`) is enforced during resume and unknown versions fail fast.
-- `DownloadState` values surface at least the following states: `Idle`, `PreparingHead`, `HeadBackoff`, `Restarting`, `PreflightStorage`, `ValidatingMetadata`, `Downloading`, `PersistingProgress`, `Paused`, `AwaitingResume`, `VerifyingSha`, `FinalizingIo`, `Completed`, and `Failed`, matching the state diagram.
+- `DownloadState` values surface at least the following states: `Idle`, `Handshake`, `HandshakeRetry`, `LeaseRenewDue`, `PreparingHead`, `HeadBackoff`, `Restarting`, `PreflightStorage`, `ValidatingMetadata`, `Downloading`, `PersistingProgress`, `Paused`, `AwaitingResume`, `LeaseExpired`, `VerifyingSha`, `FinalizingIo`, `Completed`, and `Failed`, matching the state diagram.
 - `.part` and `.meta.json` are removed on success and preserved on failure for post-mortem analysis.
 - Demo harness and automated tests described above are merged and documented.
 
@@ -319,6 +356,7 @@ App crashes or manual exits persist `.meta.json` at every state transition (`Pre
 - **Can users cancel and immediately resume?** `pause_download` followed by `resume_download` stays within the same metadata record, but invoking `start_download` again wipes prior artifacts to guarantee a clean restart.
 - **How are cross-volume destinations handled?** `FinalizingIo` detects when the destination lives on another device, stream-copies the `.part` file, `fsync`s the copy, and swaps it into place so users never see partial files.
 - **What audit trails exist for errors?** Every transition that lands in `Failed` records a structured `last_error`, and the backend logs a concise line per failure so operators can correlate UI warnings with backend telemetry.
+- **How does the lease handshake work without HTTP POST?** We send a signed token over the DHT, renew it before expiry, and re-handshake if we ever see `401/403` or `LeaseExpired`, keeping the data plane on plain HTTP.
 
 ## 15. References
 
