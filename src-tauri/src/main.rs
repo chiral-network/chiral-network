@@ -5,6 +5,7 @@
 
 pub mod commands;
 pub mod analytics;
+mod bandwidth;
 mod blockchain_listener;
 mod dht;
 mod download_scheduler;
@@ -37,6 +38,7 @@ use crate::commands::proxy::{
     proxy_echo, proxy_remove, ProxyNode,
 };
 use crate::commands::network::get_full_network_stats;
+use crate::bandwidth::BandwidthController;
 use crate::stream_auth::{
     AuthMessage, HmacKeyExchangeConfirmation, HmacKeyExchangeRequest, HmacKeyExchangeResponse,
     StreamAuthService,
@@ -230,6 +232,7 @@ struct AppState {
     multi_source_pump: Mutex<Option<JoinHandle<()>>>,
     socks5_proxy_cli: Mutex<Option<String>>,
     analytics: Arc<analytics::AnalyticsService>,
+    bandwidth: Arc<BandwidthController>,
 
     // New fields for transaction queue
     transaction_queue: Arc<Mutex<VecDeque<QueuedTransaction>>>,
@@ -616,6 +619,16 @@ async fn test_backend_connection(state: State<'_, AppState>) -> Result<String, S
         info!("❌ DHT service is not available");
         Err("DHT not running".into())
     }
+}
+
+#[tauri::command]
+async fn set_bandwidth_limits(
+    upload_kbps: u64,
+    download_kbps: u64,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.bandwidth.set_limits(upload_kbps, download_kbps).await;
+    Ok(())
 }
 
 #[tauri::command]
@@ -2598,6 +2611,7 @@ async fn start_file_transfer_service(
         app.app_handle().clone(),
         ft_arc.clone(),
         state.keystore.clone(),
+        state.bandwidth.clone(),
     )
     .await
     .map_err(|e| format!("Failed to start WebRTC service: {}", e))?;
@@ -4752,6 +4766,7 @@ fn main() {
             multi_source_pump: Mutex::new(None),
             socks5_proxy_cli: Mutex::new(args.socks5_proxy),
             analytics: Arc::new(analytics::AnalyticsService::new()),
+            bandwidth: Arc::new(BandwidthController::new()),
 
             // Initialize transaction queue
             transaction_queue: Arc::new(Mutex::new(VecDeque::new())),
@@ -4895,6 +4910,7 @@ fn main() {
             upload_versioned_file,
             get_file_versions_by_name,
             test_backend_connection,
+            set_bandwidth_limits,
             establish_webrtc_connection,
             send_webrtc_file_request,
             get_webrtc_connection_status,
