@@ -2121,55 +2121,12 @@ fn get_mac_power_from_smc() -> Option<f32> {
     // Try to read power consumption from SMC
     // The SMC provides real-time power metrics on Mac hardware
     
-    match smc::SMC::new() {
-        Ok(mut smc) => {
-            // Try different SMC keys for power readings
-            // We need to use the raw u32 values for the keys to avoid version conflicts
-            // SMC keys are 4-character codes converted to u32 (big-endian)
-            // "PCPC" = 0x50435043, "PSTR" = 0x50535452, etc.
-            let power_key_codes: &[u32] = &[
-                0x50435043, // "PCPC" - Package CPU Power
-                0x50535452, // "PSTR" - Power System Total  
-                0x50433043, // "PC0C" - CPU Core 0 Power
-                0x50435452, // "PCTR" - CPU Total Residency
-            ];
-            
-            for key_code in power_key_codes {
-                // Convert u32 to FourCharCode - this uses the version from smc crate
-                let key = smc::FourCharCode(*key_code);
-                
-                // Use read_key method which returns raw bytes
-                if let Ok(data) = smc.read_key(key) {
-                    // SMC power values are typically 4-byte floats (big-endian)
-                    if data.len() >= 4 {
-                        // Convert bytes to float (big-endian)
-                        let mut bytes = [0u8; 4];
-                        bytes.copy_from_slice(&data[..4]);
-                        let power = f32::from_be_bytes(bytes);
-                        
-                        // Validate power range (0-500W is reasonable for Mac systems)
-                        if power > 0.0 && power < 500.0 {
-                            return Some(power);
-                        }
-                    }
-                    
-                    // Try alternative interpretation as 2-byte integer (some SMC keys use sp78 format)
-                    // sp78 format: 1 sign bit, 7 integer bits, 8 fractional bits
-                    if data.len() >= 2 {
-                        let raw = u16::from_be_bytes([data[0], data[1]]);
-                        let power = (raw as f32) / 256.0; // Convert from sp78 format
-                        
-                        if power > 0.0 && power < 500.0 {
-                            return Some(power);
-                        }
-                    }
-                }
-            }
-        }
-        Err(_) => {
-            // SMC not available or no permissions
-        }
-    }
+    // Note: SMC access on macOS requires specific hardware keys
+    // This implementation may need adjustment based on actual Mac hardware
+    // For now, we'll skip SMC implementation and rely on CPU estimation
+    
+    // The smc crate has complex API requirements and version conflicts
+    // that make it difficult to use reliably across different Mac models
     
     None
 }
