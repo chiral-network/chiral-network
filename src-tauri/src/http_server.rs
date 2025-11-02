@@ -2,7 +2,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, delete},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -292,6 +292,34 @@ async fn serve_entire_file(file_path: &PathBuf, file_size: u64) -> Response {
         }
     }
 }
+/// DELETE /files/{file_hash}
+///
+/// Unregisters a file from the HTTP server (stop seeding over HTTP)
+async fn delete_file(
+    Path(file_hash): Path<String>,
+    State(state): State<Arc<HttpServerState>>,
+) -> Response {
+    // Fast path: check if it exists first (to return 404 when appropriate)
+    if !state.has_file(&file_hash).await {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("File not found: {}", file_hash),
+            }),
+        )
+            .into_response();
+    }
+
+    state.unregister_file(&file_hash).await;
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "ok": true, "hash": file_hash })),
+    )
+        .into_response()
+}
+
+
 
 /// Parse HTTP Range header
 ///
@@ -348,7 +376,7 @@ async fn health_check() -> impl IntoResponse {
 pub fn create_router(state: Arc<HttpServerState>) -> Router {
     Router::new()
         .route("/health", get(health_check))
-        .route("/files/:file_hash", get(serve_file))
+        .route("/files/:file_hash", get(serve_file).delete(delete_file))
         .route("/files/:file_hash/metadata", get(serve_metadata))
         .layer(
             CorsLayer::new()
@@ -378,6 +406,7 @@ pub async fn start_server(
     tracing::info!("  GET /health");
     tracing::info!("  GET /files/:file_hash (supports Range header)");
     tracing::info!("  GET /files/:file_hash/metadata");
+    tracing::info!("  DELETE /files/:file_hash");
 
     // Spawn server in background
     tokio::spawn(async move {
@@ -436,4 +465,67 @@ mod tests {
         assert_eq!(parse_range_header("bytes=-500", 1000), None);
         assert_eq!(parse_range_header("bytes=2000-", 1000), None);
     }
+
+        use axum::{body::Body, http::Request};
+    use tower::ServiceExt; // for `oneshot`
+
+    fn tmp_storage() -> PathBuf {
+        // no actual file IO needed for these tests; just a dir path
+        PathBuf::from("/tmp/test_files")
+    }
+
+    #[tokio::test]
+    async fn delete_returns_404_for_missing_file() {
+        let state = Arc::new(HttpServerState::new(tmp_storage()));
+        let app = create_router(state);
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/files/does-not-exist")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_unregisters_and_returns_200() {
+        let state = Arc::new(HttpServerState::new(tmp_storage()));
+
+        // Seed a file in the registry
+        let meta = HttpFileMetadata {
+            hash: "abc123".into(),
+            name: "demo.bin".into(),
+            size: 42,
+            encrypted: false,
+        };
+        state.register_file(meta).await;
+
+        // Router after registration is fine (state is Arc-shared)
+        let app = create_router(state.clone());
+
+        // Sanity: ensure present first
+        assert!(state.has_file("abc123").await);
+
+        // DELETE it
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/files/abc123")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(!state.has_file("abc123").await);
+    }
+
 }
