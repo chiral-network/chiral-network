@@ -63,6 +63,13 @@ use ethereum::{
     get_network_hashrate,
     get_peer_count,
     get_recent_mined_blocks,
+    get_block_details_by_number,
+    get_latest_blocks,
+    get_transaction_by_hash,
+    get_transactions_by_address,
+    get_top_receivers,
+    get_top_miners,
+    AddressMetric,
     start_mining,
     stop_mining,
     EthAccount,
@@ -946,6 +953,37 @@ async fn get_recent_mined_blocks_pub(
 ) -> Result<Vec<MinedBlock>, String> {
     get_recent_mined_blocks(&address, lookback, limit).await
 }
+
+#[tauri::command]
+async fn get_block_details_command(block_number: u64) -> Result<Option<serde_json::Value>, String> {
+    get_block_details_by_number(block_number).await
+}
+
+#[tauri::command]
+async fn get_latest_blocks_command(count: u64) -> Result<Vec<serde_json::Value>, String> {
+    get_latest_blocks(count).await
+}
+
+#[tauri::command]
+async fn get_transaction_by_hash_command(tx_hash: String) -> Result<Option<serde_json::Value>, String> {
+    get_transaction_by_hash(&tx_hash).await
+}
+
+#[tauri::command]
+async fn get_transactions_by_address_command(address: String) -> Result<Vec<serde_json::Value>, String> {
+    get_transactions_by_address(&address).await
+}
+
+#[tauri::command]
+async fn get_top_receivers_command(block_count: u64) -> Result<Vec<AddressMetric>, String> {
+    get_top_receivers(block_count).await
+}
+
+#[tauri::command]
+async fn get_top_miners_command(block_count: u64) -> Result<Vec<AddressMetric>, String> {
+    get_top_miners(block_count).await
+}
+
 #[tauri::command]
 async fn start_dht_node(
     app: tauri::AppHandle,
@@ -5120,7 +5158,14 @@ fn main() {
             get_relay_alias,
             get_multiaddresses,
             clear_seed_list,
-            get_full_network_stats
+            get_block_details_command,
+            get_latest_blocks_command,
+            get_transaction_by_hash_command,
+            get_transactions_by_address_command,
+            get_top_receivers_command,
+            get_top_miners_command,
+            // Analytics
+            get_full_network_stats,
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())

@@ -1687,3 +1687,138 @@ pub async fn get_block_details_by_number(
 
     Ok(json_response["result"].clone().into())
 }
+
+pub async fn get_latest_blocks(count: u64) -> Result<Vec<serde_json::Value>, String> {
+    let latest_block_number = get_block_number().await?;
+    let mut blocks = Vec::new();
+
+    for i in 0..count {
+        if latest_block_number < i {
+            break;
+        }
+        let block_number = latest_block_number - i;
+        if let Ok(Some(block)) = get_block_details_by_number(block_number).await {
+            blocks.push(block);
+        }
+    }
+
+    Ok(blocks)
+}
+
+pub async fn get_transaction_by_hash(tx_hash: &str) -> Result<Option<serde_json::Value>, String> {
+    let client = reqwest::Client::new();
+    let payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_getTransactionByHash",
+        "params": [tx_hash],
+        "id": 1
+    });
+
+    let response = client
+        .post("http://127.0.0.1:8545")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send request for transaction {}: {}", tx_hash, e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response for transaction {}: {}", tx_hash, e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error for transaction {}: {}", tx_hash, error));
+    }
+
+    Ok(json_response["result"].clone().into())
+}
+
+pub async fn get_transactions_by_address(address: &str) -> Result<Vec<serde_json::Value>, String> {
+    let latest_block_number = get_block_number().await?;
+    let mut transactions = Vec::new();
+    let lookback = 1000;
+
+    let start_block = if latest_block_number > lookback {
+        latest_block_number - lookback
+    } else {
+        0
+    };
+
+    for i in start_block..=latest_block_number {
+        if let Ok(Some(block)) = get_block_details_by_number(i).await {
+            if let Some(txs) = block["transactions"].as_array() {
+                for tx in txs {
+                    let from = tx["from"].as_str().unwrap_or("");
+                    let to = tx["to"].as_str().unwrap_or("");
+
+                    if from.eq_ignore_ascii_case(address) || to.eq_ignore_ascii_case(address) {
+                        transactions.push(tx.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(transactions)
+}
+
+use std::collections::HashMap;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AddressMetric {
+    pub address: String,
+    pub amount: f64,
+}
+
+pub async fn get_top_receivers(block_count: u64) -> Result<Vec<AddressMetric>, String> {
+    let latest_block_number = get_block_number().await?;
+    let mut receivers: HashMap<String, f64> = HashMap::new();
+
+    let start_block = if latest_block_number > block_count {
+        latest_block_number - block_count
+    } else {
+        0
+    };
+
+    for i in start_block..=latest_block_number {
+        if let Ok(Some(block)) = get_block_details_by_number(i).await {
+            if let Some(txs) = block["transactions"].as_array() {
+                for tx in txs {
+                    if let (Some(to), Some(value_str)) = (tx["to"].as_str(), tx["value"].as_str()) {
+                        let value = u128::from_str_radix(value_str.trim_start_matches("0x"), 16).unwrap_or(0);
+                        *receivers.entry(to.to_string()).or_insert(0.0) += value as f64 / 1e18;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut sorted_receivers: Vec<AddressMetric> = receivers.into_iter().map(|(address, amount)| AddressMetric { address, amount }).collect();
+    sorted_receivers.sort_by(|a, b| b.amount.partial_cmp(&a.amount).unwrap_or(std::cmp::Ordering::Equal));
+
+    Ok(sorted_receivers.into_iter().take(100).collect())
+}
+
+pub async fn get_top_miners(block_count: u64) -> Result<Vec<AddressMetric>, String> {
+    let latest_block_number = get_block_number().await?;
+    let mut miners: HashMap<String, f64> = HashMap::new();
+
+    let start_block = if latest_block_number > block_count {
+        latest_block_number - block_count
+    } else {
+        0
+    };
+
+    for i in start_block..=latest_block_number {
+        if let Ok(Some(block)) = get_block_details_by_number(i).await {
+            if let Some(miner) = block["miner"].as_str() {
+                *miners.entry(miner.to_string()).or_insert(0.0) += 2.0; // Assuming 2.0 is the block reward
+            }
+        }
+    }
+
+    let mut sorted_miners: Vec<AddressMetric> = miners.into_iter().map(|(address, amount)| AddressMetric { address, amount }).collect();
+    sorted_miners.sort_by(|a, b| b.amount.partial_cmp(&a.amount).unwrap_or(std::cmp::Ordering::Equal));
+
+    Ok(sorted_miners.into_iter().take(100).collect())
+}

@@ -445,6 +445,7 @@
     "proxy": "Proxy",
     "proxySelfTest": "Proxy Self-Test",
     "analytics": "Analytics",
+    "blockExplorer": "Block Explorer",
     "reputation": "Reputation",
     "account": "Account",
     "settings": "Settings",
@@ -1418,5 +1419,20 @@
       "fri": "Fri",
       "sat": "Sat"
     }
+  },
+  "blockExplorer": {
+    "subtitle": "Explore blocks and transactions on the Chiral network.",
+    "tabs": {
+      "explorer": "Explorer",
+      "topReceivers": "Top Receivers",
+      "topMiners": "Top Miners"
+    },
+    "searchPlaceholder": "Search by address...",
+    "latestBlocks": "Latest Blocks",
+    "block": "Block",
+    "transactions": "Transactions",
+    "miner": "Miner",
+    "topReceivers": "Top Receivers",
+    "topMiners": "Top Miners"
   }
 }

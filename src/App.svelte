@@ -1,20 +1,21 @@
 <script lang="ts">
     import './styles/globals.css'
-    import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Mail, Server, Share2 } from 'lucide-svelte'
+    import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Mail, Server, Share2, ClipboardList } from 'lucide-svelte'
     import UploadPage from './pages/Upload.svelte'
     import DownloadPage from './pages/Download.svelte'
     import ProxyPage from './pages/Proxy.svelte'
     import AccountPage from './pages/Account.svelte'
     import NetworkPage from './pages/Network.svelte'
-    import AnalyticsPage from './pages/Analytics.svelte'
-    import TorrentDownloadPage from './pages/TorrentDownload.svelte'
-    import SettingsPage from './pages/Settings.svelte'
-    import MiningPage from './pages/Mining.svelte'
-    import ReputationPage from './pages/Reputation.svelte'
-    import MessagesPage from './pages/Messages.svelte'
-    import RelayPage from './pages/Relay.svelte'
-    import NotFound from './pages/NotFound.svelte'
-    import ProxySelfTest from './routes/proxy-self-test.svelte'
+        import AnalyticsPage from './pages/Analytics.svelte'
+        import BlockExplorerPage from './pages/BlockExplorer.svelte'
+        import TorrentDownloadPage from './pages/TorrentDownload.svelte'
+        import SettingsPage from './pages/Settings.svelte'
+        import MiningPage from './pages/Mining.svelte'
+        import ReputationPage from './pages/Reputation.svelte'
+        import MessagesPage from './pages/Messages.svelte'
+        import RelayPage from './pages/Relay.svelte'
+        import NotFound from './pages/NotFound.svelte'     
+        import ProxySelfTest from './routes/proxy-self-test.svelte'
 import { networkStatus, settings, userLocation, wallet, activeBandwidthLimits } from './lib/stores'
 import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
@@ -326,6 +327,7 @@ const pushBandwidthLimits = (limits: ActiveBandwidthLimits) => {
         { id: 'mining', label: $t('nav.mining'), icon: Cpu },
         { id: 'proxy', label: $t('nav.proxy'), icon: Shield },
         { id: 'analytics', label: $t('nav.analytics'), icon: BarChart3 },
+        { id: 'block-explorer', label: $t('nav.blockExplorer'), icon: ClipboardList },
         { id: 'reputation', label: $t('nav.reputation'), icon: Star },
         { id: 'account', label: $t('nav.account'), icon: Wallet },
         { id: 'settings', label: $t('nav.settings'), icon: Settings },
@@ -375,6 +377,10 @@ const pushBandwidthLimits = (limits: ActiveBandwidthLimits) => {
       {
         path: "analytics",
         component: AnalyticsPage
+      },
+      {
+        path: "block-explorer",
+        component: BlockExplorerPage
       },
       {
         path: "reputation",
