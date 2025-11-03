@@ -437,6 +437,8 @@
     "menu": "Menu",
     "download": "Download",
     "upload": "Upload",
+    "torrents": "Torrents",
+    "messages": "Messages",
     "network": "Network",
     "relay": "Relay",
     "mining": "Mining",
