@@ -8,7 +8,7 @@
  * - Recording transactions for both parties
  */
 
-import { wallet, transactions, type Transaction, settings } from '$lib/stores';
+import { wallet, transactions, type Transaction } from '$lib/stores';
 import { get } from 'svelte/store';
 import { invoke } from '@tauri-apps/api/core';
 import { walletService } from '$lib/wallet';
