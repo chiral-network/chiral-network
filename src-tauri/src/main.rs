@@ -28,11 +28,13 @@ mod pool;
 mod proxy_latency;
 mod stream_auth;
 mod webrtc_service;
+mod transaction_services;  
 
 use crate::commands::auth::{
     cleanup_expired_proxy_auth_tokens, generate_proxy_auth_token, revoke_proxy_auth_token,
     validate_proxy_auth_token,
 };
+
 use crate::commands::bootstrap::get_bootstrap_nodes_command;
 use crate::commands::proxy::{
     disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
@@ -89,7 +91,7 @@ use sysinfo::{Components, System};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Emitter, Listener, Manager, State,
+    Emitter, Manager, State,
 };
 use tokio::time::Duration as TokioDuration;
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
@@ -2984,7 +2986,7 @@ async fn start_ftp_download(
         .map_err(|e| format!("Failed to create output file: {}", e))?;
 
     // Retrieve file and stream in chunks
-    ftp.retr(path, |mut reader| {
+    ftp.retr(path, |reader| {
         let mut buffer = [0u8; 65536]; // 64 KB
         loop {
             let bytes_read = reader
