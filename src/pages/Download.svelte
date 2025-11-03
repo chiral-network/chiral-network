@@ -297,6 +297,9 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
   
           if (downloadedFile && downloadedFile.downloadPath) {
             try {
+              // Ensure the directory exists before writing
+              await invoke('ensure_directory_exists', { path: downloadedFile.downloadPath });
+              
               // Write the file to disk at the user's chosen location
               const { writeFile } = await import('@tauri-apps/plugin-fs');
               const fileData = new Uint8Array(data.data);
@@ -1104,6 +1107,9 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
 
             console.log("Final data array length:", data_.length);
 
+            // Ensure the directory exists before writing
+            await invoke('ensure_directory_exists', { path: outputPath });
+            
             // Write the file data to the output path
             console.log("🔍 DEBUG: About to write file to:", outputPath);
             const { writeFile } = await import('@tauri-apps/plugin-fs');

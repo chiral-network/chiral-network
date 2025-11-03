@@ -450,12 +450,13 @@ export interface AppSettings {
   enableBandwidthScheduling: boolean;
   bandwidthSchedules: BandwidthScheduleEntry[];
   pricePerMb: number; // Price per MB in Chiral (e.g., 0.001)
+  customBootstrapNodes: string[]; // Custom bootstrap nodes for DHT (leave empty to use defaults)
 }
 
 // Export the settings store
 // We initialize with a safe default structure. Settings.svelte will load/persist the actual state.
 export const settings = writable<AppSettings>({
-  storagePath: "~/ChiralNetwork/Storage",
+  storagePath: "~/Chiral-Network-Storage",
   maxStorageSize: 100,
   autoCleanup: true,
   cleanupThreshold: 90,
@@ -494,6 +495,7 @@ export const settings = writable<AppSettings>({
   enableBandwidthScheduling: false,
   bandwidthSchedules: [],
   pricePerMb: 0.001, // Default price: 0.001, until ability to set pricePerMb is there, then change to 0.001 Chiral per MB
+  customBootstrapNodes: [], // Empty by default - use hardcoded bootstrap nodes
 });
 
 export const activeBandwidthLimits = writable<ActiveBandwidthLimits>(
