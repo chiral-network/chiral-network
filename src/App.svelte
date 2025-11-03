@@ -319,8 +319,8 @@ const pushBandwidthLimits = (limits: ActiveBandwidthLimits) => {
       menuItems = [
         { id: 'download', label: $t('nav.download'), icon: Download },
         { id: 'upload', label: $t('nav.upload'), icon: Upload },
-        { id: 'torrents', label: 'Torrents', icon: Share2 },
-        { id: 'messages', label: 'Messages', icon: Mail },
+        { id: 'torrents', label: $t('nav.torrents'), icon: Share2 },
+        { id: 'messages', label: $t('nav.messages'), icon: Mail },
         { id: 'network', label: $t('nav.network'), icon: Globe },
         { id: 'relay', label: $t('nav.relay'), icon: Server },
         { id: 'mining', label: $t('nav.mining'), icon: Cpu },
