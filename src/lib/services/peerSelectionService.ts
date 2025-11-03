@@ -19,6 +19,7 @@ export interface PeerMetrics {
   successful_transfers: number;
   failed_transfers: number;
   total_bytes_transferred: number;
+  protocols: string[];
   encryption_support: boolean;
 }
 
@@ -167,6 +168,36 @@ export class PeerSelectionService {
     }
   }
 
+  /**
+   * Filter peers to ensure they support at least one of the required protocols.
+   */
+  static filterPeersByProtocol(
+    peers: PeerMetrics[],
+    requiredProtocols: string[]
+  ): PeerMetrics[] {
+    if (requiredProtocols.length === 0) {
+      return peers; // No protocol requirement, return all
+    }
+
+    return peers.filter(peer => {
+      if (!peer.protocols || peer.protocols.length === 0) {
+        // For backward compatibility or if identify info is missing, assume support.
+        // The connection will fail later if the protocol is not actually supported.
+        return true;
+      }
+      // Check if the peer supports at least one of the required protocols.
+      return requiredProtocols.some(requiredProto =>
+        peer.protocols.some(peerProto => peerProto.includes(requiredProto))
+      );
+    });
+  }
+
+  // Define the required protocols for transfers
+  private static TRANSFER_PROTOCOLS = [
+    "/chiral/webrtc-signaling/1.0.0", // For WebRTC
+    "/ipfs/bitswap", // For Bitswap
+  ];
+
   private static rep = ReputationStore.getInstance();
 
   /**
@@ -179,6 +210,16 @@ export class PeerSelectionService {
   ): Promise<string | null> {
     if (availablePeers.length === 0) {
       return null;
+    }
+
+    // First, get metrics for all available peers
+    const allMetrics = await this.getPeerMetrics();
+    const availablePeerMetrics = allMetrics.filter(metric => availablePeers.includes(metric.peer_id));
+
+    // Filter peers to ensure they support a valid transfer protocol
+    const supportedPeers = this.filterPeersByProtocol(availablePeerMetrics, this.TRANSFER_PROTOCOLS);
+    if (supportedPeers.length === 0) {
+      return null; // No peers support the required protocols
     }
 
     // ✨ Pre-rank by local reputation composite (no external metrics needed)
@@ -197,7 +238,7 @@ export class PeerSelectionService {
 
     // Keep your original selection call (unchanged)
     const selectedPeers = await this.selectPeersWithStrategy(
-      availablePeers,
+      supportedPeers.map(p => p.peer_id), // Use the filtered list of peer IDs
       1,
       preferEncryption ? "encryption" : strategy,
       preferEncryption
@@ -221,13 +262,23 @@ export class PeerSelectionService {
       return [];
     }
 
+    // Get metrics for all available peers to check for protocol support
+    const allMetrics = await this.getPeerMetrics();
+    const availablePeerMetrics = allMetrics.filter(metric => availablePeers.includes(metric.peer_id));
+
+    // Filter out peers that don't support the necessary transfer protocols
+    const supportedPeers = this.filterPeersByProtocol(availablePeerMetrics, this.TRANSFER_PROTOCOLS);
+    if (supportedPeers.length === 0) {
+      return [];
+    }
+
     // For very large files, use load balancing to distribute across peers
     const strategy: PeerSelectionStrategy =
       fileSize > 500 * 1024 * 1024
         ? "load_balanced" // >500MB use load balancing
         : "balanced"; // <500MB use balanced selection
 
-    const peerCount = Math.min(maxPeers, availablePeers.length);
+    const peerCount = Math.min(maxPeers, supportedPeers.length);
 
     return await this.selectPeersWithStrategy(
       availablePeers,
