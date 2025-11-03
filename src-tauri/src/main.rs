@@ -2571,7 +2571,12 @@ fn get_default_storage_path(app: tauri::AppHandle) -> Result<String, String> {
         .app_data_dir()
         .map_err(|e| format!("Could not get app data directory: {}", e))?;
 
-    let storage_path = app_data_dir.join("Storage");
+    // Get the parent of app data dir to place storage at user level
+    let user_dir = app_data_dir
+        .parent()
+        .ok_or_else(|| "Failed to get parent directory".to_string())?;
+
+    let storage_path = user_dir.join("Chiral-Network-Storage");
 
     storage_path
         .to_str()
@@ -2582,6 +2587,24 @@ fn get_default_storage_path(app: tauri::AppHandle) -> Result<String, String> {
 #[tauri::command]
 fn check_directory_exists(path: String) -> bool {
     Path::new(&path).is_dir()
+}
+
+#[tauri::command]
+async fn ensure_directory_exists(path: String) -> Result<(), String> {
+    let path_obj = Path::new(&path);
+    
+    // Get parent directory (in case path is a file path)
+    let dir_to_create = if path_obj.extension().is_some() {
+        // This looks like a file path, get the parent directory
+        path_obj.parent().ok_or_else(|| "Invalid path".to_string())?
+    } else {
+        // This is a directory path
+        path_obj
+    };
+    
+    tokio::fs::create_dir_all(dir_to_create)
+        .await
+        .map_err(|e| format!("Failed to create directory: {}", e))
 }
 
 #[tauri::command]
@@ -4861,6 +4884,7 @@ fn main() {
             detect_locale,
             get_default_storage_path,
             check_directory_exists,
+            ensure_directory_exists,
             get_dht_health,
             get_dht_peer_count,
             get_dht_peer_id,
