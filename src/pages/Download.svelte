@@ -20,10 +20,37 @@
   import { listen } from '@tauri-apps/api/event'
   import PeerSelectionService from '$lib/services/peerSelectionService'
 import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
+import { invoke }  from '@tauri-apps/api/core';
 
-  import { invoke }  from '@tauri-apps/api/core';
+function buildSaveDialogOptions(fileName: string) {
+  const defaultPath =
+    typeof fileName === 'string' && fileName.trim().length > 0
+      ? fileName
+      : 'downloaded-file';
 
-  const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params)
+  const lastDot = defaultPath.lastIndexOf('.');
+  const rawExt =
+    lastDot > 0 && lastDot < defaultPath.length - 1
+      ? defaultPath.slice(lastDot + 1)
+      : '';
+  const sanitizedExt = rawExt.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+
+  if (sanitizedExt.length === 0) {
+    return { defaultPath };
+  }
+
+  return {
+    defaultPath,
+    filters: [
+      {
+        name: `${sanitizedExt.toUpperCase()} Files`,
+        extensions: [sanitizedExt]
+      }
+    ]
+  };
+}
+
+const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params)
 
  // Protocol selection state
   $: selectedProtocol = $protocolStore
@@ -864,13 +891,7 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
     const { save } = await import('@tauri-apps/plugin-dialog');
     
     // Show file save dialog
-    const outputPath = await save({
-      defaultPath: downloadingFile.name,
-      filters: [{
-        name: 'All Files',
-        extensions: ['*']
-      }]
-    });
+    const outputPath = await save(buildSaveDialogOptions(downloadingFile.name));
 
     if (!outputPath) {
       // User cancelled the save dialog
@@ -1027,13 +1048,7 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
 
         // Show file save dialog
         console.log("🔍 DEBUG: Opening file save dialog...");
-        const outputPath = await save({
-          defaultPath: fileToDownload.name,
-          filters: [{
-            name: 'All Files',
-            extensions: ['*']
-          }]
-        });
+        const outputPath = await save(buildSaveDialogOptions(fileToDownload.name));
         console.log("✅ DEBUG: File save dialog result:", outputPath);
 
         if (!outputPath) {

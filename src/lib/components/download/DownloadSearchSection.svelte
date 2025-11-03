@@ -20,11 +20,39 @@ import { paymentService } from '$lib/services/paymentService';
   type ToastType = 'success' | 'error' | 'info' | 'warning';
   type ToastPayload = { message: string; type?: ToastType; duration?: number; };
 
-  const dispatch = createEventDispatcher<{ download: FileMetadata; message: ToastPayload }>();
-  const tr = (key: string, params?: Record<string, unknown>) => (get(t) as any)(key, params);
+const dispatch = createEventDispatcher<{ download: FileMetadata; message: ToastPayload }>();
+const tr = (key: string, params?: Record<string, unknown>) => (get(t) as any)(key, params);
 
-  const SEARCH_TIMEOUT_MS = 10_000; // 10 seconds for DHT searches to find peers
-  export let isBitswap: boolean = false;
+const SEARCH_TIMEOUT_MS = 10_000; // 10 seconds for DHT searches to find peers
+export let isBitswap: boolean = false;
+
+function buildSaveDialogOptions(fileName: string) {
+  const defaultPath =
+    typeof fileName === 'string' && fileName.trim().length > 0
+      ? fileName
+      : 'downloaded-file';
+
+  const lastDot = defaultPath.lastIndexOf('.');
+  const rawExt =
+    lastDot > 0 && lastDot < defaultPath.length - 1
+      ? defaultPath.slice(lastDot + 1)
+      : '';
+  const sanitizedExt = rawExt.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+
+  if (sanitizedExt.length === 0) {
+    return { defaultPath };
+  }
+
+  return {
+    defaultPath,
+    filters: [
+      {
+        name: `${sanitizedExt.toUpperCase()} Files`,
+        extensions: [sanitizedExt]
+      }
+    ]
+  };
+}
 
   let searchHash = '';
   let searchMode = 'merkle_hash'; // 'merkle_hash' or 'cid'
@@ -606,13 +634,7 @@ import { paymentService } from '$lib/services/paymentService';
       const { save } = await import('@tauri-apps/plugin-dialog');
 
       // Show file save dialog
-      const outputPath = await save({
-        defaultPath: file.fileName,
-        filters: [{
-          name: 'All Files',
-          extensions: ['*']
-        }]
-      });
+      const outputPath = await save(buildSaveDialogOptions(file.fileName));
 
       if (!outputPath) {
         pushMessage('Download cancelled by user', 'info');
