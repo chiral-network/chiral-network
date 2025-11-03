@@ -4563,7 +4563,7 @@ async fn reset_analytics(state: State<'_, AppState>) -> Result<(), String> {
 /// Start HTTP server for serving encrypted chunks and file manifests
 ///
 /// The server will listen on the specified port and serve files that have been
-/// registered via `register_manifest_for_http()`.
+/// registered via `register_file()`.
 ///
 /// Returns the actual bound address (useful if port 0 was used for auto-assignment)
 #[tauri::command]
@@ -5336,7 +5336,8 @@ async fn upload_and_publish_file(
     ftp_source: Option<String>,
 ) -> Result<UploadResult, String> {
     info!("📦 BACKEND: Starting upload_and_publish_file for price {:?}", price);
-    // 1. Process file with ChunkManager (encrypt, chunk, build Merkle tree)
+
+    // 1) Encrypt, chunk, and build Merkle tree for the file
     let manifest = encrypt_file_for_recipient(
         app.clone(),
         state.clone(),
@@ -5345,7 +5346,7 @@ async fn upload_and_publish_file(
     )
     .await?;
 
-    // 2. Get file name and size
+    // 2) Extract file metadata (name, size, peer ID)
     let file_name = file_name.unwrap_or_else(|| {
         std::path::Path::new(&file_path)
             .file_name()
@@ -5356,7 +5357,6 @@ async fn upload_and_publish_file(
 
     let file_size: u64 = manifest.chunks.iter().map(|c| c.size as u64).sum();
 
-    // 3. Get peer ID from DHT
     let peer_id = {
         let dht_guard = state.dht.lock().await;
         if let Some(dht) = dht_guard.as_ref() {
@@ -5366,101 +5366,104 @@ async fn upload_and_publish_file(
         }
     };
 
-    // 4. Publish to DHT with versioning support
+    // 3) Build complete FileMetadata with all protocol sources
     let dht = {
-        let dht_guard = state.dht.lock().await; // Use the Merkle root as the file hash
+        let dht_guard = state.dht.lock().await;
         dht_guard.as_ref().cloned()
     };
 
-    let version = if let Some(dht) = dht {
-        let created_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+    let dht = dht.ok_or("DHT node is not running. Cannot publish file.")?;
 
-        // Use prepare_versioned_metadata to handle version incrementing and parent_hash
-        let mime_type = detect_mime_type_from_filename(&file_name)
-            .unwrap_or_else(|| "application/octet-stream".to_string());
-        let mut metadata = dht
-            .prepare_versioned_metadata(
-                manifest.merkle_root.clone(), // This is the Merkle root
-                file_name.clone(),
-                file_size,
-                vec![], // Empty - chunks already stored
-                created_at,
-                Some(mime_type),
-                None,                            // encrypted_key_bundle
-                true,                            // is_encrypted
-                Some("AES-256-GCM".to_string()), // Encryption method
-                None,                            // key_fingerprint (deprecated)
-                price,                            // price
-                None,                            // uploader_address
-            )
-            .await?;
+    let created_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
-        // Add HTTP source if HTTP server is running
-        let http_addr = state.http_server_addr.lock().await;
-        if let Some(addr) = *http_addr {
-            // Get actual local IP instead of 0.0.0.0
-            let port = addr.port();
-            let local_ip = crate::headless::get_local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
-            let http_url = format!("http://{}:{}", local_ip, port);
+    let mime_type = detect_mime_type_from_filename(&file_name)
+        .unwrap_or_else(|| "application/octet-stream".to_string());
 
-            metadata.http_sources = Some(vec![download_source::HttpSourceInfo {
-                url: http_url.clone(),
-                auth_header: None,
-                verify_ssl: false,
-                headers: None,
-                timeout_secs: Some(30),
-            }]);
-            tracing::info!("Added HTTP source to metadata: {} (local IP: {})", http_url, local_ip);
-        }
+    // 3.1) Build base metadata with versioning support
+    let mut metadata = dht
+        .prepare_versioned_metadata(
+            manifest.merkle_root.clone(),
+            file_name.clone(),
+            file_size,
+            vec![], // Empty - chunks already stored in Bitswap
+            created_at,
+            Some(mime_type),
+            None,                            // encrypted_key_bundle
+            true,                            // is_encrypted
+            Some("AES-256-GCM".to_string()), // encryption_method
+            None,                            // key_fingerprint (deprecated)
+            price,
+            None,                            // uploader_address
+        )
+        .await?;
 
-        let mut metadata = metadata;
-        if let Some(ftp_url) = ftp_source {
-            metadata.ftp_sources = Some(vec![FtpSourceInfo {
-                url: ftp_url,
-                username: None,
-                password: None,
-                supports_resume: false, // or true if known
-                file_size: 0,           // placeholder, could update later
-                is_available: true,
-                last_checked: Some(
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs(),
-                ),
-            }]);
-        }
-            
-        println!("📦 BACKEND: Created versioned metadata");
+    // 3.2) Add HTTP source if HTTP server is running
+    let http_addr = state.http_server_addr.lock().await;
+    if let Some(addr) = *http_addr {
+        let port = addr.port();
+        let local_ip = crate::headless::get_local_ip()
+            .unwrap_or_else(|| "127.0.0.1".to_string());
+        let http_url = format!("http://{}:{}", local_ip, port);
 
-        let version = metadata.version.unwrap_or(1);
+        metadata.http_sources = Some(vec![download_source::HttpSourceInfo {
+            url: http_url.clone(),
+            auth_header: None,
+            verify_ssl: false,
+            headers: None,
+            timeout_secs: Some(30),
+        }]);
 
-        // Store file data locally for seeding (CRITICAL FIX)
-        let ft = {
-            let ft_guard = state.file_transfer.lock().await;
-            ft_guard.as_ref().cloned()
-        };
-        if let Some(ft) = ft {
-            // Read the original file data to store locally
-            let file_data = tokio::fs::read(&file_path)
-                .await
-                .map_err(|e| format!("Failed to read file for local storage: {}", e))?;
+        tracing::info!("Added HTTP source to metadata: {} (local IP: {})", http_url, local_ip);
+    }
 
-            ft.store_file_data(manifest.merkle_root.clone(), file_name.clone(), file_data)
-                .await; // Store with Merkle root as key
-        }
+    // 3.3) Add FTP source if provided
+    if let Some(ftp_url) = ftp_source {
+        metadata.ftp_sources = Some(vec![FtpSourceInfo {
+            url: ftp_url,
+            username: None,
+            password: None,
+            supports_resume: false,
+            file_size: 0,
+            is_available: true,
+            last_checked: Some(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+            ),
+        }]);
+    }
 
-        dht.publish_file(metadata, None).await?;
-        version
-    } else {
-        1 // Default to v1 if DHT not running
+    let version = metadata.version.unwrap_or(1);
+
+    info!("📦 BACKEND: Created versioned metadata (v{})", version);
+
+    // 4) Publish metadata to DHT
+    dht.publish_file(metadata, None).await?;
+
+    info!("✅ BACKEND: Published file to DHT: {} ({})", file_name, manifest.merkle_root);
+
+    // 5) Store file data locally for seeding
+    let ft = {
+        let ft_guard = state.file_transfer.lock().await;
+        ft_guard.as_ref().cloned()
     };
 
+    if let Some(ft) = ft {
+        let file_data = tokio::fs::read(&file_path)
+            .await
+            .map_err(|e| format!("Failed to read file for local storage: {}", e))?;
 
-    // 6. Register file with HTTP server for Range-based serving
+        ft.store_file_data(manifest.merkle_root.clone(), file_name.clone(), file_data)
+            .await;
+
+        tracing::info!("Stored file locally for seeding: {}", manifest.merkle_root);
+    }
+
+    // 6) Register file with HTTP server for Range-based serving
     state
         .http_server_state
         .register_file(http_server::HttpFileMetadata {
@@ -5473,7 +5476,7 @@ async fn upload_and_publish_file(
 
     tracing::info!("Registered file for HTTP serving: {} ({})", file_name, manifest.merkle_root);
 
-    // 7. Return metadata to frontend
+    // 7) Return upload result to frontend
     Ok(UploadResult {
         merkle_root: manifest.merkle_root,
         file_name,
