@@ -8,8 +8,9 @@
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { get } from 'svelte/store';
   import { t } from 'svelte-i18n';
-  import { dhtService } from '$lib/dht';
-  import { files } from '$lib/stores';
+import { dhtService } from '$lib/dht';
+import { files } from '$lib/stores';
+import { paymentService } from '$lib/services/paymentService';
   import type { FileMetadata } from '$lib/dht';
   import SearchResultCard from './SearchResultCard.svelte';
   import { dhtSearchHistory, type SearchHistoryEntry, type SearchStatus } from '$lib/stores/searchHistory';
@@ -177,7 +178,8 @@
               version: file.version || 1,
               createdAt: file.uploadDate ? Math.floor(file.uploadDate.getTime() / 1000) : Date.now() / 1000,
               seeders: [],
-              is_encrypted: file.isEncrypted || false
+              is_encrypted: file.isEncrypted || false,
+              price: file.price ?? 0
             })).sort((a, b) => b.version - a.version);
             
             latestStatus = 'found';
@@ -344,6 +346,17 @@
   }
 
   async function downloadVersion(version: any) {
+    const rawPrice =
+      typeof version.price === 'number'
+        ? version.price
+        : typeof version.price === 'string'
+          ? Number.parseFloat(version.price)
+          : undefined;
+    const price =
+      typeof rawPrice === 'number' && Number.isFinite(rawPrice)
+        ? rawPrice
+        : undefined;
+
     // Convert version data to FileMetadata format for download
     const metadata: FileMetadata = {
       fileHash: version.fileHash,
@@ -355,7 +368,9 @@
       mimeType: version.mime_type,
       encryptionMethod: version.encryption_method,
       keyFingerprint: version.key_fingerprint,
-      version: version.version
+      version: version.version,
+      price,
+      uploaderAddress: version.uploader_address ?? version.uploaderAddress
     };
 
     // Show peer selection modal instead of direct download
@@ -420,6 +435,21 @@
     try {
       const allMetrics = await PeerSelectionService.getPeerMetrics();
 
+      const sizeInMb = metadata.fileSize > 0 ? metadata.fileSize / (1024 * 1024) : 0;
+      let perMbPrice =
+        metadata.price && sizeInMb > 0
+          ? metadata.price / sizeInMb
+          : 0;
+
+      if (!Number.isFinite(perMbPrice) || perMbPrice <= 0) {
+        try {
+          perMbPrice = await paymentService.getDynamicPricePerMB(1.2);
+        } catch (pricingError) {
+          console.warn('Falling back to static per MB price:', pricingError);
+          perMbPrice = 0.001;
+        }
+      }
+
       availablePeers = metadata.seeders.map(seederId => {
         const metrics = allMetrics.find(m => m.peer_id === seederId);
 
@@ -428,7 +458,7 @@
           latency_ms: metrics?.latency_ms,
           bandwidth_kbps: metrics?.bandwidth_kbps,
           reliability_score: metrics?.reliability_score ?? 0.5,
-          price_per_mb: 0.001,  // Default price, could come from metadata in future
+          price_per_mb: perMbPrice,
           selected: true,  // All selected by default
           percentage: Math.round(100 / metadata.seeders.length)  // Equal split
         };

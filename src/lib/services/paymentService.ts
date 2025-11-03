@@ -501,16 +501,20 @@ static async getDynamicPricePerMB(normalizationFactor = 1): Promise<number> {
     sizeInMB: number;
     formattedAmount: string;
   }> {
-    const pricePerMb = get(settings).pricePerMb || 0.001;
     const sizeInMB = fileSizeInBytes / (1024 * 1024);
     const amount = await this.calculateDownloadCost(fileSizeInBytes);
     console.log(`Download cost: ${amount.toFixed(8)} Chiral`);
 
+    let pricePerMb = await this.getDynamicPricePerMB(1.2);
+    if (!Number.isFinite(pricePerMb) || pricePerMb <= 0) {
+      pricePerMb = 0.001;
+    }
+
     return {
       amount,
-      pricePerMb,
+      pricePerMb: Number(pricePerMb.toFixed(8)),
       sizeInMB,
-      formattedAmount: `${amount.toFixed(6)} Chiral`
+      formattedAmount: `${amount.toFixed(8)} Chiral`
     };
   }
 
