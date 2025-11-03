@@ -38,6 +38,26 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   let storageSectionOpen = false;
   let networkSectionOpen = false;
   let advancedSectionOpen = false;
+  let bandwidthSectionOpen = false;
+  let languageSectionOpen = false;
+  let privacySectionOpen = false;
+  let notificationsSectionOpen = false;
+  let diagnosticsSectionOpen = false;
+
+  const ACCORDION_STORAGE_KEY = "settingsAccordionState";
+
+  type AccordionState = {
+    storage: boolean;
+    network: boolean;
+    bandwidthScheduling: boolean;
+    language: boolean;
+    privacy: boolean;
+    notifications: boolean;
+    advanced: boolean;
+    diagnostics: boolean;
+  };
+
+  let accordionStateInitialized = false;
 
   // Settings state
   let defaultSettings: AppSettings = {
@@ -150,6 +170,53 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   >;
 
   let anonymousModeRestore: PrivacySnapshot | null = null;
+  let prevStorageError = false;
+  let prevNetworkError = false;
+  let prevAdvancedError = false;
+
+  onMount(() => {
+    if (typeof window === "undefined") {
+      accordionStateInitialized = true;
+      return;
+    }
+
+    try {
+      const storedAccordion = window.localStorage.getItem(ACCORDION_STORAGE_KEY);
+      if (storedAccordion) {
+        const parsed = JSON.parse(storedAccordion) as Partial<AccordionState>;
+        if (typeof parsed.storage === "boolean") storageSectionOpen = parsed.storage;
+        if (typeof parsed.network === "boolean") networkSectionOpen = parsed.network;
+        if (typeof parsed.bandwidthScheduling === "boolean") bandwidthSectionOpen = parsed.bandwidthScheduling;
+        if (typeof parsed.language === "boolean") languageSectionOpen = parsed.language;
+        if (typeof parsed.privacy === "boolean") privacySectionOpen = parsed.privacy;
+        if (typeof parsed.notifications === "boolean") notificationsSectionOpen = parsed.notifications;
+        if (typeof parsed.advanced === "boolean") advancedSectionOpen = parsed.advanced;
+        if (typeof parsed.diagnostics === "boolean") diagnosticsSectionOpen = parsed.diagnostics;
+      }
+    } catch (error) {
+      console.warn("Failed to restore settings accordion state:", error);
+    } finally {
+      accordionStateInitialized = true;
+    }
+  });
+
+  $: if (accordionStateInitialized && typeof window !== "undefined") {
+    try {
+      const accordionState: AccordionState = {
+        storage: storageSectionOpen,
+        network: networkSectionOpen,
+        bandwidthScheduling: bandwidthSectionOpen,
+        language: languageSectionOpen,
+        privacy: privacySectionOpen,
+        notifications: notificationsSectionOpen,
+        advanced: advancedSectionOpen,
+        diagnostics: diagnosticsSectionOpen,
+      };
+      window.localStorage.setItem(ACCORDION_STORAGE_KEY, JSON.stringify(accordionState));
+    } catch (error) {
+      console.warn("Failed to persist settings accordion state:", error);
+    }
+  }
 
   const formatBandwidthLimit = (limitKbps: number): string => {
     if (!Number.isFinite(limitKbps) || limitKbps <= 0) {
@@ -366,15 +433,19 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   $: {
     // Open Storage section if it has any errors (but don't close it if already open)
     const hasStorageError = !!maxStorageError || !!storagePathError || !!errors.maxStorageSize || !!errors.cleanupThreshold;
-    if (hasStorageError) storageSectionOpen = true;
+    if (hasStorageError && (!accordionStateInitialized || !prevStorageError)) storageSectionOpen = true;
 
     // Open Network section if it has any errors (but don't close it if already open)
     const hasNetworkError = !!errors.maxConnections || !!errors.port || !!errors.uploadBandwidth || !!errors.downloadBandwidth;
-    if (hasNetworkError) networkSectionOpen = true;
+    if (hasNetworkError && (!accordionStateInitialized || !prevNetworkError)) networkSectionOpen = true;
 
     // Open Advanced section if it has any errors (but don't close it if already open)
     const hasAdvancedError = !!errors.chunkSize || !!errors.cacheSize;
-    if (hasAdvancedError) advancedSectionOpen = true;
+    if (hasAdvancedError && (!accordionStateInitialized || !prevAdvancedError)) advancedSectionOpen = true;
+
+    prevStorageError = hasStorageError;
+    prevNetworkError = hasNetworkError;
+    prevAdvancedError = hasAdvancedError;
   }
 
   async function handleConfirmReset() {
@@ -1077,7 +1148,7 @@ function sectionMatches(section: string, query: string) {
 
   <!-- Bandwidth Scheduling -->
   {#if sectionMatches("bandwidthScheduling", search)}
-    <Expandable>
+    <Expandable bind:isOpen={bandwidthSectionOpen}>
       <div slot="title" class="flex items-center gap-3">
         <RefreshCw class="h-6 w-6 text-blue-600" />
         <h2 class="text-xl font-semibold text-black">{$t('bandwidthScheduling.title')}</h2>
@@ -1263,7 +1334,7 @@ function sectionMatches(section: string, query: string) {
 
   <!-- Language Settings -->
   {#if sectionMatches("language", search)}
-    <Expandable>
+    <Expandable bind:isOpen={languageSectionOpen}>
       <div slot="title" class="flex items-center gap-3">
         <Languages class="h-6 w-6 text-blue-600" />
         <h2 class="text-xl font-semibold text-black">{$t("language.title")}</h2>
@@ -1284,7 +1355,7 @@ function sectionMatches(section: string, query: string) {
 
   <!-- Privacy Settings -->
   {#if sectionMatches("privacy", search)}
-    <Expandable>
+    <Expandable bind:isOpen={privacySectionOpen}>
       <div slot="title" class="flex items-center gap-3">
         <Shield class="h-6 w-6 text-blue-600" />
         <h2 class="text-xl font-semibold text-black">{$t("privacy.title")}</h2>
@@ -1445,7 +1516,7 @@ function sectionMatches(section: string, query: string) {
 
   <!-- Notifications -->
   {#if sectionMatches("notifications", search)}
-    <Expandable>
+    <Expandable bind:isOpen={notificationsSectionOpen}>
       <div slot="title" class="flex items-center gap-3">
         <Bell class="h-6 w-6 text-blue-600" />
         <h2 class="text-xl font-semibold text-black">{$t("notifications.title")}</h2>
@@ -1622,7 +1693,7 @@ function sectionMatches(section: string, query: string) {
 
   <!-- Diagnostics -->
   {#if sectionMatches("diagnostics", search)}
-    <Expandable>
+    <Expandable bind:isOpen={diagnosticsSectionOpen}>
       <div slot="title" class="flex items-center gap-3">
         <Activity class="h-6 w-6 text-blue-600" />
         <h2 class="text-xl font-semibold text-black">{$t("settings.diagnostics.title")}</h2>
