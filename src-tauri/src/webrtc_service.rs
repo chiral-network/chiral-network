@@ -709,6 +709,7 @@ impl WebRTCService {
                     keystore,
                     &active_private_key,
                     stream_auth,
+                    &app_handle,
                 )
                 .await;
                 let _ = event_tx
@@ -880,6 +881,7 @@ impl WebRTCService {
                             keystore,
                             &active_private_key,
                             stream_auth,
+                            &app_handle,
                         )
                         .await;
                     }
@@ -1100,6 +1102,7 @@ impl WebRTCService {
         _keystore: &Arc<Mutex<Keystore>>,
         active_private_key: &Arc<Mutex<Option<String>>>,
         stream_auth: &Arc<Mutex<StreamAuthService>>,
+        app_handle: &tauri::AppHandle,
     ) {
         // 1. Verify stream authentication first
         if let Some(ref auth_msg) = chunk.auth_message {
@@ -1173,6 +1176,7 @@ impl WebRTCService {
                         file_transfer_service,
                         event_tx,
                         peer_id,
+                        &app_handle,
                     )
                     .await;
                 }
@@ -1181,35 +1185,53 @@ impl WebRTCService {
     }
 
     async fn assemble_file_from_chunks(
-        file_hash: &str,
-        chunks: &HashMap<u32, FileChunk>,
-        file_transfer_service: &Arc<FileTransferService>,
-        event_tx: &mpsc::Sender<WebRTCEvent>,
-        peer_id: &str,
+    file_hash: &str,
+    chunks: &HashMap<u32, FileChunk>,
+    file_transfer_service: &Arc<FileTransferService>,
+    event_tx: &mpsc::Sender<WebRTCEvent>,
+    peer_id: &str,
+    app_handle: &tauri::AppHandle, // Add this parameter
     ) {
-        // Sort chunks by index
-        let mut sorted_chunks: Vec<_> = chunks.values().collect();
-        sorted_chunks.sort_by_key(|c| c.chunk_index);
+    // Sort chunks by index
+    let mut sorted_chunks: Vec<_> = chunks.values().collect();
+    sorted_chunks.sort_by_key(|c| c.chunk_index);
 
-        // Concatenate chunk data
-        let mut file_data = Vec::new();
-        for chunk in sorted_chunks {
-            file_data.extend_from_slice(&chunk.data);
-        }
+    // Get file name from the first chunk
+    let file_name = sorted_chunks
+        .first()
+        .map(|c| c.file_hash.clone())
+        .unwrap_or_else(|| format!("downloaded_{}", file_hash));
 
-        // Store the assembled file
-        let file_name = format!("downloaded_{}", file_hash);
-        file_transfer_service
-            .store_file_data(file_hash.to_string(), file_name, file_data)
-            .await;
-
-        let _ = event_tx
-            .send(WebRTCEvent::TransferCompleted {
-                peer_id: peer_id.to_string(),
-                file_hash: file_hash.to_string(),
-            })
-            .await;
+    // Concatenate chunk data
+    let mut file_data = Vec::new();
+    for chunk in sorted_chunks {
+        file_data.extend_from_slice(&chunk.data);
     }
+
+    let file_size = file_data.len();
+
+    // Store the assembled file internally
+    file_transfer_service
+        .store_file_data(file_hash.to_string(), file_name.clone(), file_data.clone())
+        .await;
+
+    // NEW: Emit event to frontend with complete file data
+    if let Err(e) = app_handle.emit("webrtc_download_complete", serde_json::json!({
+        "fileHash": file_hash,
+        "fileName": file_name,
+        "fileSize": file_size,
+        "data": file_data, // Send the actual file data
+    })) {
+        error!("Failed to emit webrtc_download_complete event: {}", e);
+    }
+
+    let _ = event_tx
+        .send(WebRTCEvent::TransferCompleted {
+            peer_id: peer_id.to_string(),
+            file_hash: file_hash.to_string(),
+        })
+        .await;
+}
 
     fn calculate_chunk_checksum(data: &[u8]) -> String {
         let mut hasher = Sha256::default();

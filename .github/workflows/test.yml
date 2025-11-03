@@ -81,7 +81,7 @@ jobs:
             libssl-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev
-        timeout-minutes: 5
+        timeout-minutes: 10
 
       - name: Check if backend compiles
         run: |

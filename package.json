@@ -45,6 +45,7 @@
     "autoprefixer": "^10.4.20",
     "eslint": "^9.36.0",
     "eslint-plugin-svelte": "^3.12.4",
+    "hardhat": "^3.0.9",
     "postcss": "^8.4.49",
     "prettier": "^3.6.2",
     "prettier-plugin-svelte": "^3.4.0",
