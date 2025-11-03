@@ -1,3 +1,4 @@
+
 <script lang="ts">
   import Card from '$lib/components/ui/card.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
@@ -95,8 +96,6 @@
   let connectionAttempts = 0
   let dhtPollInterval: number | undefined
   let natStatusUnlisten: (() => void) | null = null
-  let bootstrapCompletedUnlisten: (() => void) | null = null
-  let bootstrapCompleted = false // Track if bootstrap has completed
   let lastNatState: NatReachabilityState | null = null
   let lastNatConfidence: NatConfidence | null = null
   
@@ -312,30 +311,6 @@
       })
     } catch (error) {
       console.error('Failed to subscribe to NAT status updates', error)
-    }
-  }
-
-  async function registerBootstrapListener() {
-    if (!isTauri || bootstrapCompletedUnlisten) return
-    try {
-      bootstrapCompletedUnlisten = await listen('bootstrap_completed', async (event) => {
-        const payload = event.payload as { numRemaining: number; success: boolean }
-        if (!payload) return
-        
-        bootstrapCompleted = true // Mark bootstrap as completed
-        
-        if (payload.success) {
-          dhtEvents = [...dhtEvents, `✅ Bootstrap completed! DHT is ready (${payload.numRemaining} peers in routing table)`]
-          dhtStatus = 'connected'
-        } else {
-          dhtEvents = [...dhtEvents, `⚠ Bootstrap had issues but DHT is operational`]
-          if (dhtPeerCount > 0) {
-            dhtStatus = 'connected'
-          }
-        }
-      })
-    } catch (error) {
-      console.error('Failed to subscribe to bootstrap completion updates', error)
     }
   }
   
@@ -626,16 +601,12 @@
         }
 
         // Update connection status based on peer count
-        // IMPORTANT: Don't override status immediately after bootstrap completion
+        // IMPORTANT: Never set to 'disconnected' while backend is running
         if (peerCount === 0) {
-          // Only downgrade to 'connecting' if bootstrap hasn't just completed
-          // This prevents flickering when bootstrap completes but peers aren't fully connected yet
-          if (dhtStatus === 'connected' && !bootstrapCompleted) {
+          // If backend is running but no peers, show 'connecting' not 'disconnected'
+          if (dhtStatus === 'connected') {
             dhtStatus = 'connecting'
             dhtEvents = [...dhtEvents, '⚠ Lost connection to all peers']
-          } else if (bootstrapCompleted && dhtStatus === 'connected') {
-            // Bootstrap completed but no peers yet - this is normal, keep as connected
-            // The DHT routing table is being populated
           }
         } else {
           if (dhtStatus !== 'connected') {
@@ -688,7 +659,6 @@
       dhtPeerId = null
       dhtError = null
       connectionAttempts = 0
-      bootstrapCompleted = false // Reset bootstrap flag
       dhtEvents = [...dhtEvents, `✓ DHT stopped - port ${dhtPort} released`]
       dhtHealth = null
       copiedListenAddr = null
@@ -1207,7 +1177,6 @@
         }
         await refreshConnectedPeers();
         await registerNatListener()
-        await registerBootstrapListener()
         unlistenProgress = await listen('geth-download-progress', (event) => {
           downloadProgress = event.payload as typeof downloadProgress
         })
@@ -1227,10 +1196,6 @@
       if (natStatusUnlisten) {
         natStatusUnlisten()
         natStatusUnlisten = null
-      }
-      if (bootstrapCompletedUnlisten) {
-        bootstrapCompletedUnlisten()
-        bootstrapCompletedUnlisten = null
       }
       if (stopPeerEvents) {
         stopPeerEvents()
