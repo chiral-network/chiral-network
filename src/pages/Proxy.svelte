@@ -689,7 +689,7 @@ onDestroy(() => {
             <span
               class="inline-block h-4 w-4 transform rounded-full bg-white transition-all duration-300
                  {$privacyStore.anonymousMode ? 'translate-x-6' : 'translate-x-1'}"
-            />
+            ></span>
           </button>
         </div>
 
@@ -718,7 +718,7 @@ onDestroy(() => {
             <span
               class="inline-block h-4 w-4 transform rounded-full bg-white transition-all duration-300
                  {$privacyStore.multiHopEnabled ? 'translate-x-6' : 'translate-x-1'}"
-            />
+            ></span>
           </button>
         </div>
       </div>
@@ -772,8 +772,9 @@ onDestroy(() => {
                   bind:value={newNodeAddress}
                   placeholder="example.com:8080 or enode://..."
                   class="flex-1 {isAddressValid || newNodeAddress === '' ? '' : 'border border-red-500 focus:ring-red-500'}"
-                  on:keydown={(e: KeyboardEvent) => {
-                   if (e.key === 'Enter' && isAddressValid && newNodeAddress) addNode()
+                  on:keydown={(e) => {
+                   const ev = (e as unknown as KeyboardEvent);
+                   if (ev.key === 'Enter' && isAddressValid && newNodeAddress) addNode()
                   }}
               />
               <Button on:click={addNode} disabled={!isAddressValid || !newNodeAddress}>
