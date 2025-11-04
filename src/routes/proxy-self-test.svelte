@@ -194,8 +194,8 @@
 </div>
 
 <style>
-  .input { @apply border rounded px-3 py-2 w-full; }
-  .btn { @apply border rounded px-3 py-2; }
-  .btn-primary { @apply bg-black text-white; }
-  .btn-xs { @apply text-xs px-2 py-1; }
+  .input { border: 1px solid #d1d5db; border-radius: 0.25rem; padding: 0.5rem 0.75rem; width: 100%; }
+  .btn { border: 1px solid #d1d5db; border-radius: 0.25rem; padding: 0.5rem 0.75rem; }
+  .btn-primary { background-color: #000000; color: #ffffff; }
+  .btn-xs { font-size: 0.75rem; padding: 0.25rem 0.5rem; }
 </style>

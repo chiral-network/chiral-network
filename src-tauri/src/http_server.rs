@@ -392,6 +392,7 @@ pub async fn start_server(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tower::util::ServiceExt;
 
     #[tokio::test]
     async fn test_health_check() {
