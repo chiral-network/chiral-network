@@ -31,7 +31,7 @@
   import { showToast } from "$lib/toast";
   import { invoke } from "@tauri-apps/api/core";
   import Expandable from "$lib/components/ui/Expandable.svelte";
-  import { settings, type AppSettings } from "$lib/stores";
+import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   import { bandwidthScheduler } from "$lib/services/bandwidthScheduler";
 
   let showResetConfirmModal = false;
@@ -42,7 +42,7 @@
   // Settings state
   let defaultSettings: AppSettings = {
     // Storage settings
-    storagePath: "~/ChiralNetwork/Storage",
+    storagePath: "~/Chiral-Network-Storage",
     maxStorageSize: 100, // GB
     autoCleanup: true,
     cleanupThreshold: 90, // %
@@ -71,6 +71,7 @@
     autoStartDht: false,
     anonymousMode: false,
     shareAnalytics: true,
+    customBootstrapNodes: [],
 
     // Notifications
     enableNotifications: true,
@@ -110,6 +111,7 @@
   // NAT & privacy configuration text bindings
   let autonatServersText = '';
   let trustedProxyText = '';
+  let newBootstrapNode = '';
 
   const locationOptions = GEO_REGIONS
     .filter((region) => region.id !== UNKNOWN_REGION_ID)
@@ -150,6 +152,36 @@
   >;
 
   let anonymousModeRestore: PrivacySnapshot | null = null;
+
+  const formatBandwidthLimit = (limitKbps: number): string => {
+    if (!Number.isFinite(limitKbps) || limitKbps <= 0) {
+      return "Unlimited";
+    }
+    return `${limitKbps} KB/s`;
+  };
+
+  function formatNextChange(timestamp?: number): string {
+    if (!timestamp || !Number.isFinite(timestamp)) {
+      return "Not scheduled";
+    }
+
+    const deltaMs = timestamp - Date.now();
+    if (deltaMs <= 0) {
+      return new Date(timestamp).toLocaleString();
+    }
+
+    const deltaMinutes = Math.round(deltaMs / 60000);
+    if (deltaMinutes < 60) {
+      return `in ${deltaMinutes} min`;
+    }
+
+    const deltaHours = Math.round(deltaMs / 3600000);
+    if (deltaHours < 24) {
+      return `in ${deltaHours} hr`;
+    }
+
+    return new Date(timestamp).toLocaleString();
+  }
 
   function capturePrivacySnapshot(): void {
     if (anonymousModeRestore !== null) {
@@ -225,8 +257,9 @@
   $: hasChanges = JSON.stringify(localSettings) !== JSON.stringify(savedSettings);
 
   async function saveSettings() {
-    if (!isValid || maxStorageError || storagePathError) {
-      return;
+    // Map trustedProxyRelays to preferredRelays for consistency
+    if (localSettings.trustedProxyRelays?.length) {
+      localSettings.preferredRelays = localSettings.trustedProxyRelays;
     }
 
     // Save local changes to the Svelte store
@@ -294,16 +327,23 @@
       console.debug("stop_dht_node failed (probably already stopped):", error);
     }
 
+    // Use custom bootstrap nodes if configured, otherwise use defaults
     let bootstrapNodes: string[] = [];
-    try {
-      bootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command");
-    } catch (error) {
-      console.error("Failed to fetch bootstrap nodes:", error);
-      throw error;
-    }
+    if (localSettings.customBootstrapNodes && localSettings.customBootstrapNodes.length > 0) {
+      bootstrapNodes = localSettings.customBootstrapNodes;
+      console.log("Using custom bootstrap nodes:", bootstrapNodes);
+    } else {
+      try {
+        bootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command");
+        console.log("Using default bootstrap nodes:", bootstrapNodes);
+      } catch (error) {
+        console.error("Failed to fetch bootstrap nodes:", error);
+        throw error;
+      }
 
-    if (!Array.isArray(bootstrapNodes) || bootstrapNodes.length === 0) {
-      throw new Error("No bootstrap nodes available to restart DHT");
+      if (!Array.isArray(bootstrapNodes) || bootstrapNodes.length === 0) {
+        throw new Error("No bootstrap nodes available to restart DHT");
+      }
     }
 
     const payload: Record<string, unknown> = {
@@ -334,7 +374,7 @@
 
   $: {
     // Open Storage section if it has any errors (but don't close it if already open)
-    const hasStorageError = !!maxStorageError || !!storagePathError || !!errors.maxStorageSize || !!errors.cleanupThreshold;
+    const hasStorageError = !!maxStorageError || !!errors.maxStorageSize || !!errors.cleanupThreshold;
     if (hasStorageError) storageSectionOpen = true;
 
     // Open Network section if it has any errors (but don't close it if already open)
@@ -478,6 +518,25 @@
       .split('\n')
       .map((line) => line.trim())
       .filter((line) => line.length > 0);
+  }
+
+  function addBootstrapNode() {
+    const trimmed = newBootstrapNode.trim();
+    if (trimmed && !localSettings.customBootstrapNodes.includes(trimmed)) {
+      localSettings.customBootstrapNodes = [...localSettings.customBootstrapNodes, trimmed];
+      newBootstrapNode = '';
+    }
+  }
+
+  function removeBootstrapNode(index: number) {
+    localSettings.customBootstrapNodes = localSettings.customBootstrapNodes.filter((_, i) => i !== index);
+  }
+
+  function handleBootstrapNodeKeypress(event: KeyboardEvent) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      addBootstrapNode();
+    }
   }
 
   async function runDiagnostics() {
@@ -643,45 +702,10 @@ selectedLanguage = initial; // Synchronize dropdown display value
 
   let freeSpaceGB: number | null = null;
   let maxStorageError: string | null = null;
-  let storagePathError: string | null = null;
 
   onMount(async () => {
     freeSpaceGB = await invoke('get_available_storage');
   });
-
-  // Check if storage path exists
-  async function checkStoragePathExists(path: string) {
-    if (!path || path.trim() === '') {
-      storagePathError = null;
-      return;
-    }
-
-    try {
-      // Expand ~ to actual home directory for checking
-      let pathToCheck = path;
-      if (path.startsWith("~/") || path.startsWith("~\\")) {
-        const home = await homeDir();
-        pathToCheck = path.replace(/^~/, home);
-      } else if (path === "~") {
-        pathToCheck = await homeDir();
-      }
-
-      const exists = await invoke<boolean>('check_directory_exists', { path: pathToCheck });
-      if (!exists) {
-        storagePathError = 'Directory does not exist';
-      } else {
-        storagePathError = null;
-      }
-    } catch (error) {
-      console.error('Failed to check directory:', error);
-      storagePathError = null;
-    }
-  }
-
-  // Check storage path whenever it changes
-  $: if (localSettings.storagePath) {
-    checkStoragePathExists(localSettings.storagePath);
-  }
 
   $: {
     if (freeSpaceGB !== null && localSettings.maxStorageSize > freeSpaceGB) {
@@ -711,6 +735,8 @@ const sectionLabels: Record<string, string[]> = {
     $t("network.enableUpnp"),
     $t("network.enableNat"),
     $t("network.enableDht"),
+    "Bootstrap Nodes",
+    "Custom Bootstrap Nodes",
   ],
   bandwidthScheduling: [
     "Bandwidth Scheduling",
@@ -793,8 +819,8 @@ function sectionMatches(section: string, query: string) {
             <Input
               id="storage-path"
               bind:value={localSettings.storagePath}
-              placeholder="~/ChiralNetwork/Storage"
-              class={`flex-1 ${storagePathError ? 'border-red-500 focus:border-red-500 ring-red-500' : ''}`}
+              placeholder="~/Chiral-Network-Storage"
+              class="flex-1"
             />
             <Button
               variant="outline"
@@ -804,9 +830,6 @@ function sectionMatches(section: string, query: string) {
               <FolderOpen class="h-4 w-4" />
             </Button>
           </div>
-          {#if storagePathError}
-            <p class="mt-1 text-sm text-red-500">{storagePathError}</p>
-          {/if}
           
         </div>
 
@@ -1002,7 +1025,71 @@ function sectionMatches(section: string, query: string) {
               </p>
             </div>
           {/if}
+        </div>
 
+        <!-- Custom Bootstrap Nodes -->
+        <div class="space-y-3 border-t pt-3">
+          <h4 class="font-medium">Custom Bootstrap Nodes</h4>
+          <p class="text-xs text-muted-foreground">
+            Configure custom bootstrap nodes for the DHT network. Leave empty to use the default hardcoded bootstrap nodes.
+          </p>
+
+          <div>
+            <Label for="new-bootstrap-node">Add Bootstrap Node</Label>
+            <div class="flex gap-2 mt-1">
+              <Input
+                id="new-bootstrap-node"
+                bind:value={newBootstrapNode}
+                on:keypress={handleBootstrapNodeKeypress}
+                placeholder="/ip4/54.198.145.146/tcp/4001/p2p/12D3KooW..."
+                class="flex-1 font-mono text-sm"
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                on:click={addBootstrapNode}
+                disabled={!newBootstrapNode.trim()}
+              >
+                Add
+              </Button>
+            </div>
+            <p class="text-xs text-muted-foreground mt-1">
+              Enter bootstrap node multiaddress and press Enter or click Add
+            </p>
+          </div>
+
+          {#if localSettings.customBootstrapNodes && localSettings.customBootstrapNodes.length > 0}
+            <div class="space-y-2">
+              <Label>Configured Bootstrap Nodes ({localSettings.customBootstrapNodes.length})</Label>
+              <div class="space-y-2">
+                {#each localSettings.customBootstrapNodes as node, index}
+                  <div class="flex items-center gap-2 p-2 bg-slate-50 rounded border">
+                    <span class="flex-1 text-xs font-mono break-all">{node}</span>
+                    <Button
+                      size="xs"
+                      variant="destructive"
+                      on:click={() => removeBootstrapNode(index)}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
+
+          <div class="rounded-md border border-dashed border-slate-200 p-3 text-xs text-muted-foreground space-y-1">
+            <p>Custom bootstrap nodes: {localSettings.customBootstrapNodes?.length || 0}</p>
+            {#if localSettings.customBootstrapNodes && localSettings.customBootstrapNodes.length > 0}
+              <p class="text-green-600">✓ Using custom bootstrap nodes</p>
+            {:else}
+              <p class="text-blue-600">Using default hardcoded bootstrap nodes</p>
+            {/if}
+          </div>
+        </div>
+
+        <!-- Relay Server -->
+        <div class="space-y-2 border-t pt-3">
           <div class="flex items-center gap-2">
             <input
               type="checkbox"
@@ -1067,6 +1154,26 @@ function sectionMatches(section: string, query: string) {
         </p>
 
         {#if localSettings.enableBandwidthScheduling}
+          <div class="mt-3 rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-900">
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div class="text-sm font-semibold text-blue-800">Current limits</div>
+              <div class="text-[0.75rem] uppercase tracking-wide">
+                {#if $activeBandwidthLimits.source === "schedule"}
+                  Active schedule: {$activeBandwidthLimits.scheduleName ?? "Unnamed schedule"}
+                {:else}
+                  Default limits in effect
+                {/if}
+              </div>
+            </div>
+            <div class="mt-2 grid gap-2 sm:grid-cols-2">
+              <div>Upload: {formatBandwidthLimit($activeBandwidthLimits.uploadLimitKbps)}</div>
+              <div>Download: {formatBandwidthLimit($activeBandwidthLimits.downloadLimitKbps)}</div>
+            </div>
+            <div class="mt-2">
+              Next change: {formatNextChange($activeBandwidthLimits.nextChangeAt)}
+            </div>
+          </div>
+
           <div class="space-y-3 mt-4">
             {#each localSettings.bandwidthSchedules as schedule, index}
               <div class="p-4 border rounded-lg bg-muted/30">
@@ -1354,6 +1461,7 @@ function sectionMatches(section: string, query: string) {
               <textarea
                 id="autonat-servers"
                 bind:value={autonatServersText}
+                on:input={updateAutonatServers}
                 on:blur={updateAutonatServers}
                 placeholder="/ip4/1.2.3.4/tcp/4001/p2p/QmPeerId&#10;One multiaddr per line"
                 rows="3"
@@ -1638,9 +1746,9 @@ function sectionMatches(section: string, query: string) {
       <Button
         size="xs"
         on:click={saveSettings}
-        disabled={!hasChanges || maxStorageError || storagePathError || !isValid}
-      
-        class={`transition-colors duration-200 ${!hasChanges || maxStorageError || storagePathError || !isValid ? "cursor-not-allowed opacity-50" : ""}`}
+        disabled={!hasChanges}
+
+        class={`transition-colors duration-200 ${!hasChanges ? "cursor-not-allowed opacity-50" : ""}`}
       >
         <Save class="h-4 w-4 mr-2" />
         {$t("actions.save")}

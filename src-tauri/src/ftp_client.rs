@@ -7,11 +7,22 @@
 
 use crate::download_source::FtpSourceInfo;
 use anyhow::{Context, Result};
+use std::net::ToSocketAddrs;
 use std::path::Path;
+use std::time::Duration;
 use suppaftp::types::FileType;
 use suppaftp::{FtpStream, NativeTlsConnector, NativeTlsFtpStream};
 use tokio::task::spawn_blocking;
 use tracing::{debug, info, warn};
+
+/// Default FTP connection timeout in seconds
+/// 
+/// This timeout is used when connecting to FTP servers if the FtpSourceInfo
+/// does not specify a custom timeout. A 30-second timeout is chosen as a
+/// reasonable balance between:
+/// - Allowing time for slow network connections to establish
+/// - Preventing indefinite hangs on unresponsive servers
+const DEFAULT_FTP_TIMEOUT_SECS: u64 = 30;
 
 /// FTP download progress callback
 pub type ProgressCallback = Box<dyn Fn(u64, u64) + Send>;
@@ -66,16 +77,37 @@ impl FtpClient {
     fn download_with_ftp_sync(source_info: &FtpSourceInfo, output_path: &Path) -> Result<u64> {
         let (host, port, remote_path) = Self::parse_ftp_url(&source_info.url)?;
 
+        // Get timeout from source info or use default
+        let timeout_secs = source_info.timeout_secs.unwrap_or(DEFAULT_FTP_TIMEOUT_SECS);
+        let timeout = Duration::from_secs(timeout_secs);
+
         debug!(
             host = %host,
             port = port,
             path = %remote_path,
+            timeout_secs = timeout_secs,
             "Connecting to FTP server"
         );
 
-        // Connect to FTP server
-        let mut ftp_stream = FtpStream::connect(format!("{}:{}", host, port))
+        // Connect to FTP server with timeout
+        let addr = format!("{}:{}", host, port)
+            .to_socket_addrs()
+            .context("Failed to resolve FTP server address")?
+            .next()
+            .context("No addresses found for FTP server")?;
+
+        let mut ftp_stream = FtpStream::connect_timeout(addr, timeout)
             .context("Failed to connect to FTP server")?;
+
+        // Set read/write timeout on the underlying stream
+        ftp_stream
+            .get_ref()
+            .set_read_timeout(Some(timeout))
+            .context("Failed to set read timeout")?;
+        ftp_stream
+            .get_ref()
+            .set_write_timeout(Some(timeout))
+            .context("Failed to set write timeout")?;
 
         // Login
         let (username, password) = Self::get_credentials(source_info)?;
@@ -119,10 +151,15 @@ impl FtpClient {
     fn download_with_ftps_sync(source_info: &FtpSourceInfo, output_path: &Path) -> Result<u64> {
         let (host, port, remote_path) = Self::parse_ftp_url(&source_info.url)?;
 
+        // Get timeout from source info or use default
+        let timeout_secs = source_info.timeout_secs.unwrap_or(DEFAULT_FTP_TIMEOUT_SECS);
+        let timeout = Duration::from_secs(timeout_secs);
+
         debug!(
             host = %host,
             port = port,
             path = %remote_path,
+            timeout_secs = timeout_secs,
             "Connecting to FTPS server"
         );
 
@@ -131,8 +168,8 @@ impl FtpClient {
             native_tls::TlsConnector::new().context("Failed to create TLS connector")?,
         );
 
-        // Connect directly with TLS using connect_secure_implicit
-        // Use NativeTlsFtpStream type alias for proper type inference
+        // Note: connect_secure_implicit doesn't support timeout directly,
+        // so we use the deprecated method but set timeouts after connection
         let mut ftp_stream = NativeTlsFtpStream::connect_secure_implicit(
             format!("{}:{}", host, port),
             tls_connector,
@@ -140,7 +177,17 @@ impl FtpClient {
         )
         .context("Failed to connect to FTPS server")?;
 
-        debug!("TLS connection established");
+        // Set read/write timeouts on the underlying TCP stream after connection
+        ftp_stream
+            .get_ref()
+            .set_read_timeout(Some(timeout))
+            .context("Failed to set read timeout")?;
+        ftp_stream
+            .get_ref()
+            .set_write_timeout(Some(timeout))
+            .context("Failed to set write timeout")?;
+
+        debug!("FTPS connection established with timeout configured");
 
         // Login
         let (username, password) = Self::get_credentials(source_info)?;
@@ -338,6 +385,38 @@ mod tests {
         let (username, password) = FtpClient::get_credentials(&source_info).unwrap();
         assert_eq!(username, "testuser");
         assert_eq!(password, "");
+    }
+
+    #[test]
+    fn test_timeout_secs_default() {
+        // Test that default timeout is used when not specified
+        let source_info = FtpSourceInfo {
+            url: "ftp://ftp.example.com/file".to_string(),
+            username: None,
+            encrypted_password: None,
+            passive_mode: true,
+            use_ftps: false,
+            timeout_secs: None,
+        };
+
+        let timeout = source_info.timeout_secs.unwrap_or(DEFAULT_FTP_TIMEOUT_SECS);
+        assert_eq!(timeout, 30);
+    }
+
+    #[test]
+    fn test_timeout_secs_custom() {
+        // Test that custom timeout is used when specified
+        let source_info = FtpSourceInfo {
+            url: "ftp://ftp.example.com/file".to_string(),
+            username: None,
+            encrypted_password: None,
+            passive_mode: true,
+            use_ftps: false,
+            timeout_secs: Some(60),
+        };
+
+        let timeout = source_info.timeout_secs.unwrap_or(DEFAULT_FTP_TIMEOUT_SECS);
+        assert_eq!(timeout, 60);
     }
 
     // Integration tests would require a real FTP server

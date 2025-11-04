@@ -194,15 +194,15 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
             if (completedFile && !paidFiles.has(completedFile.hash)) {
                 // Process payment for Bitswap download (only once per file)
                 console.log('💰 Bitswap download completed, processing payment...');
-                const paymentAmount = paymentService.calculateDownloadCost(completedFile.size);
+                const paymentAmount = await paymentService.calculateDownloadCost(completedFile.size);
                 
                 // Skip payment check for free files (price = 0)
-    if (paymentAmount === 0) {
-        console.log('Free file, skipping payment');
-        paidFiles.add(completedFile.hash);
-        showNotification(`Download complete! "${completedFile.name}" (Free)`, 'success');
-        
-    }
+                if (paymentAmount === 0) {
+                    console.log('Free file, skipping payment');
+                    paidFiles.add(completedFile.hash);
+                    showNotification(`Download complete! "${completedFile.name}" (Free)`, 'success');
+                    return;
+                }
 
 
                 const seederPeerId = completedFile.seederAddresses?.[0];
@@ -657,6 +657,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       name: metadata.fileName,
       hash: metadata.fileHash,
       size: metadata.fileSize,
+      price: metadata.price ?? 0,
       status: 'queued' as const,
       priority: 'normal' as const,
       version: metadata.version, // Preserve version info if available
@@ -1118,7 +1119,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
         }
 
         // PAYMENT PROCESSING: Calculate and deduct payment before download
-        const paymentAmount = paymentService.calculateDownloadCost(fileToDownload.size);
+        const paymentAmount = await paymentService.calculateDownloadCost(fileToDownload.size);
         console.log(`💰 Payment required: ${paymentAmount.toFixed(6)} Chiral for ${fileToDownload.name}`);
 
         // Check if user has sufficient balance
@@ -1175,6 +1176,9 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
             console.log("Final data array length:", data_.length);
 
+            // Ensure the directory exists before writing
+            await invoke('ensure_directory_exists', { path: outputPath });
+            
             // Write the file data to the output path
             console.log("🔍 DEBUG: About to write file to:", outputPath);
             const { writeFile } = await import('@tauri-apps/plugin-fs');

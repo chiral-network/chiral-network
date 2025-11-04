@@ -251,6 +251,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             price: None,
             uploader_address: None,
             ftp_sources: None,
+            http_sources: None,
             info_hash: None,
             trackers: None,
         };
@@ -392,7 +393,7 @@ fn log_dcutr_snapshot(snapshot: &DhtMetricsSnapshot) {
     info!("   DCUtR enabled: {}", snapshot.dcutr_enabled);
 }
 
-fn get_local_ip() -> Option<String> {
+pub fn get_local_ip() -> Option<String> {
     // Try to get the local IP address
     if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
         if socket.connect("8.8.8.8:80").is_ok() {

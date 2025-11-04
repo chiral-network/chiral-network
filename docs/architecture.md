@@ -39,6 +39,153 @@ Each layer communicates through well-defined interfaces, allowing for independen
 4. **Choice**: Users select best protocol for their network while payments remain consistent
 5. **Testing**: Test data transfer and payments independently
 
+---
+
+### Protocol Abstraction and Management
+
+**`ProtocolManager`** and **`IContentProtocol`** unify all content exchange operations under a consistent API, abstracting away the protocol-specific details. This ensures a consistent **UX** and provides a contract for developing new protocols. This should evolve as new features are needed.
+
+---
+
+#### `IContentProtocol` Interface
+
+Defines mandatory capabilities for any content protocol. Implementations like **Bitswap** must provide these methods:
+
+```typescript
+export interface IContentProtocol {
+  /** Get the protocol name */
+  getName(): Protocol;
+
+  /** Get peers serving the content */
+  getPeersServing(identification: FileIdentification): Promise<PeerInfo[]>;
+
+  /** Retrieve metadata for a file/content */
+  getFileMetadata(identification: FileIdentification): Promise<FileMetadata | null>;
+
+  /** Download content from a peer */
+  getContentFrom(
+    peerId: string,
+    identification: FileIdentification,
+    progressUpdate: ProgressUpdate,
+    outputPath?: string
+  ): Promise<Uint8Array | Void>;
+
+  /** Start seeding/sharing content */
+  startSeeding(
+    filePathOrData: string | Uint8Array,
+    progressUpdate: ProgressUpdate
+  ): Promise<FileMetadata>;
+
+  /** Stop seeding/sharing content */
+  stopSeeding(identification: FileIdentification): Promise<boolean>;
+
+  /** Pause an ongoing download */
+  pauseDownload(identification: FileIdentification): Promise<boolean>;
+
+  /** Resume a paused download */
+  resumeDownload(identification: FileIdentification): Promise<boolean>;
+
+  /** Cancel an ongoing download */
+  cancelDownload(identification: FileIdentification): Promise<boolean>;
+}
+```
+
+---
+
+#### `ProtocolManager` Class
+
+The **`ProtocolManager`** is the gateway for all protocol interactions. It manages multiple protocol implementations and delegates operations to the active protocol.
+
+##### Key Methods
+
+| Method                                   | Description                                                                              |
+| :--------------------------------------- | :--------------------------------------------------------------------------------------- |
+| `constructor(initialProtocol: Protocol)` | Registers available protocols (e.g., `BitSwapProtocol`) and sets the active protocol.    |
+| `setProtocol(protocol: Protocol)`        | Switches the currently active protocol.                                                  |
+| `getProtocolImpl(): IContentProtocol`    | Returns the active protocol implementation.                                              |
+| `getPeersServing(..)`                    | Delegates to the active protocol to list available peers.                                |
+| `downloadFile(..)`                       | Convenience method: fetches peers if needed and downloads from the preferred/first peer. |
+| `uploadFile(..)`                         | Convenience method: seeds content via the active protocol.                               |
+| `stopSharing(..)`                        | Stops seeding/sharing content.                                                           |
+| `pauseDownload(..)`                      | Pauses an ongoing download.                                                              |
+| `resumeDownload(..)`                     | Resumes a paused download.                                                               |
+| `cancelDownload(..)`                     | Cancels an ongoing download.                                                             |
+| `cleanup(): Promise<void>`               | Calls cleanup for all registered protocols for proper shutdown.                          |
+
+```typescript
+export class ProtocolManager {
+  private currentProtocol: IContentProtocol;
+  private protocols: Map<Protocol, IContentProtocol>;
+
+  constructor(initialProtocol: Protocol = Protocol.Bitswap) {
+    this.protocols = new Map();
+    this.protocols.set(Protocol.Bitswap, new BitSwapProtocol());
+
+    const protocol = this.protocols.get(initialProtocol);
+    if (!protocol) {
+      throw new Error(`Protocol ${initialProtocol} not found`);
+    }
+    this.currentProtocol = protocol;
+  }
+
+  setProtocol(protocol: Protocol): void {
+    this.currentProtocol = protocol
+  }
+
+  getProtocol(): Protocol {
+    return this.currentProtocol.getName();
+  }
+
+  getProtocolImpl(): IContentProtocol {
+    return this.currentProtocol;
+  }
+
+  // Convenience methods delegating to current protocol (getPeersServing, downloadFile, uploadFile, etc.)
+  // ...
+}
+```
+
+#### Example Usage in BitSwap
+
+* `get_peers_serving(identification: filemetadata)`
+
+  * Invokes a Tauri command that calls `kademlia.get_providers(identification.merkel_root)`.
+  * Returns a list of peers currently serving the content.
+
+* `get_file_metadata(identification: string (merkel_root))`
+
+  * Queries the DHT for metadata associated with the content.
+  * In Bitswap, this involves retrieving the FileMetadata structure using `kademlia.get`.
+
+* `get_content_from(peerId, identification, progress_update)`
+
+  * Invokes `bitswap.get_from(identification, peerId)` in the swarm event loop.
+  * Calls `progress_update(receivedChunks / totalChunks)` as chunks are received.
+  * Returns void, `progress_update(1)` invoked when download completes.
+
+* `start_seeding(identification, file_path | data, progress_update)`
+  * File path as input
+  * Generates `FileMetadata` and inserts it into the DHT.
+  * Chunks the file and stores blocks in the on-disk blockstore.
+  * Calls `progress_update` as each chunk is stored.
+  * Returns FileMetaData
+
+* `stop_seeding(identification)`
+
+  * Removes the file metadata from the DHT.
+  * Deletes associated chunks from the on-disk blockstore.
+  * **Note:** If multiple files share the same CID, a reference count mechanism should decrement instead of deleting the blocks.
+
+* `pause_download_for(identification)` / `resume_download_for(identification)` / `cancel_download_for(identification)`
+
+  * Standard operations to control ongoing downloads.
+  * Returns true if success
+
+* `set_protocol(protocol)`
+
+  * Switches the active protocol for all subsequent operations.
+
+
 ### How It Works
 
 The network supports **two protocol styles** for file transfer and payment.
@@ -106,6 +253,19 @@ Uses established public protocols for data transfer, with payments settled separ
 - **BitTorrent**: DHT-based P2P swarming
 - **WebTorrent**: Browser-compatible WebRTC
 - **ed2k**: eDonkey2000 multi-source
+
+**Public Protocol Interaction Flow:**
+
+When a downloader initiates a file transfer using a public protocol like HTTP or BitTorrent, the following sequence of events occurs:
+
+1.  **Peer Discovery and Protocol Selection:** The downloader queries the Chiral DHT to find peers seeding the content. The DHT returns a list of seeders, each advertising the protocol(s) they support (e.g., HTTP, BitTorrent).
+    *   **Seeder-Side:** Seeders advertise a default protocol based on their network capability (HTTP for public IPs, WebTorrent for those behind a NAT).
+    *   **Downloader-Side:** The downloader analyzes the list of available seeders and protocols, and selects the optimal protocol(s) based on factors like user preference, network conditions, and file characteristics. The client can decide to use multiple protocols simultaneously from different peers to maximize speed.
+2.  **Peer Handshake and Price Negotiation:** The downloader and seeder(s) establish a connection. A handshake process is performed, during which they agree upon the terms of the transfer, including pricing. This negotiation is facilitated through DHT messages (the exact mechanism is to be defined).
+3.  **Initiation of Download:** Once terms are agreed upon, the downloader can commence the download from the seeder using one or both of the following methods (the default is to be determined):
+    *   **Public Protocol:** The transfer occurs directly over the specified public protocol (e.g., HTTP, BitTorrent).
+    *   **Private Protocol:** The transfer is wrapped within the Chiral private protocol.
+4.  **Parallel Downloading from Public Sources:** Concurrently with the above steps, the downloader can also fetch parts of the file from its original public source (e.g., the public BitTorrent network), enabling multi-source downloads.
 
 **Default Protocol Selection by Network Capability**:
 
@@ -433,7 +593,7 @@ Limitations:
 - STUN/TURN infrastructure needed
 ```
 
-##### 3. BitTorrent Protocol (Alternative for NAT'd Nodes)
+##### 3. BitTorrent Protocol Integration  (Alternative for NAT'd Nodes)
 
 **[Discussion Needed]**: Should BitTorrent be the default for NAT'd nodes instead of WebTorrent?
 
@@ -467,6 +627,114 @@ Disadvantages vs WebTorrent for NAT'd nodes:
 - DHT may be slower than WebRTC STUN/TURN
 
 [Decision Point]: WebTorrent (browser-friendly) vs BitTorrent (efficient) for NAT default?
+
+###### Chiral Client Identification in BitTorrent Swarms
+
+To enable Chiral clients to identify and prioritize each other within a public BitTorrent swarm, a custom extension to the BitTorrent protocol can be implemented, based on BEP 10 (BitTorrent Extension Protocol). This allows for the addition of new features without breaking compatibility with standard clients.
+
+**Proposed Mechanism:**
+
+1.  **Handshake Extension:** During the standard BitTorrent handshake, Chiral clients will set a reserved bit to indicate support for protocol extensions.
+2.  **Extended Handshake:** Immediately following the handshake, an "extended" handshake message is sent. In this message, Chiral clients will include a "chiral" identifier in the list of supported extensions.
+3.  **Identification Message:** If two peers both support the "chiral" extension, they can then exchange custom messages. A Chiral client can send a message containing its Chiral peer ID and reputation score from the Chiral DHT.
+4.  **Prioritization:** Once a peer is verified as a Chiral client, the application can prioritize it for piece requests, creating a "fast lane" for transfers between Chiral users.
+
+Standard BitTorrent clients that do not support this extension will simply ignore it, ensuring full compatibility with the public swarm. In a pay-first model, recorded transactions on the Chiral blockchain ledger may also be used as a verification measure.
+
+###### Note: Private BitTorrent Networks
+
+We may need to have a discussion on whether the program should configure Chiral clients to block all non-Chiral peers, creating a private BitTorrent network. This approach comes with some trade-offs/concerns:
+
+*   **Harming the BitTorrent Network:** The primary advantage of BitTorrent integration is access to the large public swarm. Blocking non-Chiral peers would negatively impace this, possibly casuing harm to the the health of the public torrent network.
+*   **Tracker Penalities/Backlash:** If Chiral clients download from the public swarm but refuse to upload to public peers, they are acting as sole "leeches." This may be seen as a challenge to the cooperative spirit of BitTorrent. Some trackers may even ban clients with poor share ratios.
+
+The recommended approach seems to be the hybrid model: **prioritize Chiral clients but maintain compatibility with the public swarm.** 
+```
+
+The BitTorrent protocol is integrated as a primary method for file transfer, leveraging the global BitTorrent network to enhance multi-source download capabilities. It acts as an additional source within `multi_source_download.rs`, coordinated by a central `ProtocolManager`.
+
+###### Conceptual Overview: Dual-Network Approach
+
+It is crucial to understand that the Chiral P2P network (built on libp2p) and the public BitTorrent network are **separate, parallel P2P networks**. The Chiral application acts as a bridge between them.
+
+- **Chiral P2P Network (libp2p)**: Used to find other Chiral peers, manage reputation, and coordinate transfers and payments within the Chiral ecosystem.
+- **Public BitTorrent Network**: The global, public swarm of all BitTorrent clients. The Chiral client connects to this network to download and seed files like a standard BitTorrent client.
+
+This dual-network approach allows the `ProtocolManager` to query both networks simultaneously, combining the speed and trust of the private Chiral network with the vast reach of the public one for faster, more resilient downloads. The system is designed to prioritize connections to other Chiral clients, ensuring that users within the Chiral ecosystem benefit from higher speeds and reliability.
+
+###### Example: Hybrid BitTorrent Download
+
+This example illustrates how the Chiral client can download a file by simultaneously sourcing chunks from both the public BitTorrent network and from other Chiral peers who are also seeding the same torrent.
+
+**Scenario:** A user wants to download a large file, `large-dataset.zip`, which is available as a public torrent.
+
+1.  **Initiating the Download:** The user adds the magnet link for `large-dataset.zip` to the Chiral client.
+
+2.  **Dual-Network Peer Discovery:** The `ProtocolManager` initiates two peer discovery processes in parallel:
+    *   **Public BitTorrent Network:** The `BitTorrentHandler` connects to the public BitTorrent DHT and trackers specified in the magnet link. It discovers a list of public peers (seeders and leechers) in the global swarm.
+    *   **Chiral DHT:** The client queries the Chiral DHT with the torrent's info hash. It discovers a Chiral peer, "Peer C," who has a high reputation and is also seeding this file within the Chiral network.
+
+3.  **Chunk Allocation and Download:** The `multi_source_download` engine allocates chunks to be downloaded from the different sources based on availability and peer reputation:
+    *   **Public Peers (BitTorrent):** The engine identifies that a group of public peers can provide chunks 1-50. It instructs the `BitTorrentHandler` to download these chunks from the public swarm.
+    *   **Chiral Peer (Chiral Network):** The engine sees that "Peer C" can provide chunks 51-100 and has a high reputation score. It prioritizes this peer for the remaining chunks.
+
+4.  **Simultaneous Download and Verification:** The Chiral client downloads chunks from both sources concurrently:
+    *   Chunks 1-50 are downloaded from the public BitTorrent swarm using the standard BitTorrent protocol.
+    *   Chunks 51-100 are downloaded from "Peer C" through the Chiral network's protocol.
+    *   As each chunk is downloaded, its hash is verified against the torrent's metadata to ensure integrity.
+
+5.  **Payment Settlement:**
+    *   **Public Peers:** No direct payment is made to the public peers, as this follows the standard BitTorrent tit-for-tat sharing model.
+    *   **Chiral Peer:** Depends on model type, but a **pay-first model may be favorable**.
+        - **(download first, pay later)** After the download from "Peer C" is complete and verified, a payment transaction is created and sent to "Peer C"'s wallet on the Chiral blockchain for the chunks they provided.
+        - **(pay first, download later)** A payment transaction is sent to "Peer C" and recorded on the Chiral blockchain specified chunks. This transaction is used as verification for receiver's payment of services.
+
+**Outcome:** By leveraging both the public BitTorrent network and the trusted, high-speed Chiral network, the user completes the download significantly faster and more reliably than using either network alone.
+
+###### Key Architectural Components
+
+1.  **`ProtocolManager` (Orchestrator)**:
+    - The central component responsible for managing all available data transfer protocols (HTTP, BitTorrent, etc.).
+    - It identifies the source type (e.g., a `magnet:` link) and delegates the download or seeding task to the appropriate handler.
+
+2.  **`BitTorrentHandler` (Rust Module)**:
+    - A dedicated Rust module (`src-tauri/src/protocols/bittorrent/`) that implements the `ProtocolHandler` trait.
+    - **Responsibilities**: Encapsulates all BitTorrent-specific logic, including parsing magnet links/.torrent files, managing connections to trackers and the public DHT, handling the peer-wire protocol, and downloading/verifying torrent pieces against their SHA-1 hashes.
+
+3.  **`multi_source_download.rs` Integration**:
+    - The multi-source engine is updated to treat the BitTorrent swarm as a valid source.
+    - It assigns torrent *pieces* (rather than byte ranges) to be downloaded by the `BitTorrentHandler`.
+    - It manages fallback logic, allowing it to supplement a slow torrent swarm with downloads from other sources like HTTP or Chiral P2P.
+
+4.  **Chiral DHT Integration**:
+    - While the `BitTorrentHandler` uses the public BitTorrent DHT to find public peers, the **Chiral DHT** is extended to allow Chiral peers to announce to *each other* that they can provide a file via BitTorrent. This is done by storing the torrent's info hash alongside the file's primary content ID (CID).
+
+5.  **Tauri API (Frontend Boundary)**:
+    - The frontend interacts with the backend through a set of clear, high-level Tauri commands:
+        - `download_torrent(magnet_uri: String)`: Initiates a download from a magnet link.
+        - `seed_file(file_path: String)`: Creates a torrent from a local file, begins seeding it, and returns the magnet link to the UI.
+    - The backend emits events (e.g., `torrent_progress`, `torrent_complete`) to the frontend for real-time UI updates.
+
+###### Data Flow
+
+The following diagram illustrates the high-level data flow when a user initiates a torrent download from the UI.
+
+```mermaid
+sequenceDiagram
+    participant UI as Frontend (Svelte)
+    participant Tauri as Tauri API
+    participant Manager as ProtocolManager
+    participant BHandler as BitTorrentHandler
+    participant PublicSwarm as Public BitTorrent Network
+
+    UI->>+Tauri: invoke('download_torrent', { magnet_uri: '...' })
+    Tauri->>+Manager: download('magnet:...')
+    Manager->>+BHandler: download('magnet:...')
+    BHandler->>+PublicSwarm: Connect to Trackers/DHT & Download Pieces
+    PublicSwarm-->>-BHandler: Piece Data
+    BHandler-->>-Manager: Progress Events
+    Manager-->>-Tauri: emit('torrent_progress', ...)
+    Tauri-->>-UI: Event received, update progress bar
 ```
 
 ##### 4. ed2k (eDonkey2000) Protocol
