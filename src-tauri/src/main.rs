@@ -15,6 +15,7 @@ mod encryption;
 mod ethereum;
 mod file_transfer;
 mod ftp_client;
+mod ftp_downloader;
 mod geth_downloader;
 mod headless;
 mod http_download;
