@@ -2,8 +2,7 @@
 import Card from '$lib/components/ui/card.svelte'
 import Badge from '$lib/components/ui/badge.svelte'
 import Progress from '$lib/components/ui/progress.svelte'
-import Button from '$lib/components/ui/button.svelte'
-import { TrendingUp, Upload, DollarSign, HardDrive, Award, BarChart3, TrendingUp as LineChart, AlertTriangle } from 'lucide-svelte'
+import { TrendingUp, Upload, DollarSign, HardDrive, Award, BarChart3, TrendingUp as LineChart } from 'lucide-svelte'
 import { files, wallet, settings } from '$lib/stores';
 import { proxyNodes } from '$lib/proxy';
 import { onMount, onDestroy } from 'svelte'
@@ -44,8 +43,6 @@ let previousUploadPercent = 0
 let previousDownloadPercent = 0
 let lastThresholdSignature = capThresholds.join(',')
 let notificationPermissionRequested = false
-let previewTimer: number | null = null
-let previewActive = false
 
 // Real analytics data
 let realBandwidthStats: BandwidthStats | null = null
@@ -181,58 +178,6 @@ let realNetworkActivity: NetworkActivity | null = null
     return { alertLevel, previous: percent }
   }
 
-  function previewCapWarnings() {
-    const uploadCap = settingsSnapshot.monthlyUploadCapGb ?? 0
-    const downloadCap = settingsSnapshot.monthlyDownloadCapGb ?? 0
-
-    if (uploadCap <= 0 && downloadCap <= 0) {
-      showToast('Set a monthly upload or download cap first to preview warnings.', 'info')
-      return
-    }
-
-    if (!settingsSnapshot.enableNotifications || !settingsSnapshot.notifyOnBandwidthCap) {
-      showToast('Enable bandwidth cap notifications to preview alerts.', 'info')
-    }
-
-    const targetPercent =
-      capThresholds.length > 0 ? capThresholds[capThresholds.length - 1] : 90
-
-    const previousUsage = { ...bandwidthUsed }
-    const previousUploadSet = new Set(triggeredUploadThresholds)
-    const previousDownloadSet = new Set(triggeredDownloadThresholds)
-    const previousUploadPercentSnapshot = previousUploadPercent
-    const previousDownloadPercentSnapshot = previousDownloadPercent
-
-    const nextUsage = { ...previousUsage }
-    if (uploadCap > 0) {
-      nextUsage.upload = (uploadCap * targetPercent * 1024) / 100
-    }
-    if (downloadCap > 0) {
-      nextUsage.download = (downloadCap * targetPercent * 1024) / 100
-    }
-
-    previewActive = true
-    bandwidthUsed = nextUsage
-
-    if (previewTimer) {
-      clearTimeout(previewTimer)
-    }
-
-    previewTimer = window.setTimeout(() => {
-      previewActive = false
-      bandwidthUsed = previousUsage
-
-      triggeredUploadThresholds.clear()
-      previousUploadSet.forEach((value) => triggeredUploadThresholds.add(value))
-      triggeredDownloadThresholds.clear()
-      previousDownloadSet.forEach((value) => triggeredDownloadThresholds.add(value))
-
-      previousUploadPercent = previousUploadPercentSnapshot
-      previousDownloadPercent = previousDownloadPercentSnapshot
-
-      fetchAnalyticsData()
-    }, 5000)
-  }
 
   type Earning = {
     date: string;
@@ -504,9 +449,6 @@ let realNetworkActivity: NetworkActivity | null = null
 
   // Fetch real analytics data
   async function fetchAnalyticsData() {
-    if (previewActive) {
-      return;
-    }
 
     realBandwidthStats = await analyticsService.getBandwidthStats();
     realNetworkActivity = await analyticsService.getNetworkActivity();
@@ -565,9 +507,6 @@ let realNetworkActivity: NetworkActivity | null = null
 
   onDestroy(() => {
     analyticsService.stopAutoUpdate();
-    if (previewTimer) {
-      clearTimeout(previewTimer);
-    }
   });
 
   // Aggregation function
@@ -759,13 +698,7 @@ let realNetworkActivity: NetworkActivity | null = null
 
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
     <Card class="p-6">
-      <div class="flex items-center justify-between mb-4 gap-2">
-        <h2 class="text-lg font-semibold">{$t('analytics.bandwidthUsage')}</h2>
-        <Button variant="outline" size="xs" on:click={previewCapWarnings} disabled={previewActive}>
-          <AlertTriangle class="h-3.5 w-3.5 mr-1" />
-          Preview warning
-        </Button>
-      </div>
+      <h2 class="text-lg font-semibold mb-4">{$t('analytics.bandwidthUsage')}</h2>
 
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div class="bg-blue-50 rounded-lg p-4 flex flex-col items-center">
@@ -1299,3 +1232,8 @@ let realNetworkActivity: NetworkActivity | null = null
 </Card>
 
 </div>
+
+
+
+
+

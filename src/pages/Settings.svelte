@@ -71,6 +71,9 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     maxConnections: 50,
     uploadBandwidth: 0, // 0 = unlimited
     downloadBandwidth: 0, // 0 = unlimited
+    monthlyUploadCapGb: 0, // 0 = unlimited
+    monthlyDownloadCapGb: 0, // 0 = unlimited
+    capWarningThresholds: [75, 90],
     port: 30303,
     enableUPnP: true,
     enableNAT: true,
@@ -98,6 +101,8 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     notifyOnComplete: true,
     notifyOnError: true,
     soundAlerts: false,
+    notifyOnBandwidthCap: true,
+    notifyOnBandwidthCapDesktop: false,
 
     // Advanced
     enableDHT: true,
@@ -329,6 +334,23 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
       localSettings.preferredRelays = localSettings.trustedProxyRelays;
     }
 
+    const sanitizedThresholds = Array.isArray(localSettings.capWarningThresholds)
+      ? Array.from(
+          new Set(
+            localSettings.capWarningThresholds
+              .map((value) => Math.round(Number(value)))
+              .filter(
+                (value) => Number.isFinite(value) && value > 0 && value <= 100
+              )
+          )
+        ).sort((a, b) => a - b)
+      : [];
+
+    localSettings = {
+      ...localSettings,
+      capWarningThresholds: sanitizedThresholds,
+    };
+
     // Save local changes to the Svelte store
     settings.set(localSettings);
 
@@ -445,7 +467,14 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     if (hasStorageError) storageSectionOpen = true;
 
     // Open Network section if it has any errors (but don't close it if already open)
-    const hasNetworkError = !!errors.maxConnections || !!errors.port || !!errors.uploadBandwidth || !!errors.downloadBandwidth;
+    const hasNetworkError =
+      !!errors.maxConnections ||
+      !!errors.port ||
+      !!errors.uploadBandwidth ||
+      !!errors.downloadBandwidth ||
+      !!errors.monthlyUploadCapGb ||
+      !!errors.monthlyDownloadCapGb ||
+      !!errors.capWarningThresholds;
     if (hasNetworkError && (!accordionStateInitialized || !prevNetworkError)) networkSectionOpen = true;
 
     // Open Advanced section if it has any errors (but don't close it if already open)
@@ -742,14 +771,65 @@ selectedLanguage = initial; // Synchronize dropdown display value
       max: Infinity,
       label: "Download Limit (MB/s)",
     },
+    monthlyUploadCapGb: { min: 0, max: 100000, label: "Monthly Upload Cap (GB)" },
+    monthlyDownloadCapGb: { min: 0, max: 100000, label: "Monthly Download Cap (GB)" },
     chunkSize: { min: 64, max: 1024, label: "Chunk Size (KB)" },
     cacheSize: { min: 256, max: 8192, label: "Cache Size (MB)" },
   } as const;
 
   let errors: Record<string, string | null> = {};
 
+  let capThresholdInput = (localSettings.capWarningThresholds ?? []).join(", ");
+  let editingCapThresholds = false;
+
+  function parseCapThresholds(value: string): number[] {
+    if (!value) {
+      return [];
+    }
+
+    const tokens = value
+      .split(/[,\\s]+/)
+      .map((token) => token.trim())
+      .filter(Boolean);
+
+    if (tokens.length === 0) {
+      return [];
+    }
+
+    const numbers = tokens
+      .map((token) => Number.parseFloat(token))
+      .filter((num) => Number.isFinite(num));
+
+    const sanitized = Array.from(new Set(numbers.map((num) => Math.round(num))))
+      .filter((num) => num > 0 && num <= 100)
+      .sort((a, b) => a - b);
+
+    return sanitized;
+  }
+
+  function handleCapThresholdInput(event: Event) {
+    const target = event.target as HTMLInputElement;
+    capThresholdInput = target.value;
+  }
+
+  function handleCapThresholdFocus() {
+    editingCapThresholds = true;
+  }
+
+  function handleCapThresholdBlur() {
+    const parsed = parseCapThresholds(capThresholdInput);
+    capThresholdInput = parsed.join(", ");
+    localSettings.capWarningThresholds = parsed;
+    localSettings = { ...localSettings };
+    editingCapThresholds = false;
+  }
+
+  $: if (!editingCapThresholds) {
+    capThresholdInput = (localSettings.capWarningThresholds ?? []).join(", ");
+  }
+
   function rangeMessage(label: string, min: number, max: number) {
-    if (max === Infinity) return `${label} must be ≥ ${min}.`;
+    if (max === Infinity) return `${label} must be >= ${min}.`;
     return `${label} must be between ${min} and ${max}.`;
   }
 
@@ -761,6 +841,23 @@ selectedLanguage = initial; // Synchronize dropdown display value
             next[key] = rangeMessage(cfg.label, cfg.min, cfg.max);
         }
     }
+
+    const thresholds = Array.isArray(localSettings.capWarningThresholds)
+      ? localSettings.capWarningThresholds
+      : [];
+
+    const hasInvalidThreshold = thresholds.some(
+      (value) => !Number.isFinite(value) || value <= 0 || value > 100
+    );
+
+    if (hasInvalidThreshold) {
+      next.capWarningThresholds = "Thresholds must be between 1 and 100.";
+    } else if (thresholds.length > 6) {
+      next.capWarningThresholds = "Keep warning thresholds to six entries or fewer.";
+    } else {
+      next.capWarningThresholds = null;
+    }
+
     errors = next;
 }
 
@@ -1029,6 +1126,64 @@ function sectionMatches(section: string, query: string) {
               <p class="mt-1 text-sm text-red-500">{errors.downloadBandwidth}</p>
             {/if}
           </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <Label for="monthly-upload-cap">Monthly Upload Cap (GB)</Label>
+            <Input
+              id="monthly-upload-cap"
+              type="number"
+              bind:value={localSettings.monthlyUploadCapGb}
+              min="0"
+              step="1"
+              class="mt-2"
+            />
+            <p class="mt-1 text-xs text-muted-foreground">
+              Set to 0 to keep uploads uncapped. Caps reset each calendar month.
+            </p>
+            {#if errors.monthlyUploadCapGb}
+              <p class="mt-1 text-sm text-red-500">{errors.monthlyUploadCapGb}</p>
+            {/if}
+          </div>
+
+          <div>
+            <Label for="monthly-download-cap">Monthly Download Cap (GB)</Label>
+            <Input
+              id="monthly-download-cap"
+              type="number"
+              bind:value={localSettings.monthlyDownloadCapGb}
+              min="0"
+              step="1"
+              class="mt-2"
+            />
+            <p class="mt-1 text-xs text-muted-foreground">
+              Set to 0 to keep downloads uncapped. Caps reset each calendar month.
+            </p>
+            {#if errors.monthlyDownloadCapGb}
+              <p class="mt-1 text-sm text-red-500">{errors.monthlyDownloadCapGb}</p>
+            {/if}
+          </div>
+        </div>
+
+        <div>
+          <Label for="cap-thresholds">Usage Warning Thresholds (%)</Label>
+          <Input
+            id="cap-thresholds"
+            type="text"
+            bind:value={capThresholdInput}
+            on:focus={handleCapThresholdFocus}
+            on:input={handleCapThresholdInput}
+            on:blur={handleCapThresholdBlur}
+            placeholder="e.g. 75, 90"
+            class="mt-2"
+          />
+          <p class="mt-1 text-xs text-muted-foreground">
+            Enter comma-separated percentages (1-100). Leave blank to skip warnings.
+          </p>
+          {#if errors.capWarningThresholds}
+            <p class="mt-1 text-sm text-red-500">{errors.capWarningThresholds}</p>
+          {/if}
         </div>
 
         <!-- User Location -->
@@ -1613,6 +1768,38 @@ function sectionMatches(section: string, query: string) {
               </Label>
             </div>
 
+            <div>
+              <div class="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="notify-cap"
+                  bind:checked={localSettings.notifyOnBandwidthCap}
+                />
+                <Label for="notify-cap" class="cursor-pointer">
+                  Warn when monthly caps reach thresholds (toast)
+                </Label>
+              </div>
+              <p class="ml-7 text-xs text-muted-foreground">
+                Triggers an in-app toast as soon as usage crosses your percentages.
+              </p>
+            </div>
+
+            <div>
+              <div class="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="notify-cap-desktop"
+                  bind:checked={localSettings.notifyOnBandwidthCapDesktop}
+                />
+                <Label for="notify-cap-desktop" class="cursor-pointer">
+                  Send desktop notification for cap warnings
+                </Label>
+              </div>
+              <p class="ml-7 text-xs text-muted-foreground">
+                Useful when the app is minimized; respects your OS notification settings.
+              </p>
+            </div>
+
             <div class="flex items-center gap-2">
               <input
                 type="checkbox"
@@ -1866,3 +2053,5 @@ function sectionMatches(section: string, query: string) {
     </div>
   </div>
 {/if}
+
+
