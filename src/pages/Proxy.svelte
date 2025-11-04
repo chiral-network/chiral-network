@@ -674,6 +674,7 @@ onDestroy(() => {
             type="button"
             role="switch"
             aria-checked={$privacyStore.anonymousMode}
+            aria-label="Toggle anonymous mode"
             on:click={() => {
               const newProfile = {
                 anonymous: !$privacyStore.anonymousMode,
@@ -702,6 +703,7 @@ onDestroy(() => {
             type="button"
             role="switch"
             aria-checked={$privacyStore.multiHopEnabled}
+            aria-label="Toggle multi-hop routing"
             on:click={() => {
               const newProfile = {
                 anonymous: $privacyStore.anonymousMode,
@@ -770,7 +772,7 @@ onDestroy(() => {
                   bind:value={newNodeAddress}
                   placeholder="example.com:8080 or enode://..."
                   class="flex-1 {isAddressValid || newNodeAddress === '' ? '' : 'border border-red-500 focus:ring-red-500'}"
-                  on:keydown={(e) => {
+                  on:keydown={(e: KeyboardEvent) => {
                    if (e.key === 'Enter' && isAddressValid && newNodeAddress) addNode()
                   }}
               />

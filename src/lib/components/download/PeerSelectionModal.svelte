@@ -1,3 +1,16 @@
+<script context="module" lang="ts">
+  export interface PeerInfo {
+    peerId: string;
+    location?: string;
+    latency_ms?: number;
+    bandwidth_kbps?: number;
+    reliability_score: number;
+    price_per_mb: number;
+    selected: boolean;
+    percentage: number;
+  }
+</script>
+
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import Card from '$lib/components/ui/card.svelte';
@@ -18,17 +31,6 @@
     confirm: void;
     cancel: void;
   }>();
-
-  export interface PeerInfo {
-    peerId: string;
-    location?: string;
-    latency_ms?: number;
-    bandwidth_kbps?: number;
-    reliability_score: number;
-    price_per_mb: number;
-    selected: boolean;
-    percentage: number;
-  }
 
   // Calculate total cost
   $: totalCost = peers
@@ -255,10 +257,11 @@
                 </tr>
               </thead>
               <tbody>
-                {#each peers as peer, index}
+                {#each peers as peer}
                   <tr class="border-t hover:bg-muted/50 transition-colors {mode === 'auto' ? 'bg-muted/30' : ''}">
                     {#if mode === 'manual'}
                       <td class="p-3">
+                        <label class="sr-only">Select peer {peer.peerId.slice(0, 12)}...</label>
                         <input
                           type="checkbox"
                           checked={peer.selected}
@@ -300,6 +303,7 @@
                       <td class="p-3">
                         {#if peer.selected}
                           <div class="flex items-center gap-1">
+                            <label class="sr-only">Allocation percentage for peer {peer.peerId.slice(0, 12)}...</label>
                             <input
                               type="number"
                               bind:value={peer.percentage}

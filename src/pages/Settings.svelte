@@ -86,9 +86,8 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     cacheSize: 1024, // MB
     logLevel: "info",
     autoUpdate: true,
-    enableBandwidthScheduling: false,
-    bandwidthSchedules: [],
-  };
+    relayServerAlias: "", // Empty by default - user can set a friendly name
+    pricePerMb: 0.001, // Default price: 0.001 Chiral per MB
   let localSettings: AppSettings = JSON.parse(JSON.stringify(get(settings)));
   let savedSettings: AppSettings = JSON.parse(JSON.stringify(localSettings));
   let hasChanges = false;
@@ -611,9 +610,9 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   async function copyDiagnostics() {
     try {
       await navigator.clipboard.writeText(diagnosticsReport);
-      showToast(tr("settings.diagnostics.copied"));
+      showToast($t("settings.diagnostics.copied"));
     } catch (e) {
-      showToast(tr("settings.diagnostics.copyFailed"), "error");
+      showToast($t("settings.diagnostics.copyFailed"), "error");
     }
   }
 
@@ -695,10 +694,6 @@ selectedLanguage = initial; // Synchronize dropdown display value
 
   // Revalidate whenever settings change
   $: validate(localSettings);
-
-  // Valid when no error messages remain
-  let isValid = true;
-  $: isValid = Object.values(errors).every((e) => !e);
 
   let freeSpaceGB: number | null = null;
   let maxStorageError: string | null = null;
@@ -1040,7 +1035,12 @@ function sectionMatches(section: string, query: string) {
               <Input
                 id="new-bootstrap-node"
                 bind:value={newBootstrapNode}
-                on:keypress={handleBootstrapNodeKeypress}
+                on:keydown={(e: KeyboardEvent) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    addBootstrapNode();
+                  }
+                }}
                 placeholder="/ip4/54.198.145.146/tcp/4001/p2p/12D3KooW..."
                 class="flex-1 font-mono text-sm"
               />
