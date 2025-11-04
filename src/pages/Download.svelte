@@ -21,7 +21,8 @@
   import PeerSelectionService from '$lib/services/peerSelectionService'
 import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
 
-  import { invoke }  from '@tauri-apps/api/core';
+  import { invoke } from '@tauri-apps/api/core'
+  import { homeDir } from '@tauri-apps/api/path'
 
   const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params)
 
@@ -284,46 +285,89 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
 
 
         // Listen for WebRTC download completion
-        const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (event) => {
-          const data = event.payload as {
-            fileHash: string;
-            fileName: string;
-            fileSize: number;
-            data: number[]; // Array of bytes
-          };
+const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (event) => {
+  const data = event.payload as {
+    fileHash: string;
+    fileName: string;
+    fileSize: number;
+    data: number[]; // Array of bytes
+  };
 
-          // Find the file in our downloads
-          const downloadedFile = $files.find(f => f.hash === data.fileHash);
-  
-          if (downloadedFile && downloadedFile.downloadPath) {
-            try {
-              // Write the file to disk at the user's chosen location
-              const { writeFile } = await import('@tauri-apps/plugin-fs');
-              const fileData = new Uint8Array(data.data);
-              await writeFile(downloadedFile.downloadPath, fileData);
-      
-              console.log(`✅ File saved to: ${downloadedFile.downloadPath}`);
-      
-              // Update status to completed
-              files.update(f => f.map(file => 
-                file.hash === data.fileHash
-                ? { ...file, status: 'completed', progress: 100 }
-                  : file
-              ));
-      
-              showNotification(`Successfully saved "${data.fileName}"`, 'success');
-            } catch (error) {
-              console.error('Failed to save file:', error);
-              showNotification(`Failed to save file: ${error}`, 'error');
+  try {
+    // ✅ GET SETTINGS PATH
+    const stored = localStorage.getItem("chiralSettings");
+    if (!stored) {
+      showNotification(
+        'Please configure a download path in Settings before downloading files.',
+        'error',
+        8000
+      );
+      return;
+    }
+    
+    const settings = JSON.parse(stored);
+    let storagePath = settings.storagePath;
+    
+    if (!storagePath || storagePath === '.') {
+      showNotification(
+        'Please set a valid download path in Settings.',
+        'error',
+        8000
+      );
+      return;
+    }
+    
+    // Expand ~ to home directory if needed
+    if (storagePath.startsWith("~")) {
+      const home = await homeDir();
+      storagePath = storagePath.replace("~", home);
+    }
+    
+    // Validate directory exists
+    const dirExists = await invoke('check_directory_exists', { path: storagePath });
+    if (!dirExists) {
+      showNotification(
+        `Download path "${settings.storagePath}" does not exist. Please update it in Settings.`,
+        'error',
+        8000
+      );
+      return;
+    }
 
-              files.update(f => f.map(file =>
-                file.hash === data.fileHash
-                  ? { ...file, status: 'failed' }
-                  : file
-              ));
-            }
-          }
-        });
+    // Construct full file path
+    const { join } = await import('@tauri-apps/api/path');
+    const outputPath = await join(storagePath, data.fileName);
+    
+    console.log(`✅ Saving WebRTC file to: ${outputPath}`);
+
+    // Write the file to disk
+    const { writeFile } = await import('@tauri-apps/plugin-fs');
+    const fileData = new Uint8Array(data.data);
+    await writeFile(outputPath, fileData);
+
+    console.log(`✅ File saved successfully: ${outputPath}`);
+
+    // Update status to completed
+    files.update(f => f.map(file => 
+      file.hash === data.fileHash
+        ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath }
+        : file
+    ));
+
+    showNotification(`Successfully saved "${data.fileName}"`, 'success');
+    
+  } catch (error) {
+    console.error('Failed to save WebRTC file:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    showNotification(`Failed to save file: ${errorMessage}`, 'error');
+
+    files.update(f => f.map(file =>
+      file.hash === data.fileHash
+        ? { ...file, status: 'failed' }
+        : file
+    ));
+  }
+});
 
         // Cleanup listeners on destroy
         return () => {

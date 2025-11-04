@@ -2363,8 +2363,31 @@ async fn download_blocks_from_network(
 async fn download_file_from_network(
     state: State<'_, AppState>,
     file_hash: String,
-    _output_path: String,
+    output_path: String,  // Remove the underscore - we'll use this now
 ) -> Result<String, String> {
+    use std::path::Path;
+
+    // ✅ VALIDATE OUTPUT PATH BEFORE STARTING DOWNLOAD
+    let path = Path::new(&output_path);
+    
+    // Check if parent directory exists
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            return Err(format!(
+                "Download failed: Directory does not exist: {}",
+                parent.display()
+            ));
+        }
+        if !parent.is_dir() {
+            return Err(format!(
+                "Download failed: Path is not a directory: {}",
+                parent.display()
+            ));
+        }
+    } else {
+        return Err("Download failed: Invalid file path".to_string());
+    }
+
     let ft = {
         let ft_guard = state.file_transfer.lock().await;
         ft_guard.as_ref().cloned()
