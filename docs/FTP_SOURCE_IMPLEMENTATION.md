@@ -4,6 +4,23 @@
 
 This implementation adds FTP as a recognized download source type within the unified source abstraction framework. FTP sources can now be identified, passed through the system, and logged alongside P2P and HTTP sources.
 
+## Protocol Overview
+
+FTP (File Transfer Protocol) is added as a download source to provide compatibility with existing file mirrors and repositories. It is integrated into the multi-source download system alongside P2P and HTTP.
+
+### Role in the Network
+
+* **Source Type:** FTP serves as a **fallback** and **mirror** download source.
+* **Discovery:** FTP sources are not discovered automatically. They are added to a file's metadata by the original publisher.
+* **Priority:** FTP is given the **lowest priority** (25) by the download scheduler, ensuring that P2P (100+) and HTTP (50) sources are preferred.
+
+### Key Features
+
+* **Client Implementation:** The client is built using the `suppaftp` crate.
+* **FTPS Support:** Secure FTP over TLS (FTPS) is supported and can be enabled via the `use_ftps` flag.
+* **Passive Mode:** Connections default to **passive mode** to work better with modern firewalls and NAT.
+* **Range Downloads:** The client simulates chunked downloading by using a "skip-and-read" method on the FTP stream, allowing it to fetch specific byte ranges (`download_range`) even from servers that don't support the `REST` command.
+
 ## Files Created
 
 ### 1. `src/download_source.rs` (Core Module)
@@ -123,7 +140,7 @@ match source {
         log::info!("FTP download from: {}", info.url);
         log::debug!("  Passive mode: {}", info.passive_mode);
         log::debug!("  FTPS: {}", info.use_ftps);
-        // Handle FTP download (TODO: implement actual FTP logic)
+        // Handle FTP download
     }
 }
 ```
@@ -359,22 +376,22 @@ FtpSourceInfo {
 - FTP source type definition (`FtpSourceInfo`)
 - `DownloadSource` enum with FTP variant
 - Source identification and display
-- Priority scoring system
+- Priority scoring system (P2P > HTTP > FTP)
 - Pattern matching support
 - Logging integration
 - Serialization/deserialization
 - Comprehensive tests
 - Example integration (scheduler)
-
-⏳ **TODO (Future Work):**
 - Actual FTP download implementation
-- FTP client integration (using `ftp` crate)
+- FTP client integration (using `suppaftp` crate)
 - FTPS connection handling
 - Passive/active mode implementation
 - Error handling and retry logic
-- Bandwidth limiting
-- Progress tracking
 - Connection pooling
+
+⏳ **TODO (Future Work):**
+- Bandwidth limiting (per-source)
+- Progress tracking (integrated with multi-source UI)
 
 ## Next Steps
 
