@@ -185,6 +185,14 @@ export class BandwidthSchedulerService {
   }
 
   /**
+   * Get current active schedule ID
+   * Returns null if no schedule is active (using default limits)
+   */
+  getCurrentScheduleId(): string | null {
+    return this.currentScheduleId;
+  }
+
+  /**
    * Get human-readable description of current limits
    */
   getCurrentLimitsDescription(): string {
