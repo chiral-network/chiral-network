@@ -4777,43 +4777,46 @@ struct ActiveDownload {
 }
 
 impl ActiveDownload {
+    
     fn new(
-        metadata: FileMetadata,
-        queries: HashMap<beetswap::QueryId, u32>,
-        download_dir: &PathBuf,
-        total_size: u64,
-        chunk_offsets: Vec<u64>,
+    metadata: FileMetadata,
+    queries: HashMap<beetswap::QueryId, u32>,
+    download_path: &PathBuf,  // Already the full file path from get_available_download_path
+    total_size: u64,
+    chunk_offsets: Vec<u64>,
     ) -> std::io::Result<Self> {
-        let total_chunks = queries.len() as u32;
+    let total_chunks = queries.len() as u32;
 
-        // Create final filename based on the actual file name
-        // let final_file_path = download_dir.join(&metadata.file_name);
-        let final_file_path = download_dir.clone();
-        // Create temporary filename with .tmp suffix
-        let temp_file_path = download_dir.with_extension("tmp");
-        info!("Creating temp file at: {:?}", temp_file_path);
-        info!("Will rename to: {:?} when complete", final_file_path);
+    // download_path is already the complete file path
+    let final_file_path = download_path.clone();
+    
+    // Create temp file by replacing extension with .tmp
+    let mut temp_file_path = download_path.clone();
+    temp_file_path.set_extension("tmp");
+    
+    info!("Creating temp file at: {:?}", temp_file_path);
+    info!("Will rename to: {:?} when complete", final_file_path);
 
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(&temp_file_path)?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(&temp_file_path)?;
 
-        file.set_len(total_size)?;
+    file.set_len(total_size)?;
 
-        let mmap = unsafe { MmapMut::map_mut(&file)? };
+    let mmap = unsafe { MmapMut::map_mut(&file)? };
 
-        Ok(Self {
-            metadata,
-            queries,
-            temp_file_path,
-            final_file_path,
-            mmap: Arc::new(std::sync::Mutex::new(mmap)),
-            received_chunks: Arc::new(std::sync::Mutex::new(HashSet::new())),
-            total_chunks,
-            chunk_offsets,
-        })
+    Ok(Self {
+        metadata,
+        queries,
+        temp_file_path,
+        final_file_path,
+        mmap: Arc::new(std::sync::Mutex::new(mmap)),
+        received_chunks: Arc::new(std::sync::Mutex::new(HashSet::new())),
+        total_chunks,
+        chunk_offsets,
+    })
     }
 
     fn write_chunk(&self, chunk_index: u32, data: &[u8], offset: u64) -> std::io::Result<()> {

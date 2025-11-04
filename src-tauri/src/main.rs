@@ -2072,10 +2072,10 @@ fn get_default_storage_path(app: tauri::AppHandle) -> Result<String, String> {
         .ok_or_else(|| "Failed to convert path to string".to_string())
 }
 
-#[tauri::command]
-fn check_directory_exists(path: String) -> bool {
-    Path::new(&path).is_dir()
-}
+// #[tauri::command]
+// fn check_directory_exists(path: String) -> bool {
+//     Path::new(&path).is_dir()
+// }
 
 #[tauri::command]
 async fn start_file_transfer_service(
@@ -4297,7 +4297,7 @@ fn main() {
             set_relay_alias,
             get_relay_alias,
             get_multiaddresses,
-            clear_seed_list
+            clear_seed_list,
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -5222,4 +5222,12 @@ async fn clear_seed_list() -> Result<(), String> {
     // The actual clearing happens in the frontend via localStorage.removeItem()
     // This command is here for consistency if you add file-based storage later
     Ok(())
+}
+
+
+#[tauri::command]
+fn check_directory_exists(path: String) -> Result<bool, String> {
+    use std::path::Path;
+    let p = Path::new(&path);
+    Ok(p.exists() && p.is_dir())
 }
