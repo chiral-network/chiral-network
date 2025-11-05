@@ -3555,30 +3555,36 @@ if active_download.is_complete() {
                         }
                     }
                     SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
-                        if let Ok(mut m) = metrics.try_lock() {
-                            m.last_error = Some(error.to_string());
-                            m.last_error_at = Some(SystemTime::now());
-                            if let Some(pid) = peer_id {
-                                if bootstrap_peer_ids.contains(&pid) {
-                                    m.bootstrap_failures = m.bootstrap_failures.saturating_add(1);
-                                }
-                            }
-                        }
-
-                        if let Some(pid) = peer_id {
-                            // If the error contains a multiaddr, check if it's plausibly reachable
-                            let is_unreachable_addr = if let Some(bad_ma) = extract_multiaddr_from_error_str(&error.to_string()) {
+                        // Check if this error is for an unreachable address before recording it
+                        let is_unreachable_addr = if let Some(pid) = peer_id {
+                            if let Some(bad_ma) = extract_multiaddr_from_error_str(&error.to_string()) {
                                 if !ma_plausibly_reachable(&bad_ma) {
                                     swarm.behaviour_mut().kademlia.remove_address(&pid, &bad_ma);
-                                    debug!("🧹 Removed unreachable addr for {}: {}", pid, bad_ma);
                                     true
                                 } else {
                                     false
                                 }
                             } else {
                                 false
-                            };
+                            }
+                        } else {
+                            false
+                        };
 
+                        // Only record errors for reachable addresses
+                        if !is_unreachable_addr {
+                            if let Ok(mut m) = metrics.try_lock() {
+                                m.last_error = Some(error.to_string());
+                                m.last_error_at = Some(SystemTime::now());
+                                if let Some(pid) = peer_id {
+                                    if bootstrap_peer_ids.contains(&pid) {
+                                        m.bootstrap_failures = m.bootstrap_failures.saturating_add(1);
+                                    }
+                                }
+                            }
+                        }
+
+                        if let Some(pid) = peer_id {
                             // Only log error for addresses that should be reachable
                             if !is_unreachable_addr {
                                 error!("❌ Outgoing connection error to {}: {}", pid, error);
