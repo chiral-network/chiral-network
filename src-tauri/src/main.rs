@@ -3458,6 +3458,7 @@ async fn upload_file_chunk(
             http_sources: None,
             info_hash: None,
             trackers: None,
+            ed2k_sources: None,
         };
 
         // Store complete file data locally for seeding

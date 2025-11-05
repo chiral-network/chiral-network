@@ -366,6 +366,7 @@ impl ReputationDhtService {
             http_sources: None,
             info_hash: None,
             trackers: None,
+            ed2k_sources: None,
         };
 
         dht_service.publish_file(metadata, None).await
@@ -423,6 +424,7 @@ impl ReputationDhtService {
             http_sources: None,
             info_hash: None,
             trackers: None,
+            ed2k_sources: None,
         };
 
         dht_service.publish_file(metadata, None).await
