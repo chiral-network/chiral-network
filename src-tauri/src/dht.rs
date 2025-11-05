@@ -1218,6 +1218,12 @@ fn filter_relay_candidates(
     let mut out = Vec::new();
     for cand in relay_candidates {
         if let Ok(ma) = cand.parse::<Multiaddr>() {
+            // Skip unreachable addresses (localhost/private IPs)
+            if !ma_plausibly_reachable(&ma) {
+                tracing::debug!("Skipping unreachable relay candidate: {}", ma);
+                continue;
+            }
+
             // PeerId extraction
             let mut pid_opt: Option<PeerId> = None;
             for p in ma.iter() {
@@ -2450,6 +2456,13 @@ async fn run_dht_node(
                         }
 
                         for (addr_str, multiaddr, maybe_peer_id) in parsed_entries {
+                            // Skip self-connection attempts for privacy proxies
+                            if let Some(peer_id_in_addr) = &maybe_peer_id {
+                                if peer_id_in_addr == &peer_id {
+                                    continue;
+                                }
+                            }
+
                             match swarm.dial(multiaddr.clone()) {
                                 Ok(_) => {
                                     if let Some(peer_id) = &maybe_peer_id {
@@ -2837,12 +2850,13 @@ async fn run_dht_node(
                             &proxy_mgr,
                             &peer_selection,
                             relay_capable_peers.clone(),
+                            &peer_id,
                         )
                         .await;
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Mdns(mdns_event)) => {
                         if !is_bootstrap{
-                            handle_mdns_event(mdns_event, &mut swarm, &event_tx).await;
+                            handle_mdns_event(mdns_event, &mut swarm, &event_tx, &peer_id).await;
                         }
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::RelayClient(relay_event)) => {
@@ -3520,12 +3534,24 @@ if active_download.is_complete() {
                             .await;
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
-                        if address.iter().any(|component| matches!(component, Protocol::P2pCircuit)) {
-                            swarm.add_external_address(address.clone());
-                            debug!("Advertised relay external address: {}", address);
-                        }
+                        // Always record in metrics for monitoring/debugging
                         if let Ok(mut m) = metrics.try_lock() {
                             m.record_listen_addr(&address);
+                        }
+                        
+                        // For relay circuit addresses, always advertise them
+                        if address.iter().any(|component| matches!(component, Protocol::P2pCircuit)) {
+                            swarm.add_external_address(address.clone());
+                            info!("✅ Advertising relay address: {}", address);
+                        } else {
+                            // For regular addresses, only advertise if they're plausibly reachable
+                            // This prevents advertising localhost/private IPs to the network
+                            if ma_plausibly_reachable(&address) {
+                                swarm.add_external_address(address.clone());
+                                info!("✅ Advertising reachable address: {}", address);
+                            } else {
+                                debug!("⏭️  Not advertising unreachable address: {}", address);
+                            }
                         }
                     }
                     SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
@@ -4301,9 +4327,15 @@ async fn handle_identify_event(
     proxy_mgr: &ProxyMgr,
     peer_selection: &Arc<Mutex<PeerSelectionService>>,
     relay_capable_peers: Arc<Mutex<HashMap<PeerId, Vec<Multiaddr>>>>,
+    local_peer_id: &PeerId,
 ) {
     match event {
         IdentifyEvent::Received { peer_id, info, .. } => {
+            // Skip processing our own peer info to prevent self-connection attempts
+            if &peer_id == local_peer_id {
+                return;
+            }
+            
             let hop_proto = "/libp2p/circuit/relay/0.2.0/hop";
             let supports_relay = info.protocols.iter().any(|p| p.as_ref() == hop_proto);
 
@@ -4374,7 +4406,10 @@ async fn handle_identify_event(
                         .find(|s| s.contains(&peer_id.to_string()))
                     {
                         if let Ok(base) = base_str.parse::<Multiaddr>() {
-                            if let Some(relay_addr) = build_relay_listen_addr(&base) {
+                            // Skip unreachable relay addresses (localhost/private IPs)
+                            if !ma_plausibly_reachable(&base) {
+                                debug!("⏭️  Skipping unreachable relay base address: {}", base);
+                            } else if let Some(relay_addr) = build_relay_listen_addr(&base) {
                                 info!(
                                     "📡 Attempting to listen via relay {} at {}",
                                     peer_id, relay_addr
@@ -4426,12 +4461,20 @@ async fn handle_mdns_event(
     event: MdnsEvent,
     swarm: &mut Swarm<DhtBehaviour>,
     event_tx: &mpsc::Sender<DhtEvent>,
+    local_peer_id: &PeerId,
 ) {
+
     match event {
         MdnsEvent::Discovered(list) => {
             let mut discovered: HashMap<PeerId, Vec<String>> = HashMap::new();
             for (peer_id, multiaddr) in list {
                 debug!("mDNS discovered peer {} at {}", peer_id, multiaddr);
+
+                // Skip self-discoveries to prevent self-connection attempts
+                if peer_id == *local_peer_id {
+                    continue;
+                }
+
                 if ma_plausibly_reachable(&multiaddr) {
                     swarm
                         .behaviour_mut()
@@ -5229,26 +5272,50 @@ impl DhtService {
         }
 
         // Configure AutoRelay relay candidate discovery (use finalized flag)
+        // Filter out unreachable addresses (localhost/private IPs) from relay candidates
         let relay_candidates: HashSet<String> = if final_enable_autorelay {
-            if !preferred_relays.is_empty() {
+            let raw_candidates = if !preferred_relays.is_empty() {
                 info!(
                     "🔗 AutoRelay enabled with {} preferred relays",
                     preferred_relays.len()
                 );
-                for (i, relay) in preferred_relays.iter().enumerate().take(5) {
-                    info!("   Relay {}: {}", i + 1, relay);
-                }
-                preferred_relays.into_iter().collect()
+                preferred_relays.into_iter().collect::<Vec<_>>()
             } else {
                 info!(
                     "🔗 AutoRelay enabled, using {} bootstrap nodes as relay candidates",
                     bootstrap_set.len()
                 );
-                for (i, node) in bootstrap_set.iter().enumerate().take(5) {
-                    info!("   Candidate {}: {}", i + 1, node);
+                bootstrap_set.iter().cloned().collect::<Vec<_>>()
+            };
+
+            // Filter out unreachable addresses from relay candidates
+            let filtered: HashSet<String> = raw_candidates
+                .into_iter()
+                .filter(|addr_str| {
+                    if let Ok(addr) = addr_str.parse::<Multiaddr>() {
+                        if ma_plausibly_reachable(&addr) {
+                            true
+                        } else {
+                            warn!("⏭️  Excluding unreachable relay candidate: {}", addr_str);
+                            false
+                        }
+                    } else {
+                        warn!("⚠️ Invalid relay candidate address: {}", addr_str);
+                        false
+                    }
+                })
+                .collect();
+
+            if filtered.is_empty() {
+                warn!("⚠️ No reachable relay candidates available after filtering");
+            } else {
+                info!("✅ Using {} reachable relay candidates", filtered.len());
+                for (i, relay) in filtered.iter().enumerate().take(5) {
+                    info!("   Relay {}: {}", i + 1, relay);
                 }
-                bootstrap_set.iter().cloned().collect()
             }
+
+            filtered
         } else {
             HashSet::new()
         };
@@ -5329,6 +5396,7 @@ impl DhtService {
                     warn!("⏭️  Skipping unreachable bootstrap addr: {}", addr);
                     continue;
                 }
+
                 match swarm.dial(addr.clone()) {
                     Ok(_) => {
                         successful_connections += 1;
@@ -5359,12 +5427,14 @@ impl DhtService {
                     continue;
                 }
                 match server_addr.parse::<Multiaddr>() {
-                    Ok(addr) => match swarm.dial(addr.clone()) {
-                        Ok(_) => {
-                            info!("Dialing AutoNAT server: {}", server_addr);
-                        }
-                        Err(e) => {
-                            debug!("Failed to dial AutoNAT server {}: {}", server_addr, e);
+                    Ok(addr) => {
+                        match swarm.dial(addr.clone()) {
+                            Ok(_) => {
+                                info!("Dialing AutoNAT server: {}", server_addr);
+                            }
+                            Err(e) => {
+                                debug!("Failed to dial AutoNAT server {}: {}", server_addr, e);
+                            }
                         }
                     },
                     Err(e) => warn!("Invalid AutoNAT server address {}: {}", server_addr, e),
