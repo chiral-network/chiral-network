@@ -4873,6 +4873,7 @@ fn get_logs_directory(app: tauri::AppHandle) -> Result<String, String> {
     
     let logs_dir = app_data_dir.join("logs");
     Ok(logs_dir.to_string_lossy().to_string())
+}
 // ============================================================================
 // HTTP Server Commands - Serve files via HTTP protocol
 // ============================================================================
