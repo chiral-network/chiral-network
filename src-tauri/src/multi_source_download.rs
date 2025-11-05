@@ -480,6 +480,11 @@ impl MultiSourceDownloadService {
         file_hash: &str,
         sources: Vec<DownloadSource>,
     ) -> Result<(), String> {
+        // Validate inputs early to avoid panics (empty sources would cause division/mod by zero)
+        if sources.is_empty() {
+            return Err("No sources provided for download".to_string());
+        }
+
         let downloads = self.active_downloads.read().await;
         let download = downloads.get(file_hash).ok_or("Download not found")?;
 
@@ -513,7 +518,13 @@ impl MultiSourceDownloadService {
         chunks: &[ChunkInfo],
         sources: &[DownloadSource],
     ) -> Vec<(DownloadSource, Vec<u32>)> {
-        let mut assignments: Vec<(DownloadSource, Vec<u32>)> = sources.iter().map(|s| (s.clone(), Vec::new())).collect();
+        // Defensive: if no sources, return an empty assignment list instead of panicking.
+        if sources.is_empty() {
+            return Vec::new();
+        }
+
+        let mut assignments: Vec<(DownloadSource, Vec<u32>)> =
+            sources.iter().map(|s| (s.clone(), Vec::new())).collect();
 
         // Round-robin assignment
         for (index, chunk) in chunks.iter().enumerate() {
@@ -707,10 +718,14 @@ impl MultiSourceDownloadService {
     async fn on_source_connected(&self, file_hash: &str, source_id: &str, chunk_ids: Vec<u32>) {
         info!("Source {} connected for file {}", source_id, file_hash);
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        // Avoid unwrap() on SystemTime duration to prevent panics when system clock is before UNIX_EPOCH
+        let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
+            Ok(d) => d.as_secs(),
+            Err(e) => {
+                warn!("System time before UNIX_EPOCH: {}", e);
+                0
+            }
+        };
 
         // Update source status
         {
@@ -945,7 +960,8 @@ impl MultiSourceDownloadService {
             .count();
 
         let duration = download.start_time.elapsed();
-        let download_speed_bps = if duration.as_secs() > 0 {
+        // Use secs_f64 to capture sub-second durations instead of integer secs which can be 0 for <1s
+        let download_speed_bps = if duration.as_secs_f64() > 0.0 {
             downloaded_size as f64 / duration.as_secs_f64()
         } else {
             0.0
@@ -1039,7 +1055,8 @@ impl MultiSourceDownloadService {
             .count();
 
         let duration = download.start_time.elapsed();
-        let download_speed_bps = if duration.as_secs() > 0 {
+        // Use secs_f64 to capture sub-second durations instead of integer secs which can be 0 for <1s
+        let download_speed_bps = if duration.as_secs_f64() > 0.0 {
             downloaded_size as f64 / duration.as_secs_f64()
         } else {
             0.0
