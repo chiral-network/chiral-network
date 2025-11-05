@@ -3,6 +3,24 @@ use crate::download_source::HttpSourceInfo;
 use x25519_dalek::PublicKey;
 use serde_bytes;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum Ed2kError {
+    InvalidLink(String),
+    MissingPart(&'static str),
+    InvalidFileSize(String),
+}
+
+impl std::fmt::Display for Ed2kError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Ed2kError::InvalidLink(s) => write!(f, "Invalid ed2k link format: {}", s),
+            Ed2kError::MissingPart(s) => write!(f, "Missing required part in link: {}", s),
+            Ed2kError::InvalidFileSize(s) => write!(f, "Invalid file size: {}", s),
+        }
+    }
+}
+impl std::error::Error for Ed2kError {}
+
 // ------ Key Request Protocol Implementation ------
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyRequestProtocol;
@@ -211,6 +229,9 @@ pub struct FileMetadata {
     pub encrypted_key_bundle: Option<crate::encryption::EncryptedAesKeyBundle>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ftp_sources: Option<Vec<FtpSourceInfo>>,
+    // ed2k HTTP sources for downloading the file
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ed2k_sources: Option<Vec<Ed2kSourceInfo>>,
     /// HTTP sources for downloading the file (HTTP Range request endpoints)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub http_sources: Option<Vec<HttpSourceInfo>>,
@@ -266,6 +287,100 @@ impl FtpSourceInfo {
     }
 }
 
+/// ed2k (eDonkey2000) source information for a file
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Ed2kSourceInfo {
+    /// ed2k server URL (e.g., "ed2k://|server|1.2.3.4|4661|/")
+    pub server_url: String,
+    
+    /// ed2k file hash (MD4 hash in hex)
+    pub file_hash: String,
+    
+    /// File size in bytes
+    pub file_size: u64,
+    
+    /// Optional file name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_name: Option<String>,
+    
+    /// List of known sources (IP:Port pairs)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sources: Option<Vec<String>>,
+    
+    /// Optional timeout in seconds
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<u64>,
+}
+
+// ed2k Link Parsing
+impl Ed2kSourceInfo {
+    /// Parse ed2k:// link
+    /// Format (File): ed2k://|file|filename.ext|size|hash|/
+    /// Format (Server): ed2k://|server|ip|port|/
+    pub fn from_ed2k_link(link: &str) -> Result<Self, Ed2kError> {
+        let Some(parts_str) = link.strip_prefix("ed2k://|") else {
+            return Err(Ed2kError::InvalidLink(link.to_string()));
+        };
+        
+        // Remove trailing characters like '/'
+        // Trim both trailing '/' and '|' to correctly handle split
+        let clean_parts_str = parts_str.trim_end_matches(&['/', '|']);
+        let parts: Vec<&str> = clean_parts_str.split('|').collect();
+
+        if parts.is_empty() {
+            return Err(Ed2kError::InvalidLink(link.to_string()));
+        }
+
+        match parts[0] {
+            "file" => {
+                // ed2k://|file|filename.ext|size|hash|/
+                if parts.len() < 4 {
+                    return Err(Ed2kError::MissingPart("File link requires name, size, and hash"));
+                }
+
+                let file_name = parts[1].to_string();
+                let file_size_str = parts[2];
+                let file_hash = parts[3].to_string();
+
+                let file_size = file_size_str.parse::<u64>()
+                    .map_err(|_| Ed2kError::InvalidFileSize(file_size_str.to_string()))?;
+
+                Ok(Self {
+                    // Per spec contradiction: File link has no server. Set to empty.
+                    // This will be populated by the application logic later.
+                    server_url: String::new(), 
+                    file_hash,
+                    file_size,
+                    file_name: Some(file_name),
+                    sources: None,
+                    timeout: None,
+                })
+            },
+            "server" => {
+                // ed2k://|server|ip|port|/
+                if parts.len() < 3 {
+                    return Err(Ed2kError::MissingPart("Server link requires ip and port"));
+                }
+                
+                let ip = parts[1];
+                let port = parts[2];
+                // Reconstruct the server_url from the parts
+                let server_url = format!("ed2k://|server|{}|{}|/", ip, port);
+
+                Ok(Self {
+                    server_url,
+                    // Per spec contradiction: Struct requires file info. Set to defaults.
+                    file_hash: String::new(),
+                    file_size: 0,
+                    file_name: None,
+                    sources: None,
+                    timeout: None,
+                })
+            },
+            _ => Err(Ed2kError::InvalidLink(format!("Unknown link type: {}", parts[0]))),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -5741,6 +5856,7 @@ impl DhtService {
             http_sources: None,
             info_hash: None,
             trackers: None,
+            ed2k_sources: None,
         })
     }
 
