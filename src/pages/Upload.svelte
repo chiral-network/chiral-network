@@ -22,7 +22,7 @@
     Globe,
     DollarSign
   } from "lucide-svelte";
-  import { files, type FileItem, etcAccount, settings } from "$lib/stores";
+  import { files, type FileItem, etcAccount } from "$lib/stores";
   import {
     loadSeedList,
     saveSeedList,
@@ -685,15 +685,6 @@
           const fileSize = await invoke<number>('get_file_size', { filePath });
           const price = await calculateFilePrice(fileSize);
 
-          let existingVersions: any[] = [];
-          try {
-            existingVersions = (await invoke("get_file_versions_by_name", {
-              fileName,
-            })) as any[];
-          } catch (versionError) {
-            console.log("No existing versions found for", fileName);
-          }
-
           console.log("🔍 Uploading file with calculated price:", price, "for", fileSize, "bytes");
           const metadata = await dhtService.publishFileToNetwork(filePath, price);
           console.log("📦 Received metadata from backend:", metadata);
@@ -737,7 +728,7 @@
                     existing.uploadDate?.getTime() ??
                     Date.now()) * 1000,
                 ),
-                status: "seeding",
+                status: "seeding" as const,
                 price: price,
               };
               f = f.slice();

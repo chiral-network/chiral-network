@@ -3367,12 +3367,19 @@ if active_download.is_complete() {
                             selection.update_peer_metrics(peer_metrics);
                         }
 
-                        // Add peer to Kademlia routing table
+                        // Add peer to Kademlia routing table (only if reachable)
                         // swarm.behaviour_mut().kademlia.add_address(&peer_id, endpoint.get_remote_address().clone());
-                        swarm
-                            .behaviour_mut()
-                            .kademlia
-                            .add_address(&peer_id, remote_addr.clone());
+                        if ma_plausibly_reachable(&remote_addr) {
+                            swarm
+                                .behaviour_mut()
+                                .kademlia
+                                .add_address(&peer_id, remote_addr.clone());
+                        } else {
+                            debug!(
+                                "⏭️ Not adding unreachable address to Kademlia for {}: {}",
+                                peer_id, remote_addr
+                            );
+                        }
 
                         let peers_count = {
                             let mut peers = connected_peers.lock().await;
@@ -3533,33 +3540,43 @@ if active_download.is_complete() {
                         }
 
                         if let Some(pid) = peer_id {
-                            error!("❌ Outgoing connection error to {}: {}", pid, error);
-
                             // If the error contains a multiaddr, check if it's plausibly reachable
-                            if let Some(bad_ma) = extract_multiaddr_from_error_str(&error.to_string()) {
+                            let is_unreachable_addr = if let Some(bad_ma) = extract_multiaddr_from_error_str(&error.to_string()) {
                                 if !ma_plausibly_reachable(&bad_ma) {
                                     swarm.behaviour_mut().kademlia.remove_address(&pid, &bad_ma);
                                     debug!("🧹 Removed unreachable addr for {}: {}", pid, bad_ma);
+                                    true
+                                } else {
+                                    false
                                 }
-                            }
+                            } else {
+                                false
+                            };
 
-                            let is_bootstrap = bootstrap_peer_ids.contains(&pid);
-                            if error.to_string().contains("rsa") {
-                                error!("   ℹ Hint: This node uses RSA keys. Enable 'rsa' feature if needed.");
-                            } else if error.to_string().contains("Timeout") {
-                                if is_bootstrap {
-                                    warn!("   ℹ Hint: Bootstrap nodes may be unreachable or overloaded.");
-                                } else {
-                                    warn!("   ℹ Hint: Peer may be unreachable (timeout).");
+                            // Only log error for addresses that should be reachable
+                            if !is_unreachable_addr {
+                                error!("❌ Outgoing connection error to {}: {}", pid, error);
+                                
+                                let is_bootstrap = bootstrap_peer_ids.contains(&pid);
+                                if error.to_string().contains("rsa") {
+                                    error!("   ℹ Hint: This node uses RSA keys. Enable 'rsa' feature if needed.");
+                                } else if error.to_string().contains("Timeout") {
+                                    if is_bootstrap {
+                                        warn!("   ℹ Hint: Bootstrap nodes may be unreachable or overloaded.");
+                                    } else {
+                                        warn!("   ℹ Hint: Peer may be unreachable (timeout).");
+                                    }
+                                } else if error.to_string().contains("Connection refused") {
+                                    if is_bootstrap {
+                                        warn!("   ℹ Hint: Bootstrap nodes are not accepting connections.");
+                                    } else {
+                                        warn!("   ℹ Hint: Peer is not accepting connections.");
+                                    }
+                                } else if error.to_string().contains("Transport") {
+                                    warn!("   ℹ Hint: Transport protocol negotiation failed.");
                                 }
-                            } else if error.to_string().contains("Connection refused") {
-                                if is_bootstrap {
-                                    warn!("   ℹ Hint: Bootstrap nodes are not accepting connections.");
-                                } else {
-                                    warn!("   ℹ Hint: Peer is not accepting connections.");
-                                }
-                            } else if error.to_string().contains("Transport") {
-                                warn!("   ℹ Hint: Transport protocol negotiation failed.");
+                            } else {
+                                debug!("⏭️ Skipped connection to unreachable address for {}: {}", pid, error);
                             }
                         } else {
                             error!("❌ Outgoing connection error to unknown peer: {}", error);
@@ -4187,7 +4204,7 @@ async fn handle_kademlia_event(
                             // Try to connect using available addresses
                             let mut connected = false;
                             for addr in &peer_info.addrs {
-                                if not_loopback(addr) {
+                                if ma_plausibly_reachable(addr) {
                                     info!(
                                         "Attempting to connect to peer {} at {}",
                                         peer_info.peer_id, addr
@@ -5258,6 +5275,29 @@ impl DhtService {
         // Listen on the specified port
         let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", port).parse()?;
         swarm.listen_on(listen_addr)?;
+
+        // Clean up any unreachable addresses from Kademlia's routing table at startup
+        // This removes stale localhost/private addresses that may have been persisted
+        {
+            let kademlia = swarm.behaviour_mut().kademlia.kbuckets();
+            let mut addrs_to_remove: Vec<(PeerId, Multiaddr)> = Vec::new();
+            
+            for bucket in kademlia {
+                for entry in bucket.iter() {
+                    let peer_id = entry.node.key.preimage();
+                    for addr in entry.node.value.iter() {
+                        if !ma_plausibly_reachable(addr) {
+                            addrs_to_remove.push((*peer_id, addr.clone()));
+                        }
+                    }
+                }
+            }
+            
+            for (peer_id, addr) in addrs_to_remove {
+                swarm.behaviour_mut().kademlia.remove_address(&peer_id, &addr);
+                debug!("🧹 Cleaned up unreachable address at startup: {} -> {}", peer_id, addr);
+            }
+        }
 
         // ---- advertise external addresses so relay reservations include routable addrs
         let mut ext_addrs: Vec<Multiaddr> = Vec::new();
@@ -6749,7 +6789,7 @@ fn ipv4_in_same_subnet(target: Ipv4Addr, iface_ip: Ipv4Addr, iface_mask: Ipv4Add
 
 /// If multiaddr can be plausibly reached from this machine
 /// - Relay paths (p2p-circuit) are allowed
-/// - IPv4 loopback (127.0.0.1) is allowed (local testing)
+/// - IPv4 loopback (127.0.0.1) is REJECTED (not reachable from remote peers)
 /// - For WAN intent, only public IPv4 addresses are allowed (not private ranges)
 fn ma_plausibly_reachable(ma: &Multiaddr) -> bool {
     // Relay paths are allowed
@@ -6758,9 +6798,9 @@ fn ma_plausibly_reachable(ma: &Multiaddr) -> bool {
     }
     // Only consider IPv4 (IPv6 can be added if needed)
     if let Some(Protocol::Ip4(v4)) = ma.iter().find(|p| matches!(p, Protocol::Ip4(_))) {
-        // Allow loopback for local testing
+        // Reject loopback addresses - they're not reachable from remote peers
         if v4.is_loopback() {
-            return true;
+            return false;
         }
         // Allow public addresses, reject private
         return !v4.is_private();
@@ -6773,10 +6813,10 @@ fn extract_multiaddr_from_error_str(s: &str) -> Option<Multiaddr> {
     // Example: "Failed to negotiate ... [(/ip4/172.17.0.3/tcp/4001/p2p/12D...: : Timeout ...)]"
     // Try to find the first occurrence of "/ip" and extract until a delimiter
     if let Some(start) = s.find("/ip") {
-        // Roughly cut the delimiter to ) ] space, etc.
+        // Extract until we hit ": " (colon followed by space) which indicates end of multiaddr
         let tail = &s[start..];
         let end = tail
-            .find(|c: char| c == ')' || c == ']' || c == ' ')
+            .find(": ")
             .unwrap_or_else(|| tail.len());
         let cand = &tail[..end];
         return cand.parse::<Multiaddr>().ok();
@@ -7021,11 +7061,6 @@ mod tests {
         verifier.update(&received_piece3);
         assert_eq!(verifier.finalize(), expected_hash3);
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn shutdown_command_stops_dht_service() {
@@ -7106,7 +7141,7 @@ mod tests {
             observed_addr: "/ip4/127.0.0.1/tcp/4001".parse().unwrap(),
         };
 
-        record_identify_push_metrics(&metrics, &info);
+        record_identify_push_metrics(&metrics, &info).await;
 
         {
             let guard = metrics.lock().await;
@@ -7115,7 +7150,7 @@ mod tests {
             assert!(guard.listen_addrs.contains(&secondary_addr.to_string()));
         }
 
-        record_identify_push_metrics(&metrics, &info);
+        record_identify_push_metrics(&metrics, &info).await;
 
         let guard = metrics.lock().await;
         assert_eq!(guard.listen_addrs.len(), 2);

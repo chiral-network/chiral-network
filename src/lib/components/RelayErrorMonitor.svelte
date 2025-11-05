@@ -12,7 +12,6 @@
   $: relayPool = relayErrorService.relayPool;
   $: activeRelay = relayErrorService.activeRelay;
   $: errorLog = relayErrorService.errorLog;
-  $: healthyRelays = relayErrorService.healthyRelays;
   $: relayStats = relayErrorService.relayStats;
 
   onMount(() => {

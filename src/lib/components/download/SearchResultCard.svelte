@@ -15,13 +15,11 @@
 
   export let metadata: FileMetadata;
   export let isBusy = false;
-  export let isBitswap: boolean = false;
 
   let canAfford = true;
   let checkingBalance = false;
   let hashCopied = false;
   let seederCopiedIndex: number | null = null;
-  let showSeedingNotice = false;
   let showDecryptDialog = false;
   let showDownloadConfirmDialog = false;
   let showPaymentConfirmDialog = false;
@@ -127,7 +125,7 @@
         metadata.fileHash,
         metadata.fileName,
         metadata.fileSize,
-        metadata.uploaderAddress,
+        metadata.uploaderAddress || '',
         seederPeerId
       );
 

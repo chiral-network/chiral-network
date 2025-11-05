@@ -86,6 +86,8 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     cacheSize: 1024, // MB
     logLevel: "info",
     autoUpdate: true,
+    relayServerAlias: "", // Empty by default - user can set a friendly name
+    pricePerMb: 0.001, // Default price: 0.001 Chiral per MB
     enableBandwidthScheduling: false,
     bandwidthSchedules: [],
   };
@@ -120,11 +122,11 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
 
   let languages = [];
   $: languages = [
-    { value: "en", label: $t("language.english") },
-    { value: "es", label: $t("language.spanish") },
-    { value: "zh", label: $t("language.chinese") },
-    { value: "ko", label: $t("language.korean") },
-    { value: "ru", label: $t("language.russian") },
+    { value: "en", label: (get(t) as any)("language.english") },
+    { value: "es", label: (get(t) as any)("language.spanish") },
+    { value: "zh", label: (get(t) as any)("language.chinese") },
+    { value: "ko", label: (get(t) as any)("language.korean") },
+    { value: "ru", label: (get(t) as any)("language.russian") },
   ];
 
   // Initialize configuration text from arrays
@@ -398,7 +400,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   }
 
   async function selectStoragePath() {
-    const tr = get(t) as (key: string, params?: any) => string;
+    const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params);
     try {
       // Try Tauri first
       await getVersion(); // only works in Tauri
@@ -466,7 +468,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     a.click();
     URL.revokeObjectURL(url);
     importExportFeedback = {
-      message: $t("advanced.exportSuccess", {
+      message: (get(t) as any)("advanced.exportSuccess", {
         default: "Settings exported to your browser's download folder.",
       }),
       type: "success",
@@ -485,7 +487,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
         await saveSettings(); // This saves, updates savedSettings, and clears any old feedback.
         // Now we set the new feedback for the import action.
         importExportFeedback = {
-          message: $t("advanced.importSuccess", {
+          message: (get(t) as any)("advanced.importSuccess", {
             default: "Settings imported successfully.",
           }),
           type: "success",
@@ -493,7 +495,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
       } catch (err) {
         console.error("Failed to import settings:", err);
         importExportFeedback = {
-          message: $t("advanced.importError", {
+          message: (get(t) as any)("advanced.importError", {
             default: "Invalid JSON file. Please select a valid export.",
           }),
           type: "error",
@@ -532,13 +534,6 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     localSettings.customBootstrapNodes = localSettings.customBootstrapNodes.filter((_, i) => i !== index);
   }
 
-  function handleBootstrapNodeKeypress(event: KeyboardEvent) {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      addBootstrapNode();
-    }
-  }
-
   async function runDiagnostics() {
     diagnosticsRunning = true;
     diagnostics = [];
@@ -548,7 +543,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
       diagnostics = [...diagnostics, item];
     };
 
-    const tr = get(t) as (key: string, params?: any) => string;
+    const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params);
 
     // 1) Environment (Web vs Tauri)
     const isTauri = typeof window !== "undefined" && "__TAURI__" in window;
@@ -611,9 +606,9 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   async function copyDiagnostics() {
     try {
       await navigator.clipboard.writeText(diagnosticsReport);
-      showToast(tr("settings.diagnostics.copied"));
+      showToast((get(t) as any)("settings.diagnostics.copied"));
     } catch (e) {
-      showToast(tr("settings.diagnostics.copyFailed"), "error");
+      showToast((get(t) as any)("settings.diagnostics.copyFailed"), "error");
     }
   }
 
@@ -696,10 +691,6 @@ selectedLanguage = initial; // Synchronize dropdown display value
   // Revalidate whenever settings change
   $: validate(localSettings);
 
-  // Valid when no error messages remain
-  let isValid = true;
-  $: isValid = Object.values(errors).every((e) => !e);
-
   let freeSpaceGB: number | null = null;
   let maxStorageError: string | null = null;
 
@@ -719,22 +710,22 @@ selectedLanguage = initial; // Synchronize dropdown display value
 
 const sectionLabels: Record<string, string[]> = {
   storage: [
-    $t("storage.title"),
-    $t("storage.location"),
-    $t("storage.maxSize"),
-    $t("storage.cleanupThreshold"),
-    $t("storage.enableCleanup"),
+    (get(t) as any)("storage.title"),
+    (get(t) as any)("storage.location"),
+    (get(t) as any)("storage.maxSize"),
+    (get(t) as any)("storage.cleanupThreshold"),
+    (get(t) as any)("storage.enableCleanup"),
   ],
   network: [
-    $t("network.title"),
-    $t("network.maxConnections"),
-    $t("network.port"),
-    $t("network.uploadLimit"),
-    $t("network.downloadLimit"),
-    $t("network.userLocation"),
-    $t("network.enableUpnp"),
-    $t("network.enableNat"),
-    $t("network.enableDht"),
+    (get(t) as any)("network.title"),
+    (get(t) as any)("network.maxConnections"),
+    (get(t) as any)("network.port"),
+    (get(t) as any)("network.uploadLimit"),
+    (get(t) as any)("network.downloadLimit"),
+    (get(t) as any)("network.userLocation"),
+    (get(t) as any)("network.enableUpnp"),
+    (get(t) as any)("network.enableNat"),
+    (get(t) as any)("network.enableDht"),
     "Bootstrap Nodes",
     "Custom Bootstrap Nodes",
   ],
@@ -744,30 +735,30 @@ const sectionLabels: Record<string, string[]> = {
     "Schedule different bandwidth limits",
   ],
   language: [
-    $t("language.title"),
-    $t("language.select"),
+    (get(t) as any)("language.title"),
+    (get(t) as any)("language.select"),
   ],
   privacy: [
-    $t("privacy.title"),
-    $t("privacy.enableProxy"),
-    $t("privacy.anonymousMode"),
-    $t("privacy.shareAnalytics"),
+    (get(t) as any)("privacy.title"),
+    (get(t) as any)("privacy.enableProxy"),
+    (get(t) as any)("privacy.anonymousMode"),
+    (get(t) as any)("privacy.shareAnalytics"),
   ],
   notifications: [
-    $t("notifications.title"),
-    $t("notifications.enable"),
-    $t("notifications.notifyComplete"),
-    $t("notifications.notifyError"),
-    $t("notifications.soundAlerts"),
+    (get(t) as any)("notifications.title"),
+    (get(t) as any)("notifications.enable"),
+    (get(t) as any)("notifications.notifyComplete"),
+    (get(t) as any)("notifications.notifyError"),
+    (get(t) as any)("notifications.soundAlerts"),
   ],
   advanced: [
-    $t("advanced.title"),
-    $t("advanced.chunkSize"),
-    $t("advanced.cacheSize"),
-    $t("advanced.logLevel"),
-    $t("advanced.autoUpdate"),
-    $t("advanced.exportSettings"),
-    $t("advanced.importSettings"),
+    (get(t) as any)("advanced.title"),
+    (get(t) as any)("advanced.chunkSize"),
+    (get(t) as any)("advanced.cacheSize"),
+    (get(t) as any)("advanced.logLevel"),
+    (get(t) as any)("advanced.autoUpdate"),
+    (get(t) as any)("advanced.exportSettings"),
+    (get(t) as any)("advanced.importSettings"),
   ],
 };
 
@@ -783,14 +774,14 @@ function sectionMatches(section: string, query: string) {
 <div class="space-y-6">
   <div class="flex items-center justify-between">
     <div>
-      <h1 class="text-3xl font-bold">{$t("settings.title")}</h1>
+      <h1 class="text-3xl font-bold">{(get(t) as any)("settings.title")}</h1>
       <p class="text-muted-foreground mt-2">
-        {$t("settings.subtitle")}
+        {(get(t) as any)("settings.subtitle")}
       </p>
     </div>
     {#if hasChanges}
       <Badge variant="outline" class="text-orange-500"
-        >{$t("badges.unsaved")}</Badge
+        >{(get(t) as any)("badges.unsaved")}</Badge
       >
     {/if}
   </div>
@@ -799,7 +790,7 @@ function sectionMatches(section: string, query: string) {
   <div class="mb-4 flex items-center gap-2">
     <Input
       type="text"
-      placeholder={$t('settings.searchPlaceholder')}
+      placeholder={(get(t) as any)('settings.searchPlaceholder')}
       bind:value={search}
       class="w-full"
     />
@@ -1040,7 +1031,13 @@ function sectionMatches(section: string, query: string) {
               <Input
                 id="new-bootstrap-node"
                 bind:value={newBootstrapNode}
-                on:keypress={handleBootstrapNodeKeypress}
+                on:keydown={(e) => {
+                  const ev = (e as unknown as KeyboardEvent);
+                  if (ev.key === 'Enter') {
+                    ev.preventDefault();
+                    addBootstrapNode();
+                  }
+                }}
                 placeholder="/ip4/54.198.145.146/tcp/4001/p2p/12D3KooW..."
                 class="flex-1 font-mono text-sm"
               />

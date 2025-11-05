@@ -24,7 +24,6 @@ import { paymentService } from '$lib/services/paymentService';
   const tr = (key: string, params?: Record<string, unknown>) => (get(t) as any)(key, params);
 
   const SEARCH_TIMEOUT_MS = 10_000; // 10 seconds for DHT searches to find peers
-  export let isBitswap: boolean = false;
 
   let searchHash = '';
   let searchMode = 'merkle_hash'; // 'merkle_hash' or 'cid'
@@ -807,7 +806,6 @@ import { paymentService } from '$lib/services/paymentService';
                 metadata={latestMetadata}
                 on:copy={handleCopy}
                 on:download={event => handleFileDownload(event.detail)}
-                isBitswap={isBitswap}
               />
               <p class="text-xs text-muted-foreground">
                 {tr('download.search.status.completedIn', { values: { seconds: (lastSearchDuration / 1000).toFixed(1) } })}

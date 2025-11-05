@@ -1,6 +1,9 @@
-import { get } from 'svelte/store';
-import { settings, activeBandwidthLimits } from '$lib/stores';
-import type { BandwidthScheduleEntry, ActiveBandwidthLimits } from '$lib/stores';
+import { get } from "svelte/store";
+import { settings, activeBandwidthLimits } from "$lib/stores";
+import type {
+  BandwidthScheduleEntry,
+  ActiveBandwidthLimits,
+} from "$lib/stores";
 
 type ScheduleMatch = {
   schedule: BandwidthScheduleEntry;
@@ -9,7 +12,7 @@ type ScheduleMatch = {
 
 /**
  * Bandwidth Scheduler Service
- * 
+ *
  * This service manages bandwidth scheduling based on time of day and day of week.
  * It checks active schedules and applies appropriate bandwidth limits.
  */
@@ -17,10 +20,9 @@ export class BandwidthSchedulerService {
   private static instance: BandwidthSchedulerService | null = null;
   private checkInterval: number | null = null;
   private readonly CHECK_INTERVAL_MS = 60000; // Check every minute
-  
+
   private currentUploadLimit: number = 0;
   private currentDownloadLimit: number = 0;
-  private currentScheduleId: string | null = null;
 
   private constructor() {}
 
@@ -47,7 +49,7 @@ export class BandwidthSchedulerService {
       this.checkAndApplySchedule();
     }, this.CHECK_INTERVAL_MS);
 
-    console.log('Bandwidth scheduler started');
+    console.log("Bandwidth scheduler started");
   }
 
   /**
@@ -57,14 +59,18 @@ export class BandwidthSchedulerService {
     if (this.checkInterval !== null) {
       clearInterval(this.checkInterval);
       this.checkInterval = null;
-      console.log('Bandwidth scheduler stopped');
+      console.log("Bandwidth scheduler stopped");
     }
 
     const currentSettings = get(settings);
-    this.applyLimits(currentSettings.uploadBandwidth, currentSettings.downloadBandwidth, {
-      source: "default",
-      nextChangeAt: null,
-    });
+    this.applyLimits(
+      currentSettings.uploadBandwidth,
+      currentSettings.downloadBandwidth,
+      {
+        source: "default",
+        nextChangeAt: null,
+      }
+    );
   }
 
   /**
@@ -76,9 +82,9 @@ export class BandwidthSchedulerService {
     const now = new Date();
     const currentTime = this.formatTime(now);
     const currentDay = now.getDay(); // 0-6, where 0 = Sunday
-    const enabledSchedules = currentSettings.bandwidthSchedules?.filter(
-      (entry) => entry.enabled
-    ) ?? [];
+    const enabledSchedules =
+      currentSettings.bandwidthSchedules?.filter((entry) => entry.enabled) ??
+      [];
 
     const activeMatch = currentSettings.enableBandwidthScheduling
       ? this.findActiveSchedule(enabledSchedules, currentTime, currentDay)
@@ -105,10 +111,14 @@ export class BandwidthSchedulerService {
     }
 
     // No active schedule or scheduling disabled: fall back to defaults.
-    this.applyLimits(currentSettings.uploadBandwidth, currentSettings.downloadBandwidth, {
-      source: "default",
-      nextChangeAt,
-    });
+    this.applyLimits(
+      currentSettings.uploadBandwidth,
+      currentSettings.downloadBandwidth,
+      {
+        source: "default",
+        nextChangeAt,
+      }
+    );
   }
 
   /**
@@ -120,14 +130,15 @@ export class BandwidthSchedulerService {
     currentDay: number
   ): ScheduleMatch | null {
     // Filter to only enabled schedules for today
-    const applicableSchedules = schedules.filter(
-      (schedule) =>
-        schedule.daysOfWeek.includes(currentDay)
+    const applicableSchedules = schedules.filter((schedule) =>
+      schedule.daysOfWeek.includes(currentDay)
     );
 
     // Find schedules where current time falls within the range
     for (const schedule of applicableSchedules) {
-      if (this.isTimeInRange(currentTime, schedule.startTime, schedule.endTime)) {
+      if (
+        this.isTimeInRange(currentTime, schedule.startTime, schedule.endTime)
+      ) {
         return { schedule, day: currentDay };
       }
     }
@@ -157,7 +168,7 @@ export class BandwidthSchedulerService {
    * Convert time string (HH:MM) to minutes since midnight
    */
   private timeToMinutes(time: string): number {
-    const [hours, minutes] = time.split(':').map(Number);
+    const [hours, minutes] = time.split(":").map(Number);
     return hours * 60 + minutes;
   }
 
@@ -165,8 +176,8 @@ export class BandwidthSchedulerService {
    * Format date to HH:MM
    */
   private formatTime(date: Date): string {
-    const hours = String(date.getHours()).padStart(2, '0');
-    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, "0");
+    const minutes = String(date.getMinutes()).padStart(2, "0");
     return `${hours}:${minutes}`;
   }
 
@@ -185,16 +196,26 @@ export class BandwidthSchedulerService {
   }
 
   /**
+   * Get current active schedule ID
+   * Returns null if no schedule is active (using default limits)
+   */
+  getCurrentScheduleId(): string | null {
+    return this.currentScheduleId;
+  }
+
+  /**
    * Get human-readable description of current limits
    */
   getCurrentLimitsDescription(): string {
-    const upload = this.currentUploadLimit === 0 
-      ? 'unlimited' 
-      : `${this.currentUploadLimit} KB/s`;
-    const download = this.currentDownloadLimit === 0 
-      ? 'unlimited' 
-      : `${this.currentDownloadLimit} KB/s`;
-    
+    const upload =
+      this.currentUploadLimit === 0
+        ? "unlimited"
+        : `${this.currentUploadLimit} KB/s`;
+    const download =
+      this.currentDownloadLimit === 0
+        ? "unlimited"
+        : `${this.currentDownloadLimit} KB/s`;
+
     return `Upload: ${upload}, Download: ${download}`;
   }
 
@@ -216,7 +237,6 @@ export class BandwidthSchedulerService {
   ) {
     this.currentUploadLimit = uploadLimit;
     this.currentDownloadLimit = downloadLimit;
-    this.currentScheduleId = meta.schedule?.id ?? null;
 
     const limits: ActiveBandwidthLimits = {
       uploadLimitKbps: uploadLimit,
@@ -383,4 +403,3 @@ export class BandwidthSchedulerService {
 
 // Export singleton instance
 export const bandwidthScheduler = BandwidthSchedulerService.getInstance();
-
