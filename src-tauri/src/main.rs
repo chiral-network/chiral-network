@@ -971,9 +971,8 @@ async fn start_dht_node(
         }
     }
 
-    // Disable autonat by default to prevent warnings when no servers are available
-    // Users can explicitly enable it when needed
-    let auto_enabled = enable_autonat.unwrap_or(true);
+    // AutoNAT disabled by default - users can enable in settings if needed for NAT detection
+    let auto_enabled = enable_autonat.unwrap_or(false);
     let probe_interval = autonat_probe_interval_secs.map(Duration::from_secs);
     let autonat_server_list = autonat_servers.unwrap_or_default();
 
@@ -996,8 +995,9 @@ async fn start_dht_node(
     let chunk_storage_path = app_data_dir.join("chunk_storage");
     let chunk_manager = Arc::new(ChunkManager::new(chunk_storage_path));
 
-    // --- Hotfix: Disable AutoRelay on bootstrap nodes (and via env var)
-    let mut final_enable_autorelay = enable_autorelay.unwrap_or(true);
+    // --- AutoRelay is now disabled by default (can be enabled via config or env var)
+    // Disable AutoRelay on bootstrap nodes (and via env var)
+    let mut final_enable_autorelay = enable_autorelay.unwrap_or(false);
     if is_bootstrap.unwrap_or(false) {
         final_enable_autorelay = false;
         tracing::info!("AutoRelay disabled on bootstrap (hotfix).");
@@ -1026,7 +1026,7 @@ async fn start_dht_node(
         Some(chunk_manager), // Pass the chunk manager
         chunk_size_kb,
         cache_size_mb,
-        /* enable AutoRelay (after hotfix) */ final_enable_autorelay,
+        /* enable AutoRelay (disabled by default) */ final_enable_autorelay,
         preferred_relays.unwrap_or_default(),
         is_bootstrap.unwrap_or(false), // enable_relay_server only on bootstrap
         Some(&async_blockstore_path),
@@ -2616,7 +2616,6 @@ fn get_windows_temperature() -> Option<f32> {
                         let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
                         if let Ok(mut logged) = log_state.lock() {
                             if !*logged {
-                                info!("✅ Temperature sensor detected via WMI HighPrecision: {:.1}°C", temp_celsius);
                                 *logged = true;
                             }
                         }
@@ -2644,7 +2643,6 @@ fn get_windows_temperature() -> Option<f32> {
                         let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
                         if let Ok(mut logged) = log_state.lock() {
                             if !*logged {
-                                info!("✅ Temperature sensor detected via WMI CurrentTemperature: {:.1}°C", temp_celsius);
                                 *logged = true;
                             }
                         }
@@ -2672,7 +2670,6 @@ fn get_windows_temperature() -> Option<f32> {
                         let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
                         if let Ok(mut logged) = log_state.lock() {
                             if !*logged {
-                                info!("✅ Temperature sensor detected via MSAcpi: {:.1}°C", temp_celsius);
                                 *logged = true;
                             }
                         }

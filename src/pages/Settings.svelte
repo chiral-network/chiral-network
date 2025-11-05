@@ -1085,45 +1085,6 @@ function sectionMatches(section: string, query: string) {
           </div>
         </div>
 
-        <!-- Relay Server -->
-        <div class="space-y-2 border-t pt-3">
-          <div class="flex items-center gap-2">
-            <input
-              type="checkbox"
-              id="enable-relay-server"
-              bind:checked={localSettings.enableRelayServer}
-            />
-            <Label for="enable-relay-server" class="cursor-pointer">
-              Enable Relay Server <span class="text-xs text-green-600 font-semibold">(Recommended - Enabled by Default)</span>
-            </Label>
-          </div>
-
-          {#if localSettings.enableRelayServer}
-            <div class="ml-6 p-4 bg-green-50 rounded-md border border-green-200">
-              <p class="text-sm text-green-900 mb-2">
-                <strong>✅ Relay Server Enabled</strong>
-              </p>
-              <p class="text-xs text-green-700 mb-2">
-                Your node helps peers behind NAT connect. This strengthens the decentralized network without requiring central infrastructure.
-              </p>
-              <ul class="text-xs text-green-600 space-y-1">
-                <li>• Enables cross-network peer connections</li>
-                <li>• Strengthens network decentralization</li>
-                <li>• Minimal resource usage when idle</li>
-                <li>• Only uses bandwidth when actively relaying</li>
-              </ul>
-            </div>
-          {:else}
-            <div class="ml-6 p-4 bg-yellow-50 rounded-md border border-yellow-200">
-              <p class="text-sm text-yellow-900 mb-2">
-                <strong>⚠️ Relay Server Disabled</strong>
-              </p>
-              <p class="text-xs text-yellow-700">
-                Your node cannot help others connect across networks. Enable this to strengthen the network.
-              </p>
-            </div>
-          {/if}
-        </div>
       </div>
     </Expandable>
   {/if}

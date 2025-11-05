@@ -578,16 +578,11 @@
     validationError = null
     
     try {
-      // Show message that we're starting mining
-      error = $t('mining.starting')
-      
       await invoke('start_miner', {
         address: $etcAccount.address,
         threads: selectedThreads,
         dataDir: './bin/geth-data'
       })
-      
-      error = '' // Clear the status message
       $miningState.isMining = true
       sessionStartTime = Date.now()
       // Store session start time in the store for persistence
