@@ -1,34 +1,40 @@
+// Prevents additional console window on Windows in release, DO NOT REMOVE!!
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 #![cfg_attr(
     all(not(debug_assertions), target_os = "windows"),
     windows_subsystem = "windows"
 )]
 
+// Declare all modules here
+pub mod protocols;
 pub mod commands;
 pub mod analytics;
-mod bandwidth;
-mod blockchain_listener;
-mod dht;
-mod download_scheduler;
-mod download_source;
-mod encryption;
-mod ethereum;
-mod file_transfer;
-mod ftp_client;
-mod geth_downloader;
-mod headless;
-mod http_download;
-mod http_server;
-mod keystore;
-mod manager;
-mod multi_source_download;
 pub mod net;
-mod peer_selection;
-mod pool;
-mod proxy_latency;
-mod stream_auth;
-mod webrtc_service;
-mod transaction_services;  
+pub mod transaction_services;
+pub mod bandwidth;
+pub mod blockchain_listener;
+pub mod dht;
+pub mod download_scheduler;
+pub mod download_source;
+pub mod encryption;
+pub mod ethereum;
+pub mod file_transfer;
+pub mod ftp_client;
+pub mod geth_downloader;
+pub mod headless;
+pub mod http_download;
+pub mod http_server;
+pub mod keystore;
+pub mod manager;
+pub mod multi_source_download;
+pub mod peer_selection;
+pub mod pool;
+pub mod proxy_latency;
+pub mod stream_auth;
+pub mod webrtc_service;
+
+use protocols::{ProtocolManager, ProtocolHandler};
 
 use crate::commands::auth::{
     cleanup_expired_proxy_auth_tokens, generate_proxy_auth_token, revoke_proxy_auth_token,
@@ -268,8 +274,13 @@ struct AppState {
 
     // Relay node aliases (peer_id -> alias)
     relay_aliases: Arc<Mutex<std::collections::HashMap<String, String>>>,
+
+    // Protocol manager for handling different download/upload protocols
+    protocol_manager: Arc<ProtocolManager>,
 }
 
+/// Tauri command to trigger a download.
+/// It takes a string identifier (like a magnet link) and uses the ProtocolManager.
 #[tauri::command]
 async fn create_chiral_account(state: State<'_, AppState>) -> Result<EthAccount, String> {
     let account = create_new_account()?;
@@ -315,14 +326,29 @@ async fn import_chiral_account(
 async fn start_geth_node(
     state: State<'_, AppState>,
     data_dir: String,
-    rpc_url: Option<String>,
-) -> Result<(), String> {
+    rpc_url: Option<String>,) -> Result<(), String> {
     let mut geth = state.geth.lock().await;
     let miner_address = state.miner_address.lock().await;
     let rpc_url = rpc_url.unwrap_or_else(|| "http://127.0.0.1:8545".to_string());
-    *state.rpc_url.lock().await = rpc_url;
+    *state.rpc_url.lock().await = rpc_url.clone();
 
-    geth.start(&data_dir, miner_address.as_deref())
+    geth.start(&data_dir, miner_address.as_deref())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn download(identifier: String, state: State<'_, AppState>) -> Result<(), String> {
+    println!("Received download command for: {}", identifier);
+    state.protocol_manager.download(&identifier).await
+}
+
+/// Tauri command to seed a file.
+/// It takes a local file path, starts seeding, and returns a magnet link.
+#[tauri::command]
+async fn seed(file_path: String, state: State<'_, AppState>) -> Result<String, String> {
+    println!("Received seed command for: {}", file_path);
+    // Delegate the seed operation to the protocol manager.
+    state.protocol_manager.seed(&file_path).await
 }
 
 #[tauri::command]
@@ -4963,6 +4989,9 @@ fn main() {
 
             // Relay aliases
             relay_aliases: Arc::new(Mutex::new(std::collections::HashMap::new())),
+
+            // Protocol Manager
+            protocol_manager: Arc::new(ProtocolManager::new()),
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
@@ -4993,6 +5022,8 @@ fn main() {
             get_transaction_queue_status,
             get_cpu_temperature,
             get_power_consumption,
+            download,
+            seed,
             is_geth_running,
             check_geth_binary,
             get_geth_status,
