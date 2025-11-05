@@ -477,7 +477,7 @@ export const settings = writable<AppSettings>({
   autonatServers: [], // Use bootstrap nodes by default
   enableAutorelay: false, // Disabled by default - enable if you need relay connections
   preferredRelays: [], // Use bootstrap nodes as relays by default
-  enableRelayServer: true, // Enabled by default - helps strengthen the network
+  enableRelayServer: false, // Disabled by default - enable to help relay traffic for others
   relayServerAlias: "", // Empty by default - user can set a friendly name
   autoStartDht: false, // Disabled by default - user must opt-in
   anonymousMode: false,
