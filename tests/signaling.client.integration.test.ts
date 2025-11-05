@@ -12,11 +12,36 @@ function wait(ms: number): Promise<void> {
 async function startServer(port: number = 9000): Promise<any> {
   const node = spawn(process.execPath, [SERVER_PATH], {
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, PORT: port.toString() },
+    env: { ...process.env, PORT: port.toString(), HOST: "127.0.0.1" },
   });
   node.stdout.on("data", (d: Buffer) => process.stdout.write(`[server] ${d}`));
   node.stderr.on("data", (d: Buffer) => process.stderr.write(`[server] ${d}`));
-  await wait(200);
+
+  // Wait for server listening log or timeout. Fail if process exits early.
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      node.stdout.off("data", onData);
+      node.removeListener("exit", onExit as any);
+      reject(new Error("server startup timeout"));
+    }, 8000);
+    const onData = (d: Buffer) => {
+      const s = d.toString();
+      if (s.includes("SignalingServer] listening")) {
+        clearTimeout(timeout);
+        node.stdout.off("data", onData);
+        node.removeListener("exit", onExit as any);
+        resolve();
+      }
+    };
+    const onExit = (code: number | null) => {
+      clearTimeout(timeout);
+      node.stdout.off("data", onData);
+      reject(new Error("server process exited before ready: " + code));
+    };
+    node.on("exit", onExit as any);
+    node.stdout.on("data", onData);
+  });
+
   return node;
 }
 
@@ -31,7 +56,7 @@ describe("SignalingService", () => {
   it("should connect and register", async () => {
     const server = await startServer(9006);
     const client = new SignalingService({
-      url: "ws://localhost:9006",
+      url: "ws://127.0.0.1:9006",
       preferDht: false,
     });
 
@@ -42,16 +67,16 @@ describe("SignalingService", () => {
 
     client.disconnect();
     await stopServer(server);
-  });
+  }, 20000);
 
   it("should send and receive messages", async () => {
     const server = await startServer(9007);
     const clientA = new SignalingService({
-      url: "ws://localhost:9007",
+      url: "ws://127.0.0.1:9007",
       preferDht: false,
     });
     const clientB = new SignalingService({
-      url: "ws://localhost:9007",
+      url: "ws://127.0.0.1:9007",
       preferDht: false,
     });
 
@@ -76,12 +101,12 @@ describe("SignalingService", () => {
     clientA.disconnect();
     clientB.disconnect();
     await stopServer(server);
-  });
+  }, 20000);
 
   it("should handle peer updates", async () => {
     const server = await startServer(9008);
     const client = new SignalingService({
-      url: "ws://localhost:9008",
+      url: "ws://127.0.0.1:9008",
       preferDht: false,
     });
 
@@ -99,16 +124,16 @@ describe("SignalingService", () => {
 
     client.disconnect();
     await stopServer(server);
-  });
+  }, 20000);
 
   it("should broadcast messages", async () => {
     const server = await startServer(9009);
     const clientA = new SignalingService({
-      url: "ws://localhost:9009",
+      url: "ws://127.0.0.1:9009",
       preferDht: false,
     });
     const clientB = new SignalingService({
-      url: "ws://localhost:9009",
+      url: "ws://127.0.0.1:9009",
       preferDht: false,
     });
 
@@ -131,5 +156,5 @@ describe("SignalingService", () => {
     clientA.disconnect();
     clientB.disconnect();
     await stopServer(server);
-  });
+  }, 20000);
 });

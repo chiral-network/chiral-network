@@ -14,6 +14,7 @@ export interface SignalingOptions {
   url?: string; // WebSocket URL
   preferDht?: boolean;
   wsHeartbeatInterval?: number; // ms
+  wsConnectTimeoutMs?: number; // ms for WS connect timeout
   peerTtlMs?: number; // ms to consider a peer stale
   persistPeers?: boolean; // persist peers to localStorage
 }
@@ -52,6 +53,7 @@ export class SignalingService {
 
   // heartbeat + garbage collection
   private wsHeartbeatIntervalMs: number;
+  private wsConnectTimeoutMs: number;
   private wsHeartbeatTimer: any = null;
   private peerTtlMs: number;
   private peerGcTimer: any = null;
@@ -62,6 +64,12 @@ export class SignalingService {
     this.wsUrl = opts.url ?? "ws://localhost:9000";
     this.preferDht = opts.preferDht ?? true;
     this.wsHeartbeatIntervalMs = opts.wsHeartbeatInterval ?? 20000; // 20s
+    // connection timeout for WebSocket connect attempts
+    this.wsConnectTimeoutMs =
+      opts.wsConnectTimeoutMs ??
+      (typeof process !== "undefined" && (process as any).env && (process as any).env.SIGNALLING_CONNECT_TIMEOUT_MS
+        ? parseInt((process as any).env.SIGNALLING_CONNECT_TIMEOUT_MS)
+        : 5000);
     this.peerTtlMs = opts.peerTtlMs ?? 1000 * 60 * 60 * 24; // 24h
     this.persistPeersFlag = opts.persistPeers ?? true;
 
@@ -327,7 +335,7 @@ export class SignalingService {
           this.state.set("disconnected");
           this.connected.set(false);
           reject(new Error("WebSocket connection timeout"));
-        }, 2000); // 2 second timeout
+        }, this.wsConnectTimeoutMs);
 
         this.ws.onopen = () => {
           clearTimeout(connectionTimeout);

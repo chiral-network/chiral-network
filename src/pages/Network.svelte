@@ -1,3 +1,4 @@
+
 <script lang="ts">
   import Card from '$lib/components/ui/card.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
@@ -282,8 +283,16 @@
 
   async function fetchBootstrapNodes() {
     try {
-      dhtBootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command")
-      dhtBootstrapNode = dhtBootstrapNodes[0] || 'No bootstrap nodes configured'
+      // Use custom bootstrap nodes if configured, otherwise use defaults
+      if ($settings.customBootstrapNodes && $settings.customBootstrapNodes.length > 0) {
+        dhtBootstrapNodes = $settings.customBootstrapNodes
+        dhtBootstrapNode = dhtBootstrapNodes[0] || 'No bootstrap nodes configured'
+        console.log('Using custom bootstrap nodes:', dhtBootstrapNodes)
+      } else {
+        dhtBootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command")
+        dhtBootstrapNode = dhtBootstrapNodes[0] || 'No bootstrap nodes configured'
+        console.log('Using default bootstrap nodes:', dhtBootstrapNodes)
+      }
     } catch (error) {
       console.error('Failed to fetch bootstrap nodes:', error)
       dhtBootstrapNodes = []

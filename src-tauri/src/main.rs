@@ -1,3 +1,4 @@
+
 #![cfg_attr(
     all(not(debug_assertions), target_os = "windows"),
     windows_subsystem = "windows"
@@ -27,11 +28,13 @@ mod pool;
 mod proxy_latency;
 mod stream_auth;
 mod webrtc_service;
+mod transaction_services;  
 
 use crate::commands::auth::{
     cleanup_expired_proxy_auth_tokens, generate_proxy_auth_token, revoke_proxy_auth_token,
     validate_proxy_auth_token,
 };
+
 use crate::commands::bootstrap::get_bootstrap_nodes_command;
 use crate::commands::proxy::{
     disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
@@ -88,7 +91,7 @@ use sysinfo::{Components, System};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Emitter, Listener, Manager, State,
+    Emitter, Manager, State,
 };
 use tokio::time::Duration as TokioDuration;
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
@@ -968,9 +971,8 @@ async fn start_dht_node(
         }
     }
 
-    // Disable autonat by default to prevent warnings when no servers are available
-    // Users can explicitly enable it when needed
-    let auto_enabled = enable_autonat.unwrap_or(true);
+    // AutoNAT disabled by default - users can enable in settings if needed for NAT detection
+    let auto_enabled = enable_autonat.unwrap_or(false);
     let probe_interval = autonat_probe_interval_secs.map(Duration::from_secs);
     let autonat_server_list = autonat_servers.unwrap_or_default();
 
@@ -993,8 +995,9 @@ async fn start_dht_node(
     let chunk_storage_path = app_data_dir.join("chunk_storage");
     let chunk_manager = Arc::new(ChunkManager::new(chunk_storage_path));
 
-    // --- Hotfix: Disable AutoRelay on bootstrap nodes (and via env var)
-    let mut final_enable_autorelay = enable_autorelay.unwrap_or(true);
+    // --- AutoRelay is now disabled by default (can be enabled via config or env var)
+    // Disable AutoRelay on bootstrap nodes (and via env var)
+    let mut final_enable_autorelay = enable_autorelay.unwrap_or(false);
     if is_bootstrap.unwrap_or(false) {
         final_enable_autorelay = false;
         tracing::info!("AutoRelay disabled on bootstrap (hotfix).");
@@ -1023,7 +1026,7 @@ async fn start_dht_node(
         Some(chunk_manager), // Pass the chunk manager
         chunk_size_kb,
         cache_size_mb,
-        /* enable AutoRelay (after hotfix) */ final_enable_autorelay,
+        /* enable AutoRelay (disabled by default) */ final_enable_autorelay,
         preferred_relays.unwrap_or_default(),
         is_bootstrap.unwrap_or(false), // enable_relay_server only on bootstrap
         Some(&async_blockstore_path),
@@ -1675,6 +1678,17 @@ async fn get_power_consumption() -> Option<f32> {
             }
         }
 
+        // Try Mac-specific methods if basic ones failed
+        #[cfg(target_os = "macos")]
+        {
+            if let Some((power, method)) = get_mac_power() {
+                if let Ok(mut working_method) = working_method_mutex.lock() {
+                    *working_method = Some(method);
+                }
+                return Some(smooth_power(power));
+            }
+        }
+
         // Final fallback: return None when power monitoring is unavailable
         // Only log the info message once to avoid spamming logs
         static POWER_WARNING_LOGGED: OnceLock<()> = OnceLock::new();
@@ -2101,6 +2115,128 @@ fn get_linux_power() -> Option<(f32, PowerMethod)> {
     None
 }
 
+#[cfg(target_os = "macos")]
+fn get_mac_power() -> Option<(f32, PowerMethod)> {
+    use std::time::Instant;
+    
+    // Static variables to track power readings over time
+    static mut LAST_CPU_USAGE: Option<(f32, Instant)> = None;
+    static mut LAST_POWER: f32 = 0.0;
+    
+    // Try to get power from SMC (System Management Controller)
+    // SMC provides direct hardware power readings on Mac systems
+    if let Some(power) = get_mac_power_from_smc() {
+        return Some((power, PowerMethod::Systemstat));
+    }
+    
+    // Fallback: Estimate power based on CPU usage
+    // This is less accurate but works when SMC access is unavailable
+    if let Some(power) = get_mac_power_from_cpu_usage() {
+        return Some((power, PowerMethod::Sysinfo));
+    }
+    
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn get_mac_power_from_smc() -> Option<f32> {
+    // Try to read power consumption from SMC
+    // The SMC provides real-time power metrics on Mac hardware
+    
+    // Note: SMC access on macOS requires specific hardware keys
+    // This implementation may need adjustment based on actual Mac hardware
+    // For now, we'll skip SMC implementation and rely on CPU estimation
+    
+    // The smc crate has complex API requirements and version conflicts
+    // that make it difficult to use reliably across different Mac models
+    
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn get_mac_power_from_cpu_usage() -> Option<f32> {
+    use std::process::Command;
+    
+    // Use system commands to estimate power consumption
+    // Method 1: Get CPU usage and estimate from TDP
+    
+    // Get CPU usage percentage
+    let cpu_usage_output = Command::new("sh")
+        .arg("-c")
+        .arg("ps -A -o %cpu | awk '{s+=$1} END {print s}'")
+        .output();
+    
+    if let Ok(output) = cpu_usage_output {
+        if output.status.success() {
+            if let Ok(usage_str) = String::from_utf8(output.stdout) {
+                if let Ok(cpu_usage) = usage_str.trim().parse::<f32>() {
+                    // Get system info to estimate TDP
+                    let sysctl_output = Command::new("sysctl")
+                        .arg("-n")
+                        .arg("machdep.cpu.brand_string")
+                        .output();
+                    
+                    let mut estimated_tdp = 15.0; // Default for MacBook
+                    
+                    if let Ok(sysctl_out) = sysctl_output {
+                        if let Ok(cpu_brand) = String::from_utf8(sysctl_out.stdout) {
+                            // Estimate TDP based on CPU model
+                            if cpu_brand.contains("M1") || cpu_brand.contains("M2") || cpu_brand.contains("M3") {
+                                // Apple Silicon - very efficient
+                                estimated_tdp = 20.0; // M-series chips are low power
+                            } else if cpu_brand.contains("Intel") {
+                                // Intel Mac
+                                if cpu_brand.contains("i9") {
+                                    estimated_tdp = 45.0;
+                                } else if cpu_brand.contains("i7") {
+                                    estimated_tdp = 28.0;
+                                } else if cpu_brand.contains("i5") {
+                                    estimated_tdp = 20.0;
+                                } else {
+                                    estimated_tdp = 15.0;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Get number of cores to adjust estimation
+                    let core_count_output = Command::new("sysctl")
+                        .arg("-n")
+                        .arg("hw.ncpu")
+                        .output();
+                    
+                    let mut num_cores = 4.0;
+                    if let Ok(core_out) = core_count_output {
+                        if let Ok(cores_str) = String::from_utf8(core_out.stdout) {
+                            if let Ok(cores) = cores_str.trim().parse::<f32>() {
+                                num_cores = cores;
+                            }
+                        }
+                    }
+                    
+                    // Calculate power consumption
+                    // cpu_usage is total across all cores, so normalize by core count
+                    let normalized_usage = cpu_usage / num_cores;
+                    let cpu_power = estimated_tdp * (normalized_usage / 100.0);
+                    
+                    // Add base system power (display, memory, etc.)
+                    let base_power = 5.0; // Base system power for Mac
+                    let total_power = cpu_power + base_power;
+                    
+                    // Ensure minimum power draw
+                    let final_power = total_power.max(estimated_tdp * 0.2); // At least 20% of TDP
+                    
+                    if final_power > 0.0 && final_power < 200.0 {
+                        return Some(final_power);
+                    }
+                }
+            }
+        }
+    }
+    
+    None
+}
+
 #[tauri::command]
 async fn get_cpu_temperature() -> Option<f32> {
     tokio::task::spawn_blocking(move || {
@@ -2480,7 +2616,6 @@ fn get_windows_temperature() -> Option<f32> {
                         let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
                         if let Ok(mut logged) = log_state.lock() {
                             if !*logged {
-                                info!("✅ Temperature sensor detected via WMI HighPrecision: {:.1}°C", temp_celsius);
                                 *logged = true;
                             }
                         }
@@ -2508,7 +2643,6 @@ fn get_windows_temperature() -> Option<f32> {
                         let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
                         if let Ok(mut logged) = log_state.lock() {
                             if !*logged {
-                                info!("✅ Temperature sensor detected via WMI CurrentTemperature: {:.1}°C", temp_celsius);
                                 *logged = true;
                             }
                         }
@@ -2536,7 +2670,6 @@ fn get_windows_temperature() -> Option<f32> {
                         let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
                         if let Ok(mut logged) = log_state.lock() {
                             if !*logged {
-                                info!("✅ Temperature sensor detected via MSAcpi: {:.1}°C", temp_celsius);
                                 *logged = true;
                             }
                         }
@@ -2571,7 +2704,12 @@ fn get_default_storage_path(app: tauri::AppHandle) -> Result<String, String> {
         .app_data_dir()
         .map_err(|e| format!("Could not get app data directory: {}", e))?;
 
-    let storage_path = app_data_dir.join("Storage");
+    // Get the parent of app data dir to place storage at user level
+    let user_dir = app_data_dir
+        .parent()
+        .ok_or_else(|| "Failed to get parent directory".to_string())?;
+
+    let storage_path = user_dir.join("Chiral-Network-Storage");
 
     storage_path
         .to_str()
@@ -2582,6 +2720,24 @@ fn get_default_storage_path(app: tauri::AppHandle) -> Result<String, String> {
 #[tauri::command]
 fn check_directory_exists(path: String) -> bool {
     Path::new(&path).is_dir()
+}
+
+#[tauri::command]
+async fn ensure_directory_exists(path: String) -> Result<(), String> {
+    let path_obj = Path::new(&path);
+    
+    // Get parent directory (in case path is a file path)
+    let dir_to_create = if path_obj.extension().is_some() {
+        // This looks like a file path, get the parent directory
+        path_obj.parent().ok_or_else(|| "Invalid path".to_string())?
+    } else {
+        // This is a directory path
+        path_obj
+    };
+    
+    tokio::fs::create_dir_all(dir_to_create)
+        .await
+        .map_err(|e| format!("Failed to create directory: {}", e))
 }
 
 #[tauri::command]
@@ -2749,7 +2905,6 @@ async fn upload_file_to_network(
                 uploader_address: Some(account.clone()),
                 ..Default::default()
             };
-          
           // Prepare a timestamp for metadata
             let created_at = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -2827,7 +2982,7 @@ async fn start_ftp_download(
         .map_err(|e| format!("Failed to create output file: {}", e))?;
 
     // Retrieve file and stream in chunks
-    ftp.retr(path, |mut reader| {
+    ftp.retr(path, |reader| {
         let mut buffer = [0u8; 65536]; // 64 KB
         loop {
             let bytes_read = reader
@@ -4563,7 +4718,7 @@ async fn reset_analytics(state: State<'_, AppState>) -> Result<(), String> {
 /// Start HTTP server for serving encrypted chunks and file manifests
 ///
 /// The server will listen on the specified port and serve files that have been
-/// registered via `register_manifest_for_http()`.
+/// registered via `register_file()`.
 ///
 /// Returns the actual bound address (useful if port 0 was used for auto-assignment)
 #[tauri::command]
@@ -4861,6 +5016,7 @@ fn main() {
             detect_locale,
             get_default_storage_path,
             check_directory_exists,
+            ensure_directory_exists,
             get_dht_health,
             get_dht_peer_count,
             get_dht_peer_id,
@@ -5336,7 +5492,8 @@ async fn upload_and_publish_file(
     ftp_source: Option<String>,
 ) -> Result<UploadResult, String> {
     info!("📦 BACKEND: Starting upload_and_publish_file for price {:?}", price);
-    // 1. Process file with ChunkManager (encrypt, chunk, build Merkle tree)
+
+    // 1) Encrypt, chunk, and build Merkle tree for the file
     let manifest = encrypt_file_for_recipient(
         app.clone(),
         state.clone(),
@@ -5345,7 +5502,7 @@ async fn upload_and_publish_file(
     )
     .await?;
 
-    // 2. Get file name and size
+    // 2) Extract file metadata (name, size, peer ID)
     let file_name = file_name.unwrap_or_else(|| {
         std::path::Path::new(&file_path)
             .file_name()
@@ -5356,7 +5513,6 @@ async fn upload_and_publish_file(
 
     let file_size: u64 = manifest.chunks.iter().map(|c| c.size as u64).sum();
 
-    // 3. Get peer ID from DHT
     let peer_id = {
         let dht_guard = state.dht.lock().await;
         if let Some(dht) = dht_guard.as_ref() {
@@ -5366,101 +5522,104 @@ async fn upload_and_publish_file(
         }
     };
 
-    // 4. Publish to DHT with versioning support
+    // 3) Build complete FileMetadata with all protocol sources
     let dht = {
-        let dht_guard = state.dht.lock().await; // Use the Merkle root as the file hash
+        let dht_guard = state.dht.lock().await;
         dht_guard.as_ref().cloned()
     };
 
-    let version = if let Some(dht) = dht {
-        let created_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+    let dht = dht.ok_or("DHT node is not running. Cannot publish file.")?;
 
-        // Use prepare_versioned_metadata to handle version incrementing and parent_hash
-        let mime_type = detect_mime_type_from_filename(&file_name)
-            .unwrap_or_else(|| "application/octet-stream".to_string());
-        let mut metadata = dht
-            .prepare_versioned_metadata(
-                manifest.merkle_root.clone(), // This is the Merkle root
-                file_name.clone(),
-                file_size,
-                vec![], // Empty - chunks already stored
-                created_at,
-                Some(mime_type),
-                None,                            // encrypted_key_bundle
-                true,                            // is_encrypted
-                Some("AES-256-GCM".to_string()), // Encryption method
-                None,                            // key_fingerprint (deprecated)
-                price,                            // price
-                None,                            // uploader_address
-            )
-            .await?;
+    let created_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
-        // Add HTTP source if HTTP server is running
-        let http_addr = state.http_server_addr.lock().await;
-        if let Some(addr) = *http_addr {
-            // Get actual local IP instead of 0.0.0.0
-            let port = addr.port();
-            let local_ip = crate::headless::get_local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
-            let http_url = format!("http://{}:{}", local_ip, port);
+    let mime_type = detect_mime_type_from_filename(&file_name)
+        .unwrap_or_else(|| "application/octet-stream".to_string());
 
-            metadata.http_sources = Some(vec![download_source::HttpSourceInfo {
-                url: http_url.clone(),
-                auth_header: None,
-                verify_ssl: false,
-                headers: None,
-                timeout_secs: Some(30),
-            }]);
-            tracing::info!("Added HTTP source to metadata: {} (local IP: {})", http_url, local_ip);
-        }
+    // 3.1) Build base metadata with versioning support
+    let mut metadata = dht
+        .prepare_versioned_metadata(
+            manifest.merkle_root.clone(),
+            file_name.clone(),
+            file_size,
+            vec![], // Empty - chunks already stored in Bitswap
+            created_at,
+            Some(mime_type),
+            None,                            // encrypted_key_bundle
+            true,                            // is_encrypted
+            Some("AES-256-GCM".to_string()), // encryption_method
+            None,                            // key_fingerprint (deprecated)
+            price,
+            None,                            // uploader_address
+        )
+        .await?;
 
-        let mut metadata = metadata;
-        if let Some(ftp_url) = ftp_source {
-            metadata.ftp_sources = Some(vec![FtpSourceInfo {
-                url: ftp_url,
-                username: None,
-                password: None,
-                supports_resume: false, // or true if known
-                file_size: 0,           // placeholder, could update later
-                is_available: true,
-                last_checked: Some(
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs(),
-                ),
-            }]);
-        }
-            
-        println!("📦 BACKEND: Created versioned metadata");
+    // 3.2) Add HTTP source if HTTP server is running
+    let http_addr = state.http_server_addr.lock().await;
+    if let Some(addr) = *http_addr {
+        let port = addr.port();
+        let local_ip = crate::headless::get_local_ip()
+            .unwrap_or_else(|| "127.0.0.1".to_string());
+        let http_url = format!("http://{}:{}", local_ip, port);
 
-        let version = metadata.version.unwrap_or(1);
+        metadata.http_sources = Some(vec![download_source::HttpSourceInfo {
+            url: http_url.clone(),
+            auth_header: None,
+            verify_ssl: false,
+            headers: None,
+            timeout_secs: Some(30),
+        }]);
 
-        // Store file data locally for seeding (CRITICAL FIX)
-        let ft = {
-            let ft_guard = state.file_transfer.lock().await;
-            ft_guard.as_ref().cloned()
-        };
-        if let Some(ft) = ft {
-            // Read the original file data to store locally
-            let file_data = tokio::fs::read(&file_path)
-                .await
-                .map_err(|e| format!("Failed to read file for local storage: {}", e))?;
+        tracing::info!("Added HTTP source to metadata: {} (local IP: {})", http_url, local_ip);
+    }
 
-            ft.store_file_data(manifest.merkle_root.clone(), file_name.clone(), file_data)
-                .await; // Store with Merkle root as key
-        }
+    // 3.3) Add FTP source if provided
+    if let Some(ftp_url) = ftp_source {
+        metadata.ftp_sources = Some(vec![FtpSourceInfo {
+            url: ftp_url,
+            username: None,
+            password: None,
+            supports_resume: false,
+            file_size: 0,
+            is_available: true,
+            last_checked: Some(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+            ),
+        }]);
+    }
 
-        dht.publish_file(metadata, None).await?;
-        version
-    } else {
-        1 // Default to v1 if DHT not running
+    let version = metadata.version.unwrap_or(1);
+
+    info!("📦 BACKEND: Created versioned metadata (v{})", version);
+
+    // 4) Publish metadata to DHT
+    dht.publish_file(metadata, None).await?;
+
+    info!("✅ BACKEND: Published file to DHT: {} ({})", file_name, manifest.merkle_root);
+
+    // 5) Store file data locally for seeding
+    let ft = {
+        let ft_guard = state.file_transfer.lock().await;
+        ft_guard.as_ref().cloned()
     };
 
+    if let Some(ft) = ft {
+        let file_data = tokio::fs::read(&file_path)
+            .await
+            .map_err(|e| format!("Failed to read file for local storage: {}", e))?;
 
-    // 6. Register file with HTTP server for Range-based serving
+        ft.store_file_data(manifest.merkle_root.clone(), file_name.clone(), file_data)
+            .await;
+
+        tracing::info!("Stored file locally for seeding: {}", manifest.merkle_root);
+    }
+
+    // 6) Register file with HTTP server for Range-based serving
     state
         .http_server_state
         .register_file(http_server::HttpFileMetadata {
@@ -5473,7 +5632,7 @@ async fn upload_and_publish_file(
 
     tracing::info!("Registered file for HTTP serving: {} ({})", file_name, manifest.merkle_root);
 
-    // 7. Return metadata to frontend
+    // 7) Return upload result to frontend
     Ok(UploadResult {
         merkle_root: manifest.merkle_root,
         file_name,

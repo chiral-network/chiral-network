@@ -42,7 +42,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   // Settings state
   let defaultSettings: AppSettings = {
     // Storage settings
-    storagePath: "~/ChiralNetwork/Storage",
+    storagePath: "~/Chiral-Network-Storage",
     maxStorageSize: 100, // GB
     autoCleanup: true,
     cleanupThreshold: 90, // %
@@ -71,6 +71,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     autoStartDht: false,
     anonymousMode: false,
     shareAnalytics: true,
+    customBootstrapNodes: [],
 
     // Notifications
     enableNotifications: true,
@@ -85,6 +86,8 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     cacheSize: 1024, // MB
     logLevel: "info",
     autoUpdate: true,
+    relayServerAlias: "", // Empty by default - user can set a friendly name
+    pricePerMb: 0.001, // Default price: 0.001 Chiral per MB
     enableBandwidthScheduling: false,
     bandwidthSchedules: [],
   };
@@ -110,6 +113,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   // NAT & privacy configuration text bindings
   let autonatServersText = '';
   let trustedProxyText = '';
+  let newBootstrapNode = '';
 
   const locationOptions = GEO_REGIONS
     .filter((region) => region.id !== UNKNOWN_REGION_ID)
@@ -118,11 +122,11 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
 
   let languages = [];
   $: languages = [
-    { value: "en", label: $t("language.english") },
-    { value: "es", label: $t("language.spanish") },
-    { value: "zh", label: $t("language.chinese") },
-    { value: "ko", label: $t("language.korean") },
-    { value: "ru", label: $t("language.russian") },
+    { value: "en", label: (get(t) as any)("language.english") },
+    { value: "es", label: (get(t) as any)("language.spanish") },
+    { value: "zh", label: (get(t) as any)("language.chinese") },
+    { value: "ko", label: (get(t) as any)("language.korean") },
+    { value: "ru", label: (get(t) as any)("language.russian") },
   ];
 
   // Initialize configuration text from arrays
@@ -325,16 +329,23 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
       console.debug("stop_dht_node failed (probably already stopped):", error);
     }
 
+    // Use custom bootstrap nodes if configured, otherwise use defaults
     let bootstrapNodes: string[] = [];
-    try {
-      bootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command");
-    } catch (error) {
-      console.error("Failed to fetch bootstrap nodes:", error);
-      throw error;
-    }
+    if (localSettings.customBootstrapNodes && localSettings.customBootstrapNodes.length > 0) {
+      bootstrapNodes = localSettings.customBootstrapNodes;
+      console.log("Using custom bootstrap nodes:", bootstrapNodes);
+    } else {
+      try {
+        bootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command");
+        console.log("Using default bootstrap nodes:", bootstrapNodes);
+      } catch (error) {
+        console.error("Failed to fetch bootstrap nodes:", error);
+        throw error;
+      }
 
-    if (!Array.isArray(bootstrapNodes) || bootstrapNodes.length === 0) {
-      throw new Error("No bootstrap nodes available to restart DHT");
+      if (!Array.isArray(bootstrapNodes) || bootstrapNodes.length === 0) {
+        throw new Error("No bootstrap nodes available to restart DHT");
+      }
     }
 
     const payload: Record<string, unknown> = {
@@ -365,7 +376,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
 
   $: {
     // Open Storage section if it has any errors (but don't close it if already open)
-    const hasStorageError = !!maxStorageError || !!storagePathError || !!errors.maxStorageSize || !!errors.cleanupThreshold;
+    const hasStorageError = !!maxStorageError || !!errors.maxStorageSize || !!errors.cleanupThreshold;
     if (hasStorageError) storageSectionOpen = true;
 
     // Open Network section if it has any errors (but don't close it if already open)
@@ -389,7 +400,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   }
 
   async function selectStoragePath() {
-    const tr = get(t) as (key: string, params?: any) => string;
+    const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params);
     try {
       // Try Tauri first
       await getVersion(); // only works in Tauri
@@ -457,7 +468,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     a.click();
     URL.revokeObjectURL(url);
     importExportFeedback = {
-      message: $t("advanced.exportSuccess", {
+      message: (get(t) as any)("advanced.exportSuccess", {
         default: "Settings exported to your browser's download folder.",
       }),
       type: "success",
@@ -476,7 +487,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
         await saveSettings(); // This saves, updates savedSettings, and clears any old feedback.
         // Now we set the new feedback for the import action.
         importExportFeedback = {
-          message: $t("advanced.importSuccess", {
+          message: (get(t) as any)("advanced.importSuccess", {
             default: "Settings imported successfully.",
           }),
           type: "success",
@@ -484,7 +495,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
       } catch (err) {
         console.error("Failed to import settings:", err);
         importExportFeedback = {
-          message: $t("advanced.importError", {
+          message: (get(t) as any)("advanced.importError", {
             default: "Invalid JSON file. Please select a valid export.",
           }),
           type: "error",
@@ -511,6 +522,18 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
       .filter((line) => line.length > 0);
   }
 
+  function addBootstrapNode() {
+    const trimmed = newBootstrapNode.trim();
+    if (trimmed && !localSettings.customBootstrapNodes.includes(trimmed)) {
+      localSettings.customBootstrapNodes = [...localSettings.customBootstrapNodes, trimmed];
+      newBootstrapNode = '';
+    }
+  }
+
+  function removeBootstrapNode(index: number) {
+    localSettings.customBootstrapNodes = localSettings.customBootstrapNodes.filter((_, i) => i !== index);
+  }
+
   async function runDiagnostics() {
     diagnosticsRunning = true;
     diagnostics = [];
@@ -520,7 +543,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
       diagnostics = [...diagnostics, item];
     };
 
-    const tr = get(t) as (key: string, params?: any) => string;
+    const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params);
 
     // 1) Environment (Web vs Tauri)
     const isTauri = typeof window !== "undefined" && "__TAURI__" in window;
@@ -583,9 +606,9 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   async function copyDiagnostics() {
     try {
       await navigator.clipboard.writeText(diagnosticsReport);
-      showToast(tr("settings.diagnostics.copied"));
+      showToast((get(t) as any)("settings.diagnostics.copied"));
     } catch (e) {
-      showToast(tr("settings.diagnostics.copyFailed"), "error");
+      showToast((get(t) as any)("settings.diagnostics.copyFailed"), "error");
     }
   }
 
@@ -668,51 +691,12 @@ selectedLanguage = initial; // Synchronize dropdown display value
   // Revalidate whenever settings change
   $: validate(localSettings);
 
-  // Valid when no error messages remain
-  let isValid = true;
-  $: isValid = Object.values(errors).every((e) => !e);
-
   let freeSpaceGB: number | null = null;
   let maxStorageError: string | null = null;
-  let storagePathError: string | null = null;
 
   onMount(async () => {
     freeSpaceGB = await invoke('get_available_storage');
   });
-
-  // Check if storage path exists
-  async function checkStoragePathExists(path: string) {
-    if (!path || path.trim() === '') {
-      storagePathError = null;
-      return;
-    }
-
-    try {
-      // Expand ~ to actual home directory for checking
-      let pathToCheck = path;
-      if (path.startsWith("~/") || path.startsWith("~\\")) {
-        const home = await homeDir();
-        pathToCheck = path.replace(/^~/, home);
-      } else if (path === "~") {
-        pathToCheck = await homeDir();
-      }
-
-      const exists = await invoke<boolean>('check_directory_exists', { path: pathToCheck });
-      if (!exists) {
-        storagePathError = 'Directory does not exist';
-      } else {
-        storagePathError = null;
-      }
-    } catch (error) {
-      console.error('Failed to check directory:', error);
-      storagePathError = null;
-    }
-  }
-
-  // Check storage path whenever it changes
-  $: if (localSettings.storagePath) {
-    checkStoragePathExists(localSettings.storagePath);
-  }
 
   $: {
     if (freeSpaceGB !== null && localSettings.maxStorageSize > freeSpaceGB) {
@@ -726,22 +710,24 @@ selectedLanguage = initial; // Synchronize dropdown display value
 
 const sectionLabels: Record<string, string[]> = {
   storage: [
-    $t("storage.title"),
-    $t("storage.location"),
-    $t("storage.maxSize"),
-    $t("storage.cleanupThreshold"),
-    $t("storage.enableCleanup"),
+    (get(t) as any)("storage.title"),
+    (get(t) as any)("storage.location"),
+    (get(t) as any)("storage.maxSize"),
+    (get(t) as any)("storage.cleanupThreshold"),
+    (get(t) as any)("storage.enableCleanup"),
   ],
   network: [
-    $t("network.title"),
-    $t("network.maxConnections"),
-    $t("network.port"),
-    $t("network.uploadLimit"),
-    $t("network.downloadLimit"),
-    $t("network.userLocation"),
-    $t("network.enableUpnp"),
-    $t("network.enableNat"),
-    $t("network.enableDht"),
+    (get(t) as any)("network.title"),
+    (get(t) as any)("network.maxConnections"),
+    (get(t) as any)("network.port"),
+    (get(t) as any)("network.uploadLimit"),
+    (get(t) as any)("network.downloadLimit"),
+    (get(t) as any)("network.userLocation"),
+    (get(t) as any)("network.enableUpnp"),
+    (get(t) as any)("network.enableNat"),
+    (get(t) as any)("network.enableDht"),
+    "Bootstrap Nodes",
+    "Custom Bootstrap Nodes",
   ],
   bandwidthScheduling: [
     "Bandwidth Scheduling",
@@ -749,30 +735,30 @@ const sectionLabels: Record<string, string[]> = {
     "Schedule different bandwidth limits",
   ],
   language: [
-    $t("language.title"),
-    $t("language.select"),
+    (get(t) as any)("language.title"),
+    (get(t) as any)("language.select"),
   ],
   privacy: [
-    $t("privacy.title"),
-    $t("privacy.enableProxy"),
-    $t("privacy.anonymousMode"),
-    $t("privacy.shareAnalytics"),
+    (get(t) as any)("privacy.title"),
+    (get(t) as any)("privacy.enableProxy"),
+    (get(t) as any)("privacy.anonymousMode"),
+    (get(t) as any)("privacy.shareAnalytics"),
   ],
   notifications: [
-    $t("notifications.title"),
-    $t("notifications.enable"),
-    $t("notifications.notifyComplete"),
-    $t("notifications.notifyError"),
-    $t("notifications.soundAlerts"),
+    (get(t) as any)("notifications.title"),
+    (get(t) as any)("notifications.enable"),
+    (get(t) as any)("notifications.notifyComplete"),
+    (get(t) as any)("notifications.notifyError"),
+    (get(t) as any)("notifications.soundAlerts"),
   ],
   advanced: [
-    $t("advanced.title"),
-    $t("advanced.chunkSize"),
-    $t("advanced.cacheSize"),
-    $t("advanced.logLevel"),
-    $t("advanced.autoUpdate"),
-    $t("advanced.exportSettings"),
-    $t("advanced.importSettings"),
+    (get(t) as any)("advanced.title"),
+    (get(t) as any)("advanced.chunkSize"),
+    (get(t) as any)("advanced.cacheSize"),
+    (get(t) as any)("advanced.logLevel"),
+    (get(t) as any)("advanced.autoUpdate"),
+    (get(t) as any)("advanced.exportSettings"),
+    (get(t) as any)("advanced.importSettings"),
   ],
 };
 
@@ -788,14 +774,14 @@ function sectionMatches(section: string, query: string) {
 <div class="space-y-6">
   <div class="flex items-center justify-between">
     <div>
-      <h1 class="text-3xl font-bold">{$t("settings.title")}</h1>
+      <h1 class="text-3xl font-bold">{(get(t) as any)("settings.title")}</h1>
       <p class="text-muted-foreground mt-2">
-        {$t("settings.subtitle")}
+        {(get(t) as any)("settings.subtitle")}
       </p>
     </div>
     {#if hasChanges}
       <Badge variant="outline" class="text-orange-500"
-        >{$t("badges.unsaved")}</Badge
+        >{(get(t) as any)("badges.unsaved")}</Badge
       >
     {/if}
   </div>
@@ -804,7 +790,7 @@ function sectionMatches(section: string, query: string) {
   <div class="mb-4 flex items-center gap-2">
     <Input
       type="text"
-      placeholder={$t('settings.searchPlaceholder')}
+      placeholder={(get(t) as any)('settings.searchPlaceholder')}
       bind:value={search}
       class="w-full"
     />
@@ -824,8 +810,8 @@ function sectionMatches(section: string, query: string) {
             <Input
               id="storage-path"
               bind:value={localSettings.storagePath}
-              placeholder="~/ChiralNetwork/Storage"
-              class={`flex-1 ${storagePathError ? 'border-red-500 focus:border-red-500 ring-red-500' : ''}`}
+              placeholder="~/Chiral-Network-Storage"
+              class="flex-1"
             />
             <Button
               variant="outline"
@@ -835,9 +821,6 @@ function sectionMatches(section: string, query: string) {
               <FolderOpen class="h-4 w-4" />
             </Button>
           </div>
-          {#if storagePathError}
-            <p class="mt-1 text-sm text-red-500">{storagePathError}</p>
-          {/if}
           
         </div>
 
@@ -1033,44 +1016,75 @@ function sectionMatches(section: string, query: string) {
               </p>
             </div>
           {/if}
+        </div>
 
-          <div class="flex items-center gap-2">
-            <input
-              type="checkbox"
-              id="enable-relay-server"
-              bind:checked={localSettings.enableRelayServer}
-            />
-            <Label for="enable-relay-server" class="cursor-pointer">
-              Enable Relay Server <span class="text-xs text-green-600 font-semibold">(Recommended - Enabled by Default)</span>
-            </Label>
+        <!-- Custom Bootstrap Nodes -->
+        <div class="space-y-3 border-t pt-3">
+          <h4 class="font-medium">Custom Bootstrap Nodes</h4>
+          <p class="text-xs text-muted-foreground">
+            Configure custom bootstrap nodes for the DHT network. Leave empty to use the default hardcoded bootstrap nodes.
+          </p>
+
+          <div>
+            <Label for="new-bootstrap-node">Add Bootstrap Node</Label>
+            <div class="flex gap-2 mt-1">
+              <Input
+                id="new-bootstrap-node"
+                bind:value={newBootstrapNode}
+                on:keydown={(e) => {
+                  const ev = (e as unknown as KeyboardEvent);
+                  if (ev.key === 'Enter') {
+                    ev.preventDefault();
+                    addBootstrapNode();
+                  }
+                }}
+                placeholder="/ip4/54.198.145.146/tcp/4001/p2p/12D3KooW..."
+                class="flex-1 font-mono text-sm"
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                on:click={addBootstrapNode}
+                disabled={!newBootstrapNode.trim()}
+              >
+                Add
+              </Button>
+            </div>
+            <p class="text-xs text-muted-foreground mt-1">
+              Enter bootstrap node multiaddress and press Enter or click Add
+            </p>
           </div>
 
-          {#if localSettings.enableRelayServer}
-            <div class="ml-6 p-4 bg-green-50 rounded-md border border-green-200">
-              <p class="text-sm text-green-900 mb-2">
-                <strong>✅ Relay Server Enabled</strong>
-              </p>
-              <p class="text-xs text-green-700 mb-2">
-                Your node helps peers behind NAT connect. This strengthens the decentralized network without requiring central infrastructure.
-              </p>
-              <ul class="text-xs text-green-600 space-y-1">
-                <li>• Enables cross-network peer connections</li>
-                <li>• Strengthens network decentralization</li>
-                <li>• Minimal resource usage when idle</li>
-                <li>• Only uses bandwidth when actively relaying</li>
-              </ul>
-            </div>
-          {:else}
-            <div class="ml-6 p-4 bg-yellow-50 rounded-md border border-yellow-200">
-              <p class="text-sm text-yellow-900 mb-2">
-                <strong>⚠️ Relay Server Disabled</strong>
-              </p>
-              <p class="text-xs text-yellow-700">
-                Your node cannot help others connect across networks. Enable this to strengthen the network.
-              </p>
+          {#if localSettings.customBootstrapNodes && localSettings.customBootstrapNodes.length > 0}
+            <div class="space-y-2">
+              <Label>Configured Bootstrap Nodes ({localSettings.customBootstrapNodes.length})</Label>
+              <div class="space-y-2">
+                {#each localSettings.customBootstrapNodes as node, index}
+                  <div class="flex items-center gap-2 p-2 bg-slate-50 rounded border">
+                    <span class="flex-1 text-xs font-mono break-all">{node}</span>
+                    <Button
+                      size="xs"
+                      variant="destructive"
+                      on:click={() => removeBootstrapNode(index)}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                {/each}
+              </div>
             </div>
           {/if}
+
+          <div class="rounded-md border border-dashed border-slate-200 p-3 text-xs text-muted-foreground space-y-1">
+            <p>Custom bootstrap nodes: {localSettings.customBootstrapNodes?.length || 0}</p>
+            {#if localSettings.customBootstrapNodes && localSettings.customBootstrapNodes.length > 0}
+              <p class="text-green-600">✓ Using custom bootstrap nodes</p>
+            {:else}
+              <p class="text-blue-600">Using default hardcoded bootstrap nodes</p>
+            {/if}
+          </div>
         </div>
+
       </div>
     </Expandable>
   {/if}

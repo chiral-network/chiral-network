@@ -450,12 +450,13 @@ export interface AppSettings {
   enableBandwidthScheduling: boolean;
   bandwidthSchedules: BandwidthScheduleEntry[];
   pricePerMb: number; // Price per MB in Chiral (e.g., 0.001)
+  customBootstrapNodes: string[]; // Custom bootstrap nodes for DHT (leave empty to use defaults)
 }
 
 // Export the settings store
 // We initialize with a safe default structure. Settings.svelte will load/persist the actual state.
 export const settings = writable<AppSettings>({
-  storagePath: "~/ChiralNetwork/Storage",
+  storagePath: "~/Chiral-Network-Storage",
   maxStorageSize: 100,
   autoCleanup: true,
   cleanupThreshold: 90,
@@ -471,12 +472,12 @@ export const settings = writable<AppSettings>({
   ipPrivacyMode: "off",
   trustedProxyRelays: [],
   disableDirectNatTraversal: false,
-  enableAutonat: true, // Enable AutoNAT by default
+  enableAutonat: false, // Disabled by default - enable if you need NAT detection
   autonatProbeInterval: 30, // 30 seconds default
   autonatServers: [], // Use bootstrap nodes by default
-  enableAutorelay: true, // Enable AutoRelay by default
+  enableAutorelay: false, // Disabled by default - enable if you need relay connections
   preferredRelays: [], // Use bootstrap nodes as relays by default
-  enableRelayServer: true, // Enabled by default - helps strengthen the network
+  enableRelayServer: false, // Disabled by default - enable to help relay traffic for others
   relayServerAlias: "", // Empty by default - user can set a friendly name
   autoStartDht: false, // Disabled by default - user must opt-in
   anonymousMode: false,
@@ -494,6 +495,7 @@ export const settings = writable<AppSettings>({
   enableBandwidthScheduling: false,
   bandwidthSchedules: [],
   pricePerMb: 0.001, // Default price: 0.001, until ability to set pricePerMb is there, then change to 0.001 Chiral per MB
+  customBootstrapNodes: [], // Empty by default - use hardcoded bootstrap nodes
 });
 
 export const activeBandwidthLimits = writable<ActiveBandwidthLimits>(

@@ -13,9 +13,14 @@
     lastSeen: number;
   };
 
+  interface Message {
+    from: string;
+    text: string;
+  }
+
   let conversations: Peer[] = [];
   let selectedPeerId: string | null = null;
-  let messages = [];
+  let messages: Message[] = [];
   let newMessage = "";
   let messageContainer: HTMLElement;
   let isLoadingPeers = false;

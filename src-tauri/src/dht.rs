@@ -143,6 +143,10 @@ use libp2p::{
 use rand::rngs::OsRng;
 const EXPECTED_PROTOCOL_VERSION: &str = "/chiral/1.0.0";
 const MAX_MULTIHASH_LENGHT: usize = 64;
+/// Prefix for DHT records that map a torrent info_hash to a Chiral Merkle root.
+const INFO_HASH_PREFIX: &str = "info_hash_idx::";
+/// Prefix for DHT records that map a keyword to a list of file Merkle roots.
+const KEYWORD_INDEX_PREFIX: &str = "keyword_idx::";
 pub const RAW_CODEC: u64 = 0x55;
 /// Heartbeat interval (how often we refresh our provider entry).
 const FILE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15); // More frequent updates
@@ -495,6 +499,10 @@ pub enum DhtCommand {
         metadata: FileMetadata,
         response_tx: oneshot::Sender<FileMetadata>,
     },
+    SearchByInfohash {
+        info_hash: String,
+        sender: oneshot::Sender<Option<FileMetadata>>,
+    },
     SearchFile(String),
     DownloadFile(FileMetadata, String),
     ConnectPeer(String),
@@ -803,6 +811,12 @@ enum SearchResponse {
 struct PendingSearch {
     id: u64,
     sender: oneshot::Sender<SearchResponse>,
+}
+
+#[derive(Debug)]
+struct PendingInfohashSearch {
+    id: u64,
+    sender: oneshot::Sender<Option<FileMetadata>>,
 }
 
 #[derive(Debug)]
@@ -1204,6 +1218,12 @@ fn filter_relay_candidates(
     let mut out = Vec::new();
     for cand in relay_candidates {
         if let Ok(ma) = cand.parse::<Multiaddr>() {
+            // Skip unreachable addresses (localhost/private IPs)
+            if !ma_plausibly_reachable(&ma) {
+                tracing::debug!("Skipping unreachable relay candidate: {}", ma);
+                continue;
+            }
+
             // PeerId extraction
             let mut pid_opt: Option<PeerId> = None;
             for p in ma.iter() {
@@ -1538,6 +1558,7 @@ async fn run_dht_node(
     pending_echo: Arc<Mutex<HashMap<rr::OutboundRequestId, PendingEcho>>>,
     pending_searches: Arc<Mutex<HashMap<String, Vec<PendingSearch>>>>,
     proxy_mgr: ProxyMgr,
+    pending_infohash_searches: Arc<Mutex<HashMap<kad::QueryId, PendingInfohashSearch>>>,
     peer_selection: Arc<Mutex<PeerSelectionService>>,
     received_chunks: Arc<Mutex<HashMap<String, HashMap<u32, FileChunk>>>>,
     file_transfer_service: Option<Arc<FileTransferService>>,
@@ -2043,7 +2064,7 @@ async fn run_dht_node(
                         // Task 1: Keyword Extraction
                         let keywords = extract_keywords(&metadata.file_name);
                         info!(
-                            "Extracted {} keywords for file '{}': {:?}",
+                            "Extracted {} keywords for file '{}': {:?}", // Merkle root is now the primary identifier
                             keywords.len(),
                             metadata.file_name,
                             keywords
@@ -2051,7 +2072,7 @@ async fn run_dht_node(
                         // Task 2: DHT Indexing
                         // TODO: implement the "read-modify-write" logic inside this loop.
                         for keyword in keywords {
-                            let index_key_str = format!("idx:{}", keyword);
+                            let index_key_str = format!("{}{}", KEYWORD_INDEX_PREFIX, keyword);
                             let _index_key = kad::RecordKey::new(&index_key_str);
 
                             // TODO: Implement the read-modify-write logic to update keyword indexes.
@@ -2066,6 +2087,14 @@ async fn run_dht_node(
                         // notify frontend
                         let _ = event_tx.send(DhtEvent::PublishedFile(metadata.clone())).await;
                         // store in file_uploaded_cache
+
+                        // If there's an info_hash, create the secondary index record
+                        if let Some(info_hash) = &metadata.info_hash {
+                            let index_key = format!("{}{}", INFO_HASH_PREFIX, info_hash);
+                            let index_record = Record::new(index_key.as_bytes().to_vec(), metadata.merkle_root.as_bytes().to_vec());
+                            swarm.behaviour_mut().kademlia.put_record(index_record, kad::Quorum::One).ok();
+                            info!("Published info_hash index for {}", info_hash);
+                        }
                         let _ = response_tx.send(metadata.clone());
                     }
                     Some(DhtCommand::StoreBlocks { blocks, root_cid, mut metadata }) => {
@@ -2163,6 +2192,26 @@ async fn run_dht_node(
                         let _ = event_tx.send(DhtEvent::PublishedFile(metadata)).await;
                     }
                     Some(DhtCommand::DownloadFile(mut file_metadata, download_path)) =>{
+                        // Dual-lookup check: If the merkle_root is an info_hash, resolve it first.
+                        if file_metadata.merkle_root.starts_with("info_hash:") {
+                            let info_hash = file_metadata.merkle_root.clone();
+                            info!("Download initiated with info_hash, resolving to merkle_root: {}", info_hash);
+                            match synchronous_search_by_infohash(&mut swarm, &info_hash).await {
+                                Ok(Some(resolved_metadata)) => {
+                                    info!("Resolved info_hash to merkle_root: {}", resolved_metadata.merkle_root);
+                                    file_metadata = resolved_metadata; // Replace with the full metadata
+                                }
+                                Ok(None) => {
+                                    let _ = event_tx.send(DhtEvent::Error(format!("Could not find file for info_hash: {}", info_hash))).await;
+                                    continue;
+                                }
+                                Err(e) => {
+                                    let _ = event_tx.send(DhtEvent::Error(format!("Error resolving info_hash {}: {}", info_hash, e))).await;
+                                    continue;
+                                }
+                            }
+                        }
+
                         let root_cid_result = file_metadata.cids.as_ref()
                             .and_then(|cids| cids.first())
                             .ok_or_else(|| {
@@ -2355,6 +2404,17 @@ async fn run_dht_node(
                         let query_id = swarm.behaviour_mut().kademlia.get_record(key);
                         info!("Searching for file: {} (query: {:?})", file_hash, query_id);
                     }
+                    Some(DhtCommand::SearchByInfohash { info_hash, sender }) => {
+                        let index_key = format!("{}{}", INFO_HASH_PREFIX, info_hash);
+                        let record_key = kad::RecordKey::new(&index_key.as_bytes());
+                        let query_id = swarm.behaviour_mut().kademlia.get_record(record_key.clone());
+                        info!("Searching for info_hash index: {} (query: {:?})", index_key, query_id);
+                        
+                        // Store the sender so we can respond when the query completes.
+                        // This is the first step of the two-step lookup.
+                        let search = PendingInfohashSearch { id: 0, sender };
+                        pending_infohash_searches.lock().await.insert(query_id, search);
+                    }
                     Some(DhtCommand::SetPrivacyProxies { addresses }) => {
                         info!("Updating privacy proxy targets ({} addresses)", addresses.len());
 
@@ -2396,6 +2456,13 @@ async fn run_dht_node(
                         }
 
                         for (addr_str, multiaddr, maybe_peer_id) in parsed_entries {
+                            // Skip self-connection attempts for privacy proxies
+                            if let Some(peer_id_in_addr) = &maybe_peer_id {
+                                if peer_id_in_addr == &peer_id {
+                                    continue;
+                                }
+                            }
+
                             match swarm.dial(multiaddr.clone()) {
                                 Ok(_) => {
                                     if let Some(peer_id) = &maybe_peer_id {
@@ -2768,6 +2835,7 @@ async fn run_dht_node(
                             &seeder_heartbeats_cache,
                             &pending_heartbeat_updates,
                             &pending_keyword_indexes,
+                            &pending_infohash_searches,
                         )
                         .await;
                     }
@@ -2780,13 +2848,15 @@ async fn run_dht_node(
                             enable_autorelay,
                             &relay_candidates,
                             &proxy_mgr,
+                            &peer_selection,
                             relay_capable_peers.clone(),
+                            &peer_id,
                         )
                         .await;
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Mdns(mdns_event)) => {
                         if !is_bootstrap{
-                            handle_mdns_event(mdns_event, &mut swarm, &event_tx).await;
+                            handle_mdns_event(mdns_event, &mut swarm, &event_tx, &peer_id).await;
                         }
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::RelayClient(relay_event)) => {
@@ -3311,12 +3381,19 @@ if active_download.is_complete() {
                             selection.update_peer_metrics(peer_metrics);
                         }
 
-                        // Add peer to Kademlia routing table
+                        // Add peer to Kademlia routing table (only if reachable)
                         // swarm.behaviour_mut().kademlia.add_address(&peer_id, endpoint.get_remote_address().clone());
-                        swarm
-                            .behaviour_mut()
-                            .kademlia
-                            .add_address(&peer_id, remote_addr.clone());
+                        if ma_plausibly_reachable(&remote_addr) {
+                            swarm
+                                .behaviour_mut()
+                                .kademlia
+                                .add_address(&peer_id, remote_addr.clone());
+                        } else {
+                            debug!(
+                                "⏭️ Not adding unreachable address to Kademlia for {}: {}",
+                                peer_id, remote_addr
+                            );
+                        }
 
                         let peers_count = {
                             let mut peers = connected_peers.lock().await;
@@ -3457,53 +3534,81 @@ if active_download.is_complete() {
                             .await;
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
-                        if address.iter().any(|component| matches!(component, Protocol::P2pCircuit)) {
-                            swarm.add_external_address(address.clone());
-                            debug!("Advertised relay external address: {}", address);
-                        }
+                        // Always record in metrics for monitoring/debugging
                         if let Ok(mut m) = metrics.try_lock() {
                             m.record_listen_addr(&address);
                         }
+                        
+                        // For relay circuit addresses, always advertise them
+                        if address.iter().any(|component| matches!(component, Protocol::P2pCircuit)) {
+                            swarm.add_external_address(address.clone());
+                            info!("✅ Advertising relay address: {}", address);
+                        } else {
+                            // For regular addresses, only advertise if they're plausibly reachable
+                            // This prevents advertising localhost/private IPs to the network
+                            if ma_plausibly_reachable(&address) {
+                                swarm.add_external_address(address.clone());
+                                info!("✅ Advertising reachable address: {}", address);
+                            } else {
+                                debug!("⏭️  Not advertising unreachable address: {}", address);
+                            }
+                        }
                     }
                     SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
-                        if let Ok(mut m) = metrics.try_lock() {
-                            m.last_error = Some(error.to_string());
-                            m.last_error_at = Some(SystemTime::now());
-                            if let Some(pid) = peer_id {
-                                if bootstrap_peer_ids.contains(&pid) {
-                                    m.bootstrap_failures = m.bootstrap_failures.saturating_add(1);
+                        // Check if this error is for an unreachable address before recording it
+                        let is_unreachable_addr = if let Some(pid) = peer_id {
+                            if let Some(bad_ma) = extract_multiaddr_from_error_str(&error.to_string()) {
+                                if !ma_plausibly_reachable(&bad_ma) {
+                                    swarm.behaviour_mut().kademlia.remove_address(&pid, &bad_ma);
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+
+                        // Only record errors for reachable addresses
+                        if !is_unreachable_addr {
+                            if let Ok(mut m) = metrics.try_lock() {
+                                m.last_error = Some(error.to_string());
+                                m.last_error_at = Some(SystemTime::now());
+                                if let Some(pid) = peer_id {
+                                    if bootstrap_peer_ids.contains(&pid) {
+                                        m.bootstrap_failures = m.bootstrap_failures.saturating_add(1);
+                                    }
                                 }
                             }
                         }
 
                         if let Some(pid) = peer_id {
-                            error!("❌ Outgoing connection error to {}: {}", pid, error);
-
-                            // If the error contains a multiaddr, check if it's plausibly reachable
-                            if let Some(bad_ma) = extract_multiaddr_from_error_str(&error.to_string()) {
-                                if !ma_plausibly_reachable(&bad_ma) {
-                                    swarm.behaviour_mut().kademlia.remove_address(&pid, &bad_ma);
-                                    debug!("🧹 Removed unreachable addr for {}: {}", pid, bad_ma);
+                            // Only log error for addresses that should be reachable
+                            if !is_unreachable_addr {
+                                error!("❌ Outgoing connection error to {}: {}", pid, error);
+                                
+                                let is_bootstrap = bootstrap_peer_ids.contains(&pid);
+                                if error.to_string().contains("rsa") {
+                                    error!("   ℹ Hint: This node uses RSA keys. Enable 'rsa' feature if needed.");
+                                } else if error.to_string().contains("Timeout") {
+                                    if is_bootstrap {
+                                        warn!("   ℹ Hint: Bootstrap nodes may be unreachable or overloaded.");
+                                    } else {
+                                        warn!("   ℹ Hint: Peer may be unreachable (timeout).");
+                                    }
+                                } else if error.to_string().contains("Connection refused") {
+                                    if is_bootstrap {
+                                        warn!("   ℹ Hint: Bootstrap nodes are not accepting connections.");
+                                    } else {
+                                        warn!("   ℹ Hint: Peer is not accepting connections.");
+                                    }
+                                } else if error.to_string().contains("Transport") {
+                                    warn!("   ℹ Hint: Transport protocol negotiation failed.");
                                 }
-                            }
-
-                            let is_bootstrap = bootstrap_peer_ids.contains(&pid);
-                            if error.to_string().contains("rsa") {
-                                error!("   ℹ Hint: This node uses RSA keys. Enable 'rsa' feature if needed.");
-                            } else if error.to_string().contains("Timeout") {
-                                if is_bootstrap {
-                                    warn!("   ℹ Hint: Bootstrap nodes may be unreachable or overloaded.");
-                                } else {
-                                    warn!("   ℹ Hint: Peer may be unreachable (timeout).");
-                                }
-                            } else if error.to_string().contains("Connection refused") {
-                                if is_bootstrap {
-                                    warn!("   ℹ Hint: Bootstrap nodes are not accepting connections.");
-                                } else {
-                                    warn!("   ℹ Hint: Peer is not accepting connections.");
-                                }
-                            } else if error.to_string().contains("Transport") {
-                                warn!("   ℹ Hint: Transport protocol negotiation failed.");
+                            } else {
+                                debug!("⏭️ Skipped connection to unreachable address for {}: {}", pid, error);
                             }
                         } else {
                             error!("❌ Outgoing connection error to unknown peer: {}", error);
@@ -3743,6 +3848,7 @@ async fn handle_kademlia_event(
     seeder_heartbeats_cache: &Arc<Mutex<HashMap<String, FileHeartbeatCacheEntry>>>,
     pending_heartbeat_updates: &Arc<Mutex<HashSet<String>>>,
     pending_keyword_indexes: &Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>>,
+    pending_infohash_searches: &Arc<Mutex<HashMap<kad::QueryId, PendingInfohashSearch>>>,
 ) {
     match event {
         KademliaEvent::RoutingUpdated { peer, .. } => {
@@ -3766,7 +3872,7 @@ async fn handle_kademlia_event(
                 debug!("✅ Kad RoutablePeer accepted: {} -> {}", peer, address);
             }
         }
-        KademliaEvent::OutboundQueryProgressed { result, .. } => {
+        KademliaEvent::OutboundQueryProgressed { id, result, .. } => {
             match result {
                 QueryResult::GetRecord(Ok(ok)) => match ok {
                     GetRecordOk::FoundRecord(peer_record) => {
@@ -3774,6 +3880,29 @@ async fn handle_kademlia_event(
                         if let Ok(metadata_json) =
                             serde_json::from_slice::<serde_json::Value>(&peer_record.record.value)
                         {
+                            // Check if this is a response to an info_hash index lookup
+                            if let Some(search) = pending_infohash_searches.lock().await.remove(&id) {
+                                if let Ok(merkle_root) = String::from_utf8(peer_record.record.value.clone()) {
+                                    info!("Resolved info_hash to merkle_root: {}", merkle_root);
+                                    // Now, initiate the second step: search for the actual file metadata
+                                    let record_key = kad::RecordKey::new(&merkle_root.as_bytes());
+                                    let final_query_id = swarm.behaviour_mut().kademlia.get_record(record_key);
+                                    
+                                    // We need to re-insert the sender to be notified when the *second* query finishes.
+                                    // This is a simplification. A more robust solution would use a state machine
+                                    // to track multi-step queries. For now, we'll just re-use the infohash search map.
+                                    // This assumes no overlapping queries for the same initial info_hash.
+                                    pending_infohash_searches.lock().await.insert(final_query_id, search);
+                                    
+                                    info!("Initiating second-step search for merkle_root: {} (query: {:?})", merkle_root, final_query_id);
+                                } else {
+                                    warn!("Failed to decode info_hash index value as string.");
+                                    let _ = search.sender.send(None);
+                                }
+                                return; // End processing for this event here.
+                            }
+
+
                             // Construct FileMetadata from the JSON
                             if let (
                                 Some(file_hash),
@@ -4049,6 +4178,11 @@ async fn handle_kademlia_event(
                     // If the error includes the key, emit FileNotFound
                     if let kad::GetRecordError::NotFound { key, .. } = err {
                         let file_hash = String::from_utf8_lossy(key.as_ref()).to_string();
+                        // Also check if this was a failed info_hash lookup
+                        if let Some(search) = pending_infohash_searches.lock().await.remove(&id) {
+                            warn!("Infohash or subsequent merkle_root lookup failed for query {:?}: Not Found", id);
+                            let _ = search.sender.send(None);
+                        }
                         let _ = event_tx
                             .send(DhtEvent::FileNotFound(file_hash.clone()))
                             .await;
@@ -4102,7 +4236,7 @@ async fn handle_kademlia_event(
                             // Try to connect using available addresses
                             let mut connected = false;
                             for addr in &peer_info.addrs {
-                                if not_loopback(addr) {
+                                if ma_plausibly_reachable(addr) {
                                     info!(
                                         "Attempting to connect to peer {} at {}",
                                         peer_info.peer_id, addr
@@ -4181,48 +4315,7 @@ async fn handle_kademlia_event(
                     }
                 }
                 QueryResult::GetProviders(Err(err)) => {
-                    // Implement proper GetProviders error handling with timeout tracking
                     warn!("GetProviders query failed: {:?}", err);
-
-                    // Check for timed-out queries and clean them up
-                    let mut timed_out_queries = Vec::new();
-                    {
-                        let get_providers_guard = get_providers_queries.lock().await;
-                        let now = std::time::Instant::now();
-                        let timeout_duration = std::time::Duration::from_secs(30); // 30 second timeout
-
-                        // Find queries that have timed out
-                        for (query_id, (file_hash, start_time)) in get_providers_guard.iter() {
-                            if now.duration_since(*start_time) > timeout_duration {
-                                timed_out_queries.push((*query_id, file_hash.clone()));
-                            }
-                        }
-
-                        // For remaining queries, mark them as failed since we can't match errors exactly
-                        for (query_id, (file_hash, _)) in get_providers_guard.iter() {
-                            if !timed_out_queries.iter().any(|(_, fh)| fh == file_hash) {
-                                timed_out_queries.push((*query_id, file_hash.clone()));
-                            }
-                        }
-                    }
-
-                    // Handle all failed/timed-out queries
-                    for (query_id, file_hash) in timed_out_queries {
-                        warn!(
-                            "Cleaning up GetProviders query for file: {} (failed or timed out)",
-                            file_hash
-                        );
-                        get_providers_queries.lock().await.remove(&query_id);
-
-                        if let Some(pending_query) =
-                            pending_provider_queries.lock().await.remove(&file_hash)
-                        {
-                            let _ = pending_query.sender.send(Err(format!(
-                                "GetProviders query failed or timed out for file {}: {:?}",
-                                file_hash, err
-                            )));
-                        }
-                    }
                 }
                 _ => {}
             }
@@ -4238,10 +4331,17 @@ async fn handle_identify_event(
     enable_autorelay: bool,
     relay_candidates: &HashSet<String>,
     proxy_mgr: &ProxyMgr,
+    peer_selection: &Arc<Mutex<PeerSelectionService>>,
     relay_capable_peers: Arc<Mutex<HashMap<PeerId, Vec<Multiaddr>>>>,
+    local_peer_id: &PeerId,
 ) {
     match event {
         IdentifyEvent::Received { peer_id, info, .. } => {
+            // Skip processing our own peer info to prevent self-connection attempts
+            if &peer_id == local_peer_id {
+                return;
+            }
+            
             let hop_proto = "/libp2p/circuit/relay/0.2.0/hop";
             let supports_relay = info.protocols.iter().any(|p| p.as_ref() == hop_proto);
 
@@ -4258,6 +4358,20 @@ async fn handle_identify_event(
                     .filter(|addr| ma_plausibly_reachable(addr))
                     .cloned()
                     .collect();
+
+                // Store supported protocols in PeerMetrics
+                {
+                    let mut metrics = {
+                        let selection = peer_selection.lock().await;
+                        selection
+                            .get_peer_metrics(&peer_id.to_string())
+                            .cloned()
+                    }
+                    .unwrap_or_else(|| PeerMetrics::new(peer_id.to_string(), "".to_string()));
+
+                    metrics.protocols = info.protocols.iter().map(|p| p.to_string()).collect();
+                    peer_selection.lock().await.update_peer_metrics(metrics);
+                }
 
                 if !reachable_addrs.is_empty() {
                     let mut relay_peers = relay_capable_peers.lock().await;
@@ -4298,7 +4412,10 @@ async fn handle_identify_event(
                         .find(|s| s.contains(&peer_id.to_string()))
                     {
                         if let Ok(base) = base_str.parse::<Multiaddr>() {
-                            if let Some(relay_addr) = build_relay_listen_addr(&base) {
+                            // Skip unreachable relay addresses (localhost/private IPs)
+                            if !ma_plausibly_reachable(&base) {
+                                debug!("⏭️  Skipping unreachable relay base address: {}", base);
+                            } else if let Some(relay_addr) = build_relay_listen_addr(&base) {
                                 info!(
                                     "📡 Attempting to listen via relay {} at {}",
                                     peer_id, relay_addr
@@ -4350,12 +4467,20 @@ async fn handle_mdns_event(
     event: MdnsEvent,
     swarm: &mut Swarm<DhtBehaviour>,
     event_tx: &mpsc::Sender<DhtEvent>,
+    local_peer_id: &PeerId,
 ) {
+
     match event {
         MdnsEvent::Discovered(list) => {
             let mut discovered: HashMap<PeerId, Vec<String>> = HashMap::new();
             for (peer_id, multiaddr) in list {
                 debug!("mDNS discovered peer {} at {}", peer_id, multiaddr);
+
+                // Skip self-discoveries to prevent self-connection attempts
+                if peer_id == *local_peer_id {
+                    continue;
+                }
+
                 if ma_plausibly_reachable(&multiaddr) {
                     swarm
                         .behaviour_mut()
@@ -5153,26 +5278,50 @@ impl DhtService {
         }
 
         // Configure AutoRelay relay candidate discovery (use finalized flag)
+        // Filter out unreachable addresses (localhost/private IPs) from relay candidates
         let relay_candidates: HashSet<String> = if final_enable_autorelay {
-            if !preferred_relays.is_empty() {
+            let raw_candidates = if !preferred_relays.is_empty() {
                 info!(
                     "🔗 AutoRelay enabled with {} preferred relays",
                     preferred_relays.len()
                 );
-                for (i, relay) in preferred_relays.iter().enumerate().take(5) {
-                    info!("   Relay {}: {}", i + 1, relay);
-                }
-                preferred_relays.into_iter().collect()
+                preferred_relays.into_iter().collect::<Vec<_>>()
             } else {
                 info!(
                     "🔗 AutoRelay enabled, using {} bootstrap nodes as relay candidates",
                     bootstrap_set.len()
                 );
-                for (i, node) in bootstrap_set.iter().enumerate().take(5) {
-                    info!("   Candidate {}: {}", i + 1, node);
+                bootstrap_set.iter().cloned().collect::<Vec<_>>()
+            };
+
+            // Filter out unreachable addresses from relay candidates
+            let filtered: HashSet<String> = raw_candidates
+                .into_iter()
+                .filter(|addr_str| {
+                    if let Ok(addr) = addr_str.parse::<Multiaddr>() {
+                        if ma_plausibly_reachable(&addr) {
+                            true
+                        } else {
+                            warn!("⏭️  Excluding unreachable relay candidate: {}", addr_str);
+                            false
+                        }
+                    } else {
+                        warn!("⚠️ Invalid relay candidate address: {}", addr_str);
+                        false
+                    }
+                })
+                .collect();
+
+            if filtered.is_empty() {
+                warn!("⚠️ No reachable relay candidates available after filtering");
+            } else {
+                info!("✅ Using {} reachable relay candidates", filtered.len());
+                for (i, relay) in filtered.iter().enumerate().take(5) {
+                    info!("   Relay {}: {}", i + 1, relay);
                 }
-                bootstrap_set.iter().cloned().collect()
             }
+
+            filtered
         } else {
             HashSet::new()
         };
@@ -5199,6 +5348,29 @@ impl DhtService {
         // Listen on the specified port
         let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", port).parse()?;
         swarm.listen_on(listen_addr)?;
+
+        // Clean up any unreachable addresses from Kademlia's routing table at startup
+        // This removes stale localhost/private addresses that may have been persisted
+        {
+            let kademlia = swarm.behaviour_mut().kademlia.kbuckets();
+            let mut addrs_to_remove: Vec<(PeerId, Multiaddr)> = Vec::new();
+            
+            for bucket in kademlia {
+                for entry in bucket.iter() {
+                    let peer_id = entry.node.key.preimage();
+                    for addr in entry.node.value.iter() {
+                        if !ma_plausibly_reachable(addr) {
+                            addrs_to_remove.push((*peer_id, addr.clone()));
+                        }
+                    }
+                }
+            }
+            
+            for (peer_id, addr) in addrs_to_remove {
+                swarm.behaviour_mut().kademlia.remove_address(&peer_id, &addr);
+                debug!("🧹 Cleaned up unreachable address at startup: {} -> {}", peer_id, addr);
+            }
+        }
 
         // ---- advertise external addresses so relay reservations include routable addrs
         let mut ext_addrs: Vec<Multiaddr> = Vec::new();
@@ -5230,6 +5402,7 @@ impl DhtService {
                     warn!("⏭️  Skipping unreachable bootstrap addr: {}", addr);
                     continue;
                 }
+
                 match swarm.dial(addr.clone()) {
                     Ok(_) => {
                         successful_connections += 1;
@@ -5260,12 +5433,14 @@ impl DhtService {
                     continue;
                 }
                 match server_addr.parse::<Multiaddr>() {
-                    Ok(addr) => match swarm.dial(addr.clone()) {
-                        Ok(_) => {
-                            info!("Dialing AutoNAT server: {}", server_addr);
-                        }
-                        Err(e) => {
-                            debug!("Failed to dial AutoNAT server {}: {}", server_addr, e);
+                    Ok(addr) => {
+                        match swarm.dial(addr.clone()) {
+                            Ok(_) => {
+                                info!("Dialing AutoNAT server: {}", server_addr);
+                            }
+                            Err(e) => {
+                                debug!("Failed to dial AutoNAT server {}: {}", server_addr, e);
+                            }
                         }
                     },
                     Err(e) => warn!("Invalid AutoNAT server address {}: {}", server_addr, e),
@@ -5313,6 +5488,10 @@ impl DhtService {
             Arc::new(Mutex::new(HashSet::new()));
         let pending_keyword_indexes: Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        let pending_infohash_searches: Arc<Mutex<HashMap<kad::QueryId, PendingInfohashSearch>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let pending_infohash_searches: Arc<Mutex<HashMap<kad::QueryId, PendingInfohashSearch>>> =
+            Arc::new(Mutex::new(HashMap::new()));
 
         {
             let mut guard = metrics.lock().await;
@@ -5335,6 +5514,7 @@ impl DhtService {
             pending_echo.clone(),
             pending_searches.clone(),
             proxy_mgr.clone(),
+            pending_infohash_searches.clone(),
             peer_selection.clone(),
             received_chunks_clone.clone(),
             file_transfer_service.clone(),
@@ -6515,6 +6695,34 @@ impl DhtService {
     }
 }
 
+/// A synchronous helper to perform the two-step info_hash lookup.
+/// This is not ideal for the main event loop but can be useful for commands.
+async fn synchronous_search_by_infohash(
+    swarm: &mut Swarm<DhtBehaviour>,
+    info_hash: &str,
+) -> Result<Option<FileMetadata>, String> {
+    // Step 1: Get the merkle_root from the info_hash index.
+    let index_key = format!("info_hash:{}", info_hash);
+    let record_key = kad::RecordKey::new(&index_key.as_bytes());
+    swarm.behaviour_mut().kademlia.get_record(record_key);
+
+    // This part is tricky without a proper request/response setup for internal swarm queries.
+    // We'll simulate waiting for the event. In a real scenario, you'd use a channel.
+    // For now, this function is more of a structural guide.
+    // A proper implementation would require refactoring the event loop to handle multi-stage queries.
+    warn!("synchronous_search_by_infohash is a placeholder due to event loop complexity.");
+    Err("Synchronous info_hash search not fully implemented.".to_string())
+}
+
+impl DhtService {
+    pub async fn search_by_infohash(&self, info_hash: String) -> Result<Option<FileMetadata>, String> {
+        let (sender, receiver) = oneshot::channel();
+        self.cmd_tx.send(DhtCommand::SearchByInfohash { info_hash, sender }).await.map_err(|e| e.to_string())?;
+        receiver.await.map_err(|e| e.to_string())
+    }
+}
+
+
 /// Process received Bitswap chunk data and assemble complete files
 async fn process_bitswap_chunk(
     query_id: &beetswap::QueryId,
@@ -6657,7 +6865,7 @@ fn ipv4_in_same_subnet(target: Ipv4Addr, iface_ip: Ipv4Addr, iface_mask: Ipv4Add
 
 /// If multiaddr can be plausibly reached from this machine
 /// - Relay paths (p2p-circuit) are allowed
-/// - IPv4 loopback (127.0.0.1) is allowed (local testing)
+/// - IPv4 loopback (127.0.0.1) is REJECTED (not reachable from remote peers)
 /// - For WAN intent, only public IPv4 addresses are allowed (not private ranges)
 fn ma_plausibly_reachable(ma: &Multiaddr) -> bool {
     // Relay paths are allowed
@@ -6666,9 +6874,9 @@ fn ma_plausibly_reachable(ma: &Multiaddr) -> bool {
     }
     // Only consider IPv4 (IPv6 can be added if needed)
     if let Some(Protocol::Ip4(v4)) = ma.iter().find(|p| matches!(p, Protocol::Ip4(_))) {
-        // Allow loopback for local testing
+        // Reject loopback addresses - they're not reachable from remote peers
         if v4.is_loopback() {
-            return true;
+            return false;
         }
         // Allow public addresses, reject private
         return !v4.is_private();
@@ -6681,10 +6889,10 @@ fn extract_multiaddr_from_error_str(s: &str) -> Option<Multiaddr> {
     // Example: "Failed to negotiate ... [(/ip4/172.17.0.3/tcp/4001/p2p/12D...: : Timeout ...)]"
     // Try to find the first occurrence of "/ip" and extract until a delimiter
     if let Some(start) = s.find("/ip") {
-        // Roughly cut the delimiter to ) ] space, etc.
+        // Extract until we hit ": " (colon followed by space) which indicates end of multiaddr
         let tail = &s[start..];
         let end = tail
-            .find(|c: char| c == ')' || c == ']' || c == ' ')
+            .find(": ")
             .unwrap_or_else(|| tail.len());
         let cand = &tail[..end];
         return cand.parse::<Multiaddr>().ok();
@@ -6929,11 +7137,6 @@ mod tests {
         verifier.update(&received_piece3);
         assert_eq!(verifier.finalize(), expected_hash3);
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn shutdown_command_stops_dht_service() {
@@ -7014,7 +7217,7 @@ mod tests {
             observed_addr: "/ip4/127.0.0.1/tcp/4001".parse().unwrap(),
         };
 
-        record_identify_push_metrics(&metrics, &info);
+        record_identify_push_metrics(&metrics, &info).await;
 
         {
             let guard = metrics.lock().await;
@@ -7023,7 +7226,7 @@ mod tests {
             assert!(guard.listen_addrs.contains(&secondary_addr.to_string()));
         }
 
-        record_identify_push_metrics(&metrics, &info);
+        record_identify_push_metrics(&metrics, &info).await;
 
         let guard = metrics.lock().await;
         assert_eq!(guard.listen_addrs.len(), 2);

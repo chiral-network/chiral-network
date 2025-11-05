@@ -79,7 +79,6 @@ Create `genesis.json` (Geth-compatible format):
   "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
   "timestamp": "0x68b3b2ca"
 }
-
 ```
 
 ### Step 3: Initialize Blockchain
@@ -467,8 +466,8 @@ Regular peers should omit `--is-bootstrap`; they rely on the configured `bootstr
 
 ### AutoRelay & reservation management
 
-- AutoRelay behavior is enabled by default in GUI mode to automatically discover
-  and use relay servers for NAT traversal.
+- AutoRelay behavior is disabled by default in GUI mode. Users can enable it
+  to automatically discover and use relay servers for NAT traversal.
 - The relay client listens for Circuit Relay v2 reservations from discovered
   relay candidates (bootstrap nodes by default, or custom relays via `--relay`).
 - When a peer is identified as a relay candidate (via `identify` protocol), the
@@ -518,6 +517,7 @@ frontend event and exposes a `get_download_metrics` command returning aggregate
 success/failure counters and the last 20 attempts. Headless mode gains a
 `--show-downloads` flag that prints the same snapshot at startup so operators can
 confirm retry behaviour without the GUI.
+
 ### Test Network Setup
 
 ```bash

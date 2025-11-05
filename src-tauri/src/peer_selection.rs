@@ -20,6 +20,7 @@ pub struct PeerMetrics {
     pub total_bytes_transferred: u64,
     pub encryption_support: bool, // Supports encrypted transfers
     pub malicious_reports: u64,   // Number of malicious behavior reports
+    pub protocols: Vec<String>,   // Protocols supported by the peer
 }
 
 impl PeerMetrics {
@@ -43,6 +44,7 @@ impl PeerMetrics {
             total_bytes_transferred: 0,
             encryption_support: false,
             malicious_reports: 0,
+            protocols: Vec::new(),
         }
     }
 

@@ -22,7 +22,7 @@
     Globe,
     DollarSign
   } from "lucide-svelte";
-  import { files, type FileItem, etcAccount, settings } from "$lib/stores";
+  import { files, type FileItem, etcAccount } from "$lib/stores";
   import {
     loadSeedList,
     saveSeedList,
@@ -159,11 +159,30 @@
   let recipientPublicKey = "";
   let showEncryptionOptions = false;
 
-  // Calculate price based on file size and price per MB
-  function calculateFilePrice(sizeInBytes: number): number {
+  // Calculate price using dynamic network metrics with safe fallbacks
+  async function calculateFilePrice(sizeInBytes: number): Promise<number> {
     const sizeInMB = sizeInBytes / 1_048_576; // Convert bytes to MB
-    const pricePerMb = $settings.pricePerMb || 0;
-    return parseFloat((sizeInMB * pricePerMb).toFixed(6)); // Round to 6 decimal places
+
+    try {
+      const dynamicPrice = await paymentService.calculateDownloadCost(sizeInBytes);
+      if (Number.isFinite(dynamicPrice) && dynamicPrice > 0) {
+        return Number(dynamicPrice.toFixed(8));
+      }
+    } catch (error) {
+      console.warn("Dynamic price calculation failed, falling back to static rate:", error);
+    }
+
+    try {
+      const pricePerMb = await paymentService.getDynamicPricePerMB(1.2);
+      if (Number.isFinite(pricePerMb) && pricePerMb > 0) {
+        return Number((sizeInMB * pricePerMb).toFixed(8));
+      }
+    } catch (secondaryError) {
+      console.warn("Secondary dynamic price lookup failed:", secondaryError);
+    }
+
+    const fallbackPricePerMb = 0.001;
+    return Number((sizeInMB * fallbackPricePerMb).toFixed(8));
   }
 
   $: storageLabel = isRefreshingStorage
@@ -424,8 +443,7 @@
                     fileData,
                   },
                 );
-                const filePrice = await paymentService.calculateDownloadCost(file.size);
-                // const filePrice = calculateFilePrice(file.size);
+                const filePrice = await calculateFilePrice(file.size);
 
                 console.log("🔍 Uploading file with calculated price:", filePrice, "for", file.size, "bytes");
 
@@ -665,16 +683,7 @@
 
           // Get file size to calculate price
           const fileSize = await invoke<number>('get_file_size', { filePath });
-          const price = await paymentService.calculateDownloadCost(fileSize);
-
-          let existingVersions: any[] = [];
-          try {
-            existingVersions = (await invoke("get_file_versions_by_name", {
-              fileName,
-            })) as any[];
-          } catch (versionError) {
-            console.log("No existing versions found for", fileName);
-          }
+          const price = await calculateFilePrice(fileSize);
 
           console.log("🔍 Uploading file with calculated price:", price, "for", fileSize, "bytes");
           const metadata = await dhtService.publishFileToNetwork(filePath, price);
@@ -719,7 +728,7 @@
                     existing.uploadDate?.getTime() ??
                     Date.now()) * 1000,
                 ),
-                status: "seeding",
+                status: "seeding" as const,
                 price: price,
               };
               f = f.slice();
@@ -769,7 +778,7 @@
 
           // Get file size to calculate price
           const fileSize = await invoke<number>('get_file_size', { filePath });
-          const price = calculateFilePrice(fileSize);
+          const price = await calculateFilePrice(fileSize);
 
           console.log("🔍 Uploading file with calculated price:", price, "for", fileSize, "bytes");
 
@@ -1417,7 +1426,7 @@
                             >
                               <DollarSign class="h-3.5 w-3.5" />
                               <span class="text-sm"
-                                >{file.price.toFixed(6)} Chiral</span
+                                >{file.price.toFixed(8)} Chiral</span
                               >
                             </div>
                           {/if}

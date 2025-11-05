@@ -29,7 +29,7 @@
   "storage.cleanupThreshold": "Auto-Cleanup Threshold (%)",
   "storage.enableCleanup": "Enable automatic cleanup when storage is full",
   "network": {
-    "title": "Network Overview",
+    "title": "Network",
     "subtitle": "Monitor network health and discover peers",
     "nodeStatus": "Chiral Node Status",
     "status": {
@@ -437,6 +437,8 @@
     "menu": "Menu",
     "download": "Download",
     "upload": "Upload",
+    "torrents": "Torrents",
+    "messages": "Messages",
     "network": "Network",
     "relay": "Relay",
     "mining": "Mining",
