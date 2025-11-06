@@ -3,6 +3,24 @@ use crate::download_source::HttpSourceInfo;
 use x25519_dalek::PublicKey;
 use serde_bytes;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum Ed2kError {
+    InvalidLink(String),
+    MissingPart(&'static str),
+    InvalidFileSize(String),
+}
+
+impl std::fmt::Display for Ed2kError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Ed2kError::InvalidLink(s) => write!(f, "Invalid ed2k link format: {}", s),
+            Ed2kError::MissingPart(s) => write!(f, "Missing required part in link: {}", s),
+            Ed2kError::InvalidFileSize(s) => write!(f, "Invalid file size: {}", s),
+        }
+    }
+}
+impl std::error::Error for Ed2kError {}
+
 // ------ Key Request Protocol Implementation ------
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyRequestProtocol;
@@ -211,6 +229,9 @@ pub struct FileMetadata {
     pub encrypted_key_bundle: Option<crate::encryption::EncryptedAesKeyBundle>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ftp_sources: Option<Vec<FtpSourceInfo>>,
+    // ed2k HTTP sources for downloading the file
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ed2k_sources: Option<Vec<Ed2kSourceInfo>>,
     /// HTTP sources for downloading the file (HTTP Range request endpoints)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub http_sources: Option<Vec<HttpSourceInfo>>,
@@ -266,6 +287,100 @@ impl FtpSourceInfo {
     }
 }
 
+/// ed2k (eDonkey2000) source information for a file
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Ed2kSourceInfo {
+    /// ed2k server URL (e.g., "ed2k://|server|1.2.3.4|4661|/")
+    pub server_url: String,
+    
+    /// ed2k file hash (MD4 hash in hex)
+    pub file_hash: String,
+    
+    /// File size in bytes
+    pub file_size: u64,
+    
+    /// Optional file name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_name: Option<String>,
+    
+    /// List of known sources (IP:Port pairs)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sources: Option<Vec<String>>,
+    
+    /// Optional timeout in seconds
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<u64>,
+}
+
+// ed2k Link Parsing
+impl Ed2kSourceInfo {
+    /// Parse ed2k:// link
+    /// Format (File): ed2k://|file|filename.ext|size|hash|/
+    /// Format (Server): ed2k://|server|ip|port|/
+    pub fn from_ed2k_link(link: &str) -> Result<Self, Ed2kError> {
+        let Some(parts_str) = link.strip_prefix("ed2k://|") else {
+            return Err(Ed2kError::InvalidLink(link.to_string()));
+        };
+        
+        // Remove trailing characters like '/'
+        // Trim both trailing '/' and '|' to correctly handle split
+        let clean_parts_str = parts_str.trim_end_matches(&['/', '|']);
+        let parts: Vec<&str> = clean_parts_str.split('|').collect();
+
+        if parts.is_empty() {
+            return Err(Ed2kError::InvalidLink(link.to_string()));
+        }
+
+        match parts[0] {
+            "file" => {
+                // ed2k://|file|filename.ext|size|hash|/
+                if parts.len() < 4 {
+                    return Err(Ed2kError::MissingPart("File link requires name, size, and hash"));
+                }
+
+                let file_name = parts[1].to_string();
+                let file_size_str = parts[2];
+                let file_hash = parts[3].to_string();
+
+                let file_size = file_size_str.parse::<u64>()
+                    .map_err(|_| Ed2kError::InvalidFileSize(file_size_str.to_string()))?;
+
+                Ok(Self {
+                    // Per spec contradiction: File link has no server. Set to empty.
+                    // This will be populated by the application logic later.
+                    server_url: String::new(), 
+                    file_hash,
+                    file_size,
+                    file_name: Some(file_name),
+                    sources: None,
+                    timeout: None,
+                })
+            },
+            "server" => {
+                // ed2k://|server|ip|port|/
+                if parts.len() < 3 {
+                    return Err(Ed2kError::MissingPart("Server link requires ip and port"));
+                }
+                
+                let ip = parts[1];
+                let port = parts[2];
+                // Reconstruct the server_url from the parts
+                let server_url = format!("ed2k://|server|{}|{}|/", ip, port);
+
+                Ok(Self {
+                    server_url,
+                    // Per spec contradiction: Struct requires file info. Set to defaults.
+                    file_hash: String::new(),
+                    file_size: 0,
+                    file_name: None,
+                    sources: None,
+                    timeout: None,
+                })
+            },
+            _ => Err(Ed2kError::InvalidLink(format!("Unknown link type: {}", parts[0]))),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1218,6 +1333,12 @@ fn filter_relay_candidates(
     let mut out = Vec::new();
     for cand in relay_candidates {
         if let Ok(ma) = cand.parse::<Multiaddr>() {
+            // Skip unreachable addresses (localhost/private IPs)
+            if !ma_plausibly_reachable(&ma) {
+                tracing::debug!("Skipping unreachable relay candidate: {}", ma);
+                continue;
+            }
+
             // PeerId extraction
             let mut pid_opt: Option<PeerId> = None;
             for p in ma.iter() {
@@ -1723,28 +1844,6 @@ async fn run_dht_node(
             tracing::warn!("listen_on via relay {} failed: {}", pid, e);
             // Temporary failure: 10min cooldown
             relay_cooldown.insert(pid, Instant::now() + Duration::from_secs(600));
-        }
-    }
-
-    // First attempt: filter candidates + try listen_on /p2p-circuit
-    let filtered_relays =
-        filter_relay_candidates(&relay_candidates, &relay_blacklist, &relay_cooldown);
-    if filtered_relays.is_empty() {
-        tracing::warn!("No usable relay candidates after blacklist/cooldown filtering");
-    } else {
-        tracing::info!("Using {} filtered relay candidates", filtered_relays.len());
-        for (i, (pid, addr)) in filtered_relays.iter().take(5).enumerate() {
-            tracing::info!("   Filtered {}: {} via {}", i + 1, pid, addr);
-        }
-        for (pid, mut base_addr) in filtered_relays {
-            last_tried_relay = Some(pid);
-            base_addr.push(Protocol::P2pCircuit);
-            tracing::info!("📡 Attempting to listen via relay {} at {}", pid, base_addr);
-            if let Err(e) = swarm.listen_on(base_addr.clone()) {
-                tracing::warn!("listen_on via relay {} failed: {}", pid, e);
-                // Temporary failure: 10min cooldown
-                relay_cooldown.insert(pid, Instant::now() + Duration::from_secs(600));
-            }
         }
     }
 
@@ -2450,6 +2549,13 @@ async fn run_dht_node(
                         }
 
                         for (addr_str, multiaddr, maybe_peer_id) in parsed_entries {
+                            // Skip self-connection attempts for privacy proxies
+                            if let Some(peer_id_in_addr) = &maybe_peer_id {
+                                if peer_id_in_addr == &peer_id {
+                                    continue;
+                                }
+                            }
+
                             match swarm.dial(multiaddr.clone()) {
                                 Ok(_) => {
                                     if let Some(peer_id) = &maybe_peer_id {
@@ -2837,12 +2943,13 @@ async fn run_dht_node(
                             &proxy_mgr,
                             &peer_selection,
                             relay_capable_peers.clone(),
+                            &peer_id,
                         )
                         .await;
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::Mdns(mdns_event)) => {
                         if !is_bootstrap{
-                            handle_mdns_event(mdns_event, &mut swarm, &event_tx).await;
+                            handle_mdns_event(mdns_event, &mut swarm, &event_tx, &peer_id).await;
                         }
                     }
                     SwarmEvent::Behaviour(DhtBehaviourEvent::RelayClient(relay_event)) => {
@@ -3367,12 +3474,19 @@ if active_download.is_complete() {
                             selection.update_peer_metrics(peer_metrics);
                         }
 
-                        // Add peer to Kademlia routing table
+                        // Add peer to Kademlia routing table (only if reachable)
                         // swarm.behaviour_mut().kademlia.add_address(&peer_id, endpoint.get_remote_address().clone());
-                        swarm
-                            .behaviour_mut()
-                            .kademlia
-                            .add_address(&peer_id, remote_addr.clone());
+                        if ma_plausibly_reachable(&remote_addr) {
+                            swarm
+                                .behaviour_mut()
+                                .kademlia
+                                .add_address(&peer_id, remote_addr.clone());
+                        } else {
+                            debug!(
+                                "⏭️ Not adding unreachable address to Kademlia for {}: {}",
+                                peer_id, remote_addr
+                            );
+                        }
 
                         let peers_count = {
                             let mut peers = connected_peers.lock().await;
@@ -3513,53 +3627,81 @@ if active_download.is_complete() {
                             .await;
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
-                        if address.iter().any(|component| matches!(component, Protocol::P2pCircuit)) {
-                            swarm.add_external_address(address.clone());
-                            debug!("Advertised relay external address: {}", address);
-                        }
+                        // Always record in metrics for monitoring/debugging
                         if let Ok(mut m) = metrics.try_lock() {
                             m.record_listen_addr(&address);
                         }
+                        
+                        // For relay circuit addresses, always advertise them
+                        if address.iter().any(|component| matches!(component, Protocol::P2pCircuit)) {
+                            swarm.add_external_address(address.clone());
+                            info!("✅ Advertising relay address: {}", address);
+                        } else {
+                            // For regular addresses, only advertise if they're plausibly reachable
+                            // This prevents advertising localhost/private IPs to the network
+                            if ma_plausibly_reachable(&address) {
+                                swarm.add_external_address(address.clone());
+                                info!("✅ Advertising reachable address: {}", address);
+                            } else {
+                                debug!("⏭️  Not advertising unreachable address: {}", address);
+                            }
+                        }
                     }
                     SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
-                        if let Ok(mut m) = metrics.try_lock() {
-                            m.last_error = Some(error.to_string());
-                            m.last_error_at = Some(SystemTime::now());
-                            if let Some(pid) = peer_id {
-                                if bootstrap_peer_ids.contains(&pid) {
-                                    m.bootstrap_failures = m.bootstrap_failures.saturating_add(1);
+                        // Check if this error is for an unreachable address before recording it
+                        let is_unreachable_addr = if let Some(pid) = peer_id {
+                            if let Some(bad_ma) = extract_multiaddr_from_error_str(&error.to_string()) {
+                                if !ma_plausibly_reachable(&bad_ma) {
+                                    swarm.behaviour_mut().kademlia.remove_address(&pid, &bad_ma);
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+
+                        // Only record errors for reachable addresses
+                        if !is_unreachable_addr {
+                            if let Ok(mut m) = metrics.try_lock() {
+                                m.last_error = Some(error.to_string());
+                                m.last_error_at = Some(SystemTime::now());
+                                if let Some(pid) = peer_id {
+                                    if bootstrap_peer_ids.contains(&pid) {
+                                        m.bootstrap_failures = m.bootstrap_failures.saturating_add(1);
+                                    }
                                 }
                             }
                         }
 
                         if let Some(pid) = peer_id {
-                            error!("❌ Outgoing connection error to {}: {}", pid, error);
-
-                            // If the error contains a multiaddr, check if it's plausibly reachable
-                            if let Some(bad_ma) = extract_multiaddr_from_error_str(&error.to_string()) {
-                                if !ma_plausibly_reachable(&bad_ma) {
-                                    swarm.behaviour_mut().kademlia.remove_address(&pid, &bad_ma);
-                                    debug!("🧹 Removed unreachable addr for {}: {}", pid, bad_ma);
+                            // Only log error for addresses that should be reachable
+                            if !is_unreachable_addr {
+                                error!("❌ Outgoing connection error to {}: {}", pid, error);
+                                
+                                let is_bootstrap = bootstrap_peer_ids.contains(&pid);
+                                if error.to_string().contains("rsa") {
+                                    error!("   ℹ Hint: This node uses RSA keys. Enable 'rsa' feature if needed.");
+                                } else if error.to_string().contains("Timeout") {
+                                    if is_bootstrap {
+                                        warn!("   ℹ Hint: Bootstrap nodes may be unreachable or overloaded.");
+                                    } else {
+                                        warn!("   ℹ Hint: Peer may be unreachable (timeout).");
+                                    }
+                                } else if error.to_string().contains("Connection refused") {
+                                    if is_bootstrap {
+                                        warn!("   ℹ Hint: Bootstrap nodes are not accepting connections.");
+                                    } else {
+                                        warn!("   ℹ Hint: Peer is not accepting connections.");
+                                    }
+                                } else if error.to_string().contains("Transport") {
+                                    warn!("   ℹ Hint: Transport protocol negotiation failed.");
                                 }
-                            }
-
-                            let is_bootstrap = bootstrap_peer_ids.contains(&pid);
-                            if error.to_string().contains("rsa") {
-                                error!("   ℹ Hint: This node uses RSA keys. Enable 'rsa' feature if needed.");
-                            } else if error.to_string().contains("Timeout") {
-                                if is_bootstrap {
-                                    warn!("   ℹ Hint: Bootstrap nodes may be unreachable or overloaded.");
-                                } else {
-                                    warn!("   ℹ Hint: Peer may be unreachable (timeout).");
-                                }
-                            } else if error.to_string().contains("Connection refused") {
-                                if is_bootstrap {
-                                    warn!("   ℹ Hint: Bootstrap nodes are not accepting connections.");
-                                } else {
-                                    warn!("   ℹ Hint: Peer is not accepting connections.");
-                                }
-                            } else if error.to_string().contains("Transport") {
-                                warn!("   ℹ Hint: Transport protocol negotiation failed.");
+                            } else {
+                                debug!("⏭️ Skipped connection to unreachable address for {}: {}", pid, error);
                             }
                         } else {
                             error!("❌ Outgoing connection error to unknown peer: {}", error);
@@ -4187,7 +4329,7 @@ async fn handle_kademlia_event(
                             // Try to connect using available addresses
                             let mut connected = false;
                             for addr in &peer_info.addrs {
-                                if not_loopback(addr) {
+                                if ma_plausibly_reachable(addr) {
                                     info!(
                                         "Attempting to connect to peer {} at {}",
                                         peer_info.peer_id, addr
@@ -4284,18 +4426,19 @@ async fn handle_identify_event(
     proxy_mgr: &ProxyMgr,
     peer_selection: &Arc<Mutex<PeerSelectionService>>,
     relay_capable_peers: Arc<Mutex<HashMap<PeerId, Vec<Multiaddr>>>>,
+    local_peer_id: &PeerId,
 ) {
     match event {
         IdentifyEvent::Received { peer_id, info, .. } => {
+            // Skip processing our own peer info to prevent self-connection attempts
+            if &peer_id == local_peer_id {
+                return;
+            }
+            
             let hop_proto = "/libp2p/circuit/relay/0.2.0/hop";
             let supports_relay = info.protocols.iter().any(|p| p.as_ref() == hop_proto);
 
             if supports_relay {
-                info!(
-                    "🛰️ Peer {} supports relay (HOP protocol advertised)",
-                    peer_id
-                );
-
                 // Store this peer as relay-capable with its listen addresses
                 let reachable_addrs: Vec<Multiaddr> = info
                     .listen_addrs
@@ -4335,10 +4478,10 @@ async fn handle_identify_event(
             let listen_addrs = info.listen_addrs.clone();
 
             // identify::Event::Received { peer_id, info, .. } => { ... }
+            // Only log and process reachable addresses (filters out localhost/private IPs)
             for addr in info.listen_addrs.iter() {
-                info!("  📍 Peer {} listen addr: {}", peer_id, addr);
-
                 if ma_plausibly_reachable(addr) {
+                    info!("  📍 Peer {} listen addr: {}", peer_id, addr);
                     swarm
                         .behaviour_mut()
                         .kademlia
@@ -4357,7 +4500,10 @@ async fn handle_identify_event(
                         .find(|s| s.contains(&peer_id.to_string()))
                     {
                         if let Ok(base) = base_str.parse::<Multiaddr>() {
-                            if let Some(relay_addr) = build_relay_listen_addr(&base) {
+                            // Skip unreachable relay addresses (localhost/private IPs)
+                            if !ma_plausibly_reachable(&base) {
+                                debug!("⏭️  Skipping unreachable relay base address: {}", base);
+                            } else if let Some(relay_addr) = build_relay_listen_addr(&base) {
                                 info!(
                                     "📡 Attempting to listen via relay {} at {}",
                                     peer_id, relay_addr
@@ -4409,12 +4555,20 @@ async fn handle_mdns_event(
     event: MdnsEvent,
     swarm: &mut Swarm<DhtBehaviour>,
     event_tx: &mpsc::Sender<DhtEvent>,
+    local_peer_id: &PeerId,
 ) {
+
     match event {
         MdnsEvent::Discovered(list) => {
             let mut discovered: HashMap<PeerId, Vec<String>> = HashMap::new();
             for (peer_id, multiaddr) in list {
                 debug!("mDNS discovered peer {} at {}", peer_id, multiaddr);
+
+                // Skip self-discoveries to prevent self-connection attempts
+                if peer_id == *local_peer_id {
+                    continue;
+                }
+
                 if ma_plausibly_reachable(&multiaddr) {
                     swarm
                         .behaviour_mut()
@@ -4846,43 +5000,46 @@ struct ActiveDownload {
 }
 
 impl ActiveDownload {
+    
     fn new(
-        metadata: FileMetadata,
-        queries: HashMap<beetswap::QueryId, u32>,
-        download_dir: &PathBuf,
-        total_size: u64,
-        chunk_offsets: Vec<u64>,
+    metadata: FileMetadata,
+    queries: HashMap<beetswap::QueryId, u32>,
+    download_path: &PathBuf,  // Already the full file path from get_available_download_path
+    total_size: u64,
+    chunk_offsets: Vec<u64>,
     ) -> std::io::Result<Self> {
-        let total_chunks = queries.len() as u32;
+    let total_chunks = queries.len() as u32;
 
-        // Create final filename based on the actual file name
-        // let final_file_path = download_dir.join(&metadata.file_name);
-        let final_file_path = download_dir.clone();
-        // Create temporary filename with .tmp suffix
-        let temp_file_path = download_dir.with_extension("tmp");
-        info!("Creating temp file at: {:?}", temp_file_path);
-        info!("Will rename to: {:?} when complete", final_file_path);
+    // download_path is already the complete file path
+    let final_file_path = download_path.clone();
+    
+    // Create temp file by replacing extension with .tmp
+    let mut temp_file_path = download_path.clone();
+    temp_file_path.set_extension("tmp");
+    
+    info!("Creating temp file at: {:?}", temp_file_path);
+    info!("Will rename to: {:?} when complete", final_file_path);
 
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(&temp_file_path)?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(&temp_file_path)?;
 
-        file.set_len(total_size)?;
+    file.set_len(total_size)?;
 
-        let mmap = unsafe { MmapMut::map_mut(&file)? };
+    let mmap = unsafe { MmapMut::map_mut(&file)? };
 
-        Ok(Self {
-            metadata,
-            queries,
-            temp_file_path,
-            final_file_path,
-            mmap: Arc::new(std::sync::Mutex::new(mmap)),
-            received_chunks: Arc::new(std::sync::Mutex::new(HashSet::new())),
-            total_chunks,
-            chunk_offsets,
-        })
+    Ok(Self {
+        metadata,
+        queries,
+        temp_file_path,
+        final_file_path,
+        mmap: Arc::new(std::sync::Mutex::new(mmap)),
+        received_chunks: Arc::new(std::sync::Mutex::new(HashSet::new())),
+        total_chunks,
+        chunk_offsets,
+    })
     }
 
     fn write_chunk(&self, chunk_index: u32, data: &[u8], offset: u64) -> std::io::Result<()> {
@@ -5075,7 +5232,7 @@ impl DhtService {
         // Create a Kademlia behaviour with tuned configuration
         let store = MemoryStore::new(local_peer_id);
         let mut kad_cfg = KademliaConfig::new(StreamProtocol::new("/chiral/kad/1.0.0"));
-        let bootstrap_interval = Duration::from_secs(1);
+        let bootstrap_interval = Duration::from_secs(30);
         if is_bootstrap {
             // These settings result in node to not provide files, only acts as a router
             kad_cfg.set_record_ttl(Some(Duration::from_secs(0)));
@@ -5212,26 +5369,50 @@ impl DhtService {
         }
 
         // Configure AutoRelay relay candidate discovery (use finalized flag)
+        // Filter out unreachable addresses (localhost/private IPs) from relay candidates
         let relay_candidates: HashSet<String> = if final_enable_autorelay {
-            if !preferred_relays.is_empty() {
+            let raw_candidates = if !preferred_relays.is_empty() {
                 info!(
                     "🔗 AutoRelay enabled with {} preferred relays",
                     preferred_relays.len()
                 );
-                for (i, relay) in preferred_relays.iter().enumerate().take(5) {
-                    info!("   Relay {}: {}", i + 1, relay);
-                }
-                preferred_relays.into_iter().collect()
+                preferred_relays.into_iter().collect::<Vec<_>>()
             } else {
                 info!(
                     "🔗 AutoRelay enabled, using {} bootstrap nodes as relay candidates",
                     bootstrap_set.len()
                 );
-                for (i, node) in bootstrap_set.iter().enumerate().take(5) {
-                    info!("   Candidate {}: {}", i + 1, node);
+                bootstrap_set.iter().cloned().collect::<Vec<_>>()
+            };
+
+            // Filter out unreachable addresses from relay candidates
+            let filtered: HashSet<String> = raw_candidates
+                .into_iter()
+                .filter(|addr_str| {
+                    if let Ok(addr) = addr_str.parse::<Multiaddr>() {
+                        if ma_plausibly_reachable(&addr) {
+                            true
+                        } else {
+                            warn!("⏭️  Excluding unreachable relay candidate: {}", addr_str);
+                            false
+                        }
+                    } else {
+                        warn!("⚠️ Invalid relay candidate address: {}", addr_str);
+                        false
+                    }
+                })
+                .collect();
+
+            if filtered.is_empty() {
+                warn!("⚠️ No reachable relay candidates available after filtering");
+            } else {
+                info!("✅ Using {} reachable relay candidates", filtered.len());
+                for (i, relay) in filtered.iter().enumerate().take(5) {
+                    info!("   Relay {}: {}", i + 1, relay);
                 }
-                bootstrap_set.iter().cloned().collect()
             }
+
+            filtered
         } else {
             HashSet::new()
         };
@@ -5258,6 +5439,29 @@ impl DhtService {
         // Listen on the specified port
         let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", port).parse()?;
         swarm.listen_on(listen_addr)?;
+
+        // Clean up any unreachable addresses from Kademlia's routing table at startup
+        // This removes stale localhost/private addresses that may have been persisted
+        {
+            let kademlia = swarm.behaviour_mut().kademlia.kbuckets();
+            let mut addrs_to_remove: Vec<(PeerId, Multiaddr)> = Vec::new();
+            
+            for bucket in kademlia {
+                for entry in bucket.iter() {
+                    let peer_id = entry.node.key.preimage();
+                    for addr in entry.node.value.iter() {
+                        if !ma_plausibly_reachable(addr) {
+                            addrs_to_remove.push((*peer_id, addr.clone()));
+                        }
+                    }
+                }
+            }
+            
+            for (peer_id, addr) in addrs_to_remove {
+                swarm.behaviour_mut().kademlia.remove_address(&peer_id, &addr);
+                debug!("🧹 Cleaned up unreachable address at startup: {} -> {}", peer_id, addr);
+            }
+        }
 
         // ---- advertise external addresses so relay reservations include routable addrs
         let mut ext_addrs: Vec<Multiaddr> = Vec::new();
@@ -5289,6 +5493,7 @@ impl DhtService {
                     warn!("⏭️  Skipping unreachable bootstrap addr: {}", addr);
                     continue;
                 }
+
                 match swarm.dial(addr.clone()) {
                     Ok(_) => {
                         successful_connections += 1;
@@ -5319,12 +5524,14 @@ impl DhtService {
                     continue;
                 }
                 match server_addr.parse::<Multiaddr>() {
-                    Ok(addr) => match swarm.dial(addr.clone()) {
-                        Ok(_) => {
-                            info!("Dialing AutoNAT server: {}", server_addr);
-                        }
-                        Err(e) => {
-                            debug!("Failed to dial AutoNAT server {}: {}", server_addr, e);
+                    Ok(addr) => {
+                        match swarm.dial(addr.clone()) {
+                            Ok(_) => {
+                                info!("Dialing AutoNAT server: {}", server_addr);
+                            }
+                            Err(e) => {
+                                debug!("Failed to dial AutoNAT server {}: {}", server_addr, e);
+                            }
                         }
                     },
                     Err(e) => warn!("Invalid AutoNAT server address {}: {}", server_addr, e),
@@ -5701,6 +5908,7 @@ impl DhtService {
             http_sources: None,
             info_hash: None,
             trackers: None,
+            ed2k_sources: None,
         })
     }
 
@@ -6749,7 +6957,7 @@ fn ipv4_in_same_subnet(target: Ipv4Addr, iface_ip: Ipv4Addr, iface_mask: Ipv4Add
 
 /// If multiaddr can be plausibly reached from this machine
 /// - Relay paths (p2p-circuit) are allowed
-/// - IPv4 loopback (127.0.0.1) is allowed (local testing)
+/// - IPv4 loopback (127.0.0.1) is REJECTED (not reachable from remote peers)
 /// - For WAN intent, only public IPv4 addresses are allowed (not private ranges)
 fn ma_plausibly_reachable(ma: &Multiaddr) -> bool {
     // Relay paths are allowed
@@ -6758,9 +6966,9 @@ fn ma_plausibly_reachable(ma: &Multiaddr) -> bool {
     }
     // Only consider IPv4 (IPv6 can be added if needed)
     if let Some(Protocol::Ip4(v4)) = ma.iter().find(|p| matches!(p, Protocol::Ip4(_))) {
-        // Allow loopback for local testing
+        // Reject loopback addresses - they're not reachable from remote peers
         if v4.is_loopback() {
-            return true;
+            return false;
         }
         // Allow public addresses, reject private
         return !v4.is_private();
@@ -6773,10 +6981,10 @@ fn extract_multiaddr_from_error_str(s: &str) -> Option<Multiaddr> {
     // Example: "Failed to negotiate ... [(/ip4/172.17.0.3/tcp/4001/p2p/12D...: : Timeout ...)]"
     // Try to find the first occurrence of "/ip" and extract until a delimiter
     if let Some(start) = s.find("/ip") {
-        // Roughly cut the delimiter to ) ] space, etc.
+        // Extract until we hit ": " (colon followed by space) which indicates end of multiaddr
         let tail = &s[start..];
         let end = tail
-            .find(|c: char| c == ')' || c == ']' || c == ' ')
+            .find(": ")
             .unwrap_or_else(|| tail.len());
         let cand = &tail[..end];
         return cand.parse::<Multiaddr>().ok();
@@ -7021,11 +7229,6 @@ mod tests {
         verifier.update(&received_piece3);
         assert_eq!(verifier.finalize(), expected_hash3);
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn shutdown_command_stops_dht_service() {
@@ -7106,7 +7309,7 @@ mod tests {
             observed_addr: "/ip4/127.0.0.1/tcp/4001".parse().unwrap(),
         };
 
-        record_identify_push_metrics(&metrics, &info);
+        record_identify_push_metrics(&metrics, &info).await;
 
         {
             let guard = metrics.lock().await;
@@ -7115,7 +7318,7 @@ mod tests {
             assert!(guard.listen_addrs.contains(&secondary_addr.to_string()));
         }
 
-        record_identify_push_metrics(&metrics, &info);
+        record_identify_push_metrics(&metrics, &info).await;
 
         let guard = metrics.lock().await;
         assert_eq!(guard.listen_addrs.len(), 2);

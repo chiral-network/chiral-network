@@ -1,10 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { t } from 'svelte-i18n';
-  import { get } from 'svelte/store';
   import PeerSelectionService, { type PeerMetrics } from '$lib/services/peerSelectionService';
-
-  const tr = (key: string, params?: Record<string, any>) => (get(t) as any)(key, params);
 
   let peers: PeerMetrics[] = [];
   let loading = true;

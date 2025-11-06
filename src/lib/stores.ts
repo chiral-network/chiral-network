@@ -110,16 +110,6 @@ export const suspiciousActivity = writable<
   }[]
 >([]);
 
-export interface ChatMessage {
-  id: string;
-  peerId: string;
-  peerNickname: string;
-  content: string;
-  timestamp: Date;
-  type: "sent" | "received";
-  read: boolean;
-}
-
 export interface NetworkStats {
   totalPeers: number;
   onlinePeers: number;
@@ -317,7 +307,6 @@ export const peerGeoDistribution = derived(
   }
 );
 
-export const chatMessages = writable<ChatMessage[]>([]);
 export const networkStats = writable<NetworkStats>(dummyNetworkStats);
 export const downloadQueue = writable<FileItem[]>([]);
 export const userLocation = writable<string>("US-East");
@@ -443,14 +432,14 @@ export interface AppSettings {
   preferredRelays: string[]; // Preferred relay node multiaddrs
   enableRelayServer: boolean; // Act as a relay server for other peers
   relayServerAlias: string; // Public alias/name for your relay server (appears in logs and bootstrapping)
-  autoStartDht: boolean; // Automatically start DHT network on app launch
   anonymousMode: boolean;
   shareAnalytics: boolean;
   enableNotifications: boolean;
   notifyOnComplete: boolean;
   notifyOnError: boolean;
+  notifyOnBandwidthCap: boolean;
+  notifyOnBandwidthCapDesktop: boolean;
   soundAlerts: boolean;
-  enableDHT: boolean;
   enableIPFS: boolean;
   chunkSize: number; // KB
   cacheSize: number; // MB
@@ -458,8 +447,12 @@ export interface AppSettings {
   autoUpdate: boolean;
   enableBandwidthScheduling: boolean;
   bandwidthSchedules: BandwidthScheduleEntry[];
+  monthlyUploadCapGb: number; // 0 = no cap
+  monthlyDownloadCapGb: number; // 0 = no cap
+  capWarningThresholds: number[]; // Percentages, e.g. [75, 90]
   pricePerMb: number; // Price per MB in Chiral (e.g., 0.001)
   customBootstrapNodes: string[]; // Custom bootstrap nodes for DHT (leave empty to use defaults)
+  autoStartDHT: boolean; // Whether to automatically start DHT on app launch
 }
 
 // Export the settings store
@@ -481,21 +474,21 @@ export const settings = writable<AppSettings>({
   ipPrivacyMode: "off",
   trustedProxyRelays: [],
   disableDirectNatTraversal: false,
-  enableAutonat: true, // Enable AutoNAT by default
+  enableAutonat: false, // Disabled by default - enable if you need NAT detection
   autonatProbeInterval: 30, // 30 seconds default
   autonatServers: [], // Use bootstrap nodes by default
-  enableAutorelay: true, // Enable AutoRelay by default
+  enableAutorelay: false, // Disabled by default - enable if you need relay connections
   preferredRelays: [], // Use bootstrap nodes as relays by default
-  enableRelayServer: true, // Enabled by default - helps strengthen the network
+  enableRelayServer: false, // Disabled by default - enable to help relay traffic for others
   relayServerAlias: "", // Empty by default - user can set a friendly name
-  autoStartDht: false, // Disabled by default - user must opt-in
   anonymousMode: false,
   shareAnalytics: true,
   enableNotifications: true,
   notifyOnComplete: true,
   notifyOnError: true,
+  notifyOnBandwidthCap: true,
+  notifyOnBandwidthCapDesktop: false,
   soundAlerts: false,
-  enableDHT: true,
   enableIPFS: false,
   chunkSize: 256,
   cacheSize: 1024,
@@ -503,8 +496,12 @@ export const settings = writable<AppSettings>({
   autoUpdate: true,
   enableBandwidthScheduling: false,
   bandwidthSchedules: [],
+  monthlyUploadCapGb: 0,
+  monthlyDownloadCapGb: 0,
+  capWarningThresholds: [75, 90],
   pricePerMb: 0.001, // Default price: 0.001, until ability to set pricePerMb is there, then change to 0.001 Chiral per MB
   customBootstrapNodes: [], // Empty by default - use hardcoded bootstrap nodes
+  autoStartDHT: false, // Don't auto-start DHT by default
 });
 
 export const activeBandwidthLimits = writable<ActiveBandwidthLimits>(

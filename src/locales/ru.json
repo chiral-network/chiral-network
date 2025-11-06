@@ -434,7 +434,6 @@
     "download": "Скачать",
     "upload": "Загрузить",
     "torrents": "Торренты",
-    "messages": "Сообщения",
     "network": "Сеть",
     "relay": "Релей",
     "mining": "Майнинг",
@@ -735,10 +734,6 @@
     },
     "exportFailed": "Экспорт не удался. Пожалуйста, попробуйте снова.",
     "createAccount": "Не удалось создать аккаунт: {error}"
-  },
-  "messages": {
-    "copied": "Скопировано!",
-    "failed": "Не удалось!"
   },
   "analytics": {
     "title": "Панель аналитики",
@@ -1330,17 +1325,6 @@
     "fileManagementTooltip": "Управление файлами требует настольного приложения",
     "fileManagementWebNotAvailable": "Управление файлами недоступно в веб-версии",
     "fileDialogError": "Не удалось открыть диалог выбора файлов"
-  },
-  "messages": {
-    "title": "Сообщения",
-    "subtitle": "Безопасно общайтесь со своими пирами.",
-    "conversations": "Контакты",
-    "searchPlaceholder": "Поиск контактов...",
-    "inputPlaceholder": "Введите зашифрованное сообщение...",
-    "selectConversation": "Выберите разговор для начала обмена сообщениями",
-    "peer": "Пир",
-    "endToEndEncrypted": "Сквозное шифрование",
-    "refreshPeerList": "Обновить список пиров"
   },
   "torrent": {
     "title": "Торренты",

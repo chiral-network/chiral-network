@@ -374,10 +374,6 @@ pub async fn start_server(
     let bound_addr = listener.local_addr().map_err(|e| e.to_string())?;
 
     tracing::info!("HTTP server listening on http://{}", bound_addr);
-    tracing::info!("Endpoints:");
-    tracing::info!("  GET /health");
-    tracing::info!("  GET /files/:file_hash (supports Range header)");
-    tracing::info!("  GET /files/:file_hash/metadata");
 
     // Spawn server in background
     tokio::spawn(async move {
@@ -392,6 +388,7 @@ pub async fn start_server(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tower::util::ServiceExt;
 
     #[tokio::test]
     async fn test_health_check() {

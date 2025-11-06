@@ -80,6 +80,10 @@ multihash-codetable = { version = "0.1", features = ["blake3", "sha2", "sha3"] }
 cid = { version = "0.11.1", features = ["serde-codec"] }
 blockstore = { version = "0.7.0", features = ["redb"] }
 
+# ed2k protocol support (MD4 hashing for eDonkey2000)
+md4 = "0.10"
+thiserror = "1.0"
+
 # WebRTC dependencies for P2P file transfers
 webrtc = "0.10"
 tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
@@ -92,10 +96,12 @@ anyhow = "1.0.100"
 
 # HTTP server dependencies
 axum = { version = "0.7", features = ["macros"] }
+tower = "0.5"
 tower-http = { version = "0.5", features = ["cors"] }
 
 [dev-dependencies]
 tempfile = "3.8"
+sha1 = "0.10"
 
 [lints.rust]
 unused_variables = "allow"

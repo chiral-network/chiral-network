@@ -319,7 +319,6 @@
     "download": "다운로드",
     "upload": "업로드",
     "torrents": "토렌트",
-    "messages": "메시지",
     "network": "네트워크",
     "relay": "릴레이",
     "mining": "채굴",
@@ -625,10 +624,6 @@
     },
     "exportFailed": "내보내기에 실패했습니다. 다시 시도하세요.",
     "createAccount": "계정 생성 실패: {error}"
-  },
-  "messages": {
-    "copied": "복사됨!",
-    "failed": "실패!"
   },
   "analytics": {
     "title": "분석 대시보드",
@@ -1229,17 +1224,6 @@
     "fileManagementTooltip": "파일 관리는 데스크톱 앱이 필요합니다",
     "fileManagementWebNotAvailable": "웹 버전에서는 파일 관리를 사용할 수 없습니다",
     "fileDialogError": "파일 대화 상자를 열지 못했습니다"
-  },
-  "messages": {
-    "title": "메시지",
-    "subtitle": "피어와 안전하게 통신하세요.",
-    "conversations": "연락처",
-    "searchPlaceholder": "연락처 검색...",
-    "inputPlaceholder": "암호화된 메시지를 입력하세요...",
-    "selectConversation": "대화를 선택하여 메시지를 시작하세요",
-    "peer": "피어",
-    "endToEndEncrypted": "종단 간 암호화",
-    "refreshPeerList": "피어 목록 새로고침"
   },
   "torrent": {
     "title": "토렌트",

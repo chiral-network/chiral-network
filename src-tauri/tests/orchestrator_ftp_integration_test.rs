@@ -50,6 +50,8 @@ async fn test_extract_ftp_sources_from_metadata() {
                 is_available: true,
             },
         ]),
+        ed2k_sources: None,
+        http_sources: None,
         is_root: true,
         download_path: None,
         price: None,
