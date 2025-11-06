@@ -287,7 +287,7 @@
         <p class="text-sm font-semibold">{$t("torrent.seed.shareMagnet")}</p>
         <div class="flex items-center gap-2 mt-1">
           <input type="text" readonly value={newlySeededMagnet} class="flex-grow p-1 text-xs bg-muted rounded-sm" />
-          <button on:click={() => copyToClipboard(newlySeededMagnet)} class="p-2 hover:bg-accent rounded-md">
+          <button on:click={() => copyToClipboard(newlySeededMagnet!)} class="p-2 hover:bg-accent rounded-md">
             <Copy class="h-4 w-4" />
           </button>
         </div>

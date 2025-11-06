@@ -1,3 +1,16 @@
+<script context="module" lang="ts">
+  export interface PeerInfo {
+    peerId: string;
+    location?: string;
+    latency_ms?: number;
+    bandwidth_kbps?: number;
+    reliability_score: number;
+    price_per_mb: number;
+    selected: boolean;
+    percentage: number;
+  }
+</script>
+
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import Card from '$lib/components/ui/card.svelte';
@@ -18,17 +31,6 @@
     confirm: void;
     cancel: void;
   }>();
-
-  export interface PeerInfo {
-    peerId: string;
-    location?: string;
-    latency_ms?: number;
-    bandwidth_kbps?: number;
-    reliability_score: number;
-    price_per_mb: number;
-    selected: boolean;
-    percentage: number;
-  }
 
   // Calculate total cost
   $: totalCost = peers
@@ -119,7 +121,7 @@
 
         <!-- Protocol Selection (HTTP vs WebRTC only - Bitswap doesn't use peer selection) -->
         <div class="space-y-2">
-          <label class="text-sm font-semibold text-foreground/90">Transfer Protocol</label>
+          <div class="text-sm font-semibold text-foreground/90">Transfer Protocol</div>
           <div class="flex gap-2">
             <Button
               variant={protocol === 'http' ? 'default' : 'outline'}
@@ -255,11 +257,13 @@
                 </tr>
               </thead>
               <tbody>
-                {#each peers as peer, index}
+                {#each peers as peer}
                   <tr class="border-t hover:bg-muted/50 transition-colors {mode === 'auto' ? 'bg-muted/30' : ''}">
                     {#if mode === 'manual'}
                       <td class="p-3">
+                        <label class="sr-only" for="peer-select-{peer.peerId.slice(0, 12)}">Select peer {peer.peerId.slice(0, 12)}...</label>
                         <input
+                          id="peer-select-{peer.peerId.slice(0, 12)}"
                           type="checkbox"
                           checked={peer.selected}
                           on:change={() => togglePeer(peer.peerId)}
@@ -300,7 +304,9 @@
                       <td class="p-3">
                         {#if peer.selected}
                           <div class="flex items-center gap-1">
+                            <label class="sr-only" for="peer-percentage-{peer.peerId.slice(0, 12)}">Allocation percentage for peer {peer.peerId.slice(0, 12)}...</label>
                             <input
+                              id="peer-percentage-{peer.peerId.slice(0, 12)}"
                               type="number"
                               bind:value={peer.percentage}
                               min="1"
