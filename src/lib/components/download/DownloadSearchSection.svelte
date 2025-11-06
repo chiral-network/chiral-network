@@ -53,7 +53,7 @@ function buildSaveDialogOptions(fileName: string) {
     ]
   };
 }
-  const SEARCH_TIMEOUT_MS = 10_000; // 10 seconds for DHT searches to find peers
+
 
   let searchHash = '';
   let searchMode = 'merkle_hash'; // 'merkle_hash' or 'cid'
