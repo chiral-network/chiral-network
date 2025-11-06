@@ -21,6 +21,7 @@ pub mod encryption;
 pub mod ethereum;
 pub mod file_transfer;
 pub mod ftp_client;
+pub mod ftp_downloader;
 pub mod geth_downloader;
 pub mod headless;
 pub mod http_download;
