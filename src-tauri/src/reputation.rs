@@ -365,6 +365,7 @@ impl ReputationDhtService {
             ftp_sources: None,
             info_hash: None,
             trackers: None,
+            ..Default::default()
         };
 
         dht_service.publish_file(metadata, None).await
@@ -421,6 +422,7 @@ impl ReputationDhtService {
             ftp_sources: None,
             info_hash: None,
             trackers: None,
+            ..Default::default()
         };
 
         dht_service.publish_file(metadata, None).await
