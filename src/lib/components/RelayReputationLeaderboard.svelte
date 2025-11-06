@@ -156,8 +156,7 @@
                     if (e.key === 'Enter') saveAlias(relay.peer_id);
                     if (e.key === 'Escape') cancelEditingAlias();
                   }}
-                  autofocus
-                />
+              />
                 <button
                   on:click={() => saveAlias(relay.peer_id)}
                   class="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"

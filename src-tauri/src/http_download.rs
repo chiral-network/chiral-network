@@ -470,8 +470,6 @@ impl HttpDownloadClient {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // Integration tests would go here
     // For now, these require a running HTTP server
 }
