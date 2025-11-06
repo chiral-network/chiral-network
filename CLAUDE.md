@@ -337,6 +337,10 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
 - **History**: Mining history tracking with hash rate charts
 - **Rewards**: Block rewards tracked (some values are mock data)
 - **Persistence**: Session state saved to localStorage
+- **Power Monitoring**: Real-time power consumption monitoring
+  - Windows: PowerShell performance counters and WMI
+  - Linux: RAPL (Running Average Power Limit) interface
+  - macOS: SMC (System Management Controller) readings with CPU usage fallback
 
 ## Development Guidelines
 

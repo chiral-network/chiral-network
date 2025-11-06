@@ -101,10 +101,15 @@
       // Wait a bit for cleanup
       await new Promise(resolve => setTimeout(resolve, 500));
 
+      // Use custom bootstrap nodes if configured, otherwise use defaults
+      const bootstrapNodes = currentSettings.customBootstrapNodes && currentSettings.customBootstrapNodes.length > 0
+        ? currentSettings.customBootstrapNodes
+        : [];
+
       // Start with new config
       await dhtService.start({
         port: currentSettings.port || 4001,
-        bootstrapNodes: [], // Will use default bootstrap nodes
+        bootstrapNodes, // Use custom or default bootstrap nodes
         enableAutonat: currentSettings.enableAutonat,
         autonatProbeIntervalSeconds: currentSettings.autonatProbeInterval,
         autonatServers: currentSettings.autonatServers || [],

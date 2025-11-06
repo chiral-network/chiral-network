@@ -1,5 +1,6 @@
 use chrono;
 use ethers::prelude::*;
+use once_cell::sync::Lazy;
 use rand::rngs::OsRng;
 use secp256k1::{PublicKey, Secp256k1, SecretKey};
 use serde::{Deserialize, Serialize};
@@ -9,6 +10,51 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+
+// ============================================================================
+// Configuration & Shared Resources
+// ============================================================================
+
+#[derive(Debug, Clone)]
+pub struct NetworkConfig {
+    pub rpc_endpoint: String,
+    pub chain_id: u64,
+    pub network_id: u64,
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            rpc_endpoint: "http://127.0.0.1:8545".to_string(),
+            chain_id: 98765,
+            network_id: 98765,
+        }
+    }
+}
+
+// Global configuration - can be updated via environment variables
+pub static NETWORK_CONFIG: Lazy<NetworkConfig> = Lazy::new(|| {
+    NetworkConfig {
+        rpc_endpoint: std::env::var("CHIRAL_RPC_ENDPOINT")
+            .unwrap_or_else(|_| "http://127.0.0.1:8545".to_string()),
+        chain_id: std::env::var("CHIRAL_CHAIN_ID")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(98765),
+        network_id: std::env::var("CHIRAL_NETWORK_ID")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(98765),
+    }
+});
+
+// Shared HTTP client for all RPC calls
+pub static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .expect("Failed to create HTTP client")
+});
 
 //Structs
 #[derive(Debug, Serialize, Deserialize)]
@@ -365,8 +411,6 @@ pub fn get_account_from_private_key(private_key_hex: &str) -> Result<EthAccount,
 }
 
 pub async fn get_balance(address: &str) -> Result<String, String> {
-    let client = reqwest::Client::new();
-
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "eth_getBalance",
@@ -374,8 +418,8 @@ pub async fn get_balance(address: &str) -> Result<String, String> {
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -405,8 +449,6 @@ pub async fn get_balance(address: &str) -> Result<String, String> {
 }
 
 pub async fn get_peer_count() -> Result<u32, String> {
-    let client = reqwest::Client::new();
-
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "net_peerCount",
@@ -414,8 +456,8 @@ pub async fn get_peer_count() -> Result<u32, String> {
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -442,15 +484,13 @@ pub async fn get_peer_count() -> Result<u32, String> {
 }
 
 pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), String> {
-    let client = reqwest::Client::new();
-
     // First, ensure geth is ready to accept RPC calls
     let mut attempts = 0;
     let max_attempts = 10; // 10 seconds max wait
     loop {
         // Check if geth is responding to RPC calls
-        if let Ok(response) = client
-            .post("http://127.0.0.1:8545")
+        if let Ok(response) = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&serde_json::json!({
                 "jsonrpc": "2.0",
                 "method": "net_version",
@@ -488,8 +528,8 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&set_etherbase)
         .send()
         .await
@@ -515,8 +555,8 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
         "id": 2
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&start_mining)
         .send()
         .await
@@ -535,8 +575,6 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
 }
 
 pub async fn stop_mining() -> Result<(), String> {
-    let client = reqwest::Client::new();
-
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "miner_stop",
@@ -544,8 +582,8 @@ pub async fn stop_mining() -> Result<(), String> {
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -564,8 +602,6 @@ pub async fn stop_mining() -> Result<(), String> {
 }
 
 pub async fn get_mining_status() -> Result<bool, String> {
-    let client = reqwest::Client::new();
-
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "eth_mining",
@@ -573,8 +609,8 @@ pub async fn get_mining_status() -> Result<bool, String> {
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -597,8 +633,6 @@ pub async fn get_mining_status() -> Result<bool, String> {
 }
 
 pub async fn get_hashrate() -> Result<String, String> {
-    let client = reqwest::Client::new();
-
     // First try eth_hashrate
     let payload = json!({
         "jsonrpc": "2.0",
@@ -607,8 +641,8 @@ pub async fn get_hashrate() -> Result<String, String> {
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -628,8 +662,8 @@ pub async fn get_hashrate() -> Result<String, String> {
             "id": 1
         });
 
-        if let Ok(miner_response) = client
-            .post("http://127.0.0.1:8545")
+        if let Ok(miner_response) = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&miner_payload)
             .send()
             .await
@@ -679,8 +713,8 @@ pub async fn get_hashrate() -> Result<String, String> {
             "id": 1
         });
 
-        if let Ok(gethashrate_response) = client
-            .post("http://127.0.0.1:8545")
+        if let Ok(gethashrate_response) = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&gethashrate_payload)
             .send()
             .await
@@ -758,8 +792,6 @@ pub async fn get_hashrate() -> Result<String, String> {
 }
 
 pub async fn get_block_number() -> Result<u64, String> {
-    let client = reqwest::Client::new();
-
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "eth_blockNumber",
@@ -767,8 +799,8 @@ pub async fn get_block_number() -> Result<u64, String> {
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -795,8 +827,6 @@ pub async fn get_block_number() -> Result<u64, String> {
 }
 
 pub async fn get_network_difficulty() -> Result<String, String> {
-    let client = reqwest::Client::new();
-
     // Get the latest block to extract difficulty
     let payload = json!({
         "jsonrpc": "2.0",
@@ -805,8 +835,8 @@ pub async fn get_network_difficulty() -> Result<String, String> {
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -1216,7 +1246,6 @@ pub fn get_mining_logs(data_dir: &str, lines: usize) -> Result<Vec<String>, Stri
 }
 
 pub async fn get_mined_blocks_count(miner_address: &str) -> Result<u64, String> {
-    let client = reqwest::Client::new();
     let mut blocks_mined = 0u64;
 
     // Get the current block number
@@ -1227,8 +1256,8 @@ pub async fn get_mined_blocks_count(miner_address: &str) -> Result<u64, String> 
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&block_number_payload)
         .send()
         .await
@@ -1265,8 +1294,8 @@ pub async fn get_mined_blocks_count(miner_address: &str) -> Result<u64, String> 
             "id": 1
         });
 
-        if let Ok(response) = client
-            .post("http://127.0.0.1:8545")
+        if let Ok(response) = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&block_payload)
             .send()
             .await
@@ -1292,11 +1321,9 @@ pub async fn get_recent_mined_blocks(
     lookback: u64,
     limit: usize,
 ) -> Result<Vec<MinedBlock>, String> {
-    let client = reqwest::Client::new();
-
     // Fetch latest block number
-    let latest_v = client
-        .post("http://127.0.0.1:8545")
+    let latest_v = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&serde_json::json!({
             "jsonrpc": "2.0",
             "method": "eth_blockNumber",
@@ -1326,8 +1353,8 @@ pub async fn get_recent_mined_blocks(
             break;
         }
 
-        let block_v = client
-            .post("http://127.0.0.1:8545")
+        let block_v = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&serde_json::json!({
                 "jsonrpc": "2.0",
                 "method": "eth_getBlockByNumber",
@@ -1455,8 +1482,6 @@ pub async fn get_recent_mined_blocks(
 
 #[tauri::command]
 pub async fn get_network_hashrate() -> Result<String, String> {
-    let client = reqwest::Client::new();
-
     // First, try to get the actual network hashrate from eth_hashrate
     // This will return the sum of all miners that have submitted their hashrate
     let hashrate_payload = json!({
@@ -1466,8 +1491,8 @@ pub async fn get_network_hashrate() -> Result<String, String> {
         "id": 1
     });
 
-    if let Ok(response) = client
-        .post("http://127.0.0.1:8545")
+    if let Ok(response) = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&hashrate_payload)
         .send()
         .await
@@ -1513,8 +1538,8 @@ pub async fn get_network_hashrate() -> Result<String, String> {
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&latest_block)
         .send()
         .await

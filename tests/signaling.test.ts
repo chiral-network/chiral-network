@@ -13,14 +13,37 @@ async function startServer(
   const serverPath = path.resolve("src/lib/services/server/server.cjs");
   const node = spawn(process.execPath, [serverPath], {
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, PORT: port.toString() },
+    env: { ...process.env, PORT: port.toString(), HOST: "127.0.0.1" },
   });
 
   node.stdout.on("data", (d: Buffer) => process.stdout.write(`[server] ${d}`));
   node.stderr.on("data", (d: Buffer) => process.stderr.write(`[server] ${d}`));
 
-  // Wait a bit for server to start
-  await wait(300);
+  // Wait for server listening log or timeout. Fail if process exits early.
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      node.stdout.off("data", onData);
+      node.removeListener("exit", onExit as any);
+      reject(new Error("server startup timeout"));
+    }, 8000);
+    const onData = (d: Buffer) => {
+      const s = d.toString();
+      if (s.includes("SignalingServer] listening")) {
+        clearTimeout(timeout);
+        node.stdout.off("data", onData);
+        node.removeListener("exit", onExit as any);
+        resolve();
+      }
+    };
+    const onExit = (code: number | null) => {
+      clearTimeout(timeout);
+      node.stdout.off("data", onData);
+      reject(new Error("server process exited before ready: " + code));
+    };
+    node.on("exit", onExit as any);
+    node.stdout.on("data", onData);
+  });
+
   return { node, port };
 }
 
@@ -38,7 +61,7 @@ describe("Signaling Integration", () => {
   it("should relay messages between peers", async () => {
     const serverInfo = await startServer(9001); // Use a different port
 
-    const url = `ws://localhost:${serverInfo.port}`;
+  const url = `ws://127.0.0.1:${serverInfo.port}`;
 
     const a = new WebSocket(url);
     const b = new WebSocket(url);
@@ -104,5 +127,5 @@ describe("Signaling Integration", () => {
     a.close();
     b.close();
     await stopServer(serverInfo);
-  });
+  }, 20000);
 });

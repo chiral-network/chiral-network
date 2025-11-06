@@ -301,6 +301,15 @@ async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
       resolvedStoragePath += "/" + fileMetadata.fileName;
       console.log("Using settings storage path:", resolvedStoragePath);
     }
+    
+    // Ensure the directory exists before starting download
+    try {
+      await invoke('ensure_directory_exists', { path: resolvedStoragePath });
+    } catch (error) {
+      console.error("Failed to create download directory:", error);
+      throw new Error(`Failed to create download directory: ${error}`);
+    }
+    
       // IMPORTANT: Set up the event listener BEFORE invoking the backend
       // to avoid race condition where event fires before we're listening
       const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {

@@ -1,6 +1,8 @@
 use crate::dht::{DhtService, FileMetadata, WebRTCOfferRequest};
 use crate::download_source::{DownloadSource, FtpSourceInfo as DownloadFtpSourceInfo};
+use crate::ftp_downloader::{FtpDownloader, FtpCredentials};
 use crate::webrtc_service::{WebRTCFileRequest, WebRTCService};
+use suppaftp::FtpStream;
 use url::Url;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
@@ -138,12 +140,15 @@ pub struct ActiveDownload {
 pub struct MultiSourceDownloadService {
     dht_service: Arc<DhtService>,
     webrtc_service: Arc<WebRTCService>,
+    ftp_downloader: Arc<FtpDownloader>,
     proxy_latency_service: Option<Arc<Mutex<crate::proxy_latency::ProxyLatencyService>>>,
     active_downloads: Arc<RwLock<HashMap<String, ActiveDownload>>>,
     event_tx: mpsc::UnboundedSender<MultiSourceEvent>,
     event_rx: Arc<Mutex<mpsc::UnboundedReceiver<MultiSourceEvent>>>,
     command_tx: mpsc::UnboundedSender<MultiSourceCommand>,
     command_rx: Arc<Mutex<mpsc::UnboundedReceiver<MultiSourceCommand>>>,
+    // FTP connection pool - maps FTP URL to connection for reuse
+    ftp_connections: Arc<Mutex<HashMap<String, FtpStream>>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -212,6 +217,7 @@ impl MultiSourceDownloadService {
         Self {
             dht_service,
             webrtc_service,
+            ftp_downloader: Arc::new(FtpDownloader::new()),
             proxy_latency_service: Some(Arc::new(Mutex::new(
                 crate::proxy_latency::ProxyLatencyService::new(),
             ))),
@@ -220,6 +226,7 @@ impl MultiSourceDownloadService {
             event_rx: Arc::new(Mutex::new(event_rx)),
             command_tx,
             command_rx: Arc::new(Mutex::new(command_rx)),
+            ftp_connections: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -499,9 +506,7 @@ impl MultiSourceDownloadService {
                     self.start_p2p_connection(file_hash, p2p_info.peer_id.clone(), chunk_ids).await?;
                 }
                 DownloadSource::Ftp(ftp_info) => {
-                    // TODO: FTP data fetching implementation needed
-                    // This belongs to "FTP Data Fetching & Verification" task
-                    warn!("FTP download not yet implemented for source: {}", ftp_info.url);
+                    self.start_ftp_connection(file_hash, ftp_info.clone(), chunk_ids).await?;
                 }
                 DownloadSource::Http(http_info) => {
                     self.start_http_download(file_hash, http_info.clone(), chunk_ids).await?;
@@ -677,8 +682,319 @@ impl MultiSourceDownloadService {
         }
     }
 
-    // FTP download implementation removed - this belongs to "FTP Data Fetching & Verification" task
-    // Scope was only FTP source handling and chunk assignment, not data fetching
+    /// Start FTP connection and chunk downloading
+    async fn start_ftp_connection(
+        &self,
+        file_hash: &str,
+        ftp_info: DownloadFtpSourceInfo,
+        chunk_ids: Vec<u32>,
+    ) -> Result<(), String> {
+        info!(
+            "Connecting to FTP server {} for {} chunks",
+            ftp_info.url,
+            chunk_ids.len()
+        );
+
+        let ftp_url_id = ftp_info.url.clone();
+
+        // Update source assignment status
+        {
+            let mut downloads = self.active_downloads.write().await;
+            if let Some(download) = downloads.get_mut(file_hash) {
+                let ftp_source = DownloadSource::Ftp(ftp_info.clone());
+
+                download.source_assignments.insert(
+                    ftp_url_id.clone(),
+                    SourceAssignment::new(ftp_source, chunk_ids.clone()),
+                );
+            }
+        }
+
+        // Parse FTP URL to get connection info
+        let url = Url::parse(&ftp_info.url)
+            .map_err(|e| format!("Invalid FTP URL: {}", e))?;
+
+        // Create credentials from FTP source info
+        let credentials = if let Some(username) = &ftp_info.username {
+            let password = ftp_info.encrypted_password
+                .as_deref()
+                .unwrap_or("anonymous@chiral.network");
+            Some(FtpCredentials::new(username.clone(), password.to_string()))
+        } else {
+            None // Use anonymous credentials
+        };
+
+        // Attempt to establish FTP connection
+        match self.ftp_downloader.connect_and_login(&url, credentials).await {
+            Ok(ftp_stream) => {
+                info!("Successfully connected to FTP server: {}", ftp_info.url);
+
+                // Store connection for reuse
+                {
+                    let mut connections = self.ftp_connections.lock().await;
+                    connections.insert(ftp_url_id.clone(), ftp_stream);
+                }
+
+                // Mark source as connected and start chunk downloads
+                self.on_source_connected(file_hash, &ftp_url_id, chunk_ids.clone()).await;
+                self.start_ftp_chunk_downloads(file_hash, ftp_info, chunk_ids).await;
+
+                Ok(())
+            }
+            Err(e) => {
+                // Provide more specific error messages based on common FTP errors
+                let error_msg = if e.contains("Connection refused") {
+                    format!("FTP server refused connection: {} (server may be down)", ftp_info.url)
+                } else if e.contains("timeout") || e.contains("Timeout") {
+                    format!("FTP connection timeout: {} (server may be slow or unreachable)", ftp_info.url)
+                } else if e.contains("login") || e.contains("authentication") || e.contains("530") {
+                    format!("FTP authentication failed: {} (invalid credentials)", ftp_info.url)
+                } else if e.contains("550") {
+                    format!("FTP file not found or permission denied: {}", ftp_info.url)
+                } else {
+                    format!("FTP connection failed: {} - {}", ftp_info.url, e)
+                };
+                
+                warn!("{}", error_msg);
+                self.on_source_failed(file_hash, &ftp_url_id, error_msg.clone()).await;
+                Err(error_msg)
+            }
+        }
+    }
+
+    /// Start downloading chunks from FTP server
+    async fn start_ftp_chunk_downloads(
+        &self,
+        file_hash: &str,
+        ftp_info: DownloadFtpSourceInfo,
+        chunk_ids: Vec<u32>,
+    ) {
+        let ftp_url_id = ftp_info.url.clone();
+        
+        // Get chunk information for the assigned chunks
+        let chunks_to_download = {
+            let downloads = self.active_downloads.read().await;
+            if let Some(download) = downloads.get(file_hash) {
+                chunk_ids
+                    .iter()
+                    .filter_map(|&chunk_id| {
+                        download.chunks.iter().find(|chunk| chunk.chunk_id == chunk_id).cloned()
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            }
+        };
+
+        if chunks_to_download.is_empty() {
+            warn!("No chunks found for FTP download");
+            return;
+        }
+
+        // Update source status to downloading
+        {
+            let mut downloads = self.active_downloads.write().await;
+            if let Some(download) = downloads.get_mut(file_hash) {
+                if let Some(assignment) = download.source_assignments.get_mut(&ftp_url_id) {
+                    assignment.status = SourceStatus::Downloading;
+                }
+            }
+        }
+
+        // Parse remote file path from FTP URL
+        let remote_path = match self.parse_ftp_remote_path(&ftp_info.url) {
+            Ok(path) => path,
+            Err(e) => {
+                self.on_source_failed(file_hash, &ftp_url_id, format!("Invalid FTP path: {}", e)).await;
+                return;
+            }
+        };
+
+        // Download chunks concurrently (but limit concurrency to avoid overwhelming FTP server)
+        let downloader = self.ftp_downloader.clone();
+        let connections = self.ftp_connections.clone();
+        let file_hash_clone = file_hash.to_string();
+        let ftp_url_clone = ftp_url_id.clone();
+        let event_tx = self.event_tx.clone();
+        let downloads = self.active_downloads.clone();
+
+        tokio::spawn(async move {
+            let semaphore = Arc::new(tokio::sync::Semaphore::new(2)); // Max 2 concurrent FTP downloads per server
+
+            let mut tasks = Vec::new();
+
+            for chunk_info in chunks_to_download {
+                let permit = semaphore.clone().acquire_owned().await;
+                if permit.is_err() {
+                    continue;
+                }
+
+                let downloader = downloader.clone();
+                let connections = connections.clone();
+                let remote_path = remote_path.clone();
+                let file_hash = file_hash_clone.clone();
+                let ftp_url = ftp_url_clone.clone();
+                let event_tx = event_tx.clone();
+                let downloads = downloads.clone();
+                let chunk = chunk_info.clone();
+
+                let task = tokio::spawn(async move {
+                    let _permit = permit.unwrap();
+
+                    // Calculate byte range for this chunk
+                    let (start_byte, size) = (chunk.offset, chunk.size as u64);
+                    
+                    info!(
+                        "Downloading FTP chunk {} ({}:{}) from {}",
+                        chunk.chunk_id, start_byte, size, remote_path
+                    );
+
+                    // Get FTP connection (we need to handle connection sharing carefully)
+                    let download_result = {
+                        let mut connections_guard = connections.lock().await;
+                        if let Some(ftp_stream) = connections_guard.get_mut(&ftp_url) {
+                            downloader.download_range(ftp_stream, &remote_path, start_byte, size).await
+                        } else {
+                            Err("FTP connection not found".to_string())
+                        }
+                    };
+
+                    match download_result {
+                        Ok(data) => {
+                            // Verify chunk data (basic size check)
+                            if data.len() != chunk.size {
+                                warn!(
+                                    "FTP chunk {} size mismatch: expected {}, got {}",
+                                    chunk.chunk_id,
+                                    chunk.size,
+                                    data.len()
+                                );
+                                
+                                // For now, we'll accept partial data if it's the last chunk
+                                let is_last_chunk = {
+                                    let downloads_guard = downloads.read().await;
+                                    if let Some(download) = downloads_guard.get(&file_hash) {
+                                        chunk.chunk_id == (download.chunks.len() - 1) as u32
+                                    } else {
+                                        false
+                                    }
+                                };
+
+                                if !is_last_chunk {
+                                    let error_msg = format!("Chunk size mismatch: expected {}, got {}", chunk.size, data.len());
+                                    let _ = event_tx.send(MultiSourceEvent::ChunkFailed {
+                                        file_hash: file_hash.clone(),
+                                        chunk_id: chunk.chunk_id,
+                                        peer_id: ftp_url.clone(),
+                                        error: error_msg,
+                                    });
+                                    return;
+                                }
+                            }
+
+                            // TODO: Add hash verification here once chunk hashes are properly calculated
+                            // For now, we'll skip hash verification as it needs to be implemented in the chunk calculation
+
+                            // Store completed chunk
+                            {
+                                let mut downloads_guard = downloads.write().await;
+                                if let Some(download) = downloads_guard.get_mut(&file_hash) {
+                                    let completed_chunk = CompletedChunk {
+                                        chunk_id: chunk.chunk_id,
+                                        data,
+                                        source_id: ftp_url.clone(),
+                                        completed_at: Instant::now(),
+                                    };
+                                    download.completed_chunks.insert(chunk.chunk_id, completed_chunk);
+
+                                    // Update last activity
+                                    if let Some(assignment) = download.source_assignments.get_mut(&ftp_url) {
+                                        let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
+                                            Ok(d) => Some(d.as_secs()),
+                                            Err(_) => None,
+                                        };
+                                        assignment.last_activity = now;
+                                    }
+                                }
+                            }
+
+                            info!(
+                                "Successfully downloaded FTP chunk {} ({} bytes)",
+                                chunk.chunk_id,
+                                chunk.size
+                            );
+
+                            // Emit chunk completed event
+                            let _ = event_tx.send(MultiSourceEvent::ChunkCompleted {
+                                file_hash: file_hash.clone(),
+                                chunk_id: chunk.chunk_id,
+                                peer_id: ftp_url.clone(),
+                            });
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to download FTP chunk {}: {}",
+                                chunk.chunk_id, e
+                            );
+
+                            // Add chunk back to failed queue
+                            {
+                                let mut downloads_guard = downloads.write().await;
+                                if let Some(download) = downloads_guard.get_mut(&file_hash) {
+                                    download.failed_chunks.push_back(chunk.chunk_id);
+                                }
+                            }
+
+                            // Emit chunk failed event
+                            let _ = event_tx.send(MultiSourceEvent::ChunkFailed {
+                                file_hash: file_hash.clone(),
+                                chunk_id: chunk.chunk_id,
+                                peer_id: ftp_url.clone(),
+                                error: e,
+                            });
+                        }
+                    }
+                });
+
+                tasks.push(task);
+            }
+
+            // Wait for all chunk downloads to complete
+            for task in tasks {
+                let _ = task.await;
+            }
+
+            // Check if all chunks for this FTP source are completed
+            let all_chunks_completed = {
+                let downloads_guard = downloads.read().await;
+                if let Some(download) = downloads_guard.get(&file_hash_clone) {
+                    if let Some(assignment) = download.source_assignments.get(&ftp_url_clone) {
+                        assignment.chunks.iter().all(|&chunk_id| {
+                            download.completed_chunks.contains_key(&chunk_id)
+                        })
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            };
+
+            if all_chunks_completed {
+                // Mark FTP source as completed
+                {
+                    let mut downloads_guard = downloads.write().await;
+                    if let Some(download) = downloads_guard.get_mut(&file_hash_clone) {
+                        if let Some(assignment) = download.source_assignments.get_mut(&ftp_url_clone) {
+                            assignment.status = SourceStatus::Completed;
+                        }
+                    }
+                }
+
+                info!("FTP source {} completed all assigned chunks", ftp_url_clone);
+            }
+        });
+    }
 
     /// Start HTTP download (placeholder)
     async fn start_http_download(
@@ -865,9 +1181,25 @@ impl MultiSourceDownloadService {
         };
 
         if let Some(download) = download {
-            // Close all peer connections
-            for peer_id in download.source_assignments.keys() {
-                let _ = self.webrtc_service.close_connection(peer_id.clone()).await;
+            // Close connections based on source type
+            for (source_id, assignment) in download.source_assignments.iter() {
+                match &assignment.source {
+                    DownloadSource::P2p(_) => {
+                        // Close P2P/WebRTC connections
+                        let _ = self.webrtc_service.close_connection(source_id.clone()).await;
+                    }
+                    DownloadSource::Ftp(_) => {
+                        // Close FTP connections
+                        let mut connections = self.ftp_connections.lock().await;
+                        if let Some(mut ftp_stream) = connections.remove(source_id) {
+                            let _ = self.ftp_downloader.disconnect(&mut ftp_stream).await;
+                        }
+                    }
+                    DownloadSource::Http(_) => {
+                        // HTTP connections are typically closed automatically
+                        // No explicit cleanup needed for HTTP
+                    }
+                }
             }
         }
     }
@@ -1174,6 +1506,62 @@ impl MultiSourceDownloadService {
             })
         }
     }
+
+    /// Get statistics about FTP connections and performance
+    pub async fn get_ftp_statistics(&self) -> serde_json::Value {
+        let connection_count = {
+            let connections = self.ftp_connections.lock().await;
+            connections.len()
+        };
+
+        let active_ftp_downloads = {
+            let downloads = self.active_downloads.read().await;
+            downloads.values()
+                .map(|download| {
+                    download.source_assignments.values()
+                        .filter(|assignment| matches!(assignment.source, DownloadSource::Ftp(_)))
+                        .count()
+                })
+                .sum::<usize>()
+        };
+
+        serde_json::json!({
+            "active_connections": connection_count,
+            "active_ftp_downloads": active_ftp_downloads,
+            "ftp_enabled": true
+        })
+    }
+
+    /// Cleanup all resources (FTP connections, etc.) when service shuts down
+    pub async fn cleanup(&self) {
+        info!("Cleaning up MultiSourceDownloadService resources");
+
+        // Close all active FTP connections
+        let mut connections = self.ftp_connections.lock().await;
+        let connection_urls: Vec<String> = connections.keys().cloned().collect();
+        
+        for url in connection_urls {
+            if let Some(mut ftp_stream) = connections.remove(&url) {
+                if let Err(e) = self.ftp_downloader.disconnect(&mut ftp_stream).await {
+                    warn!("Failed to disconnect FTP connection {}: {}", url, e);
+                } else {
+                    info!("Closed FTP connection: {}", url);
+                }
+            }
+        }
+
+        // Cancel all active downloads
+        let active_hashes: Vec<String> = {
+            let downloads = self.active_downloads.read().await;
+            downloads.keys().cloned().collect()
+        };
+
+        for file_hash in active_hashes {
+            self.handle_cancel_download(&file_hash).await;
+        }
+
+        info!("MultiSourceDownloadService cleanup completed");
+    }
 }
 
 #[cfg(test)]
@@ -1262,5 +1650,63 @@ mod tests {
         // Test that event can be serialized (required for Tauri events)
         let serialized = serde_json::to_string(&event);
         assert!(serialized.is_ok());
+    }
+
+    #[test]
+    fn test_ftp_source_assignment() {
+        use crate::download_source::{FtpSourceInfo as DownloadFtpSourceInfo, DownloadSource};
+
+        let ftp_info = DownloadFtpSourceInfo {
+            url: "ftp://ftp.example.com/file.bin".to_string(),
+            username: Some("testuser".to_string()),
+            encrypted_password: Some("testpass".to_string()),
+            passive_mode: true,
+            use_ftps: false,
+            timeout_secs: Some(30),
+        };
+
+        let ftp_source = DownloadSource::Ftp(ftp_info);
+        let chunk_ids = vec![1, 2, 3];
+        let assignment = SourceAssignment::new(ftp_source.clone(), chunk_ids.clone());
+
+        assert_eq!(assignment.source_id(), "ftp://ftp.example.com/file.bin");
+        assert_eq!(assignment.chunks, chunk_ids);
+        assert_eq!(assignment.status, SourceStatus::Connecting);
+        assert!(matches!(assignment.source, DownloadSource::Ftp(_)));
+    }
+
+    #[test]
+    fn test_ftp_priority_score() {
+        use crate::download_source::{FtpSourceInfo as DownloadFtpSourceInfo, DownloadSource, P2pSourceInfo, HttpSourceInfo};
+
+        let ftp_source = DownloadSource::Ftp(DownloadFtpSourceInfo {
+            url: "ftp://example.com/file".to_string(),
+            username: None,
+            encrypted_password: None,
+            passive_mode: true,
+            use_ftps: false,
+            timeout_secs: None,
+        });
+
+        let p2p_source = DownloadSource::P2p(P2pSourceInfo {
+            peer_id: "peer123".to_string(),
+            multiaddr: None,
+            reputation: Some(80),
+            supports_encryption: false,
+            protocol: None,
+        });
+
+        let http_source = DownloadSource::Http(HttpSourceInfo {
+            url: "http://example.com/file".to_string(),
+            auth_header: None,
+            verify_ssl: true,
+            headers: None,
+            timeout_secs: None,
+        });
+
+        // FTP should have lowest priority (25), HTTP medium (50), P2P highest (100 + reputation)
+        assert_eq!(ftp_source.priority_score(), 25);
+        assert_eq!(http_source.priority_score(), 50);
+        assert_eq!(p2p_source.priority_score(), 180); // 100 + 80 reputation
     }
 }

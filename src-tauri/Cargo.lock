@@ -1150,17 +1150,21 @@ dependencies = [
  "if-addrs",
  "lazy_static",
  "libp2p",
+ "md4",
  "memmap2",
  "multihash-codetable",
  "native-tls",
+ "once_cell",
  "pbkdf2 0.12.2",
  "rand 0.8.5",
  "reqwest 0.11.27",
+ "rlp",
  "rs_merkle",
  "secp256k1",
  "serde",
  "serde_bytes",
  "serde_json",
+ "sha1",
  "sha2",
  "sha3",
  "suppaftp",
@@ -1177,11 +1181,13 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-store",
  "tempfile",
+ "thiserror 1.0.69",
  "tokio",
  "tokio-socks",
  "tokio-tungstenite",
  "tokio-util",
  "totp-rs",
+ "tower",
  "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
@@ -4888,6 +4894,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
 dependencies = [
  "cfg-if",
+ "digest",
+]
+
+[[package]]
+name = "md4"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7da5ac363534dce5fabf69949225e174fbf111a498bf0ff794c8ea1fba9f3dda"
+dependencies = [
  "digest",
 ]
 

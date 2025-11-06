@@ -47,7 +47,6 @@
   // Power monitoring
   let realPowerConsumption = 0.0
   let hasRealPower = false
-  let powerLoading = true
 
   // Uptime tick (forces template to re-render every second while mining)
   let uptimeNow: number = Date.now()
@@ -536,7 +535,6 @@
   async function updatePowerConsumption() {
     // Only show loading state for the very first check
     if (!hasCompletedFirstCheck) {
-      powerLoading = true
     }
 
     try {
@@ -552,7 +550,6 @@
       hasRealPower = false
     } finally {
       if (!hasCompletedFirstCheck) {
-        powerLoading = false
       }
     }
   }
@@ -581,16 +578,11 @@
     validationError = null
     
     try {
-      // Show message that we're starting mining
-      error = $t('mining.starting')
-      
       await invoke('start_miner', {
         address: $etcAccount.address,
         threads: selectedThreads,
         dataDir: './bin/geth-data'
       })
-      
-      error = '' // Clear the status message
       $miningState.isMining = true
       sessionStartTime = Date.now()
       // Store session start time in the store for persistence

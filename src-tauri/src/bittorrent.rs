@@ -64,3 +64,69 @@ impl TorrentHandler for BitTorrentHandler {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dht::DhtService;
+    use std::time::Duration;
+
+    /// Helper to create a DHT service for testing.
+    async fn create_test_dht_node(port: u16, bootstrap_nodes: Vec<String>) -> DhtService {
+        DhtService::new(
+            port,
+            bootstrap_nodes,
+            None,      // secret
+            false,     // is_bootstrap
+            false,     // enable_autonat
+            None,      // autonat_probe_interval
+            vec![],    // autonat_servers
+            None,      // proxy_address
+            None,      // file_transfer_service
+            None,      // chunk_manager
+            Some(256), // chunk_size_kb
+            Some(128), // cache_size_mb
+            false,     // enable_autorelay
+            vec![],    // preferred_relays
+            false,     // enable_relay_server
+            None,      // blockstore_db_path
+        )
+        .await
+        .expect("Failed to create DHT service")
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_dht_torrent_peer_discovery() {
+        // 1. Setup: Create two DHT nodes.
+        let node1 = create_test_dht_node(10001, vec![]).await;
+        let node1_peer_id = node1.get_peer_id().await;
+        let node1_addr = format!("/ip4/127.0.0.1/tcp/10001/p2p/{}", node1_peer_id);
+
+        let node2 = create_test_dht_node(10002, vec![node1_addr.clone()]).await;
+        let node2_peer_id = node2.get_peer_id().await;
+
+        // Give nodes time to connect
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        // Ensure they are connected
+        assert!(node1.get_connected_peers().await.contains(&node2_peer_id));
+        assert!(node2.get_connected_peers().await.contains(&node1_peer_id));
+
+        // 2. Announce: Node 1 announces it's seeding a torrent.
+        let info_hash = "b263275b1e3138b29596356533f685c33103575c".to_string();
+        node1
+            .announce_torrent(info_hash.clone())
+            .await
+            .expect("Node 1 failed to announce torrent");
+
+        // Give DHT time to propagate provider record
+        tokio::time::sleep(Duration::from_secs(3)).await;
+
+        // 3. Discover: Node 2 searches for peers seeding that torrent.
+        let providers = node2.get_seeders_for_file(&info_hash).await;
+
+        // 4. Assert: Node 2 should find Node 1.
+        assert!(!providers.is_empty(), "Node 2 should have found providers.");
+        assert!(providers.contains(&node1_peer_id), "Node 2 did not discover Node 1 as a provider for the torrent.");
+    }
+}

@@ -53,6 +53,7 @@ function buildSaveDialogOptions(fileName: string) {
     ]
   };
 }
+  const SEARCH_TIMEOUT_MS = 10_000; // 10 seconds for DHT searches to find peers
 
   let searchHash = '';
   let searchMode = 'merkle_hash'; // 'merkle_hash' or 'cid'
@@ -829,7 +830,6 @@ function buildSaveDialogOptions(fileName: string) {
                 metadata={latestMetadata}
                 on:copy={handleCopy}
                 on:download={event => handleFileDownload(event.detail)}
-                isBitswap={isBitswap}
               />
               <p class="text-xs text-muted-foreground">
                 {tr('download.search.status.completedIn', { values: { seconds: (lastSearchDuration / 1000).toFixed(1) } })}

@@ -442,6 +442,8 @@ export interface AppSettings {
   notifyOnComplete: boolean;
   notifyOnError: boolean;
   soundAlerts: boolean;
+  notifyOnBandwidthCap: boolean;
+  notifyOnBandwidthCapDesktop: boolean;
   enableDHT: boolean;
   enableIPFS: boolean;
   chunkSize: number; // KB
@@ -450,13 +452,17 @@ export interface AppSettings {
   autoUpdate: boolean;
   enableBandwidthScheduling: boolean;
   bandwidthSchedules: BandwidthScheduleEntry[];
+  monthlyUploadCapGb: number; // 0 = no cap
+  monthlyDownloadCapGb: number; // 0 = no cap
+  capWarningThresholds: number[]; // Percentages, e.g. [75, 90]
   pricePerMb: number; // Price per MB in Chiral (e.g., 0.001)
+  customBootstrapNodes: string[]; // Custom bootstrap nodes for DHT (leave empty to use defaults)
 }
 
 // Export the settings store
 // We initialize with a safe default structure. Settings.svelte will load/persist the actual state.
 export const settings = writable<AppSettings>({
-  storagePath: "~/ChiralNetwork/Storage",
+  storagePath: "~/Chiral-Network-Storage",
   maxStorageSize: 100,
   autoCleanup: true,
   cleanupThreshold: 90,
@@ -472,12 +478,12 @@ export const settings = writable<AppSettings>({
   ipPrivacyMode: "off",
   trustedProxyRelays: [],
   disableDirectNatTraversal: false,
-  enableAutonat: true, // Enable AutoNAT by default
+  enableAutonat: false, // Disabled by default - enable if you need NAT detection
   autonatProbeInterval: 30, // 30 seconds default
   autonatServers: [], // Use bootstrap nodes by default
-  enableAutorelay: true, // Enable AutoRelay by default
+  enableAutorelay: false, // Disabled by default - enable if you need relay connections
   preferredRelays: [], // Use bootstrap nodes as relays by default
-  enableRelayServer: true, // Enabled by default - helps strengthen the network
+  enableRelayServer: false, // Disabled by default - enable to help relay traffic for others
   relayServerAlias: "", // Empty by default - user can set a friendly name
   autoStartDht: false, // Disabled by default - user must opt-in
   anonymousMode: false,
@@ -486,6 +492,8 @@ export const settings = writable<AppSettings>({
   notifyOnComplete: true,
   notifyOnError: true,
   soundAlerts: false,
+  notifyOnBandwidthCap: true,
+  notifyOnBandwidthCapDesktop: false,
   enableDHT: true,
   enableIPFS: false,
   chunkSize: 256,
@@ -494,7 +502,11 @@ export const settings = writable<AppSettings>({
   autoUpdate: true,
   enableBandwidthScheduling: false,
   bandwidthSchedules: [],
+  monthlyUploadCapGb: 0,
+  monthlyDownloadCapGb: 0,
+  capWarningThresholds: [75, 90],
   pricePerMb: 0.001, // Default price: 0.001, until ability to set pricePerMb is there, then change to 0.001 Chiral per MB
+  customBootstrapNodes: [], // Empty by default - use hardcoded bootstrap nodes
 });
 
 export const activeBandwidthLimits = writable<ActiveBandwidthLimits>(

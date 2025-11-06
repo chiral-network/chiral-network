@@ -4,8 +4,6 @@
 // These tests are currently IGNORED (#[ignore]) because the implementation
 // doesn't exist yet. Remove #[ignore] when implementing Person 6's tasks.
 
-use serde_json::json;
-
 // ============================================================================
 // UNIT TESTS - Tauri Command Functionality
 // ============================================================================

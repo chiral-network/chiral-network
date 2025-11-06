@@ -18,6 +18,7 @@ Complete guide for using Chiral Network for file sharing, mining, and network pa
 ### First Launch
 
 On first launch, the application will:
+
 - Create default storage directory
 - Connect to DHT network
 - Detect your region automatically
@@ -28,6 +29,7 @@ On first launch, the application will:
 ### Navigation
 
 The sidebar contains navigation to all pages:
+
 - **Download** - Manage file downloads
 - **Upload** - Share files with the network
 - **Network** - View peers and network status
@@ -42,6 +44,7 @@ The sidebar contains navigation to all pages:
 ### Status Indicators
 
 **Network Status** (top right):
+
 - 🟢 **Connected** - DHT network active
 - 🔴 **Disconnected** - No network connection
 
@@ -62,23 +65,27 @@ The sidebar contains navigation to all pages:
 ### Upload Options
 
 **Encryption**:
+
 - Enable to encrypt files before sharing
 - Choose password-based or public key encryption
 - Share decryption key securely with recipients
 
 **Priority**:
+
 - Set upload bandwidth priority
 - Manage seeding resources
 
 ### Managing Uploads
 
 **View uploaded files**:
+
 - File name and size
 - Content hash
 - Number of seeders
 - Upload status
 
 **Actions**:
+
 - Copy hash to clipboard
 - Remove from sharing (stop seeding)
 - View file details
@@ -101,6 +108,7 @@ The sidebar contains navigation to all pages:
 ### Download Queue
 
 **Queue Management**:
+
 - View all active, queued, and completed downloads
 - Set priority (High/Normal/Low)
 - Pause/resume individual downloads
@@ -108,6 +116,7 @@ The sidebar contains navigation to all pages:
 - Retry failed downloads
 
 **Filters**:
+
 - Active - Currently downloading
 - Queued - Waiting to start
 - Completed - Finished downloads
@@ -116,10 +125,12 @@ The sidebar contains navigation to all pages:
 ### Download Settings
 
 **Concurrent Downloads**:
+
 - Set maximum simultaneous downloads (1-10)
 - Higher = faster overall, but more resource intensive
 
 **Download Location**:
+
 - Default: `~/ChiralNetwork/Downloads`
 - Change in Settings → Storage
 
@@ -128,6 +139,7 @@ The sidebar contains navigation to all pages:
 ### Viewing Network Status
 
 **Network page shows**:
+
 - Connected peers count
 - DHT status
 - Your peer ID
@@ -137,10 +149,12 @@ The sidebar contains navigation to all pages:
 ### Connecting to Peers
 
 **Automatic**:
+
 - DHT discovers peers automatically
 - Connects based on file queries
 
 **Manual**:
+
 1. Click "Connect to Peer"
 2. Enter peer multiaddress or ID
 3. Click "Connect"
@@ -148,11 +162,13 @@ The sidebar contains navigation to all pages:
 ### NAT Traversal
 
 **Check reachability**:
+
 - View NAT status in Network page
 - Public/Private/Unknown indicator
 - Confidence level
 
 **If behind NAT**:
+
 - AutoRelay will automatically find relay nodes
 - Or manually add relays in Relay page
 
@@ -163,7 +179,7 @@ The sidebar contains navigation to all pages:
 If you're behind NAT:
 
 1. **Navigate to Relay page**
-2. **Enable AutoRelay** (enabled by default)
+2. **Enable AutoRelay** (disabled by default)
 3. **Optionally add preferred relays**:
    - Enter multiaddress of trusted relay
    - One per line
@@ -183,6 +199,7 @@ Help other NAT'd peers:
 5. **Earn reputation** by helping peers
 
 **Requirements**:
+
 - Good uptime
 - Stable connection
 - Sufficient bandwidth
@@ -206,12 +223,14 @@ Help other NAT'd peers:
 ### Mining Tips
 
 **Optimization**:
+
 - Use all available CPU cores for maximum hashrate
 - Start with 50% intensity and adjust based on system performance
 - Close unnecessary applications
 - Monitor CPU temperature
 
 **Economics**:
+
 - Calculate electricity costs vs. rewards
 - Solo mining may have irregular rewards
 - Pool mining (coming soon) offers consistent payouts
@@ -219,6 +238,7 @@ Help other NAT'd peers:
 ### Mining History
 
 View mining statistics:
+
 - Hash rate over time (chart)
 - Recent blocks found
 - Total earnings
@@ -248,11 +268,13 @@ View mining statistics:
 ### Managing Accounts
 
 **Create additional accounts**:
+
 1. Click "Add Account"
 2. New account derived from mnemonic
 3. Each has unique address
 
 **Account operations**:
+
 - View balance
 - Copy address
 - Generate QR code
@@ -275,21 +297,25 @@ View mining statistics:
 The Analytics page shows:
 
 **Storage**:
+
 - Total space used
 - Number of files shared
 - Files by type
 
 **Bandwidth**:
+
 - Upload/download over time
 - Peak usage times
 - Total transferred
 
 **Network**:
+
 - Peers connected
 - Connection history
 - Network contribution
 
 **Mining** (if enabled):
+
 - Hash rate history
 - Blocks found
 - Rewards earned
@@ -299,81 +325,97 @@ The Analytics page shows:
 ### General Settings
 
 **Language**:
+
 - Select preferred language
 - Changes apply immediately
 
 **Theme**:
+
 - Light/Dark mode
 - Auto (system preference)
 
 ### Storage Settings
 
 **Location**:
+
 - Set download/upload directories
 - Change storage path
 
 **Limits**:
+
 - Maximum storage size
 - Auto-cleanup threshold
 
 ### Network Settings
 
 **Connection**:
+
 - Port number (default: 30303)
 - Max connections
 - Enable UPnP/NAT
 
 **Bandwidth**:
+
 - Upload/download limits (KB/s)
 - 0 = unlimited
 
 **Bandwidth Scheduling**:
+
 - Create time-based bandwidth rules
 - Different limits for different hours/days
 
 ### Privacy Settings
 
 **Proxy**:
+
 - Enable SOCKS5 proxy
 - Enter proxy address (e.g., 127.0.0.1:9050 for Tor)
 
 **Anonymous Mode**:
+
 - Routes all traffic through relay/proxy
 - Changes peer ID periodically
 - Disables direct connections
 
 **Encryption**:
+
 - Force encryption for all transfers
 - Disable unencrypted connections
 
 ### NAT Traversal Settings
 
 **AutoNAT**:
+
 - Enable/disable reachability detection
 - Set probe interval (seconds)
 - Add custom AutoNAT servers
 
 **AutoRelay**:
+
 - Enable/disable automatic relay usage
 - Add preferred relay nodes
 
 **Relay Server**:
+
 - Enable to help NAT'd peers
 - Contributes bandwidth to network
 
 ### Advanced Settings
 
 **DHT**:
+
 - Auto-start DHT on launch
 - Bootstrap nodes
 - Kademlia parameters
 
 **File Transfer**:
+
 - Chunk size (KB)
 - Cache size (MB)
 - Concurrent transfers
 
 **Logging**:
+
 - Log level (debug/info/warn/error)
 - Log location
 
@@ -391,11 +433,13 @@ The Analytics page shows:
 ### Filtering Peers
 
 **Filter by**:
+
 - Trust level
 - Encryption support
 - Minimum uptime percentage
 
 **Sort by**:
+
 - Reputation score
 - Number of interactions
 - Last seen time
@@ -403,6 +447,7 @@ The Analytics page shows:
 ### Relay Leaderboard
 
 View top relay servers:
+
 - Ranked by relay reputation
 - Shows circuit success rate
 - Displays reservations accepted
