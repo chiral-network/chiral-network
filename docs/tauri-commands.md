@@ -541,15 +541,6 @@ These commands currently operate on in-memory mock data to support “progressiv
 - **Returns**: `void`
 - **Description**: Adds or updates a locally stored file for seeding.
 
-### `send_chat_message`
-
-- **Parameters**
-  - `recipient_peer_id: string`
-  - `encrypted_payload: number[]`
-  - `signature: number[]`
-- **Returns**: `void`
-- **Description**: Sends an encrypted chat/WebRTC data message to a peer, establishing a connection first if necessary.
-
 ## Multi-Source Downloads & Proxy Optimization
 
 ### `start_multi_source_download`

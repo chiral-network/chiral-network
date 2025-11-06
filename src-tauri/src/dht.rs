@@ -1887,28 +1887,6 @@ async fn run_dht_node(
         }
     }
 
-    // First attempt: filter candidates + try listen_on /p2p-circuit
-    let filtered_relays =
-        filter_relay_candidates(&relay_candidates, &relay_blacklist, &relay_cooldown);
-    if filtered_relays.is_empty() {
-        tracing::warn!("No usable relay candidates after blacklist/cooldown filtering");
-    } else {
-        tracing::info!("Using {} filtered relay candidates", filtered_relays.len());
-        for (i, (pid, addr)) in filtered_relays.iter().take(5).enumerate() {
-            tracing::info!("   Filtered {}: {} via {}", i + 1, pid, addr);
-        }
-        for (pid, mut base_addr) in filtered_relays {
-            last_tried_relay = Some(pid);
-            base_addr.push(Protocol::P2pCircuit);
-            tracing::info!("📡 Attempting to listen via relay {} at {}", pid, base_addr);
-            if let Err(e) = swarm.listen_on(base_addr.clone()) {
-                tracing::warn!("listen_on via relay {} failed: {}", pid, e);
-                // Temporary failure: 10min cooldown
-                relay_cooldown.insert(pid, Instant::now() + Duration::from_secs(600));
-            }
-        }
-    }
-
     'outer: loop {
         tokio::select! {
                     // periodic maintenance tick - prune expired seeder heartbeats and update DHT
@@ -4515,11 +4493,6 @@ async fn handle_identify_event(
             let supports_relay = info.protocols.iter().any(|p| p.as_ref() == hop_proto);
 
             if supports_relay {
-                info!(
-                    "🛰️ Peer {} supports relay (HOP protocol advertised)",
-                    peer_id
-                );
-
                 // Store this peer as relay-capable with its listen addresses
                 let reachable_addrs: Vec<Multiaddr> = info
                     .listen_addrs
@@ -4557,10 +4530,10 @@ async fn handle_identify_event(
             let listen_addrs = info.listen_addrs.clone();
 
             // identify::Event::Received { peer_id, info, .. } => { ... }
+            // Only log and process reachable addresses (filters out localhost/private IPs)
             for addr in info.listen_addrs.iter() {
-                info!("  📍 Peer {} listen addr: {}", peer_id, addr);
-
                 if ma_plausibly_reachable(addr) {
+                    info!("  📍 Peer {} listen addr: {}", peer_id, addr);
                     swarm
                         .behaviour_mut()
                         .kademlia
@@ -5334,7 +5307,7 @@ impl DhtService {
         // Create a Kademlia behaviour with tuned configuration
         let store = MemoryStore::new(local_peer_id);
         let mut kad_cfg = KademliaConfig::new(StreamProtocol::new("/chiral/kad/1.0.0"));
-        let bootstrap_interval = Duration::from_secs(1);
+        let bootstrap_interval = Duration::from_secs(30);
         if is_bootstrap {
             // These settings result in node to not provide files, only acts as a router
             kad_cfg.set_record_ttl(Some(Duration::from_secs(0)));

@@ -12,10 +12,9 @@
 // - Debuggable: All events carry contextual information for troubleshooting
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::time::SystemTime;
-use tauri::{AppHandle, Emitter, Manager};
-use tracing::{debug, error, warn};
+use tauri::{AppHandle, Emitter};
+use tracing::{debug, error};
 
 /// Current version of the event schema for backwards compatibility
 pub const EVENT_SCHEMA_VERSION: &str = "1.0.0";
