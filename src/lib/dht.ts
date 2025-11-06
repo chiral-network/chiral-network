@@ -33,6 +33,14 @@ export interface DhtConfig {
   relayServerAlias?: string; // Public alias for relay server (appears in logs and bootstrap)
 }
 
+export interface HttpSourceInfo {
+  url: string;
+  authHeader?: string;
+  verifySsl: boolean;
+  headers?: Array<[string, string]>;
+  timeoutSecs?: number;
+}
+
 export interface FileMetadata {
   fileHash: string;
   fileName: string;
@@ -52,6 +60,7 @@ export interface FileMetadata {
   cids?: string[];
   price?: number;
   uploaderAddress?: string;
+  httpSources?: HttpSourceInfo[];
 }
 
 export interface FileManifestForJs {
@@ -292,6 +301,15 @@ async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
       resolvedStoragePath += "/" + fileMetadata.fileName;
       console.log("Using settings storage path:", resolvedStoragePath);
     }
+    
+    // Ensure the directory exists before starting download
+    try {
+      await invoke('ensure_directory_exists', { path: resolvedStoragePath });
+    } catch (error) {
+      console.error("Failed to create download directory:", error);
+      throw new Error(`Failed to create download directory: ${error}`);
+    }
+    
       // IMPORTANT: Set up the event listener BEFORE invoking the backend
       // to avoid race condition where event fires before we're listening
       const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {

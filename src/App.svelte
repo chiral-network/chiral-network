@@ -3,7 +3,7 @@
     import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Mail, Server, Share2 } from 'lucide-svelte'
     import UploadPage from './pages/Upload.svelte'
     import DownloadPage from './pages/Download.svelte'
-    import ProxyPage from './pages/Proxy.svelte'
+    // import ProxyPage from './pages/Proxy.svelte' // DISABLED
     import AccountPage from './pages/Account.svelte'
     import NetworkPage from './pages/Network.svelte'
     import AnalyticsPage from './pages/Analytics.svelte'
@@ -14,8 +14,9 @@
     import MessagesPage from './pages/Messages.svelte'
     import RelayPage from './pages/Relay.svelte'
     import NotFound from './pages/NotFound.svelte'
-    import ProxySelfTest from './routes/proxy-self-test.svelte'
-    import { networkStatus, settings, userLocation, wallet } from './lib/stores'
+    // import ProxySelfTest from './routes/proxy-self-test.svelte' // DISABLED
+import { networkStatus, settings, userLocation, wallet, activeBandwidthLimits } from './lib/stores'
+import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
     import {onMount, setContext} from 'svelte';
     import { tick } from 'svelte';
@@ -28,7 +29,9 @@
     import { bandwidthScheduler } from '$lib/services/bandwidthScheduler';
     import { detectUserRegion } from '$lib/services/geolocation';
     import { paymentService } from '$lib/services/paymentService';
-    import { listen } from '@tauri-apps/api/event';
+import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
+import { exit } from '@tauri-apps/plugin-process';
     // gets path name not entire url:
     // ex: http://locatlhost:1420/download -> /download
     
@@ -44,14 +47,70 @@
       currentPage = getPathName(window.location.pathname);
     }
     
-    let currentPage = getPathName(window.location.pathname);
-    let loading = true;
-    
-    onMount(() => {
-      let stopNetworkMonitoring: () => void = () => {};
-      let unlistenSeederPayment: (() => void) | null = null;
+let currentPage = getPathName(window.location.pathname);
+let loading = true;
+let schedulerRunning = false;
+let unsubscribeScheduler: (() => void) | null = null;
+let unsubscribeBandwidth: (() => void) | null = null;
+let lastAppliedBandwidthSignature: string | null = null;
 
-      (async () => {
+const syncBandwidthScheduler = (config: AppSettings) => {
+  const enabledSchedules = config.bandwidthSchedules?.filter(
+    (entry) => entry.enabled
+  ) ?? [];
+  const shouldRun = config.enableBandwidthScheduling && enabledSchedules.length > 0;
+
+  if (shouldRun) {
+    if (!schedulerRunning) {
+      bandwidthScheduler.start();
+      schedulerRunning = true;
+    }
+    bandwidthScheduler.forceUpdate();
+    return;
+  }
+
+  if (schedulerRunning) {
+    bandwidthScheduler.stop();
+    schedulerRunning = false;
+  } else {
+    // Ensure limits reflect the defaults when scheduler is idle.
+    bandwidthScheduler.forceUpdate();
+  }
+};
+
+const pushBandwidthLimits = (limits: ActiveBandwidthLimits) => {
+  const uploadKbps = Math.max(0, Math.floor(limits.uploadLimitKbps || 0));
+  const downloadKbps = Math.max(0, Math.floor(limits.downloadLimitKbps || 0));
+  const signature = `${uploadKbps}:${downloadKbps}`;
+
+  if (signature === lastAppliedBandwidthSignature) {
+    return;
+  }
+
+  lastAppliedBandwidthSignature = signature;
+
+  if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) {
+    return;
+  }
+
+  invoke("set_bandwidth_limits", {
+    uploadKbps,
+    downloadKbps,
+  }).catch((error) => {
+    console.error("Failed to apply bandwidth limits:", error);
+  });
+};
+    
+  onMount(() => {
+    let stopNetworkMonitoring: () => void = () => {};
+    let unlistenSeederPayment: (() => void) | null = null;
+
+    unsubscribeScheduler = settings.subscribe(syncBandwidthScheduler);
+    syncBandwidthScheduler(get(settings));
+    unsubscribeBandwidth = activeBandwidthLimits.subscribe(pushBandwidthLimits);
+    pushBandwidthLimits(get(activeBandwidthLimits));
+
+    (async () => {
         // Initialize payment service to load wallet and transactions
         paymentService.initialize();
 
@@ -156,10 +215,6 @@
           console.error('Failed to initialize backend services:', error);
         }
 
-        // Start bandwidth scheduler
-        bandwidthScheduler.start();
-        console.log('Bandwidth scheduler started.');
-
         // set the currentPage var
         syncFromUrl();
 
@@ -173,6 +228,13 @@
 
       // keyboard shortcuts
       const handleKeyDown = (event: KeyboardEvent) => {
+        // Ctrl/Cmd + Q - Quit application
+        if ((event.ctrlKey || event.metaKey) && event.key === 'q') {
+          event.preventDefault();
+          exit(0);
+          return;
+        }
+
         // Ctrl/Cmd + , - Open Settings
         if ((event.ctrlKey || event.metaKey) && event.key === ',') {
           event.preventDefault();
@@ -214,10 +276,24 @@
         window.removeEventListener('popstate', onPop);
         window.removeEventListener('keydown', handleKeyDown);
         stopNetworkMonitoring();
-        bandwidthScheduler.stop();
+        if (schedulerRunning) {
+          bandwidthScheduler.stop();
+          schedulerRunning = false;
+        } else {
+          bandwidthScheduler.forceUpdate();
+        }
         if (unlistenSeederPayment) {
           unlistenSeederPayment();
         }
+        if (unsubscribeScheduler) {
+          unsubscribeScheduler();
+          unsubscribeScheduler = null;
+        }
+        if (unsubscribeBandwidth) {
+          unsubscribeBandwidth();
+          unsubscribeBandwidth = null;
+        }
+        lastAppliedBandwidthSignature = null;
       };
     })
 
@@ -251,18 +327,19 @@
       menuItems = [
         { id: 'download', label: $t('nav.download'), icon: Download },
         { id: 'upload', label: $t('nav.upload'), icon: Upload },
-        { id: 'torrents', label: 'Torrents', icon: Share2 },
-        { id: 'messages', label: 'Messages', icon: Mail },
+        { id: 'torrents', label: $t('nav.torrents'), icon: Share2 },
+        { id: 'mining', label: $t('nav.mining'), icon: Cpu },
         { id: 'network', label: $t('nav.network'), icon: Globe },
         { id: 'relay', label: $t('nav.relay'), icon: Server },
-        { id: 'mining', label: $t('nav.mining'), icon: Cpu },
-        { id: 'proxy', label: $t('nav.proxy'), icon: Shield },
+        // { id: 'proxy', label: $t('nav.proxy'), icon: Shield }, // DISABLED
         { id: 'analytics', label: $t('nav.analytics'), icon: BarChart3 },
         { id: 'reputation', label: $t('nav.reputation'), icon: Star },
+        { id: 'messages', label: $t('nav.messages'), icon: Mail },
         { id: 'account', label: $t('nav.account'), icon: Wallet },
         { id: 'settings', label: $t('nav.settings'), icon: Settings },
 
-        ...(import.meta.env.DEV ? [{ id: 'proxy-self-test', label: 'Proxy Self-Test', icon: Shield }] : [])
+        // DISABLED: Proxy self-test page
+        // ...(import.meta.env.DEV ? [{ id: 'proxy-self-test', label: 'Proxy Self-Test', icon: Shield }] : [])
 
       ]
     }
@@ -300,10 +377,11 @@
         path: "mining",
         component: MiningPage
       },
-      {
-        path: "proxy",
-        component: ProxyPage
-      },
+      // DISABLED: Proxy page
+      // {
+      //   path: "proxy",
+      //   component: ProxyPage
+      // },
       {
         path: "analytics",
         component: AnalyticsPage
@@ -320,10 +398,11 @@
         path: "settings",
         component: SettingsPage
       },
-      {
-        path: "proxy-self-test",
-        component: ProxySelfTest
-      },
+      // DISABLED: Proxy self-test page
+      // {
+      //   path: "proxy-self-test",
+      //   component: ProxySelfTest
+      // },
     ]
 
     

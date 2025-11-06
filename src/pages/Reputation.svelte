@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';
   import { TrustLevel, type PeerReputation, type ReputationAnalytics } from '$lib/types/reputation';
   import ReputationCard from '$lib/components/ReputationCard.svelte';
@@ -48,7 +48,20 @@
 
   // State
   let peers: PeerReputation[] = [];
-  let analytics: ReputationAnalytics;
+  let analytics: ReputationAnalytics = {
+    totalPeers: 0,
+    trustedPeers: 0,
+    averageScore: 0,
+    topPerformers: [],
+    recentEvents: [],
+    trustLevelDistribution: {
+      [TrustLevel.Trusted]: 0,
+      [TrustLevel.High]: 0,
+      [TrustLevel.Medium]: 0,
+      [TrustLevel.Low]: 0,
+      [TrustLevel.Unknown]: 0
+    }
+  };
   let sortBy: 'score' | 'interactions' | 'lastSeen' = 'score';
   let searchQuery = '';
   let debouncedSearchQuery = ''; // Debounced version for filtering
@@ -88,11 +101,9 @@
   $: updateDebouncedSearch(searchQuery);
 
   // Persist UI toggles when they change
+  // Persist UI toggles when they change (consolidated)
   $: {
     persistToggle(STORAGE_KEY_SHOW_ANALYTICS, showAnalytics);
-  }
-  
-  $: {
     persistToggle(STORAGE_KEY_SHOW_RELAY_LEADERBOARD, showRelayLeaderboard);
   }
 
@@ -189,10 +200,17 @@
       const trustedPeers = mappedPeers.filter(p => p.trustLevel === TrustLevel.Trusted).length;
       const averageScore = totalPeers > 0 ? mappedPeers.reduce((sum, p) => sum + p.score, 0) / totalPeers : 0;
       const topPerformers = [...mappedPeers].sort((a, b) => b.score - a.score).slice(0, 10);
-      const trustLevelDistribution = Object.values(TrustLevel).reduce((acc, level) => {
+      // Build trust level distribution deterministically from the known options
+      const trustLevelDistribution = trustLevelOptions.reduce((acc, level) => {
         acc[level] = mappedPeers.filter(p => p.trustLevel === level).length;
         return acc;
-      }, {} as Record<TrustLevel, number>);
+      }, {
+        [TrustLevel.Trusted]: 0,
+        [TrustLevel.High]: 0,
+        [TrustLevel.Medium]: 0,
+        [TrustLevel.Low]: 0,
+        [TrustLevel.Unknown]: 0
+      } as Record<TrustLevel, number>);
 
       analytics = {
         totalPeers,
@@ -368,7 +386,7 @@
             {showAnalytics ? $t('reputation.hideAnalytics') : $t('reputation.showAnalytics')}
           </Button>
           <Button on:click={() => showRelayLeaderboard = !showRelayLeaderboard} variant="outline" class="w-full sm:w-auto">
-            {showRelayLeaderboard ? 'Hide Relay Leaderboard' : 'Show Relay Leaderboard'}
+            {showRelayLeaderboard ? $t('reputation.hideRelayLeaderboard') : $t('reputation.showRelayLeaderboard')}
           </Button>
         </div>
       </div>
@@ -398,27 +416,27 @@
               <div class="flex items-center gap-3 mb-4">
                 <span class="text-3xl">⚡</span>
                 <div>
-                  <h3 class="text-xl font-bold text-gray-900">Your Relay Reputation</h3>
-                  <p class="text-sm text-gray-600">Your node is running as a relay server</p>
+                  <h3 class="text-xl font-bold text-gray-900">{$t('reputation.myRelay.title')}</h3>
+                  <p class="text-sm text-gray-600">{$t('reputation.myRelay.subtitle')}</p>
                 </div>
               </div>
 
               <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div class="bg-white rounded-lg p-4 shadow-sm">
                   <div class="text-2xl font-bold text-blue-600">#{myRelayStats.rank}</div>
-                  <div class="text-xs text-gray-600">Rank of {myRelayStats.totalRelays}</div>
+                  <div class="text-xs text-gray-600">{$t('reputation.myRelay.rankOf', { total: myRelayStats.totalRelays })}</div>
                 </div>
                 <div class="bg-white rounded-lg p-4 shadow-sm">
                   <div class="text-2xl font-bold text-purple-600">{myRelayStats.reputation_score.toFixed(0)}</div>
-                  <div class="text-xs text-gray-600">Reputation Score</div>
+                  <div class="text-xs text-gray-600">{$t('reputation.myRelay.reputationScore')}</div>
                 </div>
                 <div class="bg-white rounded-lg p-4 shadow-sm">
                   <div class="text-2xl font-bold text-green-600">{myRelayStats.circuits_successful}</div>
-                  <div class="text-xs text-gray-600">Successful Circuits</div>
+                  <div class="text-xs text-gray-600">{$t('reputation.myRelay.successfulCircuits')}</div>
                 </div>
                 <div class="bg-white rounded-lg p-4 shadow-sm">
                   <div class="text-2xl font-bold text-orange-600">{myRelayStats.reservations_accepted}</div>
-                  <div class="text-xs text-gray-600">Reservations</div>
+                  <div class="text-xs text-gray-600">{$t('reputation.myRelay.reservations')}</div>
                 </div>
               </div>
             </div>
@@ -468,7 +486,7 @@
                       {#each trustLevelOptions as level}
                         <label class="flex items-center gap-2 text-sm font-normal">
                           <input type="checkbox" bind:group={pendingSelectedTrustLevels} value={level} />
-                          {level}
+                          {$t(`reputation.trustLevels.${level}`)}
                         </label>
                       {/each}
                     </div>
@@ -549,7 +567,11 @@
         {#if totalPages > 1}
           <div class="flex items-center justify-between mt-6 pt-6 border-t border-gray-200">
             <div class="text-sm text-gray-600">
-              Showing {(currentPage - 1) * peersPerPage + 1}-{Math.min(currentPage * peersPerPage, filteredPeers.length)} of {filteredPeers.length} peers
+              {$t('reputation.pagination.showing', {
+                start: (currentPage - 1) * peersPerPage + 1,
+                end: Math.min(currentPage * peersPerPage, filteredPeers.length),
+                total: filteredPeers.length
+              })}
             </div>
             <div class="flex items-center gap-2">
               <Button
@@ -558,7 +580,7 @@
                 on:click={() => currentPage = currentPage - 1}
                 disabled={currentPage === 1}
               >
-                Previous
+                {$t('reputation.pagination.previous')}
               </Button>
               <div class="flex items-center gap-1">
                 {#each Array(totalPages) as _, i}
@@ -582,7 +604,7 @@
                 on:click={() => currentPage = currentPage + 1}
                 disabled={currentPage === totalPages}
               >
-                Next
+                {$t('reputation.pagination.next')}
               </Button>
             </div>
           </div>

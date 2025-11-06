@@ -14,11 +14,37 @@ async function startServer(
 ): Promise<{ node: any; port: number }> {
   const node = spawn(process.execPath, [SERVER_PATH], {
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, PORT: port.toString() },
+    env: { ...process.env, PORT: port.toString(), HOST: "127.0.0.1" },
   });
   node.stdout.on("data", (d: Buffer) => process.stdout.write(`[server] ${d}`));
   node.stderr.on("data", (d: Buffer) => process.stderr.write(`[server] ${d}`));
-  await wait(200);
+
+  // Wait until server prints listening message or timeout. If the process exits
+  // before printing the listening message, fail early.
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      node.stdout.off("data", onData);
+      node.removeListener("exit", onExit as any);
+      reject(new Error("server startup timeout"));
+    }, 8000);
+    const onData = (d: Buffer) => {
+      const s = d.toString();
+      if (s.includes("SignalingServer] listening")) {
+        clearTimeout(timeout);
+        node.stdout.off("data", onData);
+        node.removeListener("exit", onExit as any);
+        resolve();
+      }
+    };
+    const onExit = (code: number | null) => {
+      clearTimeout(timeout);
+      node.stdout.off("data", onData);
+      reject(new Error("server process exited before ready: " + code));
+    };
+    node.on("exit", onExit as any);
+    node.stdout.on("data", onData);
+  });
+
   return { node, port };
 }
 
@@ -36,8 +62,8 @@ describe("Signaling Server", () => {
   it("should register peers and broadcast peer list", async () => {
     const serverInfo = await startServer(9002);
 
-    const a = new WebSocket(`ws://localhost:${serverInfo.port}`);
-    const b = new WebSocket(`ws://localhost:${serverInfo.port}`);
+  const a = new WebSocket(`ws://127.0.0.1:${serverInfo.port}`);
+  const b = new WebSocket(`ws://127.0.0.1:${serverInfo.port}`);
 
     await Promise.all([
       new Promise<void>((r) => a.on("open", r)),
@@ -71,13 +97,13 @@ describe("Signaling Server", () => {
     a.close();
     b.close();
     await stopServer(serverInfo);
-  });
+  }, 20000);
 
   it("should route direct messages using `to` field", async () => {
     const serverInfo = await startServer(9003);
 
-    const a = new WebSocket(`ws://localhost:${serverInfo.port}`);
-    const b = new WebSocket(`ws://localhost:${serverInfo.port}`);
+  const a = new WebSocket(`ws://127.0.0.1:${serverInfo.port}`);
+  const b = new WebSocket(`ws://127.0.0.1:${serverInfo.port}`);
 
     await Promise.all([
       new Promise<void>((r) => a.on("open", r)),
@@ -114,14 +140,14 @@ describe("Signaling Server", () => {
     a.close();
     b.close();
     await stopServer(serverInfo);
-  });
+  }, 20000);
 
   it("should fall back to broadcast when no `to` field", async () => {
     const serverInfo = await startServer(9004);
 
-    const a = new WebSocket(`ws://localhost:${serverInfo.port}`);
-    const b = new WebSocket(`ws://localhost:${serverInfo.port}`);
-    const c = new WebSocket(`ws://localhost:${serverInfo.port}`);
+  const a = new WebSocket(`ws://127.0.0.1:${serverInfo.port}`);
+  const b = new WebSocket(`ws://127.0.0.1:${serverInfo.port}`);
+  const c = new WebSocket(`ws://127.0.0.1:${serverInfo.port}`);
 
     await Promise.all([
       new Promise<void>((r) => a.on("open", r)),
@@ -157,13 +183,13 @@ describe("Signaling Server", () => {
     b.close();
     c.close();
     await stopServer(serverInfo);
-  });
+  }, 20000);
 
   it("should update peer list on disconnect", async () => {
     const serverInfo = await startServer(9005);
 
-    const a = new WebSocket(`ws://localhost:${serverInfo.port}`);
-    const b = new WebSocket(`ws://localhost:${serverInfo.port}`);
+  const a = new WebSocket(`ws://127.0.0.1:${serverInfo.port}`);
+  const b = new WebSocket(`ws://127.0.0.1:${serverInfo.port}`);
 
     await Promise.all([
       new Promise<void>((r) => a.on("open", r)),
@@ -189,5 +215,5 @@ describe("Signaling Server", () => {
 
     b.close();
     await stopServer(serverInfo);
-  });
+  }, 20000);
 });
