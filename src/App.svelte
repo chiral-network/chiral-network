@@ -11,7 +11,6 @@
     import SettingsPage from './pages/Settings.svelte'
     import MiningPage from './pages/Mining.svelte'
     import ReputationPage from './pages/Reputation.svelte'
-    import MessagesPage from './pages/Messages.svelte'
     import RelayPage from './pages/Relay.svelte'
     import NotFound from './pages/NotFound.svelte'
     // import ProxySelfTest from './routes/proxy-self-test.svelte' // DISABLED
@@ -341,7 +340,6 @@ const pushBandwidthLimits = (limits: ActiveBandwidthLimits) => {
         // { id: 'proxy', label: $t('nav.proxy'), icon: Shield }, // DISABLED
         { id: 'analytics', label: $t('nav.analytics'), icon: BarChart3 },
         { id: 'reputation', label: $t('nav.reputation'), icon: Star },
-        { id: 'messages', label: $t('nav.messages'), icon: Mail },
         { id: 'account', label: $t('nav.account'), icon: Wallet },
         { id: 'settings', label: $t('nav.settings'), icon: Settings },
 
@@ -367,10 +365,6 @@ const pushBandwidthLimits = (limits: ActiveBandwidthLimits) => {
       {
         path: "torrents",
         component: TorrentDownloadPage
-      },
-      {
-        path: "messages",
-        component: MessagesPage
       },
       {
         path: "network",

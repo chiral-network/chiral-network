@@ -312,7 +312,6 @@
     "download": "Descargar",
     "upload": "Subir",
     "torrents": "Torrents",
-    "messages": "Mensajes",
     "network": "Red",
     "relay": "Relé",
     "mining": "Minería",
@@ -640,10 +639,6 @@
     },
     "exportFailed": "La exportación falló. Inténtalo de nuevo.",
     "createAccount": "No se pudo crear la cuenta: {error}"
-  },
-  "messages": {
-    "copied": "¡Copiado!",
-    "failed": "¡Fallido!"
   },
   "analytics": {
     "title": "Panel de análisis",
@@ -1411,17 +1406,6 @@
     "fileManagementTooltip": "La gestión de archivos requiere aplicación de escritorio",
     "fileManagementWebNotAvailable": "Gestión de archivos no disponible en versión web",
     "fileDialogError": "Error al abrir el diálogo de archivos"
-  },
-  "messages": {
-    "title": "Mensajes",
-    "subtitle": "Comunícate de forma segura con tus pares.",
-    "conversations": "Contactos",
-    "searchPlaceholder": "Buscar contactos...",
-    "inputPlaceholder": "Escribe un mensaje cifrado...",
-    "selectConversation": "Selecciona una conversación para comenzar a enviar mensajes",
-    "peer": "Par",
-    "endToEndEncrypted": "Cifrado de extremo a extremo",
-    "refreshPeerList": "Actualizar lista de pares"
   },
   "torrent": {
     "title": "Torrents",

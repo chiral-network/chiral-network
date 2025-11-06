@@ -438,7 +438,6 @@
     "download": "Download",
     "upload": "Upload",
     "torrents": "Torrents",
-    "messages": "Messages",
     "network": "Network",
     "relay": "Relay",
     "mining": "Mining",
@@ -739,10 +738,6 @@
     },
     "exportFailed": "Export failed. Please try again.",
     "createAccount": "Failed to create account: {error}"
-  },
-  "messages": {
-    "copied": "Copied!",
-    "failed": "Failed!"
   },
   "analytics": {
     "title": "Analytics Dashboard",
@@ -1336,17 +1331,6 @@
     "fileManagementTooltip": "File management requires desktop app",
     "fileManagementWebNotAvailable": "File management not available in web version",
     "fileDialogError": "Failed to open file dialog"
-  },
-  "messages": {
-    "title": "Messages",
-    "subtitle": "Communicate securely with your peers.",
-    "conversations": "Contacts",
-    "searchPlaceholder": "Search contacts...",
-    "inputPlaceholder": "Type an encrypted message...",
-    "selectConversation": "Select a conversation to start messaging",
-    "peer": "Peer",
-    "endToEndEncrypted": "End-to-end encrypted",
-    "refreshPeerList": "Refresh peer list"
   },
   "torrent": {
     "title": "Torrents",

@@ -110,16 +110,6 @@ export const suspiciousActivity = writable<
   }[]
 >([]);
 
-export interface ChatMessage {
-  id: string;
-  peerId: string;
-  peerNickname: string;
-  content: string;
-  timestamp: Date;
-  type: "sent" | "received";
-  read: boolean;
-}
-
 export interface NetworkStats {
   totalPeers: number;
   onlinePeers: number;
@@ -308,7 +298,6 @@ export const peerGeoDistribution = derived(
   }
 );
 
-export const chatMessages = writable<ChatMessage[]>([]);
 export const networkStats = writable<NetworkStats>(dummyNetworkStats);
 export const downloadQueue = writable<FileItem[]>([]);
 export const userLocation = writable<string>("US-East");
