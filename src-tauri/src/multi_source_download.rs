@@ -1,6 +1,6 @@
 use crate::dht::{DhtService, FileMetadata, WebRTCOfferRequest};
 use crate::download_source::{DownloadSource, Ed2kSourceInfo as DownloadEd2kSourceInfo, FtpSourceInfo as DownloadFtpSourceInfo};
-use crate::ed2k_client::{Ed2kClient, Ed2kConfig};
+use crate::ed2k_client::{Ed2kClient, Ed2kConfig, ED2K_CHUNK_SIZE};
 use crate::ftp_downloader::{FtpDownloader, FtpCredentials};
 use crate::webrtc_service::{WebRTCFileRequest, WebRTCService};
 use suppaftp::FtpStream;
@@ -1096,7 +1096,7 @@ impl MultiSourceDownloadService {
         }
 
         let file_hash_clone = file_hash.to_string();
-        let ed2k_connections = Arc::clone(&self.ed2k_connections);
+        let ed2k_connections: Arc<Mutex<HashMap<String, Ed2kClient>>> = Arc::clone(&self.ed2k_connections);
         let active_downloads = Arc::clone(&self.active_downloads);
 
         // Spawn task to download chunks concurrently (limit to 2 concurrent downloads per server)
@@ -1106,7 +1106,7 @@ impl MultiSourceDownloadService {
 
             for chunk in chunks_to_download {
                 let permit = semaphore.clone().acquire_owned().await;
-                let ed2k_connections_clone = Arc::clone(&ed2k_connections);
+                let ed2k_connections_clone: Arc<Mutex<HashMap<String, Ed2kClient>>> = Arc::clone(&ed2k_connections);
                 let active_downloads_clone = Arc::clone(&active_downloads);
                 let file_hash_inner = file_hash_clone.clone();
                 let server_url_clone = server_url_id.clone();
@@ -1124,7 +1124,7 @@ impl MultiSourceDownloadService {
                     if let Some(mut client) = ed2k_client {
                         // Ed2k uses fixed 9.28 MB chunks, so we need to download the appropriate chunk
                         // Calculate which Ed2k chunk this corresponds to
-                        let ed2k_chunk_index = (chunk.offset / crate::ed2k_client::ED2K_CHUNK_SIZE as u64) as u32;
+                        let ed2k_chunk_index = (chunk.offset / ED2K_CHUNK_SIZE as u64) as u32;
 
                         // For simplicity, we'll use a mock hash for now
                         // In a real implementation, this should come from the file metadata

@@ -23,6 +23,7 @@ pub mod blockchain_listener;
 pub mod dht;
 pub mod download_scheduler;
 pub mod download_source;
+pub mod ed2k_client;
 pub mod encryption;
 pub mod ethereum;
 pub mod file_transfer;
