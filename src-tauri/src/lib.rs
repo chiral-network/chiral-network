@@ -28,3 +28,6 @@ pub mod proxy_latency;
 pub mod stream_auth;
 // Reputation system
 pub mod reputation;
+
+// Logger module for file-based logging
+pub mod logger;
