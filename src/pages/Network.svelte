@@ -1298,7 +1298,7 @@
       {#if isCheckingGeth}
         <div class="text-center py-8">
           <RefreshCw class="h-12 w-12 text-blue-500 mx-auto mb-2 animate-spin" />
-          <p class="text-sm text-muted-foreground mb-1">Checking if Geth is installed...</p>
+          <p class="text-sm text-muted-foreground mb-1">Checking if Geth is downloaded...</p>
           <p class="text-xs text-muted-foreground">Please wait while we check your system</p>
         </div>
       {:else if !isGethInstalled}
