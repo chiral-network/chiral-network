@@ -31,6 +31,7 @@ import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import { paymentService } from '$lib/services/paymentService';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
+import { exit } from '@tauri-apps/plugin-process';
     // gets path name not entire url:
     // ex: http://locatlhost:1420/download -> /download
     
@@ -227,6 +228,13 @@ const pushBandwidthLimits = (limits: ActiveBandwidthLimits) => {
 
       // keyboard shortcuts
       const handleKeyDown = (event: KeyboardEvent) => {
+        // Ctrl/Cmd + Q - Quit application
+        if ((event.ctrlKey || event.metaKey) && event.key === 'q') {
+          event.preventDefault();
+          exit(0);
+          return;
+        }
+
         // Ctrl/Cmd + , - Open Settings
         if ((event.ctrlKey || event.metaKey) && event.key === ',') {
           event.preventDefault();
