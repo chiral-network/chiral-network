@@ -21,6 +21,7 @@ export interface FileItem {
   description?: string;
   seeders?: number;
   seederAddresses?: string[];
+  uploaderAddress?: string;
   leechers?: number;
   encrypted?: boolean;
   priority?: "low" | "normal" | "high";

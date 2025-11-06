@@ -225,6 +225,9 @@ pub struct FileMetadata {
     /// A list of BitTorrent tracker URLs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trackers: Option<Vec<String>>,
+    /// Optional list of eDonkey2000 sources associated with this file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ed2k_sources: Option<Vec<String>>,
 }
 
 /// FTP source information for a file
@@ -5637,6 +5640,7 @@ impl DhtService {
             http_sources: None,
             info_hash: None,
             trackers: None,
+            ed2k_sources: None,
         })
     }
 
