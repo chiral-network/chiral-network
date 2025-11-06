@@ -1,7 +1,7 @@
-use crate::encryption::EncryptedAesKeyBundle;
 use crate::download_source::HttpSourceInfo;
-use x25519_dalek::PublicKey;
+use crate::encryption::EncryptedAesKeyBundle;
 use serde_bytes;
+use x25519_dalek::PublicKey;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Ed2kError {
@@ -53,35 +53,57 @@ impl rr::Codec for KeyRequestCodec {
     type Request = KeyRequest;
     type Response = KeyResponse;
 
-    async fn read_request<T>(&mut self, _: &Self::Protocol, io: &mut T) -> std::io::Result<Self::Request>
+    async fn read_request<T>(
+        &mut self,
+        _: &Self::Protocol,
+        io: &mut T,
+    ) -> std::io::Result<Self::Request>
     where
         T: FAsyncRead + Unpin + Send,
     {
         let data = read_framed(io).await?;
-        serde_json::from_slice(&data).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        serde_json::from_slice(&data)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 
-    async fn read_response<T>(&mut self, _: &Self::Protocol, io: &mut T) -> std::io::Result<Self::Response>
+    async fn read_response<T>(
+        &mut self,
+        _: &Self::Protocol,
+        io: &mut T,
+    ) -> std::io::Result<Self::Response>
     where
         T: FAsyncRead + Unpin + Send,
     {
         let data = read_framed(io).await?;
-        serde_json::from_slice(&data).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        serde_json::from_slice(&data)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 
-    async fn write_request<T>(&mut self, _: &Self::Protocol, io: &mut T, request: Self::Request) -> std::io::Result<()>
+    async fn write_request<T>(
+        &mut self,
+        _: &Self::Protocol,
+        io: &mut T,
+        request: Self::Request,
+    ) -> std::io::Result<()>
     where
         T: FAsyncWrite + Unpin + Send,
     {
-        let data = serde_json::to_vec(&request).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let data = serde_json::to_vec(&request)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         write_framed(io, data).await
     }
 
-    async fn write_response<T>(&mut self, _: &Self::Protocol, io: &mut T, response: Self::Response) -> std::io::Result<()>
+    async fn write_response<T>(
+        &mut self,
+        _: &Self::Protocol,
+        io: &mut T,
+        response: Self::Response,
+    ) -> std::io::Result<()>
     where
         T: FAsyncWrite + Unpin + Send,
     {
-        let data = serde_json::to_vec(&response).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let data = serde_json::to_vec(&response)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         write_framed(io, data).await
     }
 }
@@ -119,9 +141,9 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio_util::compat::TokioAsyncReadCompatExt;
 use tracing::{debug, error, info, trace, warn};
 
+use crate::manager::Sha256Hasher;
 use crate::peer_selection::{PeerMetrics, PeerSelectionService, SelectionStrategy};
 use crate::webrtc_service::{get_webrtc_service, FileChunk};
-use crate::manager::Sha256Hasher;
 use std::io::{self};
 use tokio_socks::tcp::Socks5Stream;
 
@@ -197,46 +219,51 @@ fn extract_keywords(file_name: &str) -> Vec<String> {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct FileMetadata {
+    // !IMPORTANT: Please make use of serde(default) and ..Default::default() for backwards/forwards compatability
     /// The Merkle root of the original file chunks, used as the primary identifier for integrity.
     pub merkle_root: String,
     pub file_name: String,
     pub file_size: u64,
     #[serde(skip)]
     pub file_data: Vec<u8>, // holds the actual file data
+    #[serde(default)]
     pub seeders: Vec<String>,
+    #[serde(default)]
     pub created_at: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
     /// Whether the file is encrypted
+    #[serde(default)]
     pub is_encrypted: bool,
     /// The encryption method used (e.g., "AES-256-GCM")
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encryption_method: Option<String>,
     /// Fingerprint of the encryption key for identification.
     /// This is now deprecated in favor of the merkle_root.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_fingerprint: Option<String>,
     // --- VERSIONING FIELDS ---
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_hash: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     /// The root CID(s) for retrieving the file from Bitswap. Usually one.
     pub cids: Option<Vec<Cid>>,
     /// For encrypted files, this contains the encrypted AES key and other info.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encrypted_key_bundle: Option<crate::encryption::EncryptedAesKeyBundle>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ftp_sources: Option<Vec<FtpSourceInfo>>,
     // ed2k HTTP sources for downloading the file
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ed2k_sources: Option<Vec<Ed2kSourceInfo>>,
     /// HTTP sources for downloading the file (HTTP Range request endpoints)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_sources: Option<Vec<HttpSourceInfo>>,
+    #[serde(default)]
     pub is_root: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub download_path: Option<String>,
     /// Price in Chiral tokens set by the uploader
     #[serde(default)]
@@ -245,10 +272,10 @@ pub struct FileMetadata {
     #[serde(default)]
     pub uploader_address: Option<String>,
     /// The SHA-1 info hash for BitTorrent compatibility.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub info_hash: Option<String>,
     /// A list of BitTorrent tracker URLs.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trackers: Option<Vec<String>>,
 }
 
@@ -268,7 +295,7 @@ pub struct FtpSourceInfo {
     /// Last known file size on this FTP server
     pub file_size: u64,
     /// Server availability (updated based on connection attempts)
-    pub last_checked: Option<u64>,  // Unix timestamp
+    pub last_checked: Option<u64>, // Unix timestamp
     pub is_available: bool,
 }
 
@@ -278,7 +305,7 @@ impl FtpSourceInfo {
         Self {
             url: self.url.clone(),
             username: self.username.clone(),
-            password: None,  // Always None for DHT storage
+            password: None, // Always None for DHT storage
             supports_resume: self.supports_resume,
             file_size: self.file_size,
             last_checked: self.last_checked,
@@ -292,21 +319,21 @@ impl FtpSourceInfo {
 pub struct Ed2kSourceInfo {
     /// ed2k server URL (e.g., "ed2k://|server|1.2.3.4|4661|/")
     pub server_url: String,
-    
+
     /// ed2k file hash (MD4 hash in hex)
     pub file_hash: String,
-    
+
     /// File size in bytes
     pub file_size: u64,
-    
+
     /// Optional file name
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file_name: Option<String>,
-    
+
     /// List of known sources (IP:Port pairs)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sources: Option<Vec<String>>,
-    
+
     /// Optional timeout in seconds
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<u64>,
@@ -321,7 +348,7 @@ impl Ed2kSourceInfo {
         let Some(parts_str) = link.strip_prefix("ed2k://|") else {
             return Err(Ed2kError::InvalidLink(link.to_string()));
         };
-        
+
         // Remove trailing characters like '/'
         // Trim both trailing '/' and '|' to correctly handle split
         let clean_parts_str = parts_str.trim_end_matches(&['/', '|']);
@@ -335,33 +362,36 @@ impl Ed2kSourceInfo {
             "file" => {
                 // ed2k://|file|filename.ext|size|hash|/
                 if parts.len() < 4 {
-                    return Err(Ed2kError::MissingPart("File link requires name, size, and hash"));
+                    return Err(Ed2kError::MissingPart(
+                        "File link requires name, size, and hash",
+                    ));
                 }
 
                 let file_name = parts[1].to_string();
                 let file_size_str = parts[2];
                 let file_hash = parts[3].to_string();
 
-                let file_size = file_size_str.parse::<u64>()
+                let file_size = file_size_str
+                    .parse::<u64>()
                     .map_err(|_| Ed2kError::InvalidFileSize(file_size_str.to_string()))?;
 
                 Ok(Self {
                     // Per spec contradiction: File link has no server. Set to empty.
                     // This will be populated by the application logic later.
-                    server_url: String::new(), 
+                    server_url: String::new(),
                     file_hash,
                     file_size,
                     file_name: Some(file_name),
                     sources: None,
                     timeout: None,
                 })
-            },
+            }
             "server" => {
                 // ed2k://|server|ip|port|/
                 if parts.len() < 3 {
                     return Err(Ed2kError::MissingPart("Server link requires ip and port"));
                 }
-                
+
                 let ip = parts[1];
                 let port = parts[2];
                 // Reconstruct the server_url from the parts
@@ -376,8 +406,11 @@ impl Ed2kSourceInfo {
                     sources: None,
                     timeout: None,
                 })
-            },
-            _ => Err(Ed2kError::InvalidLink(format!("Unknown link type: {}", parts[0]))),
+            }
+            _ => Err(Ed2kError::InvalidLink(format!(
+                "Unknown link type: {}",
+                parts[0]
+            ))),
         }
     }
 }
@@ -403,7 +436,10 @@ fn unix_timestamp() -> u64 {
         .as_secs()
 }
 
-fn merge_heartbeats(mut a: Vec<SeederHeartbeat>, mut b: Vec<SeederHeartbeat>) -> Vec<SeederHeartbeat> {
+fn merge_heartbeats(
+    mut a: Vec<SeederHeartbeat>,
+    mut b: Vec<SeederHeartbeat>,
+) -> Vec<SeederHeartbeat> {
     let mut merged = Vec::new();
     let mut seen_peers = std::collections::HashSet::new();
     let now = unix_timestamp();
@@ -414,17 +450,19 @@ fn merge_heartbeats(mut a: Vec<SeederHeartbeat>, mut b: Vec<SeederHeartbeat>) ->
     let common_peers: HashSet<_> = a_peers.intersection(&b_peers).cloned().collect();
 
     // Filter and collect entries in one pass instead of using retain
-    let filtered_a: Vec<_> = a.into_iter()
+    let filtered_a: Vec<_> = a
+        .into_iter()
         .filter(|hb| {
-            common_peers.contains(&hb.peer_id) || 
-            hb.expires_at > now.saturating_sub(30) // 30s grace period
+            common_peers.contains(&hb.peer_id) || hb.expires_at > now.saturating_sub(30)
+            // 30s grace period
         })
         .collect();
 
-    let filtered_b: Vec<_> = b.into_iter()
+    let filtered_b: Vec<_> = b
+        .into_iter()
         .filter(|hb| {
-            common_peers.contains(&hb.peer_id) || 
-            hb.expires_at > now.saturating_sub(30) // 30s grace period
+            common_peers.contains(&hb.peer_id) || hb.expires_at > now.saturating_sub(30)
+            // 30s grace period
         })
         .collect();
 
@@ -438,7 +476,7 @@ fn merge_heartbeats(mut a: Vec<SeederHeartbeat>, mut b: Vec<SeederHeartbeat>) ->
 
     let mut a_iter = a.into_iter();
     let mut b_iter = b.into_iter();
-    
+
     let mut next_a = a_iter.next();
     let mut next_b = b_iter.next();
 
@@ -449,27 +487,29 @@ fn merge_heartbeats(mut a: Vec<SeederHeartbeat>, mut b: Vec<SeederHeartbeat>) ->
                 // 1. Takes the most recent heartbeat timestamp
                 // 2. Uses the latest expiry time
                 // 3. Extends the expiry if it's an active seeder (recent heartbeat)
-                let latest_heartbeat = std::cmp::max(a_entry.last_heartbeat, b_entry.last_heartbeat);
+                let latest_heartbeat =
+                    std::cmp::max(a_entry.last_heartbeat, b_entry.last_heartbeat);
                 let latest_expiry = std::cmp::max(a_entry.expires_at, b_entry.expires_at);
-                
+
                 // If this is an active seeder (recent heartbeat), extend its expiry
-                let new_expiry = if now.saturating_sub(latest_heartbeat) < FILE_HEARTBEAT_INTERVAL.as_secs() {
-                    now.saturating_add(FILE_HEARTBEAT_TTL.as_secs())
-                } else {
-                    latest_expiry
-                };
-                
+                let new_expiry =
+                    if now.saturating_sub(latest_heartbeat) < FILE_HEARTBEAT_INTERVAL.as_secs() {
+                        now.saturating_add(FILE_HEARTBEAT_TTL.as_secs())
+                    } else {
+                        latest_expiry
+                    };
+
                 let entry = SeederHeartbeat {
                     peer_id: a_entry.peer_id.clone(),
                     expires_at: new_expiry,
                     last_heartbeat: latest_heartbeat,
                 };
-                
+
                 if !seen_peers.contains(&entry.peer_id) {
                     seen_peers.insert(entry.peer_id.clone());
                     merged.push(entry);
                 }
-                
+
                 next_a = a_iter.next();
                 next_b = b_iter.next();
             }
@@ -522,10 +562,10 @@ fn prune_heartbeats(mut entries: Vec<SeederHeartbeat>, now: u64) -> Vec<SeederHe
 
 fn upsert_heartbeat(entries: &mut Vec<SeederHeartbeat>, peer_id: &str, now: u64) {
     let expires_at = now.saturating_add(FILE_HEARTBEAT_TTL.as_secs());
-    
+
     // First remove any expired entries
     entries.retain(|hb| hb.expires_at > now);
-    
+
     // Then update or add the new heartbeat
     if let Some(entry) = entries.iter_mut().find(|hb| hb.peer_id == peer_id) {
         entry.expires_at = expires_at;
@@ -537,7 +577,7 @@ fn upsert_heartbeat(entries: &mut Vec<SeederHeartbeat>, peer_id: &str, now: u64)
             last_heartbeat: now,
         });
     }
-    
+
     // Sort by peer_id for consistent ordering
     entries.sort_by(|a, b| a.peer_id.cmp(&b.peer_id));
 }
@@ -654,21 +694,21 @@ pub enum DhtCommand {
         cid: Cid,
         data: Vec<u8>,
     },
-        StoreBlocks {
-            blocks: Vec<(Cid, Vec<u8>)>, 
-            root_cid: Cid,
-            metadata: FileMetadata,
-        },
-        RequestFileAccess {
-            seeder: PeerId,
-            merkle_root: String,
-            recipient_public_key: PublicKey,
-            sender: oneshot::Sender<Result<EncryptedAesKeyBundle, String>>,
-        },
+    StoreBlocks {
+        blocks: Vec<(Cid, Vec<u8>)>,
+        root_cid: Cid,
+        metadata: FileMetadata,
+    },
+    RequestFileAccess {
+        seeder: PeerId,
+        merkle_root: String,
+        recipient_public_key: PublicKey,
+        sender: oneshot::Sender<Result<EncryptedAesKeyBundle, String>>,
+    },
     AnnounceTorrent {
         info_hash: String,
     },
-    }
+}
 #[derive(Debug, Clone, Serialize)]
 pub enum DhtEvent {
     // PeerDiscovered(String),
@@ -1849,850 +1889,874 @@ async fn run_dht_node(
 
     'outer: loop {
         tokio::select! {
-            // periodic maintenance tick - prune expired seeder heartbeats and update DHT
-            // Fast heartbeat tick — refresh DHT records for files this node is actively seeding
-            _ = heartbeat_maintenance_interval.tick() => {
-                let now = unix_timestamp();
-                let my_id = peer_id.to_string();
-                let mut updated_records: Vec<(String, Vec<u8>)> = Vec::new();
-
-                {
-                    let mut cache = seeder_heartbeats_cache.lock().await;
-                    for (file_hash, entry) in cache.iter_mut() {
-                        // Prune expired entries first
-                        entry.heartbeats = prune_heartbeats(entry.heartbeats.clone(), now);
-
-                        // Only refresh records if this node is listed as a seeder
-                        if entry.heartbeats.iter().any(|hb| hb.peer_id == my_id) {
-                            // ensure our own heartbeat is up-to-date in cache
-                            for hb in entry.heartbeats.iter_mut() {
-                                if hb.peer_id == my_id {
-                                    hb.last_heartbeat = now;
-                                    hb.expires_at = now.saturating_add(FILE_HEARTBEAT_TTL.as_secs());
-                                }
-                            }
-
-                            // update metadata fields
-                            let seeder_strings = heartbeats_to_peer_list(&entry.heartbeats);
-                            entry.metadata["seeders"] = serde_json::Value::Array(
-                                seeder_strings
-                                    .iter()
-                                    .cloned()
-                                    .map(serde_json::Value::String)
-                                    .collect(),
-                            );
-                            entry.metadata["seederHeartbeats"] =
-                                serde_json::to_value(&entry.heartbeats)
-                                    .unwrap_or_else(|_| serde_json::Value::Array(vec![]));
-
-                            if let Ok(bytes) = serde_json::to_vec(&entry.metadata) {
-                                updated_records.push((file_hash.clone(), bytes));
-                            }
-                        }
-                    }
-                } // release cache lock
-
-                // Perform DHT updates for seeder heartbeats (non-blocking best-effort)
-                        // Push updated records to Kademlia for each updated file
-                        for (file_hash, bytes) in updated_records {
-                            let key = kad::RecordKey::new(&file_hash.as_bytes());
-                            let record = Record {
-                                key: key.clone(),
-                                value: bytes.clone(),
-                                publisher: Some(peer_id.clone()),
-                                expires: None,
-                            };
-                            if let Err(e) =
-                                swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One)
-                            {
-                                warn!("Failed to refresh DHT record after disconnect for {}: {}", file_hash, e);
-                            } else {
-                                debug!("Refreshed DHT record for {} after peer {} disconnected", file_hash, peer_id);
-                            }
-
-                            // notify UI with updated metadata so frontend refreshes immediately
-                            if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                                if let (Some(merkle_root), Some(file_name), Some(file_size), Some(created_at)) = (
-                                    json_val.get("merkle_root").and_then(|v| v.as_str()),
-                                    json_val.get("file_name").and_then(|v| v.as_str()),
-                                    json_val.get("file_size").and_then(|v| v.as_u64()),
-                                    json_val.get("created_at").and_then(|v| v.as_u64()),
-                                ) {
-                                    let seeders = json_val
-                                        .get("seeders")
-                                        .and_then(|v| v.as_array())
-                                        .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
-                                        .unwrap_or_default();
-
-                                    let metadata = FileMetadata {
-                                        merkle_root: merkle_root.to_string(),
-                                        file_name: file_name.to_string(),
-                                        file_size,
-                                        file_data: Vec::new(),
-                                        seeders,
-                                        created_at,
-                                        mime_type: json_val.get("mime_type").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                        is_encrypted: json_val.get("is_encrypted").and_then(|v| v.as_bool()).unwrap_or(false),
-                                        encryption_method: json_val.get("encryption_method").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                        key_fingerprint: json_val.get("key_fingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                        version: json_val.get("version").and_then(|v| v.as_u64()).map(|u| u as u32),
-                                        parent_hash: json_val.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                        cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
-                                        encrypted_key_bundle: json_val.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
-                                        info_hash: json_val.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                        trackers: json_val.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
-                                        is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
-                                        price: json_val.get("price").and_then(|v| v.as_f64()),
-                                        uploader_address: json_val.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                        http_sources: json_val.get("http_sources").and_then(|v| {serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)}),
-                                        ..Default::default()
-                                    };
-                                    let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
-                                }
-                            }
-                        }
-            }
-
-            cmd = cmd_rx.recv() => {
-                match cmd {
-                    Some(DhtCommand::Shutdown(ack)) => {
-                        info!("Received shutdown signal for DHT node");
-                        shutdown_ack = Some(ack);
-                        break 'outer;
-                    }
-                    Some(DhtCommand::PublishFile { mut metadata, response_tx }) => {
-                        // If file_data is NOT empty (non-encrypted files or inline data),
-                        // create blocks, generate a Merkle root, and a root CID.
-                        if !metadata.file_data.is_empty() {
-                            let blocks = split_into_blocks(&metadata.file_data, chunk_size);
-                            let mut block_cids = Vec::new();
-                            let mut original_chunk_hashes: Vec<[u8; 32]> = Vec::new();
-
-                            for (idx, block) in blocks.iter().enumerate() {
-                                let cid = match block.cid() {
-                                    Ok(c) => c,
-                                    Err(e) => {
-                                        error!("failed to get cid for block: {}", e);
-                                        let _ = event_tx.send(DhtEvent::Error(format!("failed to get cid for block: {}", e))).await;
-                                        return;
-                                    }
-                                };
-                                // Also hash the original data for the Merkle root
-                                original_chunk_hashes.push(Sha256Hasher::hash(block.data()));
-
-                                println!("block {} size={} cid={}", idx, block.data().len(), cid);
-
-                                match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(cid.clone(), block.data().to_vec()){
-                                    Ok(_) => {
-                                        info!("📦 Stored block {} (size: {} bytes) in Bitswap blockstore", cid, block.data().len());
-                                    },
-                                    Err(e) => {
-                                        error!("failed to store block {}: {}", cid, e);
-                                        let _ = event_tx.send(DhtEvent::Error(format!("failed to store block {}: {}", cid, e))).await;
-                                        return;
-                                    }
-                                };
-                                block_cids.push(cid);
-                            }
-
-                            // Build the Merkle tree from original chunk hashes
-                            let merkle_tree = MerkleTree::<Sha256Hasher>::from_leaves(&original_chunk_hashes);
-                            let merkle_root = match merkle_tree.root().ok_or("Failed to compute Merkle root") {
-                                Ok(root) => root,
-                                Err(e) => {
-                                    eprintln!("Merkle root computation failed: {}", e);
-                                    return;
-                                }
-                            };
-
-                            // Create root block containing just the CIDs
-                            let root_block_data = match serde_json::to_vec(&block_cids) {
-                                Ok(data) => data,
-                                Err(e) => {
-                                    eprintln!("Failed to serialize CIDs: {}", e);
-                                    return;
-                                }
-                            };
-
-                            // Store root block in Bitswap
-                            let root_cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&root_block_data));
-                            match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(root_cid.clone(), root_block_data.clone()) {
-                                Ok(_) => {
-                                    info!("🌳 Stored ROOT block {} (size: {} bytes, contains {} CIDs) in Bitswap blockstore", root_cid, root_block_data.len(), block_cids.len());
-                                },
-                                Err(e) => {
-                                    error!("failed to store root block: {}", e);
-                                    let _ = event_tx.send(DhtEvent::Error(format!("failed to store root block: {}", e))).await;
-                                    return;
-                                }
-                            }
-
-                            // The file_hash is the Merkle Root. The root_cid is for retrieval.
-                            metadata.merkle_root = hex::encode(merkle_root);
-                            metadata.cids = Some(vec![root_cid]); // Store root CID for bitswap retrieval
-                            metadata.file_data.clear(); // Don't store full data in DHT record
-
-                            println!("Publishing file with root CID: {} (merkle_root: {:?})",
-                                root_cid, metadata.merkle_root);
-                        } else {
-                            // File data is empty - chunks and root block are already in Bitswap
-                            // (from streaming upload or pre-processed encrypted file)
-                            // Use the provided file_hash (which should already be a CID)
-                            println!("Publishing file with pre-computed Merkle root: {} and CID: {:?}",
-                                metadata.merkle_root, metadata.cids);
-                        }
-
+                    // periodic maintenance tick - prune expired seeder heartbeats and update DHT
+                    // Fast heartbeat tick — refresh DHT records for files this node is actively seeding
+                    _ = heartbeat_maintenance_interval.tick() => {
                         let now = unix_timestamp();
-                        let peer_id_str = peer_id.to_string();
-                        let existing_heartbeats = {
-                            let cache = seeder_heartbeats_cache.lock().await;
-                            cache
-                                .get(&metadata.merkle_root)
-                                .map(|entry| entry.heartbeats.clone())
-                                .unwrap_or_default()
-                        };
-                        let mut heartbeat_entries = existing_heartbeats;
-                        upsert_heartbeat(&mut heartbeat_entries, &peer_id_str, now);
-                        let active_heartbeats = prune_heartbeats(heartbeat_entries, now);
-                        metadata.seeders = heartbeats_to_peer_list(&active_heartbeats);
-
-                        // Store minimal metadata in DHT
-                        println!("💾 DHT: About to serialize metadata with price: {:?}, uploader: {:?}", metadata.price, metadata.uploader_address);
-
-                        let dht_metadata = serde_json::json!({
-                            "file_hash":metadata.merkle_root,
-                            "merkle_root": metadata.merkle_root,
-                            "file_name": metadata.file_name,
-                            "file_size": metadata.file_size,
-                            "created_at": metadata.created_at,
-                            "mime_type": metadata.mime_type,
-                            "is_encrypted": metadata.is_encrypted,
-                            "encryption_method": metadata.encryption_method,
-                            "key_fingerprint": metadata.key_fingerprint,
-                            "version": metadata.version,
-                            "parent_hash": metadata.parent_hash,
-                            "cids": metadata.cids, // The root CID for Bitswap
-                            "encrypted_key_bundle": metadata.encrypted_key_bundle,
-                            "info_hash": metadata.info_hash,
-                            "trackers": metadata.trackers,
-                            "seeders": metadata.seeders,
-                            "seederHeartbeats": active_heartbeats,
-                            "price": metadata.price,
-                            "uploader_address": metadata.uploader_address,
-                            "http_sources": metadata.http_sources,
-                        });
-
-                        println!("💾 DHT: Serialized metadata JSON: {}", serde_json::to_string(&dht_metadata).unwrap_or_else(|_| "error".to_string()));
+                        let my_id = peer_id.to_string();
+                        let mut updated_records: Vec<(String, Vec<u8>)> = Vec::new();
 
                         {
                             let mut cache = seeder_heartbeats_cache.lock().await;
-                            cache.insert(
-                                metadata.merkle_root.clone(),
-                                FileHeartbeatCacheEntry {
-                                    heartbeats: active_heartbeats.clone(),
-                                    metadata: dht_metadata.clone(),
-                                },
-                            );
-                        }
+                            for (file_hash, entry) in cache.iter_mut() {
+                                // Prune expired entries first
+                                entry.heartbeats = prune_heartbeats(entry.heartbeats.clone(), now);
 
-                        let record_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
-                        {
-                            let mut pending = pending_heartbeat_updates.lock().await;
-                            pending.insert(metadata.merkle_root.clone());
-                        }
-                        swarm
-                            .behaviour_mut()
-                            .kademlia
-                            .get_record(record_key.clone());
+                                // Only refresh records if this node is listed as a seeder
+                                if entry.heartbeats.iter().any(|hb| hb.peer_id == my_id) {
+                                    // ensure our own heartbeat is up-to-date in cache
+                                    for hb in entry.heartbeats.iter_mut() {
+                                        if hb.peer_id == my_id {
+                                            hb.last_heartbeat = now;
+                                            hb.expires_at = now.saturating_add(FILE_HEARTBEAT_TTL.as_secs());
+                                        }
+                                    }
 
-                        let dht_record_data = match serde_json::to_vec(&dht_metadata) {
-                            Ok(data) => data,
-                            Err(e) => {
-                                eprintln!("Failed to serialize DHT metadata: {}", e);
-                                return;
+                                    // update metadata fields
+                                    let seeder_strings = heartbeats_to_peer_list(&entry.heartbeats);
+                                    entry.metadata["seeders"] = serde_json::Value::Array(
+                                        seeder_strings
+                                            .iter()
+                                            .cloned()
+                                            .map(serde_json::Value::String)
+                                            .collect(),
+                                    );
+                                    entry.metadata["seederHeartbeats"] =
+                                        serde_json::to_value(&entry.heartbeats)
+                                            .unwrap_or_else(|_| serde_json::Value::Array(vec![]));
+
+                                    if let Ok(bytes) = serde_json::to_vec(&entry.metadata) {
+                                        updated_records.push((file_hash.clone(), bytes));
+                                    }
+                                }
                             }
-                        };
+                        } // release cache lock
 
-                        let record = Record {
+                        // Perform DHT updates for seeder heartbeats (non-blocking best-effort)
+                                // Push updated records to Kademlia for each updated file
+                                for (file_hash, bytes) in updated_records {
+                                    let key = kad::RecordKey::new(&file_hash.as_bytes());
+                                    let record = Record {
+                                        key: key.clone(),
+                                        value: bytes.clone(),
+                                        publisher: Some(peer_id.clone()),
+                                        expires: None,
+                                    };
+                                    if let Err(e) =
+                                        swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One)
+                                    {
+                                        warn!("Failed to refresh DHT record after disconnect for {}: {}", file_hash, e);
+                                    } else {
+                                        debug!("Refreshed DHT record for {} after peer {} disconnected", file_hash, peer_id);
+                                    }
+
+                                    // notify UI with updated metadata so frontend refreshes immediately
+                                    if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                                        if let (Some(merkle_root), Some(file_name), Some(file_size), Some(created_at)) = (
+                                            json_val.get("merkle_root").and_then(|v| v.as_str()),
+                                            json_val.get("file_name").and_then(|v| v.as_str()),
+                                            json_val.get("file_size").and_then(|v| v.as_u64()),
+                                            json_val.get("created_at").and_then(|v| v.as_u64()),
+                                        ) {
+                                            let seeders = json_val
+                                                .get("seeders")
+                                                .and_then(|v| v.as_array())
+                                                .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                                                .unwrap_or_default();
+
+                                            let metadata = FileMetadata {
+                                                merkle_root: merkle_root.to_string(),
+                                                file_name: file_name.to_string(),
+                                                file_size,
+                                                file_data: Vec::new(),
+                                                seeders,
+                                                created_at,
+                                                mime_type: json_val.get("mime_type").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                is_encrypted: json_val.get("is_encrypted").and_then(|v| v.as_bool()).unwrap_or(false),
+                                                encryption_method: json_val.get("encryption_method").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                key_fingerprint: json_val.get("key_fingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                version: json_val.get("version").and_then(|v| v.as_u64()).map(|u| u as u32),
+                                                parent_hash: json_val.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
+                                                encrypted_key_bundle: json_val.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
+                                                info_hash: json_val.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                trackers: json_val.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
+                                                is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
+                                                price: json_val.get("price").and_then(|v| v.as_f64()),
+                                                uploader_address: json_val.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                http_sources: json_val.get("http_sources").and_then(|v| {serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)}),
+                                                ..Default::default()
+                                            };
+                                            let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
+                                        }
+                                    }
+                                }
+                    }
+
+                    cmd = cmd_rx.recv() => {
+                        match cmd {
+                            Some(DhtCommand::Shutdown(ack)) => {
+                                info!("Received shutdown signal for DHT node");
+                                shutdown_ack = Some(ack);
+                                break 'outer;
+                            }
+                            Some(DhtCommand::PublishFile { mut metadata, response_tx }) => {
+                                // If file_data is NOT empty (non-encrypted files or inline data),
+                                // create blocks, generate a Merkle root, and a root CID.
+                                if !metadata.file_data.is_empty() {
+                                    let blocks = split_into_blocks(&metadata.file_data, chunk_size);
+                                    let mut block_cids = Vec::new();
+                                    let mut original_chunk_hashes: Vec<[u8; 32]> = Vec::new();
+
+                                    for (idx, block) in blocks.iter().enumerate() {
+                                        let cid = match block.cid() {
+                                            Ok(c) => c,
+                                            Err(e) => {
+                                                error!("failed to get cid for block: {}", e);
+                                                let _ = event_tx.send(DhtEvent::Error(format!("failed to get cid for block: {}", e))).await;
+                                                return;
+                                            }
+                                        };
+                                        // Also hash the original data for the Merkle root
+                                        original_chunk_hashes.push(Sha256Hasher::hash(block.data()));
+
+                                        println!("block {} size={} cid={}", idx, block.data().len(), cid);
+
+                                        match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(cid.clone(), block.data().to_vec()){
+                                            Ok(_) => {
+                                                info!("📦 Stored block {} (size: {} bytes) in Bitswap blockstore", cid, block.data().len());
+                                            },
+                                            Err(e) => {
+                                                error!("failed to store block {}: {}", cid, e);
+                                                let _ = event_tx.send(DhtEvent::Error(format!("failed to store block {}: {}", cid, e))).await;
+                                                return;
+                                            }
+                                        };
+                                        block_cids.push(cid);
+                                    }
+
+                                    // Build the Merkle tree from original chunk hashes
+                                    let merkle_tree = MerkleTree::<Sha256Hasher>::from_leaves(&original_chunk_hashes);
+                                    let merkle_root = match merkle_tree.root().ok_or("Failed to compute Merkle root") {
+                                        Ok(root) => root,
+                                        Err(e) => {
+                                            eprintln!("Merkle root computation failed: {}", e);
+                                            return;
+                                        }
+                                    };
+
+                                    // Create root block containing just the CIDs
+                                    let root_block_data = match serde_json::to_vec(&block_cids) {
+                                        Ok(data) => data,
+                                        Err(e) => {
+                                            eprintln!("Failed to serialize CIDs: {}", e);
+                                            return;
+                                        }
+                                    };
+
+                                    // Store root block in Bitswap
+                                    let root_cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&root_block_data));
+                                    match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(root_cid.clone(), root_block_data.clone()) {
+                                        Ok(_) => {
+                                            info!("🌳 Stored ROOT block {} (size: {} bytes, contains {} CIDs) in Bitswap blockstore", root_cid, root_block_data.len(), block_cids.len());
+                                        },
+                                        Err(e) => {
+                                            error!("failed to store root block: {}", e);
+                                            let _ = event_tx.send(DhtEvent::Error(format!("failed to store root block: {}", e))).await;
+                                            return;
+                                        }
+                                    }
+
+                                    // The file_hash is the Merkle Root. The root_cid is for retrieval.
+                                    metadata.merkle_root = hex::encode(merkle_root);
+                                    metadata.cids = Some(vec![root_cid]); // Store root CID for bitswap retrieval
+                                    metadata.file_data.clear(); // Don't store full data in DHT record
+
+                                    println!("Publishing file with root CID: {} (merkle_root: {:?})",
+                                        root_cid, metadata.merkle_root);
+                                } else {
+                                    // File data is empty - chunks and root block are already in Bitswap
+                                    // (from streaming upload or pre-processed encrypted file)
+                                    // Use the provided file_hash (which should already be a CID)
+                                    println!("Publishing file with pre-computed Merkle root: {} and CID: {:?}",
+                                        metadata.merkle_root, metadata.cids);
+                                }
+
+                                let now = unix_timestamp();
+                                let peer_id_str = peer_id.to_string();
+                                let existing_heartbeats = {
+                                    let cache = seeder_heartbeats_cache.lock().await;
+                                    cache
+                                        .get(&metadata.merkle_root)
+                                        .map(|entry| entry.heartbeats.clone())
+                                        .unwrap_or_default()
+                                };
+                                let mut heartbeat_entries = existing_heartbeats;
+                                upsert_heartbeat(&mut heartbeat_entries, &peer_id_str, now);
+                                let active_heartbeats = prune_heartbeats(heartbeat_entries, now);
+                                metadata.seeders = heartbeats_to_peer_list(&active_heartbeats);
+
+                                // Store minimal metadata in DHT
+                                println!("💾 DHT: About to serialize metadata with price: {:?}, uploader: {:?}", metadata.price, metadata.uploader_address);
+
+                                let dht_metadata = serde_json::json!({
+                                    "file_hash":metadata.merkle_root,
+                                    "merkle_root": metadata.merkle_root,
+                                    "file_name": metadata.file_name,
+                                    "file_size": metadata.file_size,
+                                    "created_at": metadata.created_at,
+                                    "mime_type": metadata.mime_type,
+                                    "is_encrypted": metadata.is_encrypted,
+                                    "encryption_method": metadata.encryption_method,
+                                    "key_fingerprint": metadata.key_fingerprint,
+                                    "version": metadata.version,
+                                    "parent_hash": metadata.parent_hash,
+                                    "cids": metadata.cids, // The root CID for Bitswap
+                                    "encrypted_key_bundle": metadata.encrypted_key_bundle,
+                                    "info_hash": metadata.info_hash,
+                                    "trackers": metadata.trackers,
+                                    "seeders": metadata.seeders,
+                                    "seederHeartbeats": active_heartbeats,
+                                    "price": metadata.price,
+                                    "uploader_address": metadata.uploader_address,
+                                    "http_sources": metadata.http_sources,
+                                });
+
+                                println!("💾 DHT: Serialized metadata JSON: {}", serde_json::to_string(&dht_metadata).unwrap_or_else(|_| "error".to_string()));
+
+                                {
+                                    let mut cache = seeder_heartbeats_cache.lock().await;
+                                    cache.insert(
+                                        metadata.merkle_root.clone(),
+                                        FileHeartbeatCacheEntry {
+                                            heartbeats: active_heartbeats.clone(),
+                                            metadata: dht_metadata.clone(),
+                                        },
+                                    );
+                                }
+
+                                let record_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
+                                {
+                                    let mut pending = pending_heartbeat_updates.lock().await;
+                                    pending.insert(metadata.merkle_root.clone());
+                                }
+                                swarm
+                                    .behaviour_mut()
+                                    .kademlia
+                                    .get_record(record_key.clone());
+
+                                let dht_record_data = match serde_json::to_vec(&dht_metadata) {
+                                    Ok(data) => data,
+                                    Err(e) => {
+                                        eprintln!("Failed to serialize DHT metadata: {}", e);
+                                        return;
+                                    }
+                                };
+
+                                let record = Record {
+                                            key: record_key.clone(),
+                                            value: dht_record_data,
+                                            publisher: Some(peer_id),
+                                            expires: None,
+                                        };
+
+                                // Determine appropriate quorum based on number of connected peers
+                                let connected_peers_count = connected_peers.lock().await.len();
+                                let min_replication_peers = 3; // Require at least 3 peers for stronger replication
+
+                                let quorum = if connected_peers_count >= min_replication_peers {
+                                    info!("Using Quorum::All for file {} ({} peers available)", metadata.merkle_root, connected_peers_count);
+                                    kad::Quorum::All
+                                } else {
+                                    info!("Using Quorum::One for file {} (only {} peers available)", metadata.merkle_root, connected_peers_count);
+                                    kad::Quorum::One
+                                };
+
+                                match swarm.behaviour_mut().kademlia.put_record(record, quorum) {
+                                    Ok(query_id) => {
+                                        info!("started providing file: {}, query id: {:?} with quorum {:?}",
+                                            metadata.merkle_root, query_id, quorum);
+                                    }
+                                    Err(e) => {
+                                        error!("failed to start providing file {}: {}", metadata.merkle_root, e);
+                                        let _ = event_tx.send(DhtEvent::Error(format!("failed to start providing: {}", e))).await;
+                                    }
+                                }
+
+                                // Register this peer as a provider for the file
+                                let provider_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
+                                match swarm.behaviour_mut().kademlia.start_providing(provider_key) {
+                                    Ok(query_id) => {
+                                        info!("registered as provider for file: {}, query id: {:?}", metadata.merkle_root, query_id);
+                                    }
+                                    Err(e) => {
+                                        error!("failed to register as provider for file {}: {}", metadata.merkle_root, e);
+                                        let _ = event_tx.send(DhtEvent::Error(format!("failed to register as provider: {}", e))).await;
+                                    }
+                                }
+                                // Task 1: Keyword Extraction
+                                let keywords = extract_keywords(&metadata.file_name);
+                                info!(
+                                    "Extracted {} keywords for file '{}': {:?}", // Merkle root is now the primary identifier
+                                    keywords.len(),
+                                    metadata.file_name,
+                                    keywords
+                                );
+                                // Task 2: DHT Indexing
+                                // TODO: implement the "read-modify-write" logic inside this loop.
+                                for keyword in keywords {
+                                    let index_key_str = format!("{}{}", KEYWORD_INDEX_PREFIX, keyword);
+                                    let _index_key = kad::RecordKey::new(&index_key_str);
+
+                                    // TODO: Implement the read-modify-write logic to update keyword indexes.
+                                    // 1. Call swarm.behaviour_mut().kademlia.get_record(index_key.clone())
+                                    // 2. In the KademliaEvent handler for GetRecordOk, deserialize the value (a list of hashes).
+                                    // 3. Add the new metadata.merkle_root to the list.
+                                    // 4. Serialize the updated list.
+                                    // 5. Create a new Record and call swarm.behaviour_mut().kademlia.put_record(...).
+
+                                    info!("TODO - Register keyword '{}' with file hash '{}'", keyword, metadata.merkle_root);
+                                }
+                                // notify frontend
+                                let _ = event_tx.send(DhtEvent::PublishedFile(metadata.clone())).await;
+                                // store in file_uploaded_cache
+
+                                // If there's an info_hash, create the secondary index record
+                                if let Some(info_hash) = &metadata.info_hash {
+                                    let index_key = format!("{}{}", INFO_HASH_PREFIX, info_hash);
+                                    let index_record = Record::new(index_key.as_bytes().to_vec(), metadata.merkle_root.as_bytes().to_vec());
+                                    swarm.behaviour_mut().kademlia.put_record(index_record, kad::Quorum::One).ok();
+                                    info!("Published info_hash index for {}", info_hash);
+                                }
+                                let _ = response_tx.send(metadata.clone());
+                            }
+                            Some(DhtCommand::StoreBlocks { blocks, root_cid, mut metadata }) => {
+                                // 1. Store all encrypted data blocks in bitswap
+                                for (cid, data) in blocks {
+                                    if let Err(e) = swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(cid.clone(), data) {
+                                        error!("Failed to store encrypted block {} in bitswap: {}", cid, e);
+                                        let _ = event_tx.send(DhtEvent::Error(format!("Failed to store block {}: {}", cid, e))).await;
+                                        continue 'outer; // Abort this publish operation
+                                    }
+                                }
+
+                                // 2. Update metadata with the root CID
+                                metadata.cids = Some(vec![root_cid]);
+
+                                let now = unix_timestamp();
+                                let peer_id_str = peer_id.to_string();
+                                let existing_heartbeats = {
+                                    let cache = seeder_heartbeats_cache.lock().await;
+                                    cache
+                                        .get(&metadata.merkle_root)
+                                        .map(|entry| entry.heartbeats.clone())
+                                        .unwrap_or_default()
+                                };
+                                let mut heartbeat_entries = existing_heartbeats;
+                                upsert_heartbeat(&mut heartbeat_entries, &peer_id_str, now);
+                                let active_heartbeats = prune_heartbeats(heartbeat_entries, now);
+                                metadata.seeders = heartbeats_to_peer_list(&active_heartbeats);
+
+                                // 3. Create and publish the DHT record pointing to the file
+                                let dht_metadata = serde_json::json!({
+                                    "merkle_root": metadata.merkle_root,
+                                    "file_name": metadata.file_name,
+                                    "file_size": metadata.file_size,
+                                    "created_at": metadata.created_at,
+                                    "mime_type": metadata.mime_type,
+                                    "is_encrypted": metadata.is_encrypted,
+                                    "encryption_method": metadata.encryption_method,
+                                    "cids": metadata.cids,
+                                    "encrypted_key_bundle": metadata.encrypted_key_bundle,
+                                    "version": metadata.version,
+                                    "info_hash": metadata.info_hash,
+                                    "trackers": metadata.trackers,
+                                    "parent_hash": metadata.parent_hash,
+                                    "seeders": metadata.seeders,
+                                    "seederHeartbeats": active_heartbeats,
+                                });
+
+                                {
+                                    let mut cache = seeder_heartbeats_cache.lock().await;
+                                    cache.insert(
+                                        metadata.merkle_root.clone(),
+                                        FileHeartbeatCacheEntry {
+                                            heartbeats: active_heartbeats.clone(),
+                                            metadata: dht_metadata.clone(),
+                                        },
+                                    );
+                                }
+
+                                let record_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
+                                {
+                                    let mut pending = pending_heartbeat_updates.lock().await;
+                                    pending.insert(metadata.merkle_root.clone());
+                                }
+                                swarm
+                                    .behaviour_mut()
+                                    .kademlia
+                                    .get_record(record_key.clone());
+
+                                let record_value = match serde_json::to_vec(&dht_metadata).map_err(|e| e.to_string()) {
+                                    Ok(val) => val,
+                                    Err(e) => {
+                                        warn!("Failed to serialize DHT metadata: {}", e);
+                                        continue;
+                                    }
+                                };
+                                let record = Record {
                                     key: record_key.clone(),
-                                    value: dht_record_data,
+                                    value: record_value,
                                     publisher: Some(peer_id),
                                     expires: None,
                                 };
 
-                        // Determine appropriate quorum based on number of connected peers
-                        let connected_peers_count = connected_peers.lock().await.len();
-                        let min_replication_peers = 3; // Require at least 3 peers for stronger replication
-                        
-                        let quorum = if connected_peers_count >= min_replication_peers {
-                            info!("Using Quorum::All for file {} ({} peers available)", metadata.merkle_root, connected_peers_count);
-                            kad::Quorum::All
-                        } else {
-                            info!("Using Quorum::One for file {} (only {} peers available)", metadata.merkle_root, connected_peers_count);
-                            kad::Quorum::One
-                        };
-
-                        match swarm.behaviour_mut().kademlia.put_record(record, quorum) {
-                            Ok(query_id) => {
-                                info!("started providing file: {}, query id: {:?} with quorum {:?}", 
-                                    metadata.merkle_root, query_id, quorum);
-                            }
-                            Err(e) => {
-                                error!("failed to start providing file {}: {}", metadata.merkle_root, e);
-                                let _ = event_tx.send(DhtEvent::Error(format!("failed to start providing: {}", e))).await;
-                            }
-                        }
-
-                        // Register this peer as a provider for the file
-                        let provider_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
-                        match swarm.behaviour_mut().kademlia.start_providing(provider_key) {
-                            Ok(query_id) => {
-                                info!("registered as provider for file: {}, query id: {:?}", metadata.merkle_root, query_id);
-                            }
-                            Err(e) => {
-                                error!("failed to register as provider for file {}: {}", metadata.merkle_root, e);
-                                let _ = event_tx.send(DhtEvent::Error(format!("failed to register as provider: {}", e))).await;
-                            }
-                        }
-                        // Task 1: Keyword Extraction
-                        let keywords = extract_keywords(&metadata.file_name);
-                        info!(
-                            "Extracted {} keywords for file '{}': {:?}", // Merkle root is now the primary identifier
-                            keywords.len(),
-                            metadata.file_name,
-                            keywords
-                        );
-                        // Task 2: DHT Indexing
-                        // TODO: implement the "read-modify-write" logic inside this loop.
-                        for keyword in keywords {
-                            let index_key_str = format!("{}{}", KEYWORD_INDEX_PREFIX, keyword);
-                            let _index_key = kad::RecordKey::new(&index_key_str);
-
-                            // TODO: Implement the read-modify-write logic to update keyword indexes.
-                            // 1. Call swarm.behaviour_mut().kademlia.get_record(index_key.clone())
-                            // 2. In the KademliaEvent handler for GetRecordOk, deserialize the value (a list of hashes).
-                            // 3. Add the new metadata.merkle_root to the list.
-                            // 4. Serialize the updated list.
-                            // 5. Create a new Record and call swarm.behaviour_mut().kademlia.put_record(...).
-
-                            info!("TODO - Register keyword '{}' with file hash '{}'", keyword, metadata.merkle_root);
-                        }
-                        // notify frontend
-                        let _ = event_tx.send(DhtEvent::PublishedFile(metadata.clone())).await;
-                        // store in file_uploaded_cache
-
-                        // If there's an info_hash, create the secondary index record
-                        if let Some(info_hash) = &metadata.info_hash {
-                            let index_key = format!("{}{}", INFO_HASH_PREFIX, info_hash);
-                            let index_record = Record::new(index_key.as_bytes().to_vec(), metadata.merkle_root.as_bytes().to_vec());
-                            swarm.behaviour_mut().kademlia.put_record(index_record, kad::Quorum::One).ok();
-                            info!("Published info_hash index for {}", info_hash);
-                        }
-                        let _ = response_tx.send(metadata.clone());
-                    }
-                    Some(DhtCommand::StoreBlocks { blocks, root_cid, mut metadata }) => {
-                        // 1. Store all encrypted data blocks in bitswap
-                        for (cid, data) in blocks {
-                            if let Err(e) = swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(cid.clone(), data) {
-                                error!("Failed to store encrypted block {} in bitswap: {}", cid, e);
-                                let _ = event_tx.send(DhtEvent::Error(format!("Failed to store block {}: {}", cid, e))).await;
-                                continue 'outer; // Abort this publish operation
-                            }
-                        }
-
-                        // 2. Update metadata with the root CID
-                        metadata.cids = Some(vec![root_cid]);
-
-                        let now = unix_timestamp();
-                        let peer_id_str = peer_id.to_string();
-                        let existing_heartbeats = {
-                            let cache = seeder_heartbeats_cache.lock().await;
-                            cache
-                                .get(&metadata.merkle_root)
-                                .map(|entry| entry.heartbeats.clone())
-                                .unwrap_or_default()
-                        };
-                        let mut heartbeat_entries = existing_heartbeats;
-                        upsert_heartbeat(&mut heartbeat_entries, &peer_id_str, now);
-                        let active_heartbeats = prune_heartbeats(heartbeat_entries, now);
-                        metadata.seeders = heartbeats_to_peer_list(&active_heartbeats);
-
-                        // 3. Create and publish the DHT record pointing to the file
-                        let dht_metadata = serde_json::json!({
-                            "merkle_root": metadata.merkle_root,
-                            "file_name": metadata.file_name,
-                            "file_size": metadata.file_size,
-                            "created_at": metadata.created_at,
-                            "mime_type": metadata.mime_type,
-                            "is_encrypted": metadata.is_encrypted,
-                            "encryption_method": metadata.encryption_method,
-                            "cids": metadata.cids,
-                            "encrypted_key_bundle": metadata.encrypted_key_bundle,
-                            "version": metadata.version,
-                            "info_hash": metadata.info_hash,
-                            "trackers": metadata.trackers,
-                            "parent_hash": metadata.parent_hash,
-                            "seeders": metadata.seeders,
-                            "seederHeartbeats": active_heartbeats,
-                        });
-
-                        {
-                            let mut cache = seeder_heartbeats_cache.lock().await;
-                            cache.insert(
-                                metadata.merkle_root.clone(),
-                                FileHeartbeatCacheEntry {
-                                    heartbeats: active_heartbeats.clone(),
-                                    metadata: dht_metadata.clone(),
-                                },
-                            );
-                        }
-
-                        let record_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
-                        {
-                            let mut pending = pending_heartbeat_updates.lock().await;
-                            pending.insert(metadata.merkle_root.clone());
-                        }
-                        swarm
-                            .behaviour_mut()
-                            .kademlia
-                            .get_record(record_key.clone());
-
-                        let record_value = match serde_json::to_vec(&dht_metadata).map_err(|e| e.to_string()) {
-                            Ok(val) => val,
-                            Err(e) => {
-                                warn!("Failed to serialize DHT metadata: {}", e);
-                                continue;
-                            }
-                        };
-                        let record = Record {
-                            key: record_key.clone(),
-                            value: record_value,
-                            publisher: Some(peer_id),
-                            expires: None,
-                        };
-
-                        if let Err(e) = swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One) {
-                            error!("Failed to put record for encrypted file {}: {}", metadata.merkle_root, e);
-                        }
-
-                        // 4. Announce self as provider
-                        let provider_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
-                        if let Err(e) = swarm.behaviour_mut().kademlia.start_providing(provider_key) {
-                            error!("Failed to start providing encrypted file {}: {}", metadata.merkle_root, e);
-                        }
-
-                        info!("Successfully published and started providing encrypted file: {}", metadata.merkle_root);
-                        let _ = event_tx.send(DhtEvent::PublishedFile(metadata)).await;
-                    }
-                    Some(DhtCommand::DownloadFile(mut file_metadata, download_path)) =>{
-                        // Dual-lookup check: If the merkle_root is an info_hash, resolve it first.
-                        if file_metadata.merkle_root.starts_with("info_hash:") {
-                            let info_hash = file_metadata.merkle_root.clone();
-                            info!("Download initiated with info_hash, resolving to merkle_root: {}", info_hash);
-                            match synchronous_search_by_infohash(&mut swarm, &info_hash).await {
-                                Ok(Some(resolved_metadata)) => {
-                                    info!("Resolved info_hash to merkle_root: {}", resolved_metadata.merkle_root);
-                                    file_metadata = resolved_metadata; // Replace with the full metadata
+                                if let Err(e) = swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One) {
+                                    error!("Failed to put record for encrypted file {}: {}", metadata.merkle_root, e);
                                 }
-                                Ok(None) => {
-                                    let _ = event_tx.send(DhtEvent::Error(format!("Could not find file for info_hash: {}", info_hash))).await;
-                                    continue;
+
+                                // 4. Announce self as provider
+                                let provider_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
+                                if let Err(e) = swarm.behaviour_mut().kademlia.start_providing(provider_key) {
+                                    error!("Failed to start providing encrypted file {}: {}", metadata.merkle_root, e);
                                 }
-                                Err(e) => {
-                                    let _ = event_tx.send(DhtEvent::Error(format!("Error resolving info_hash {}: {}", info_hash, e))).await;
-                                    continue;
+
+                                info!("Successfully published and started providing encrypted file: {}", metadata.merkle_root);
+                                let _ = event_tx.send(DhtEvent::PublishedFile(metadata)).await;
+                            }
+                            Some(DhtCommand::DownloadFile(mut file_metadata, download_path)) =>{
+                                // Dual-lookup check: If the merkle_root is an info_hash, resolve it first.
+                                if file_metadata.merkle_root.starts_with("info_hash:") {
+                                    let info_hash = file_metadata.merkle_root.clone();
+                                    info!("Download initiated with info_hash, resolving to merkle_root: {}", info_hash);
+                                    match synchronous_search_by_infohash(&mut swarm, &info_hash).await {
+                                        Ok(Some(resolved_metadata)) => {
+                                            info!("Resolved info_hash to merkle_root: {}", resolved_metadata.merkle_root);
+                                            file_metadata = resolved_metadata; // Replace with the full metadata
+                                        }
+                                        Ok(None) => {
+                                            let _ = event_tx.send(DhtEvent::Error(format!("Could not find file for info_hash: {}", info_hash))).await;
+                                            continue;
+                                        }
+                                        Err(e) => {
+                                            let _ = event_tx.send(DhtEvent::Error(format!("Error resolving info_hash {}: {}", info_hash, e))).await;
+                                            continue;
+                                        }
+                                    }
                                 }
+
+                                let root_cid_result = file_metadata.cids.as_ref()
+                                    .and_then(|cids| cids.first())
+                                    .ok_or_else(|| {
+                                        let msg = format!("No root CID found for file with Merkle root: {}", file_metadata.merkle_root);
+                                        error!("{}", msg);
+                                        msg
+                                    });
+
+                                let root_cid = match root_cid_result {
+                                    Ok(cid) => cid.clone(),
+                                    Err(e) => { let _ = event_tx.send(DhtEvent::Error(e)).await; continue; }
+                                };
+                                let Some(first_seeder) = file_metadata.seeders.get(0) else {
+                                    let _ = event_tx.send(DhtEvent::Error("No seeders found".to_string())).await;
+                                    return;
+                                };
+
+                                let peer_id = match PeerId::from_str(first_seeder) {
+                                    Ok(id) => id.clone(),
+                                    Err(e) => {
+                                        let _ = event_tx.send(DhtEvent::Error(e.to_string())).await;
+                                        return;
+                                    }
+                                };
+
+                                // Request the root block which contains the CIDs
+                                let root_query_id = swarm.behaviour_mut().bitswap.get_from(&root_cid, peer_id);
+
+                                file_metadata.download_path = Some(download_path);
+                                // Store the root query ID to handle when we get the root block
+                                info!("INSERTING INTO ROOT QUERY MAPPING");
+                                root_query_mapping.lock().await.insert(root_query_id, file_metadata);
                             }
-                        }
 
-                        let root_cid_result = file_metadata.cids.as_ref()
-                            .and_then(|cids| cids.first())
-                            .ok_or_else(|| {
-                                let msg = format!("No root CID found for file with Merkle root: {}", file_metadata.merkle_root);
-                                error!("{}", msg);
-                                msg
-                            });
-
-                        let root_cid = match root_cid_result {
-                            Ok(cid) => cid.clone(),
-                            Err(e) => { let _ = event_tx.send(DhtEvent::Error(e)).await; continue; }
-                        };
-                        let Some(first_seeder) = file_metadata.seeders.get(0) else {
-                            let _ = event_tx.send(DhtEvent::Error("No seeders found".to_string())).await;
-                            return;
-                        };
-                        
-                        let peer_id = match PeerId::from_str(first_seeder) {
-                            Ok(id) => id.clone(),
-                            Err(e) => {
-                                let _ = event_tx.send(DhtEvent::Error(e.to_string())).await;
-                                return;
-                            }
-                        };
-
-                        // Request the root block which contains the CIDs
-                        let root_query_id = swarm.behaviour_mut().bitswap.get_from(&root_cid, peer_id);
-
-                        file_metadata.download_path = Some(download_path);
-                        // Store the root query ID to handle when we get the root block
-                        info!("INSERTING INTO ROOT QUERY MAPPING");
-                        root_query_mapping.lock().await.insert(root_query_id, file_metadata);
-                    }
-
-                    Some(DhtCommand::StopPublish(file_hash)) => {
-                        let key = kad::RecordKey::new(&file_hash);
-                        let removed = swarm.behaviour_mut().kademlia.remove_record(&key);
-                        debug!(
-                            "StopPublish: removed record for {} (removed={:?})",
-                            file_hash, removed
-                        );
-
-                        // Ask Kademlia to stop providing this file (so provider records are removed)
-                        swarm
-                            .behaviour_mut()
-                            .kademlia
-                            .stop_providing(&key);
-
-                        // Also proactively publish an updated DHT record with no seeders so remote nodes
-                        // that fetch the JSON record see that there are no seeders immediately.
-                        // Build minimal "empty" metadata
-                        let empty_meta = serde_json::json!({
-                            "merkle_root": file_hash,
-                            "file_name": serde_json::Value::Null,
-                            "file_size": 0u64,
-                            "created_at": unix_timestamp(),
-                            "seeders": Vec::<String>::new(),
-                            "seederHeartbeats": Vec::<SeederHeartbeat>::new()
-                        });
-                        if let Ok(bytes) = serde_json::to_vec(&empty_meta) {
-                            let record = Record {
-                                key: kad::RecordKey::new(&file_hash.as_bytes()),
-                                value: bytes,
-                                publisher: Some(peer_id.clone()),
-                                expires: None,
-                            };
-                            if let Err(e) =
-                                swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One)
-                            {
-                                warn!("Failed to publish empty record for {}: {}", file_hash, e);
-                            } else {
-                                debug!("Published empty seeder record for {}", file_hash);
-                            }
-                        }
-
-                        seeder_heartbeats_cache.lock().await.remove(&file_hash);
-                        pending_heartbeat_updates
-                            .lock()
-                            .await
-                            .remove(&file_hash);
-                        debug!("Cleared cached heartbeat state for {}", file_hash);
-                    }
-                    Some(DhtCommand::HeartbeatFile { file_hash }) => {
-                        let now = unix_timestamp();
-                        let peer_id_str = peer_id.to_string();
-                        let mut serialized_record: Option<Vec<u8>> = None;
-
-                        {
-                            let mut cache = seeder_heartbeats_cache.lock().await;
-                            if let Some(entry) = cache.get_mut(&file_hash) {
-                                upsert_heartbeat(&mut entry.heartbeats, &peer_id_str, now);
-                                entry.heartbeats = prune_heartbeats(entry.heartbeats.clone(), now);
-
-                                let seeder_strings = heartbeats_to_peer_list(&entry.heartbeats);
-                                entry.metadata["seeders"] = serde_json::Value::Array(
-                                    seeder_strings
-                                        .iter()
-                                        .cloned()
-                                        .map(serde_json::Value::String)
-                                        .collect(),
+                            Some(DhtCommand::StopPublish(file_hash)) => {
+                                let key = kad::RecordKey::new(&file_hash);
+                                let removed = swarm.behaviour_mut().kademlia.remove_record(&key);
+                                debug!(
+                                    "StopPublish: removed record for {} (removed={:?})",
+                                    file_hash, removed
                                 );
-                                entry.metadata["seederHeartbeats"] =
-                                    serde_json::to_value(&entry.heartbeats)
-                                        .unwrap_or_else(|_| serde_json::Value::Array(vec![]));
 
-                                match serde_json::to_vec(&entry.metadata) {
-                                    Ok(bytes) => serialized_record = Some(bytes),
+                                // Ask Kademlia to stop providing this file (so provider records are removed)
+                                swarm
+                                    .behaviour_mut()
+                                    .kademlia
+                                    .stop_providing(&key);
+
+                                // Also proactively publish an updated DHT record with no seeders so remote nodes
+                                // that fetch the JSON record see that there are no seeders immediately.
+                                // Build minimal "empty" metadata
+                                let empty_meta = serde_json::json!({
+                                    "merkle_root": file_hash,
+                                    "file_name": serde_json::Value::Null,
+                                    "file_size": 0u64,
+                                    "created_at": unix_timestamp(),
+                                    "seeders": Vec::<String>::new(),
+                                    "seederHeartbeats": Vec::<SeederHeartbeat>::new()
+                                });
+                                if let Ok(bytes) = serde_json::to_vec(&empty_meta) {
+                                    let record = Record {
+                                        key: kad::RecordKey::new(&file_hash.as_bytes()),
+                                        value: bytes,
+                                        publisher: Some(peer_id.clone()),
+                                        expires: None,
+                                    };
+                                    if let Err(e) =
+                                        swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One)
+                                    {
+                                        warn!("Failed to publish empty record for {}: {}", file_hash, e);
+                                    } else {
+                                        debug!("Published empty seeder record for {}", file_hash);
+                                    }
+                                }
+
+                                seeder_heartbeats_cache.lock().await.remove(&file_hash);
+                                pending_heartbeat_updates
+                                    .lock()
+                                    .await
+                                    .remove(&file_hash);
+                                debug!("Cleared cached heartbeat state for {}", file_hash);
+                            }
+                            Some(DhtCommand::HeartbeatFile { file_hash }) => {
+                                let now = unix_timestamp();
+                                let peer_id_str = peer_id.to_string();
+                                let mut serialized_record: Option<Vec<u8>> = None;
+
+                                {
+                                    let mut cache = seeder_heartbeats_cache.lock().await;
+                                    if let Some(entry) = cache.get_mut(&file_hash) {
+                                        upsert_heartbeat(&mut entry.heartbeats, &peer_id_str, now);
+                                        entry.heartbeats = prune_heartbeats(entry.heartbeats.clone(), now);
+
+                                        let seeder_strings = heartbeats_to_peer_list(&entry.heartbeats);
+                                        entry.metadata["seeders"] = serde_json::Value::Array(
+                                            seeder_strings
+                                                .iter()
+                                                .cloned()
+                                                .map(serde_json::Value::String)
+                                                .collect(),
+                                        );
+                                        entry.metadata["seederHeartbeats"] =
+                                            serde_json::to_value(&entry.heartbeats)
+                                                .unwrap_or_else(|_| serde_json::Value::Array(vec![]));
+
+                                        match serde_json::to_vec(&entry.metadata) {
+                                            Ok(bytes) => serialized_record = Some(bytes),
+                                            Err(e) => {
+                                                error!(
+                                                    "Failed to serialize heartbeat metadata for {}: {}",
+                                                    file_hash, e
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if let Some(record_bytes) = serialized_record {
+                                    pending_heartbeat_updates
+                                        .lock()
+                                        .await
+                                        .remove(&file_hash);
+
+                                    let key = kad::RecordKey::new(&file_hash.as_bytes());
+                                    let record = Record {
+                                        key,
+                                        value: record_bytes,
+                                        publisher: Some(peer_id),
+                                        expires: None,
+                                    };
+
+                                    // Determine appropriate quorum based on number of connected peers
+                                let connected_peers_count = connected_peers.lock().await.len();
+                                let min_replication_peers = 3; // Require at least 3 peers for stronger replication
+
+                                let quorum = if connected_peers_count >= min_replication_peers {
+                                    debug!("Using Quorum::All for heartbeat update of {} ({} peers available)",
+                                        file_hash, connected_peers_count);
+                                    kad::Quorum::All
+                                } else {
+                                    debug!("Using Quorum::One for heartbeat update of {} (only {} peers available)",
+                                        file_hash, connected_peers_count);
+                                    kad::Quorum::One
+                                };
+
+                                match swarm
+                                    .behaviour_mut()
+                                    .kademlia
+                                    .put_record(record, quorum)
+                                {
+                                    Ok(query_id) => {
+                                        debug!(
+                                            "Refreshed heartbeat for {} with quorum {:?} (query id: {:?})",
+                                            file_hash, quorum, query_id
+                                        );
+                                    }
                                     Err(e) => {
                                         error!(
-                                            "Failed to serialize heartbeat metadata for {}: {}",
+                                            "Failed to update heartbeat record for {}: {}",
                                             file_hash, e
                                         );
                                     }
+                                    }
+
+                                    let provider_key = kad::RecordKey::new(&file_hash.as_bytes());
+                                    if let Err(e) =
+                                        swarm.behaviour_mut().kademlia.start_providing(provider_key)
+                                    {
+                                        debug!(
+                                            "Failed to refresh provider record for {}: {}",
+                                            file_hash, e
+                                        );
+                                    }
+                                } else {
+                                    pending_heartbeat_updates
+                                        .lock()
+                                        .await
+                                        .insert(file_hash.clone());
+
+                                    debug!(
+                                        "No cached metadata for {}; fetching record before heartbeat",
+                                        file_hash
+                                    );
+                                    let key = kad::RecordKey::new(&file_hash.as_bytes());
+                                    let _ = swarm.behaviour_mut().kademlia.get_record(key);
                                 }
                             }
-                        }
-
-                        if let Some(record_bytes) = serialized_record {
-                            pending_heartbeat_updates
-                                .lock()
-                                .await
-                                .remove(&file_hash);
-
-                            let key = kad::RecordKey::new(&file_hash.as_bytes());
-                            let record = Record {
-                                key,
-                                value: record_bytes,
-                                publisher: Some(peer_id),
-                                expires: None,
-                            };
-
-                            // Determine appropriate quorum based on number of connected peers
-                        let connected_peers_count = connected_peers.lock().await.len();
-                        let min_replication_peers = 3; // Require at least 3 peers for stronger replication
-                        
-                        let quorum = if connected_peers_count >= min_replication_peers {
-                            debug!("Using Quorum::All for heartbeat update of {} ({} peers available)", 
-                                file_hash, connected_peers_count);
-                            kad::Quorum::All
-                        } else {
-                            debug!("Using Quorum::One for heartbeat update of {} (only {} peers available)", 
-                                file_hash, connected_peers_count);
-                            kad::Quorum::One
-                        };
-
-                        match swarm
-                            .behaviour_mut()
-                            .kademlia
-                            .put_record(record, quorum)
-                        {
-                            Ok(query_id) => {
-                                debug!(
-                                    "Refreshed heartbeat for {} with quorum {:?} (query id: {:?})",
-                                    file_hash, quorum, query_id
-                                );
+                            Some(DhtCommand::SearchFile(file_hash)) => {
+                                let key = kad::RecordKey::new(&file_hash.as_bytes());
+                                let query_id = swarm.behaviour_mut().kademlia.get_record(key);
+                                info!("Searching for file: {} (query: {:?})", file_hash, query_id);
                             }
-                            Err(e) => {
-                                error!(
-                                    "Failed to update heartbeat record for {}: {}",
-                                    file_hash, e
-                                );
+                            Some(DhtCommand::SearchByInfohash { info_hash, sender }) => {
+                                let index_key = format!("{}{}", INFO_HASH_PREFIX, info_hash);
+                                let record_key = kad::RecordKey::new(&index_key.as_bytes());
+                                let query_id = swarm.behaviour_mut().kademlia.get_record(record_key.clone());
+                                info!("Searching for info_hash index: {} (query: {:?})", index_key, query_id);
+
+                                // Store the sender so we can respond when the query completes.
+                                // This is the first step of the two-step lookup.
+                                let search = PendingInfohashSearch { id: 0, sender };
+                                pending_infohash_searches.lock().await.insert(query_id, search);
                             }
+                            Some(DhtCommand::SetPrivacyProxies { addresses }) => {
+                                info!("Updating privacy proxy targets ({} addresses)", addresses.len());
+
+                                let mut parsed_entries: Vec<(String, Multiaddr, Option<PeerId>)> = Vec::new();
+
+                                for address in addresses {
+                                    match address.parse::<Multiaddr>() {
+                                        Ok(multiaddr) => {
+                                            let maybe_peer_id = multiaddr.iter().find_map(|protocol| {
+                                                if let libp2p::multiaddr::Protocol::P2p(peer_id) = protocol {
+                                                    Some(peer_id.clone())
+                                                } else {
+                                                    None
+                                                }
+                                            });
+
+                                            parsed_entries.push((address, multiaddr, maybe_peer_id));
+                                        }
+                                        Err(error) => {
+                                            warn!("Invalid privacy proxy address '{}': {}", address, error);
+                                            let _ = event_tx
+                                                .send(DhtEvent::Error(format!(
+                                                    "Invalid proxy address '{}': {}",
+                                                    address, error
+                                                )))
+                                                .await;
+                                        }
+                                    }
+                                }
+
+                                let manual_peers: Vec<PeerId> = parsed_entries
+                                    .iter()
+                                    .filter_map(|(_, _, maybe_peer)| maybe_peer.clone())
+                                    .collect();
+
+                                {
+                                    let mut mgr = proxy_mgr.lock().await;
+                                    mgr.set_manual_trusted(&manual_peers);
+                                }
+
+                                for (addr_str, multiaddr, maybe_peer_id) in parsed_entries {
+                                    // Skip self-connection attempts for privacy proxies
+                                    if let Some(peer_id_in_addr) = &maybe_peer_id {
+                                        if peer_id_in_addr == &peer_id {
+                                            continue;
+                                        }
+                                    }
+
+                                    match swarm.dial(multiaddr.clone()) {
+                                        Ok(_) => {
+                                            if let Some(peer_id) = &maybe_peer_id {
+                                                info!(
+                                                    "Dialing trusted privacy proxy {} via {}",
+                                                    peer_id, multiaddr
+                                                );
+                                            } else {
+                                                info!("Dialing privacy proxy at {}", multiaddr);
+                                            }
+                                        }
+                                        Err(error) => {
+                                            warn!("Failed to dial privacy proxy {}: {}", addr_str, error);
+                                            let _ = event_tx
+                                                .send(DhtEvent::Error(format!(
+                                                    "Failed to dial proxy {}: {}",
+                                                    addr_str, error
+                                                )))
+                                                .await;
+                                        }
+                                    }
+                                }
                             }
-
-                            let provider_key = kad::RecordKey::new(&file_hash.as_bytes());
-                            if let Err(e) =
-                                swarm.behaviour_mut().kademlia.start_providing(provider_key)
-                            {
-                                debug!(
-                                    "Failed to refresh provider record for {}: {}",
-                                    file_hash, e
-                                );
-                            }
-                        } else {
-                            pending_heartbeat_updates
-                                .lock()
-                                .await
-                                .insert(file_hash.clone());
-
-                            debug!(
-                                "No cached metadata for {}; fetching record before heartbeat",
-                                file_hash
-                            );
-                            let key = kad::RecordKey::new(&file_hash.as_bytes());
-                            let _ = swarm.behaviour_mut().kademlia.get_record(key);
-                        }
-                    }
-                    Some(DhtCommand::SearchFile(file_hash)) => {
-                        let key = kad::RecordKey::new(&file_hash.as_bytes());
-                        let query_id = swarm.behaviour_mut().kademlia.get_record(key);
-                        info!("Searching for file: {} (query: {:?})", file_hash, query_id);
-                    }
-                    Some(DhtCommand::SearchByInfohash { info_hash, sender }) => {
-                        let index_key = format!("{}{}", INFO_HASH_PREFIX, info_hash);
-                        let record_key = kad::RecordKey::new(&index_key.as_bytes());
-                        let query_id = swarm.behaviour_mut().kademlia.get_record(record_key.clone());
-                        info!("Searching for info_hash index: {} (query: {:?})", index_key, query_id);
-                        
-                        // Store the sender so we can respond when the query completes.
-                        // This is the first step of the two-step lookup.
-                        let search = PendingInfohashSearch { id: 0, sender };
-                        pending_infohash_searches.lock().await.insert(query_id, search);
-                    }
-                    Some(DhtCommand::SetPrivacyProxies { addresses }) => {
-                        info!("Updating privacy proxy targets ({} addresses)", addresses.len());
-
-                        let mut parsed_entries: Vec<(String, Multiaddr, Option<PeerId>)> = Vec::new();
-
-                        for address in addresses {
-                            match address.parse::<Multiaddr>() {
-                                Ok(multiaddr) => {
-                                    let maybe_peer_id = multiaddr.iter().find_map(|protocol| {
-                                        if let libp2p::multiaddr::Protocol::P2p(peer_id) = protocol {
+                            Some(DhtCommand::ConnectPeer(addr)) => {
+                                info!("Attempting to connect to: {}", addr);
+                                if let Ok(multiaddr) = addr.parse::<Multiaddr>() {
+                                    let maybe_peer_id = multiaddr.iter().find_map(|p| {
+                                        if let libp2p::multiaddr::Protocol::P2p(peer_id) = p {
                                             Some(peer_id.clone())
                                         } else {
                                             None
                                         }
                                     });
 
-                                    parsed_entries.push((address, multiaddr, maybe_peer_id));
-                                }
-                                Err(error) => {
-                                    warn!("Invalid privacy proxy address '{}': {}", address, error);
-                                    let _ = event_tx
-                                        .send(DhtEvent::Error(format!(
-                                            "Invalid proxy address '{}': {}",
-                                            address, error
-                                        )))
-                                        .await;
-                                }
-                            }
-                        }
-
-                        let manual_peers: Vec<PeerId> = parsed_entries
-                            .iter()
-                            .filter_map(|(_, _, maybe_peer)| maybe_peer.clone())
-                            .collect();
-
-                        {
-                            let mut mgr = proxy_mgr.lock().await;
-                            mgr.set_manual_trusted(&manual_peers);
-                        }
-
-                        for (addr_str, multiaddr, maybe_peer_id) in parsed_entries {
-                            // Skip self-connection attempts for privacy proxies
-                            if let Some(peer_id_in_addr) = &maybe_peer_id {
-                                if peer_id_in_addr == &peer_id {
-                                    continue;
-                                }
-                            }
-
-                            match swarm.dial(multiaddr.clone()) {
-                                Ok(_) => {
-                                    if let Some(peer_id) = &maybe_peer_id {
-                                        info!(
-                                            "Dialing trusted privacy proxy {} via {}",
-                                            peer_id, multiaddr
-                                        );
-                                    } else {
-                                        info!("Dialing privacy proxy at {}", multiaddr);
-                                    }
-                                }
-                                Err(error) => {
-                                    warn!("Failed to dial privacy proxy {}: {}", addr_str, error);
-                                    let _ = event_tx
-                                        .send(DhtEvent::Error(format!(
-                                            "Failed to dial proxy {}: {}",
-                                            addr_str, error
-                                        )))
-                                        .await;
-                                }
-                            }
-                        }
-                    }
-                    Some(DhtCommand::ConnectPeer(addr)) => {
-                        info!("Attempting to connect to: {}", addr);
-                        if let Ok(multiaddr) = addr.parse::<Multiaddr>() {
-                            let maybe_peer_id = multiaddr.iter().find_map(|p| {
-                                if let libp2p::multiaddr::Protocol::P2p(peer_id) = p {
-                                    Some(peer_id.clone())
-                                } else {
-                                    None
-                                }
-                            });
-
-                            if let Some(peer_id) = maybe_peer_id.clone() {
-                                // Check if the address contains a private IP
-                                let has_private_ip = multiaddr.iter().any(|p| {
-                                    if let Protocol::Ip4(ipv4) = p {
-                                        is_private_or_loopback_v4(ipv4)
-                                    } else {
-                                        false
-                                    }
-                                });
-
-                                // If private IP detected, try relay connection via any relay-capable peer
-                                if has_private_ip {
-                                    info!("🔍 Detected private IP address in {}", multiaddr);
-
-                                    // Get list of relay-capable peers we've discovered
-                                    let relay_peers = relay_capable_peers.lock().await;
-
-                                    if !relay_peers.is_empty() {
-                                        info!("🔄 Found {} relay-capable peers, attempting relay connection", relay_peers.len());
-
-                                        // Try to use the first available relay-capable peer
-                                        // Clone the data we need before dropping the lock
-                                        let relay_option = relay_peers.iter().next().map(|(id, addrs)| {
-                                            (*id, addrs.first().cloned())
+                                    if let Some(peer_id) = maybe_peer_id.clone() {
+                                        // Check if the address contains a private IP
+                                        let has_private_ip = multiaddr.iter().any(|p| {
+                                            if let Protocol::Ip4(ipv4) = p {
+                                                is_private_or_loopback_v4(ipv4)
+                                            } else {
+                                                false
+                                            }
                                         });
 
-                                        drop(relay_peers); // Release lock before dialing
+                                        // If private IP detected, try relay connection via any relay-capable peer
+                                        if has_private_ip {
+                                            info!("🔍 Detected private IP address in {}", multiaddr);
 
-                                        if let Some((relay_peer_id, Some(relay_addr))) = relay_option {
-                                            info!("📡 Attempting to connect to {} via relay peer {}", peer_id, relay_peer_id);
+                                            // Get list of relay-capable peers we've discovered
+                                            let relay_peers = relay_capable_peers.lock().await;
 
-                                            // Build proper circuit relay address
-                                            // Format: /ip4/{relay_ip}/tcp/{relay_port}/p2p/{relay_peer_id}/p2p-circuit/p2p/{target_peer_id}
-                                            let mut circuit_addr = relay_addr.clone();
+                                            if !relay_peers.is_empty() {
+                                                info!("🔄 Found {} relay-capable peers, attempting relay connection", relay_peers.len());
 
-                                            // Ensure the relay address includes the relay peer ID
-                                            if !circuit_addr.iter().any(|p| matches!(p, Protocol::P2p(_))) {
-                                                circuit_addr.push(Protocol::P2p(relay_peer_id));
-                                            }
+                                                // Try to use the first available relay-capable peer
+                                                // Clone the data we need before dropping the lock
+                                                let relay_option = relay_peers.iter().next().map(|(id, addrs)| {
+                                                    (*id, addrs.first().cloned())
+                                                });
 
-                                            circuit_addr.push(Protocol::P2pCircuit);
-                                            circuit_addr.push(Protocol::P2p(peer_id));
+                                                drop(relay_peers); // Release lock before dialing
 
-                                            info!("  Using relay circuit address: {}", circuit_addr);
+                                                if let Some((relay_peer_id, Some(relay_addr))) = relay_option {
+                                                    info!("📡 Attempting to connect to {} via relay peer {}", peer_id, relay_peer_id);
 
-                                            match swarm.dial(circuit_addr.clone()) {
-                                                Ok(_) => {
-                                                    info!("✓ Relay connection requested successfully");
-                                                    let _ = event_tx.send(DhtEvent::Info(format!(
-                                                        "Connecting to private network peer {} via relay {}", peer_id, relay_peer_id
-                                                    ))).await;
-                                                    continue; // Skip direct dial, use relay only
+                                                    // Build proper circuit relay address
+                                                    // Format: /ip4/{relay_ip}/tcp/{relay_port}/p2p/{relay_peer_id}/p2p-circuit/p2p/{target_peer_id}
+                                                    let mut circuit_addr = relay_addr.clone();
+
+                                                    // Ensure the relay address includes the relay peer ID
+                                                    if !circuit_addr.iter().any(|p| matches!(p, Protocol::P2p(_))) {
+                                                        circuit_addr.push(Protocol::P2p(relay_peer_id));
+                                                    }
+
+                                                    circuit_addr.push(Protocol::P2pCircuit);
+                                                    circuit_addr.push(Protocol::P2p(peer_id));
+
+                                                    info!("  Using relay circuit address: {}", circuit_addr);
+
+                                                    match swarm.dial(circuit_addr.clone()) {
+                                                        Ok(_) => {
+                                                            info!("✓ Relay connection requested successfully");
+                                                            let _ = event_tx.send(DhtEvent::Info(format!(
+                                                                "Connecting to private network peer {} via relay {}", peer_id, relay_peer_id
+                                                            ))).await;
+                                                            continue; // Skip direct dial, use relay only
+                                                        }
+                                                        Err(e) => {
+                                                            warn!("Relay connection failed: {}, falling back to direct dial", e);
+                                                            // Fall through to direct dial attempt
+                                                        }
+                                                    }
                                                 }
-                                                Err(e) => {
-                                                    warn!("Relay connection failed: {}, falling back to direct dial", e);
-                                                    // Fall through to direct dial attempt
-                                                }
+                                            } else {
+                                                drop(relay_peers); // Release lock
+                                                info!("⚠️ No relay-capable peers discovered yet. Trying direct connection.");
+                                                info!("   Tip: Enable 'Relay Server' in Settings to help others connect!");
                                             }
                                         }
-                                    } else {
-                                        drop(relay_peers); // Release lock
-                                        info!("⚠️ No relay-capable peers discovered yet. Trying direct connection.");
-                                        info!("   Tip: Enable 'Relay Server' in Settings to help others connect!");
-                                    }
-                                }
-                                {
-                                    let mut mgr = proxy_mgr.lock().await;
-                                    mgr.set_target(peer_id.clone());
-                                    let use_proxy_routing = mgr.is_privacy_routing_enabled();
+                                        {
+                                            let mut mgr = proxy_mgr.lock().await;
+                                            mgr.set_target(peer_id.clone());
+                                            let use_proxy_routing = mgr.is_privacy_routing_enabled();
 
-                                    if use_proxy_routing {
-                                        if let Some(proxy_peer_id) = mgr.select_proxy_for_routing(&peer_id) {
-                                            drop(mgr);
+                                            if use_proxy_routing {
+                                                if let Some(proxy_peer_id) = mgr.select_proxy_for_routing(&peer_id) {
+                                                    drop(mgr);
 
-                                            info!(
-                                                "Using privacy routing through proxy {} to reach {}",
-                                                proxy_peer_id, peer_id
-                                            );
-
-                                            let circuit_addr =
-                                                create_circuit_relay_address_robust(&proxy_peer_id, &peer_id);
-                                            info!(
-                                                "Attempting circuit relay connection via {} to {}",
-                                                proxy_peer_id, peer_id
-                                            );
-
-                                            match swarm.dial(circuit_addr.clone()) {
-                                                Ok(_) => {
                                                     info!(
-                                                        "Requested circuit relay connection to {} via proxy {}",
-                                                        peer_id, proxy_peer_id
+                                                        "Using privacy routing through proxy {} to reach {}",
+                                                        proxy_peer_id, peer_id
                                                     );
-                                                    continue;
-                                                }
-                                                Err(e) => {
-                                                    error!(
-                                                        "Failed to dial via circuit relay {}: {}",
-                                                        circuit_addr, e
+
+                                                    let circuit_addr =
+                                                        create_circuit_relay_address_robust(&proxy_peer_id, &peer_id);
+                                                    info!(
+                                                        "Attempting circuit relay connection via {} to {}",
+                                                        proxy_peer_id, peer_id
+                                                    );
+
+                                                    match swarm.dial(circuit_addr.clone()) {
+                                                        Ok(_) => {
+                                                            info!(
+                                                                "Requested circuit relay connection to {} via proxy {}",
+                                                                peer_id, proxy_peer_id
+                                                            );
+                                                            continue;
+                                                        }
+                                                        Err(e) => {
+                                                            error!(
+                                                                "Failed to dial via circuit relay {}: {}",
+                                                                circuit_addr, e
+                                                            );
+                                                            let _ = event_tx
+                                                                .send(DhtEvent::Error(format!(
+                                                                    "Circuit relay failed: {}",
+                                                                    e
+                                                                )))
+                                                                .await;
+                                                            if {
+                                                                let mgr = proxy_mgr.lock().await;
+                                                                mgr.privacy_mode() == PrivacyMode::Strict
+                                                            } {
+                                                                {
+                                                                    let mut mgr = proxy_mgr.lock().await;
+                                                                    mgr.clear_target(&peer_id);
+                                                                }
+                                                                continue;
+                                                            }
+                                                        }
+                                                    }
+                                                } else {
+                                                    drop(mgr);
+                                                    warn!(
+                                                        "No suitable proxy available for privacy routing to {}",
+                                                        peer_id
                                                     );
                                                     let _ = event_tx
                                                         .send(DhtEvent::Error(format!(
-                                                            "Circuit relay failed: {}",
-                                                            e
+                                                            "No trusted proxy available to reach {}",
+                                                            peer_id
                                                         )))
                                                         .await;
                                                     if {
@@ -2707,1200 +2771,1176 @@ async fn run_dht_node(
                                                     }
                                                 }
                                             }
-                                        } else {
-                                            drop(mgr);
-                                            warn!(
-                                                "No suitable proxy available for privacy routing to {}",
-                                                peer_id
-                                            );
-                                            let _ = event_tx
-                                                .send(DhtEvent::Error(format!(
-                                                    "No trusted proxy available to reach {}",
-                                                    peer_id
-                                                )))
-                                                .await;
-                                            if {
-                                                let mgr = proxy_mgr.lock().await;
-                                                mgr.privacy_mode() == PrivacyMode::Strict
-                                            } {
-                                                {
-                                                    let mut mgr = proxy_mgr.lock().await;
-                                                    mgr.clear_target(&peer_id);
+                                        }
+
+                                        let should_request = {
+                                            let mut mgr = proxy_mgr.lock().await;
+                                            let should_request = !mgr.has_relay_request(&peer_id);
+                                            if should_request {
+                                                mgr.mark_relay_pending(peer_id.clone());
+                                            }
+                                            should_request
+                                        };
+
+                                        if should_request {
+                                            if let Some(relay_addr) = build_relay_listen_addr(&multiaddr) {
+                                                match swarm.listen_on(relay_addr.clone()) {
+                                                    Ok(_) => {
+                                                        info!("Requested relay reservation via {}", relay_addr);
+                                                        let _ = event_tx
+                                                            .send(DhtEvent::ProxyStatus {
+                                                                id: peer_id.to_string(),
+                                                                address: relay_addr.to_string(),
+                                                                status: "relay_pending".into(),
+                                                                latency_ms: None,
+                                                                error: None,
+                                                            })
+                                                            .await;
+                                                    }
+                                                    Err(err) => {
+                                                        warn!(
+                                                            "Failed to request relay reservation via {}: {}",
+                                                            relay_addr, err
+                                                        );
+                                                        let mut mgr = proxy_mgr.lock().await;
+                                                        mgr.relay_pending.remove(&peer_id);
+                                                        let _ = event_tx
+                                                            .send(DhtEvent::ProxyStatus {
+                                                                id: peer_id.to_string(),
+                                                                address: relay_addr.to_string(),
+                                                                status: "relay_error".into(),
+                                                                latency_ms: None,
+                                                                error: Some(err.to_string()),
+                                                            })
+                                                            .await;
+                                                    }
                                                 }
-                                                continue;
+                                            } else {
+                                                warn!("Cannot derive relay listen address from {}", multiaddr);
                                             }
                                         }
-                                    }
-                                }
 
-                                let should_request = {
-                                    let mut mgr = proxy_mgr.lock().await;
-                                    let should_request = !mgr.has_relay_request(&peer_id);
-                                    if should_request {
-                                        mgr.mark_relay_pending(peer_id.clone());
-                                    }
-                                    should_request
-                                };
-
-                                if should_request {
-                                    if let Some(relay_addr) = build_relay_listen_addr(&multiaddr) {
-                                        match swarm.listen_on(relay_addr.clone()) {
+                                        match swarm.dial(multiaddr.clone()) {
                                             Ok(_) => {
-                                                info!("Requested relay reservation via {}", relay_addr);
-                                                let _ = event_tx
-                                                    .send(DhtEvent::ProxyStatus {
-                                                        id: peer_id.to_string(),
-                                                        address: relay_addr.to_string(),
-                                                        status: "relay_pending".into(),
-                                                        latency_ms: None,
-                                                        error: None,
-                                                    })
-                                                    .await;
+                                                info!("Requested direct connection to: {}", addr);
+                                                info!("  Multiaddr: {}", multiaddr);
+                                                info!("  Waiting for ConnectionEstablished event...");
                                             }
-                                            Err(err) => {
-                                                warn!(
-                                                    "Failed to request relay reservation via {}: {}",
-                                                    relay_addr, err
-                                                );
-                                                let mut mgr = proxy_mgr.lock().await;
-                                                mgr.relay_pending.remove(&peer_id);
+                                            Err(e) => {
+                                                error!("Failed to dial {}: {}", addr, e);
                                                 let _ = event_tx
-                                                    .send(DhtEvent::ProxyStatus {
-                                                        id: peer_id.to_string(),
-                                                        address: relay_addr.to_string(),
-                                                        status: "relay_error".into(),
-                                                        latency_ms: None,
-                                                        error: Some(err.to_string()),
-                                                    })
+                                                    .send(DhtEvent::Error(format!("Failed to connect: {}", e)))
                                                     .await;
                                             }
                                         }
                                     } else {
-                                        warn!("Cannot derive relay listen address from {}", multiaddr);
+                                        error!("No peer ID found in multiaddr: {}", addr);
+                                        let _ = event_tx
+                                            .send(DhtEvent::Error(format!("Invalid address format: {}", addr)))
+                                            .await;
                                     }
+                                } else {
+                                    error!("Invalid multiaddr format: {}", addr);
+                                    let _ = event_tx
+                                        .send(DhtEvent::Error(format!("Invalid address: {}", addr)))
+                                        .await;
                                 }
+                            }
+                            Some(DhtCommand::ConnectToPeerById(peer_id)) => {
+                                info!("Attempting to connect to peer by ID: {}", peer_id);
 
-                                match swarm.dial(multiaddr.clone()) {
-                                    Ok(_) => {
-                                        info!("Requested direct connection to: {}", addr);
-                                        info!("  Multiaddr: {}", multiaddr);
-                                        info!("  Waiting for ConnectionEstablished event...");
+                                // First check if we're already connected to this peer
+                                let connected_peers = connected_peers.lock().await;
+                                if connected_peers.contains(&peer_id) {
+                                    info!("Already connected to peer {}", peer_id);
+                                    // let _ = event_tx.send(DhtEvent::PeerConnected(peer_id.to_string())).await;
+                                    let _ = event_tx
+                                        .send(DhtEvent::PeerConnected {
+                                            peer_id: peer_id.to_string(),
+                                            address: None,
+                                        })
+                                        .await;
+                                    return;
+                                }
+                                drop(connected_peers);
+
+                                // Query the DHT for known addresses of this peer
+                                info!("Querying DHT for addresses of peer {}", peer_id);
+                                let _query_id = swarm.behaviour_mut().kademlia.get_closest_peers(peer_id);
+
+                                // Connection attempts will be handled when GetClosestPeers results are received
+                                let _ = event_tx.send(DhtEvent::Info(format!("Searching for peer {} addresses...", peer_id))).await;
+                            }
+                            Some(DhtCommand::DisconnectPeer(peer_id)) => {
+                                let _ = swarm.disconnect_peer_id(peer_id.clone());
+                                proxy_mgr.lock().await.remove_all(&peer_id);
+                            }
+
+
+                            Some(DhtCommand::GetPeerCount(tx)) => {
+                                let count = connected_peers.lock().await.len();
+                                let _ = tx.send(count);
+                            }
+                            Some(DhtCommand::Echo { peer, payload, tx }) => {
+                                let id = swarm.behaviour_mut().proxy_rr.send_request(&peer, EchoRequest(payload));
+                                pending_echo.lock().await.insert(id, PendingEcho { peer, tx });
+                            }
+                            Some(DhtCommand::GetProviders { file_hash, sender }) => {
+                                // Query provider records for this file hash
+                                let key = kad::RecordKey::new(&file_hash.as_bytes());
+                                let query_id = swarm.behaviour_mut().kademlia.get_providers(key);
+                                info!("Querying providers for file: {} (query_id: {:?})", file_hash, query_id);
+
+                                // Store the query_id -> (file_hash, start_time) mapping for error handling and timeout detection
+                                get_providers_queries.lock().await.insert(query_id, (file_hash.clone(), std::time::Instant::now()));
+
+                                // Store the query for async handling
+                                let pending_query = PendingProviderQuery {
+                                    id: 0, // Not used for matching
+                                    sender,
+                                };
+                                pending_provider_queries.lock().await.insert(file_hash, pending_query);
+                            }
+                            Some(DhtCommand::SendWebRTCOffer { peer, offer_request, sender }) => {
+                                let id = swarm.behaviour_mut().webrtc_signaling_rr.send_request(&peer, offer_request);
+                                pending_webrtc_offers.lock().await.insert(id, sender);
+                            }
+                            Some(DhtCommand::SendMessageToPeer { target_peer_id, message }) => {
+                                // TODO: Implement a proper messaging protocol
+                                // For now, we'll use the proxy protocol to send messages
+                                // In a real implementation, this could use a dedicated messaging protocol
+                                match serde_json::to_vec(&message) {
+                                    Ok(message_data) => {
+                                        // Send the message directly using the proxy protocol
+                                        let request_id = swarm.behaviour_mut().proxy_rr.send_request(&target_peer_id, EchoRequest(message_data));
+                                        info!("Sent message to peer {} with request ID {:?}", target_peer_id, request_id);
                                     }
                                     Err(e) => {
-                                        error!("Failed to dial {}: {}", addr, e);
+                                        error!("Failed to serialize message: {}", e);
+                                    }
+                                }
+                            }
+                            Some(DhtCommand::StoreBlock { cid, data }) => {
+                                match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(cid, data) {
+                                    Ok(_) => {
+                                        debug!("Successfully stored block in Bitswap");
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to store block in Bitswap: {}", e);
+                                    }
+                                }
+                            }
+                            Some(DhtCommand::RequestFileAccess { .. }) => {
+                                todo!();
+                            }
+                            Some(DhtCommand::AnnounceTorrent { info_hash }) => {
+                                let key = kad::RecordKey::new(&info_hash);
+                                match swarm.behaviour_mut().kademlia.start_providing(key) {
+                                    Ok(query_id) => {
+                                        info!("Started providing torrent with info_hash: {}, query_id: {:?}", info_hash, query_id);
+                                        let _ = event_tx.send(DhtEvent::Info(format!("Announced torrent: {}", info_hash))).await;
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to start providing torrent {}: {}", info_hash, e);
+                                        let _ = event_tx.send(DhtEvent::Error(format!("Failed to announce torrent: {}", e))).await;
+                                    }
+                                }
+                            }
+                            None => {
+                                info!("DHT command channel closed; shutting down node task");
+                                break 'outer;
+                            }
+                        }
+                    }
+
+                    event = swarm.next() => if let Some(event) = event {
+                        match event {
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::Kademlia(kad_event)) => {
+                                handle_kademlia_event(
+                                    kad_event,
+                                    &mut swarm,
+                                    &peer_id,
+                                    &connected_peers,
+                                    &event_tx,
+                                    &pending_searches,
+                                    &pending_provider_queries,
+                                    &get_providers_queries,
+                                    &seeder_heartbeats_cache,
+                                    &pending_heartbeat_updates,
+                                    &pending_keyword_indexes,
+                                    &pending_infohash_searches,
+                                )
+                                .await;
+                            }
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::Identify(identify_event)) => {
+                                handle_identify_event(
+                                    identify_event,
+                                    &mut swarm,
+                                    &event_tx,
+                                    metrics.clone(),
+                                    enable_autorelay,
+                                    &relay_candidates,
+                                    &proxy_mgr,
+                                    &peer_selection,
+                                    relay_capable_peers.clone(),
+                                    &peer_id,
+                                )
+                                .await;
+                            }
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::Mdns(mdns_event)) => {
+                                if !is_bootstrap{
+                                    handle_mdns_event(mdns_event, &mut swarm, &event_tx, &peer_id).await;
+                                }
+                            }
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::RelayClient(relay_event)) => {
+                                match relay_event {
+                                    RelayClientEvent::ReservationReqAccepted { relay_peer_id, .. } => {
+                                        info!("✅ Relay reservation accepted from {}", relay_peer_id);
+                                        let mut mgr = proxy_mgr.lock().await;
+                                        let newly_ready = mgr.mark_relay_ready(relay_peer_id);
+                                        drop(mgr);
+
+                                        // Update AutoRelay metrics
+                                        {
+                                            let mut m = metrics.lock().await;
+                                            m.active_relay_peer_id = Some(relay_peer_id.to_string());
+                                            m.relay_reservation_status = Some("accepted".to_string());
+                                            m.last_reservation_success = Some(SystemTime::now());
+                                            m.reservation_renewals += 1;
+                                        }
+
+                                        if newly_ready {
+                                            let _ = event_tx
+                                                .send(DhtEvent::ProxyStatus {
+                                                    id: relay_peer_id.to_string(),
+                                                    address: String::new(),
+                                                    status: "relay_ready".into(),
+                                                    latency_ms: None,
+                                                    error: None,
+                                                })
+                                                .await;
+                                            let _ = event_tx
+                                                .send(DhtEvent::Info(format!(
+                                                    "Connected to relay: {}",
+                                                    relay_peer_id
+                                                )))
+                                                .await;
+                                        }
+                                    }
+                                    RelayClientEvent::OutboundCircuitEstablished { relay_peer_id, .. } => {
+                                        info!("🔗 Outbound relay circuit established via {}", relay_peer_id);
+                                        proxy_mgr.lock().await.set_online(relay_peer_id);
                                         let _ = event_tx
-                                            .send(DhtEvent::Error(format!("Failed to connect: {}", e)))
+                                            .send(DhtEvent::ProxyStatus {
+                                                id: relay_peer_id.to_string(),
+                                                address: String::new(),
+                                                status: "relay_circuit".into(),
+                                                latency_ms: None,
+                                                error: None,
+                                            })
+                                            .await;
+                                    }
+                                    RelayClientEvent::InboundCircuitEstablished { src_peer_id, .. } => {
+                                        info!("📥 Inbound relay circuit established from {}", src_peer_id);
+                                        let _ = event_tx
+                                            .send(DhtEvent::ProxyStatus {
+                                                id: src_peer_id.to_string(),
+                                                address: String::new(),
+                                                status: "relay_inbound".into(),
+                                                latency_ms: None,
+                                                error: None,
+                                            })
                                             .await;
                                     }
                                 }
-                            } else {
-                                error!("No peer ID found in multiaddr: {}", addr);
-                                let _ = event_tx
-                                    .send(DhtEvent::Error(format!("Invalid address format: {}", addr)))
-                                    .await;
                             }
-                        } else {
-                            error!("Invalid multiaddr format: {}", addr);
-                            let _ = event_tx
-                                .send(DhtEvent::Error(format!("Invalid address: {}", addr)))
-                                .await;
-                        }
-                    }
-                    Some(DhtCommand::ConnectToPeerById(peer_id)) => {
-                        info!("Attempting to connect to peer by ID: {}", peer_id);
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::RelayServer(relay_server_event)) => {
+                                use relay::Event as RelayEvent;
+                                match relay_server_event {
+                                    RelayEvent::ReservationReqAccepted { src_peer_id, .. } => {
+                                        info!("🔁 Relay server: Accepted reservation from {}", src_peer_id);
+                                        let _ = event_tx
+                                            .send(DhtEvent::Info(format!(
+                                                "Acting as relay for peer {}",
+                                                src_peer_id
+                                            )))
+                                            .await;
 
-                        // First check if we're already connected to this peer
-                        let connected_peers = connected_peers.lock().await;
-                        if connected_peers.contains(&peer_id) {
-                            info!("Already connected to peer {}", peer_id);
-                            // let _ = event_tx.send(DhtEvent::PeerConnected(peer_id.to_string())).await;
-                            let _ = event_tx
-                                .send(DhtEvent::PeerConnected {
-                                    peer_id: peer_id.to_string(),
-                                    address: None,
-                                })
-                                .await;
-                            return;
-                        }
-                        drop(connected_peers);
+                                        // Emit reputation event
+                                        let _ = event_tx
+                                            .send(DhtEvent::ReputationEvent {
+                                                peer_id: src_peer_id.to_string(),
+                                                event_type: "RelayReservationAccepted".to_string(),
+                                                impact: 5.0,
+                                                data: serde_json::json!({
+                                                    "timestamp": SystemTime::now()
+                                                        .duration_since(UNIX_EPOCH)
+                                                        .unwrap_or_default()
+                                                        .as_secs(),
+                                                }),
+                                            })
+                                            .await;
+                                    }
+                                    RelayEvent::ReservationReqDenied { src_peer_id, .. } => {
+                                        debug!("🔁 Relay server: Denied reservation from {}", src_peer_id);
 
-                        // Query the DHT for known addresses of this peer
-                        info!("Querying DHT for addresses of peer {}", peer_id);
-                        let _query_id = swarm.behaviour_mut().kademlia.get_closest_peers(peer_id);
+                                        // Emit reputation event
+                                        let _ = event_tx
+                                            .send(DhtEvent::ReputationEvent {
+                                                peer_id: src_peer_id.to_string(),
+                                                event_type: "RelayRefused".to_string(),
+                                                impact: -2.0,
+                                                data: serde_json::json!({
+                                                    "reason": "reservation_denied",
+                                                    "timestamp": SystemTime::now()
+                                                        .duration_since(UNIX_EPOCH)
+                                                        .unwrap_or_default()
+                                                        .as_secs(),
+                                                }),
+                                            })
+                                            .await;
+                                    }
+                                    RelayEvent::ReservationTimedOut { src_peer_id } => {
+                                        debug!("🔁 Relay server: Reservation timed out for {}", src_peer_id);
 
-                        // Connection attempts will be handled when GetClosestPeers results are received
-                        let _ = event_tx.send(DhtEvent::Info(format!("Searching for peer {} addresses...", peer_id))).await;
-                    }
-                    Some(DhtCommand::DisconnectPeer(peer_id)) => {
-                        let _ = swarm.disconnect_peer_id(peer_id.clone());
-                        proxy_mgr.lock().await.remove_all(&peer_id);
-                    }
+                                        // Emit reputation event
+                                        let _ = event_tx
+                                            .send(DhtEvent::ReputationEvent {
+                                                peer_id: src_peer_id.to_string(),
+                                                event_type: "RelayTimeout".to_string(),
+                                                impact: -10.0,
+                                                data: serde_json::json!({
+                                                    "reason": "reservation_timeout",
+                                                    "timestamp": SystemTime::now()
+                                                        .duration_since(UNIX_EPOCH)
+                                                        .unwrap_or_default()
+                                                        .as_secs(),
+                                                }),
+                                            })
+                                            .await;
+                                    }
+                                    RelayEvent::CircuitReqDenied { src_peer_id, dst_peer_id, .. } => {
+                                        debug!("🔁 Relay server: Denied circuit from {} to {}", src_peer_id, dst_peer_id);
 
+                                        // Emit reputation event
+                                        let _ = event_tx
+                                            .send(DhtEvent::ReputationEvent {
+                                                peer_id: src_peer_id.to_string(),
+                                                event_type: "RelayRefused".to_string(),
+                                                impact: -2.0,
+                                                data: serde_json::json!({
+                                                    "reason": "circuit_denied",
+                                                    "dst_peer_id": dst_peer_id.to_string(),
+                                                    "timestamp": SystemTime::now()
+                                                        .duration_since(UNIX_EPOCH)
+                                                        .unwrap_or_default()
+                                                        .as_secs(),
+                                                }),
+                                            })
+                                            .await;
+                                    }
+                                    RelayEvent::CircuitReqAccepted { src_peer_id, dst_peer_id, .. } => {
+                                        info!("🔁 Relay server: Established circuit from {} to {}", src_peer_id, dst_peer_id);
+                                        let _ = event_tx
+                                            .send(DhtEvent::Info(format!(
+                                                "Relaying traffic from {} to {}",
+                                                src_peer_id, dst_peer_id
+                                            )))
+                                            .await;
 
-                    Some(DhtCommand::GetPeerCount(tx)) => {
-                        let count = connected_peers.lock().await.len();
-                        let _ = tx.send(count);
-                    }
-                    Some(DhtCommand::Echo { peer, payload, tx }) => {
-                        let id = swarm.behaviour_mut().proxy_rr.send_request(&peer, EchoRequest(payload));
-                        pending_echo.lock().await.insert(id, PendingEcho { peer, tx });
-                    }
-                    Some(DhtCommand::GetProviders { file_hash, sender }) => {
-                        // Query provider records for this file hash
-                        let key = kad::RecordKey::new(&file_hash.as_bytes());
-                        let query_id = swarm.behaviour_mut().kademlia.get_providers(key);
-                        info!("Querying providers for file: {} (query_id: {:?})", file_hash, query_id);
+                                        // Emit reputation event
+                                        let _ = event_tx
+                                            .send(DhtEvent::ReputationEvent {
+                                                peer_id: src_peer_id.to_string(),
+                                                event_type: "RelayCircuitEstablished".to_string(),
+                                                impact: 10.0,
+                                                data: serde_json::json!({
+                                                    "dst_peer_id": dst_peer_id.to_string(),
+                                                    "timestamp": SystemTime::now()
+                                                        .duration_since(UNIX_EPOCH)
+                                                        .unwrap_or_default()
+                                                        .as_secs(),
+                                                }),
+                                            })
+                                            .await;
+                                    }
+                                    RelayEvent::CircuitClosed { src_peer_id, dst_peer_id, .. } => {
+                                        debug!("🔁 Relay server: Circuit closed between {} and {}", src_peer_id, dst_peer_id);
 
-                        // Store the query_id -> (file_hash, start_time) mapping for error handling and timeout detection
-                        get_providers_queries.lock().await.insert(query_id, (file_hash.clone(), std::time::Instant::now()));
-
-                        // Store the query for async handling
-                        let pending_query = PendingProviderQuery {
-                            id: 0, // Not used for matching
-                            sender,
-                        };
-                        pending_provider_queries.lock().await.insert(file_hash, pending_query);
-                    }
-                    Some(DhtCommand::SendWebRTCOffer { peer, offer_request, sender }) => {
-                        let id = swarm.behaviour_mut().webrtc_signaling_rr.send_request(&peer, offer_request);
-                        pending_webrtc_offers.lock().await.insert(id, sender);
-                    }
-                    Some(DhtCommand::SendMessageToPeer { target_peer_id, message }) => {
-                        // TODO: Implement a proper messaging protocol
-                        // For now, we'll use the proxy protocol to send messages
-                        // In a real implementation, this could use a dedicated messaging protocol
-                        match serde_json::to_vec(&message) {
-                            Ok(message_data) => {
-                                // Send the message directly using the proxy protocol
-                                let request_id = swarm.behaviour_mut().proxy_rr.send_request(&target_peer_id, EchoRequest(message_data));
-                                info!("Sent message to peer {} with request ID {:?}", target_peer_id, request_id);
+                                        // Emit reputation event
+                                        let _ = event_tx
+                                            .send(DhtEvent::ReputationEvent {
+                                                peer_id: src_peer_id.to_string(),
+                                                event_type: "RelayCircuitSuccessful".to_string(),
+                                                impact: 15.0,
+                                                data: serde_json::json!({
+                                                    "dst_peer_id": dst_peer_id.to_string(),
+                                                    "timestamp": SystemTime::now()
+                                                        .duration_since(UNIX_EPOCH)
+                                                        .unwrap_or_default()
+                                                        .as_secs(),
+                                                }),
+                                            })
+                                            .await;
+                                    }
+                                    // Handle deprecated relay events (libp2p handles logging internally)
+                                    _ => {}
+                                }
                             }
-                            Err(e) => {
-                                error!("Failed to serialize message: {}", e);
-                            }
-                        }
-                    }
-                    Some(DhtCommand::StoreBlock { cid, data }) => {
-                        match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(cid, data) {
-                            Ok(_) => {
-                                debug!("Successfully stored block in Bitswap");
-                            }
-                            Err(e) => {
-                                error!("Failed to store block in Bitswap: {}", e);
-                            }
-                        }
-                    }
-                    Some(DhtCommand::RequestFileAccess { .. }) => {
-                        todo!();
-                    }
-                    Some(DhtCommand::AnnounceTorrent { info_hash }) => {
-                        let key = kad::RecordKey::new(&info_hash);
-                        match swarm.behaviour_mut().kademlia.start_providing(key) {
-                            Ok(query_id) => {
-                                info!("Started providing torrent with info_hash: {}, query_id: {:?}", info_hash, query_id);
-                                let _ = event_tx.send(DhtEvent::Info(format!("Announced torrent: {}", info_hash))).await;
-                            }
-                            Err(e) => {
-                                error!("Failed to start providing torrent {}: {}", info_hash, e);
-                                let _ = event_tx.send(DhtEvent::Error(format!("Failed to announce torrent: {}", e))).await;
-                            }
-                        }
-                    }
-                    None => {
-                        info!("DHT command channel closed; shutting down node task");
-                        break 'outer;
-                    }
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) => match bitswap {
+                                beetswap::Event::GetQueryResponse { query_id, data } => {
+                                    info!("📥 Received Bitswap block (query_id: {:?}, size: {} bytes)", query_id, data.len());
+
+                                    // Check if this is a root block query first
+                                    if let Some(metadata) = root_query_mapping.lock().await.remove(&query_id) {
+                                        info!("✅ This is a ROOT BLOCK for file: {}", metadata.merkle_root);
+
+                                        // This is the root block containing CIDs - parse and request all data blocks
+                                        match serde_json::from_slice::<Vec<Cid>>(&data) {
+                                            Ok(cids) => {
+
+                                                // Create queries map for this file's data blocks
+                                                let mut file_queries = HashMap::new();
+                                                let peer_id = match PeerId::from_str(&metadata.seeders[0]) {
+                                                    Ok(id) => id.clone(),
+                                                    Err(e) => {let _ = event_tx.send(DhtEvent::Error(e.to_string())).await; continue; }
+                                                };
+
+                                                for (i, cid) in cids.iter().enumerate() {
+                                                    // Request the root block which contains the CIDs
+                                                    let block_query_id = swarm.behaviour_mut().bitswap.get_from(&cid, peer_id);
+                                                    file_queries.insert(block_query_id, i as u32);
+                                                }
+
+                                                // Calculate chunk size based on file size and number of chunks
+                                                let total_chunks = cids.len() as u64;
+                                                // assume 256kb
+                                                let chunk_size = 256 * 1024;
+
+                                                // Pre-calculate chunk offsets
+                                                let chunk_offsets: Vec<u64> = (0..total_chunks)
+                                                    .map(|i| i * chunk_size)
+                                                    .collect();
+
+                                                info!("Chunk offsets: {:?}", chunk_offsets);
+
+                                                info!("About to create ActiveDownload for file: {}", metadata.merkle_root);
+                                                let download_path = match metadata.download_path.as_ref() {
+                                                    Some(path_str) => PathBuf::from_str(path_str),
+                                                    None => {
+                                                        error!("Download path not defined for file: {}", metadata.merkle_root);
+                                                        return;
+                                                    }
+                                                };
+                                                let download_path = match download_path {
+                                                    Ok(path) => get_available_download_path(path).await,
+                                                    Err(e) => {
+                                                        error!("Invalid download path for file {}: {}", metadata.merkle_root, e);
+                                                        return;
+                                                    }
+                                                };
+
+                                            // Create active download with memory-mapped file
+                                    match ActiveDownload::new(
+                                        metadata.clone(),
+                                        file_queries,
+                                        &download_path,
+                                        metadata.file_size,
+                                        chunk_offsets,
+                                    ) {
+                                        Ok(active_download) => {
+                                            let active_download = Arc::new(tokio::sync::Mutex::new(active_download));
+
+                                            info!("Successfully created ActiveDownload");
+
+                                            active_downloads.lock().await.insert(
+                                                metadata.merkle_root.clone(),
+                                                Arc::clone(&active_download),
+                                            );
+
+                                            info!(
+                                                "Inserted into active_downloads map. Started tracking download for file {} with {} chunks (chunk_size: {} bytes)",
+                                                metadata.merkle_root, cids.len(), chunk_size
+                                            );
+                                        }
+                                        Err(e) => {
+                                            error!(
+                                                "FAILED to create memory-mapped file for {}: {}",
+                                                metadata.merkle_root, e
+                                            );
+                                        }
+                                    }
+
+                                            }
+                                            Err(e) => {
+                                                error!("Failed to parse root block as CIDs array for file {}: {}",
+                                                    metadata.merkle_root, e);
+                                            }
+                                        }
+                                    } else {
+                                        // This is a data block query - find the corresponding file and handle it
+
+                                        let mut completed_downloads = Vec::new();
+
+                                        // Check all active downloads for this query_id
+                                        {
+                                            let mut active_downloads_guard = active_downloads.lock().await;
+
+                                            let mut found = false;
+                                            for (file_hash, active_download_lock) in active_downloads_guard.iter_mut() {
+                                                let mut active_download = active_download_lock.lock().await;
+                                                if let Some(chunk_index) = active_download.queries.remove(&query_id) {
+                                                    found = true;
+
+                                                    // This query belongs to this file - write the chunk to disk
+                                                    let offset = active_download.chunk_offsets
+                                                        .get(chunk_index as usize)
+                                                        .copied()
+                                                        .unwrap_or_else(|| {
+                                                            error!("No offset found for chunk_index: {}", chunk_index);
+                                                            0
+                                                        });
+
+
+                                                    if let Err(e) = active_download.write_chunk(chunk_index, &data, offset) {
+                                                        error!("Failed to write chunk {} to disk for file {}: {}",
+                                                            chunk_index, file_hash, e);
+                                                        break;
+                                                    }
+
+                                                    info!("Successfully wrote chunk {}/{} for file {}",
+                                                        chunk_index + 1,
+                                                        active_download.total_chunks,
+                                                        file_hash);
+
+                                                    let _ = event_tx.send(DhtEvent::BitswapChunkDownloaded {
+                                                        file_hash: file_hash.clone(),
+                                                        chunk_index,
+                                                        total_chunks: active_download.total_chunks,
+                                                        chunk_size: data.len(),
+                                                    }).await;
+
+                                                    // --- Reputation System Integration ---
+                                                    // Reward the peer who sent this chunk.
+                                                    // The `peer` ID is part of the GetQueryResponse event.
+                                                    // The `peer` field was removed. We get the seeder from the metadata.
+                                                    let seeder = match active_download.metadata.seeders.first() {
+                                                        Some(s) => s.clone(),
+                                                        None => continue, // Should not happen if we got a response
+                                                    };
+
+                                                    let _ = event_tx.send(DhtEvent::ReputationEvent {
+                                                        peer_id: seeder.to_string(),
+                                                        event_type: "TorrentChunkSeeded".to_string(),
+                                                        impact: 2.0, // Use the default impact from EventType
+                                                        data: serde_json::json!({
+                                                            "file_hash": file_hash,
+                                                            "chunk_index": chunk_index,
+                                                            "chunk_size": data.len(),
+                                                            "timestamp": unix_timestamp(),
+                                                        }),
+                                                    }).await;
+                                                    debug!(
+                                                        "Rewarded peer {} for seeding chunk {} of file {}",
+                                                        seeder,
+                                                        chunk_index,
+                                                        file_hash
+                                                    );
+
+                                                   // In the "all chunks downloaded" section:
+                                                    // In the "all chunks downloaded" section:
+        if active_download.is_complete() {
+            // Flush and finalize the file
+            info!("Finalizing file...");
+            match active_download.finalize() {
+                Ok(_) => {
+                    info!("Successfully finalized file");
+                }
+                Err(e) => {
+                    error!("Failed to finalize file {}: {}", file_hash, e);
+                    break;
                 }
             }
 
-            event = swarm.next() => if let Some(event) = event {
-                match event {
-                    SwarmEvent::Behaviour(DhtBehaviourEvent::Kademlia(kad_event)) => {
-                        handle_kademlia_event(
-                            kad_event,
-                            &mut swarm,
-                            &peer_id,
-                            &connected_peers,
-                            &event_tx,
-                            &pending_searches,
-                            &pending_provider_queries,
-                            &get_providers_queries,
-                            &seeder_heartbeats_cache,
-                            &pending_heartbeat_updates,
-                            &pending_keyword_indexes,
-                            &pending_infohash_searches,
-                        )
-                        .await;
-                    }
-                    SwarmEvent::Behaviour(DhtBehaviourEvent::Identify(identify_event)) => {
-                        handle_identify_event(
-                            identify_event,
-                            &mut swarm,
-                            &event_tx,
-                            metrics.clone(),
-                            enable_autorelay,
-                            &relay_candidates,
-                            &proxy_mgr,
-                            &peer_selection,
-                            relay_capable_peers.clone(),
-                            &peer_id,
-                        )
-                        .await;
-                    }
-                    SwarmEvent::Behaviour(DhtBehaviourEvent::Mdns(mdns_event)) => {
-                        if !is_bootstrap{
-                            handle_mdns_event(mdns_event, &mut swarm, &event_tx, &peer_id).await;
-                        }
-                    }
-                    SwarmEvent::Behaviour(DhtBehaviourEvent::RelayClient(relay_event)) => {
-                        match relay_event {
-                            RelayClientEvent::ReservationReqAccepted { relay_peer_id, .. } => {
-                                info!("✅ Relay reservation accepted from {}", relay_peer_id);
-                                let mut mgr = proxy_mgr.lock().await;
-                                let newly_ready = mgr.mark_relay_ready(relay_peer_id);
-                                drop(mgr);
-
-                                // Update AutoRelay metrics
-                                {
-                                    let mut m = metrics.lock().await;
-                                    m.active_relay_peer_id = Some(relay_peer_id.to_string());
-                                    m.relay_reservation_status = Some("accepted".to_string());
-                                    m.last_reservation_success = Some(SystemTime::now());
-                                    m.reservation_renewals += 1;
-                                }
-
-                                if newly_ready {
-                                    let _ = event_tx
-                                        .send(DhtEvent::ProxyStatus {
-                                            id: relay_peer_id.to_string(),
-                                            address: String::new(),
-                                            status: "relay_ready".into(),
-                                            latency_ms: None,
-                                            error: None,
-                                        })
-                                        .await;
-                                    let _ = event_tx
-                                        .send(DhtEvent::Info(format!(
-                                            "Connected to relay: {}",
-                                            relay_peer_id
-                                        )))
-                                        .await;
-                                }
-                            }
-                            RelayClientEvent::OutboundCircuitEstablished { relay_peer_id, .. } => {
-                                info!("🔗 Outbound relay circuit established via {}", relay_peer_id);
-                                proxy_mgr.lock().await.set_online(relay_peer_id);
-                                let _ = event_tx
-                                    .send(DhtEvent::ProxyStatus {
-                                        id: relay_peer_id.to_string(),
-                                        address: String::new(),
-                                        status: "relay_circuit".into(),
-                                        latency_ms: None,
-                                        error: None,
-                                    })
-                                    .await;
-                            }
-                            RelayClientEvent::InboundCircuitEstablished { src_peer_id, .. } => {
-                                info!("📥 Inbound relay circuit established from {}", src_peer_id);
-                                let _ = event_tx
-                                    .send(DhtEvent::ProxyStatus {
-                                        id: src_peer_id.to_string(),
-                                        address: String::new(),
-                                        status: "relay_inbound".into(),
-                                        latency_ms: None,
-                                        error: None,
-                                    })
-                                    .await;
-                            }
-                        }
-                    }
-                    SwarmEvent::Behaviour(DhtBehaviourEvent::RelayServer(relay_server_event)) => {
-                        use relay::Event as RelayEvent;
-                        match relay_server_event {
-                            RelayEvent::ReservationReqAccepted { src_peer_id, .. } => {
-                                info!("🔁 Relay server: Accepted reservation from {}", src_peer_id);
-                                let _ = event_tx
-                                    .send(DhtEvent::Info(format!(
-                                        "Acting as relay for peer {}",
-                                        src_peer_id
-                                    )))
-                                    .await;
-
-                                // Emit reputation event
-                                let _ = event_tx
-                                    .send(DhtEvent::ReputationEvent {
-                                        peer_id: src_peer_id.to_string(),
-                                        event_type: "RelayReservationAccepted".to_string(),
-                                        impact: 5.0,
-                                        data: serde_json::json!({
-                                            "timestamp": SystemTime::now()
-                                                .duration_since(UNIX_EPOCH)
-                                                .unwrap_or_default()
-                                                .as_secs(),
-                                        }),
-                                    })
-                                    .await;
-                            }
-                            RelayEvent::ReservationReqDenied { src_peer_id, .. } => {
-                                debug!("🔁 Relay server: Denied reservation from {}", src_peer_id);
-
-                                // Emit reputation event
-                                let _ = event_tx
-                                    .send(DhtEvent::ReputationEvent {
-                                        peer_id: src_peer_id.to_string(),
-                                        event_type: "RelayRefused".to_string(),
-                                        impact: -2.0,
-                                        data: serde_json::json!({
-                                            "reason": "reservation_denied",
-                                            "timestamp": SystemTime::now()
-                                                .duration_since(UNIX_EPOCH)
-                                                .unwrap_or_default()
-                                                .as_secs(),
-                                        }),
-                                    })
-                                    .await;
-                            }
-                            RelayEvent::ReservationTimedOut { src_peer_id } => {
-                                debug!("🔁 Relay server: Reservation timed out for {}", src_peer_id);
-
-                                // Emit reputation event
-                                let _ = event_tx
-                                    .send(DhtEvent::ReputationEvent {
-                                        peer_id: src_peer_id.to_string(),
-                                        event_type: "RelayTimeout".to_string(),
-                                        impact: -10.0,
-                                        data: serde_json::json!({
-                                            "reason": "reservation_timeout",
-                                            "timestamp": SystemTime::now()
-                                                .duration_since(UNIX_EPOCH)
-                                                .unwrap_or_default()
-                                                .as_secs(),
-                                        }),
-                                    })
-                                    .await;
-                            }
-                            RelayEvent::CircuitReqDenied { src_peer_id, dst_peer_id, .. } => {
-                                debug!("🔁 Relay server: Denied circuit from {} to {}", src_peer_id, dst_peer_id);
-
-                                // Emit reputation event
-                                let _ = event_tx
-                                    .send(DhtEvent::ReputationEvent {
-                                        peer_id: src_peer_id.to_string(),
-                                        event_type: "RelayRefused".to_string(),
-                                        impact: -2.0,
-                                        data: serde_json::json!({
-                                            "reason": "circuit_denied",
-                                            "dst_peer_id": dst_peer_id.to_string(),
-                                            "timestamp": SystemTime::now()
-                                                .duration_since(UNIX_EPOCH)
-                                                .unwrap_or_default()
-                                                .as_secs(),
-                                        }),
-                                    })
-                                    .await;
-                            }
-                            RelayEvent::CircuitReqAccepted { src_peer_id, dst_peer_id, .. } => {
-                                info!("🔁 Relay server: Established circuit from {} to {}", src_peer_id, dst_peer_id);
-                                let _ = event_tx
-                                    .send(DhtEvent::Info(format!(
-                                        "Relaying traffic from {} to {}",
-                                        src_peer_id, dst_peer_id
-                                    )))
-                                    .await;
-
-                                // Emit reputation event
-                                let _ = event_tx
-                                    .send(DhtEvent::ReputationEvent {
-                                        peer_id: src_peer_id.to_string(),
-                                        event_type: "RelayCircuitEstablished".to_string(),
-                                        impact: 10.0,
-                                        data: serde_json::json!({
-                                            "dst_peer_id": dst_peer_id.to_string(),
-                                            "timestamp": SystemTime::now()
-                                                .duration_since(UNIX_EPOCH)
-                                                .unwrap_or_default()
-                                                .as_secs(),
-                                        }),
-                                    })
-                                    .await;
-                            }
-                            RelayEvent::CircuitClosed { src_peer_id, dst_peer_id, .. } => {
-                                debug!("🔁 Relay server: Circuit closed between {} and {}", src_peer_id, dst_peer_id);
-
-                                // Emit reputation event
-                                let _ = event_tx
-                                    .send(DhtEvent::ReputationEvent {
-                                        peer_id: src_peer_id.to_string(),
-                                        event_type: "RelayCircuitSuccessful".to_string(),
-                                        impact: 15.0,
-                                        data: serde_json::json!({
-                                            "dst_peer_id": dst_peer_id.to_string(),
-                                            "timestamp": SystemTime::now()
-                                                .duration_since(UNIX_EPOCH)
-                                                .unwrap_or_default()
-                                                .as_secs(),
-                                        }),
-                                    })
-                                    .await;
-                            }
-                            // Handle deprecated relay events (libp2p handles logging internally)
-                            _ => {}
-                        }
-                    }
-                    SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) => match bitswap {
-                        beetswap::Event::GetQueryResponse { query_id, data } => {
-                            info!("📥 Received Bitswap block (query_id: {:?}, size: {} bytes)", query_id, data.len());
-
-                            // Check if this is a root block query first
-                            if let Some(metadata) = root_query_mapping.lock().await.remove(&query_id) {
-                                info!("✅ This is a ROOT BLOCK for file: {}", metadata.merkle_root);
-
-                                // This is the root block containing CIDs - parse and request all data blocks
-                                match serde_json::from_slice::<Vec<Cid>>(&data) {
-                                    Ok(cids) => {
-
-                                        // Create queries map for this file's data blocks
-                                        let mut file_queries = HashMap::new();
-                                        let peer_id = match PeerId::from_str(&metadata.seeders[0]) {
-                                            Ok(id) => id.clone(),
-                                            Err(e) => {let _ = event_tx.send(DhtEvent::Error(e.to_string())).await; continue; }
-                                        };
-
-                                        for (i, cid) in cids.iter().enumerate() {
-                                            // Request the root block which contains the CIDs
-                                            let block_query_id = swarm.behaviour_mut().bitswap.get_from(&cid, peer_id);
-                                            file_queries.insert(block_query_id, i as u32);
-                                        }
-
-                                        // Calculate chunk size based on file size and number of chunks
-                                        let total_chunks = cids.len() as u64;
-                                        // assume 256kb
-                                        let chunk_size = 256 * 1024;
-
-                                        // Pre-calculate chunk offsets
-                                        let chunk_offsets: Vec<u64> = (0..total_chunks)
-                                            .map(|i| i * chunk_size)
-                                            .collect();
-
-                                        info!("Chunk offsets: {:?}", chunk_offsets);
-
-                                        info!("About to create ActiveDownload for file: {}", metadata.merkle_root);
-                                        let download_path = match metadata.download_path.as_ref() {
-                                            Some(path_str) => PathBuf::from_str(path_str),
-                                            None => {
-                                                error!("Download path not defined for file: {}", metadata.merkle_root);
-                                                return;
-                                            }
-                                        };
-                                        let download_path = match download_path {
-                                            Ok(path) => get_available_download_path(path).await,
-                                            Err(e) => {
-                                                error!("Invalid download path for file {}: {}", metadata.merkle_root, e);
-                                                return;
-                                            }
-                                        };
-
-                                    // Create active download with memory-mapped file
-                            match ActiveDownload::new(
-                                metadata.clone(),
-                                file_queries,
-                                &download_path,
-                                metadata.file_size,
-                                chunk_offsets,
-                            ) {
-                                Ok(active_download) => {
-                                    let active_download = Arc::new(tokio::sync::Mutex::new(active_download));
-
-                                    info!("Successfully created ActiveDownload");
-
-                                    active_downloads.lock().await.insert(
-                                        metadata.merkle_root.clone(),
-                                        Arc::clone(&active_download),
-                                    );
-
-                                    info!(
-                                        "Inserted into active_downloads map. Started tracking download for file {} with {} chunks (chunk_size: {} bytes)",
-                                        metadata.merkle_root, cids.len(), chunk_size
-                                    );
-                                }
-                                Err(e) => {
-                                    error!(
-                                        "FAILED to create memory-mapped file for {}: {}",
-                                        metadata.merkle_root, e
-                                    );
-                                }
-                            }
-
-                                    }
-                                    Err(e) => {
-                                        error!("Failed to parse root block as CIDs array for file {}: {}",
-                                            metadata.merkle_root, e);
-                                    }
-                                }
-                            } else {
-                                // This is a data block query - find the corresponding file and handle it
-
-                                let mut completed_downloads = Vec::new();
-
-                                // Check all active downloads for this query_id
-                                {
-                                    let mut active_downloads_guard = active_downloads.lock().await;
-
-                                    let mut found = false;
-                                    for (file_hash, active_download_lock) in active_downloads_guard.iter_mut() {
-                                        let mut active_download = active_download_lock.lock().await;
-                                        if let Some(chunk_index) = active_download.queries.remove(&query_id) {
-                                            found = true;
-
-                                            // This query belongs to this file - write the chunk to disk
-                                            let offset = active_download.chunk_offsets
-                                                .get(chunk_index as usize)
-                                                .copied()
-                                                .unwrap_or_else(|| {
-                                                    error!("No offset found for chunk_index: {}", chunk_index);
-                                                    0
-                                                });
-
-
-                                            if let Err(e) = active_download.write_chunk(chunk_index, &data, offset) {
-                                                error!("Failed to write chunk {} to disk for file {}: {}",
-                                                    chunk_index, file_hash, e);
-                                                break;
-                                            }
-
-                                            info!("Successfully wrote chunk {}/{} for file {}",
-                                                chunk_index + 1,
-                                                active_download.total_chunks,
-                                                file_hash);
-
-                                            let _ = event_tx.send(DhtEvent::BitswapChunkDownloaded {
-                                                file_hash: file_hash.clone(),
-                                                chunk_index,
-                                                total_chunks: active_download.total_chunks,
-                                                chunk_size: data.len(),
-                                            }).await;
-
-                                            // --- Reputation System Integration ---
-                                            // Reward the peer who sent this chunk.
-                                            // The `peer` ID is part of the GetQueryResponse event.
-                                            // The `peer` field was removed. We get the seeder from the metadata.
-                                            let seeder = match active_download.metadata.seeders.first() {
-                                                Some(s) => s.clone(),
-                                                None => continue, // Should not happen if we got a response
-                                            };
-
-                                            let _ = event_tx.send(DhtEvent::ReputationEvent {
-                                                peer_id: seeder.to_string(),
-                                                event_type: "TorrentChunkSeeded".to_string(),
-                                                impact: 2.0, // Use the default impact from EventType
-                                                data: serde_json::json!({
-                                                    "file_hash": file_hash,
-                                                    "chunk_index": chunk_index,
-                                                    "chunk_size": data.len(),
-                                                    "timestamp": unix_timestamp(),
-                                                }),
-                                            }).await;
-                                            debug!(
-                                                "Rewarded peer {} for seeding chunk {} of file {}",
-                                                seeder,
-                                                chunk_index,
-                                                file_hash
-                                            );
-
-                                           // In the "all chunks downloaded" section:
-                                            // In the "all chunks downloaded" section:
-if active_download.is_complete() {
-    // Flush and finalize the file
-    info!("Finalizing file...");
-    match active_download.finalize() {
-        Ok(_) => {
-            info!("Successfully finalized file");
+            // Create completed metadata with the correct absolute path
+            let mut completed_metadata = active_download.metadata.clone();
+            completed_metadata.download_path = Some(
+                active_download.final_file_path
+                    .to_string_lossy()
+                    .to_string()
+            );
+            completed_downloads.push(completed_metadata);
         }
-        Err(e) => {
-            error!("Failed to finalize file {}: {}", file_hash, e);
-            break;
-        }
-    }
-    
-    // Create completed metadata with the correct absolute path
-    let mut completed_metadata = active_download.metadata.clone();
-    completed_metadata.download_path = Some(
-        active_download.final_file_path
-            .to_string_lossy()
-            .to_string()
-    );
-    completed_downloads.push(completed_metadata);
-}
-                                            break;
-                                        }
-                                    }
-
-                                    if !found {
-                                        warn!("Received chunk for unknown query_id: {:?}", query_id);
-                                    }
-                                }
-
-                                // Send completion events for finished downloads
-                             // Send completion events for finished downloads
-                                for metadata in completed_downloads {
-                                    info!("Emitting DownloadedFile event for: {}", metadata.merkle_root);
-
-                                    if let Err(e) = event_tx.send(DhtEvent::DownloadedFile(metadata.clone())).await {
-                                        error!("Failed to send DownloadedFile event: {}", e);
-                                    }
-
-                                    // Just remove from active downloads - file is already finalized
-                                    info!("Removing from active_downloads...");
-                                    active_downloads.lock().await.remove(&metadata.merkle_root);
-                                }
-                            }
-                        }
-                        beetswap::Event::GetQueryError {
-                            query_id,
-                            error,
-                        } => {
-                            // Handle Bitswap query error
-                            error!("❌ Bitswap query {:?} failed: {:?}", query_id, error);
-
-                            // Clean up any active downloads that contain this failed query
-                            {
-                                let mut active_downloads_guard = active_downloads.lock().await;
-                                let mut failed_files = Vec::new();
-
-                                for (file_hash, active_download_lock) in active_downloads_guard.iter_mut() {
-                                        let mut active_download = active_download_lock.lock().await;
-                                    if active_download.queries.remove(&query_id).is_some() {
-                                        warn!("Query {:?} failed for file {}, removing from active downloads", query_id, file_hash);
-                                        failed_files.push(file_hash.clone());
-                                    }
-                                }
-
-                                // Remove failed downloads from active downloads
-                                for file_hash in failed_files {
-                                    active_downloads_guard.remove(&file_hash);
-                                }
-                            }
-
-                            let _ = event_tx.send(DhtEvent::BitswapError {
-                                query_id: format!("{:?}", query_id),
-                                error: format!("{:?}", error),
-                            }).await;
-                        }
-                    }
-                    SwarmEvent::Behaviour(DhtBehaviourEvent::Ping(ev)) => {
-                        match ev {
-                            libp2p::ping::Event { peer, result: Ok(rtt), .. } => {
-                                let is_connected = connected_peers.lock().await.contains(&peer);
-                                let rtt_ms = rtt.as_millis() as u64;
-                                debug!("Ping from peer {}: {} ms (connected: {})", peer, rtt_ms, is_connected);
-
-                                // Update peer selection metrics with latency
-                                {
-                                    let mut selection = peer_selection.lock().await;
-                                    selection.update_peer_latency(&peer.to_string(), rtt_ms);
-                                }
-
-                                let show = proxy_mgr.lock().await.is_proxy(&peer);
-
-                                if show {
-                                    let _ = event_tx
-                                        .send(DhtEvent::PeerRtt {
-                                            peer: peer.to_string(),
-                                            rtt_ms,
-                                        })
-                                        .await;
-
-                                        ping_failures.remove(&peer);
-                                } else {
-                                    // Ignore
-                                }
-                            }
-                            libp2p::ping::Event { peer, result: Err(libp2p::ping::Failure::Timeout), .. } => {
-                                let _ = event_tx
-                                    .send(DhtEvent::Error(format!("Ping timeout {}", peer)))
-                                    .await;
-                                let count = ping_failures.entry(peer).or_insert(0);
-                                *count += 1;
-                                if *count >= 3 {
-                                    swarm.behaviour_mut().kademlia.remove_peer(&peer);
-                                    ping_failures.remove(&peer);
-                                    let _ = event_tx.send(DhtEvent::Error(format!(
-                                        "Peer {} removed after 3 failed pings", peer
-                                    ))).await;
-                                }
-                            }
-                            libp2p::ping::Event { peer, result: Err(e), .. } => {
-                                warn!("ping error with {}: {}", peer, e);
-                                let count = ping_failures.entry(peer).or_insert(0);
-                                *count += 1;
-                                if *count >= 3 {
-                                    swarm.behaviour_mut().kademlia.remove_peer(&peer);
-                                    ping_failures.remove(&peer);
-                                    let _ = event_tx.send(DhtEvent::Error(format!(
-                                        "Peer {} removed after 3 failed pings", peer
-                                    ))).await;
-                                }
-                            }
-                        }
-                    }
-                    SwarmEvent::Behaviour(DhtBehaviourEvent::AutonatClient(ev)) => {
-                        handle_autonat_client_event(ev, &metrics, &event_tx).await;
-                    }
-                    SwarmEvent::Behaviour(DhtBehaviourEvent::AutonatServer(ev)) => {
-                        debug!(?ev, "AutoNAT server event");
-                    }
-                    SwarmEvent::Behaviour(DhtBehaviourEvent::Dcutr(ev)) => {
-                        handle_dcutr_event(ev, &metrics, &event_tx).await;
-                    }
-                    SwarmEvent::ExternalAddrConfirmed { address, .. } => {
-                        handle_external_addr_confirmed(&address, &metrics, &event_tx, &proxy_mgr)
-                            .await;
-                    }
-                    SwarmEvent::ExternalAddrExpired { address, .. } => {
-                        handle_external_addr_expired(&address, &metrics, &event_tx, &proxy_mgr)
-                            .await;
-                    }
-                    SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
-                        let remote_addr = endpoint.get_remote_address().clone();
-
-                        // Initialize peer metrics for smart selection
-                        {
-                            let mut selection = peer_selection.lock().await;
-                            let peer_metrics = PeerMetrics::new(
-                                peer_id.to_string(),
-                                // endpoint.get_remote_address().to_string(),
-                                remote_addr.to_string(),
-                            );
-                            selection.update_peer_metrics(peer_metrics);
-                        }
-
-                        // Add peer to Kademlia routing table (only if reachable)
-                        // swarm.behaviour_mut().kademlia.add_address(&peer_id, endpoint.get_remote_address().clone());
-                        if ma_plausibly_reachable(&remote_addr) {
-                            swarm
-                                .behaviour_mut()
-                                .kademlia
-                                .add_address(&peer_id, remote_addr.clone());
-                        } else {
-                            debug!(
-                                "⏭️ Not adding unreachable address to Kademlia for {}: {}",
-                                peer_id, remote_addr
-                            );
-                        }
-
-                        let peers_count = {
-                            let mut peers = connected_peers.lock().await;
-                            peers.insert(peer_id);
-                            peers.len()
-                        };
-                        if let Ok(mut m) = metrics.try_lock() {
-                            m.last_success = Some(SystemTime::now());
-                        }
-                        // info!("✅ Connected to {} via {}", peer_id, endpoint.get_remote_address());
-                        info!("✅ Connected to {} via {}", peer_id, remote_addr);
-                        info!("   Total connected peers: {}", peers_count);
-                        let _ = event_tx
-                            .send(DhtEvent::PeerConnected {
-                                peer_id: peer_id.to_string(),
-                                address: Some(remote_addr.to_string()),
-                            })
-                            .await;
-                    }
-                     SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
-                        warn!("❌ DISCONNECTED from peer: {}", peer_id);
-                        warn!("   Cause: {:?}", cause);
-
-                        let peers_count = {
-                            let mut peers = connected_peers.lock().await;
-                            peers.remove(&peer_id);
-                            peers.len()
-                        };
-
-                        // Remove proxy state
-                        proxy_mgr.lock().await.remove_all(&peer_id);
-
-                        // Immediately remove disconnected peer from seeder heartbeat cache
-                        let pid_str = peer_id.to_string();
-                        let mut updated_records: Vec<(String, Vec<u8>)> = Vec::new();
-                        {
-                            let mut cache = seeder_heartbeats_cache.lock().await;
-                            let now = unix_timestamp();
-                            let mut to_remove_keys: Vec<String> = Vec::new();
-                            for (file_hash, entry) in cache.iter_mut() {
-                                let before = entry.heartbeats.len();
-                                // remove any heartbeats for this peer
-                                entry.heartbeats.retain(|hb| hb.peer_id != pid_str);
-
-                                // prune expired while we're here
-                                entry.heartbeats = prune_heartbeats(entry.heartbeats.clone(), now);
-
-                                if entry.heartbeats.len() != before {
-                                    // update metadata fields
-                                    let seeder_strings = heartbeats_to_peer_list(&entry.heartbeats);
-                                    entry.metadata["seeders"] = serde_json::Value::Array(
-                                        seeder_strings
-                                            .iter()
-                                            .cloned()
-                                            .map(serde_json::Value::String)
-                                            .collect(),
-                                    );
-                                    entry.metadata["seederHeartbeats"] =
-                                        serde_json::to_value(&entry.heartbeats)
-                                            .unwrap_or_else(|_| serde_json::Value::Array(vec![]));
-
-                                    // If no seeders left we can drop the cache entry (and optionally stop providing)
-                                    if entry.heartbeats.is_empty() {
-                                        to_remove_keys.push(file_hash.clone());
-                                    } else if let Ok(bytes) = serde_json::to_vec(&entry.metadata) {
-                                        updated_records.push((file_hash.clone(), bytes));
-                                    }
-                                }
-                            }
-                            for k in to_remove_keys {
-                                cache.remove(&k);
-                            }
-                        } // release cache lock
-
-                        // Push updated records to Kademlia for each updated file
-                        for (file_hash, bytes) in updated_records {
-                            let key = kad::RecordKey::new(&file_hash.as_bytes());
-                            let record = Record {
-                                key: key.clone(),
-                                value: bytes.clone(),
-                                publisher: Some(peer_id.clone()),
-                                expires: None,
-                            };
-                            if let Err(e) =
-                                swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One)
-                            {
-                                warn!("Failed to refresh DHT record after disconnect for {}: {}", file_hash, e);
-                            } else {
-                                debug!("Refreshed DHT record for {} after peer {} disconnected", file_hash, peer_id);
-                            }
-
-                            // notify UI with updated metadata so frontend refreshes immediately
-                            if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                                if let (Some(merkle_root), Some(file_name), Some(file_size), Some(created_at)) = (
-                                    json_val.get("merkle_root").and_then(|v| v.as_str()),
-                                    json_val.get("file_name").and_then(|v| v.as_str()),
-                                    json_val.get("file_size").and_then(|v| v.as_u64()),
-                                    json_val.get("created_at").and_then(|v| v.as_u64()),
-                                ) {
-                                    let seeders = json_val
-                                        .get("seeders")
-                                        .and_then(|v| v.as_array())
-                                        .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
-                                        .unwrap_or_default();
-
-                                    let metadata = FileMetadata {
-                                        merkle_root: merkle_root.to_string(),
-                                        file_name: file_name.to_string(),
-                                        file_size,
-                                        file_data: Vec::new(),
-                                        seeders,
-                                        created_at,
-                                        mime_type: json_val.get("mime_type").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                        is_encrypted: json_val.get("is_encrypted").and_then(|v| v.as_bool()).unwrap_or(false),
-                                        encryption_method: json_val.get("encryption_method").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                        key_fingerprint: json_val.get("key_fingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                        version: json_val.get("version").and_then(|v| v.as_u64()).map(|u| u as u32),
-                                        parent_hash: json_val.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                        cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
-                                        encrypted_key_bundle: json_val.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
-                                        info_hash: json_val.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                        trackers: json_val.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
-                                        is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
-                                        price: json_val.get("price").and_then(|v| v.as_f64()),
-                                        uploader_address: json_val.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                        http_sources: json_val.get("http_sources").and_then(|v| {serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)}),
-                                        ..Default::default()
-                                    };
-                                    let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
-                                }
-                            }
-                        }
-                        info!("   Remaining connected peers: {}", peers_count);
-                        let _ = event_tx
-                            .send(DhtEvent::PeerDisconnected {
-                                peer_id: peer_id.to_string(),
-                            })
-                            .await;
-                    }
-                    SwarmEvent::NewListenAddr { address, .. } => {
-                        // Always record in metrics for monitoring/debugging
-                        if let Ok(mut m) = metrics.try_lock() {
-                            m.record_listen_addr(&address);
-                        }
-                        
-                        // For relay circuit addresses, always advertise them
-                        if address.iter().any(|component| matches!(component, Protocol::P2pCircuit)) {
-                            swarm.add_external_address(address.clone());
-                            info!("✅ Advertising relay address: {}", address);
-                        } else {
-                            // For regular addresses, only advertise if they're plausibly reachable
-                            // This prevents advertising localhost/private IPs to the network
-                            if ma_plausibly_reachable(&address) {
-                                swarm.add_external_address(address.clone());
-                                info!("✅ Advertising reachable address: {}", address);
-                            } else {
-                                debug!("⏭️  Not advertising unreachable address: {}", address);
-                            }
-                        }
-                    }
-                    SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
-                        // Check if this error is for an unreachable address before recording it
-                        let is_unreachable_addr = if let Some(pid) = peer_id {
-                            if let Some(bad_ma) = extract_multiaddr_from_error_str(&error.to_string()) {
-                                if !ma_plausibly_reachable(&bad_ma) {
-                                    swarm.behaviour_mut().kademlia.remove_address(&pid, &bad_ma);
-                                    true
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
-
-                        // Only record errors for reachable addresses
-                        if !is_unreachable_addr {
-                            if let Ok(mut m) = metrics.try_lock() {
-                                m.last_error = Some(error.to_string());
-                                m.last_error_at = Some(SystemTime::now());
-                                if let Some(pid) = peer_id {
-                                    if bootstrap_peer_ids.contains(&pid) {
-                                        m.bootstrap_failures = m.bootstrap_failures.saturating_add(1);
-                                    }
-                                }
-                            }
-                        }
-
-                        if let Some(pid) = peer_id {
-                            // Only log error for addresses that should be reachable
-                            if !is_unreachable_addr {
-                                error!("❌ Outgoing connection error to {}: {}", pid, error);
-                                
-                                let is_bootstrap = bootstrap_peer_ids.contains(&pid);
-                                if error.to_string().contains("rsa") {
-                                    error!("   ℹ Hint: This node uses RSA keys. Enable 'rsa' feature if needed.");
-                                } else if error.to_string().contains("Timeout") {
-                                    if is_bootstrap {
-                                        warn!("   ℹ Hint: Bootstrap nodes may be unreachable or overloaded.");
-                                    } else {
-                                        warn!("   ℹ Hint: Peer may be unreachable (timeout).");
-                                    }
-                                } else if error.to_string().contains("Connection refused") {
-                                    if is_bootstrap {
-                                        warn!("   ℹ Hint: Bootstrap nodes are not accepting connections.");
-                                    } else {
-                                        warn!("   ℹ Hint: Peer is not accepting connections.");
-                                    }
-                                } else if error.to_string().contains("Transport") {
-                                    warn!("   ℹ Hint: Transport protocol negotiation failed.");
-                                }
-                            } else {
-                                debug!("⏭️ Skipped connection to unreachable address for {}: {}", pid, error);
-                            }
-                        } else {
-                            error!("❌ Outgoing connection error to unknown peer: {}", error);
-                        }
-                        let _ = event_tx.send(DhtEvent::Error(format!("Connection failed: {}", error))).await;
-                    }
-                    SwarmEvent::Behaviour(DhtBehaviourEvent::ProxyRr(ev)) => {
-                        use libp2p::request_response::{Event as RREvent, Message};
-                        match ev {
-                            RREvent::Message { peer, message } => match message {
-                                // Echo server
-                                Message::Request { request, channel, .. } => {
-                                    proxy_mgr.lock().await.set_capable(peer);
-                                    proxy_mgr.lock().await.set_online(peer);
-                                    let _ = event_tx.send(DhtEvent::ProxyStatus {
-                                        id: peer.to_string(),
-                                        address: String::new(),
-                                        status: "online".into(),
-                                        latency_ms: None,
-                                        error: None,
-                                    }).await;
-                                    let EchoRequest(data) = request;
-
-                                    // Check if this is a payment notification
-                                    if let Ok(json_str) = std::str::from_utf8(&data) {
-                                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
-                                            if parsed.get("type").and_then(|v| v.as_str()) == Some("payment_notification") {
-                                                // This is a payment notification, emit special event
-                                                if let Some(payload) = parsed.get("payload") {
-                                                    info!("💰 Received payment notification from peer {}: {:?}", peer, payload);
-                                                    let _ = event_tx.send(DhtEvent::PaymentNotificationReceived {
-                                                        from_peer: peer.to_string(),
-                                                        payload: payload.clone(),
-                                                    }).await;
+                                                    break;
                                                 }
                                             }
+
+                                            if !found {
+                                                warn!("Received chunk for unknown query_id: {:?}", query_id);
+                                            }
+                                        }
+
+                                        // Send completion events for finished downloads
+                                     // Send completion events for finished downloads
+                                        for metadata in completed_downloads {
+                                            info!("Emitting DownloadedFile event for: {}", metadata.merkle_root);
+
+                                            if let Err(e) = event_tx.send(DhtEvent::DownloadedFile(metadata.clone())).await {
+                                                error!("Failed to send DownloadedFile event: {}", e);
+                                            }
+
+                                            // Just remove from active downloads - file is already finalized
+                                            info!("Removing from active_downloads...");
+                                            active_downloads.lock().await.remove(&metadata.merkle_root);
+                                        }
+                                    }
+                                }
+                                beetswap::Event::GetQueryError {
+                                    query_id,
+                                    error,
+                                } => {
+                                    // Handle Bitswap query error
+                                    error!("❌ Bitswap query {:?} failed: {:?}", query_id, error);
+
+                                    // Clean up any active downloads that contain this failed query
+                                    {
+                                        let mut active_downloads_guard = active_downloads.lock().await;
+                                        let mut failed_files = Vec::new();
+
+                                        for (file_hash, active_download_lock) in active_downloads_guard.iter_mut() {
+                                                let mut active_download = active_download_lock.lock().await;
+                                            if active_download.queries.remove(&query_id).is_some() {
+                                                warn!("Query {:?} failed for file {}, removing from active downloads", query_id, file_hash);
+                                                failed_files.push(file_hash.clone());
+                                            }
+                                        }
+
+                                        // Remove failed downloads from active downloads
+                                        for file_hash in failed_files {
+                                            active_downloads_guard.remove(&file_hash);
                                         }
                                     }
 
-                                    // 2) Showing received data to UI (for non-payment messages)
-                                    let preview = std::str::from_utf8(&data).ok().map(|s| s.to_string());
-                                    let _ = event_tx.send(DhtEvent::EchoReceived {
-                                        from: peer.to_string(),
-                                        utf8: preview,
-                                        bytes: data.len(),
+                                    let _ = event_tx.send(DhtEvent::BitswapError {
+                                        query_id: format!("{:?}", query_id),
+                                        error: format!("{:?}", error),
                                     }).await;
-
-                                    // 3) Echo response
-                                    swarm.behaviour_mut().proxy_rr
-                                        .send_response(channel, EchoResponse(data))
-                                        .unwrap_or_else(|e| error!("send_response failed: {e:?}"));
-                                }
-                                // Client response
-                                Message::Response { request_id, response } => {
-                                    proxy_mgr.lock().await.set_capable(peer);
-                                    proxy_mgr.lock().await.set_online(peer);
-                                    let _ = event_tx.send(DhtEvent::ProxyStatus {
-                                        id: peer.to_string(),
-                                        address: String::new(),
-                                        status: "online".into(),
-                                        latency_ms: None,
-                                        error: None,
-                                    }).await;
-
-                                    if let Some(PendingEcho { tx, .. }) = pending_echo.lock().await.remove(&request_id) {
-                                        let EchoResponse(data) = response;
-                                        let _ = tx.send(Ok(data));
-                                    }
-                                }
-                            },
-
-                            RREvent::OutboundFailure { request_id, error, .. } => {
-                                if let Some(PendingEcho { peer, tx }) = pending_echo.lock().await.remove(&request_id) {
-                                    let _ = tx.send(Err(format!("outbound failure: {error:?}")));
-
-                                    {
-                                        let mut pm = proxy_mgr.lock().await;
-                                        pm.set_offline(&peer);
-                                    }
-                                    let _ = event_tx.send(DhtEvent::ProxyStatus {
-                                        id: peer.to_string(),
-                                        address: String::new(),
-                                        status: "offline".into(),
-                                        latency_ms: None,
-                                        error: Some(error.to_string()),
-                                    }).await;
-                                } else {
-                                    warn!("OutboundFailure for unknown request_id {:?}: {:?}", request_id, error);
                                 }
                             }
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::Ping(ev)) => {
+                                match ev {
+                                    libp2p::ping::Event { peer, result: Ok(rtt), .. } => {
+                                        let is_connected = connected_peers.lock().await.contains(&peer);
+                                        let rtt_ms = rtt.as_millis() as u64;
+                                        debug!("Ping from peer {}: {} ms (connected: {})", peer, rtt_ms, is_connected);
 
-                            RREvent::InboundFailure { peer, error, .. } => {
+                                        // Update peer selection metrics with latency
+                                        {
+                                            let mut selection = peer_selection.lock().await;
+                                            selection.update_peer_latency(&peer.to_string(), rtt_ms);
+                                        }
+
+                                        let show = proxy_mgr.lock().await.is_proxy(&peer);
+
+                                        if show {
+                                            let _ = event_tx
+                                                .send(DhtEvent::PeerRtt {
+                                                    peer: peer.to_string(),
+                                                    rtt_ms,
+                                                })
+                                                .await;
+
+                                                ping_failures.remove(&peer);
+                                        } else {
+                                            // Ignore
+                                        }
+                                    }
+                                    libp2p::ping::Event { peer, result: Err(libp2p::ping::Failure::Timeout), .. } => {
+                                        let _ = event_tx
+                                            .send(DhtEvent::Error(format!("Ping timeout {}", peer)))
+                                            .await;
+                                        let count = ping_failures.entry(peer).or_insert(0);
+                                        *count += 1;
+                                        if *count >= 3 {
+                                            swarm.behaviour_mut().kademlia.remove_peer(&peer);
+                                            ping_failures.remove(&peer);
+                                            let _ = event_tx.send(DhtEvent::Error(format!(
+                                                "Peer {} removed after 3 failed pings", peer
+                                            ))).await;
+                                        }
+                                    }
+                                    libp2p::ping::Event { peer, result: Err(e), .. } => {
+                                        warn!("ping error with {}: {}", peer, e);
+                                        let count = ping_failures.entry(peer).or_insert(0);
+                                        *count += 1;
+                                        if *count >= 3 {
+                                            swarm.behaviour_mut().kademlia.remove_peer(&peer);
+                                            ping_failures.remove(&peer);
+                                            let _ = event_tx.send(DhtEvent::Error(format!(
+                                                "Peer {} removed after 3 failed pings", peer
+                                            ))).await;
+                                        }
+                                    }
+                                }
+                            }
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::AutonatClient(ev)) => {
+                                handle_autonat_client_event(ev, &metrics, &event_tx).await;
+                            }
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::AutonatServer(ev)) => {
+                                debug!(?ev, "AutoNAT server event");
+                            }
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::Dcutr(ev)) => {
+                                handle_dcutr_event(ev, &metrics, &event_tx).await;
+                            }
+                            SwarmEvent::ExternalAddrConfirmed { address, .. } => {
+                                handle_external_addr_confirmed(&address, &metrics, &event_tx, &proxy_mgr)
+                                    .await;
+                            }
+                            SwarmEvent::ExternalAddrExpired { address, .. } => {
+                                handle_external_addr_expired(&address, &metrics, &event_tx, &proxy_mgr)
+                                    .await;
+                            }
+                            SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
+                                let remote_addr = endpoint.get_remote_address().clone();
+
+                                // Initialize peer metrics for smart selection
                                 {
-                                    let mut pm = proxy_mgr.lock().await;
-                                    pm.set_offline(&peer);
+                                    let mut selection = peer_selection.lock().await;
+                                    let peer_metrics = PeerMetrics::new(
+                                        peer_id.to_string(),
+                                        // endpoint.get_remote_address().to_string(),
+                                        remote_addr.to_string(),
+                                    );
+                                    selection.update_peer_metrics(peer_metrics);
                                 }
-                                let _ = event_tx.send(DhtEvent::ProxyStatus {
-                                    id: peer.to_string(),
-                                    address: String::new(),
-                                    status: "offline".into(),
-                                    latency_ms: None,
-                                    error: Some(error.to_string()),
-                                }).await;
+
+                                // Add peer to Kademlia routing table (only if reachable)
+                                // swarm.behaviour_mut().kademlia.add_address(&peer_id, endpoint.get_remote_address().clone());
+                                if ma_plausibly_reachable(&remote_addr) {
+                                    swarm
+                                        .behaviour_mut()
+                                        .kademlia
+                                        .add_address(&peer_id, remote_addr.clone());
+                                } else {
+                                    debug!(
+                                        "⏭️ Not adding unreachable address to Kademlia for {}: {}",
+                                        peer_id, remote_addr
+                                    );
+                                }
+
+                                let peers_count = {
+                                    let mut peers = connected_peers.lock().await;
+                                    peers.insert(peer_id);
+                                    peers.len()
+                                };
+                                if let Ok(mut m) = metrics.try_lock() {
+                                    m.last_success = Some(SystemTime::now());
+                                }
+                                // info!("✅ Connected to {} via {}", peer_id, endpoint.get_remote_address());
+                                info!("✅ Connected to {} via {}", peer_id, remote_addr);
+                                info!("   Total connected peers: {}", peers_count);
+                                let _ = event_tx
+                                    .send(DhtEvent::PeerConnected {
+                                        peer_id: peer_id.to_string(),
+                                        address: Some(remote_addr.to_string()),
+                                    })
+                                    .await;
                             }
+                             SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
+                                warn!("❌ DISCONNECTED from peer: {}", peer_id);
+                                warn!("   Cause: {:?}", cause);
 
-                            RREvent::ResponseSent { .. } => {}
-                        }
-                    }
-                    SwarmEvent::Behaviour(DhtBehaviourEvent::WebrtcSignalingRr(ev)) => {
-                        use libp2p::request_response::{Event as RREvent, Message};
-                        match ev {
-                            RREvent::Message { peer, message } => match message {
-                                // WebRTC offer request
-                                Message::Request { request, channel, .. } => {
-                                    let WebRTCOfferRequest { offer_sdp, file_hash, requester_peer_id: _requester_peer_id } = request;
-                                    info!("Received WebRTC offer from {} for file {}", peer, file_hash);
+                                let peers_count = {
+                                    let mut peers = connected_peers.lock().await;
+                                    peers.remove(&peer_id);
+                                    peers.len()
+                                };
 
-                                    // Get WebRTC service to handle the offer
-                                    if let Some(webrtc_service) = get_webrtc_service().await {
-                                        // Create WebRTC answer using the WebRTC service
-                                        match webrtc_service.establish_connection_with_offer(peer.to_string(), offer_sdp).await {
-                                            Ok(answer_sdp) => {
-                                                info!("Created WebRTC answer for peer {}", peer);
-                                                swarm.behaviour_mut().webrtc_signaling_rr
-                                                    .send_response(channel, WebRTCAnswerResponse { answer_sdp })
-                                                    .unwrap_or_else(|e| error!("send_response failed: {e:?}"));
+                                // Remove proxy state
+                                proxy_mgr.lock().await.remove_all(&peer_id);
+
+                                // Immediately remove disconnected peer from seeder heartbeat cache
+                                let pid_str = peer_id.to_string();
+                                let mut updated_records: Vec<(String, Vec<u8>)> = Vec::new();
+                                {
+                                    let mut cache = seeder_heartbeats_cache.lock().await;
+                                    let now = unix_timestamp();
+                                    let mut to_remove_keys: Vec<String> = Vec::new();
+                                    for (file_hash, entry) in cache.iter_mut() {
+                                        let before = entry.heartbeats.len();
+                                        // remove any heartbeats for this peer
+                                        entry.heartbeats.retain(|hb| hb.peer_id != pid_str);
+
+                                        // prune expired while we're here
+                                        entry.heartbeats = prune_heartbeats(entry.heartbeats.clone(), now);
+
+                                        if entry.heartbeats.len() != before {
+                                            // update metadata fields
+                                            let seeder_strings = heartbeats_to_peer_list(&entry.heartbeats);
+                                            entry.metadata["seeders"] = serde_json::Value::Array(
+                                                seeder_strings
+                                                    .iter()
+                                                    .cloned()
+                                                    .map(serde_json::Value::String)
+                                                    .collect(),
+                                            );
+                                            entry.metadata["seederHeartbeats"] =
+                                                serde_json::to_value(&entry.heartbeats)
+                                                    .unwrap_or_else(|_| serde_json::Value::Array(vec![]));
+
+                                            // If no seeders left we can drop the cache entry (and optionally stop providing)
+                                            if entry.heartbeats.is_empty() {
+                                                to_remove_keys.push(file_hash.clone());
+                                            } else if let Ok(bytes) = serde_json::to_vec(&entry.metadata) {
+                                                updated_records.push((file_hash.clone(), bytes));
                                             }
-                                            Err(e) => {
-                                                error!("Failed to create WebRTC answer for peer {}: {}", peer, e);
-                                                let error_answer = "error:failed-to-create-answer".to_string();
+                                        }
+                                    }
+                                    for k in to_remove_keys {
+                                        cache.remove(&k);
+                                    }
+                                } // release cache lock
+
+                                // Push updated records to Kademlia for each updated file
+                                for (file_hash, bytes) in updated_records {
+                                    let key = kad::RecordKey::new(&file_hash.as_bytes());
+                                    let record = Record {
+                                        key: key.clone(),
+                                        value: bytes.clone(),
+                                        publisher: Some(peer_id.clone()),
+                                        expires: None,
+                                    };
+                                    if let Err(e) =
+                                        swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One)
+                                    {
+                                        warn!("Failed to refresh DHT record after disconnect for {}: {}", file_hash, e);
+                                    } else {
+                                        debug!("Refreshed DHT record for {} after peer {} disconnected", file_hash, peer_id);
+                                    }
+
+                                    // notify UI with updated metadata so frontend refreshes immediately
+                                    if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                                        if let (Some(merkle_root), Some(file_name), Some(file_size), Some(created_at)) = (
+                                            json_val.get("merkle_root").and_then(|v| v.as_str()),
+                                            json_val.get("file_name").and_then(|v| v.as_str()),
+                                            json_val.get("file_size").and_then(|v| v.as_u64()),
+                                            json_val.get("created_at").and_then(|v| v.as_u64()),
+                                        ) {
+                                            let seeders = json_val
+                                                .get("seeders")
+                                                .and_then(|v| v.as_array())
+                                                .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                                                .unwrap_or_default();
+
+                                            let metadata = FileMetadata {
+                                                merkle_root: merkle_root.to_string(),
+                                                file_name: file_name.to_string(),
+                                                file_size,
+                                                file_data: Vec::new(),
+                                                seeders,
+                                                created_at,
+                                                mime_type: json_val.get("mime_type").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                is_encrypted: json_val.get("is_encrypted").and_then(|v| v.as_bool()).unwrap_or(false),
+                                                encryption_method: json_val.get("encryption_method").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                key_fingerprint: json_val.get("key_fingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                version: json_val.get("version").and_then(|v| v.as_u64()).map(|u| u as u32),
+                                                parent_hash: json_val.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
+                                                encrypted_key_bundle: json_val.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
+                                                info_hash: json_val.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                trackers: json_val.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
+                                                is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
+                                                price: json_val.get("price").and_then(|v| v.as_f64()),
+                                                uploader_address: json_val.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                http_sources: json_val.get("http_sources").and_then(|v| {serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)}),
+                                                ..Default::default()
+                                            };
+                                            let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
+                                        }
+                                    }
+                                }
+                                info!("   Remaining connected peers: {}", peers_count);
+                                let _ = event_tx
+                                    .send(DhtEvent::PeerDisconnected {
+                                        peer_id: peer_id.to_string(),
+                                    })
+                                    .await;
+                            }
+                            SwarmEvent::NewListenAddr { address, .. } => {
+                                // Always record in metrics for monitoring/debugging
+                                if let Ok(mut m) = metrics.try_lock() {
+                                    m.record_listen_addr(&address);
+                                }
+
+                                // For relay circuit addresses, always advertise them
+                                if address.iter().any(|component| matches!(component, Protocol::P2pCircuit)) {
+                                    swarm.add_external_address(address.clone());
+                                    info!("✅ Advertising relay address: {}", address);
+                                } else {
+                                    // For regular addresses, only advertise if they're plausibly reachable
+                                    // This prevents advertising localhost/private IPs to the network
+                                    if ma_plausibly_reachable(&address) {
+                                        swarm.add_external_address(address.clone());
+                                        info!("✅ Advertising reachable address: {}", address);
+                                    } else {
+                                        debug!("⏭️  Not advertising unreachable address: {}", address);
+                                    }
+                                }
+                            }
+                            SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                                // Check if this error is for an unreachable address before recording it
+                                let is_unreachable_addr = if let Some(pid) = peer_id {
+                                    if let Some(bad_ma) = extract_multiaddr_from_error_str(&error.to_string()) {
+                                        if !ma_plausibly_reachable(&bad_ma) {
+                                            swarm.behaviour_mut().kademlia.remove_address(&pid, &bad_ma);
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                };
+
+                                // Only record errors for reachable addresses
+                                if !is_unreachable_addr {
+                                    if let Ok(mut m) = metrics.try_lock() {
+                                        m.last_error = Some(error.to_string());
+                                        m.last_error_at = Some(SystemTime::now());
+                                        if let Some(pid) = peer_id {
+                                            if bootstrap_peer_ids.contains(&pid) {
+                                                m.bootstrap_failures = m.bootstrap_failures.saturating_add(1);
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if let Some(pid) = peer_id {
+                                    // Only log error for addresses that should be reachable
+                                    if !is_unreachable_addr {
+                                        error!("❌ Outgoing connection error to {}: {}", pid, error);
+
+                                        let is_bootstrap = bootstrap_peer_ids.contains(&pid);
+                                        if error.to_string().contains("rsa") {
+                                            error!("   ℹ Hint: This node uses RSA keys. Enable 'rsa' feature if needed.");
+                                        } else if error.to_string().contains("Timeout") {
+                                            if is_bootstrap {
+                                                warn!("   ℹ Hint: Bootstrap nodes may be unreachable or overloaded.");
+                                            } else {
+                                                warn!("   ℹ Hint: Peer may be unreachable (timeout).");
+                                            }
+                                        } else if error.to_string().contains("Connection refused") {
+                                            if is_bootstrap {
+                                                warn!("   ℹ Hint: Bootstrap nodes are not accepting connections.");
+                                            } else {
+                                                warn!("   ℹ Hint: Peer is not accepting connections.");
+                                            }
+                                        } else if error.to_string().contains("Transport") {
+                                            warn!("   ℹ Hint: Transport protocol negotiation failed.");
+                                        }
+                                    } else {
+                                        debug!("⏭️ Skipped connection to unreachable address for {}: {}", pid, error);
+                                    }
+                                } else {
+                                    error!("❌ Outgoing connection error to unknown peer: {}", error);
+                                }
+                                let _ = event_tx.send(DhtEvent::Error(format!("Connection failed: {}", error))).await;
+                            }
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::ProxyRr(ev)) => {
+                                use libp2p::request_response::{Event as RREvent, Message};
+                                match ev {
+                                    RREvent::Message { peer, message } => match message {
+                                        // Echo server
+                                        Message::Request { request, channel, .. } => {
+                                            proxy_mgr.lock().await.set_capable(peer);
+                                            proxy_mgr.lock().await.set_online(peer);
+                                            let _ = event_tx.send(DhtEvent::ProxyStatus {
+                                                id: peer.to_string(),
+                                                address: String::new(),
+                                                status: "online".into(),
+                                                latency_ms: None,
+                                                error: None,
+                                            }).await;
+                                            let EchoRequest(data) = request;
+
+                                            // Check if this is a payment notification
+                                            if let Ok(json_str) = std::str::from_utf8(&data) {
+                                                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
+                                                    if parsed.get("type").and_then(|v| v.as_str()) == Some("payment_notification") {
+                                                        // This is a payment notification, emit special event
+                                                        if let Some(payload) = parsed.get("payload") {
+                                                            info!("💰 Received payment notification from peer {}: {:?}", peer, payload);
+                                                            let _ = event_tx.send(DhtEvent::PaymentNotificationReceived {
+                                                                from_peer: peer.to_string(),
+                                                                payload: payload.clone(),
+                                                            }).await;
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            // 2) Showing received data to UI (for non-payment messages)
+                                            let preview = std::str::from_utf8(&data).ok().map(|s| s.to_string());
+                                            let _ = event_tx.send(DhtEvent::EchoReceived {
+                                                from: peer.to_string(),
+                                                utf8: preview,
+                                                bytes: data.len(),
+                                            }).await;
+
+                                            // 3) Echo response
+                                            swarm.behaviour_mut().proxy_rr
+                                                .send_response(channel, EchoResponse(data))
+                                                .unwrap_or_else(|e| error!("send_response failed: {e:?}"));
+                                        }
+                                        // Client response
+                                        Message::Response { request_id, response } => {
+                                            proxy_mgr.lock().await.set_capable(peer);
+                                            proxy_mgr.lock().await.set_online(peer);
+                                            let _ = event_tx.send(DhtEvent::ProxyStatus {
+                                                id: peer.to_string(),
+                                                address: String::new(),
+                                                status: "online".into(),
+                                                latency_ms: None,
+                                                error: None,
+                                            }).await;
+
+                                            if let Some(PendingEcho { tx, .. }) = pending_echo.lock().await.remove(&request_id) {
+                                                let EchoResponse(data) = response;
+                                                let _ = tx.send(Ok(data));
+                                            }
+                                        }
+                                    },
+
+                                    RREvent::OutboundFailure { request_id, error, .. } => {
+                                        if let Some(PendingEcho { peer, tx }) = pending_echo.lock().await.remove(&request_id) {
+                                            let _ = tx.send(Err(format!("outbound failure: {error:?}")));
+
+                                            {
+                                                let mut pm = proxy_mgr.lock().await;
+                                                pm.set_offline(&peer);
+                                            }
+                                            let _ = event_tx.send(DhtEvent::ProxyStatus {
+                                                id: peer.to_string(),
+                                                address: String::new(),
+                                                status: "offline".into(),
+                                                latency_ms: None,
+                                                error: Some(error.to_string()),
+                                            }).await;
+                                        } else {
+                                            warn!("OutboundFailure for unknown request_id {:?}: {:?}", request_id, error);
+                                        }
+                                    }
+
+                                    RREvent::InboundFailure { peer, error, .. } => {
+                                        {
+                                            let mut pm = proxy_mgr.lock().await;
+                                            pm.set_offline(&peer);
+                                        }
+                                        let _ = event_tx.send(DhtEvent::ProxyStatus {
+                                            id: peer.to_string(),
+                                            address: String::new(),
+                                            status: "offline".into(),
+                                            latency_ms: None,
+                                            error: Some(error.to_string()),
+                                        }).await;
+                                    }
+
+                                    RREvent::ResponseSent { .. } => {}
+                                }
+                            }
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::WebrtcSignalingRr(ev)) => {
+                                use libp2p::request_response::{Event as RREvent, Message};
+                                match ev {
+                                    RREvent::Message { peer, message } => match message {
+                                        // WebRTC offer request
+                                        Message::Request { request, channel, .. } => {
+                                            let WebRTCOfferRequest { offer_sdp, file_hash, requester_peer_id: _requester_peer_id } = request;
+                                            info!("Received WebRTC offer from {} for file {}", peer, file_hash);
+
+                                            // Get WebRTC service to handle the offer
+                                            if let Some(webrtc_service) = get_webrtc_service().await {
+                                                // Create WebRTC answer using the WebRTC service
+                                                match webrtc_service.establish_connection_with_offer(peer.to_string(), offer_sdp).await {
+                                                    Ok(answer_sdp) => {
+                                                        info!("Created WebRTC answer for peer {}", peer);
+                                                        swarm.behaviour_mut().webrtc_signaling_rr
+                                                            .send_response(channel, WebRTCAnswerResponse { answer_sdp })
+                                                            .unwrap_or_else(|e| error!("send_response failed: {e:?}"));
+                                                    }
+                                                    Err(e) => {
+                                                        error!("Failed to create WebRTC answer for peer {}: {}", peer, e);
+                                                        let error_answer = "error:failed-to-create-answer".to_string();
+                                                        swarm.behaviour_mut().webrtc_signaling_rr
+                                                            .send_response(channel, WebRTCAnswerResponse { answer_sdp: error_answer })
+                                                            .unwrap_or_else(|e| error!("send_response failed: {e:?}"));
+                                                    }
+                                                }
+                                            } else {
+                                                error!("WebRTC service not available for handling offer from peer {}", peer);
+                                                let error_answer = "error:webrtc-service-unavailable".to_string();
                                                 swarm.behaviour_mut().webrtc_signaling_rr
                                                     .send_response(channel, WebRTCAnswerResponse { answer_sdp: error_answer })
                                                     .unwrap_or_else(|e| error!("send_response failed: {e:?}"));
                                             }
                                         }
-                                    } else {
-                                        error!("WebRTC service not available for handling offer from peer {}", peer);
-                                        let error_answer = "error:webrtc-service-unavailable".to_string();
-                                        swarm.behaviour_mut().webrtc_signaling_rr
-                                            .send_response(channel, WebRTCAnswerResponse { answer_sdp: error_answer })
-                                            .unwrap_or_else(|e| error!("send_response failed: {e:?}"));
-                                    }
-                                }
-                                // WebRTC answer response
-                                Message::Response { request_id, response } => {
-                                    let WebRTCAnswerResponse { ref answer_sdp } = response;
-                                    info!("Received WebRTC answer: {}", answer_sdp);
+                                        // WebRTC answer response
+                                        Message::Response { request_id, response } => {
+                                            let WebRTCAnswerResponse { ref answer_sdp } = response;
+                                            info!("Received WebRTC answer: {}", answer_sdp);
 
-                                    if let Some(tx) = pending_webrtc_offers.lock().await.remove(&request_id) {
-                                        let _ = tx.send(Ok(response));
+                                            if let Some(tx) = pending_webrtc_offers.lock().await.remove(&request_id) {
+                                                let _ = tx.send(Ok(response));
+                                            }
+                                        }
+                                    },
+                                    RREvent::OutboundFailure { request_id, error, .. } => {
+                                        warn!("WebRTC signaling outbound failure: {error:?}");
+                                        if let Some(tx) = pending_webrtc_offers.lock().await.remove(&request_id) {
+                                            let _ = tx.send(Err(format!("outbound failure: {error:?}")));
+                                        }
                                     }
-                                }
-                            },
-                            RREvent::OutboundFailure { request_id, error, .. } => {
-                                warn!("WebRTC signaling outbound failure: {error:?}");
-                                if let Some(tx) = pending_webrtc_offers.lock().await.remove(&request_id) {
-                                    let _ = tx.send(Err(format!("outbound failure: {error:?}")));
-                                }
-                            }
-                            RREvent::InboundFailure { error, .. } => {
-                                warn!("WebRTC signaling inbound failure: {error:?}");
-                            }
-                            RREvent::ResponseSent { .. } => {}
-                        }
-                    }
-                    SwarmEvent::IncomingConnectionError { error, .. } => {
-                        if let Ok(mut m) = metrics.try_lock() {
-                            m.last_error = Some(error.to_string());
-                            m.last_error_at = Some(SystemTime::now());
-                            m.bootstrap_failures = m.bootstrap_failures.saturating_add(1);
-                        }
-                        error!("❌ Incoming connection error: {}", error);
-                    }
-                    SwarmEvent::ListenerClosed { reason, .. } => {
-                        if reason.is_ok() {
-                            trace!("ListenerClosed Ok; ignoring");
-                        } else {
-                            let s = format!("{:?}", reason);
-                            if let Some(pid) = last_tried_relay.take() {
-                                match classify_err_str(&s) {
-                                    RelayErrClass::Permanent => {
-                                        relay_blacklist.insert(pid);
-                                        warn!("🧱 {} marked permanent (unsupported/denied)", pid);
+                                    RREvent::InboundFailure { error, .. } => {
+                                        warn!("WebRTC signaling inbound failure: {error:?}");
                                     }
-                                    RelayErrClass::Transient => {
-                                        relay_cooldown.insert(pid, Instant::now() + Duration::from_secs(600));
-                                        warn!("⏳ {} cooldown 10m (transient failure): {}", pid, s);
-                                    }
+                                    RREvent::ResponseSent { .. } => {}
                                 }
                             }
+                            SwarmEvent::IncomingConnectionError { error, .. } => {
+                                if let Ok(mut m) = metrics.try_lock() {
+                                    m.last_error = Some(error.to_string());
+                                    m.last_error_at = Some(SystemTime::now());
+                                    m.bootstrap_failures = m.bootstrap_failures.saturating_add(1);
+                                }
+                                error!("❌ Incoming connection error: {}", error);
+                            }
+                            SwarmEvent::ListenerClosed { reason, .. } => {
+                                if reason.is_ok() {
+                                    trace!("ListenerClosed Ok; ignoring");
+                                } else {
+                                    let s = format!("{:?}", reason);
+                                    if let Some(pid) = last_tried_relay.take() {
+                                        match classify_err_str(&s) {
+                                            RelayErrClass::Permanent => {
+                                                relay_blacklist.insert(pid);
+                                                warn!("🧱 {} marked permanent (unsupported/denied)", pid);
+                                            }
+                                            RelayErrClass::Transient => {
+                                                relay_cooldown.insert(pid, Instant::now() + Duration::from_secs(600));
+                                                warn!("⏳ {} cooldown 10m (transient failure): {}", pid, s);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
                         }
+                    } else {
+                        info!("DHT swarm stream ended; shutting down node task");
+                        break 'outer;
                     }
-                    _ => {}
                 }
-            } else {
-                info!("DHT swarm stream ended; shutting down node task");
-                break 'outer;
-            }
-        }
     }
 
     connected_peers.lock().await.clear();
@@ -3974,19 +4014,26 @@ async fn handle_kademlia_event(
                             serde_json::from_slice::<serde_json::Value>(&peer_record.record.value)
                         {
                             // Check if this is a response to an info_hash index lookup
-                            if let Some(search) = pending_infohash_searches.lock().await.remove(&id) {
-                                if let Ok(merkle_root) = String::from_utf8(peer_record.record.value.clone()) {
+                            if let Some(search) = pending_infohash_searches.lock().await.remove(&id)
+                            {
+                                if let Ok(merkle_root) =
+                                    String::from_utf8(peer_record.record.value.clone())
+                                {
                                     info!("Resolved info_hash to merkle_root: {}", merkle_root);
                                     // Now, initiate the second step: search for the actual file metadata
                                     let record_key = kad::RecordKey::new(&merkle_root.as_bytes());
-                                    let final_query_id = swarm.behaviour_mut().kademlia.get_record(record_key);
-                                    
+                                    let final_query_id =
+                                        swarm.behaviour_mut().kademlia.get_record(record_key);
+
                                     // We need to re-insert the sender to be notified when the *second* query finishes.
                                     // This is a simplification. A more robust solution would use a state machine
                                     // to track multi-step queries. For now, we'll just re-use the infohash search map.
                                     // This assumes no overlapping queries for the same initial info_hash.
-                                    pending_infohash_searches.lock().await.insert(final_query_id, search);
-                                    
+                                    pending_infohash_searches
+                                        .lock()
+                                        .await
+                                        .insert(final_query_id, search);
+
                                     info!("Initiating second-step search for merkle_root: {} (query: {:?})", merkle_root, final_query_id);
                                 } else {
                                     warn!("Failed to decode info_hash index value as string.");
@@ -3994,7 +4041,6 @@ async fn handle_kademlia_event(
                                 }
                                 return; // End processing for this event here.
                             }
-
 
                             // Construct FileMetadata from the JSON
                             if let (
@@ -4084,7 +4130,8 @@ async fn handle_kademlia_event(
                                     active_heartbeats.clone()
                                 };
 
-                                let mut merged_seeders = heartbeats_to_peer_list(&merged_heartbeats);
+                                let mut merged_seeders =
+                                    heartbeats_to_peer_list(&merged_heartbeats);
                                 if merged_seeders.is_empty() && !fallback_seeders.is_empty() {
                                     merged_seeders = fallback_seeders.clone();
                                 }
@@ -4219,9 +4266,13 @@ async fn handle_kademlia_event(
                                             >(v.clone())
                                             .unwrap_or(None)
                                         }),
-                                    info_hash: metadata_json.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                    info_hash: metadata_json
+                                        .get("infoHash")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string()),
                                     trackers: metadata_json.get("trackers").and_then(|v| {
-                                        serde_json::from_value::<Option<Vec<String>>>(v.clone()).unwrap_or(None)
+                                        serde_json::from_value::<Option<Vec<String>>>(v.clone())
+                                            .unwrap_or(None)
                                     }),
                                     is_root: metadata_json
                                         .get("is_root")
@@ -4229,7 +4280,10 @@ async fn handle_kademlia_event(
                                         .unwrap_or(true),
                                     price: metadata_json.get("price").and_then(|v| v.as_f64()),
                                     http_sources: metadata_json.get("http_sources").and_then(|v| {
-                                            serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)
+                                        serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(
+                                            v.clone(),
+                                        )
+                                        .unwrap_or(None)
                                     }),
                                     uploader_address: metadata_json
                                         .get("uploader_address")
@@ -4434,7 +4488,7 @@ async fn handle_identify_event(
             if &peer_id == local_peer_id {
                 return;
             }
-            
+
             let hop_proto = "/libp2p/circuit/relay/0.2.0/hop";
             let supports_relay = info.protocols.iter().any(|p| p.as_ref() == hop_proto);
 
@@ -4451,9 +4505,7 @@ async fn handle_identify_event(
                 {
                     let mut metrics = {
                         let selection = peer_selection.lock().await;
-                        selection
-                            .get_peer_metrics(&peer_id.to_string())
-                            .cloned()
+                        selection.get_peer_metrics(&peer_id.to_string()).cloned()
                     }
                     .unwrap_or_else(|| PeerMetrics::new(peer_id.to_string(), "".to_string()));
 
@@ -4557,7 +4609,6 @@ async fn handle_mdns_event(
     event_tx: &mpsc::Sender<DhtEvent>,
     local_peer_id: &PeerId,
 ) {
-
     match event {
         MdnsEvent::Discovered(list) => {
             let mut discovered: HashMap<PeerId, Vec<String>> = HashMap::new();
@@ -5000,51 +5051,54 @@ struct ActiveDownload {
 }
 
 impl ActiveDownload {
-    
     fn new(
-    metadata: FileMetadata,
-    queries: HashMap<beetswap::QueryId, u32>,
-    download_path: &PathBuf,  // Already the full file path from get_available_download_path
-    total_size: u64,
-    chunk_offsets: Vec<u64>,
+        metadata: FileMetadata,
+        queries: HashMap<beetswap::QueryId, u32>,
+        download_path: &PathBuf, // Already the full file path from get_available_download_path
+        total_size: u64,
+        chunk_offsets: Vec<u64>,
     ) -> std::io::Result<Self> {
-    let total_chunks = queries.len() as u32;
+        let total_chunks = queries.len() as u32;
 
-    // download_path is already the complete file path
-    let final_file_path = download_path.clone();
-    
-    // Create temp file by replacing extension with .tmp
-    let mut temp_file_path = download_path.clone();
-    temp_file_path.set_extension("tmp");
-    
-    info!("Creating temp file at: {:?}", temp_file_path);
-    info!("Will rename to: {:?} when complete", final_file_path);
+        // download_path is already the complete file path
+        let final_file_path = download_path.clone();
 
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(&temp_file_path)?;
+        // Create temp file by replacing extension with .tmp
+        let mut temp_file_path = download_path.clone();
+        temp_file_path.set_extension("tmp");
 
-    file.set_len(total_size)?;
+        info!("Creating temp file at: {:?}", temp_file_path);
+        info!("Will rename to: {:?} when complete", final_file_path);
 
-    let mmap = unsafe { MmapMut::map_mut(&file)? };
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&temp_file_path)?;
 
-    Ok(Self {
-        metadata,
-        queries,
-        temp_file_path,
-        final_file_path,
-        mmap: Arc::new(std::sync::Mutex::new(mmap)),
-        received_chunks: Arc::new(std::sync::Mutex::new(HashSet::new())),
-        total_chunks,
-        chunk_offsets,
-    })
+        file.set_len(total_size)?;
+
+        let mmap = unsafe { MmapMut::map_mut(&file)? };
+
+        Ok(Self {
+            metadata,
+            queries,
+            temp_file_path,
+            final_file_path,
+            mmap: Arc::new(std::sync::Mutex::new(mmap)),
+            received_chunks: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            total_chunks,
+            chunk_offsets,
+        })
     }
 
     fn write_chunk(&self, chunk_index: u32, data: &[u8], offset: u64) -> std::io::Result<()> {
-        let mut mmap = self.mmap.lock()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Mutex lock failed: {}", e)))?;
+        let mut mmap = self.mmap.lock().map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Mutex lock failed: {}", e),
+            )
+        })?;
         let start = offset as usize;
         let end = start + data.len();
 
@@ -5056,8 +5110,14 @@ impl ActiveDownload {
         }
 
         mmap[start..end].copy_from_slice(data);
-        self.received_chunks.lock()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Mutex lock failed: {}", e)))?
+        self.received_chunks
+            .lock()
+            .map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Mutex lock failed: {}", e),
+                )
+            })?
             .insert(chunk_index);
 
         Ok(())
@@ -5065,20 +5125,32 @@ impl ActiveDownload {
 
     fn is_complete(&self) -> bool {
         self.queries.is_empty()
-            && self.received_chunks.lock()
+            && self
+                .received_chunks
+                .lock()
                 .map(|chunks| chunks.len() == self.total_chunks as usize)
                 .unwrap_or(false)
     }
 
     fn flush(&self) -> std::io::Result<()> {
-        self.mmap.lock()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Mutex lock failed: {}", e)))?
+        self.mmap
+            .lock()
+            .map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Mutex lock failed: {}", e),
+                )
+            })?
             .flush()
     }
 
     fn read_complete_file(&self) -> std::io::Result<Vec<u8>> {
-        let mmap = self.mmap.lock()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Mutex lock failed: {}", e)))?;
+        let mmap = self.mmap.lock().map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Mutex lock failed: {}", e),
+            )
+        })?;
         Ok(mmap.to_vec())
     }
 
@@ -5119,14 +5191,17 @@ impl ActiveDownload {
     }
 
     fn progress(&self) -> f32 {
-        let received = self.received_chunks.lock()
+        let received = self
+            .received_chunks
+            .lock()
             .map(|chunks| chunks.len())
             .unwrap_or(0) as f32;
         received / self.total_chunks as f32
     }
 
     fn chunks_received(&self) -> usize {
-        self.received_chunks.lock()
+        self.received_chunks
+            .lock()
             .map(|chunks| chunks.len())
             .unwrap_or(0)
     }
@@ -5421,9 +5496,9 @@ impl DhtService {
         let transport = build_transport_with_relay(&local_key, relay_transport, proxy_address)?;
 
         // Extract behaviour or return error if already taken
-        let behaviour_instance = behaviour.take().ok_or_else(|| {
-            Box::<dyn Error>::from("behaviour already taken")
-        })?;
+        let behaviour_instance = behaviour
+            .take()
+            .ok_or_else(|| Box::<dyn Error>::from("behaviour already taken"))?;
 
         // Create the swarm
         let mut swarm = SwarmBuilder::with_existing_identity(local_key)
@@ -5445,7 +5520,7 @@ impl DhtService {
         {
             let kademlia = swarm.behaviour_mut().kademlia.kbuckets();
             let mut addrs_to_remove: Vec<(PeerId, Multiaddr)> = Vec::new();
-            
+
             for bucket in kademlia {
                 for entry in bucket.iter() {
                     let peer_id = entry.node.key.preimage();
@@ -5456,10 +5531,16 @@ impl DhtService {
                     }
                 }
             }
-            
+
             for (peer_id, addr) in addrs_to_remove {
-                swarm.behaviour_mut().kademlia.remove_address(&peer_id, &addr);
-                debug!("🧹 Cleaned up unreachable address at startup: {} -> {}", peer_id, addr);
+                swarm
+                    .behaviour_mut()
+                    .kademlia
+                    .remove_address(&peer_id, &addr);
+                debug!(
+                    "🧹 Cleaned up unreachable address at startup: {} -> {}",
+                    peer_id, addr
+                );
             }
         }
 
@@ -5524,14 +5605,12 @@ impl DhtService {
                     continue;
                 }
                 match server_addr.parse::<Multiaddr>() {
-                    Ok(addr) => {
-                        match swarm.dial(addr.clone()) {
-                            Ok(_) => {
-                                info!("Dialing AutoNAT server: {}", server_addr);
-                            }
-                            Err(e) => {
-                                debug!("Failed to dial AutoNAT server {}: {}", server_addr, e);
-                            }
+                    Ok(addr) => match swarm.dial(addr.clone()) {
+                        Ok(_) => {
+                            info!("Dialing AutoNAT server: {}", server_addr);
+                        }
+                        Err(e) => {
+                            debug!("Failed to dial AutoNAT server {}: {}", server_addr, e);
                         }
                     },
                     Err(e) => warn!("Invalid AutoNAT server address {}: {}", server_addr, e),
@@ -5738,12 +5817,14 @@ impl DhtService {
         debug!("Heartbeat tracking stopped for {}", file_hash);
     }
 
-    pub async fn publish_file(&self, mut metadata: FileMetadata,ftp_sources: Option<Vec<FtpSourceInfo>>,) -> Result<(), String> {
+    pub async fn publish_file(
+        &self,
+        mut metadata: FileMetadata,
+        ftp_sources: Option<Vec<FtpSourceInfo>>,
+    ) -> Result<(), String> {
         // Add FTP sources to metadata before publishing
         if let Some(sources) = ftp_sources {
-            metadata.ftp_sources = Some(
-                sources.into_iter().map(|s| s.for_dht_storage()).collect()
-            );
+            metadata.ftp_sources = Some(sources.into_iter().map(|s| s.for_dht_storage()).collect());
         }
 
         let (response_tx, response_rx) = oneshot::channel();
@@ -6027,7 +6108,7 @@ impl DhtService {
                         pending.remove(&file_hash);
                     }
                 }
-                return Err("Search timed out".into())
+                return Err("Search timed out".into());
             }
         }
     }
@@ -6065,7 +6146,8 @@ impl DhtService {
         let metrics = self.metrics.lock().await;
         let peer_id = &self.peer_id;
 
-        metrics.listen_addrs
+        metrics
+            .listen_addrs
             .iter()
             .filter(|addr| {
                 // Filter out loopback addresses
@@ -6807,13 +6889,18 @@ async fn synchronous_search_by_infohash(
 }
 
 impl DhtService {
-    pub async fn search_by_infohash(&self, info_hash: String) -> Result<Option<FileMetadata>, String> {
+    pub async fn search_by_infohash(
+        &self,
+        info_hash: String,
+    ) -> Result<Option<FileMetadata>, String> {
         let (sender, receiver) = oneshot::channel();
-        self.cmd_tx.send(DhtCommand::SearchByInfohash { info_hash, sender }).await.map_err(|e| e.to_string())?;
+        self.cmd_tx
+            .send(DhtCommand::SearchByInfohash { info_hash, sender })
+            .await
+            .map_err(|e| e.to_string())?;
         receiver.await.map_err(|e| e.to_string())
     }
 }
-
 
 /// Process received Bitswap chunk data and assemble complete files
 async fn process_bitswap_chunk(
@@ -6983,9 +7070,7 @@ fn extract_multiaddr_from_error_str(s: &str) -> Option<Multiaddr> {
     if let Some(start) = s.find("/ip") {
         // Extract until we hit ": " (colon followed by space) which indicates end of multiaddr
         let tail = &s[start..];
-        let end = tail
-            .find(": ")
-            .unwrap_or_else(|| tail.len());
+        let end = tail.find(": ").unwrap_or_else(|| tail.len());
         let cand = &tail[..end];
         return cand.parse::<Multiaddr>().ok();
     }
@@ -7058,7 +7143,7 @@ async fn get_available_download_path(path: PathBuf) -> PathBuf {
         Some(p) => p,
         None => return path, // If no parent, return original path
     };
-    
+
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
     let extension = path.extension().and_then(|s| s.to_str());
 
@@ -7122,10 +7207,8 @@ pub fn parse_magnet_uri(uri: &str) -> Result<MagnetData, String> {
     let info_hash = params
         .get("xt")
         .and_then(|xts| {
-            xts.iter().find_map(|xt| {
-                xt.strip_prefix("urn:btih:")
-                    .map(|hash| hash.to_lowercase())
-            })
+            xts.iter()
+                .find_map(|xt| xt.strip_prefix("urn:btih:").map(|hash| hash.to_lowercase()))
         })
         .ok_or_else(|| "Magnet URI is missing 'xt' (info hash) parameter".to_string())?;
 
@@ -7180,10 +7263,7 @@ mod tests {
     fn test_parse_magnet_uri_case_insensitivity() {
         let magnet = "magnet:?XT=urn:btih:B263275B1E3138B29596356533F685C33103575C";
         let result = parse_magnet_uri(magnet).unwrap();
-        assert_eq!(
-            result.info_hash,
-            "b263275b1e3138b29596356533f685c33103575c"
-        );
+        assert_eq!(result.info_hash, "b263275b1e3138b29596356533f685c33103575c");
     }
 
     #[test]
