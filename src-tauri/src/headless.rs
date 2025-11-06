@@ -105,6 +105,8 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
 
     info!("Starting Chiral Network in headless mode");
     info!("DHT Port: {}", args.dht_port);
+    // Print all arguments if CliArgs implements Debug
+    info!("CLI args: {:#?}", args);
 
     // Add default bootstrap nodes if no custom ones specified
     let mut bootstrap_nodes = args.bootstrap.clone();
