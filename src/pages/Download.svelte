@@ -18,6 +18,7 @@
   import { initDownloadTelemetry, disposeDownloadTelemetry } from '$lib/downloadTelemetry'
   import { MultiSourceDownloadService, type MultiSourceProgress } from '$lib/services/multiSourceDownloadService'
   import { listen } from '@tauri-apps/api/event'
+  import { homeDir } from '@tauri-apps/api/path'
   import PeerSelectionService from '$lib/services/peerSelectionService'
 import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
 import { invoke }  from '@tauri-apps/api/core';
@@ -232,17 +233,15 @@ const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, param
 
 
                 const seederPeerId = completedFile.seederAddresses?.[0];
-                const seederWalletAddress = paymentService.isValidWalletAddress(completedFile.uploaderAddress)
-                    ? completedFile.uploaderAddress!
-                    : null;
-
-                if (!seederWalletAddress) {
-                    console.warn('Skipping Bitswap payment due to missing or invalid uploader wallet address', {
-                        file: completedFile.name,
-                        uploaderAddress: completedFile.uploaderAddress
-                    });
-                    showNotification('Payment skipped: missing uploader wallet address', 'warning');
-                } else {
+                const seederWalletAddress = paymentService.isValidWalletAddress(completedFile.seederAddresses?.[0])
+                  ? completedFile.seederAddresses?.[0]!
+                  : null;                if (!seederWalletAddress) {
+                  console.warn('Skipping Bitswap payment due to missing or invalid uploader wallet address', {
+                      file: completedFile.name,
+                      seederAddresses: completedFile.seederAddresses
+                  });
+                  showNotification('Payment skipped: missing uploader wallet address', 'warning');
+              } else {
                     try {
                         const paymentResult = await paymentService.processDownloadPayment(
                             completedFile.hash,
@@ -311,46 +310,89 @@ const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, param
 
 
         // Listen for WebRTC download completion
-        const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (event) => {
-          const data = event.payload as {
-            fileHash: string;
-            fileName: string;
-            fileSize: number;
-            data: number[]; // Array of bytes
-          };
+const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (event) => {
+  const data = event.payload as {
+    fileHash: string;
+    fileName: string;
+    fileSize: number;
+    data: number[]; // Array of bytes
+  };
 
-          // Find the file in our downloads
-          const downloadedFile = $files.find(f => f.hash === data.fileHash);
-  
-          if (downloadedFile && downloadedFile.downloadPath) {
-            try {
-              // Write the file to disk at the user's chosen location
-              const { writeFile } = await import('@tauri-apps/plugin-fs');
-              const fileData = new Uint8Array(data.data);
-              await writeFile(downloadedFile.downloadPath, fileData);
-      
-              console.log(`✅ File saved to: ${downloadedFile.downloadPath}`);
-      
-              // Update status to completed
-              files.update(f => f.map(file => 
-                file.hash === data.fileHash
-                ? { ...file, status: 'completed', progress: 100 }
-                  : file
-              ));
-      
-              showNotification(`Successfully saved "${data.fileName}"`, 'success');
-            } catch (error) {
-              console.error('Failed to save file:', error);
-              showNotification(`Failed to save file: ${error}`, 'error');
+  try {
+    // ✅ GET SETTINGS PATH
+    const stored = localStorage.getItem("chiralSettings");
+    if (!stored) {
+      showNotification(
+        'Please configure a download path in Settings before downloading files.',
+        'error',
+        8000
+      );
+      return;
+    }
+    
+    const settings = JSON.parse(stored);
+    let storagePath = settings.storagePath;
+    
+    if (!storagePath || storagePath === '.') {
+      showNotification(
+        'Please set a valid download path in Settings.',
+        'error',
+        8000
+      );
+      return;
+    }
+    
+    // Expand ~ to home directory if needed
+    if (storagePath.startsWith("~")) {
+      const home = await homeDir();
+      storagePath = storagePath.replace("~", home);
+    }
+    
+    // Validate directory exists
+    const dirExists = await invoke('check_directory_exists', { path: storagePath });
+    if (!dirExists) {
+      showNotification(
+        `Download path "${settings.storagePath}" does not exist. Please update it in Settings.`,
+        'error',
+        8000
+      );
+      return;
+    }
 
-              files.update(f => f.map(file =>
-                file.hash === data.fileHash
-                  ? { ...file, status: 'failed' }
-                  : file
-              ));
-            }
-          }
-        });
+    // Construct full file path
+    const { join } = await import('@tauri-apps/api/path');
+    const outputPath = await join(storagePath, data.fileName);
+    
+    console.log(`✅ Saving WebRTC file to: ${outputPath}`);
+
+    // Write the file to disk
+    const { writeFile } = await import('@tauri-apps/plugin-fs');
+    const fileData = new Uint8Array(data.data);
+    await writeFile(outputPath, fileData);
+
+    console.log(`✅ File saved successfully: ${outputPath}`);
+
+    // Update status to completed
+    files.update(f => f.map(file => 
+      file.hash === data.fileHash
+        ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath }
+        : file
+    ));
+
+    showNotification(`Successfully saved "${data.fileName}"`, 'success');
+    
+  } catch (error) {
+    console.error('Failed to save WebRTC file:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    showNotification(`Failed to save file: ${errorMessage}`, 'error');
+
+    files.update(f => f.map(file =>
+      file.hash === data.fileHash
+        ? { ...file, status: 'failed' }
+        : file
+    ));
+  }
+});
 
         // Cleanup listeners on destroy
         return () => {
@@ -392,18 +434,6 @@ const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, param
   // Add notification related variables
   let currentNotification: HTMLElement | null = null
   let showSettings = false // Toggle for settings panel
-
-  // Payment confirmation modal state
-  let showPaymentModal = false
-  let pendingDownload: {
-    file: any;
-    paymentDetails: {
-      amount: number;
-      pricePerMb: number;
-      sizeInMB: number;
-      formattedAmount: string;
-    };
-  } | null = null
 
   // Track which files have already had payment processed
   let paidFiles = new Set<string>()
@@ -646,7 +676,6 @@ const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, param
       version: metadata.version, // Preserve version info if available
       seeders: metadata.seeders.length, // Convert array length to number
       seederAddresses: metadata.seeders, // Array that only contains selected seeder rather than all seeders
-      uploaderAddress: metadata.uploaderAddress, // Store uploader's wallet address
       // Pass encryption info to the download item
       isEncrypted: metadata.isEncrypted,
       manifest: metadata.manifest ? JSON.parse(metadata.manifest) : null,
@@ -886,33 +915,68 @@ const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, param
     return
   }
 
-  // 🆕 ADD FILE SAVE DIALOG FOR BITSWAP
+  // ✅ VALIDATE SETTINGS PATH BEFORE DOWNLOADING
   try {
-    const { save } = await import('@tauri-apps/plugin-dialog');
-    
-    // Show file save dialog
-    const outputPath = await save(buildSaveDialogOptions(downloadingFile.name));
-
-    if (!outputPath) {
-      // User cancelled the save dialog
+    const stored = localStorage.getItem("chiralSettings");
+    if (!stored) {
+      showNotification(
+        'Please configure a download path in Settings before downloading files.',
+        'error',
+        8000
+      );
       files.update(f => f.map(file =>
         file.id === downloadingFile.id
-          ? { ...file, status: 'canceled' }
+          ? { ...file, status: 'failed' }
           : file
       ));
       return;
     }
 
-    console.log('✅ User selected save location:', outputPath);
+    const settings = JSON.parse(stored);
+    let storagePath = settings.storagePath;
 
-    // Update file with download path
-    files.update(f => f.map(file =>
-      file.id === downloadingFile.id
-        ? { ...file, downloadPath: outputPath }
-        : file
-    ));
+    if (!storagePath || storagePath === '.') {
+      showNotification(
+        'Please set a valid download path in Settings before downloading files.',
+        'error',
+        8000
+      );
+      files.update(f => f.map(file =>
+        file.id === downloadingFile.id
+          ? { ...file, status: 'failed' }
+          : file
+      ));
+      return;
+    }
 
-    // Now start the actual Bitswap download with the output path
+    // Expand ~ to home directory if needed
+    if (storagePath.startsWith("~")) {
+      const home = await homeDir();
+      storagePath = storagePath.replace("~", home);
+    }
+
+    // Validate directory exists using Tauri command
+    const dirExists = await invoke('check_directory_exists', { path: storagePath });
+    if (!dirExists) {
+      showNotification(
+        `Download path "${settings.storagePath}" does not exist. Please update it in Settings.`,
+        'error',
+        8000
+      );
+      files.update(f => f.map(file =>
+        file.id === downloadingFile.id
+          ? { ...file, status: 'failed' }
+          : file
+      ));
+      return;
+    }
+
+    // Construct full file path: directory + filename
+    const fullPath = `${storagePath}/${downloadingFile.name}`;
+
+    console.log('✅ Using settings download path:', fullPath);
+
+    // Now start the actual Bitswap download
     const metadata = {
       fileHash: downloadingFile.hash,
       fileName: downloadingFile.name,
@@ -923,15 +987,13 @@ const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, param
       version: downloadingFile.version,
       manifest: downloadingFile.manifest ? JSON.stringify(downloadingFile.manifest) : undefined,
       cids: downloadingFile.cids,
-      downloadPath: outputPath // 🔥 PASS THE OUTPUT PATH
+      downloadPath: fullPath  // Pass the full path
     }
 
-    console.log('🔍 FULL metadata being sent:', JSON.stringify(metadata, null, 2));
-    
     console.log('  📤 Calling dhtService.downloadFile with metadata:', metadata)
     console.log('  📦 CIDs:', downloadingFile.cids)
     console.log('  👥 Seeders:', downloadingFile.seederAddresses)
-    console.log('  💾 Download path:', outputPath)
+    console.log('  💾 Download path:', fullPath)
 
     // Start the download asynchronously
     dhtService.downloadFile(metadata)
@@ -956,16 +1018,16 @@ const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, param
         )
       })
   } catch (error) {
-    console.error('Failed to open save dialog:', error);
+    console.error('Failed to validate download path:', error);
     files.update(f => f.map(file =>
       file.id === downloadingFile.id
         ? { ...file, status: 'failed' }
         : file
-    ))
-    showNotification('Failed to open save dialog', 'error');
+    ));
+    showNotification('Failed to validate download path', 'error', 6000);
     return;
   }
-} 
+}
     else {
       console.log('  🎬 Simulating download')
       simulateDownloadProgress(downloadingFile.id)
@@ -1120,6 +1182,9 @@ const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, param
 
             console.log("Final data array length:", data_.length);
 
+            // Ensure the directory exists before writing
+            await invoke('ensure_directory_exists', { path: outputPath });
+            
             // Write the file data to the output path
             console.log("🔍 DEBUG: About to write file to:", outputPath);
             const { writeFile } = await import('@tauri-apps/plugin-fs');
@@ -1129,14 +1194,14 @@ const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, param
             // Process payment for local download (only if not already paid)
             if (!paidFiles.has(fileToDownload.hash)) {
               const seederPeerId = localPeerIdNow || seeders[0];
-              const seederWalletAddress = paymentService.isValidWalletAddress(fileToDownload.uploaderAddress)
-                ? fileToDownload.uploaderAddress!
+              const seederWalletAddress = paymentService.isValidWalletAddress(fileToDownload.seederAddresses?.[0])
+                ? fileToDownload.seederAddresses?.[0]!
                 : null;
 
               if (!seederWalletAddress) {
                 console.warn('Skipping local copy payment due to missing or invalid uploader wallet address', {
                   file: fileToDownload.name,
-                  uploaderAddress: fileToDownload.uploaderAddress
+                  seederAddresses: fileToDownload.seederAddresses
                 });
                 showNotification('Payment skipped: missing uploader wallet address', 'warning');
               } else {
@@ -1209,14 +1274,14 @@ const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, param
         // 3. Process payment for encrypted download (only if not already paid)
         if (!paidFiles.has(fileToDownload.hash)) {
           const seederPeerId = seeders[0];
-          const seederWalletAddress = paymentService.isValidWalletAddress(fileToDownload.uploaderAddress)
-            ? fileToDownload.uploaderAddress!
+          const seederWalletAddress = paymentService.isValidWalletAddress(fileToDownload.seederAddresses?.[0])
+            ? fileToDownload.seederAddresses?.[0]!
             : null;
 
           if (!seederWalletAddress) {
             console.warn('Skipping encrypted download payment due to missing or invalid uploader wallet address', {
               file: fileToDownload.name,
-              uploaderAddress: fileToDownload.uploaderAddress
+              seederAddresses: fileToDownload.seederAddresses
             });
             showNotification('Payment skipped: missing uploader wallet address', 'warning');
           } else {
@@ -1275,14 +1340,14 @@ const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, param
             // Process payment for multi-source download (only if not already paid)
             if (!paidFiles.has(fileToDownload.hash)) {
               const seederPeerId = seeders[0];
-              const seederWalletAddress = paymentService.isValidWalletAddress(fileToDownload.uploaderAddress)
-                ? fileToDownload.uploaderAddress!
+              const seederWalletAddress = paymentService.isValidWalletAddress(fileToDownload.seederAddresses?.[0])
+                ? fileToDownload.seederAddresses?.[0]!
                 : null;
 
               if (!seederWalletAddress) {
                 console.warn('Skipping multi-source payment due to missing or invalid uploader wallet address', {
                   file: fileToDownload.name,
-                  uploaderAddress: fileToDownload.uploaderAddress
+                  seederAddresses: fileToDownload.seederAddresses
                 });
                 showNotification('Payment skipped: missing uploader wallet address', 'warning');
               } else {
@@ -1395,14 +1460,14 @@ const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, param
                   // Process payment for P2P download (only if not already paid)
                   if (!paidFiles.has(fileToDownload.hash)) {
                     const seederPeerId = seeders[0];
-                    const seederWalletAddress = paymentService.isValidWalletAddress(fileToDownload.uploaderAddress)
-                      ? fileToDownload.uploaderAddress!
+                    const seederWalletAddress = paymentService.isValidWalletAddress(fileToDownload.seederAddresses?.[0])
+                      ? fileToDownload.seederAddresses?.[0]!
                       : null;
 
                     if (!seederWalletAddress) {
                       console.warn('Skipping P2P payment due to missing or invalid uploader wallet address', {
                         file: fileToDownload.name,
-                        uploaderAddress: fileToDownload.uploaderAddress
+                        seederAddresses: fileToDownload.seederAddresses
                       });
                       showNotification('Payment skipped: missing uploader wallet address', 'warning');
                     } else {
@@ -1618,7 +1683,6 @@ const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, param
     <DownloadSearchSection
       on:download={(event) => handleSearchDownload(event.detail)}
       on:message={handleSearchMessage}
-      isBitswap={selectedProtocol === 'Bitswap'}
     />
     <!-- Protocol Indicator and Switcher -->
     <Card class="p-4">
@@ -2007,7 +2071,7 @@ const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, param
                     {#if multiSourceProgress.has(file.hash) && file.status === 'downloading'}
                       {@const msProgress = multiSourceProgress.get(file.hash)}
                       {#if msProgress}
-                        <span class="text-purple-600">Peers: {msProgress.activePeers}</span>
+                        <span class="text-purple-600">Peers: {msProgress.activeSources}</span>
                         <span class="text-purple-600">Chunks: {msProgress.completedChunks}/{msProgress.totalChunks}</span>
                       {/if}
                     {/if}
@@ -2016,7 +2080,7 @@ const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, param
                 </div>
                 {#if selectedProtocol === 'Bitswap'}
                   <div class="w-full bg-border rounded-full h-2 flex overflow-hidden" title={`Chunks: ${file.downloadedChunks?.length || 0} / ${file.totalChunks || '?'}`}>
-                    {#if file.totalChunks > 0}
+                    {#if file.totalChunks && file.totalChunks > 0}
                       {@const chunkWidth = 100 / file.totalChunks}
                       {#each Array.from({ length: file.totalChunks }) as _, i}
                         <div
@@ -2035,12 +2099,12 @@ const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, param
                 {/if}
                 {#if multiSourceProgress.has(file.hash)}
                   {@const msProgress = multiSourceProgress.get(file.hash)}
-                  {#if msProgress && msProgress.peerAssignments.length > 0}
+                  {#if msProgress && msProgress.sourceAssignments.length > 0}
                     <div class="mt-2 space-y-1">
                       <div class="text-xs text-muted-foreground">Peer progress:</div>
-                      {#each msProgress.peerAssignments as peerAssignment}
+                      {#each msProgress.sourceAssignments as peerAssignment}
                         <div class="flex items-center gap-2 text-xs">
-                          <span class="w-20 truncate">{peerAssignment.peerId.slice(0, 8)}...</span>
+                          <span class="w-20 truncate">{peerAssignment.source.type === 'p2p' ? peerAssignment.source.p2p.peerId.slice(0, 8) : 'N/A'}...</span>
                           <div class="flex-1 bg-muted rounded-full h-1">
                             <div
                               class="bg-purple-500 h-1 rounded-full transition-all duration-300"
