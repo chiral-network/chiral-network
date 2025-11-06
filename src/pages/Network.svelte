@@ -68,6 +68,7 @@
   let isGethInstalled = false
   let isStartingNode = false
   let isDownloading = false
+  let isCheckingGeth = true
   let downloadProgress = {
     downloaded: 0,
     total: 0,
@@ -921,9 +922,11 @@
       // In web mode, simulate that geth is not installed
       isGethInstalled = false
       isGethRunning = false
+      isCheckingGeth = false
       return
     }
 
+    isCheckingGeth = true
     try {
       const status = await fetchGethStatus('./bin/geth-data', 1)
       // If node is running from previous session, stop it for clean state
@@ -940,6 +943,8 @@
       }
     } catch (error) {
       console.error('Failed to check geth status:', error)
+    } finally {
+      isCheckingGeth = false
     }
   }
 
@@ -948,6 +953,23 @@
       downloadError = $t('network.errors.downloadOnlyTauri')
       return
     }
+
+    // First check if Geth is already installed
+    isCheckingGeth = true
+    try {
+      const status = await fetchGethStatus('./bin/geth-data', 1)
+      if (status.installed) {
+        // Geth is already installed, update state and return
+        applyGethStatus(status)
+        isCheckingGeth = false
+        showToast('Geth is already installed', 'info')
+        return
+      }
+    } catch (error) {
+      console.error('Failed to check geth status before download:', error)
+      // Continue with download attempt
+    }
+    isCheckingGeth = false
 
     isDownloading = true
     downloadError = ''
@@ -1273,7 +1295,13 @@
     </div>
 
     <div class="space-y-3">
-      {#if !isGethInstalled}
+      {#if isCheckingGeth}
+        <div class="text-center py-8">
+          <RefreshCw class="h-12 w-12 text-blue-500 mx-auto mb-2 animate-spin" />
+          <p class="text-sm text-muted-foreground mb-1">Checking if Geth is downloaded...</p>
+          <p class="text-xs text-muted-foreground">Please wait while we check your system</p>
+        </div>
+      {:else if !isGethInstalled}
         <div class="text-center py-4">
           <Server class="h-12 w-12 text-muted-foreground mx-auto mb-2" />
           <p class="text-sm text-muted-foreground mb-1">Geth not installed</p>
@@ -1286,9 +1314,14 @@
               </div>
             </div>
           {/if}
-          <Button on:click={downloadGeth} disabled={isDownloading}>
-            <Download class="h-4 w-4 mr-2" />
-            Download Geth
+          <Button on:click={downloadGeth} disabled={isDownloading || isCheckingGeth}>
+            {#if isCheckingGeth}
+              <RefreshCw class="h-4 w-4 mr-2 animate-spin" />
+              Checking...
+            {:else}
+              <Download class="h-4 w-4 mr-2" />
+              Download Geth
+            {/if}
           </Button>
         </div>
       {:else if isGethRunning}
@@ -1329,7 +1362,7 @@
         <div class="text-center py-8">
           <Server class="h-12 w-12 text-muted-foreground mx-auto mb-2" />
           <p class="text-sm text-muted-foreground mb-3">Chiral Node not running</p>
-          <Button on:click={startGethNode} disabled={isStartingNode}>
+          <Button on:click={startGethNode} disabled={isStartingNode || isCheckingGeth}>
             {#if isStartingNode}
               <RefreshCw class="h-4 w-4 mr-2 animate-spin" />
               Starting Node...
