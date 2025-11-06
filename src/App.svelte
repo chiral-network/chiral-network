@@ -1,6 +1,6 @@
 <script lang="ts">
     import './styles/globals.css'
-    import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Mail, Server, Share2 } from 'lucide-svelte'
+    import { Upload, Download, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Mail, Server, Share2 } from 'lucide-svelte'
     import UploadPage from './pages/Upload.svelte'
     import DownloadPage from './pages/Download.svelte'
     // import ProxyPage from './pages/Proxy.svelte' // DISABLED
@@ -11,7 +11,6 @@
     import SettingsPage from './pages/Settings.svelte'
     import MiningPage from './pages/Mining.svelte'
     import ReputationPage from './pages/Reputation.svelte'
-    import MessagesPage from './pages/Messages.svelte'
     import RelayPage from './pages/Relay.svelte'
     import NotFound from './pages/NotFound.svelte'
     // import ProxySelfTest from './routes/proxy-self-test.svelte' // DISABLED
@@ -207,10 +206,17 @@ const pushBandwidthLimits = (limits: ActiveBandwidthLimits) => {
         } catch (error) {
           console.warn('Automatic location detection failed:', error);
         }
-        // Initialize backend services (File Transfer, DHT)
+        // Initialize backend services (File Transfer, DHT - conditionally)
         try {
-          await fileService.initializeServices();
-          console.log('Backend services (File Transfer, DHT) initialized successfully.');
+          const currentSettings = get(settings);
+          if (currentSettings.autoStartDHT) {
+            await fileService.initializeServices();
+            console.log('Backend services (File Transfer, DHT) initialized successfully.');
+          } else {
+            // Only start file transfer service, not DHT
+            await invoke("start_file_transfer_service");
+            console.log('File transfer service initialized (DHT auto-start disabled).');
+          }
         } catch (error) {
           console.error('Failed to initialize backend services:', error);
         }
@@ -334,7 +340,6 @@ const pushBandwidthLimits = (limits: ActiveBandwidthLimits) => {
         // { id: 'proxy', label: $t('nav.proxy'), icon: Shield }, // DISABLED
         { id: 'analytics', label: $t('nav.analytics'), icon: BarChart3 },
         { id: 'reputation', label: $t('nav.reputation'), icon: Star },
-        { id: 'messages', label: $t('nav.messages'), icon: Mail },
         { id: 'account', label: $t('nav.account'), icon: Wallet },
         { id: 'settings', label: $t('nav.settings'), icon: Settings },
 
@@ -360,10 +365,6 @@ const pushBandwidthLimits = (limits: ActiveBandwidthLimits) => {
       {
         path: "torrents",
         component: TorrentDownloadPage
-      },
-      {
-        path: "messages",
-        component: MessagesPage
       },
       {
         path: "network",

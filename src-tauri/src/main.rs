@@ -11,11 +11,11 @@ pub mod protocols;
 pub mod commands;
 pub mod analytics;
 pub mod net;
-mod peer_selection;
-mod pool;
-mod proxy_latency;
-mod stream_auth;
-mod webrtc_service;
+pub mod peer_selection;
+pub mod pool;
+pub mod proxy_latency;
+pub mod stream_auth;
+pub mod webrtc_service;
 mod transfer_events;
 pub mod transaction_services;
 pub mod bandwidth;
@@ -35,13 +35,8 @@ pub mod http_server;
 pub mod keystore;
 pub mod manager;
 pub mod multi_source_download;
-pub mod peer_selection;
-pub mod pool;
-pub mod proxy_latency;
-pub mod stream_auth;
-pub mod webrtc_service;
 
-use protocols::{ProtocolManager, ProtocolHandler};
+use protocols::ProtocolManager;
 
 use crate::commands::auth::{
     cleanup_expired_proxy_auth_tokens, generate_proxy_auth_token, revoke_proxy_auth_token,
@@ -5170,7 +5165,6 @@ fn main() {
             revoke_proxy_auth_token,
             cleanup_expired_proxy_auth_tokens,
             get_file_data,
-            send_chat_message,
             store_file_data,
             start_proof_of_storage_watcher,
             stop_proof_of_storage_watcher,
@@ -5827,85 +5821,6 @@ async fn get_file_data(state: State<'_, AppState>, file_hash: String) -> Result<
     } else {
         Err("File transfer service not running".to_string())
     }
-}
-
-#[derive(serde::Serialize, Clone)]
-struct ChatMessageForFrontend {
-    from_peer_id: String,
-    message_id: String,
-    encrypted_payload: Vec<u8>,
-    timestamp: u64,
-    signature: Vec<u8>,
-}
-
-/// Sends an E2EE chat message to a peer.
-#[tauri::command]
-async fn send_chat_message(
-    state: State<'_, AppState>,
-    recipient_peer_id: String,
-    encrypted_payload: Vec<u8>,
-    signature: Vec<u8>,
-) -> Result<(), String> {
-    debug!("send_chat_message called for peer: {}", recipient_peer_id);
-    let webrtc = state
-        .webrtc
-        .lock()
-        .await
-        .as_ref()
-        .cloned()
-        .ok_or("WebRTC service not running")?;
-
-    // 1. Check if a WebRTC connection already exists.
-    if !webrtc.get_connection_status(&recipient_peer_id).await {
-        debug!(
-            "No existing WebRTC connection to {}. Attempting to establish one.",
-            recipient_peer_id
-        );
-        let dht = state
-            .dht
-            .lock()
-            .await
-            .as_ref()
-            .cloned()
-            .ok_or("DHT service not running")?;
-
-        dht.connect_to_peer_by_id(recipient_peer_id.clone()).await?;
-
-        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-
-        if !webrtc.get_connection_status(&recipient_peer_id).await {
-            error!(
-                "Failed to establish WebRTC connection with peer {} after 5s.",
-                recipient_peer_id
-            );
-            return Err("Failed to establish WebRTC connection with peer.".to_string());
-        }
-        debug!(
-            "WebRTC connection to {} established successfully.",
-            recipient_peer_id
-        );
-    }
-
-    // 3. Construct the message payload.
-    let chat_message = webrtc_service::WebRTCChatMessage {
-        message_id: format!(
-            "msg_{}",
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-        ),
-        encrypted_payload,
-        timestamp: chrono::Utc::now().timestamp() as u64,
-        signature,
-    };
-    let message = webrtc_service::WebRTCMessage::ChatMessage(chat_message);
-    let message_bytes = serde_json::to_vec(&message)
-        .map_err(|e| format!("Failed to serialize chat message: {}", e))?;
-    debug!("Sending chat message to {}", recipient_peer_id);
-    // Correctly serialize the message to a string before sending via send_text
-    let message_str = serde_json::to_string(&message)
-        .map_err(|e| format!("Failed to serialize chat message to string: {}", e))?;
-
-    // Assuming send_data is a method that sends text. If it sends bytes, use message_bytes.
-    webrtc.send_data(&recipient_peer_id, message_bytes).await
 }
 
 #[tauri::command]

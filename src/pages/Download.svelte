@@ -5,7 +5,7 @@
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
-  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation, Globe, Blocks, RefreshCw, Coins } from 'lucide-svelte'
+  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation, Globe, Blocks, RefreshCw } from 'lucide-svelte'
   import { files, downloadQueue, activeTransfers, wallet } from '$lib/stores'
   import { dhtService } from '$lib/dht'
   import { paymentService } from '$lib/services/paymentService'
@@ -1793,12 +1793,6 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
               {$t('download.clearFinished')}
             </Button>
           {/if}
-        </div>
-
-        <!-- Balance Display -->
-        <div class="flex items-center gap-2 px-3 py-1 bg-secondary rounded-md">
-          <Coins class="h-3 w-3 text-muted-foreground" />
-          <span class="text-xs font-medium">{$wallet.balance.toFixed(8)} Chiral</span>
         </div>
 
         <!-- Settings Toggle Button -->
