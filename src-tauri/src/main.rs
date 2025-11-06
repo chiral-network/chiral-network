@@ -11,11 +11,11 @@ pub mod protocols;
 pub mod commands;
 pub mod analytics;
 pub mod net;
-mod peer_selection;
-mod pool;
-mod proxy_latency;
-mod stream_auth;
-mod webrtc_service;
+pub mod peer_selection;
+pub mod pool;
+pub mod proxy_latency;
+pub mod stream_auth;
+pub mod webrtc_service;
 mod transfer_events;
 pub mod transaction_services;
 pub mod bandwidth;
@@ -35,13 +35,8 @@ pub mod http_server;
 pub mod keystore;
 pub mod manager;
 pub mod multi_source_download;
-pub mod peer_selection;
-pub mod pool;
-pub mod proxy_latency;
-pub mod stream_auth;
-pub mod webrtc_service;
 
-use protocols::{ProtocolManager, ProtocolHandler};
+use protocols::ProtocolManager;
 
 use crate::commands::auth::{
     cleanup_expired_proxy_auth_tokens, generate_proxy_auth_token, revoke_proxy_auth_token,

@@ -545,6 +545,7 @@ impl ReputationDhtService {
             price: None,
             uploader_address: None,
             ftp_sources: None,
+            ed2k_sources: None,
             http_sources: None,
             info_hash: None,
             trackers: None,

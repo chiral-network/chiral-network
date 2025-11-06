@@ -91,10 +91,10 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     enableAutorelay: true,
     preferredRelays: [],
     enableRelayServer: false,
-    autoStartDht: false,
     anonymousMode: false,
     shareAnalytics: true,
     customBootstrapNodes: [],
+    autoStartDHT: false,
 
     // Notifications
     enableNotifications: true,
@@ -105,7 +105,6 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     notifyOnBandwidthCapDesktop: false,
 
     // Advanced
-    enableDHT: true,
     enableIPFS: false,
     chunkSize: 256, // KB
     cacheSize: 1024, // MB
@@ -179,7 +178,6 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   >;
 
   let anonymousModeRestore: PrivacySnapshot | null = null;
-  let prevStorageError = false;
   let prevNetworkError = false;
   let prevAdvancedError = false;
 
@@ -483,7 +481,6 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     const hasAdvancedError = !!errors.chunkSize || !!errors.cacheSize;
     if (hasAdvancedError && (!accordionStateInitialized || !prevAdvancedError)) advancedSectionOpen = true;
 
-    prevStorageError = hasStorageError;
     prevNetworkError = hasNetworkError;
     prevAdvancedError = hasAdvancedError;
   }
@@ -842,7 +839,7 @@ selectedLanguage = initial; // Synchronize dropdown display value
       : [];
 
     const hasInvalidThreshold = thresholds.some(
-      (value) => !Number.isFinite(value) || value <= 0 || value > 100
+      (value: number) => !Number.isFinite(value) || value <= 0 || value > 100
     );
 
     if (hasInvalidThreshold) {
@@ -1216,32 +1213,14 @@ function sectionMatches(section: string, query: string) {
           <div class="flex items-center gap-2">
             <input
               type="checkbox"
-              id="enable-dht"
-              bind:checked={localSettings.enableDHT}
-            />
-            <Label for="enable-dht" class="cursor-pointer">
-              {$t("network.enableDht")}
-            </Label>
-          </div>
-
-          <div class="flex items-center gap-2">
-            <input
-              type="checkbox"
               id="auto-start-dht"
-              bind:checked={localSettings.autoStartDht}
+              bind:checked={localSettings.autoStartDHT}
             />
             <Label for="auto-start-dht" class="cursor-pointer">
-              Auto-start Network on App Launch
+              Auto-start DHT on launch
             </Label>
           </div>
 
-          {#if localSettings.autoStartDht}
-            <div class="ml-6 p-3 bg-blue-50 rounded-md border border-blue-200">
-              <p class="text-xs text-blue-900">
-                The DHT network will automatically start when you open the application, so you don't have to manually start it each time.
-              </p>
-            </div>
-          {/if}
         </div>
 
         <!-- Custom Bootstrap Nodes -->
@@ -1838,6 +1817,7 @@ function sectionMatches(section: string, query: string) {
             {$t("advanced.autoUpdate")}
           </Label>
         </div>
+
 
         <div class="flex flex-wrap gap-2">
           <Button

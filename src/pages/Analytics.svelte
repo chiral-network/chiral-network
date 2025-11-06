@@ -116,7 +116,6 @@ let realNetworkActivity: NetworkActivity | null = null
 
   function maybeFireBandwidthAlert(
     direction: 'upload' | 'download',
-    threshold: number,
     percent: number,
     capGb: number
   ) {
@@ -168,7 +167,7 @@ let realNetworkActivity: NetworkActivity | null = null
         alertLevel = threshold
         if (!triggeredSet.has(threshold)) {
           triggeredSet.add(threshold)
-          maybeFireBandwidthAlert(direction, threshold, percent, capGb)
+          maybeFireBandwidthAlert(direction, percent, capGb)
         }
       } else if (triggeredSet.has(threshold) && percent + 1 < threshold) {
         triggeredSet.delete(threshold)

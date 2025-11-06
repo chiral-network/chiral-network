@@ -434,16 +434,14 @@ export interface AppSettings {
   preferredRelays: string[]; // Preferred relay node multiaddrs
   enableRelayServer: boolean; // Act as a relay server for other peers
   relayServerAlias: string; // Public alias/name for your relay server (appears in logs and bootstrapping)
-  autoStartDht: boolean; // Automatically start DHT network on app launch
   anonymousMode: boolean;
   shareAnalytics: boolean;
   enableNotifications: boolean;
   notifyOnComplete: boolean;
   notifyOnError: boolean;
-  soundAlerts: boolean;
   notifyOnBandwidthCap: boolean;
   notifyOnBandwidthCapDesktop: boolean;
-  enableDHT: boolean;
+  soundAlerts: boolean;
   enableIPFS: boolean;
   chunkSize: number; // KB
   cacheSize: number; // MB
@@ -456,6 +454,7 @@ export interface AppSettings {
   capWarningThresholds: number[]; // Percentages, e.g. [75, 90]
   pricePerMb: number; // Price per MB in Chiral (e.g., 0.001)
   customBootstrapNodes: string[]; // Custom bootstrap nodes for DHT (leave empty to use defaults)
+  autoStartDHT: boolean; // Whether to automatically start DHT on app launch
 }
 
 // Export the settings store
@@ -484,16 +483,14 @@ export const settings = writable<AppSettings>({
   preferredRelays: [], // Use bootstrap nodes as relays by default
   enableRelayServer: false, // Disabled by default - enable to help relay traffic for others
   relayServerAlias: "", // Empty by default - user can set a friendly name
-  autoStartDht: false, // Disabled by default - user must opt-in
   anonymousMode: false,
   shareAnalytics: true,
   enableNotifications: true,
   notifyOnComplete: true,
   notifyOnError: true,
-  soundAlerts: false,
   notifyOnBandwidthCap: true,
   notifyOnBandwidthCapDesktop: false,
-  enableDHT: true,
+  soundAlerts: false,
   enableIPFS: false,
   chunkSize: 256,
   cacheSize: 1024,
@@ -506,6 +503,7 @@ export const settings = writable<AppSettings>({
   capWarningThresholds: [75, 90],
   pricePerMb: 0.001, // Default price: 0.001, until ability to set pricePerMb is there, then change to 0.001 Chiral per MB
   customBootstrapNodes: [], // Empty by default - use hardcoded bootstrap nodes
+  autoStartDHT: false, // Don't auto-start DHT by default
 });
 
 export const activeBandwidthLimits = writable<ActiveBandwidthLimits>(
