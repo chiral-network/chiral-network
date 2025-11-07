@@ -35,7 +35,9 @@ pub mod http_server;
 pub mod keystore;
 pub mod manager;
 pub mod multi_source_download;
+
 mod logger;
+pub mod bittorrent_handler;
 
 use protocols::ProtocolManager;
 
@@ -5174,12 +5176,31 @@ fn main() {
 
             // Relay aliases
             relay_aliases: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        
+            // Protocol Manager with BitTorrent support
+            protocol_manager: {
+                let mut manager = ProtocolManager::new();
+                
+                // Create default download directory
+                let download_dir = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
+                    .map(|dirs| dirs.data_dir().join("downloads"))
+                    .unwrap_or_else(|| std::env::current_dir().unwrap().join("downloads"));
+                
+                // Ensure download directory exists
+                if let Err(e) = std::fs::create_dir_all(&download_dir) {
+                    eprintln!("Failed to create download directory: {}", e);
+                }
+                
+                // Register BitTorrent handler
+                let bittorrent_handler = Arc::new(bittorrent_handler::BitTorrentHandler::new(download_dir));
+                manager.register(bittorrent_handler);
+                
+                Arc::new(manager)
+            },
 
-            // Protocol Manager
-            protocol_manager: Arc::new(ProtocolManager::new()),
-
-            // File logger - will be initialized in setup phase after loading settings
+          // File logger - will be initialized in setup phase after loading settings
             file_logger: Arc::new(Mutex::new(None)),
+          
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
