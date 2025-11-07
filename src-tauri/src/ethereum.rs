@@ -1,13 +1,60 @@
+use chrono;
 use ethers::prelude::*;
+use once_cell::sync::Lazy;
 use rand::rngs::OsRng;
 use secp256k1::{PublicKey, Secp256k1, SecretKey};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha3::{Digest, Keccak256};
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+
+// ============================================================================
+// Configuration & Shared Resources
+// ============================================================================
+
+#[derive(Debug, Clone)]
+pub struct NetworkConfig {
+    pub rpc_endpoint: String,
+    pub chain_id: u64,
+    pub network_id: u64,
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            rpc_endpoint: "http://127.0.0.1:8545".to_string(),
+            chain_id: 98765,
+            network_id: 98765,
+        }
+    }
+}
+
+// Global configuration - can be updated via environment variables
+pub static NETWORK_CONFIG: Lazy<NetworkConfig> = Lazy::new(|| {
+    NetworkConfig {
+        rpc_endpoint: std::env::var("CHIRAL_RPC_ENDPOINT")
+            .unwrap_or_else(|_| "http://127.0.0.1:8545".to_string()),
+        chain_id: std::env::var("CHIRAL_CHAIN_ID")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(98765),
+        network_id: std::env::var("CHIRAL_NETWORK_ID")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(98765),
+    }
+});
+
+// Shared HTTP client for all RPC calls
+pub static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .expect("Failed to create HTTP client")
+});
 
 //Structs
 #[derive(Debug, Serialize, Deserialize)]
@@ -202,7 +249,7 @@ impl GethProcess {
         }
 
         // Bootstrap node
-        let bootstrap_enode = "enode://ae987db6399b50addb75d7822bfad9b4092fbfd79cbfe97e6864b1f17d3e8fcd8e9e190ad109572c1439230fa688a9837e58f0b1ad7c0dc2bc6e4ab328f3991e@130.245.173.105:30303";
+        let bootstrap_enode = "enode://ae987db6399b50addb75d7822bfad9b4092fbfd79cbfe97e6864b1f17d3e8fcd8e9e190ad109572c1439230fa688a9837e58f0b1ad7c0dc2bc6e4ab328f3991e@130.245.173.105:30303,enode://b3ead5f07d0dbeda56023435a7c05877d67b055df3a8bf18f3d5f7c56873495cd4de5cf031ae9052827c043c12f1d30704088c79fb539c96834bfa74b78bf80b@20.85.124.187:30303";
 
         let mut cmd = Command::new(&geth_path);
         cmd.arg("--datadir")
@@ -248,7 +295,10 @@ impl GethProcess {
             .open(&log_path)
             .map_err(|e| format!("Failed to create log file: {}", e))?;
 
-        cmd.stdout(Stdio::from(log_file.try_clone().unwrap()))
+        let log_file_clone = log_file.try_clone()
+            .map_err(|e| format!("Failed to clone log file handle: {}", e))?;
+
+        cmd.stdout(Stdio::from(log_file_clone))
             .stderr(Stdio::from(log_file));
 
         let child = cmd
@@ -361,8 +411,6 @@ pub fn get_account_from_private_key(private_key_hex: &str) -> Result<EthAccount,
 }
 
 pub async fn get_balance(address: &str) -> Result<String, String> {
-    let client = reqwest::Client::new();
-
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "eth_getBalance",
@@ -370,8 +418,8 @@ pub async fn get_balance(address: &str) -> Result<String, String> {
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -401,8 +449,6 @@ pub async fn get_balance(address: &str) -> Result<String, String> {
 }
 
 pub async fn get_peer_count() -> Result<u32, String> {
-    let client = reqwest::Client::new();
-
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "net_peerCount",
@@ -410,8 +456,8 @@ pub async fn get_peer_count() -> Result<u32, String> {
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -438,15 +484,13 @@ pub async fn get_peer_count() -> Result<u32, String> {
 }
 
 pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), String> {
-    let client = reqwest::Client::new();
-
     // First, ensure geth is ready to accept RPC calls
     let mut attempts = 0;
     let max_attempts = 10; // 10 seconds max wait
     loop {
         // Check if geth is responding to RPC calls
-        if let Ok(response) = client
-            .post("http://127.0.0.1:8545")
+        if let Ok(response) = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&serde_json::json!({
                 "jsonrpc": "2.0",
                 "method": "net_version",
@@ -484,8 +528,8 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&set_etherbase)
         .send()
         .await
@@ -511,8 +555,8 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
         "id": 2
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&start_mining)
         .send()
         .await
@@ -531,8 +575,6 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
 }
 
 pub async fn stop_mining() -> Result<(), String> {
-    let client = reqwest::Client::new();
-
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "miner_stop",
@@ -540,8 +582,8 @@ pub async fn stop_mining() -> Result<(), String> {
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -560,8 +602,6 @@ pub async fn stop_mining() -> Result<(), String> {
 }
 
 pub async fn get_mining_status() -> Result<bool, String> {
-    let client = reqwest::Client::new();
-
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "eth_mining",
@@ -569,8 +609,8 @@ pub async fn get_mining_status() -> Result<bool, String> {
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -593,8 +633,6 @@ pub async fn get_mining_status() -> Result<bool, String> {
 }
 
 pub async fn get_hashrate() -> Result<String, String> {
-    let client = reqwest::Client::new();
-
     // First try eth_hashrate
     let payload = json!({
         "jsonrpc": "2.0",
@@ -603,8 +641,8 @@ pub async fn get_hashrate() -> Result<String, String> {
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -624,8 +662,8 @@ pub async fn get_hashrate() -> Result<String, String> {
             "id": 1
         });
 
-        if let Ok(miner_response) = client
-            .post("http://127.0.0.1:8545")
+        if let Ok(miner_response) = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&miner_payload)
             .send()
             .await
@@ -667,7 +705,57 @@ pub async fn get_hashrate() -> Result<String, String> {
             }
         }
 
-        // If both fail, return original error
+        // If both fail, try one more method: miner.getHashrate
+        let gethashrate_payload = json!({
+            "jsonrpc": "2.0",
+            "method": "miner.getHashrate",
+            "params": [],
+            "id": 1
+        });
+
+        if let Ok(gethashrate_response) = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
+            .json(&gethashrate_payload)
+            .send()
+            .await
+        {
+            if let Ok(gethashrate_json) = gethashrate_response.json::<serde_json::Value>().await {
+                if gethashrate_json.get("error").is_none() {
+                    if let Some(result) = gethashrate_json.get("result") {
+                        if let Some(hashrate_hex) = result.as_str() {
+                            // Process with the same logic below
+                            let hex_str = if hashrate_hex.starts_with("0x")
+                                || hashrate_hex.starts_with("0X")
+                            {
+                                &hashrate_hex[2..]
+                            } else {
+                                hashrate_hex
+                            };
+
+                            let hashrate = if hex_str.is_empty() || hex_str == "0" {
+                                0
+                            } else {
+                                u64::from_str_radix(hex_str, 16).unwrap_or(0)
+                            };
+
+                            let formatted = if hashrate >= 1_000_000_000 {
+                                format!("{:.2} GH/s", hashrate as f64 / 1_000_000_000.0)
+                            } else if hashrate >= 1_000_000 {
+                                format!("{:.2} MH/s", hashrate as f64 / 1_000_000.0)
+                            } else if hashrate >= 1_000 {
+                                format!("{:.2} KH/s", hashrate as f64 / 1_000.0)
+                            } else {
+                                format!("{} H/s", hashrate)
+                            };
+
+                            return Ok(formatted);
+                        }
+                    }
+                }
+            }
+        }
+
+        // If all methods fail, return original error
         return Err(format!("RPC error: {}", error));
     }
 
@@ -704,8 +792,6 @@ pub async fn get_hashrate() -> Result<String, String> {
 }
 
 pub async fn get_block_number() -> Result<u64, String> {
-    let client = reqwest::Client::new();
-
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "eth_blockNumber",
@@ -713,8 +799,8 @@ pub async fn get_block_number() -> Result<u64, String> {
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -741,8 +827,6 @@ pub async fn get_block_number() -> Result<u64, String> {
 }
 
 pub async fn get_network_difficulty() -> Result<String, String> {
-    let client = reqwest::Client::new();
-
     // Get the latest block to extract difficulty
     let payload = json!({
         "jsonrpc": "2.0",
@@ -751,8 +835,8 @@ pub async fn get_network_difficulty() -> Result<String, String> {
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -791,7 +875,143 @@ pub async fn get_network_difficulty() -> Result<String, String> {
     Ok(formatted)
 }
 
-pub fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String> {
+pub async fn get_network_difficulty_as_u64() -> Result<u64, String> {
+    let client = reqwest::Client::new();
+
+    // Get the latest block to extract difficulty
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "eth_getBlockByNumber",
+        "params": ["latest", false],
+        "id": 1
+    });
+
+    let response = client
+        .post("http://127.0.0.1:8545")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get block: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error: {}", error));
+    }
+
+    let difficulty_hex = json_response["result"]["difficulty"]
+        .as_str()
+        .ok_or("Invalid difficulty response")?;
+
+    // Convert hex to decimal
+    let hex_str = if difficulty_hex.starts_with("0x") || difficulty_hex.starts_with("0X") {
+        &difficulty_hex[2..]
+    } else {
+        difficulty_hex
+    };
+
+    let difficulty = if hex_str.is_empty() {
+        1u64
+    } else {
+        u64::from_str_radix(hex_str, 16).unwrap_or(1)
+    };
+
+    Ok(difficulty)
+}
+
+// Static storage for mining session data
+static MINING_SESSION_DATA: std::sync::Mutex<MiningSessionData> = std::sync::Mutex::new(MiningSessionData {
+    last_hash_rate: 0.0,
+    session_start: 0,
+    total_attempts: 0,
+});
+
+#[derive(Clone, Debug)]
+struct MiningSessionData {
+    last_hash_rate: f64,
+    session_start: u64,
+    total_attempts: u64,
+}
+
+// Helper function to write debug messages to mining logs
+fn log_to_mining_logs(data_dir: &str, message: &str) {
+    // For debugging, also print to stdout so we can see if the function is called
+    println!("DEBUG LOG: {}", message);
+
+    // Resolve data directory
+    let exe_dir = match std::env::current_exe() {
+        Ok(exe) => match exe.parent() {
+            Some(parent) => parent.to_path_buf(),
+            None => {
+                println!("DEBUG LOG: Failed to get exe parent directory");
+                return;
+            }
+        },
+        Err(e) => {
+            println!("DEBUG LOG: Failed to get exe path: {}", e);
+            return;
+        }
+    };
+
+    let data_path = if Path::new(data_dir).is_absolute() {
+        PathBuf::from(data_dir)
+    } else {
+        exe_dir.join(data_dir)
+    };
+
+    let log_path = data_path.join("geth.log");
+    println!("DEBUG LOG: Attempting to write to: {:?}", log_path);
+
+    // Create log directory if it doesn't exist
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    // Append message to log file
+    match OpenOptions::new().create(true).append(true).open(&log_path) {
+        Ok(mut file) => {
+            let timestamp = chrono::Utc::now().format("%Y-%m-%d|%H:%M:%S");
+            let log_line = format!("INFO [{}] DEBUG: {}\n", timestamp, message);
+            match file.write_all(log_line.as_bytes()) {
+                Ok(_) => println!("DEBUG LOG: Successfully wrote to log file"),
+                Err(e) => println!("DEBUG LOG: Failed to write to log file: {}", e),
+            }
+        }
+        Err(e) => println!("DEBUG LOG: Failed to open log file: {}", e),
+    }
+}
+
+// Helper function to parse elapsed time strings like "386.043ms", "5.382s", etc.
+fn parse_elapsed_time(time_str: &str) -> Result<f64, String> {
+    if time_str.ends_with("ms") {
+        // Convert milliseconds to seconds
+        let ms_str = &time_str[..time_str.len() - 2];
+        ms_str.parse::<f64>().map(|ms| ms / 1000.0).map_err(|e| format!("Failed to parse milliseconds: {}", e))
+    } else if time_str.ends_with('s') {
+        // Already in seconds
+        let s_str = &time_str[..time_str.len() - 1];
+        s_str.parse::<f64>().map_err(|e| format!("Failed to parse seconds: {}", e))
+    } else {
+        // Assume seconds if no unit
+        time_str.parse::<f64>().map_err(|e| format!("Failed to parse time: {}", e))
+    }
+}
+
+pub async fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String> {
+    let current_time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    // First, try to get the current network difficulty
+    let network_difficulty = match get_network_difficulty_as_u64().await {
+        Ok(diff) => diff,
+        Err(_) => 1u64, // fallback if RPC fails
+    };
+
     // Resolve relative data_dir against the executable directory
     let exe_dir = std::env::current_exe()
         .map_err(|e| format!("Failed to get exe path: {}", e))?
@@ -806,12 +1026,11 @@ pub fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String> {
     // Try to get blocks mined from logs first
     let log_path = data_path.join("geth.log");
 
-    // If log doesn't exist, return defaults (blocks will be calculated from balance in frontend)
-    if !log_path.exists() {
-        // Return 0 blocks but a reasonable hashrate estimate based on CPU mining
-        // Frontend will calculate blocks from actual balance
-        return Ok((0, 85000.0)); // Default ~85KH/s for single thread CPU mining
-    }
+            // If log doesn't exist, return defaults (blocks will be calculated from balance in frontend)
+            if !log_path.exists() {
+                // Return 0 for blocks and hash rate - no simulation
+                return Ok((0, 0.0));
+            }
 
     let file = File::open(&log_path).map_err(|e| format!("Failed to open log file: {}", e))?;
     let reader = BufReader::new(file);
@@ -839,9 +1058,12 @@ pub fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String> {
             blocks_mined += 1;
         }
 
-        // Look for mining stats in logs
-        // Geth may log lines like "Generating DAG" or mining-related performance
-        if line.contains("Mining") && line.contains("hashrate") {
+        // Look for mining stats in logs - try multiple patterns
+        // Geth may log hashrate in various formats
+        let has_hashrate_keyword = line.contains("hashrate") || line.contains("hash rate") || line.contains("Hashrate");
+        let has_mining_keyword = line.contains("Mining") || line.contains("mining") || line.contains("miner");
+
+        if has_hashrate_keyword {
             // Try to extract hashrate if it's explicitly logged
             if let Some(hr_pos) = line.find("hashrate=") {
                 let hr_str = &line[hr_pos + 9..];
@@ -853,60 +1075,141 @@ pub fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String> {
                 }
             }
         }
-    }
 
-    // If we found explicit hashrates in logs, use the average
-    if !recent_hashrates.is_empty() {
-        let avg_hashrate = recent_hashrates.iter().sum::<f64>() / recent_hashrates.len() as f64;
-        return Ok((blocks_mined, avg_hashrate));
-    }
-
-    // Otherwise, estimate based on blocks found and difficulty
-    // Look for the most recent block difficulty
-    let mut last_difficulty = 0u64;
-    for line in &lines {
-        if line.contains("Successfully sealed new block") && line.contains("diff=") {
-            if let Some(diff_pos) = line.find("diff=") {
-                let diff_str = &line[diff_pos + 5..];
-                if let Some(end_pos) = diff_str.find(|c: char| c == ' ' || c == '\n') {
-                    let diff_val_str = &diff_str[..end_pos];
-                    if let Ok(diff) = diff_val_str.parse::<u64>() {
-                        last_difficulty = diff;
-                        break; // Use the most recent
+        // Also look for lines with mining performance data
+        if has_mining_keyword && (line.contains("H/s") || line.contains("KH/s") || line.contains("MH/s") || line.contains("GH/s")) {
+            // Try to extract hash rate with units
+            // Look for patterns like "123.45 MH/s" or "123.45MH/s"
+            if let Some(hs_pos) = line.find("H/s") {
+                // Look backwards for the number
+                let before_hs = &line[..hs_pos];
+                if let Some(last_space) = before_hs.rfind(' ') {
+                    let rate_str = &before_hs[last_space + 1..];
+                    if let Ok(rate) = rate_str.parse::<f64>() {
+                        // Convert based on units
+                        let multiplier = if line.contains("KH/s") { 1000.0 }
+                                       else if line.contains("MH/s") { 1_000_000.0 }
+                                       else if line.contains("GH/s") { 1_000_000_000.0 }
+                                       else { 1.0 }; // H/s
+                        let actual_rate = rate * multiplier;
+                        recent_hashrates.push(actual_rate);
                     }
                 }
             }
         }
     }
 
-    // If we have blocks mined and difficulty, estimate hashrate
-    // Hash rate ≈ (blocks_found * difficulty) / time_period
-    // Since we're looking at recent logs, assume last ~10 minutes
-    if blocks_mined > 0 && last_difficulty > 0 {
-        let time_window = 600.0; // 10 minutes in seconds
-        let estimated_hashrate = (blocks_mined as f64 * last_difficulty as f64) / time_window;
-        return Ok((blocks_mined, estimated_hashrate));
-    }
+            // If we found explicit hashrates in logs, use the average
+            if !recent_hashrates.is_empty() {
+                let avg_hashrate = recent_hashrates.iter().sum::<f64>() / recent_hashrates.len() as f64;
+                return Ok((blocks_mined, avg_hashrate));
+            }
 
-    // If still no data, check for CPU miner initialization
+    // Try to estimate hash rate from recent mining activity
+    // Look for recent blocks with elapsed time information
+    let mut recent_blocks = Vec::new();
+
     for line in &lines {
-        if line.contains("Updated mining threads") || line.contains("Starting mining operation") {
-            // Look for thread count
-            if let Some(threads_pos) = line.find("threads=") {
-                let threads_str = &line[threads_pos + 8..];
-                if let Some(end_pos) = threads_str.find(|c: char| c == ' ' || c == '\n') {
-                    let thread_count_str = &threads_str[..end_pos];
-                    if let Ok(threads) = thread_count_str.parse::<u32>() {
-                        // Estimate ~85KH/s per thread for CPU mining
-                        let estimated_hashrate = threads as f64 * 85000.0;
-                        return Ok((blocks_mined, estimated_hashrate));
+        if line.contains("Successfully sealed new block") && line.contains("elapsed=") {
+            // Extract elapsed time for this block
+            if let Some(elapsed_pos) = line.find("elapsed=") {
+                let elapsed_str = &line[elapsed_pos + 8..];
+                if let Some(end_pos) = elapsed_str.find(|c: char| c == ' ' || c == 's' || c == '\n') {
+                    let time_str = &elapsed_str[..end_pos];
+                    if let Ok(elapsed_seconds) = parse_elapsed_time(time_str) {
+                        // Also try to get difficulty if available
+                        let mut difficulty = network_difficulty; // Use network difficulty as default
+
+                        if let Some(diff_pos) = line.find("diff=") {
+                            let diff_str = &line[diff_pos + 5..];
+                            if let Some(diff_end) = diff_str.find(|c: char| c == ' ' || c == '\n') {
+                                let diff_val_str = &diff_str[..diff_end];
+                                if let Ok(diff) = diff_val_str.parse::<u64>() {
+                                    difficulty = diff;
+                                }
+                            }
+                        }
+                        recent_blocks.push((elapsed_seconds, difficulty));
                     }
                 }
             }
         }
     }
 
-    Ok((blocks_mined, 0.0))
+            // Update session data
+            let mut session_data = match MINING_SESSION_DATA.lock() {
+                Ok(data) => data.clone(),
+                Err(_) => MiningSessionData {
+                    last_hash_rate: 0.0,
+                    session_start: current_time,
+                    total_attempts: 0,
+                },
+            };
+
+    // Initialize session start if not set
+    if session_data.session_start == 0 {
+        session_data.session_start = current_time;
+    }
+
+    // Calculate hash rate from mining difficulty and elapsed time (when blocks are found)
+    let mut calculated_hashrate = None;
+    if !recent_blocks.is_empty() {
+        // For each block, hash_rate = difficulty / time_taken
+        // Average across all recent blocks for stability
+        let mut total_hashrate = 0.0;
+        let mut valid_blocks = 0;
+
+        for (elapsed_seconds, difficulty) in &recent_blocks {
+            if *elapsed_seconds > 0.0 && *difficulty > 0 {
+                let block_hashrate = *difficulty as f64 / *elapsed_seconds;
+                total_hashrate += block_hashrate;
+                valid_blocks += 1;
+            }
+        }
+
+        if valid_blocks > 0 {
+            let avg_hashrate = total_hashrate / valid_blocks as f64;
+            session_data.last_hash_rate = avg_hashrate;
+            calculated_hashrate = Some(avg_hashrate);
+        }
+    }
+
+    // Try to estimate real-time hash rate from mining activity patterns
+    // Count recent mining operations in the logs
+    let mut mining_operations = 0;
+    for line in &lines {
+        // Look for various mining activity indicators
+        if line.contains("Commit new sealing work") ||
+           line.contains("Generating DAG") ||
+           line.contains("mining") ||
+           (line.contains("miner") && line.contains("start")) {
+            mining_operations += 1;
+        }
+    }
+
+    // Only provide hash rate when we have actual data
+    // Don't simulate or estimate - be honest about what we can measure
+    let realtime_estimate: Option<f64> = None; // No estimation - only real calculations
+
+    // Only return hash rates based on actual measurements
+    let final_hashrate = if let Some(calc_rate) = calculated_hashrate {
+        // We have a real calculation from blocks found
+        session_data.last_hash_rate = calc_rate;
+        calc_rate
+    } else if session_data.last_hash_rate > 0.0 {
+        // Return the last measured hash rate from blocks
+        session_data.last_hash_rate
+    } else {
+        // No blocks mined yet - can't provide hash rate
+        0.0
+    };
+
+    // Store updated session data
+    if let Ok(mut data) = MINING_SESSION_DATA.lock() {
+        *data = session_data;
+    }
+
+    Ok((blocks_mined, final_hashrate))
 }
 
 pub fn get_mining_logs(data_dir: &str, lines: usize) -> Result<Vec<String>, String> {
@@ -943,7 +1246,6 @@ pub fn get_mining_logs(data_dir: &str, lines: usize) -> Result<Vec<String>, Stri
 }
 
 pub async fn get_mined_blocks_count(miner_address: &str) -> Result<u64, String> {
-    let client = reqwest::Client::new();
     let mut blocks_mined = 0u64;
 
     // Get the current block number
@@ -954,8 +1256,8 @@ pub async fn get_mined_blocks_count(miner_address: &str) -> Result<u64, String> 
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&block_number_payload)
         .send()
         .await
@@ -992,8 +1294,8 @@ pub async fn get_mined_blocks_count(miner_address: &str) -> Result<u64, String> 
             "id": 1
         });
 
-        if let Ok(response) = client
-            .post("http://127.0.0.1:8545")
+        if let Ok(response) = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&block_payload)
             .send()
             .await
@@ -1019,11 +1321,9 @@ pub async fn get_recent_mined_blocks(
     lookback: u64,
     limit: usize,
 ) -> Result<Vec<MinedBlock>, String> {
-    let client = reqwest::Client::new();
-
     // Fetch latest block number
-    let latest_v = client
-        .post("http://127.0.0.1:8545")
+    let latest_v = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&serde_json::json!({
             "jsonrpc": "2.0",
             "method": "eth_blockNumber",
@@ -1053,8 +1353,8 @@ pub async fn get_recent_mined_blocks(
             break;
         }
 
-        let block_v = client
-            .post("http://127.0.0.1:8545")
+        let block_v = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&serde_json::json!({
                 "jsonrpc": "2.0",
                 "method": "eth_getBlockByNumber",
@@ -1180,9 +1480,8 @@ pub async fn get_recent_mined_blocks(
     Ok(out)
 }
 
+#[tauri::command]
 pub async fn get_network_hashrate() -> Result<String, String> {
-    let client = reqwest::Client::new();
-
     // First, try to get the actual network hashrate from eth_hashrate
     // This will return the sum of all miners that have submitted their hashrate
     let hashrate_payload = json!({
@@ -1192,8 +1491,8 @@ pub async fn get_network_hashrate() -> Result<String, String> {
         "id": 1
     });
 
-    if let Ok(response) = client
-        .post("http://127.0.0.1:8545")
+    if let Ok(response) = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&hashrate_payload)
         .send()
         .await
@@ -1239,8 +1538,8 @@ pub async fn get_network_hashrate() -> Result<String, String> {
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&latest_block)
         .send()
         .await
@@ -1286,6 +1585,7 @@ pub async fn get_network_hashrate() -> Result<String, String> {
 
     Ok(formatted)
 }
+
 
 pub async fn send_transaction(
     from_address: &str,

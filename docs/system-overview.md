@@ -76,7 +76,8 @@ All nodes are equal and can simultaneously seed files (earning cryptocurrency), 
 
 ### 1. True Decentralization
 
-- No centralized storage or servers
+- No centralized storage or servers for file data
+- We keep a long-lived bootstrap DHT node online for fast peer discovery; it stores no file data, and any peer can assume the role if maintained like a service
 - All nodes are equal - everyone can seed, leech, relay, and mine
 - Files only available while peers actively seed them (no permanent storage)
 - Distributed consensus through blockchain (for mining only)

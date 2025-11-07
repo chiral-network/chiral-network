@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { downloadDir, join } from "@tauri-apps/api/path";
+import { join } from "@tauri-apps/api/path";
 
 /**
  * A service class to interact with the file transfer and DHT commands
@@ -57,7 +57,10 @@ export class FileService {
       const { encryptionService } = await import("./encryption");
 
       // Use ChunkManager via encryptionService (same as file path upload)
-      const manifest = await encryptionService.encryptFile(tempFilePath, recipientPublicKey);
+      const manifest = await encryptionService.encryptFile(
+        tempFilePath,
+        recipientPublicKey
+      );
 
       return manifest;
     } catch (error: any) {
@@ -72,7 +75,9 @@ export class FileService {
    */
   async getMerkleRoot(fileHash: string): Promise<string | null> {
     try {
-      const root = await invoke<string | null>("get_merkle_root_for_file", { fileHash });
+      const root = await invoke<string | null>("get_merkle_root_for_file", {
+        fileHash,
+      });
       return root ?? null;
     } catch (error) {
       console.error("Failed to get Merkle root:", error);
@@ -82,18 +87,52 @@ export class FileService {
 
   /**
    * Downloads a file from the network given its hash.
-   * The backend saves it to the user's default download directory.
+   * Uses the configured download path from settings.
    * @param hash The hash of the file to download.
    * @param fileName The name to save the file as.
    * @returns The full path to the downloaded file.
    */
   async downloadFile(hash: string, fileName: string): Promise<string> {
-    const downloadPath = await downloadDir();
-    const outputPath = await join(downloadPath, fileName);
+    // ✅ GET AND VALIDATE SETTINGS PATH
+    const stored = localStorage.getItem("chiralSettings");
+    if (!stored) {
+      throw new Error(
+        "Please configure a download path in Settings before downloading files."
+      );
+    }
 
-    // Calls 'download_file_from_network' on the backend.
-    // Note: The current backend implementation only retrieves from its local
-    // storage, not from other peers yet. This is a starting point.
+    const settings = JSON.parse(stored);
+    let storagePath = settings.storagePath;
+
+    if (!storagePath || storagePath === ".") {
+      throw new Error(
+        "Please set a valid download path in Settings before downloading files."
+      );
+    }
+
+    // Expand ~ to home directory if needed
+    if (storagePath.startsWith("~")) {
+      const { homeDir } = await import("@tauri-apps/api/path");
+      const home = await homeDir();
+      storagePath = storagePath.replace("~", home);
+    }
+
+    // Validate directory exists
+    const dirExists = await invoke<boolean>("check_directory_exists", {
+      path: storagePath,
+    });
+    if (!dirExists) {
+      throw new Error(
+        `Download path "${settings.storagePath}" does not exist. Please update it in Settings.`
+      );
+    }
+
+    // Construct full file path using join for proper path handling
+    const outputPath = await join(storagePath, fileName);
+
+    console.log("✅ Starting download to:", outputPath);
+
+    // Call the backend with the validated path
     await invoke("download_file_from_network", {
       fileHash: hash,
       outputPath: outputPath,

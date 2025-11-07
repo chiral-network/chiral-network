@@ -9,15 +9,65 @@
   import Button from '$lib/components/ui/button.svelte';
   import PeerSelectionService, { type PeerMetrics as BackendPeerMetrics } from '$lib/services/peerSelectionService';
   import { invoke } from '@tauri-apps/api/core';
+  import { debounce } from '$lib/utils/debounce';
+
+  // LocalStorage keys for persisted UI state
+  const STORAGE_KEY_SHOW_ANALYTICS = 'chiral.reputation.showAnalytics';
+  const STORAGE_KEY_SHOW_RELAY_LEADERBOARD = 'chiral.reputation.showRelayLeaderboard';
+
+  // Load persisted UI toggles from localStorage
+  function loadPersistedToggles() {
+    if (typeof window === 'undefined') return { showAnalytics: true, showRelayLeaderboard: true };
+    
+    try {
+      const storedAnalytics = window.localStorage.getItem(STORAGE_KEY_SHOW_ANALYTICS);
+      const storedLeaderboard = window.localStorage.getItem(STORAGE_KEY_SHOW_RELAY_LEADERBOARD);
+      
+      return {
+        showAnalytics: storedAnalytics !== null ? storedAnalytics === 'true' : true,
+        showRelayLeaderboard: storedLeaderboard !== null ? storedLeaderboard === 'true' : true
+      };
+    } catch (e) {
+      console.warn('Failed to load persisted UI toggles:', e);
+      return { showAnalytics: true, showRelayLeaderboard: true };
+    }
+  }
+
+  // Persist UI toggle to localStorage
+  function persistToggle(key: string, value: boolean) {
+    if (typeof window === 'undefined') return;
+    
+    try {
+      window.localStorage.setItem(key, String(value));
+    } catch (e) {
+      console.warn('Failed to persist UI toggle:', e);
+    }
+  }
+
+  const persistedToggles = loadPersistedToggles();
 
   // State
   let peers: PeerReputation[] = [];
-  let analytics: ReputationAnalytics;
+  let analytics: ReputationAnalytics = {
+    totalPeers: 0,
+    trustedPeers: 0,
+    averageScore: 0,
+    topPerformers: [],
+    recentEvents: [],
+    trustLevelDistribution: {
+      [TrustLevel.Trusted]: 0,
+      [TrustLevel.High]: 0,
+      [TrustLevel.Medium]: 0,
+      [TrustLevel.Low]: 0,
+      [TrustLevel.Unknown]: 0
+    }
+  };
   let sortBy: 'score' | 'interactions' | 'lastSeen' = 'score';
   let searchQuery = '';
+  let debouncedSearchQuery = ''; // Debounced version for filtering
   let isLoading = true;
-  let showAnalytics = true;
-  let showRelayLeaderboard = true;
+  let showAnalytics = persistedToggles.showAnalytics;
+  let showRelayLeaderboard = persistedToggles.showRelayLeaderboard;
   let currentPage = 1;
   const peersPerPage = 8;
 
@@ -35,6 +85,27 @@
   let pendingSelectedTrustLevels: TrustLevel[] = [];
   let pendingFilterEncryptionSupported: boolean | null = null;
   let pendingMinUptime = 0;
+
+  // Previous filter/sort values for detecting actual changes
+  let prevSelectedTrustLevels: TrustLevel[] = [];
+  let prevFilterEncryptionSupported: boolean | null = null;
+  let prevMinUptime = 0;
+  let prevSortBy: 'score' | 'interactions' | 'lastSeen' = 'score';
+
+  // Debounced search handler
+  const updateDebouncedSearch = debounce((query: string) => {
+    debouncedSearchQuery = query;
+  }, 300);
+
+  // Watch search query and update debounced version
+  $: updateDebouncedSearch(searchQuery);
+
+  // Persist UI toggles when they change
+  // Persist UI toggles when they change (consolidated)
+  $: {
+    persistToggle(STORAGE_KEY_SHOW_ANALYTICS, showAnalytics);
+    persistToggle(STORAGE_KEY_SHOW_RELAY_LEADERBOARD, showRelayLeaderboard);
+  }
 
   function openFilters() {
     // Sync pending state with applied state when opening
@@ -55,6 +126,13 @@
     pendingSelectedTrustLevels = [];
     pendingFilterEncryptionSupported = null;
     pendingMinUptime = 0;
+  }
+
+  // Close filter dropdown on escape key
+  function handleKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape' && isFilterOpen) {
+      isFilterOpen = false;
+    }
   }
 
   // Action to detect clicks outside an element
@@ -122,10 +200,17 @@
       const trustedPeers = mappedPeers.filter(p => p.trustLevel === TrustLevel.Trusted).length;
       const averageScore = totalPeers > 0 ? mappedPeers.reduce((sum, p) => sum + p.score, 0) / totalPeers : 0;
       const topPerformers = [...mappedPeers].sort((a, b) => b.score - a.score).slice(0, 10);
-      const trustLevelDistribution = Object.values(TrustLevel).reduce((acc, level) => {
+      // Build trust level distribution deterministically from the known options
+      const trustLevelDistribution = trustLevelOptions.reduce((acc, level) => {
         acc[level] = mappedPeers.filter(p => p.trustLevel === level).length;
         return acc;
-      }, {} as Record<TrustLevel, number>);
+      }, {
+        [TrustLevel.Trusted]: 0,
+        [TrustLevel.High]: 0,
+        [TrustLevel.Medium]: 0,
+        [TrustLevel.Low]: 0,
+        [TrustLevel.Unknown]: 0
+      } as Record<TrustLevel, number>);
 
       analytics = {
         totalPeers,
@@ -205,7 +290,7 @@
   $: filteredPeers = peers
     .filter(peer => {
       const matchesTrustLevel = selectedTrustLevels.length === 0 || selectedTrustLevels.includes(peer.trustLevel);
-      const matchesSearch = searchQuery === '' || peer.peerId.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesSearch = debouncedSearchQuery === '' || peer.peerId.toLowerCase().includes(debouncedSearchQuery.toLowerCase());
       const matchesEncryption = filterEncryptionSupported === null || peer.metrics.encryptionSupported === filterEncryptionSupported;
       const matchesUptime = peer.metrics.uptime >= minUptime;
 
@@ -231,10 +316,27 @@
     currentPage = totalPages;
   }
 
-  // Reset to page 1 when filters or search change
-  $: if (searchQuery || selectedTrustLevels || filterEncryptionSupported || minUptime || sortBy) {
-    currentPage = 1;
+  // Reset to page 1 only when filters or sort ACTUALLY change (not on every reactive update)
+  $: {
+    const filtersChanged = 
+      JSON.stringify(selectedTrustLevels) !== JSON.stringify(prevSelectedTrustLevels) ||
+      filterEncryptionSupported !== prevFilterEncryptionSupported ||
+      minUptime !== prevMinUptime ||
+      sortBy !== prevSortBy ||
+      debouncedSearchQuery !== (prevDebouncedSearchQuery || '');
+    
+    if (filtersChanged) {
+      currentPage = 1;
+      prevSelectedTrustLevels = [...selectedTrustLevels];
+      prevFilterEncryptionSupported = filterEncryptionSupported;
+      prevMinUptime = minUptime;
+      prevSortBy = sortBy;
+      prevDebouncedSearchQuery = debouncedSearchQuery;
+    }
   }
+
+  // Track previous debounced search for comparison
+  let prevDebouncedSearchQuery = '';
 
   onMount(() => {
     loadPeersFromBackend();
@@ -245,8 +347,15 @@
     setTimeout(() => { loadPeersFromBackend(); loadMyRelayStats(); }, 1500);
     // Periodic refresh to keep data live
     const interval = setInterval(() => { loadPeersFromBackend(); loadMyRelayStats(); }, 10000);
+    
+    // Add escape key listener
+    window.addEventListener('keydown', handleKeydown);
+    
     isLoading = false;
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('keydown', handleKeydown);
+    };
   });
 
   async function refreshData() {
@@ -277,7 +386,7 @@
             {showAnalytics ? $t('reputation.hideAnalytics') : $t('reputation.showAnalytics')}
           </Button>
           <Button on:click={() => showRelayLeaderboard = !showRelayLeaderboard} variant="outline" class="w-full sm:w-auto">
-            {showRelayLeaderboard ? 'Hide Relay Leaderboard' : 'Show Relay Leaderboard'}
+            {showRelayLeaderboard ? $t('reputation.hideRelayLeaderboard') : $t('reputation.showRelayLeaderboard')}
           </Button>
         </div>
       </div>
@@ -307,27 +416,27 @@
               <div class="flex items-center gap-3 mb-4">
                 <span class="text-3xl">⚡</span>
                 <div>
-                  <h3 class="text-xl font-bold text-gray-900">Your Relay Reputation</h3>
-                  <p class="text-sm text-gray-600">Your node is running as a relay server</p>
+                  <h3 class="text-xl font-bold text-gray-900">{$t('reputation.myRelay.title')}</h3>
+                  <p class="text-sm text-gray-600">{$t('reputation.myRelay.subtitle')}</p>
                 </div>
               </div>
 
               <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div class="bg-white rounded-lg p-4 shadow-sm">
                   <div class="text-2xl font-bold text-blue-600">#{myRelayStats.rank}</div>
-                  <div class="text-xs text-gray-600">Rank of {myRelayStats.totalRelays}</div>
+                  <div class="text-xs text-gray-600">{$t('reputation.myRelay.rankOf', { total: myRelayStats.totalRelays })}</div>
                 </div>
                 <div class="bg-white rounded-lg p-4 shadow-sm">
                   <div class="text-2xl font-bold text-purple-600">{myRelayStats.reputation_score.toFixed(0)}</div>
-                  <div class="text-xs text-gray-600">Reputation Score</div>
+                  <div class="text-xs text-gray-600">{$t('reputation.myRelay.reputationScore')}</div>
                 </div>
                 <div class="bg-white rounded-lg p-4 shadow-sm">
                   <div class="text-2xl font-bold text-green-600">{myRelayStats.circuits_successful}</div>
-                  <div class="text-xs text-gray-600">Successful Circuits</div>
+                  <div class="text-xs text-gray-600">{$t('reputation.myRelay.successfulCircuits')}</div>
                 </div>
                 <div class="bg-white rounded-lg p-4 shadow-sm">
                   <div class="text-2xl font-bold text-orange-600">{myRelayStats.reservations_accepted}</div>
-                  <div class="text-xs text-gray-600">Reservations</div>
+                  <div class="text-xs text-gray-600">{$t('reputation.myRelay.reservations')}</div>
                 </div>
               </div>
             </div>
@@ -359,10 +468,15 @@
       <!-- Filters and Sort Controls -->
       <div class="flex items-center justify-between mb-4 gap-2 flex-wrap">
         <!-- Filter Dropdown -->
-        <div class="relative">
-          <Button variant="outline" class="sm:w-auto" on:click={openFilters}>{$t('reputation.filters')}</Button>
+        <div class="relative" use:clickOutside>
+          <Button
+            variant="outline"
+            class="sm:w-auto"
+            on:click={() => (isFilterOpen ? (isFilterOpen = false) : openFilters())}
+            aria-haspopup="true"
+            aria-expanded={isFilterOpen}
+          >{$t('reputation.filters')}</Button>
           {#if isFilterOpen}
-            <div use:clickOutside>
               <Card class="absolute top-full mt-2 p-6 w-72 z-10">
                 <div class="space-y-6">
                   <!-- Trust Level Filter -->
@@ -372,7 +486,7 @@
                       {#each trustLevelOptions as level}
                         <label class="flex items-center gap-2 text-sm font-normal">
                           <input type="checkbox" bind:group={pendingSelectedTrustLevels} value={level} />
-                          {level}
+                          {$t(`reputation.trustLevels.${level}`)}
                         </label>
                       {/each}
                     </div>
@@ -412,7 +526,6 @@
                   <Button on:click={applyFilters}>{$t('reputation.apply')}</Button>
                 </div>
               </Card>
-            </div>
           {/if}
         </div>
 
@@ -454,7 +567,11 @@
         {#if totalPages > 1}
           <div class="flex items-center justify-between mt-6 pt-6 border-t border-gray-200">
             <div class="text-sm text-gray-600">
-              Showing {(currentPage - 1) * peersPerPage + 1}-{Math.min(currentPage * peersPerPage, filteredPeers.length)} of {filteredPeers.length} peers
+              {$t('reputation.pagination.showing', {
+                start: (currentPage - 1) * peersPerPage + 1,
+                end: Math.min(currentPage * peersPerPage, filteredPeers.length),
+                total: filteredPeers.length
+              })}
             </div>
             <div class="flex items-center gap-2">
               <Button
@@ -463,7 +580,7 @@
                 on:click={() => currentPage = currentPage - 1}
                 disabled={currentPage === 1}
               >
-                Previous
+                {$t('reputation.pagination.previous')}
               </Button>
               <div class="flex items-center gap-1">
                 {#each Array(totalPages) as _, i}
@@ -487,7 +604,7 @@
                 on:click={() => currentPage = currentPage + 1}
                 disabled={currentPage === totalPages}
               >
-                Next
+                {$t('reputation.pagination.next')}
               </Button>
             </div>
           </div>

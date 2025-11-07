@@ -1,15 +1,15 @@
+
 <script lang="ts">
   import Card from '$lib/components/ui/card.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import Button from '$lib/components/ui/button.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import GethStatusCard from '$lib/components/GethStatusCard.svelte'
   import PeerMetrics from '$lib/components/PeerMetrics.svelte'
   import GeoDistributionCard from '$lib/components/GeoDistributionCard.svelte'
-  import { peers, networkStats, networkStatus, userLocation, etcAccount, settings } from '$lib/stores'
+  import { peers, networkStats, networkStatus, userLocation, settings } from '$lib/stores'
   import { normalizeRegion, UNKNOWN_REGION_ID } from '$lib/geo'
-  import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Play, Square, Download, AlertCircle, Wifi, UserMinus } from 'lucide-svelte'
+  import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Wifi, UserMinus, Square, Play, Download, AlertCircle } from 'lucide-svelte'
   import { get } from 'svelte/store'
   import { onMount, onDestroy } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
@@ -63,11 +63,12 @@
     sortDirection = defaults[sortBy]
   }
   
-  // Chiral Network Node variables
+  // Chiral Network Node variables (status only)
   let isGethRunning = false
   let isGethInstalled = false
-  let isDownloading = false
   let isStartingNode = false
+  let isDownloading = false
+  let isCheckingGeth = true
   let downloadProgress = {
     downloaded: 0,
     total: 0,
@@ -75,14 +76,15 @@
     status: ''
   }
   let downloadError = ''
-  let dataDir = './bin/geth-data'
   let peerCount = 0
   let peerCountInterval: ReturnType<typeof setInterval> | undefined
   let chainId = 98765
-  let gethStatusCardRef: { refresh?: () => Promise<void> } | null = null
+  let nodeAddress = ''
+  let copiedNodeAddr = false
   
   // DHT variables
-  let dhtStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
+  //let dhtStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
+  let dhtStatus: 'disconnected' | 'connecting' | 'connected' | 'loading' = 'disconnected'
   let dhtPeerId: string | null = null
   let dhtPort = 4001
   let dhtBootstrapNodes: string[] = []
@@ -147,11 +149,21 @@
   }
   
   // UI variables
-  const nodeAddress = "enode://277ac35977fc0a230e3ca4ccbf6df6da486fd2af9c129925b1193b25da6f013a301788fceed458f03c6c0d289dfcbf7a7ca5c0aef34b680fcbbc8c2ef79c0f71@127.0.0.1:30303"
-  let copiedNodeAddr = false
   let copiedPeerId = false
   let copiedBootstrap = false
   let copiedListenAddr: string | null = null
+  let publicMultiaddrs: string[] = []
+
+  // Fetch public multiaddresses (non-loopback)
+  async function fetchPublicMultiaddrs() {
+    try {
+      const addrs = await invoke<string[]>('get_multiaddresses')
+      publicMultiaddrs = addrs
+    } catch (e) {
+      console.error('Failed to get multiaddresses:', e)
+      publicMultiaddrs = []
+    }
+  }
 
   function formatSize(bytes: number | undefined): string {
     if (bytes === undefined || bytes === null || isNaN(bytes)) {
@@ -269,8 +281,16 @@
 
   async function fetchBootstrapNodes() {
     try {
-      dhtBootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command")
-      dhtBootstrapNode = dhtBootstrapNodes[0] || 'No bootstrap nodes configured'
+      // Use custom bootstrap nodes if configured, otherwise use defaults
+      if ($settings.customBootstrapNodes && $settings.customBootstrapNodes.length > 0) {
+        dhtBootstrapNodes = $settings.customBootstrapNodes
+        dhtBootstrapNode = dhtBootstrapNodes[0] || 'No bootstrap nodes configured'
+        console.log('Using custom bootstrap nodes:', dhtBootstrapNodes)
+      } else {
+        dhtBootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command")
+        dhtBootstrapNode = dhtBootstrapNodes[0] || 'No bootstrap nodes configured'
+        console.log('Using default bootstrap nodes:', dhtBootstrapNodes)
+      }
     } catch (error) {
       console.error('Failed to fetch bootstrap nodes:', error)
       dhtBootstrapNodes = []
@@ -372,6 +392,7 @@
             enableAutorelay: $settings.enableAutorelay,
             preferredRelays: $settings.preferredRelays || [],
             enableRelayServer: $settings.enableRelayServer,
+            relayServerAlias: $settings.relayServerAlias || '',
             chunkSizeKb: $settings.chunkSize,
             cacheSizeMb: $settings.cacheSize,
           })
@@ -482,42 +503,23 @@
     } catch (error: any) {
       console.error('Failed to start DHT:', error)
       dhtStatus = 'disconnected'
-      dhtError = error.toString ? error.toString() : String(error)
-      dhtEvents = [...dhtEvents, `✗ Failed to start DHT: ${dhtError}`]
-    }
-  }
-
-  // Ensure UI reflects backend DHT state when returning to this tab
-  async function syncDhtStatusOnMount() {
-    if (!isTauri) return
-    try {
-      const backendPeerId = await invoke<string | null>('get_dht_peer_id')
-      if (backendPeerId) {
-        dhtPeerId = backendPeerId
-        dhtService.setPeerId(backendPeerId)
-
-        // Sync the port from the service
-        dhtPort = dhtService.getPort()
-
-        // Pull health/peers and update UI without attempting a restart
-        const health = await dhtService.getHealth()
-        if (health) {
-          dhtHealth = health
-          dhtPeerCount = health.peerCount
-          lastNatState = health.reachability
-          lastNatConfidence = health.reachabilityConfidence
-        } else {
-          dhtPeerCount = await dhtService.getPeerCount()
-        }
-
-        // Set status and resume polling if needed
-        dhtStatus = dhtPeerCount > 0 ? 'connected' : 'disconnected'
-        startDhtPolling()
+      let errorMessage = error.toString ? error.toString() : String(error)
+      
+      // Handle port already in use error (Windows error 10048)
+      if (errorMessage.includes('10048') || errorMessage.includes('address already in use') || errorMessage.includes('Address in use')) {
+        errorMessage = `Port ${dhtPort} is already in use. Try stopping the DHT first, or choose a different port.`
+        dhtEvents = [...dhtEvents, `✗ Port conflict detected on ${dhtPort}`]
+        dhtEvents = [...dhtEvents, `💡 Try clicking "Stop DHT" first, or change the port number`]
+      } else if (errorMessage.includes('already running')) {
+        errorMessage = 'DHT is already running. Try stopping it first.'
+        dhtEvents = [...dhtEvents, `⚠ DHT already running - click "Stop DHT" to restart`]
       }
-    } catch (e) {
-      console.warn('Failed to sync DHT status on mount:', e)
+      
+      dhtError = errorMessage
+      dhtEvents = [...dhtEvents, `✗ Failed to start DHT: ${errorMessage}`]
     }
   }
+
   
   let peerRefreshCounter = 0;
 
@@ -550,6 +552,8 @@
         if (health) {
           dhtHealth = health
           peerCount = health.peerCount
+          // Fetch public multiaddresses
+          await fetchPublicMultiaddrs()
           dhtPeerCount = peerCount
           lastNatState = health.reachability
           lastNatConfidence = health.reachabilityConfidence
@@ -561,12 +565,18 @@
         }
 
         // Update connection status based on peer count
-        if (dhtStatus === 'connected' && peerCount === 0) {
-          dhtStatus = 'disconnected'
-          dhtEvents = [...dhtEvents, '⚠ Lost connection to all peers']
-        } else if (dhtStatus === 'disconnected' && peerCount > 0) {
-          dhtStatus = 'connected'
-          dhtEvents = [...dhtEvents, `✓ Reconnected to ${peerCount} peer(s)`]
+        // IMPORTANT: Never set to 'disconnected' while backend is running
+        if (peerCount === 0) {
+          // If backend is running but no peers, show 'connecting' not 'disconnected'
+          if (dhtStatus === 'connected') {
+            dhtStatus = 'connecting'
+            dhtEvents = [...dhtEvents, '⚠ Lost connection to all peers']
+          }
+        } else {
+          if (dhtStatus !== 'connected') {
+            dhtStatus = 'connected'
+            dhtEvents = [...dhtEvents, `✓ Reconnected to ${peerCount} peer(s)`]
+          }
         }
 
         // Auto-refresh connected peers list every 5 seconds (every ~2.5 poll cycles)
@@ -602,19 +612,31 @@
     }
     
     try {
+      // Stop polling first to prevent race conditions
+      if (dhtPollInterval) {
+        clearInterval(dhtPollInterval)
+        dhtPollInterval = undefined
+      }
+      
       await dhtService.stop()
       dhtStatus = 'disconnected'
       dhtPeerId = null
       dhtError = null
       connectionAttempts = 0
-      dhtEvents = [...dhtEvents, `✓ DHT stopped`]
+      dhtEvents = [...dhtEvents, `✓ DHT stopped - port ${dhtPort} released`]
       dhtHealth = null
       copiedListenAddr = null
       lastNatState = null
       lastNatConfidence = null
+      
+      // Small delay to ensure port is fully released
+      await new Promise(resolve => setTimeout(resolve, 500))
     } catch (error) {
       console.error('Failed to stop DHT:', error)
       dhtEvents = [...dhtEvents, `✗ Failed to stop DHT: ${error}`]
+      // Even if stop failed, clear local state
+      dhtStatus = 'disconnected'
+      dhtPeerId = null
     }
   }
 
@@ -882,7 +904,6 @@
     const wasRunning = isGethRunning
     isGethInstalled = status.installed
     isGethRunning = status.running
-    isStartingNode = false
 
     if (status.running && !wasRunning) {
       startPolling()
@@ -895,37 +916,61 @@
     }
   }
 
-  function handleGethStatusChange(event: CustomEvent<GethStatus>) {
-    applyGethStatus(event.detail)
-  }
   
   async function checkGethStatus() {
     if (!isTauri) {
       // In web mode, simulate that geth is not installed
       isGethInstalled = false
       isGethRunning = false
-      isStartingNode = false
+      isCheckingGeth = false
       return
     }
 
+    isCheckingGeth = true
     try {
-      if (gethStatusCardRef?.refresh) {
-        await gethStatusCardRef.refresh()
+      const status = await fetchGethStatus('./bin/geth-data', 1)
+      // If node is running from previous session, stop it for clean state
+      if (status.running) {
+        console.log('Stopping node from previous session...')
+        await invoke('stop_geth_node')
+        // Wait a moment for it to stop
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        // Check status again
+        let updatedStatus = await fetchGethStatus('./bin/geth-data', 1)
+        applyGethStatus(updatedStatus)
       } else {
-        const status = await fetchGethStatus(dataDir, 1)
         applyGethStatus(status)
       }
     } catch (error) {
       console.error('Failed to check geth status:', error)
+    } finally {
+      isCheckingGeth = false
     }
   }
-  
+
   async function downloadGeth() {
     if (!isTauri) {
       downloadError = $t('network.errors.downloadOnlyTauri')
       return
     }
-    
+
+    // First check if Geth is already installed
+    isCheckingGeth = true
+    try {
+      const status = await fetchGethStatus('./bin/geth-data', 1)
+      if (status.installed) {
+        // Geth is already installed, update state and return
+        applyGethStatus(status)
+        isCheckingGeth = false
+        showToast('Geth is already installed', 'info')
+        return
+      }
+    } catch (error) {
+      console.error('Failed to check geth status before download:', error)
+      // Continue with download attempt
+    }
+    isCheckingGeth = false
+
     isDownloading = true
     downloadError = ''
     downloadProgress = {
@@ -934,31 +979,17 @@
       percentage: 0,
       status: $t('network.download.starting')
     }
-    
+
     try {
       await invoke('download_geth_binary')
       isGethInstalled = true
       isDownloading = false
-      // Auto-start after download
-      await startGethNode()
-      if (gethStatusCardRef?.refresh) {
-        await gethStatusCardRef.refresh()
-      }
+      // Download completed successfully - UI will update to show start button
     } catch (e) {
       downloadError = String(e)
       isDownloading = false
-      if (gethStatusCardRef?.refresh) {
-        await gethStatusCardRef.refresh()
-      }
+      showToast('Failed to download Geth: ' + e, 'error')
     }
-  }
-
-  function startPolling() {
-    if (peerCountInterval) {
-      clearInterval(peerCountInterval)
-    }
-    fetchPeerCount()
-    peerCountInterval = setInterval(fetchPeerCount, 5000)
   }
 
   async function startGethNode() {
@@ -966,22 +997,14 @@
       console.log('Cannot start Chiral Node in web mode - desktop app required')
       return
     }
-    
+
     isStartingNode = true
     try {
-      // Set miner address if we have an account
-      if ($etcAccount) {
-        await invoke('set_miner_address', { address: $etcAccount.address })
-      }
-      await invoke('start_geth_node', { dataDir })
+      await invoke('start_geth_node', { dataDir: './bin/geth-data' })
       isGethRunning = true
       startPolling()
-      if (gethStatusCardRef?.refresh) {
-        await gethStatusCardRef.refresh()
-      }
     } catch (error) {
-      console.error('Failed to start geth node:', error)
-      alert('Failed to start Chiral node: ' + error)
+      console.error('Failed to start Chiral node:', error)
     } finally {
       isStartingNode = false
     }
@@ -992,23 +1015,29 @@
       console.log('Cannot stop Chiral Node in web mode - desktop app required')
       return
     }
-    
+
     try {
       await invoke('stop_geth_node')
       isGethRunning = false
-      isStartingNode = false
-      peerCount = 0
       if (peerCountInterval) {
         clearInterval(peerCountInterval)
         peerCountInterval = undefined
       }
-      if (gethStatusCardRef?.refresh) {
-        await gethStatusCardRef.refresh()
-      }
+      peerCount = 0
     } catch (error) {
-      console.error('Failed to stop geth node:', error)
+      console.error('Failed to stop Chiral node:', error)
     }
   }
+  
+
+  function startPolling() {
+    if (peerCountInterval) {
+      clearInterval(peerCountInterval)
+    }
+    fetchPeerCount()
+    peerCountInterval = setInterval(fetchPeerCount, 5000)
+  }
+
 
   // Copy Helper
   async function copy(text: string | null | undefined) {
@@ -1092,17 +1121,11 @@
       await fetchBootstrapNodes()
       await checkGethStatus()
 
-      // DHT check will happen in startDht()
+      // DHT status will be checked when user clicks Start Network
+      // No automatic DHT checking on app startup
 
-      // Also passively sync DHT state if it's already running
-      await syncDhtStatusOnMount()
-
-      // Auto-start DHT if enabled in settings
-      if (isTauri && $settings.autoStartDht && dhtStatus === 'disconnected') {
-        console.log('Auto-starting DHT network...')
-        dhtEvents = [...dhtEvents, '🚀 Auto-starting network...']
-        await startDht()
-      }
+      // DHT will only start when user clicks the Start Network button
+      // Auto-start disabled for better user control
 
       if (isTauri) {
         if (!peerDiscoveryUnsub) {
@@ -1119,11 +1142,13 @@
         }
         await refreshConnectedPeers();
         await registerNatListener()
+
+        // Listen for download progress updates
         unlistenProgress = await listen('geth-download-progress', (event) => {
           downloadProgress = event.payload as typeof downloadProgress
         })
       }
-      
+
       // initAsync()
     })()
     
@@ -1241,7 +1266,6 @@
       title={$t('network.quickActions.refreshStatus.tooltip')}
       on:click={async () => {
         await checkGethStatus();
-        if (gethStatusCardRef?.refresh) await gethStatusCardRef.refresh();
         showToast($t('network.quickActions.refreshStatus.success'), 'success');
       }}
     >
@@ -1249,30 +1273,9 @@
       {$t('network.quickActions.refreshStatus.button')}
     </Button>
 
-    <!-- Restart Node -->
-    <Button
-      size="lg"
-      variant="secondary"
-      class="flex items-center gap-2 px-6 py-3 font-semibold text-base rounded-lg shadow-sm border border-primary/10 bg-background hover:bg-secondary/80"
-      title={$t('network.quickActions.restartNode.tooltip')}
-      on:click={async () => {
-        if (!isGethRunning) {
-          showToast($t('network.quickActions.restartNode.notRunning'), 'error');
-          return;
-        }
-        await stopGethNode();
-        await startGethNode();
-        showToast($t('network.quickActions.restartNode.success'), 'success');
-      }}
-      disabled={!isGethInstalled || isStartingNode || !isGethRunning}
-    >
-      <Square class="h-5 w-5" />
-      {$t('network.quickActions.restartNode.button')}
-    </Button>
   </div>
 </Card>
 
-  
   <!-- Chiral Network Node Status Card -->
   <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
@@ -1281,12 +1284,6 @@
         {#if !isGethInstalled}
           <div class="h-2 w-2 bg-yellow-500 rounded-full"></div>
           <span class="text-sm text-yellow-600">{$t('network.status.notInstalled')}</span>
-        {:else if isDownloading}
-          <div class="h-2 w-2 bg-blue-500 rounded-full animate-pulse"></div>
-          <span class="text-sm text-blue-600">{$t('network.status.downloading')}</span>
-        {:else if isStartingNode}
-          <div class="h-2 w-2 bg-yellow-500 rounded-full animate-pulse"></div>
-          <span class="text-sm text-yellow-600">{$t('network.status.starting')}</span>
         {:else if isGethRunning}
           <div class="h-2 w-2 bg-green-500 rounded-full animate-pulse"></div>
           <span class="text-sm text-green-600">{$t('network.status.connected')}</span>
@@ -1296,69 +1293,38 @@
         {/if}
       </div>
     </div>
-    
+
     <div class="space-y-3">
-      {#if !isGethInstalled}
-        {#if isDownloading}
-          <div class="space-y-3">
-            <div class="text-center py-2">
-              <Download class="h-12 w-12 text-blue-500 mx-auto mb-2 animate-pulse" />
-              <p class="text-sm font-medium">{downloadProgress.status}</p>
-            </div>
-            <div class="space-y-2">
-              <div class="flex justify-between text-sm">
-                <span>{$t('network.download.progress')}</span>
-                <span>{downloadProgress.percentage.toFixed(0)}%</span>
-              </div>
-              <div class="w-full bg-secondary rounded-full h-2 overflow-hidden">
-                <div 
-                  class="bg-blue-500 h-full transition-all duration-300"
-                  style="width: {downloadProgress.percentage}%"
-                ></div>
-              </div>
-              {#if downloadProgress.total > 0}
-                <p class="text-xs text-muted-foreground text-center">
-                  {(downloadProgress.downloaded / 1024 / 1024).toFixed(1)} MB / 
-                  {(downloadProgress.total / 1024 / 1024).toFixed(1)} MB
-                </p>
-              {/if}
-            </div>
-          </div>
-        {:else}
-          <div class="text-center py-4">
-            <Server class="h-12 w-12 text-muted-foreground mx-auto mb-2" />
-            <p class="text-sm text-muted-foreground mb-1">{$t('network.download.notFound')}</p>
-            <p class="text-xs text-muted-foreground mb-3">{$t('network.download.prompt')}</p>
-            {#if downloadError}
-              <div class="bg-red-500/10 border border-red-500/20 rounded-lg p-2 mb-3">
-                <div class="flex items-center gap-2 justify-center">
-                  <AlertCircle class="h-4 w-4 text-red-500 flex-shrink-0" />
-                  <p class="text-xs text-red-500">{downloadError}</p>
-                </div>
-              </div>
-            {/if}
-            <Button on:click={downloadGeth} disabled={isDownloading}>
-              <Download class="h-4 w-4 mr-2" />
-              {$t('network.download.button')}
-            </Button>
-          </div>
-        {/if}
-      {:else if isStartingNode}
-        <div class="text-center py-4">
-          <Server class="h-12 w-12 text-yellow-500 mx-auto mb-2 animate-pulse" />
-          <p class="text-sm text-muted-foreground">{$t('network.startingNode')}</p>
-          <p class="text-xs text-muted-foreground mt-1">{$t('network.pleaseWait')}</p>
+      {#if isCheckingGeth}
+        <div class="text-center py-8">
+          <RefreshCw class="h-12 w-12 text-blue-500 mx-auto mb-2 animate-spin" />
+          <p class="text-sm text-muted-foreground mb-1">Checking if Geth is downloaded...</p>
+          <p class="text-xs text-muted-foreground">Please wait while we check your system</p>
         </div>
-      {:else if !isGethRunning}
+      {:else if !isGethInstalled}
         <div class="text-center py-4">
           <Server class="h-12 w-12 text-muted-foreground mx-auto mb-2" />
-          <p class="text-sm text-muted-foreground mb-3">{$t('network.notRunning')}</p>
-          <Button on:click={startGethNode} disabled={isStartingNode}>
-            <Play class="h-4 w-4 mr-2" />
-            {$t('network.startNode')}
+          <p class="text-sm text-muted-foreground mb-1">Geth not installed</p>
+          <p class="text-xs text-muted-foreground mb-3">Download and install the Chiral Network node</p>
+          {#if downloadError}
+            <div class="bg-red-500/10 border border-red-500/20 rounded-lg p-2 mb-3">
+              <div class="flex items-center gap-2 justify-center">
+                <AlertCircle class="h-4 w-4 text-red-500 flex-shrink-0" />
+                <p class="text-xs text-red-500">{downloadError}</p>
+              </div>
+            </div>
+          {/if}
+          <Button on:click={downloadGeth} disabled={isDownloading || isCheckingGeth}>
+            {#if isCheckingGeth}
+              <RefreshCw class="h-4 w-4 mr-2 animate-spin" />
+              Checking...
+            {:else}
+              <Download class="h-4 w-4 mr-2" />
+              Download Geth
+            {/if}
           </Button>
         </div>
-      {:else}
+      {:else if isGethRunning}
         <div class="grid grid-cols-2 gap-4">
           <div class="bg-secondary rounded-lg p-3">
             <p class="text-sm text-muted-foreground">{$t('network.chiralPeers')}</p>
@@ -1388,21 +1354,28 @@
           </div>
           <p class="text-xs font-mono break-all">{nodeAddress}</p>
         </div>
-        <Button class="w-full" variant="outline" on:click={stopGethNode}>
+        <Button class="w-full mt-4" variant="outline" on:click={stopGethNode}>
           <Square class="h-4 w-4 mr-2" />
-          {$t('network.stopNode')}
+          Stop Node
         </Button>
+      {:else}
+        <div class="text-center py-8">
+          <Server class="h-12 w-12 text-muted-foreground mx-auto mb-2" />
+          <p class="text-sm text-muted-foreground mb-3">Chiral Node not running</p>
+          <Button on:click={startGethNode} disabled={isStartingNode || isCheckingGeth}>
+            {#if isStartingNode}
+              <RefreshCw class="h-4 w-4 mr-2 animate-spin" />
+              Starting Node...
+            {:else}
+              <Play class="h-4 w-4 mr-2" />
+              Start Node
+            {/if}
+          </Button>
+        </div>
       {/if}
     </div>
   </Card>
 
-  <GethStatusCard
-    bind:this={gethStatusCardRef}
-    dataDir={dataDir}
-    logLines={60}
-    refreshIntervalMs={10000}
-    on:status={handleGethStatusChange}
-  />
   
   <!-- DHT Network Status Card -->
   <Card class="p-6">
@@ -1415,6 +1388,9 @@
         {:else if dhtStatus === 'connecting'}
           <div class="h-2 w-2 bg-yellow-500 rounded-full animate-pulse"></div>
           <span class="text-sm text-yellow-600">{$t('network.status.connecting')}</span>
+        {:else if dhtStatus === 'loading'}
+          <div class="h-2 w-2 bg-blue-500 rounded-full animate-pulse"></div>
+          <span class="text-sm text-blue-600">Loading...</span>
         {:else}
           <div class="h-2 w-2 bg-red-500 rounded-full"></div>
           <span class="text-sm text-red-600">{$t('network.status.disconnected')}</span>
@@ -1423,7 +1399,12 @@
     </div>
     
     <div class="space-y-3">
-      {#if dhtStatus === 'disconnected'}
+      {#if dhtStatus === 'loading'}
+        <div class="text-center py-8">
+          <Wifi class="h-12 w-12 text-blue-500 mx-auto mb-2 animate-spin" />
+          <p class="text-sm text-muted-foreground">Checking DHT status...</p>
+        </div>
+      {:else if dhtStatus === 'disconnected'}
         <div class="text-center py-4">
           <Wifi class="h-12 w-12 text-muted-foreground mx-auto mb-2" />
           <p class="text-sm text-muted-foreground mb-3">{$t('network.dht.notConnected')}</p>
@@ -1523,13 +1504,12 @@
             <p class="text-xs font-mono break-all">{dhtBootstrapNode}</p>
           </div>
 
-          {#if dhtHealth?.listenAddrs && dhtHealth.listenAddrs.length > 0}
+          {#if publicMultiaddrs && publicMultiaddrs.length > 0}
             <div class="pt-2 space-y-2">
               <p class="text-sm text-muted-foreground">{$t('network.dht.listenAddresses')}</p>
-              {#each dhtHealth.listenAddrs as addr}
-                {@const fullAddr = dhtPeerId ? `${addr}/p2p/${dhtPeerId}` : addr}
+              {#each publicMultiaddrs as fullAddr}
                 <div class="bg-muted/40 rounded-lg px-3 py-2">
-                  <div class="flex items-start justify-between gap-2">
+                  <div class="flex items-center justify-between gap-2">
                     <p class="text-xs font-mono break-all flex-1">{fullAddr}</p>
                     <Button
                       variant="outline"
@@ -2174,3 +2154,4 @@
     </div>
   </Card>
 </div>
+

@@ -40,6 +40,7 @@ export interface FileItem {
   downloadedChunks?: number[];
   totalChunks?: number;
   downloadStartTime?: number;
+  price?: number; // Price in Chiral for this file
 }
 
 export interface ProxyNode {
@@ -109,16 +110,6 @@ export const suspiciousActivity = writable<
   }[]
 >([]);
 
-export interface ChatMessage {
-  id: string;
-  peerId: string;
-  peerNickname: string;
-  content: string;
-  timestamp: Date;
-  type: "sent" | "received";
-  read: boolean;
-}
-
 export interface NetworkStats {
   totalPeers: number;
   onlinePeers: number;
@@ -135,9 +126,19 @@ export interface Transaction {
   amount: number;
   to?: string;
   from?: string;
+  txHash?: string;
   date: Date;
   description: string;
-  status: "pending" | "completed";
+  status: 'submitted' | 'pending' | 'success' | 'failed'; // Match API statuses
+  transaction_hash?: string;
+  gas_used?: number;
+  gas_price?: number; // in Wei
+  confirmations?: number;
+  block_number?: number;
+  nonce?: number;
+  fee?: number; // Total fee in Wei
+  timestamp?: number;
+  error_message?: string;
 }
 
 export interface BlacklistEntry {
@@ -203,7 +204,7 @@ const dummyTransactions: Transaction[] = [
     from: "0x8765...4321",
     date: new Date("2024-03-15"),
     description: "Storage reward",
-    status: "completed",
+    status: "success",
   },
   {
     id: 2,
@@ -212,7 +213,7 @@ const dummyTransactions: Transaction[] = [
     to: "0x1234...5678",
     date: new Date("2024-03-14"),
     description: "Proxy service",
-    status: "completed",
+    status: "success",
   },
   {
     id: 3,
@@ -221,7 +222,7 @@ const dummyTransactions: Transaction[] = [
     from: "0xabcd...ef12",
     date: new Date("2024-03-13"),
     description: "Upload reward",
-    status: "completed",
+    status: "success",
   },
   {
     id: 4,
@@ -230,7 +231,7 @@ const dummyTransactions: Transaction[] = [
     to: "0x9876...5432",
     date: new Date("2024-03-12"),
     description: "File download",
-    status: "completed",
+    status: "success",
   },
 ];
 
@@ -306,7 +307,6 @@ export const peerGeoDistribution = derived(
   }
 );
 
-export const chatMessages = writable<ChatMessage[]>([]);
 export const networkStats = writable<NetworkStats>(dummyNetworkStats);
 export const downloadQueue = writable<FileItem[]>([]);
 export const userLocation = writable<string>("US-East");
@@ -389,6 +389,24 @@ export interface BandwidthScheduleEntry {
   enabled: boolean;
 }
 
+export interface ActiveBandwidthLimits {
+  uploadLimitKbps: number;
+  downloadLimitKbps: number;
+  source: "default" | "schedule";
+  scheduleId?: string;
+  scheduleName?: string;
+  nextChangeAt?: number;
+}
+
+const defaultActiveBandwidthLimits: ActiveBandwidthLimits = {
+  uploadLimitKbps: 0,
+  downloadLimitKbps: 0,
+  source: "default",
+  nextChangeAt: undefined,
+  scheduleId: undefined,
+  scheduleName: undefined,
+};
+
 // Interface for Application Settings
 export interface AppSettings {
   storagePath: string;
@@ -413,14 +431,15 @@ export interface AppSettings {
   enableAutorelay: boolean; // Circuit Relay v2 with AutoRelay (renamed from enableAutoRelay)
   preferredRelays: string[]; // Preferred relay node multiaddrs
   enableRelayServer: boolean; // Act as a relay server for other peers
-  autoStartDht: boolean; // Automatically start DHT network on app launch
+  relayServerAlias: string; // Public alias/name for your relay server (appears in logs and bootstrapping)
   anonymousMode: boolean;
   shareAnalytics: boolean;
   enableNotifications: boolean;
   notifyOnComplete: boolean;
   notifyOnError: boolean;
+  notifyOnBandwidthCap: boolean;
+  notifyOnBandwidthCapDesktop: boolean;
   soundAlerts: boolean;
-  enableDHT: boolean;
   enableIPFS: boolean;
   chunkSize: number; // KB
   cacheSize: number; // MB
@@ -428,12 +447,18 @@ export interface AppSettings {
   autoUpdate: boolean;
   enableBandwidthScheduling: boolean;
   bandwidthSchedules: BandwidthScheduleEntry[];
+  monthlyUploadCapGb: number; // 0 = no cap
+  monthlyDownloadCapGb: number; // 0 = no cap
+  capWarningThresholds: number[]; // Percentages, e.g. [75, 90]
+  pricePerMb: number; // Price per MB in Chiral (e.g., 0.001)
+  customBootstrapNodes: string[]; // Custom bootstrap nodes for DHT (leave empty to use defaults)
+  autoStartDHT: boolean; // Whether to automatically start DHT on app launch
 }
 
 // Export the settings store
 // We initialize with a safe default structure. Settings.svelte will load/persist the actual state.
 export const settings = writable<AppSettings>({
-  storagePath: "~/ChiralNetwork/Storage",
+  storagePath: "~/Chiral-Network-Storage",
   maxStorageSize: 100,
   autoCleanup: true,
   cleanupThreshold: 90,
@@ -449,20 +474,21 @@ export const settings = writable<AppSettings>({
   ipPrivacyMode: "off",
   trustedProxyRelays: [],
   disableDirectNatTraversal: false,
-  enableAutonat: true, // Enable AutoNAT by default
+  enableAutonat: false, // Disabled by default - enable if you need NAT detection
   autonatProbeInterval: 30, // 30 seconds default
   autonatServers: [], // Use bootstrap nodes by default
-  enableAutorelay: true, // Enable AutoRelay by default
+  enableAutorelay: false, // Disabled by default - enable if you need relay connections
   preferredRelays: [], // Use bootstrap nodes as relays by default
-  enableRelayServer: true, // Enabled by default - helps strengthen the network
-  autoStartDht: false, // Disabled by default - user must opt-in
+  enableRelayServer: false, // Disabled by default - enable to help relay traffic for others
+  relayServerAlias: "", // Empty by default - user can set a friendly name
   anonymousMode: false,
   shareAnalytics: true,
   enableNotifications: true,
   notifyOnComplete: true,
   notifyOnError: true,
+  notifyOnBandwidthCap: true,
+  notifyOnBandwidthCapDesktop: false,
   soundAlerts: false,
-  enableDHT: true,
   enableIPFS: false,
   chunkSize: 256,
   cacheSize: 1024,
@@ -470,4 +496,109 @@ export const settings = writable<AppSettings>({
   autoUpdate: true,
   enableBandwidthScheduling: false,
   bandwidthSchedules: [],
+  monthlyUploadCapGb: 0,
+  monthlyDownloadCapGb: 0,
+  capWarningThresholds: [75, 90],
+  pricePerMb: 0.001, // Default price: 0.001, until ability to set pricePerMb is there, then change to 0.001 Chiral per MB
+  customBootstrapNodes: [], // Empty by default - use hardcoded bootstrap nodes
+  autoStartDHT: false, // Don't auto-start DHT by default
 });
+
+export const activeBandwidthLimits = writable<ActiveBandwidthLimits>(
+  defaultActiveBandwidthLimits
+);
+
+// Transaction polling functionality
+import { pollTransactionStatus, type TransactionStatus as ApiTransactionStatus } from './services/transactionService';
+
+// Active polling tracker
+const activePollingTasks = new Map<string, boolean>();
+
+/**
+ * Add a transaction and start polling for status updates
+ */
+export async function addTransactionWithPolling(
+  transaction: Transaction
+): Promise<void> {
+  if (!transaction.transaction_hash) {
+    throw new Error('Transaction must have a hash for polling');
+  }
+
+  const txHash = transaction.transaction_hash;
+
+  // Prevent duplicate polling
+  if (activePollingTasks.has(txHash)) {
+    console.warn(`Already polling transaction ${txHash}`);
+    return;
+  }
+
+  // Add to store immediately with 'submitted' status
+  transactions.update(txs => [transaction, ...txs]);
+
+  // Mark as actively polling
+  activePollingTasks.set(txHash, true);
+
+  try {
+    // Start polling with status updates
+    await pollTransactionStatus(
+      txHash,
+      (status: ApiTransactionStatus) => {
+        // Update transaction in store on each status change
+        transactions.update(txs =>
+          txs.map(tx => {
+            if (tx.transaction_hash === txHash) {
+              return {
+                ...tx,
+                status: status.status === 'success' ? 'success' :
+                        status.status === 'failed' ? 'failed' :
+                        status.status === 'pending' ? 'pending' :
+                        'submitted',
+                confirmations: status.confirmations || 0,
+                block_number: status.block_number || undefined,
+                gas_used: status.gas_used || undefined,
+                error_message: status.error_message || undefined,
+              };
+            }
+            return tx;
+          })
+        );
+      },
+      120, // 2 minutes max polling
+      2000  // 2 second intervals
+    );
+  } catch (error) {
+    console.error(`Failed to poll transaction ${txHash}:`, error);
+
+    // Mark as failed on error
+    transactions.update(txs =>
+      txs.map(tx => {
+        if (tx.transaction_hash === txHash) {
+          return {
+            ...tx,
+            status: 'failed',
+            error_message: error instanceof Error ? error.message : 'Polling failed',
+          };
+        }
+        return tx;
+      })
+    );
+  } finally {
+    activePollingTasks.delete(txHash);
+  }
+}
+
+/**
+ * Helper to update transaction status manually
+ */
+export function updateTransactionStatus(
+  txHash: string,
+  updates: Partial<Transaction>
+): void {
+  transactions.update(txs =>
+    txs.map(tx =>
+      tx.transaction_hash === txHash
+        ? { ...tx, ...updates }
+        : tx
+    )
+  );
+}

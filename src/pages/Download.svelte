@@ -5,9 +5,10 @@
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
-  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation, Globe, Blocks, RefreshCw } from 'lucide-svelte'  
-  import { files, downloadQueue, activeTransfers } from '$lib/stores'
+  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation, Globe, Blocks, RefreshCw } from 'lucide-svelte'
+  import { files, downloadQueue, activeTransfers, wallet } from '$lib/stores'
   import { dhtService } from '$lib/dht'
+  import { paymentService } from '$lib/services/paymentService'
   import DownloadSearchSection from '$lib/components/download/DownloadSearchSection.svelte'
   import type { FileMetadata } from '$lib/dht'
   import { onDestroy, onMount } from 'svelte'
@@ -20,7 +21,8 @@
   import PeerSelectionService from '$lib/services/peerSelectionService'
 import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
 
-  import { invoke }  from '@tauri-apps/api/core';
+  import { invoke } from '@tauri-apps/api/core'
+  import { homeDir } from '@tauri-apps/api/path'
 
   const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params)
 
@@ -36,6 +38,9 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
     protocolStore.reset()
   }
   onMount(() => {
+    // Initialize payment service to load persisted wallet and transactions
+    paymentService.initialize();
+
     initDownloadTelemetry()
 
     // Listen for multi-source download events
@@ -180,8 +185,64 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
             }));
         });
 
-        const unlistenDownloadCompleted = await listen('file_content', (event) => {
+        const unlistenDownloadCompleted = await listen('file_content', async (event) => {
             const metadata = event.payload as any;
+
+            // Find the file that just completed
+            const completedFile = $files.find(f => f.hash === metadata.merkleRoot);
+
+            if (completedFile && !paidFiles.has(completedFile.hash)) {
+                // Process payment for Bitswap download (only once per file)
+                console.log('💰 Bitswap download completed, processing payment...');
+                const paymentAmount = await paymentService.calculateDownloadCost(completedFile.size);
+                
+                // Skip payment check for free files (price = 0)
+                if (paymentAmount === 0) {
+                    console.log('Free file, skipping payment');
+                    paidFiles.add(completedFile.hash);
+                    showNotification(`Download complete! "${completedFile.name}" (Free)`, 'success');
+                    return;
+                }
+
+
+                const seederPeerId = completedFile.seederAddresses?.[0];
+                const seederWalletAddress = paymentService.isValidWalletAddress(completedFile.seederAddresses?.[0])
+                  ? completedFile.seederAddresses?.[0]!
+                  : null;                if (!seederWalletAddress) {
+                  console.warn('Skipping Bitswap payment due to missing or invalid uploader wallet address', {
+                      file: completedFile.name,
+                      seederAddresses: completedFile.seederAddresses
+                  });
+                  showNotification('Payment skipped: missing uploader wallet address', 'warning');
+              } else {
+                    try {
+                        const paymentResult = await paymentService.processDownloadPayment(
+                            completedFile.hash,
+                            completedFile.name,
+                            completedFile.size,
+                            seederWalletAddress,
+                            seederPeerId
+                        );
+
+                        if (paymentResult.success) {
+                            paidFiles.add(completedFile.hash); // Mark as paid
+                            console.log(`✅ Bitswap payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
+                            showNotification(
+                                `Download complete! Paid ${paymentAmount.toFixed(4)} Chiral`,
+                                'success'
+                            );
+                        } else {
+                            console.error('Bitswap payment failed:', paymentResult.error);
+                            showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
+                        }
+                    } catch (error) {
+                        console.error('Error processing Bitswap payment:', error);
+                        showNotification(`Payment failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'warning');
+                    }
+                }
+            }
+
+            // Update file status
             files.update(f => f.map(file => {
                 if (file.hash === metadata.merkleRoot) {
                     return {
@@ -195,6 +256,116 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
             }));
         });
 
+        // Listen for DHT errors (like missing CIDs)
+        const unlistenDhtError = await listen('dht_event', (event) => {
+          const eventStr = event.payload as string;
+          if (eventStr.startsWith('error:')) {
+            const errorMsg = eventStr.substring(6); // Remove 'error:' prefix
+            console.error('DHT Error:', errorMsg);
+
+            // Try to match error to a download in progress
+            if (errorMsg.includes('No root CID found')) {
+              // Find downloading files and mark them as failed
+              files.update(f => f.map(file => {
+                if (file.status === 'downloading' && (!file.cids || file.cids.length === 0)) {
+                  showNotification(
+                    `Download failed for "${file.name}": ${errorMsg}`,
+                    'error',
+                    6000
+                  )
+                  return { ...file, status: 'failed' as const }
+                }
+                return file
+              }))
+            }
+          }
+        });
+
+
+        // Listen for WebRTC download completion
+const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (event) => {
+  const data = event.payload as {
+    fileHash: string;
+    fileName: string;
+    fileSize: number;
+    data: number[]; // Array of bytes
+  };
+
+  try {
+    // ✅ GET SETTINGS PATH
+    const stored = localStorage.getItem("chiralSettings");
+    if (!stored) {
+      showNotification(
+        'Please configure a download path in Settings before downloading files.',
+        'error',
+        8000
+      );
+      return;
+    }
+    
+    const settings = JSON.parse(stored);
+    let storagePath = settings.storagePath;
+    
+    if (!storagePath || storagePath === '.') {
+      showNotification(
+        'Please set a valid download path in Settings.',
+        'error',
+        8000
+      );
+      return;
+    }
+    
+    // Expand ~ to home directory if needed
+    if (storagePath.startsWith("~")) {
+      const home = await homeDir();
+      storagePath = storagePath.replace("~", home);
+    }
+    
+    // Validate directory exists
+    const dirExists = await invoke('check_directory_exists', { path: storagePath });
+    if (!dirExists) {
+      showNotification(
+        `Download path "${settings.storagePath}" does not exist. Please update it in Settings.`,
+        'error',
+        8000
+      );
+      return;
+    }
+
+    // Construct full file path
+    const { join } = await import('@tauri-apps/api/path');
+    const outputPath = await join(storagePath, data.fileName);
+    
+    console.log(`✅ Saving WebRTC file to: ${outputPath}`);
+
+    // Write the file to disk
+    const { writeFile } = await import('@tauri-apps/plugin-fs');
+    const fileData = new Uint8Array(data.data);
+    await writeFile(outputPath, fileData);
+
+    console.log(`✅ File saved successfully: ${outputPath}`);
+
+    // Update status to completed
+    files.update(f => f.map(file => 
+      file.hash === data.fileHash
+        ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath }
+        : file
+    ));
+
+    showNotification(`Successfully saved "${data.fileName}"`, 'success');
+    
+  } catch (error) {
+    console.error('Failed to save WebRTC file:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    showNotification(`Failed to save file: ${errorMessage}`, 'error');
+
+    files.update(f => f.map(file =>
+      file.hash === data.fileHash
+        ? { ...file, status: 'failed' }
+        : file
+    ));
+  }
+});
 
         // Cleanup listeners on destroy
         return () => {
@@ -204,6 +375,8 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
           unlistenFailed()
           unlistenBitswapProgress()
           unlistenDownloadCompleted()
+          unlistenDhtError()
+          unlistenWebRTCComplete()
         }
       } catch (error) {
         console.error('Failed to setup event listeners:', error)
@@ -234,6 +407,9 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
   // Add notification related variables
   let currentNotification: HTMLElement | null = null
   let showSettings = false // Toggle for settings panel
+
+  // Track which files have already had payment processed
+  let paidFiles = new Set<string>()
 
   // Show notification function
   function showNotification(message: string, type: 'success' | 'error' | 'info' | 'warning' = 'success', duration = 4000) {
@@ -401,6 +577,31 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
   }
 
   async function handleSearchDownload(metadata: FileMetadata) {
+    console.log('🔍 handleSearchDownload called with metadata:', metadata)
+
+    // Check protocol compatibility
+    const hasCids = metadata.cids && metadata.cids.length > 0
+    const isBitswapFile = hasCids
+    const isWebRTCFile = !hasCids
+
+    if (selectedProtocol === 'Bitswap' && isWebRTCFile) {
+      showNotification(
+        `Cannot download "${metadata.fileName}": This file was uploaded with WebRTC protocol. Please select WebRTC protocol to download it.`,
+        'error',
+        8000
+      )
+      return
+    }
+
+    if (selectedProtocol === 'WebRTC' && isBitswapFile) {
+      showNotification(
+        `Cannot download "${metadata.fileName}": This file was uploaded with Bitswap protocol. Please select Bitswap protocol to download it.`,
+        'error',
+        8000
+      )
+      return
+    }
+
     const allFiles = [...$downloadQueue]
     const existingFile = allFiles.find((file) => file.hash === metadata.fileHash)
 
@@ -442,21 +643,26 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
       name: metadata.fileName,
       hash: metadata.fileHash,
       size: metadata.fileSize,
+      price: metadata.price ?? 0,
       status: 'queued' as const,
       priority: 'normal' as const,
       version: metadata.version, // Preserve version info if available
       seeders: metadata.seeders.length, // Convert array length to number
-      seederAddresses: metadata.seeders, // Store the actual seeder addresses
+      seederAddresses: metadata.seeders, // Array that only contains selected seeder rather than all seeders
       // Pass encryption info to the download item
       isEncrypted: metadata.isEncrypted,
-      manifest: metadata.manifest ? JSON.parse(metadata.manifest) : null
+      manifest: metadata.manifest ? JSON.parse(metadata.manifest) : null,
+      cids: metadata.cids // IMPORTANT: Pass CIDs for Bitswap downloads
     }
 
+    console.log('📦 Created new file for queue:', newFile)
     downloadQueue.update((queue) => [...queue, newFile])
     showNotification(tr('download.search.status.addedToQueue', { values: { name: metadata.fileName } }), 'success')
 
+    console.log('⏭️ autoStartQueue:', autoStartQueue)
     if (autoStartQueue) {
-      processQueue()
+      console.log('▶️ Calling processQueue...')
+      await processQueue()
     }
   }
 
@@ -608,28 +814,196 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
     }
   }
 
+  // Auto-clear completed downloads when setting is enabled
+  $: if (autoClearCompleted) {
+    files.update(f => f.filter(file => file.status !== 'completed'))
+  }
+
   // New function to download from search results
-  function processQueue() {
+  async function processQueue() {
+    console.log('📋 processQueue called')
     // Only prevent starting new downloads if we've reached the max concurrent limit
     const activeDownloads = $files.filter(f => f.status === 'downloading').length
     // Handle case where maxConcurrentDownloads might be empty during typing
     const maxConcurrent = Math.max(1, Number(maxConcurrentDownloads) || 3)
-    if (activeDownloads >= maxConcurrent) return
+    console.log(`  Active downloads: ${activeDownloads}, Max: ${maxConcurrent}`)
+    if (activeDownloads >= maxConcurrent) {
+      console.log('  ⏸️ Max concurrent downloads reached, waiting...')
+      return
+    }
 
     const nextFile = $downloadQueue[0]
-    if (!nextFile) return
+    if (!nextFile) {
+      console.log('  ℹ️ Queue is empty')
+      return
+    }
+    console.log('  📄 Next file from queue:', nextFile)
     downloadQueue.update(q => q.filter(f => f.id !== nextFile.id))
     const downloadingFile = {
       ...nextFile,
       status: 'downloading' as const,
       progress: 0,
       speed: '0 B/s', // Ensure speed property exists
-      eta: 'N/A'      // Ensure eta property exists
+      eta: 'N/A',     // Ensure eta property exists
+      downloadStartTime: Date.now(), // Track start time for speed calculation
+      downloadedChunks: [], // Track downloaded chunks for Bitswap
+      totalChunks: 0 // Will be set when first chunk arrives
     }
+    console.log('  ✏️ Created downloadingFile object:', downloadingFile)
     files.update(f => [...f, downloadingFile])
-    if (selectedProtocol!=="Bitswap"){
-      console.log('simulating download')
-        simulateDownloadProgress(downloadingFile.id)
+    console.log('  ✅ Added file to files store, current protocol:', selectedProtocol)
+
+    if (selectedProtocol === "Bitswap"){
+  console.log('  🔍 Starting Bitswap download for:', downloadingFile.name)
+
+  // CRITICAL: Bitswap requires CIDs to download
+  if (!downloadingFile.cids || downloadingFile.cids.length === 0) {
+    console.error('  ❌ No CIDs found for Bitswap download')
+    files.update(f => f.map(file =>
+      file.id === downloadingFile.id
+        ? { ...file, status: 'failed' }
+        : file
+    ))
+    showNotification(
+      `Cannot download "${downloadingFile.name}": This file was not uploaded via Bitswap and has no CIDs. Please use WebRTC protocol instead.`,
+      'error',
+      8000
+    )
+    return
+  }
+
+  // Verify seeders are available
+  if (!downloadingFile.seederAddresses || downloadingFile.seederAddresses.length === 0) {
+    console.error('  ❌ No seeders found for download')
+    files.update(f => f.map(file =>
+      file.id === downloadingFile.id
+        ? { ...file, status: 'failed' }
+        : file
+    ))
+    showNotification(
+      `Cannot download "${downloadingFile.name}": No seeders are currently online for this file.`,
+      'error',
+      6000
+    )
+    return
+  }
+
+  // ✅ VALIDATE SETTINGS PATH BEFORE DOWNLOADING
+  try {
+    const stored = localStorage.getItem("chiralSettings");
+    if (!stored) {
+      showNotification(
+        'Please configure a download path in Settings before downloading files.',
+        'error',
+        8000
+      );
+      files.update(f => f.map(file =>
+        file.id === downloadingFile.id
+          ? { ...file, status: 'failed' }
+          : file
+      ));
+      return;
+    }
+    
+    const settings = JSON.parse(stored);
+    let storagePath = settings.storagePath;
+    
+    if (!storagePath || storagePath === '.') {
+      showNotification(
+        'Please set a valid download path in Settings before downloading files.',
+        'error',
+        8000
+      );
+      files.update(f => f.map(file =>
+        file.id === downloadingFile.id
+          ? { ...file, status: 'failed' }
+          : file
+      ));
+      return;
+    }
+    
+    // Expand ~ to home directory if needed
+    if (storagePath.startsWith("~")) {
+      const home = await homeDir();
+      storagePath = storagePath.replace("~", home);
+    }
+    
+    // Validate directory exists using Tauri command
+    const dirExists = await invoke('check_directory_exists', { path: storagePath });
+    if (!dirExists) {
+      showNotification(
+        `Download path "${settings.storagePath}" does not exist. Please update it in Settings.`,
+        'error',
+        8000
+      );
+      files.update(f => f.map(file =>
+        file.id === downloadingFile.id
+          ? { ...file, status: 'failed' }
+          : file
+      ));
+      return;
+    }
+
+    // Construct full file path: directory + filename
+    const fullPath = `${storagePath}/${downloadingFile.name}`;
+    
+    console.log('✅ Using settings download path:', fullPath);
+
+    // Now start the actual Bitswap download
+    const metadata = {
+      fileHash: downloadingFile.hash,
+      fileName: downloadingFile.name,
+      fileSize: downloadingFile.size,
+      seeders: downloadingFile.seederAddresses,
+      createdAt: Date.now(),
+      isEncrypted: downloadingFile.isEncrypted || false,
+      version: downloadingFile.version,
+      manifest: downloadingFile.manifest ? JSON.stringify(downloadingFile.manifest) : undefined,
+      cids: downloadingFile.cids,
+      downloadPath: fullPath  // Pass the full path
+    }
+    
+    console.log('  📤 Calling dhtService.downloadFile with metadata:', metadata)
+    console.log('  📦 CIDs:', downloadingFile.cids)
+    console.log('  👥 Seeders:', downloadingFile.seederAddresses)
+    console.log('  💾 Download path:', fullPath)
+
+    // Start the download asynchronously
+    dhtService.downloadFile(metadata)
+      .then((result) => {
+        console.log('  ✅ Bitswap download completed for:', downloadingFile.name, result)
+        showNotification(`Successfully downloaded "${downloadingFile.name}"`, 'success')
+      })
+      .catch((error) => {
+        console.error('  ❌ Bitswap download failed:', error)
+        const errorMessage = error instanceof Error ? error.message : String(error)
+
+        files.update(f => f.map(file =>
+          file.id === downloadingFile.id
+            ? { ...file, status: 'failed' }
+            : file
+        ))
+
+        showNotification(
+          `Download failed for "${downloadingFile.name}": ${errorMessage}`,
+          'error',
+          6000
+        )
+      })
+  } catch (error) {
+    console.error('Path validation error:', error);
+    files.update(f => f.map(file =>
+      file.id === downloadingFile.id
+        ? { ...file, status: 'failed' }
+        : file
+    ))
+    showNotification('Failed to validate download path', 'error', 6000);
+    return;
+  }
+} 
+    else {
+      console.log('  🎬 Simulating download')
+      simulateDownloadProgress(downloadingFile.id)
     }
   }
 
@@ -729,6 +1103,25 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
           return;
         }
 
+        // PAYMENT PROCESSING: Calculate and deduct payment before download
+        const paymentAmount = await paymentService.calculateDownloadCost(fileToDownload.size);
+        console.log(`💰 Payment required: ${paymentAmount.toFixed(6)} Chiral for ${fileToDownload.name}`);
+
+        // Check if user has sufficient balance
+        if (paymentAmount > 0 && !paymentService.hasSufficientBalance(paymentAmount)) {
+          showNotification(
+            `Insufficient balance. Need ${paymentAmount.toFixed(4)} Chiral, have ${$wallet.balance.toFixed(4)} Chiral`,
+            'error',
+            6000
+          );
+          activeSimulations.delete(fileId);
+          files.update(f => f.map(file =>
+            file.id === fileId
+              ? { ...file, status: 'failed' }
+              : file
+          ));
+          return;
+        }
 
       // Determine seeders, prefer local seeder when available
         let seeders = (fileToDownload.seederAddresses || []).slice();
@@ -768,13 +1161,52 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
 
             console.log("Final data array length:", data_.length);
 
+            // Ensure the directory exists before writing
+            await invoke('ensure_directory_exists', { path: outputPath });
+            
             // Write the file data to the output path
             console.log("🔍 DEBUG: About to write file to:", outputPath);
             const { writeFile } = await import('@tauri-apps/plugin-fs');
             await writeFile(outputPath, data_);
             console.log("✅ DEBUG: File written successfully to:", outputPath);
+
+            // Process payment for local download (only if not already paid)
+            if (!paidFiles.has(fileToDownload.hash)) {
+              const seederPeerId = localPeerIdNow || seeders[0];
+              const seederWalletAddress = paymentService.isValidWalletAddress(fileToDownload.seederAddresses?.[0])
+                ? fileToDownload.seederAddresses?.[0]!
+                : null;
+
+              if (!seederWalletAddress) {
+                console.warn('Skipping local copy payment due to missing or invalid uploader wallet address', {
+                  file: fileToDownload.name,
+                  seederAddresses: fileToDownload.seederAddresses
+                });
+                showNotification('Payment skipped: missing uploader wallet address', 'warning');
+              } else {
+                const paymentResult = await paymentService.processDownloadPayment(
+                  fileToDownload.hash,
+                  fileToDownload.name,
+                  fileToDownload.size,
+                  seederWalletAddress,
+                  seederPeerId
+                );
+
+                if (paymentResult.success) {
+                  paidFiles.add(fileToDownload.hash); // Mark as paid
+                  console.log(`✅ Payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
+                  showNotification(
+                    `${tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } })} - Paid ${paymentAmount.toFixed(4)} Chiral`,
+                    'success'
+                  );
+                } else {
+                  console.error('Payment failed:', paymentResult.error);
+                  showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
+                }
+              }
+            }
+
             files.update(f => f.map(file => file.id === fileId ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath } : file));
-            showNotification(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
             activeSimulations.delete(fileId);
             console.log("Done with downloading file")
             return;
@@ -818,11 +1250,43 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
         const { encryptionService } = await import('$lib/services/encryption');
         await encryptionService.decryptFile(fileToDownload.manifest, outputPath);
 
-        // 3. Mark the download as complete.
+        // 3. Process payment for encrypted download (only if not already paid)
+        if (!paidFiles.has(fileToDownload.hash)) {
+          const seederPeerId = seeders[0];
+          const seederWalletAddress = paymentService.isValidWalletAddress(fileToDownload.seederAddresses?.[0])
+            ? fileToDownload.seederAddresses?.[0]!
+            : null;
+
+          if (!seederWalletAddress) {
+            console.warn('Skipping encrypted download payment due to missing or invalid uploader wallet address', {
+              file: fileToDownload.name,
+              seederAddresses: fileToDownload.seederAddresses
+            });
+            showNotification('Payment skipped: missing uploader wallet address', 'warning');
+          } else {
+            const paymentResult = await paymentService.processDownloadPayment(
+              fileToDownload.hash,
+              fileToDownload.name,
+              fileToDownload.size,
+              seederWalletAddress,
+              seederPeerId
+            );
+
+            if (paymentResult.success) {
+              paidFiles.add(fileToDownload.hash); // Mark as paid
+              console.log(`✅ Payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
+            } else {
+              console.error('Payment failed:', paymentResult.error);
+              showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
+            }
+          }
+        }
+
+        // 4. Mark the download as complete.
         files.update(f => f.map(file =>
           file.id === fileId ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath } : file
         ));
-        showNotification(`Successfully decrypted and saved "${fileToDownload.name}"!`, 'success');
+        showNotification(`Successfully decrypted and saved "${fileToDownload.name}"! Paid ${paymentAmount.toFixed(4)} Chiral`, 'success');
         activeSimulations.delete(fileId);
 
       } else {
@@ -851,6 +1315,39 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
 
             // The progress updates will be handled by the event listeners in onMount
             activeSimulations.delete(fileId);
+
+            // Process payment for multi-source download (only if not already paid)
+            if (!paidFiles.has(fileToDownload.hash)) {
+              const seederPeerId = seeders[0];
+              const seederWalletAddress = paymentService.isValidWalletAddress(fileToDownload.seederAddresses?.[0])
+                ? fileToDownload.seederAddresses?.[0]!
+                : null;
+
+              if (!seederWalletAddress) {
+                console.warn('Skipping multi-source payment due to missing or invalid uploader wallet address', {
+                  file: fileToDownload.name,
+                  seederAddresses: fileToDownload.seederAddresses
+                });
+                showNotification('Payment skipped: missing uploader wallet address', 'warning');
+              } else {
+                const paymentResult = await paymentService.processDownloadPayment(
+                  fileToDownload.hash,
+                  fileToDownload.name,
+                  fileToDownload.size,
+                  seederWalletAddress,
+                  seederPeerId
+                );
+
+                if (paymentResult.success) {
+                  paidFiles.add(fileToDownload.hash); // Mark as paid
+                  console.log(`✅ Multi-source payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
+                  showNotification(`Multi-source download completed! Paid ${paymentAmount.toFixed(4)} Chiral`, 'success');
+                } else {
+                  console.error('Multi-source payment failed:', paymentResult.error);
+                  showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
+                }
+              }
+            }
 
             // Record transfer success metrics for each peer
             const downloadDuration = Date.now() - downloadStartTime;
@@ -939,7 +1436,42 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
 
                 // Show notification and record metrics on completion or failure
                 if (transfer.status === 'completed' && fileToDownload) {
-                  showNotification(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
+                  // Process payment for P2P download (only if not already paid)
+                  if (!paidFiles.has(fileToDownload.hash)) {
+                    const seederPeerId = seeders[0];
+                    const seederWalletAddress = paymentService.isValidWalletAddress(fileToDownload.seederAddresses?.[0])
+                      ? fileToDownload.seederAddresses?.[0]!
+                      : null;
+
+                    if (!seederWalletAddress) {
+                      console.warn('Skipping P2P payment due to missing or invalid uploader wallet address', {
+                        file: fileToDownload.name,
+                        seederAddresses: fileToDownload.seederAddresses
+                      });
+                      showNotification('Payment skipped: missing uploader wallet address', 'warning');
+                    } else {
+                      const paymentResult = await paymentService.processDownloadPayment(
+                        fileToDownload.hash,
+                        fileToDownload.name,
+                        fileToDownload.size,
+                        seederWalletAddress,
+                        seederPeerId
+                      );
+
+                      if (paymentResult.success) {
+                        paidFiles.add(fileToDownload.hash); // Mark as paid
+                        console.log(`✅ Payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
+                        showNotification(
+                          `${tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } })} - Paid ${paymentAmount.toFixed(4)} Chiral`,
+                          'success'
+                        );
+                      } else {
+                        console.error('Payment failed:', paymentResult.error);
+                        showNotification(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
+                        showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
+                      }
+                    }
+                  }
 
                   // Record success metrics for each peer
                   const duration = Date.now() - p2pStartTime;
@@ -1130,7 +1662,6 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
     <DownloadSearchSection
       on:download={(event) => handleSearchDownload(event.detail)}
       on:message={handleSearchMessage}
-      isBitswap={selectedProtocol === 'Bitswap'}
     />
     <!-- Protocol Indicator and Switcher -->
     <Card class="p-4">
@@ -1513,7 +2044,7 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
                     {#if multiSourceProgress.has(file.hash) && file.status === 'downloading'}
                       {@const msProgress = multiSourceProgress.get(file.hash)}
                       {#if msProgress}
-                        <span class="text-purple-600">Peers: {msProgress.activePeers}</span>
+                        <span class="text-purple-600">Peers: {msProgress.activeSources}</span>
                         <span class="text-purple-600">Chunks: {msProgress.completedChunks}/{msProgress.totalChunks}</span>
                       {/if}
                     {/if}
@@ -1522,7 +2053,7 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
                 </div>
                 {#if selectedProtocol === 'Bitswap'}
                   <div class="w-full bg-border rounded-full h-2 flex overflow-hidden" title={`Chunks: ${file.downloadedChunks?.length || 0} / ${file.totalChunks || '?'}`}>
-                    {#if file.totalChunks > 0}
+                    {#if file.totalChunks && file.totalChunks > 0}
                       {@const chunkWidth = 100 / file.totalChunks}
                       {#each Array.from({ length: file.totalChunks }) as _, i}
                         <div
@@ -1541,12 +2072,12 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
                 {/if}
                 {#if multiSourceProgress.has(file.hash)}
                   {@const msProgress = multiSourceProgress.get(file.hash)}
-                  {#if msProgress && msProgress.peerAssignments.length > 0}
+                  {#if msProgress && msProgress.sourceAssignments.length > 0}
                     <div class="mt-2 space-y-1">
                       <div class="text-xs text-muted-foreground">Peer progress:</div>
-                      {#each msProgress.peerAssignments as peerAssignment}
+                      {#each msProgress.sourceAssignments as peerAssignment}
                         <div class="flex items-center gap-2 text-xs">
-                          <span class="w-20 truncate">{peerAssignment.peerId.slice(0, 8)}...</span>
+                          <span class="w-20 truncate">{peerAssignment.source.type === 'p2p' ? peerAssignment.source.p2p.peerId.slice(0, 8) : 'N/A'}...</span>
                           <div class="flex-1 bg-muted rounded-full h-1">
                             <div
                               class="bg-purple-500 h-1 rounded-full transition-all duration-300"

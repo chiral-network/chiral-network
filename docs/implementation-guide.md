@@ -79,7 +79,6 @@ Create `genesis.json` (Geth-compatible format):
   "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
   "timestamp": "0x68b3b2ca"
 }
-
 ```
 
 ### Step 3: Initialize Blockchain
@@ -432,6 +431,22 @@ pub async fn download_file(
 }
 ```
 
+### Running the Bootstrap DHT Node
+
+To keep discovery healthy, run at least one headless instance flagged as the bootstrap node:
+
+```bash
+# From the repo root
+./run-bootstrap.sh --port 4001 --log-level info --enable-geth
+```
+
+The script builds (if necessary) and launches `chiral-network --headless --is-bootstrap`, which:
+
+- Disables provider record storage and AutoRelay so the node stays focused on routing DHT traffic
+- Starts the bundled Geth process when `--enable-geth` (or `ENABLE_GETH=true`) is supplied so the bootstrap host maintains local chain state; keep mining disabled so this node remains a neutral router
+
+Regular peers should omit `--is-bootstrap`; they rely on the configured `bootstrap_nodes` list to dial the bootstrap instance and populate their routing tables.
+
 ## Phase 4: Integration Testing
 
 ### NAT reachability instrumentation
@@ -451,8 +466,8 @@ pub async fn download_file(
 
 ### AutoRelay & reservation management
 
-- AutoRelay behavior is enabled by default in GUI mode to automatically discover
-  and use relay servers for NAT traversal.
+- AutoRelay behavior is disabled by default in GUI mode. Users can enable it
+  to automatically discover and use relay servers for NAT traversal.
 - The relay client listens for Circuit Relay v2 reservations from discovered
   relay candidates (bootstrap nodes by default, or custom relays via `--relay`).
 - When a peer is identified as a relay candidate (via `identify` protocol), the
@@ -502,6 +517,7 @@ frontend event and exposes a `get_download_metrics` command returning aggregate
 success/failure counters and the last 20 attempts. Headless mode gains a
 `--show-downloads` flag that prints the same snapshot at startup so operators can
 confirm retry behaviour without the GUI.
+
 ### Test Network Setup
 
 ```bash

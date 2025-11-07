@@ -20,13 +20,14 @@ pub struct PeerMetrics {
     pub total_bytes_transferred: u64,
     pub encryption_support: bool, // Supports encrypted transfers
     pub malicious_reports: u64,   // Number of malicious behavior reports
+    pub protocols: Vec<String>,   // Protocols supported by the peer
 }
 
 impl PeerMetrics {
     pub fn new(peer_id: String, address: String) -> Self {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
         Self {
             peer_id,
@@ -43,6 +44,7 @@ impl PeerMetrics {
             total_bytes_transferred: 0,
             encryption_support: false,
             malicious_reports: 0,
+            protocols: Vec::new(),
         }
     }
 
@@ -53,7 +55,7 @@ impl PeerMetrics {
         self.total_bytes_transferred += bytes;
         self.last_seen = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
         // Calculate bandwidth from this transfer
@@ -75,7 +77,7 @@ impl PeerMetrics {
         self.failed_transfers += 1;
         self.last_seen = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
         // Penalize certain error types more heavily
@@ -99,7 +101,7 @@ impl PeerMetrics {
         );
         self.last_seen = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
     }
 
@@ -169,7 +171,7 @@ impl PeerMetrics {
         // Age penalty calculation
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
         let age_seconds = now.saturating_sub(self.last_seen);
         let age_penalty = if age_seconds > 300 {
@@ -307,7 +309,7 @@ impl PeerSelectionService {
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
         // Filter peers based on requirements
@@ -398,7 +400,7 @@ impl PeerSelectionService {
     pub fn cleanup_inactive_peers(&mut self, max_age_seconds: u64) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
         let before_count = self.metrics.len();
 

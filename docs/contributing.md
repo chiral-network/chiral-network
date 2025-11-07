@@ -15,14 +15,15 @@ Thank you for your interest in contributing to Chiral Network! This guide will h
 ## What Can You Contribute?
 
 ### Design Documentation
-- Add major parts 
+
+- Add major parts
 - Fix critical issues
 - Add protocol specifications
 - Add examples and tutorials
 - Fix minor issues
 
-
 ### Code Contributions
+
 - Bug fixes
 - New features (aligned with project goals)
 - Performance improvements
@@ -30,6 +31,7 @@ Thank you for your interest in contributing to Chiral Network! This guide will h
 - Code refactoring
 
 ### Documentation
+
 - Fix typos and errors
 - Improve clarity
 - Add examples
@@ -37,11 +39,13 @@ Thank you for your interest in contributing to Chiral Network! This guide will h
 - Write tutorials
 
 ### UI/UX Improvements
+
 - Icons and graphics
 - Accessibility enhancements
 - Responsive design
 
 ### Testing
+
 - Write tests
 - Report bugs
 - Test on different platforms
@@ -53,14 +57,15 @@ Thank you for your interest in contributing to Chiral Network! This guide will h
 
 ### Quick Reference
 
-| Priority | Type | Examples | Review Speed |
-|----------|------|----------|--------------|
-| **1 🔴** | **Major Design/Docs** | Architecture decisions, protocol specs, API contracts | Thorough review required |
+| Priority | Type                          | Examples                                                | Review Speed             |
+| -------- | ----------------------------- | ------------------------------------------------------- | ------------------------ |
+| **1 🔴** | **Major Design/Docs**         | Architecture decisions, protocol specs, API contracts   | Thorough review required |
 | **2 🟠** | **Major Code/Critical Fixes** | Protocol implementations, security fixes, core features | Thorough review required |
-| **3 🟡** | **Minor Design/Docs** | Examples, tutorials, typos, clarifications | Faster review |
-| **4 🟢** | **Minor Code** | UI polish, code comments, small optimizations | Fastest review |
+| **3 🟡** | **Minor Design/Docs**         | Examples, tutorials, typos, clarifications              | Faster review            |
+| **4 🟢** | **Minor Code**                | UI polish, code comments, small optimizations           | Fastest review           |
 
 ### Priority 1: Major Design/Documentation Work (HIGHEST) 🔴
+
 - **Add major parts to design documentation**
   - Architecture decisions and system design
   - Protocol specifications and data flow diagrams
@@ -75,6 +80,7 @@ Thank you for your interest in contributing to Chiral Network! This guide will h
 **Why highest priority?** Design decisions affect everything. Getting the design right before implementation saves significant rework and prevents architectural mistakes.
 
 ### Priority 2: Major Code Work or Critical Code Fixes 🟠
+
 - **Add major parts to codebase**
   - Core protocol implementations (HTTP, WebTorrent, BitTorrent, ed2k)
   - Payment system integration
@@ -90,6 +96,7 @@ Thank you for your interest in contributing to Chiral Network! This guide will h
 **Why high priority?** Major features and critical bugs directly impact functionality and user experience.
 
 ### Priority 3: Minor Design/Documentation Improvements 🟡
+
 - **Add minor parts to documentation**
   - Examples and tutorials
   - Clarifications and additional details
@@ -104,6 +111,7 @@ Thank you for your interest in contributing to Chiral Network! This guide will h
 **Why medium priority?** Documentation improvements help users but don't block development.
 
 ### Priority 4: Minor Code Improvements (LOWEST) 🟢
+
 - **Add minor features**
   - UI polish and minor UX improvements
   - Non-critical convenience features
@@ -156,6 +164,7 @@ Get the design right first, then build, then polish.
 ```
 
 **Remember**:
+
 - ✅ Design before code (Priority 1 before Priority 2)
 - ✅ Critical before nice-to-have (Priority 1-2 before Priority 3-4)
 - ✅ Documentation updates required for all Priority 1-2 changes
@@ -164,6 +173,7 @@ Get the design right first, then build, then polish.
 ## What NOT to Contribute
 
 **Please avoid**:
+
 - ❌ Centralized market features
 - ❌ Commercial tracking systems
 - ❌ Features that enable piracy
@@ -175,6 +185,7 @@ Get the design right first, then build, then polish.
 ### 1. Set Up Development Environment
 
 Follow the [Developer Setup Guide](developer-setup.md) to:
+
 - Install prerequisites
 - Clone repository
 - Install dependencies
@@ -183,23 +194,27 @@ Follow the [Developer Setup Guide](developer-setup.md) to:
 ### 2. Find Something to Work On
 
 **Follow Priority Order** (see [Contribution Priorities](#contribution-priorities) above):
+
 1. **Priority 1** 🔴: Major design/documentation work
 2. **Priority 2** 🟠: Major code work or critical fixes
 3. **Priority 3** 🟡: Minor documentation improvements
 4. **Priority 4** 🟢: Minor code improvements
 
 **Good First Issues**:
+
 - Look for issues labeled `good first issue` (usually Priority 3-4)
 - Check `help wanted` label
 - Start with documentation (Priority 3) to learn the system
 
 **Current High-Priority Areas** (Check [roadmap.md](roadmap.md)):
+
 - Protocol documentation (Priority 1)
 - Multi-protocol implementation (Priority 2)
 - Critical bug fixes (Priority 2)
 - Architecture documentation updates (Priority 1)
 
 **Lower Priority Areas** (Good for newcomers):
+
 - Translation improvements (Priority 3-4)
 - Test coverage (Priority 4)
 - UI polish (Priority 4)
@@ -208,6 +223,7 @@ Follow the [Developer Setup Guide](developer-setup.md) to:
 ### 3. Create an Issue
 
 Before starting work:
+
 1. Search existing issues to avoid duplicates
 2. Create new issue describing:
    - What you want to add/fix
@@ -231,7 +247,7 @@ git clone https://github.com/YOUR_USERNAME/chiral-network.git
 cd chiral-network
 
 # Add upstream remote
-git remote add upstream https://github.com/Aery1e/chiral-network.git
+git remote add upstream https://github.com/chiral-network/chiral-network.git
 ```
 
 ### 2. Create a Branch
@@ -246,6 +262,7 @@ git checkout -b feature/my-feature
 ```
 
 Branch naming:
+
 - `feature/` - New features
 - `fix/` - Bug fixes
 - `docs/` - Documentation
@@ -255,6 +272,7 @@ Branch naming:
 ### 3. Make Changes
 
 **Code Guidelines**:
+
 - Follow existing code style
 - Use TypeScript for new code
 - Add JSDoc comments
@@ -262,6 +280,7 @@ Branch naming:
 - Update documentation
 
 **Commit Guidelines**:
+
 ```bash
 # Use conventional commits
 git commit -m "feat: add reputation filtering"
@@ -270,6 +289,7 @@ git commit -m "docs: update NAT traversal guide"
 ```
 
 Commit types:
+
 - `feat:` - New feature
 - `fix:` - Bug fix
 - `docs:` - Documentation
@@ -299,6 +319,7 @@ npm run tauri:build
 ### 5. Update Documentation
 
 If your change affects:
+
 - **User features**: Update [User Guide](user-guide.md)
 - **Developer APIs**: Update [API Documentation](api-documentation.md)
 - **Architecture**: Update [Architecture](architecture.md)
@@ -312,6 +333,7 @@ git push origin feature/my-feature
 ```
 
 Then on GitHub:
+
 1. Create Pull Request from your fork
 2. Fill out PR template
 3. Link related issues
@@ -322,6 +344,7 @@ Then on GitHub:
 ### PR Title
 
 Use conventional commit format:
+
 ```
 feat: add bandwidth scheduling UI
 fix: resolve peer connection timeout
@@ -331,6 +354,7 @@ docs: improve installation instructions
 ### PR Description
 
 Include:
+
 - **Priority Level** (1-4) - Indicate contribution priority
 - **What** changed
 - **Why** it was needed
@@ -341,28 +365,35 @@ Include:
 - **Breaking changes** (if any)
 
 Example (Priority 2 - Major Code Work):
+
 ```markdown
 ## Priority
+
 Priority 2: Major code implementation (BitTorrent protocol support)
 
 ## What
+
 Adds BitTorrent protocol support to the multi-protocol file transfer system
 
 ## Why
+
 Required for Phase 3 roadmap - enables efficient swarming and compatibility with existing BitTorrent ecosystem
 
 ## How
+
 - Implemented BitTorrent protocol handler in ProtocolManager
 - Added piece exchange logic with peer selection
 - Integrated with existing DHT for peer discovery
 - Ensured protocol-agnostic payment settlement
 
 ## Documentation Updates
+
 - [ ] Updated architecture.md with BitTorrent implementation details
 - [ ] Updated network-protocol.md with BitTorrent specifications
 - [ ] Added examples to implementation-guide.md
 
 ## Testing
+
 - [ ] Manual testing on macOS with multiple peers
 - [ ] Tested piece exchange with different chunk sizes
 - [ ] Verified payment settlement works correctly
@@ -370,26 +401,33 @@ Required for Phase 3 roadmap - enables efficient swarming and compatibility with
 - [ ] Tested interoperability with standard BitTorrent clients
 
 ## Breaking Changes
+
 None - backward compatible with existing HTTP/WebTorrent implementations
 ```
 
 Example (Priority 3 - Minor Documentation):
+
 ```markdown
 ## Priority
+
 Priority 3: Minor documentation improvement
 
 ## What
+
 Added examples and clarifications to NAT traversal documentation
 
 ## Why
+
 Users reported confusion about Circuit Relay v2 configuration
 
 ## How
+
 - Added step-by-step setup examples
 - Created troubleshooting section
 - Added diagrams for relay flow
 
 ## Testing
+
 - [ ] Reviewed by technical writer
 - [ ] Verified all links work
 - [ ] Tested examples on fresh installation
@@ -439,7 +477,7 @@ interface FileMetadata {
 }
 
 // Use type for unions
-type Status = 'pending' | 'active' | 'completed';
+type Status = "pending" | "active" | "completed";
 
 // Explicit return types
 function processFile(file: File): Promise<string> {
@@ -557,28 +595,35 @@ See [i18n Guide](i18n.md) for details.
 
 ```markdown
 ## Description
+
 Clear description of the bug
 
 ## Steps to Reproduce
+
 1. Go to '...'
 2. Click on '...'
 3. See error
 
 ## Expected Behavior
+
 What should happen
 
 ## Actual Behavior
+
 What actually happens
 
 ## Environment
+
 - OS: [e.g., macOS 14.0]
 - Version: [e.g., 0.1.0]
 - Node: [e.g., 18.17.0]
 
 ## Screenshots
+
 If applicable
 
 ## Additional Context
+
 Any other relevant information
 ```
 
@@ -594,15 +639,19 @@ Any other relevant information
 
 ```markdown
 ## Problem
+
 What problem does this solve?
 
 ## Proposed Solution
+
 How would you solve it?
 
 ## Alternatives Considered
+
 Other approaches you've thought about
 
 ## Additional Context
+
 Mockups, examples, etc.
 ```
 
@@ -611,12 +660,14 @@ Mockups, examples, etc.
 ### For Reviewers
 
 **When reviewing**:
+
 - Be kind and constructive
 - Explain reasoning
 - Suggest alternatives
 - Approve when ready
 
 **Check for**:
+
 - Code quality
 - Test coverage
 - Documentation updates
@@ -626,6 +677,7 @@ Mockups, examples, etc.
 ### For Contributors
 
 **When receiving feedback**:
+
 - Be open to suggestions
 - Ask questions if unclear
 - Make requested changes promptly
@@ -649,6 +701,7 @@ Mockups, examples, etc.
 ## Recognition
 
 Contributors are recognized in:
+
 - Git commit history
 - GitHub contributors page
 - Release notes
@@ -661,6 +714,7 @@ By contributing, you agree that your contributions will be licensed under the sa
 ## Questions?
 
 If you have questions about contributing:
+
 1. Read this guide thoroughly
 2. Check [Developer Setup](developer-setup.md)
 3. Search existing issues
