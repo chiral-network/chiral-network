@@ -2,6 +2,7 @@ use crate::protocols::ProtocolHandler;
 use async_trait::async_trait;
 use std::path::Path;
 use tracing::{info, warn, error, instrument};
+use sha1::{Sha1, Digest}; // Import Sha1 and Digest for hashing
 
 /// BitTorrent protocol handler implementing the ProtocolHandler trait.
 /// This handler manages BitTorrent downloads and seeding operations.
@@ -53,7 +54,7 @@ impl BitTorrentHandler {
     /// This is a simplified implementation that would need a real torrent library.
     async fn create_magnet_link(&self, file_path: &str) -> Result<String, String> {
         use sha1::{Sha1, Digest};
-        use std::fs;
+        use std::fs; // `sha1::{Sha1, Digest}` is already imported at the top of the file now.
 
         let path = Path::new(file_path);
         if !path.exists() {
@@ -82,6 +83,35 @@ impl BitTorrentHandler {
         );
 
         Ok(magnet_link)
+    }
+
+    /// Verifies the SHA-1 integrity of an assembled file.
+    /// This is a helper function for post-download verification.
+    fn verify_assembled_file_integrity(file_path: &Path, expected_sha1_hash: &str) -> Result<(), String> {
+        use std::fs;
+        info!("Verifying integrity of assembled file: {:?}", file_path);
+
+        if !file_path.exists() {
+            return Err(format!("File does not exist for verification: {:?}", file_path));
+        }
+
+        let file_content = fs::read(file_path)
+            .map_err(|e| format!("Failed to read file for integrity check: {}", e))?;
+
+        let mut hasher = Sha1::new();
+        hasher.update(&file_content);
+        let actual_sha1_hash = format!("{:x}", hasher.finalize());
+
+        if actual_sha1_hash == expected_sha1_hash.to_lowercase() {
+            info!("File integrity verified successfully. Actual hash: {}", actual_sha1_hash);
+            Ok(())
+        } else {
+            error!(
+                "File integrity verification failed. Expected: {}, Actual: {}",
+                expected_sha1_hash, actual_sha1_hash
+            );
+            Err(format!("File integrity mismatch. Expected: {}, Actual: {}", expected_sha1_hash, actual_sha1_hash))
+        }
     }
 }
 
@@ -135,9 +165,26 @@ impl ProtocolHandler for BitTorrentHandler {
             // This would involve:
             // 1. Parse the .torrent file (bencode format)
             // 2. Extract tracker information and file metadata
+            //    - Extract the info_hash and piece hashes from the .torrent file.
             // 3. Follow similar process as magnet link download
+            //    - For each downloaded piece:
+            //      - Calculate its SHA-1 hash.
+            //      - Compare with the expected piece hash from the torrent metadata.
+            //      - If hashes don't match, request the piece again or from another peer.
             
             info!("Torrent file download completed (simulated) for: {}", identifier);
+
+            // Simulate creating a dummy file for verification
+            // In a real scenario, the info_hash would be extracted from the .torrent file.
+            let simulated_info_hash = "0123456789abcdef0123456789abcdef01234567".to_string(); // Placeholder
+            let dummy_file_name = format!("{}.bin", simulated_info_hash);
+            let dummy_file_path = self.download_directory.join(&dummy_file_name);
+            std::fs::write(&dummy_file_path, b"simulated file content from torrent file")
+                .map_err(|e| format!("Failed to write dummy file: {}", e))?;
+
+            // Verify the integrity of the simulated assembled file
+            Self::verify_assembled_file_integrity(&dummy_file_path, &simulated_info_hash)?;
+
             Ok(())
             
         } else {
@@ -162,7 +209,8 @@ impl ProtocolHandler for BitTorrentHandler {
         // 1. Creating a .torrent file with proper metadata
         // 2. Announcing to trackers or DHT
         // 3. Listening for peer connections
-        // 4. Serving file pieces to requesting peers
+        // 4. Serving file pieces to requesting peers.
+        //    - When serving a piece, ensure its integrity (e.g., re-hash and compare before sending).
         
         info!("Seeding started (simulated) for file: {} with magnet link: {}", file_path, magnet_link);
         
@@ -327,6 +375,40 @@ mod tests {
         assert_eq!(magnet1, magnet2);
     }
 
+    // Unit Tests for verify_assembled_file_integrity
+    #[test]
+    fn test_verify_assembled_file_integrity_success() {
+        let temp_dir = tempdir().unwrap();
+        let file_content = b"This is a test file for integrity verification.";
+        let file_path = create_test_file(temp_dir.path(), "verified_file.txt", std::str::from_utf8(file_content).unwrap());
+
+        let mut hasher = Sha1::new();
+        hasher.update(file_content);
+        let expected_hash = format!("{:x}", hasher.finalize());
+
+        assert!(BitTorrentHandler::verify_assembled_file_integrity(&file_path, &expected_hash).is_ok());
+    }
+
+    #[test]
+    fn test_verify_assembled_file_integrity_mismatch() {
+        let temp_dir = tempdir().unwrap();
+        let file_content = b"This is a test file for integrity verification.";
+        let file_path = create_test_file(temp_dir.path(), "mismatched_file.txt", std::str::from_utf8(file_content).unwrap());
+
+        let wrong_hash = "abcdef1234567890abcdef1234567890abcdef12".to_string(); // A deliberately wrong hash
+
+        assert!(BitTorrentHandler::verify_assembled_file_integrity(&file_path, &wrong_hash).is_err());
+    }
+
+    #[test]
+    fn test_verify_assembled_file_integrity_nonexistent() {
+        let temp_dir = tempdir().unwrap();
+        let nonexistent_path = temp_dir.path().join("nonexistent.txt");
+        let dummy_hash = "abcdef1234567890abcdef1234567890abcdef12".to_string();
+
+        assert!(BitTorrentHandler::verify_assembled_file_integrity(&nonexistent_path, &dummy_hash).is_err());
+    }
+
     // Integration Tests for Download Functionality
     #[tokio::test]
     async fn test_download_valid_magnet_link() {
@@ -363,10 +445,15 @@ mod tests {
         let torrent_path = create_test_file(temp_dir.path(), "test.torrent", "fake torrent content");
         let result = handler.download(torrent_path.to_str().unwrap()).await;
         
-        // Should succeed (simulation)
+        // Should succeed (simulation and verification)
         assert!(result.is_ok());
-    }
 
+        // Check if the dummy file was created and verified (using the simulated info hash)
+        let simulated_info_hash = "0123456789abcdef0123456789abcdef01234567".to_string();
+        let dummy_file_name = format!("{}.bin", simulated_info_hash);
+        let dummy_file_path = temp_dir.path().join(&dummy_file_name);
+        assert!(dummy_file_path.exists());
+    }
     #[tokio::test]
     async fn test_download_unsupported_identifier() {
         let temp_dir = tempdir().unwrap();
