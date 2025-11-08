@@ -495,7 +495,21 @@
   },
   "account": {
     "title": "Account",
-    "subtitle": "Manage your wallet and account settings"
+    "subtitle": "Manage your wallet and account settings",
+    "firstRun": {
+      "welcome": "Welcome to Chiral Network!",
+      "description": "To start mining and earning rewards, you'll need to create a wallet account.",
+      "whyAccount": "Why do I need an account?",
+      "reason1": "Receive mining rewards to your wallet",
+      "reason2": "Secure your funds with encrypted recovery phrase",
+      "reason3": "Transfer coins to other users on the network",
+      "createWallet": "Create New Wallet",
+      "skipForNow": "Skip for Now (Create Temporary Account)",
+      "skipWarning": "If you skip, a temporary account will be created when you start mining. You can create a permanent wallet anytime from the Account page.",
+      "skipped": "First-run setup skipped. A temporary account will be created when needed.",
+      "accountCreated": "Wallet created successfully! You can now start mining.",
+      "error": "Failed to create account. Please try again."
+    }
   },
   "wallet": {
     "title": "Chiral Network Wallet",

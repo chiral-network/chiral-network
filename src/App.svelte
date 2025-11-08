@@ -23,6 +23,7 @@ import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import { setupI18n } from './i18n/i18n';
     import { t } from 'svelte-i18n';
     import SimpleToast from './lib/components/SimpleToast.svelte';
+    import FirstRunWizard from './lib/components/wallet/FirstRunWizard.svelte';
     import { startNetworkMonitoring } from './lib/services/networkService';
     import { fileService } from '$lib/services/fileService';
     import { bandwidthScheduler } from '$lib/services/bandwidthScheduler';
@@ -100,7 +101,16 @@ const pushBandwidthLimits = (limits: ActiveBandwidthLimits) => {
     console.error("Failed to apply bandwidth limits:", error);
   });
 };
-    
+
+// First-run wizard handlers
+function handleFirstRunComplete() {
+  showFirstRunWizard = false;
+}
+
+function handleFirstRunSkip() {
+  showFirstRunWizard = false;
+}
+
   onMount(() => {
     let stopNetworkMonitoring: () => void = () => {};
     let unlistenSeederPayment: (() => void) | null = null;
@@ -576,5 +586,14 @@ const pushBandwidthLimits = (limits: ActiveBandwidthLimits) => {
       </div>
     </div>
   </div>
+
+<!-- First Run Wizard -->
+{#if showFirstRunWizard}
+  <FirstRunWizard
+    onComplete={handleFirstRunComplete}
+    onSkip={handleFirstRunSkip}
+  />
+{/if}
+
   <!-- add Toast  -->
 <SimpleToast />
