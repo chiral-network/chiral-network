@@ -31,8 +31,10 @@
   import { showToast } from "$lib/toast";
   import { invoke } from "@tauri-apps/api/core";
   import Expandable from "$lib/components/ui/Expandable.svelte";
-import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
+  import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   import { bandwidthScheduler } from "$lib/services/bandwidthScheduler";
+
+  const translate = (key: string, params?: Record<string, any>) => $t(key, params);
 
   let showResetConfirmModal = false;
   let storageSectionOpen = false;
@@ -145,12 +147,19 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     .sort((a, b) => a.label.localeCompare(b.label));
 
   let languages = [];
+  // $: languages = [
+  //   { value: "en", label: (get(t) as any)("language.english") },
+  //   { value: "es", label: (get(t) as any)("language.spanish") },
+  //   { value: "zh", label: (get(t) as any)("language.chinese") },
+  //   { value: "ko", label: (get(t) as any)("language.korean") },
+  //   { value: "ru", label: (get(t) as any)("language.russian") },
+  // ];
   $: languages = [
-    { value: "en", label: (get(t) as any)("language.english") },
-    { value: "es", label: (get(t) as any)("language.spanish") },
-    { value: "zh", label: (get(t) as any)("language.chinese") },
-    { value: "ko", label: (get(t) as any)("language.korean") },
-    { value: "ru", label: (get(t) as any)("language.russian") },
+    { value: "en", label: translate("language.english") },
+    { value: "es", label: translate("language.spanish") },
+    { value: "zh", label: translate("language.chinese") },
+    { value: "ko", label: translate("language.korean") },
+    { value: "ru", label: translate("language.russian") },
   ];
 
   // Initialize configuration text from arrays
@@ -497,7 +506,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   }
 
   async function selectStoragePath() {
-    const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params);
+    // const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params);
     try {
       // Try Tauri first
       await getVersion(); // only works in Tauri
@@ -508,7 +517,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
         defaultPath: localSettings.storagePath.startsWith("~/")
           ? localSettings.storagePath.replace("~", home)
           : localSettings.storagePath,
-        title: tr("storage.selectLocationTitle"),
+        title: translate("storage.selectLocationTitle"),
       });
 
       if (typeof result === "string") {
@@ -531,7 +540,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
       } else {
         // Fallback: let user type path manually
         const newPath = prompt(
-          `${tr("storage.enterPathPrompt")} ( ${tr("storage.browserNoPicker")} )`,
+          `${translate("storage.enterPathPrompt")} ( ${translate("storage.browserNoPicker")} )`,
           localSettings.storagePath
         );
         if (newPath) {
@@ -565,7 +574,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     a.click();
     URL.revokeObjectURL(url);
     importExportFeedback = {
-      message: (get(t) as any)("advanced.exportSuccess", {
+      message: translate("advanced.exportSuccess", {
         default: "Settings exported to your browser's download folder.",
       }),
       type: "success",
@@ -584,7 +593,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
         await saveSettings(); // This saves, updates savedSettings, and clears any old feedback.
         // Now we set the new feedback for the import action.
         importExportFeedback = {
-          message: (get(t) as any)("advanced.importSuccess", {
+          message: translate("advanced.importSuccess", {
             default: "Settings imported successfully.",
           }),
           type: "success",
@@ -592,7 +601,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
       } catch (err) {
         console.error("Failed to import settings:", err);
         importExportFeedback = {
-          message: (get(t) as any)("advanced.importError", {
+          message: translate("advanced.importError", {
             default: "Invalid JSON file. Please select a valid export.",
           }),
           type: "error",
@@ -640,19 +649,19 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
       diagnostics = [...diagnostics, item];
     };
 
-    const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params);
+    // const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params);
 
     // 1) Environment (Web vs Tauri)
     const isTauri = typeof window !== "undefined" && "__TAURI__" in window;
     try {
       if (isTauri) {
         const ver = await getVersion();
-        add({ id: "env", label: tr("settings.diagnostics.environment"), status: "pass", details: `Tauri ${ver}` });
+        add({ id: "env", label: translate("settings.diagnostics.environment"), status: "pass", details: `Tauri ${ver}` });
       } else {
-        add({ id: "env", label: tr("settings.diagnostics.environment"), status: "warn", details: "Web build: some checks skipped" });
+        add({ id: "env", label: translate("settings.diagnostics.environment"), status: "warn", details: "Web build: some checks skipped" });
       }
     } catch (e:any) {
-      add({ id: "env", label: tr("settings.diagnostics.environment"), status: "fail", details: String(e) });
+      add({ id: "env", label: translate("settings.diagnostics.environment"), status: "fail", details: String(e) });
     }
 
     // 2) i18n storage read/write
@@ -661,9 +670,9 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
       await saveLocale(before || "en");
       const after = await loadLocale();
       const ok = (before || "en") === (after || "en");
-      add({ id: "i18n", label: tr("settings.diagnostics.i18nStorage"), status: ok ? "pass" : "warn", details: `value=${after ?? "null"}` });
+      add({ id: "i18n", label: translate("settings.diagnostics.i18nStorage"), status: ok ? "pass" : "warn", details: `value=${after ?? "null"}` });
     } catch (e:any) {
-      add({ id: "i18n", label: tr("settings.diagnostics.i18nStorage"), status: "fail", details: String(e) });
+      add({ id: "i18n", label: translate("settings.diagnostics.i18nStorage"), status: "fail", details: String(e) });
     }
 
     // 3) Bootstrap nodes availability (DHT)
@@ -672,12 +681,12 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
       if (isTauri) {
         const nodes = await invoke<string[]>("get_bootstrap_nodes_command");
         const count = Array.isArray(nodes) ? nodes.length : 0;
-        add({ id: "dht", label: tr("settings.diagnostics.bootstrapNodes"), status: count > 0 ? "pass" : "fail", details: `count=${count}` });
+        add({ id: "dht", label: translate("settings.diagnostics.bootstrapNodes"), status: count > 0 ? "pass" : "fail", details: `count=${count}` });
       } else {
-        add({ id: "dht", label: tr("settings.diagnostics.bootstrapNodes"), status: "warn", details: "Skipped in web build" });
+        add({ id: "dht", label: translate("settings.diagnostics.bootstrapNodes"), status: "warn", details: "Skipped in web build" });
       }
     } catch (e:any) {
-      add({ id: "dht", label: tr("settings.diagnostics.bootstrapNodes"), status: "fail", details: String(e) });
+      add({ id: "dht", label: translate("settings.diagnostics.bootstrapNodes"), status: "fail", details: String(e) });
     }
 
     // 4) Privacy routing configuration sanity
@@ -685,12 +694,12 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
       const ipMode = localSettings.ipPrivacyMode;
       const trusted = localSettings.trustedProxyRelays?.length ?? 0;
       if (ipMode !== "off" && trusted === 0) {
-        add({ id: "privacy", label: tr("settings.diagnostics.privacyConfig"), status: "warn", details: tr("settings.diagnostics.privacyNeedsTrusted") });
+        add({ id: "privacy", label: translate("settings.diagnostics.privacyConfig"), status: "warn", details: tr("settings.diagnostics.privacyNeedsTrusted") });
       } else {
-        add({ id: "privacy", label: tr("settings.diagnostics.privacyConfig"), status: "pass", details: `mode=${ipMode}, trusted=${trusted}` });
+        add({ id: "privacy", label: translate("settings.diagnostics.privacyConfig"), status: "pass", details: `mode=${ipMode}, trusted=${trusted}` });
       }
     } catch (e:any) {
-      add({ id: "privacy", label: tr("settings.diagnostics.privacyConfig"), status: "fail", details: String(e) });
+      add({ id: "privacy", label: translate("settings.diagnostics.privacyConfig"), status: "fail", details: String(e) });
     }
 
     // Build report text
@@ -703,9 +712,9 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   async function copyDiagnostics() {
     try {
       await navigator.clipboard.writeText(diagnosticsReport);
-      showToast((get(t) as any)("settings.diagnostics.copied"));
+      showToast(translate("settings.diagnostics.copied"));
     } catch (e) {
-      showToast((get(t) as any)("settings.diagnostics.copyFailed"), "error");
+      showToast(translate("settings.diagnostics.copyFailed"), "error");
     }
   }
 
@@ -873,24 +882,86 @@ selectedLanguage = initial; // Synchronize dropdown display value
 
   let search = '';
 
-const sectionLabels: Record<string, string[]> = {
+// const sectionLabels: Record<string, string[]> = {
+//   storage: [
+//     (get(t) as any)("storage.title"),
+//     (get(t) as any)("storage.location"),
+//     (get(t) as any)("storage.maxSize"),
+//     (get(t) as any)("storage.cleanupThreshold"),
+//     (get(t) as any)("storage.enableCleanup"),
+//   ],
+//   network: [
+//     (get(t) as any)("network.title"),
+//     (get(t) as any)("network.maxConnections"),
+//     (get(t) as any)("network.port"),
+//     (get(t) as any)("network.uploadLimit"),
+//     (get(t) as any)("network.downloadLimit"),
+//     (get(t) as any)("network.userLocation"),
+//     (get(t) as any)("network.enableUpnp"),
+//     (get(t) as any)("network.enableNat"),
+//     (get(t) as any)("network.enableDht"),
+//     "Bootstrap Nodes",
+//     "Custom Bootstrap Nodes",
+//   ],
+//   bandwidthScheduling: [
+//     "Bandwidth Scheduling",
+//     "Enable Bandwidth Scheduling",
+//     "Schedule different bandwidth limits",
+//   ],
+//   language: [
+//     (get(t) as any)("language.title"),
+//     (get(t) as any)("language.select"),
+//   ],
+//   privacy: [
+//     (get(t) as any)("privacy.title"),
+//     (get(t) as any)("privacy.enableProxy"),
+//     (get(t) as any)("privacy.anonymousMode"),
+//     (get(t) as any)("privacy.shareAnalytics"),
+//   ],
+//   notifications: [
+//     (get(t) as any)("notifications.title"),
+//     (get(t) as any)("notifications.enable"),
+//     (get(t) as any)("notifications.notifyComplete"),
+//     (get(t) as any)("notifications.notifyError"),
+//     (get(t) as any)("notifications.soundAlerts"),
+//   ],
+//   advanced: [
+//     (get(t) as any)("advanced.title"),
+//     (get(t) as any)("advanced.chunkSize"),
+//     (get(t) as any)("advanced.cacheSize"),
+//     (get(t) as any)("advanced.logLevel"),
+//     (get(t) as any)("advanced.autoUpdate"),
+//     (get(t) as any)("advanced.exportSettings"),
+//     (get(t) as any)("advanced.importSettings"),
+//   ],
+// };
+
+// function sectionMatches(section: string, query: string) {
+//   if (!query) return true;
+//   const labels = sectionLabels[section] || [];
+//   return labels.some((label) =>
+//     label.toLowerCase().includes(query.toLowerCase())
+//   );
+// }
+let sectionLabels: Record<string, string[]> = {};
+$: sectionLabels = {
   storage: [
-    (get(t) as any)("storage.title"),
-    (get(t) as any)("storage.location"),
-    (get(t) as any)("storage.maxSize"),
-    (get(t) as any)("storage.cleanupThreshold"),
-    (get(t) as any)("storage.enableCleanup"),
+    translate("storage.title"),
+    translate("storage.location"),
+    translate("storage.maxSize"),
+    translate("storage.cleanupThreshold"),
+    translate("storage.enableCleanup"),
   ],
   network: [
-    (get(t) as any)("network.title"),
-    (get(t) as any)("network.maxConnections"),
-    (get(t) as any)("network.port"),
-    (get(t) as any)("network.uploadLimit"),
-    (get(t) as any)("network.downloadLimit"),
-    (get(t) as any)("network.userLocation"),
-    (get(t) as any)("network.enableUpnp"),
-    (get(t) as any)("network.enableNat"),
-    (get(t) as any)("network.enableDht"),
+    translate("network.title"),
+    translate("network.maxConnections"),
+    translate("network.port"),
+    translate("network.uploadLimit"),
+    translate("network.downloadLimit"),
+    translate("network.userLocation"),
+    translate("network.enableUpnp"),
+    translate("network.enableNat"),
+    translate("network.enableDht"),
     "Bootstrap Nodes",
     "Custom Bootstrap Nodes",
   ],
@@ -900,30 +971,30 @@ const sectionLabels: Record<string, string[]> = {
     "Schedule different bandwidth limits",
   ],
   language: [
-    (get(t) as any)("language.title"),
-    (get(t) as any)("language.select"),
+    translate("language.title"),
+    translate("language.select"),
   ],
   privacy: [
-    (get(t) as any)("privacy.title"),
-    (get(t) as any)("privacy.enableProxy"),
-    (get(t) as any)("privacy.anonymousMode"),
-    (get(t) as any)("privacy.shareAnalytics"),
+    translate("privacy.title"),
+    translate("privacy.enableProxy"),
+    translate("privacy.anonymousMode"),
+    translate("privacy.shareAnalytics"),
   ],
   notifications: [
-    (get(t) as any)("notifications.title"),
-    (get(t) as any)("notifications.enable"),
-    (get(t) as any)("notifications.notifyComplete"),
-    (get(t) as any)("notifications.notifyError"),
-    (get(t) as any)("notifications.soundAlerts"),
+    translate("notifications.title"),
+    translate("notifications.enable"),
+    translate("notifications.notifyComplete"),
+    translate("notifications.notifyError"),
+    translate("notifications.soundAlerts"),
   ],
   advanced: [
-    (get(t) as any)("advanced.title"),
-    (get(t) as any)("advanced.chunkSize"),
-    (get(t) as any)("advanced.cacheSize"),
-    (get(t) as any)("advanced.logLevel"),
-    (get(t) as any)("advanced.autoUpdate"),
-    (get(t) as any)("advanced.exportSettings"),
-    (get(t) as any)("advanced.importSettings"),
+    translate("advanced.title"),
+    translate("advanced.chunkSize"),
+    translate("advanced.cacheSize"),
+    translate("advanced.logLevel"),
+    translate("advanced.autoUpdate"),
+    translate("advanced.exportSettings"),
+    translate("advanced.importSettings"),
   ],
 };
 
@@ -934,19 +1005,20 @@ function sectionMatches(section: string, query: string) {
     label.toLowerCase().includes(query.toLowerCase())
   );
 }
+
 </script>
 
 <div class="space-y-6">
   <div class="flex items-center justify-between">
     <div>
-      <h1 class="text-3xl font-bold">{(get(t) as any)("settings.title")}</h1>
+      <h1 class="text-3xl font-bold">{$t("settings.title")}</h1>
       <p class="text-muted-foreground mt-2">
-        {(get(t) as any)("settings.subtitle")}
+        {$t("settings.subtitle")}
       </p>
     </div>
     {#if hasChanges}
       <Badge variant="outline" class="text-orange-500"
-        >{(get(t) as any)("badges.unsaved")}</Badge
+        >{$t("badges.unsaved")}</Badge
       >
     {/if}
   </div>
@@ -955,7 +1027,7 @@ function sectionMatches(section: string, query: string) {
   <div class="mb-4 flex items-center gap-2">
     <Input
       type="text"
-      placeholder={(get(t) as any)('settings.searchPlaceholder')}
+      placeholder={$t('settings.searchPlaceholder')}
       bind:value={search}
       class="w-full"
     />
