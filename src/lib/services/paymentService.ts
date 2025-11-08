@@ -8,10 +8,10 @@
  * - Recording transactions for both parties
  */
 
-import { wallet, transactions, type Transaction } from "$lib/stores";
-import { get } from "svelte/store";
-import { invoke } from "@tauri-apps/api/core";
-import { walletService } from "$lib/wallet";
+import { wallet, transactions, type Transaction } from '$lib/stores';
+import { get } from 'svelte/store';
+import { invoke } from '@tauri-apps/api/core';
+import { walletService } from '$lib/wallet';
 
 // type FullNetworkStats = {
 //   network_difficulty: number
@@ -348,7 +348,7 @@ export class PaymentService {
         txHash: transactionHash,
         date: new Date(),
         description: `Download: ${fileName}`,
-        status: "completed",
+        status: 'success'
       };
 
       console.log("📝 Creating transaction:", newTransaction);
@@ -445,7 +445,7 @@ export class PaymentService {
         txHash: transactionHash,
         date: new Date(),
         description: `Upload payment: ${fileName}`,
-        status: "completed",
+        status: 'success'
       };
 
       // Add transaction to history with persistence
@@ -465,10 +465,10 @@ export class PaymentService {
         wallet.update((w) => {
           const allTxs = get(transactions);
           const totalReceived = allTxs
-            .filter((tx) => tx.status === "completed" && tx.type === "received")
+            .filter((tx) => tx.status === 'success' && tx.type === 'received')
             .reduce((sum, tx) => sum + tx.amount, 0);
           const totalSpent = allTxs
-            .filter((tx) => tx.status === "completed" && tx.type === "sent")
+            .filter((tx) => tx.status === 'success' && tx.type === 'sent')
             .reduce((sum, tx) => sum + tx.amount, 0);
 
           const updated = {

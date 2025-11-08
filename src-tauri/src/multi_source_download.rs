@@ -511,6 +511,10 @@ impl MultiSourceDownloadService {
                 DownloadSource::Http(http_info) => {
                     self.start_http_download(file_hash, http_info.clone(), chunk_ids).await?;
                 }
+                DownloadSource::Ed2k(_ed2k_info) => {
+                    // TODO: Implement Ed2k connection in PR #2
+                    tracing::warn!("Ed2k downloads not yet implemented");
+                }
             }
         }
 
@@ -1198,6 +1202,10 @@ impl MultiSourceDownloadService {
                     DownloadSource::Http(_) => {
                         // HTTP connections are typically closed automatically
                         // No explicit cleanup needed for HTTP
+                    }
+                    DownloadSource::Ed2k(_) => {
+                        // TODO: Implement Ed2k connection cleanup in PR #2
+                        // Ed2k connections will be managed similarly to FTP
                     }
                 }
             }
