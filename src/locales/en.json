@@ -509,6 +509,12 @@
       "skipped": "First-run setup skipped. A temporary account will be created when needed.",
       "accountCreated": "Wallet created successfully! You can now start mining.",
       "error": "Failed to create account. Please try again."
+    },
+    "upgradeAccount": {
+      "title": "Secure Your Mining Rewards!",
+      "description": "You're using a temporary account. Save it to an encrypted keystore or create an HD wallet to protect your mining rewards from being lost.",
+      "saveToKeystore": "Save to Keystore",
+      "createHDWallet": "Create HD Wallet"
     }
   },
   "wallet": {
