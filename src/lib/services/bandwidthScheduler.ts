@@ -23,6 +23,7 @@ export class BandwidthSchedulerService {
 
   private currentUploadLimit: number = 0;
   private currentDownloadLimit: number = 0;
+  private currentScheduleId: string | null = null;
 
   private constructor() {}
 
@@ -237,6 +238,7 @@ export class BandwidthSchedulerService {
   ) {
     this.currentUploadLimit = uploadLimit;
     this.currentDownloadLimit = downloadLimit;
+    this.currentScheduleId = meta.schedule?.id || null;
 
     const limits: ActiveBandwidthLimits = {
       uploadLimitKbps: uploadLimit,

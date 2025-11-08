@@ -98,6 +98,9 @@
   let natStatusUnlisten: (() => void) | null = null
   let lastNatState: NatReachabilityState | null = null
   let lastNatConfidence: NatConfidence | null = null
+
+  // For page navigation, always preserve existing connections
+  // App reloads can be handled separately if needed
   
   // WebRTC and Signaling variables
   let signaling: SignalingService;
@@ -640,6 +643,28 @@
     }
   }
 
+  // Sync DHT status with backend state on app reload (resets stale connections)
+  async function syncDhtStatusOnMount() {
+    try {
+      // Always reset network services on app reload for clean state
+      try {
+        await invoke('reset_network_services')
+      } catch (resetError) {
+        // Reset failed, but continue with UI reset
+      }
+
+      // Force disconnected state after reset for clean app reload experience
+      dhtStatus = 'disconnected'
+      dhtPeerId = null
+      dhtPeerCount = 0
+    } catch (error) {
+      dhtStatus = 'disconnected'
+      dhtPeerId = null
+      dhtPeerCount = 0
+      dhtEvents = [...dhtEvents, '⚠ Error checking network status']
+    }
+  }
+
   async function runDiscovery() {
     if (dhtStatus !== 'connected') {
       showToast($t('network.errors.dhtNotConnected'), 'error');
@@ -1103,29 +1128,25 @@
       }
       
       // Initialize async operations
-      // const initAsync = async () => {
-      //   await fetchBootstrapNodes()
-      //   await checkGethStatus()
-        
-      //   // DHT check will happen in startDht()
+      const initAsync = async () => {
+        // Run independent checks in parallel for better performance
+        await Promise.all([
+          fetchBootstrapNodes(),
+          checkGethStatus(),
+          syncDhtStatusOnMount()
+        ])
 
-      //   // Also passively sync DHT state if it's already running
-      //   await syncDhtStatusOnMount()
-        
-      //   // Listen for download progress updates (only in Tauri)
-      //   if (isTauri) {
-      //     await registerNatListener()
-      //     unlistenProgress = await listen('geth-download-progress', (event) => {
-      //       downloadProgress = event.payload as typeof downloadProgress
-      //     })
-      await fetchBootstrapNodes()
-      await checkGethStatus()
+        // Listen for download progress updates (only in Tauri)
+        if (isTauri) {
+          await registerNatListener()
+          unlistenProgress = await listen('geth-download-progress', (event) => {
+            downloadProgress = event.payload as typeof downloadProgress
+          })
+        }
+      }
 
-      // DHT status will be checked when user clicks Start Network
-      // No automatic DHT checking on app startup
-
-      // DHT will only start when user clicks the Start Network button
-      // Auto-start disabled for better user control
+      // Execute initialization
+      await initAsync()
 
       if (isTauri) {
         if (!peerDiscoveryUnsub) {
@@ -1399,12 +1420,7 @@
     </div>
     
     <div class="space-y-3">
-      {#if dhtStatus === 'loading'}
-        <div class="text-center py-8">
-          <Wifi class="h-12 w-12 text-blue-500 mx-auto mb-2 animate-spin" />
-          <p class="text-sm text-muted-foreground">Checking DHT status...</p>
-        </div>
-      {:else if dhtStatus === 'disconnected'}
+      {#if dhtStatus === 'disconnected'}
         <div class="text-center py-4">
           <Wifi class="h-12 w-12 text-muted-foreground mx-auto mb-2" />
           <p class="text-sm text-muted-foreground mb-3">{$t('network.dht.notConnected')}</p>

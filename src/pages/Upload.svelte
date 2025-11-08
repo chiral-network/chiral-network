@@ -309,7 +309,6 @@
               seeders: 1,
               leechers: 0,
               uploadDate: s.addedAt ? new Date(s.addedAt) : new Date(),
-              version: 1,
               isEncrypted: false,
               manifest: s.manifest ?? null,
               price: s.price ?? 0,
@@ -371,6 +370,25 @@
           showToast(
             tr("upload.uploadInProgress"),
             "warning",
+          );
+          return;
+        }
+
+        // CHECK: Ensure DHT is connected before attempting upload
+        try {
+          const isDhtConnected = await invoke<boolean>('is_dht_running').catch(() => false);
+          if (!isDhtConnected) {
+            showToast(
+              "DHT network is not connected. Please start the DHT network before uploading files.",
+              "error",
+            );
+            return;
+          }
+        } catch (error) {
+          console.error('Failed to check DHT status:', error);
+          showToast(
+            "Unable to verify DHT connection. Please ensure the DHT network is running.",
+            "error",
           );
           return;
         }
@@ -483,7 +501,6 @@
                   seeders: isDhtRunning ? 1 : 0,
                   leechers: 0,
                   uploadDate: new Date(),
-                  version: result.version,
                   isNewVersion: isNewVersion,
                   isEncrypted: result.isEncrypted,
                   price: filePrice,
@@ -673,6 +690,25 @@
       return;
     }
 
+    // CHECK: Ensure DHT is connected before attempting upload
+    try {
+      const isDhtConnected = await invoke<boolean>('is_dht_running').catch(() => false);
+      if (!isDhtConnected) {
+        showToast(
+          "DHT network is not connected. Please start the DHT network before uploading files.",
+          "error",
+        );
+        return;
+      }
+    } catch (error) {
+      console.error('Failed to check DHT status:', error);
+      showToast(
+        "Unable to verify DHT connection. Please ensure the DHT network is running.",
+        "error",
+      );
+      return;
+    }
+
     let duplicateCount = 0;
     let addedCount = 0;
 
@@ -700,8 +736,8 @@
             seederAddresses: metadata.seeders ?? [],
             leechers: 0,
             uploadDate: new Date(metadata.createdAt),
-            version: metadata.version,
             price: price,
+            cids: metadata.cids, // Store CID information
           };
 
           let existed = false;
@@ -720,7 +756,6 @@
                 name: metadata.fileName || existing.name,
                 hash: metadata.merkleRoot || existing.hash,
                 size: metadata.fileSize ?? existing.size,
-                version: metadata.version ?? existing.version,
                 seeders: metadata.seeders?.length ?? existing.seeders,
                 seederAddresses: metadata.seeders ?? existing.seederAddresses,
                 uploadDate: new Date(
@@ -744,15 +779,14 @@
           if (existed) {
             duplicateCount++;
             showToast(
-              tr("upload.fileUpdated", { values: { name: fileName, version: metadata.version } }),
+              tr("upload.fileUpdated", { values: { name: fileName } }),
               "info",
             );
           } else {
             addedCount++;
-            showToast(
-              tr("upload.fileUploadedNew", { values: { name: fileName, version: metadata.version } }),
-              "success",
-            );
+            const successMessage = tr("upload.fileUploadedNew", { values: { name: fileName } }) +
+              (metadata.cids && metadata.cids.length > 0 ? `\nCID: ${metadata.cids[0]}` : "");
+            showToast(successMessage, "success");
           }
         } catch (error) {
           console.error(error);
@@ -819,7 +853,6 @@
             seederAddresses,
             leechers: 0,
             uploadDate: new Date(),
-            version: result.version,
             isEncrypted: result.isEncrypted,
             price: price,
           };
@@ -889,28 +922,6 @@
     showToast(tr("upload.hashCopiedClipboard"), "success");
   }
 
-  async function showVersionHistory(fileName: string) {
-    try {
-      const versions = (await invoke("get_file_versions_by_name", {
-        fileName,
-      })) as any[];
-      if (versions.length === 0) {
-        showToast(tr("upload.noVersionHistory"), "info");
-        return;
-      }
-
-      const versionList = versions
-        .map(
-          (v) =>
-            `v${v.version}: ${v.fileHash.slice(0, 8)}... (${new Date(v.createdAt * 1000).toLocaleDateString()})`,
-        )
-        .join("\n");
-
-      showToast(tr("upload.versionHistoryTitle", { values: { name: fileName, list: versionList } }), "info");
-    } catch (error) {
-      showToast(tr("upload.versionHistoryError"), "error");
-    }
-  }
 </script>
 
 <div class="space-y-6">
@@ -1311,7 +1322,7 @@
                 <div class="space-y-3 relative px-4">
                   {#each $files.filter((f) => f.status === "seeding" || f.status === "uploaded") as file}
                     <div
-                      class="group relative bg-gradient-to-r from-card to-card/80 border border-border/50 rounded-xl p-4 hover:shadow-lg hover:border-border transition-all duration-300 overflow-hidden"
+                      class="group relative bg-gradient-to-r from-card to-card/80 border border-border/50 rounded-xl p-4 hover:shadow-lg hover:border-border transition-all duration-300 overflow-hidden mb-3"
                     >
                       <div
                         class="absolute inset-0 bg-gradient-to-r from-primary/5 via-transparent to-secondary/5 opacity-0 group-hover:opacity-100 transition-opacity duration-300"
@@ -1344,15 +1355,6 @@
                               >
                                 {file.name}
                               </p>
-                              {#if file.version}
-                                <Badge
-                                  class="bg-blue-100 text-blue-800 text-xs px-2 py-0.5 cursor-pointer hover:bg-blue-200 transition-colors"
-                                  title={$t("upload.versionHistoryTooltip", { values: { version: file.version } })}
-                                  on:click={() => showVersionHistory(file.name)}
-                                >
-                                  v{file.version}
-                                </Badge>
-                              {/if}
 
                               {#if file.isEncrypted}
                                 <Badge
@@ -1363,20 +1365,9 @@
                                   {$t("upload.encryption.encryptedBadge")}
                                 </Badge>
                               {/if}
-
-                              <div class="flex items-center gap-1">
-                                <div
-                                  class="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"
-                                ></div>
-                                <span class="text-xs text-green-600 font-medium"
-                                  >{$t("upload.active")}</span
-                                >
-                              </div>
                             </div>
 
-                            <div
-                              class="flex flex-wrap items-center gap-3 text-xs text-muted-foreground"
-                            >
+                            <div class="space-y-2 text-xs text-muted-foreground">
                               <div class="flex items-center gap-1">
                                 <span class="opacity-60">{$t("upload.hashLabel")}</span>
                                 <code
@@ -1388,30 +1379,40 @@
                                 </code>
                               </div>
 
-                              <span>•</span>
-                              <span class="font-medium"
-                                >{formatFileSize(file.size)}</span
-                              >
-
-                              {#if file.seeders !== undefined}
-                                <span>•</span>
+                              {#if file.cids && file.cids.length > 0}
                                 <div class="flex items-center gap-1">
-                                  <Upload class="h-3 w-3 text-green-500" />
-                                  <span class="text-green-600 font-medium"
-                                    >{file.seeders || 1}</span
+                                  <span class="opacity-60">CID:</span>
+                                  <code
+                                    class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono"
                                   >
+                                    {file.cids[0].slice(0, 8)}...{file.cids[0].slice(-6)}
+                                  </code>
                                 </div>
                               {/if}
 
-                              {#if file.leechers && file.leechers > 0}
-                                <span>•</span>
-                                <div class="flex items-center gap-1">
-                                  <Download class="h-3 w-3 text-orange-500" />
-                                  <span class="text-orange-600 font-medium"
-                                    >{file.leechers}</span
-                                  >
-                                </div>
-                              {/if}
+                              <div class="flex items-center gap-3">
+                                <span class="font-medium"
+                                  >{formatFileSize(file.size)}</span
+                                >
+
+                                {#if file.seeders !== undefined}
+                                  <div class="flex items-center gap-1">
+                                    <Upload class="h-3 w-3 text-green-500" />
+                                    <span class="text-green-600 font-medium"
+                                      >{file.seeders || 1}</span
+                                    >
+                                  </div>
+                                {/if}
+
+                                {#if file.leechers && file.leechers > 0}
+                                  <div class="flex items-center gap-1">
+                                    <Download class="h-3 w-3 text-orange-500" />
+                                    <span class="text-orange-600 font-medium"
+                                      >{file.leechers}</span
+                                    >
+                                  </div>
+                                {/if}
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -1431,27 +1432,6 @@
                             </div>
                           {/if}
 
-                          {#if file.status === "seeding"}
-                            <Badge
-                              variant="secondary"
-                              class="bg-green-500/10 text-green-600 border-green-500/20 font-medium"
-                            >
-                              <div
-                                class="w-1.5 h-1.5 bg-green-500 rounded-full mr-1.5 animate-pulse"
-                              ></div>
-                              {$t("upload.seeding")}
-                            </Badge>
-                          {:else if file.status === "uploaded"}
-                            <Badge
-                              variant="secondary"
-                              class="bg-blue-500/10 text-blue-600 border-blue-500/20 font-medium"
-                            >
-                              <div
-                                class="w-1.5 h-1.5 bg-blue-500 rounded-full mr-1.5"
-                              ></div>
-                              {$t("upload.storedLocallyBadge")}
-                            </Badge>
-                          {/if}
 
                           <button
                             on:click={() => handleCopy(file.hash)}
@@ -1473,6 +1453,17 @@
                               />
                             </svg>
                           </button>
+
+                          {#if file.cids && file.cids.length > 0}
+                            <button
+                              on:click={() => handleCopy(file.cids![0])}
+                              class="group/btn p-2 hover:bg-primary/10 rounded-lg transition-all duration-200 hover:scale-110"
+                              title="Copy CID"
+                              aria-label="Copy file CID"
+                            >
+                              <Blocks class="h-4 w-4 text-muted-foreground group-hover/btn:text-primary transition-colors" />
+                            </button>
+                          {/if}
 
                           {#if isTauri}
                             <button
