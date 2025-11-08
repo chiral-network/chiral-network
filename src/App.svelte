@@ -14,7 +14,7 @@
     import RelayPage from './pages/Relay.svelte'
     import NotFound from './pages/NotFound.svelte'
     // import ProxySelfTest from './routes/proxy-self-test.svelte' // DISABLED
-import { networkStatus, settings, userLocation, wallet, activeBandwidthLimits } from './lib/stores'
+import { networkStatus, settings, userLocation, wallet, activeBandwidthLimits, etcAccount } from './lib/stores'
 import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
     import {onMount, setContext} from 'svelte';
@@ -52,6 +52,7 @@ let schedulerRunning = false;
 let unsubscribeScheduler: (() => void) | null = null;
 let unsubscribeBandwidth: (() => void) | null = null;
 let lastAppliedBandwidthSignature: string | null = null;
+let showFirstRunWizard = false;
 
 const syncBandwidthScheduler = (config: AppSettings) => {
   const enabledSchedules = config.bandwidthSchedules?.filter(
@@ -161,6 +162,33 @@ const pushBandwidthLimits = (limits: ActiveBandwidthLimits) => {
         // setup i18n
         await setupI18n();
         loading = false;
+
+        // Check for first-run and show wizard if no account exists
+        try {
+          const firstRunCompleted = localStorage.getItem('chiral_first_run_complete');
+          const hasAccount = get(etcAccount) !== null;
+
+          // Check if there are any keystore files (Tauri only)
+          let hasKeystoreFiles = false;
+          if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+            try {
+              const keystoreFiles = await invoke<string[]>('list_keystore_accounts');
+              hasKeystoreFiles = keystoreFiles && keystoreFiles.length > 0;
+            } catch (error) {
+              console.warn('Failed to check keystore files:', error);
+            }
+          }
+
+          // Show wizard if:
+          // - First run not completed AND
+          // - No active account AND
+          // - No keystore files exist
+          if (!firstRunCompleted && !hasAccount && !hasKeystoreFiles) {
+            showFirstRunWizard = true;
+          }
+        } catch (error) {
+          console.warn('Failed to check first-run status:', error);
+        }
 
         let storedLocation: string | null = null;
         try {
