@@ -99,8 +99,15 @@
   let lastNatState: NatReachabilityState | null = null
   let lastNatConfidence: NatConfidence | null = null
 
-  // For page navigation, always preserve existing connections
-  // App reloads can be handled separately if needed
+  // Detect app reload vs page navigation
+  const APP_INIT_KEY = 'chiral_app_last_init'
+  const now = Date.now()
+  const lastInit = parseInt(sessionStorage.getItem(APP_INIT_KEY) || '0')
+  const timeSinceLastInit = now - lastInit
+  const isAppReload = timeSinceLastInit > 5000 // 5+ seconds = app reload
+
+  // Mark this initialization
+  sessionStorage.setItem(APP_INIT_KEY, now.toString())
   
   // WebRTC and Signaling variables
   let signaling: SignalingService;
@@ -643,17 +650,42 @@
     }
   }
 
-  // Sync DHT status with backend state on app reload (resets stale connections)
-  async function syncDhtStatusOnMount() {
+  // Sync DHT status with backend state on page navigation (preserves connections)
+  async function syncDhtStatusOnPageLoad() {
     try {
-      // Always reset network services on app reload for clean state
-      try {
-        await invoke('reset_network_services')
-      } catch (resetError) {
-        // Reset failed, but continue with UI reset
-      }
+      // Check current DHT status without resetting connections
+      const [isRunning, peerCount, peerId] = await Promise.all([
+        invoke<boolean>('is_dht_running').catch(() => false),
+        invoke<number>('get_dht_peer_count').catch(() => 0),
+        invoke<string | null>('get_dht_peer_id').catch(() => null)
+      ])
 
-      // Force disconnected state after reset for clean app reload experience
+      // Consider DHT connected if service is running OR if we have peers
+      if (isRunning || peerCount > 0) {
+        dhtPeerId = peerId
+        dhtPeerCount = peerCount
+        dhtStatus = 'connected'
+        dhtEvents = [...dhtEvents, `✓ DHT is active with ${peerCount} peers`]
+        startDhtPolling() // Start monitoring for updates
+      } else {
+        dhtStatus = 'disconnected'
+        dhtPeerId = null
+        dhtPeerCount = 0
+      }
+    } catch (error) {
+      dhtStatus = 'disconnected'
+      dhtPeerId = null
+      dhtPeerCount = 0
+      dhtEvents = [...dhtEvents, '⚠ Error checking network status']
+    }
+  }
+
+  // Reset DHT connections (for app reload scenarios)
+  async function resetDhtConnections() {
+    try {
+      await invoke('reset_network_services')
+
+      // Force disconnected state
       dhtStatus = 'disconnected'
       dhtPeerId = null
       dhtPeerCount = 0
@@ -661,7 +693,6 @@
       dhtStatus = 'disconnected'
       dhtPeerId = null
       dhtPeerCount = 0
-      dhtEvents = [...dhtEvents, '⚠ Error checking network status']
     }
   }
 
@@ -1127,13 +1158,13 @@
         }
       }
       
-      // Initialize async operations
+      // Initialize async operations (preserves connections)
       const initAsync = async () => {
         // Run independent checks in parallel for better performance
         await Promise.all([
           fetchBootstrapNodes(),
           checkGethStatus(),
-          syncDhtStatusOnMount()
+          syncDhtStatusOnPageLoad()  // Sync status without resetting connections
         ])
 
         // Listen for download progress updates (only in Tauri)
@@ -1145,8 +1176,32 @@
         }
       }
 
-      // Execute initialization
-      await initAsync()
+      // Initialize async operations with connection reset (for app reload)
+      const initAsyncWithReset = async () => {
+        // Run independent checks in parallel for better performance
+        await Promise.all([
+          fetchBootstrapNodes(),
+          checkGethStatus(),
+          resetDhtConnections()  // Reset connections for clean app reload state
+        ])
+
+        // Listen for download progress updates (only in Tauri)
+        if (isTauri) {
+          await registerNatListener()
+          unlistenProgress = await listen('geth-download-progress', (event) => {
+            downloadProgress = event.payload as typeof downloadProgress
+          })
+        }
+      }
+
+      // Execute initialization with appropriate connection handling
+      if (isAppReload) {
+        // App reload (Ctrl+R) - reset connections for clean state
+        await initAsyncWithReset()
+      } else {
+        // Page navigation - preserve existing connections
+        await initAsync()
+      }
 
       if (isTauri) {
         if (!peerDiscoveryUnsub) {
