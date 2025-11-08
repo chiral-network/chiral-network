@@ -133,6 +133,18 @@
     return "text-muted-foreground";
   }
 
+  // Helper function to check if DHT is connected (consistent with Network.svelte)
+  async function isDhtConnected(): Promise<boolean> {
+    if (!isTauri) return false;
+    
+    try {
+      const isRunning = await invoke<boolean>('is_dht_running').catch(() => false);
+      return isRunning;
+    } catch {
+      return false;
+    }
+  }
+
   let isDragging = false;
   const LOW_STORAGE_THRESHOLD = 5;
   let availableStorage: number | null = null;
@@ -285,7 +297,6 @@
     // Clear persisted seed list on startup to prevent ghost files from other nodes
     try {
       await clearSeedList();
-      console.log("Cleared persisted seed list to prevent cross-node file display");
     } catch (e) {
       console.warn("Failed to clear persisted seed list", e);
     }
@@ -354,9 +365,11 @@
       };
 
       const handleDrop = async (e: DragEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
         isDragging = false;
+
+        // IMPORTANT: Extract files immediately before any async operations
+        // dataTransfer.files becomes empty after the event completes
+        const droppedFiles = Array.from(e.dataTransfer?.files || []);
 
         if (!$etcAccount) {
           showToast(
@@ -375,25 +388,14 @@
         }
 
         // CHECK: Ensure DHT is connected before attempting upload
-        try {
-          const isDhtConnected = await invoke<boolean>('is_dht_running').catch(() => false);
-          if (!isDhtConnected) {
-            showToast(
-              "DHT network is not connected. Please start the DHT network before uploading files.",
-              "error",
-            );
-            return;
-          }
-        } catch (error) {
-          console.error('Failed to check DHT status:', error);
+        const dhtConnected = await isDhtConnected();
+        if (!dhtConnected) {
           showToast(
-            "Unable to verify DHT connection. Please ensure the DHT network is running.",
+            "DHT network is not connected. Please start the DHT network before uploading files.",
             "error",
           );
           return;
         }
-
-        const droppedFiles = Array.from(e.dataTransfer?.files || []);
 
         if (droppedFiles.length > 0) {
           if (!isTauri) {
@@ -410,7 +412,87 @@
             let addedCount = 0;
             let blockedCount = 0;
 
-            for (const file of droppedFiles) {
+            // Handle files based on selected protocol
+            if (selectedProtocol === "Bitswap") {
+              // Bitswap protocol - process files sequentially
+              for (const file of droppedFiles) {
+                const blockedExtensions = [
+                  ".exe",
+                  ".bat",
+                  ".cmd",
+                  ".com",
+                  ".msi",
+                  ".scr",
+                  ".vbs",
+                ];
+                const fileName = file.name.toLowerCase();
+                if (blockedExtensions.some((ext) => fileName.endsWith(ext))) {
+                  showToast(
+                    tr("upload.executableBlocked", { values: { name: file.name } }),
+                    "error",
+                  );
+                  blockedCount++;
+                  continue;
+                }
+
+                if (file.size === 0) {
+                  showToast(tr("upload.emptyFile", { values: { name: file.name } }), "error");
+                  blockedCount++;
+                  continue;
+                }
+
+                try {
+                  const buffer = await file.arrayBuffer();
+                  const fileData = Array.from(new Uint8Array(buffer));
+                  const tempFilePath = await invoke<string>(
+                    "save_temp_file_for_upload",
+                    {
+                      fileName: file.name,
+                      fileData,
+                    },
+                  );
+                  const filePrice = await calculateFilePrice(file.size);
+
+                  console.log("🔍 Uploading file with calculated price:", filePrice, "for", file.size, "bytes");
+                  const metadata = await dhtService.publishFileToNetwork(tempFilePath, filePrice);
+                  console.log("📦 Received metadata from backend:", metadata);
+
+                  if (get(files).some((f) => f.hash === metadata.merkleRoot)) {
+                    duplicateCount++;
+                    continue;
+                  }
+
+                  const newFile = {
+                    id: `file-${Date.now()}-${Math.random()}`,
+                    name: metadata.fileName,
+                    path: file.name,
+                    hash: metadata.merkleRoot || "",
+                    size: metadata.fileSize,
+                    status: "seeding" as const,
+                    seeders: metadata.seeders?.length ?? 0,
+                    seederAddresses: metadata.seeders ?? [],
+                    leechers: 0,
+                    uploadDate: new Date(metadata.createdAt),
+                    price: filePrice,
+                    cids: metadata.cids,
+                  };
+
+                  files.update((currentFiles) => [...currentFiles, newFile]);
+                  addedCount++;
+                  showToast(`${file.name} uploaded successfully`, "success");
+                } catch (error) {
+                  console.error("Error uploading dropped file:", file.name, error);
+                  showToast(
+                    tr("upload.fileFailed", {
+                      values: { name: file.name, error: String(error) },
+                    }),
+                    "error",
+                  );
+                }
+              }
+            } else {
+              // WebRTC protocol - process files sequentially
+              for (const file of droppedFiles) {
               const blockedExtensions = [
                 ".exe",
                 ".bat",
@@ -487,7 +569,7 @@
                 }
 
                 const isNewVersion = existingVersions.length > 0;
-                const isDhtRunning = dhtService.getPeerId() !== null;
+                const isDhtRunning = await isDhtConnected();
 
                 const newFile = {
                   id: `file-${Date.now()}-${Math.random()}`,
@@ -508,6 +590,7 @@
 
                 files.update((currentFiles) => [...currentFiles, newFile]);
                 addedCount++;
+                showToast(`${file.name} uploaded successfully`, "success");
               } catch (error) {
                 console.error(
                   "Error uploading dropped file:",
@@ -523,6 +606,7 @@
                 );
               }
             }
+            } // End of WebRTC protocol block
 
             if (duplicateCount > 0) {
               showToast(
@@ -533,19 +617,8 @@
               );
             }
 
+            // Refresh storage after uploads
             if (addedCount > 0) {
-              const isDhtRunning = dhtService.getPeerId() !== null;
-              if (isDhtRunning) {
-                showToast(
-                  tr("upload.publishedToDHT"),
-                  "success",
-                );
-              } else {
-                showToast(
-                  tr("upload.storedLocally"),
-                  "info",
-                );
-              }
               setTimeout(() => refreshAvailableStorage(), 100);
             }
           } catch (error) {
@@ -691,19 +764,10 @@
     }
 
     // CHECK: Ensure DHT is connected before attempting upload
-    try {
-      const isDhtConnected = await invoke<boolean>('is_dht_running').catch(() => false);
-      if (!isDhtConnected) {
-        showToast(
-          "DHT network is not connected. Please start the DHT network before uploading files.",
-          "error",
-        );
-        return;
-      }
-    } catch (error) {
-      console.error('Failed to check DHT status:', error);
+    const dhtConnected = await isDhtConnected();
+    if (!dhtConnected) {
       showToast(
-        "Unable to verify DHT connection. Please ensure the DHT network is running.",
+        "DHT network is not connected. Please start the DHT network before uploading files.",
         "error",
       );
       return;
@@ -784,9 +848,7 @@
             );
           } else {
             addedCount++;
-            const successMessage = tr("upload.fileUploadedNew", { values: { name: fileName } }) +
-              (metadata.cids && metadata.cids.length > 0 ? `\nCID: ${metadata.cids[0]}` : "");
-            showToast(successMessage, "success");
+            showToast(`${fileName} uploaded successfully`, "success");
           }
         } catch (error) {
           console.error(error);
@@ -836,7 +898,7 @@
             return { type: "duplicate", fileName };
           }
 
-          const isDhtRunning = dhtService.getPeerId() !== null;
+          const isDhtRunning = await isDhtConnected();
           const localSeeder =
             result.peerId || dhtService.getPeerId() || undefined;
           const seederAddresses =
@@ -859,6 +921,7 @@
 
           files.update((f) => [...f, newFile]);
 
+          showToast(`${result.fileName} uploaded successfully`, "success");
           return { type: "success", fileName };
         } catch (error) {
           console.error(error);
@@ -891,23 +954,8 @@
       }
 
       if (addedCount > 0) {
-        showUploadSummaryMessage(addedCount);
+        setTimeout(() => refreshAvailableStorage(), 100);
       }
-    }
-  }
-
-  function showUploadSummaryMessage(addedCount: number) {
-    if (addedCount > 0) {
-      const isDhtRunning = dhtService.getPeerId() !== null;
-      if (isDhtRunning) {
-        showToast(tr("upload.publishedToDHT"), "success");
-      } else {
-        showToast(
-          tr("upload.storedLocally"),
-          "info",
-        );
-      }
-      setTimeout(() => refreshAvailableStorage(), 100);
     }
   }
 
@@ -1062,15 +1110,50 @@
     </Card>
   {/if}
 
+  <!-- Protocol Selection/Indicator Card -->
+  {#if hasSelectedProtocol}
+    <Card>
+      <div class="p-4">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <div
+              class="flex items-center justify-center w-10 h-10 bg-gradient-to-br from-blue-500/10 to-blue-500/5 rounded-lg border border-blue-500/20"
+            >
+              {#if selectedProtocol === "WebRTC"}
+                <Globe class="h-5 w-5 text-blue-600" />
+              {:else}
+                <Blocks class="h-5 w-5 text-blue-600" />
+              {/if}
+            </div>
+            <div>
+              <p class="text-sm font-semibold">
+                {$t("upload.currentProtocol")}: {selectedProtocol}
+              </p>
+              <p class="text-xs text-muted-foreground">
+                {selectedProtocol === "WebRTC"
+                  ? $t("upload.webrtcDescription")
+                  : $t("upload.bitswapDescription")}
+              </p>
+            </div>
+          </div>
+          <button
+            on:click={changeProtocol}
+            class="inline-flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium border border-input bg-background hover:bg-muted transition-colors"
+          >
+            <RefreshCw class="h-4 w-4 mr-2" />
+            {$t("upload.changeProtocol")}
+          </button>
+        </div>
+      </div>
+    </Card>
+  {/if}
+
   <Card
     class="drop-zone relative p-6 transition-all duration-200 border-dashed {isDragging
-      ? 'border-primary bg-primary/5 scale-[1.01]'
+      ? 'border-primary bg-primary/5'
       : isUploading
         ? 'border-orange-500 bg-orange-500/5'
         : 'border-muted-foreground/25 hover:border-muted-foreground/50'}"
-    role="button"
-    tabindex="0"
-    aria-label="Drop zone for file uploads"
   >
     {#if !hasSelectedProtocol}
       <Card>
@@ -1124,66 +1207,16 @@
         </div>
       </Card>
     {:else}
-      <Card>
-        <div class="space-y-4" role="region">
-          <!-- Protocol Indicator and Switcher -->
-          <div
-            class="flex items-center justify-between p-4 bg-muted/50 rounded-lg"
-          >
-            <div class="flex items-center gap-3">
-              <div
-                class="flex items-center justify-center w-10 h-10 bg-gradient-to-br from-blue-500/10 to-blue-500/5 rounded-lg border border-blue-500/20"
-              >
-                {#if selectedProtocol === "WebRTC"}
-                  <Globe class="h-5 w-5 text-blue-600" />
-                {:else}
-                  <Blocks class="h-5 w-5 text-blue-600" />
-                {/if}
-              </div>
-              <div>
-                <p class="text-sm font-semibold">
-                  {$t("upload.currentProtocol")}: {selectedProtocol}
-                </p>
-                <p class="text-xs text-muted-foreground">
-                  {selectedProtocol === "WebRTC"
-                    ? $t("upload.webrtcDescription")
-                    : $t("upload.bitswapDescription")}
-                </p>
-              </div>
-            </div>
-            <button
-              on:click={changeProtocol}
-              class="inline-flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium border border-input bg-background hover:bg-muted transition-colors"
-            >
-              <RefreshCw class="h-4 w-4 mr-2" />
-              {$t("upload.changeProtocol")}
-            </button>
-          </div>
-          <div class="space-y-4">
-            <!-- Drag & Drop Indicator -->
+      <!-- Drag & Drop Indicator -->
             {#if $files.filter((f) => f.status === "seeding" || f.status === "uploaded").length === 0}
               <div
-                class="text-center py-12 border-2 border-dashed rounded-xl transition-all duration-300 relative overflow-hidden {isDragging
-                  ? 'border-primary bg-gradient-to-br from-primary/20 via-primary/10 to-primary/5 scale-105 shadow-2xl'
-                  : 'border-muted-foreground/25 bg-gradient-to-br from-muted/5 to-muted/10 hover:border-muted-foreground/40 hover:bg-muted/20'}"
+                class="text-center py-12 transition-all duration-300 relative overflow-hidden"
               >
-                {#if isDragging}
-                  <div
-                    class="absolute inset-0 bg-gradient-to-r from-transparent via-primary/10 to-transparent animate-pulse"
-                  ></div>
-                  <div
-                    class="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(59,130,246,0.1)_0%,transparent_70%)] animate-ping"
-                  ></div>
-                {/if}
-
                 <div class="relative z-10">
                   <div class="relative mb-6">
                     {#if isDragging}
-                      <div class="absolute inset-0 animate-ping">
-                        <Upload class="h-16 w-16 mx-auto text-primary/60" />
-                      </div>
                       <Upload
-                        class="h-16 w-16 mx-auto text-primary animate-bounce"
+                        class="h-16 w-16 mx-auto text-primary"
                       />
                     {:else}
                       <FolderOpen
@@ -1194,9 +1227,9 @@
 
                   <h3
                     class="text-2xl font-bold mb-3 transition-all duration-300 {isDragging
-                      ? 'text-primary scale-110'
+                      ? 'text-primary'
                       : isUploading
-                        ? 'text-orange-500 scale-105'
+                        ? 'text-orange-500'
                         : 'text-foreground'}"
                   >
                     {isDragging
@@ -1220,17 +1253,16 @@
                           : $t("upload.dragDropRequiresDesktop")}
                   </p>
 
-                  {#if !isDragging}
-                    <div class="flex justify-center gap-4 mb-8 opacity-60">
-                      <Image class="h-8 w-8 text-blue-500 animate-pulse" />
-                      <Video class="h-8 w-8 text-purple-500 animate-pulse" />
-                      <Music class="h-8 w-8 text-green-500 animate-pulse" />
-                      <Archive class="h-8 w-8 text-orange-500 animate-pulse" />
-                      <Code class="h-8 w-8 text-red-500 animate-pulse" />
-                    </div>
+                  <div class="flex justify-center gap-4 mb-8 opacity-60 {isDragging ? 'invisible' : 'visible'}">
+                    <Image class="h-8 w-8 text-blue-500 animate-pulse" />
+                    <Video class="h-8 w-8 text-purple-500 animate-pulse" />
+                    <Music class="h-8 w-8 text-green-500 animate-pulse" />
+                    <Archive class="h-8 w-8 text-orange-500 animate-pulse" />
+                    <Code class="h-8 w-8 text-red-500 animate-pulse" />
+                  </div>
 
-                    <div class="flex justify-center gap-3">
-                      {#if isTauri}
+                  <div class="flex justify-center gap-3 {isDragging ? 'invisible' : 'visible'}">
+                    {#if isTauri}
                         <button
                           class="group inline-flex items-center justify-center h-12 rounded-xl px-6 text-sm font-medium bg-gradient-to-r from-primary to-primary/90 text-primary-foreground hover:from-primary/90 hover:to-primary shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
                           disabled={isUploading}
@@ -1251,16 +1283,15 @@
                           </p>
                         </div>
                       {/if}
-                    </div>
+                  </div>
 
-                    <p class="text-xs text-muted-foreground/75 mt-4">
-                      {#if isTauri}
-                        {$t("upload.supportedFormats")}
-                      {:else}
-                        {$t("upload.supportedFormatsDesktop")}
-                      {/if}
-                    </p>
-                  {/if}
+                  <p class="text-xs text-muted-foreground/75 mt-4 {isDragging ? 'invisible' : 'visible'}">
+                    {#if isTauri}
+                      {$t("upload.supportedFormats")}
+                    {:else}
+                      {$t("upload.supportedFormatsDesktop")}
+                    {/if}
+                  </p>
                 </div>
               </div>
             {:else}
@@ -1504,9 +1535,6 @@
                 </div>
               {/if}
             {/if}
-          </div>
-        </div>
-      </Card>
     {/if}
   </Card>
 </div>

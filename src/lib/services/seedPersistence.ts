@@ -42,7 +42,6 @@ export async function saveSeedList(seeds: SeedRecord[]): Promise<void> {
 
 export async function loadSeedList(): Promise<SeedRecord[]> {
   try {
-    console.log("from tauri");
     if ((globalThis as any).__tauri_invoke || (globalThis as any).invoke) {
       const res = await tauriInvoke("read_seed_list");
       if (!res) return [];
@@ -64,7 +63,6 @@ export async function loadSeedList(): Promise<SeedRecord[]> {
     );
   }
   try {
-    console.log("from localstorage");
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);

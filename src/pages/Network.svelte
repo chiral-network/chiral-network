@@ -83,8 +83,7 @@
   let copiedNodeAddr = false
   
   // DHT variables
-  //let dhtStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
-  let dhtStatus: 'disconnected' | 'connecting' | 'connected' | 'loading' = 'disconnected'
+  let dhtStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
   let dhtPeerId: string | null = null
   let dhtPort = 4001
   let dhtBootstrapNodes: string[] = []
@@ -336,98 +335,60 @@
     try {
       dhtError = null
       
-      // First check if DHT is already running in backend BEFORE setting any status
-      let backendPeerId = null
-      try {
-        backendPeerId = await invoke<string | null>('get_dht_peer_id')
-      } catch (error) {
-        console.log('Failed to check backend DHT status:', error)
+      // Check if DHT is already running in backend
+      const isRunning = await invoke<boolean>('is_dht_running').catch(() => false)
+      
+      if (isRunning) {
+        // DHT is already running in backend, sync the frontend state immediately
+        const backendPeerId = await invoke<string | null>('get_dht_peer_id')
+        const peerCount = await invoke<number>('get_dht_peer_count').catch(() => 0)
+        
+        if (backendPeerId) {
+          dhtPeerId = backendPeerId
+          dhtService.setPeerId(backendPeerId)
+          dhtPeerCount = peerCount
+          dhtEvents = [...dhtEvents, `✓ DHT already running with peer ID: ${backendPeerId.slice(0, 16)}...`]
+          
+          // Get health snapshot
+          const health = await dhtService.getHealth()
+          if (health) {
+            dhtHealth = health
+            dhtPeerCount = health.peerCount
+          }
+
+          // Set status based on peer count
+          dhtStatus = dhtPeerCount > 0 ? 'connected' : 'connecting'
+          if (dhtPeerCount > 0) {
+            dhtEvents = [...dhtEvents, `✓ Connected to ${dhtPeerCount} peer(s)`]
+          }
+          startDhtPolling()
+          return
+        }
       }
       
-      if (backendPeerId) {
-        // DHT is already running in backend, sync the frontend state immediately
-        console.log('DHT already running in backend with peer ID:', backendPeerId)
-        dhtPeerId = backendPeerId
-        dhtService.setPeerId(backendPeerId) // Update frontend service state
-        dhtEvents = [...dhtEvents, `✓ DHT already running with peer ID: ${backendPeerId.slice(0, 16)}...`]
-        
-        // Check connection status immediately
-        let currentPeers = 0
-        const health = await dhtService.getHealth()
-        if (health) {
-          dhtHealth = health
-          currentPeers = health.peerCount
-        } else {
-          currentPeers = await dhtService.getPeerCount()
-        }
-        dhtPeerCount = currentPeers
-
-        if (currentPeers > 0) {
-          // Set status directly to connected without showing connecting first
-          dhtStatus = 'connected'
-          dhtEvents = [...dhtEvents, `✓ Connected to ${currentPeers} peer(s)`]
-          startDhtPolling() // Start polling for updates
-          return // Already connected, no need to continue
-        } else {
-          // No peers connected, set to disconnected and try to connect
-          dhtStatus = 'disconnected'
-          dhtEvents = [...dhtEvents, `⚠ No peers connected, attempting to connect to bootstrap...`]
-          startDhtPolling() // Start polling anyway
-          connectionAttempts++
-          // Continue below to try connecting to bootstrap
-        }
-      } else {
-        // DHT not running, show connecting state and start it
-        dhtStatus = 'connecting'
-        connectionAttempts++
-        
-        // Add a small delay to show the connecting state only when starting fresh
-        await new Promise(resolve => setTimeout(resolve, 500))
-        // DHT not running, start it
-        try {
-          const peerId = await dhtService.start({
-            port: dhtPort,
-            bootstrapNodes: dhtBootstrapNodes,
-            enableAutonat: $settings.enableAutonat,
-            autonatProbeIntervalSeconds: $settings.autonatProbeInterval,
-            autonatServers: $settings.autonatServers,
-            enableAutorelay: $settings.enableAutorelay,
-            preferredRelays: $settings.preferredRelays || [],
-            enableRelayServer: $settings.enableRelayServer,
-            relayServerAlias: $settings.relayServerAlias || '',
-            chunkSizeKb: $settings.chunkSize,
-            cacheSizeMb: $settings.cacheSize,
-          })
-          dhtPeerId = peerId
-          // Also ensure the service knows its own peer ID
-          dhtService.setPeerId(peerId)
-          dhtEvents = [...dhtEvents, `✓ DHT started with peer ID: ${peerId.slice(0, 16)}...`]
-        } catch (error: any) {
-          if (error.toString().includes('already running')) {
-            // DHT is already running in backend but service doesn't have the peer ID
-            // This shouldn't happen with our singleton pattern, but handle it anyway
-            console.warn('DHT already running in backend, attempting to retrieve peer ID...')
-            dhtEvents = [...dhtEvents, `⚠ DHT already running in backend, retrieving peer ID...`]
-            
-            // Try to get it from the backend directly
-            try {
-              const peerId = await invoke('get_dht_peer_id')
-              if (peerId) {
-                dhtPeerId = peerId as string
-                dhtService.setPeerId(dhtPeerId)
-                dhtEvents = [...dhtEvents, `✓ Retrieved peer ID: ${dhtPeerId.slice(0, 16)}...`]
-              } else {
-                throw new Error('Could not retrieve peer ID from backend')
-              }
-            } catch (retrieveError) {
-              console.error('Failed to retrieve peer ID:', retrieveError)
-              throw retrieveError
-            }
-          } else {
-            throw error
-          }
-        }
-      }
+      // DHT not running, start it
+      dhtStatus = 'connecting'
+      connectionAttempts++
+      
+      // Add a small delay to show the connecting state
+      await new Promise(resolve => setTimeout(resolve, 500))
+      
+      const peerId = await dhtService.start({
+        port: dhtPort,
+        bootstrapNodes: dhtBootstrapNodes,
+        enableAutonat: $settings.enableAutonat,
+        autonatProbeIntervalSeconds: $settings.autonatProbeInterval,
+        autonatServers: $settings.autonatServers,
+        enableAutorelay: $settings.enableAutorelay,
+        preferredRelays: $settings.preferredRelays || [],
+        enableRelayServer: $settings.enableRelayServer,
+        relayServerAlias: $settings.relayServerAlias || '',
+        chunkSizeKb: $settings.chunkSize,
+        cacheSizeMb: $settings.cacheSize,
+      })
+      dhtPeerId = peerId
+      dhtService.setPeerId(peerId)
+      dhtEvents = [...dhtEvents, `✓ DHT started with peer ID: ${peerId.slice(0, 16)}...`]
       
       // Try to connect to bootstrap nodes
       let connectionSuccessful = false
@@ -526,7 +487,10 @@
   let peerRefreshCounter = 0;
 
   function startDhtPolling() {
-    if (dhtPollInterval) return // Already polling
+    // If already polling, don't start another one
+    if (dhtPollInterval !== undefined) {
+      return
+    }
 
     dhtPollInterval = setInterval(async () => {
       try {
@@ -644,47 +608,58 @@
 
   // Sync DHT status with backend state on page navigation (preserves connections)
   async function syncDhtStatusOnPageLoad() {
+    if (!isTauri) {
+      dhtStatus = 'disconnected'
+      return
+    }
+    
     try {
       // Check current DHT status without resetting connections
-      const [isRunning, peerCount, peerId] = await Promise.all([
-        invoke<boolean>('is_dht_running').catch(() => false),
-        invoke<number>('get_dht_peer_count').catch(() => 0),
-        invoke<string | null>('get_dht_peer_id').catch(() => null)
-      ])
+      const isRunning = await invoke<boolean>('is_dht_running').catch(() => false)
+      const peerCount = await invoke<number>('get_dht_peer_count').catch(() => 0)
+      const peerId = await invoke<string | null>('get_dht_peer_id').catch(() => null)
 
-      // Consider DHT connected if service is running OR if we have peers
-      if (isRunning || peerCount > 0) {
+      // If DHT is running in backend, sync status and start polling
+      if (isRunning && peerId) {
         dhtPeerId = peerId
         dhtPeerCount = peerCount
-        dhtStatus = 'connected'
-        dhtEvents = [...dhtEvents, `✓ DHT is active with ${peerCount} peers`]
-        startDhtPolling() // Start monitoring for updates
+        
+        // Update dhtService with the peer ID
+        dhtService.setPeerId(peerId)
+        
+        // Also restore health snapshot
+        try {
+          const health = await dhtService.getHealth()
+          if (health) {
+            dhtHealth = health
+            lastNatState = health.reachability
+            lastNatConfidence = health.reachabilityConfidence
+          }
+        } catch (healthError) {
+          console.debug('Could not fetch health snapshot:', healthError)
+        }
+        
+        // Set status based on peer count - polling will handle dynamic updates
+        dhtStatus = peerCount > 0 ? 'connected' : 'connecting'
+        dhtEvents = [...dhtEvents, `✓ DHT restored (${peerCount} peer${peerCount !== 1 ? 's' : ''} connected)`]
+        startDhtPolling() // Always start polling when DHT is running
       } else {
         dhtStatus = 'disconnected'
         dhtPeerId = null
         dhtPeerCount = 0
+        dhtHealth = null
+        lastNatState = null
+        lastNatConfidence = null
       }
     } catch (error) {
+      console.error('Failed to sync DHT status:', error)
       dhtStatus = 'disconnected'
       dhtPeerId = null
       dhtPeerCount = 0
+      dhtHealth = null
+      lastNatState = null
+      lastNatConfidence = null
       dhtEvents = [...dhtEvents, '⚠ Error checking network status']
-    }
-  }
-
-  // Reset DHT connections (for app reload scenarios)
-  async function resetDhtConnections() {
-    try {
-      await invoke('reset_network_services')
-
-      // Force disconnected state
-      dhtStatus = 'disconnected'
-      dhtPeerId = null
-      dhtPeerCount = 0
-    } catch (error) {
-      dhtStatus = 'disconnected'
-      dhtPeerId = null
-      dhtPeerCount = 0
     }
   }
 
@@ -1152,11 +1127,11 @@
       
       // Initialize async operations (preserves connections)
       const initAsync = async () => {
-        // Run independent checks in parallel for better performance
+        // Run ALL independent checks in parallel for better performance
         await Promise.all([
           fetchBootstrapNodes(),
           checkGethStatus(),
-          syncDhtStatusOnPageLoad()  // Sync status without resetting connections
+          syncDhtStatusOnPageLoad() // DHT check is independent from Geth check
         ])
 
         // Listen for download progress updates (only in Tauri)
@@ -1166,25 +1141,7 @@
             downloadProgress = event.payload as typeof downloadProgress
           })
         }
-      }
-
-      // Initialize async operations with connection reset (for app reload)
-      const initAsyncWithReset = async () => {
-        // Run independent checks in parallel for better performance
-        await Promise.all([
-          fetchBootstrapNodes(),
-          checkGethStatus(),
-          resetDhtConnections()  // Reset connections for clean app reload state
-        ])
-
-        // Listen for download progress updates (only in Tauri)
-        if (isTauri) {
-          await registerNatListener()
-          unlistenProgress = await listen('geth-download-progress', (event) => {
-            downloadProgress = event.payload as typeof downloadProgress
-          })
-        }
-      }
+      }     
 
       // Always preserve existing connections
       await initAsync()
@@ -1242,9 +1199,11 @@
   onDestroy(() => {
     if (peerCountInterval) {
       clearInterval(peerCountInterval)
+      peerCountInterval = undefined
     }
     if (dhtPollInterval) {
       clearInterval(dhtPollInterval)
+      dhtPollInterval = undefined
     }
     if (natStatusUnlisten) {
       natStatusUnlisten()
@@ -1451,9 +1410,6 @@
         {:else if dhtStatus === 'connecting'}
           <div class="h-2 w-2 bg-yellow-500 rounded-full animate-pulse"></div>
           <span class="text-sm text-yellow-600">{$t('network.status.connecting')}</span>
-        {:else if dhtStatus === 'loading'}
-          <div class="h-2 w-2 bg-blue-500 rounded-full animate-pulse"></div>
-          <span class="text-sm text-blue-600">Loading...</span>
         {:else}
           <div class="h-2 w-2 bg-red-500 rounded-full"></div>
           <span class="text-sm text-red-600">{$t('network.status.disconnected')}</span>

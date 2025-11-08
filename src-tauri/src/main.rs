@@ -5118,6 +5118,7 @@ fn main() {
             get_dht_health,
             get_dht_peer_count,
             get_dht_peer_id,
+            is_dht_running,
             get_dht_connected_peers,
             send_dht_message,
             start_file_transfer_service,
