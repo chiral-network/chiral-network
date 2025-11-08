@@ -99,15 +99,7 @@
   let lastNatState: NatReachabilityState | null = null
   let lastNatConfidence: NatConfidence | null = null
 
-  // Detect app reload vs page navigation
-  const APP_INIT_KEY = 'chiral_app_last_init'
-  const now = Date.now()
-  const lastInit = parseInt(sessionStorage.getItem(APP_INIT_KEY) || '0')
-  const timeSinceLastInit = now - lastInit
-  const isAppReload = timeSinceLastInit > 5000 // 5+ seconds = app reload
-
-  // Mark this initialization
-  sessionStorage.setItem(APP_INIT_KEY, now.toString())
+  // Always preserve connections - no unreliable time-based detection
   
   // WebRTC and Signaling variables
   let signaling: SignalingService;
@@ -1194,14 +1186,8 @@
         }
       }
 
-      // Execute initialization with appropriate connection handling
-      if (isAppReload) {
-        // App reload (Ctrl+R) - reset connections for clean state
-        await initAsyncWithReset()
-      } else {
-        // Page navigation - preserve existing connections
-        await initAsync()
-      }
+      // Always preserve existing connections
+      await initAsync()
 
       if (isTauri) {
         if (!peerDiscoveryUnsub) {
@@ -1348,6 +1334,7 @@
       <Activity class="h-5 w-5" />
       {$t('network.quickActions.refreshStatus.button')}
     </Button>
+
 
   </div>
 </Card>
