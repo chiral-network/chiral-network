@@ -1032,7 +1032,13 @@
       "gethNotRunning": "Chiral node is not running. Please start it from the Network page",
       "noAccountLink": "Please create a Chiral Network account from the"
     },
-    "starting": "Starting mining... (may restart node if needed)"
+    "starting": "Starting mining... (may restart node if needed)",
+    "temporaryAccount": {
+      "title": "⚠️ Temporary Account - Mining Rewards at Risk!",
+      "description": "You're mining with a temporary account. Mining rewards will be lost when you close the app unless you save your account.",
+      "createWallet": "Create Permanent Wallet",
+      "goToAccount": "Go to Account Page"
+    }
   },
   "reputation": {
     "title": "Reputation System",
