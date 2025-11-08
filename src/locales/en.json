@@ -1249,6 +1249,7 @@
     "dropFilesHint": "Drag and drop files anywhere on this card, or click \"Add Files\" below",
     "addFiles": "Add Files",
     "sharedFiles": "Shared Files",
+    "file": "file",
     "files": "files",
     "total": "total",
     "tip": "💡 Tip: You can also drag and drop files here to add them",
