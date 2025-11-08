@@ -270,6 +270,25 @@ function handleFirstRunSkip() {
       const onPop = () => syncFromUrl();
       window.addEventListener('popstate', onPop);
 
+      // Warn before closing if there are unsaved mining rewards
+      const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+        const hasUnsavedMiningRewards = localStorage.getItem('chiral_temp_account_mining') === 'true';
+        const currentAccount = get(etcAccount);
+        const hasAccount = currentAccount !== null;
+
+        // Only warn if:
+        // 1. There's a temporary account that was used for mining
+        // 2. The account still exists (not saved to keystore)
+        // 3. First-run was skipped (indicating temporary usage)
+        const firstRunSkipped = localStorage.getItem('chiral_first_run_skipped') === 'true';
+
+        if (hasUnsavedMiningRewards && hasAccount && firstRunSkipped) {
+          event.preventDefault();
+          event.returnValue = ''; // Required for Chrome
+        }
+      };
+      window.addEventListener('beforeunload', handleBeforeUnload);
+
       // keyboard shortcuts
       const handleKeyDown = (event: KeyboardEvent) => {
         // Ctrl/Cmd + Q - Quit application
