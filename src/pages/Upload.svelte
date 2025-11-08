@@ -412,87 +412,8 @@
             let addedCount = 0;
             let blockedCount = 0;
 
-            // Handle files based on selected protocol
-            if (selectedProtocol === "Bitswap") {
-              // Bitswap protocol - process files sequentially
-              for (const file of droppedFiles) {
-                const blockedExtensions = [
-                  ".exe",
-                  ".bat",
-                  ".cmd",
-                  ".com",
-                  ".msi",
-                  ".scr",
-                  ".vbs",
-                ];
-                const fileName = file.name.toLowerCase();
-                if (blockedExtensions.some((ext) => fileName.endsWith(ext))) {
-                  showToast(
-                    tr("upload.executableBlocked", { values: { name: file.name } }),
-                    "error",
-                  );
-                  blockedCount++;
-                  continue;
-                }
-
-                if (file.size === 0) {
-                  showToast(tr("upload.emptyFile", { values: { name: file.name } }), "error");
-                  blockedCount++;
-                  continue;
-                }
-
-                try {
-                  const buffer = await file.arrayBuffer();
-                  const fileData = Array.from(new Uint8Array(buffer));
-                  const tempFilePath = await invoke<string>(
-                    "save_temp_file_for_upload",
-                    {
-                      fileName: file.name,
-                      fileData,
-                    },
-                  );
-                  const filePrice = await calculateFilePrice(file.size);
-
-                  console.log("🔍 Uploading file with calculated price:", filePrice, "for", file.size, "bytes");
-                  const metadata = await dhtService.publishFileToNetwork(tempFilePath, filePrice);
-                  console.log("📦 Received metadata from backend:", metadata);
-
-                  if (get(files).some((f) => f.hash === metadata.merkleRoot)) {
-                    duplicateCount++;
-                    continue;
-                  }
-
-                  const newFile = {
-                    id: `file-${Date.now()}-${Math.random()}`,
-                    name: metadata.fileName,
-                    path: file.name,
-                    hash: metadata.merkleRoot || "",
-                    size: metadata.fileSize,
-                    status: "seeding" as const,
-                    seeders: metadata.seeders?.length ?? 0,
-                    seederAddresses: metadata.seeders ?? [],
-                    leechers: 0,
-                    uploadDate: new Date(metadata.createdAt),
-                    price: filePrice,
-                    cids: metadata.cids,
-                  };
-
-                  files.update((currentFiles) => [...currentFiles, newFile]);
-                  addedCount++;
-                  showToast(`${file.name} uploaded successfully`, "success");
-                } catch (error) {
-                  console.error("Error uploading dropped file:", file.name, error);
-                  showToast(
-                    tr("upload.fileFailed", {
-                      values: { name: file.name, error: String(error) },
-                    }),
-                    "error",
-                  );
-                }
-              }
-            } else {
-              // WebRTC protocol - process files sequentially
-              for (const file of droppedFiles) {
+            // Process files sequentially (unified flow for all protocols)
+            for (const file of droppedFiles) {
               const blockedExtensions = [
                 ".exe",
                 ".bat",
@@ -519,21 +440,6 @@
               }
 
               try {
-                let existingVersions: any[] = [];
-                try {
-                  existingVersions = (await invoke(
-                    "get_file_versions_by_name",
-                    { fileName: file.name },
-                  )) as any[];
-                } catch (versionError) {
-                  console.log("No existing versions found for", file.name);
-                }
-
-                const recipientKey =
-                  useEncryptedSharing && recipientPublicKey.trim()
-                    ? recipientPublicKey.trim()
-                    : undefined;
-
                 const buffer = await file.arrayBuffer();
                 const fileData = Array.from(new Uint8Array(buffer));
                 const tempFilePath = await invoke<string>(
@@ -545,68 +451,41 @@
                 );
                 const filePrice = await calculateFilePrice(file.size);
 
-                console.log("🔍 Uploading file with calculated price:", filePrice, "for", file.size, "bytes");
+                const metadata = await dhtService.publishFileToNetwork(tempFilePath, filePrice);
 
-                const result = await invoke<{
-                  merkleRoot: string;
-                  fileName: string;
-                  fileSize: number;
-                  isEncrypted: boolean;
-                  peerId: string;
-                  version: number;
-                }>("upload_and_publish_file", {
-                  filePath: tempFilePath,
-                  fileName: file.name,
-                  recipientPublicKey: recipientKey,
-                  price: filePrice
-                });
-
-                console.log("📦 Received metadata from backend:", result);
-
-                if (get(files).some((f) => f.hash === result.merkleRoot)) {
+                if (get(files).some((f) => f.hash === metadata.merkleRoot)) {
                   duplicateCount++;
                   continue;
                 }
 
-                const isNewVersion = existingVersions.length > 0;
-                const isDhtRunning = await isDhtConnected();
-
                 const newFile = {
                   id: `file-${Date.now()}-${Math.random()}`,
-                  name: file.name,
+                  name: metadata.fileName,
                   path: file.name,
-                  hash: result.merkleRoot,
-                  size: result.fileSize,
-                  status: isDhtRunning
-                    ? ("seeding" as const)
-                    : ("uploaded" as const),
-                  seeders: isDhtRunning ? 1 : 0,
+                  hash: metadata.merkleRoot || "",
+                  size: metadata.fileSize,
+                  status: "seeding" as const,
+                  seeders: metadata.seeders?.length ?? 0,
+                  seederAddresses: metadata.seeders ?? [],
                   leechers: 0,
-                  uploadDate: new Date(),
-                  isNewVersion: isNewVersion,
-                  isEncrypted: result.isEncrypted,
+                  uploadDate: new Date(metadata.createdAt),
                   price: filePrice,
+                  cids: metadata.cids,
                 };
 
                 files.update((currentFiles) => [...currentFiles, newFile]);
                 addedCount++;
                 showToast(`${file.name} uploaded successfully`, "success");
               } catch (error) {
-                console.error(
-                  "Error uploading dropped file:",
-                  file.name,
-                  error,
-                );
-                const fileName = file.name || "unknown file";
+                console.error("Error uploading dropped file:", file.name, error);
                 showToast(
                   tr("upload.fileFailed", {
-                    values: { name: fileName, error: String(error) },
+                    values: { name: file.name, error: String(error) },
                   }),
                   "error",
                 );
               }
             }
-            } // End of WebRTC protocol block
 
             if (duplicateCount > 0) {
               showToast(
@@ -776,186 +655,101 @@
     let duplicateCount = 0;
     let addedCount = 0;
 
-    if (selectedProtocol === "Bitswap") {
-      for (const filePath of paths) {
-        try {
-          const fileName = filePath.replace(/^.*[\\/]/, "") || "";
+    // Unified upload flow for all protocols
+    for (const filePath of paths) {
+      try {
+        const fileName = filePath.replace(/^.*[\\/]/, "") || "";
 
-          // Get file size to calculate price
-          const fileSize = await invoke<number>('get_file_size', { filePath });
-          const price = await calculateFilePrice(fileSize);
+        // Get file size to calculate price
+        const fileSize = await invoke<number>('get_file_size', { filePath });
+        const price = await calculateFilePrice(fileSize);
 
-          console.log("🔍 Uploading file with calculated price:", price, "for", fileSize, "bytes");
-          const metadata = await dhtService.publishFileToNetwork(filePath, price);
-          console.log("📦 Received metadata from backend:", metadata);
+        const metadata = await dhtService.publishFileToNetwork(filePath, price);
 
-          const newFile = {
-            id: `file-${Date.now()}-${Math.random()}`,
-            name: metadata.fileName,
-            path: filePath,
-            hash: metadata.merkleRoot || "",
-            size: metadata.fileSize,
-            status: "seeding" as const,
-            seeders: metadata.seeders?.length ?? 0,
-            seederAddresses: metadata.seeders ?? [],
-            leechers: 0,
-            uploadDate: new Date(metadata.createdAt),
-            price: price,
-            cids: metadata.cids, // Store CID information
-          };
+        const newFile = {
+          id: `file-${Date.now()}-${Math.random()}`,
+          name: metadata.fileName,
+          path: filePath,
+          hash: metadata.merkleRoot || "",
+          size: metadata.fileSize,
+          status: "seeding" as const,
+          seeders: metadata.seeders?.length ?? 0,
+          seederAddresses: metadata.seeders ?? [],
+          leechers: 0,
+          uploadDate: new Date(metadata.createdAt),
+          price: price,
+          cids: metadata.cids,
+        };
 
-          let existed = false;
-          files.update((f) => {
-            const matchIndex = f.findIndex(
-              (item) =>
-                (metadata.merkleRoot && item.hash === metadata.merkleRoot) ||
-                (item.name === metadata.fileName &&
-                  item.size === metadata.fileSize),
-            );
+        let existed = false;
+        files.update((f) => {
+          const matchIndex = f.findIndex(
+            (item) =>
+              (metadata.merkleRoot && item.hash === metadata.merkleRoot) ||
+              (item.name === metadata.fileName &&
+                item.size === metadata.fileSize),
+          );
 
-            if (matchIndex !== -1) {
-              const existing = f[matchIndex];
-              const updated = {
-                ...existing,
-                name: metadata.fileName || existing.name,
-                hash: metadata.merkleRoot || existing.hash,
-                size: metadata.fileSize ?? existing.size,
-                seeders: metadata.seeders?.length ?? existing.seeders,
-                seederAddresses: metadata.seeders ?? existing.seederAddresses,
-                uploadDate: new Date(
-                  (metadata.createdAt ??
-                    existing.uploadDate?.getTime() ??
-                    Date.now()) * 1000,
-                ),
-                status: "seeding" as const,
-                price: price,
-              };
-              f = f.slice();
-              f[matchIndex] = updated;
-              existed = true;
-            } else {
-              f = [...f, newFile];
-            }
-
-            return f;
-          });
-
-          if (existed) {
-            duplicateCount++;
-            showToast(
-              tr("upload.fileUpdated", { values: { name: fileName } }),
-              "info",
-            );
+          if (matchIndex !== -1) {
+            const existing = f[matchIndex];
+            const updated = {
+              ...existing,
+              name: metadata.fileName || existing.name,
+              hash: metadata.merkleRoot || existing.hash,
+              size: metadata.fileSize ?? existing.size,
+              seeders: metadata.seeders?.length ?? existing.seeders,
+              seederAddresses: metadata.seeders ?? existing.seederAddresses,
+              uploadDate: new Date(
+                (metadata.createdAt ??
+                  existing.uploadDate?.getTime() ??
+                  Date.now()) * 1000,
+              ),
+              status: "seeding" as const,
+              price: price,
+            };
+            f = f.slice();
+            f[matchIndex] = updated;
+            existed = true;
           } else {
-            addedCount++;
-            showToast(`${fileName} uploaded successfully`, "success");
-          }
-        } catch (error) {
-          console.error(error);
-          showToast(
-            tr("upload.fileFailed", {
-              values: {
-                name: filePath.replace(/^.*[\\/]/, ""),
-                error: String(error),
-              },
-            }),
-            "error",
-          );
-        }
-      }
-    } else {
-      const filePromises = paths.map(async (filePath) => {
-        try {
-          const fileName = filePath.replace(/^.*[\\/]/, "") || "";
-          const recipientKey =
-            useEncryptedSharing && recipientPublicKey.trim()
-              ? recipientPublicKey.trim()
-              : undefined;
-
-          // Get file size to calculate price
-          const fileSize = await invoke<number>('get_file_size', { filePath });
-          const price = await calculateFilePrice(fileSize);
-
-          console.log("🔍 Uploading file with calculated price:", price, "for", fileSize, "bytes");
-
-          const result = await invoke<{
-            merkleRoot: string;
-            fileName: string;
-            fileSize: number;
-            isEncrypted: boolean;
-            peerId: string;
-            version: number;
-          }>("upload_and_publish_file", {
-            filePath,
-            fileName: null,
-            recipientPublicKey: recipientKey,
-            price: price
-          });
-
-          console.log("📦 Received metadata from backend:", result);
-
-          if (get(files).some((f: FileItem) => f.hash === result.merkleRoot)) {
-            return { type: "duplicate", fileName };
+            f = [...f, newFile];
           }
 
-          const isDhtRunning = await isDhtConnected();
-          const localSeeder =
-            result.peerId || dhtService.getPeerId() || undefined;
-          const seederAddresses =
-            isDhtRunning && localSeeder ? [localSeeder] : [];
+          return f;
+        });
 
-          const newFile: FileItem = {
-            id: `file-${Date.now()}-${Math.random()}`,
-            name: result.fileName,
-            path: filePath,
-            hash: result.merkleRoot,
-            size: result.fileSize,
-            status: isDhtRunning ? "seeding" : "uploaded",
-            seeders: seederAddresses.length,
-            seederAddresses,
-            leechers: 0,
-            uploadDate: new Date(),
-            isEncrypted: result.isEncrypted,
-            price: price,
-          };
-
-          files.update((f) => [...f, newFile]);
-
-          showToast(`${result.fileName} uploaded successfully`, "success");
-          return { type: "success", fileName };
-        } catch (error) {
-          console.error(error);
-          const fileName = filePath.replace(/^.*[\\/]/, "") || "unknown file";
-          showToast(
-            tr("upload.fileFailed", {
-              values: { name: fileName, error: String(error) },
-            }),
-            "error",
-          );
-          return { type: "error", fileName: fileName, error };
-        }
-      });
-
-      const results = await Promise.all(filePromises);
-
-      results.forEach((result) => {
-        if (result.type === "duplicate") {
+        if (existed) {
           duplicateCount++;
-        } else if (result.type === "success") {
+          showToast(
+            tr("upload.fileUpdated", { values: { name: fileName } }),
+            "info",
+          );
+        } else {
           addedCount++;
+          showToast(`${fileName} uploaded successfully`, "success");
         }
-      });
-
-      if (duplicateCount > 0) {
+      } catch (error) {
+        console.error(error);
         showToast(
-          tr("upload.duplicateSkipped", { values: { count: duplicateCount } }),
-          "warning",
+          tr("upload.fileFailed", {
+            values: {
+              name: filePath.replace(/^.*[\\/]/, ""),
+              error: String(error),
+            },
+          }),
+          "error",
         );
       }
+    }
 
-      if (addedCount > 0) {
-        setTimeout(() => refreshAvailableStorage(), 100);
-      }
+    if (duplicateCount > 0) {
+      showToast(
+        tr("upload.duplicateSkipped", { values: { count: duplicateCount } }),
+        "warning",
+      );
+    }
+
+    if (addedCount > 0) {
+      setTimeout(() => refreshAvailableStorage(), 100);
     }
   }
 
