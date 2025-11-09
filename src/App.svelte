@@ -1,24 +1,37 @@
 <script lang="ts">
     import './styles/globals.css'
-    import { Upload, Download, Shield, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X } from 'lucide-svelte'
+    import { Upload, Download, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Server } from 'lucide-svelte'
     import UploadPage from './pages/Upload.svelte'
     import DownloadPage from './pages/Download.svelte'
-    import ProxyPage from './pages/Proxy.svelte'
+    // import ProxyPage from './pages/Proxy.svelte' // DISABLED
     import AccountPage from './pages/Account.svelte'
     import NetworkPage from './pages/Network.svelte'
     import AnalyticsPage from './pages/Analytics.svelte'
+    // import TorrentDownloadPage from './pages/TorrentDownload.svelte' // INTEGRATED INTO DOWNLOAD/UPLOAD PAGES
     import SettingsPage from './pages/Settings.svelte'
     import MiningPage from './pages/Mining.svelte'
+    import ReputationPage from './pages/Reputation.svelte'
+    import RelayPage from './pages/Relay.svelte'
     import NotFound from './pages/NotFound.svelte'
-    import { networkStatus } from './lib/stores'
+    // import ProxySelfTest from './routes/proxy-self-test.svelte' // DISABLED
+import { networkStatus, settings, userLocation, wallet, activeBandwidthLimits, etcAccount } from './lib/stores'
+import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
     import {onMount, setContext} from 'svelte';
     import { tick } from 'svelte';
+    import { get } from 'svelte/store';
     import { setupI18n } from './i18n/i18n';
     import { t } from 'svelte-i18n';
     import SimpleToast from './lib/components/SimpleToast.svelte';
+    import FirstRunWizard from './lib/components/wallet/FirstRunWizard.svelte';
     import { startNetworkMonitoring } from './lib/services/networkService';
     import { fileService } from '$lib/services/fileService';
+    import { bandwidthScheduler } from '$lib/services/bandwidthScheduler';
+    import { detectUserRegion } from '$lib/services/geolocation';
+    import { paymentService } from '$lib/services/paymentService';
+import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
+import { exit } from '@tauri-apps/plugin-process';
     // gets path name not entire url:
     // ex: http://locatlhost:1420/download -> /download
     
@@ -34,21 +47,214 @@
       currentPage = getPathName(window.location.pathname);
     }
     
-    let currentPage = getPathName(window.location.pathname);
-    let loading = true;
-    
-    onMount(() => {
-      let stopNetworkMonitoring: () => void = () => {};
+let currentPage = getPathName(window.location.pathname);
+let loading = true;
+let schedulerRunning = false;
+let unsubscribeScheduler: (() => void) | null = null;
+let unsubscribeBandwidth: (() => void) | null = null;
+let lastAppliedBandwidthSignature: string | null = null;
+let showFirstRunWizard = false;
 
-      (async () => {
+const syncBandwidthScheduler = (config: AppSettings) => {
+  const enabledSchedules = config.bandwidthSchedules?.filter(
+    (entry) => entry.enabled
+  ) ?? [];
+  const shouldRun = config.enableBandwidthScheduling && enabledSchedules.length > 0;
+
+  if (shouldRun) {
+    if (!schedulerRunning) {
+      bandwidthScheduler.start();
+      schedulerRunning = true;
+    }
+    bandwidthScheduler.forceUpdate();
+    return;
+  }
+
+  if (schedulerRunning) {
+    bandwidthScheduler.stop();
+    schedulerRunning = false;
+  } else {
+    // Ensure limits reflect the defaults when scheduler is idle.
+    bandwidthScheduler.forceUpdate();
+  }
+};
+
+const pushBandwidthLimits = (limits: ActiveBandwidthLimits) => {
+  const uploadKbps = Math.max(0, Math.floor(limits.uploadLimitKbps || 0));
+  const downloadKbps = Math.max(0, Math.floor(limits.downloadLimitKbps || 0));
+  const signature = `${uploadKbps}:${downloadKbps}`;
+
+  if (signature === lastAppliedBandwidthSignature) {
+    return;
+  }
+
+  lastAppliedBandwidthSignature = signature;
+
+  if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) {
+    return;
+  }
+
+  invoke("set_bandwidth_limits", {
+    uploadKbps,
+    downloadKbps,
+  }).catch((error) => {
+    console.error("Failed to apply bandwidth limits:", error);
+  });
+};
+
+// First-run wizard handlers
+function handleFirstRunComplete() {
+  showFirstRunWizard = false;
+}
+
+function handleFirstRunSkip() {
+  showFirstRunWizard = false;
+}
+
+  onMount(() => {
+    let stopNetworkMonitoring: () => void = () => {};
+    let unlistenSeederPayment: (() => void) | null = null;
+
+    unsubscribeScheduler = settings.subscribe(syncBandwidthScheduler);
+    syncBandwidthScheduler(get(settings));
+    unsubscribeBandwidth = activeBandwidthLimits.subscribe(pushBandwidthLimits);
+    pushBandwidthLimits(get(activeBandwidthLimits));
+
+    (async () => {
+        // Initialize payment service to load wallet and transactions
+        paymentService.initialize();
+
+        // Listen for payment notifications from backend
+        if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+          try {
+            const unlisten = await listen('seeder_payment_received', async (event: any) => {
+              const payload = event.payload;
+              console.log('💰 Seeder payment notification received:', payload);
+
+              // Only credit the payment if we are the seeder (not the downloader)
+              const currentWalletAddress = get(wallet).address;
+              const seederAddress = payload.seeder_wallet_address;
+
+              if (!seederAddress || !currentWalletAddress) {
+                console.warn('⚠️ Missing wallet addresses, skipping payment credit');
+                return;
+              }
+
+              // Check if this payment is meant for us (we are the seeder)
+              if (currentWalletAddress.toLowerCase() !== seederAddress.toLowerCase()) {
+                console.log(`⏭️ Skipping payment credit - not for us. Seeder: ${seederAddress}, Us: ${currentWalletAddress}`);
+                return;
+              }
+
+              console.log('✅ This payment is for us! Crediting...');
+
+              // Credit the seeder's wallet
+              const result = await paymentService.creditSeederPayment(
+                payload.file_hash,
+                payload.file_name,
+                payload.file_size,
+                payload.downloader_address,
+                payload.transaction_hash
+              );
+
+              if (result.success) {
+                console.log('✅ Seeder payment credited successfully');
+              } else {
+                console.error('❌ Failed to credit seeder payment:', result.error);
+              }
+            });
+            unlistenSeederPayment = unlisten;
+          } catch (error) {
+            console.error('Failed to setup payment listener:', error);
+          }
+        }
+
         // setup i18n
         await setupI18n();
         loading = false;
 
-        // Initialize backend services (File Transfer, DHT)
+        // Check for first-run and show wizard if no account exists
         try {
-          await fileService.initializeServices();
-          console.log('Backend services (File Transfer, DHT) initialized successfully.');
+          const firstRunCompleted = localStorage.getItem('chiral_first_run_complete');
+          const hasAccount = get(etcAccount) !== null;
+
+          // Check if there are any keystore files (Tauri only)
+          let hasKeystoreFiles = false;
+          if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+            try {
+              const keystoreFiles = await invoke<string[]>('list_keystore_accounts');
+              hasKeystoreFiles = keystoreFiles && keystoreFiles.length > 0;
+            } catch (error) {
+              console.warn('Failed to check keystore files:', error);
+            }
+          }
+
+          // Show wizard if:
+          // - First run not completed AND
+          // - No active account AND
+          // - No keystore files exist
+          if (!firstRunCompleted && !hasAccount && !hasKeystoreFiles) {
+            showFirstRunWizard = true;
+          }
+        } catch (error) {
+          console.warn('Failed to check first-run status:', error);
+        }
+
+        let storedLocation: string | null = null;
+        try {
+          const storedSettings = localStorage.getItem('chiralSettings');
+          if (storedSettings) {
+            const parsed = JSON.parse(storedSettings);
+            if (typeof parsed?.userLocation === 'string' && parsed.userLocation) {
+              storedLocation = parsed.userLocation;
+              userLocation.set(parsed.userLocation);
+            }
+          }
+        } catch (error) {
+          console.warn('Failed to load stored user location:', error);
+        }
+        try {
+          const currentLocation = get(userLocation);
+          const shouldAutoDetect = !storedLocation || currentLocation === 'US-East';
+
+          if (shouldAutoDetect) {
+            const detection = await detectUserRegion();
+            const detectedLocation = detection.region.label;
+            if (detectedLocation && detectedLocation !== currentLocation) {
+              userLocation.set(detectedLocation);
+              settings.update((previous) => {
+                const next = { ...previous, userLocation: detectedLocation };
+                try {
+                  const storedSettings = localStorage.getItem('chiralSettings');
+                  if (storedSettings) {
+                    const parsed = JSON.parse(storedSettings) ?? {};
+                    parsed.userLocation = detectedLocation;
+                    localStorage.setItem ('chiralSettings', JSON.stringify(parsed));
+                  } else {
+                    localStorage.setItem('chiralSettings', JSON.stringify(next));
+                  }
+                } catch (storageError) {
+                  console.warn('Failed to persist detected location:', storageError);
+                }
+                console.log('User region detected via ${detection.source}: ${detectedLocation}');
+                return next;
+              });
+            }
+          }
+        } catch (error) {
+          console.warn('Automatic location detection failed:', error);
+        }
+        // Initialize backend services (File Transfer, DHT - conditionally)
+        try {
+          const currentSettings = get(settings);
+          if (currentSettings.autoStartDHT) {
+            await fileService.initializeServices();
+            console.log('Backend services (File Transfer, DHT) initialized successfully.');
+          } else {
+            // Only start file transfer service, not DHT
+            await invoke("start_file_transfer_service");
+            console.log('File transfer service initialized (DHT auto-start disabled).');
+          }
         } catch (error) {
           console.error('Failed to initialize backend services:', error);
         }
@@ -64,10 +270,93 @@
       const onPop = () => syncFromUrl();
       window.addEventListener('popstate', onPop);
 
+      // Warn before closing if there are unsaved mining rewards
+      const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+        const hasUnsavedMiningRewards = localStorage.getItem('chiral_temp_account_mining') === 'true';
+        const currentAccount = get(etcAccount);
+        const hasAccount = currentAccount !== null;
+
+        // Only warn if:
+        // 1. There's a temporary account that was used for mining
+        // 2. The account still exists (not saved to keystore)
+        // 3. First-run was skipped (indicating temporary usage)
+        const firstRunSkipped = localStorage.getItem('chiral_first_run_skipped') === 'true';
+
+        if (hasUnsavedMiningRewards && hasAccount && firstRunSkipped) {
+          event.preventDefault();
+          event.returnValue = ''; // Required for Chrome
+        }
+      };
+      window.addEventListener('beforeunload', handleBeforeUnload);
+
+      // keyboard shortcuts
+      const handleKeyDown = (event: KeyboardEvent) => {
+        // Ctrl/Cmd + Q - Quit application
+        if ((event.ctrlKey || event.metaKey) && event.key === 'q') {
+          event.preventDefault();
+          exit(0);
+          return;
+        }
+
+        // Ctrl/Cmd + , - Open Settings
+        if ((event.ctrlKey || event.metaKey) && event.key === ',') {
+          event.preventDefault();
+          currentPage = 'settings';
+          goto('/settings');
+          return;
+        }
+
+        // Ctrl/Cmd + R - Refresh current page
+        if ((event.ctrlKey || event.metaKey) && event.key === 'r') {
+          event.preventDefault();
+          window.location.reload();
+          return;
+        }
+
+        // F5 - Reload application
+        if (event.key === 'F5') {
+          event.preventDefault();
+          window.location.reload();
+          return;
+        }
+
+        // F11 - Toggle fullscreen (desktop)
+        if (event.key === 'F11') {
+          event.preventDefault();
+          if (document.fullscreenElement) {
+            document.exitFullscreen();
+          } else {
+            document.documentElement.requestFullscreen();
+          }
+          return;
+        }
+      };
+
+      window.addEventListener('keydown', handleKeyDown);
+
       // cleanup
       return () => {
         window.removeEventListener('popstate', onPop);
+        window.removeEventListener('keydown', handleKeyDown);
         stopNetworkMonitoring();
+        if (schedulerRunning) {
+          bandwidthScheduler.stop();
+          schedulerRunning = false;
+        } else {
+          bandwidthScheduler.forceUpdate();
+        }
+        if (unlistenSeederPayment) {
+          unlistenSeederPayment();
+        }
+        if (unsubscribeScheduler) {
+          unsubscribeScheduler();
+          unsubscribeScheduler = null;
+        }
+        if (unsubscribeBandwidth) {
+          unsubscribeBandwidth();
+          unsubscribeBandwidth = null;
+        }
+        lastAppliedBandwidthSignature = null;
       };
     })
 
@@ -78,12 +367,12 @@
     });
 
     let sidebarCollapsed = false
-    let mobileMenuOpen = false
+    let sidebarMenuOpen = false
 
     // Scroll to top when page changes
     $: if (currentPage) {
         tick().then(() => {
-            const mainContent = document.querySelector('.flex-1.overflow-auto')
+            const mainContent = document.querySelector('#main-content')
             if (mainContent) {
                 mainContent.scrollTop = 0
             }
@@ -101,12 +390,18 @@
       menuItems = [
         { id: 'download', label: $t('nav.download'), icon: Download },
         { id: 'upload', label: $t('nav.upload'), icon: Upload },
-        { id: 'network', label: $t('nav.network'), icon: Globe },
         { id: 'mining', label: $t('nav.mining'), icon: Cpu },
-        { id: 'proxy', label: $t('nav.proxy'), icon: Shield },
+        { id: 'network', label: $t('nav.network'), icon: Globe },
+        { id: 'relay', label: $t('nav.relay'), icon: Server },
+        // { id: 'proxy', label: $t('nav.proxy'), icon: Shield }, // DISABLED
         { id: 'analytics', label: $t('nav.analytics'), icon: BarChart3 },
+        { id: 'reputation', label: $t('nav.reputation'), icon: Star },
         { id: 'account', label: $t('nav.account'), icon: Wallet },
         { id: 'settings', label: $t('nav.settings'), icon: Settings },
+
+        // DISABLED: Proxy self-test page
+        // ...(import.meta.env.DEV ? [{ id: 'proxy-self-test', label: 'Proxy Self-Test', icon: Shield }] : [])
+
       ]
     }
 
@@ -128,16 +423,25 @@
         component: NetworkPage
       },
       {
+        path: "relay",
+        component: RelayPage
+      },
+      {
         path: "mining",
         component: MiningPage
       },
-      {
-        path: "proxy",
-        component: ProxyPage
-      },
+      // DISABLED: Proxy page
+      // {
+      //   path: "proxy",
+      //   component: ProxyPage
+      // },
       {
         path: "analytics",
         component: AnalyticsPage
+      },
+      {
+        path: "reputation",
+        component: ReputationPage
       },
       {
         path: "account",
@@ -147,16 +451,22 @@
         path: "settings",
         component: SettingsPage
       },
+      // DISABLED: Proxy self-test page
+      // {
+      //   path: "proxy-self-test",
+      //   component: ProxySelfTest
+      // },
     ]
 
     
   </script>
   
-  <div class="flex h-screen bg-background">
+  <div class="flex bg-background h-full">
     {#if !loading}
     <!-- Desktop Sidebar -->
-    <div class="hidden md:block {sidebarCollapsed ? 'w-16' : 'w-64'} bg-card border-r transition-all">
-      <nav class="p-2 space-y-2">
+    <!-- Make the sidebar sticky so it stays visible while the main content scrolls -->
+    <div class="hidden md:block {sidebarCollapsed ? 'w-16' : 'w-64'} bg-card border-r transition-all sticky top-0 h-screen">
+      <nav class="p-2 space-y-2 h-full overflow-y-auto">
         <!-- Sidebar Header (desktop only) -->
         <div class="flex items-center justify-between px-2 py-2 mb-2">
           <div class="flex items-center">
@@ -208,31 +518,31 @@
       </nav>
     </div>
   
-    <!-- Mobile Menu Button -->
+    <!-- Sidebar Menu Button -->
     <div class="absolute top-2 right-2 md:hidden">
       <button
         class="p-2 rounded bg-card shadow"
-        on:click={() => mobileMenuOpen = true}
+        on:click={() => sidebarMenuOpen = true}
       >
         <Menu class="h-6 w-6" />
       </button>
     </div>
   
-<!-- Mobile Menu Overlay -->
-{#if mobileMenuOpen}
+<!-- Sidebar Menu Overlay -->
+{#if sidebarMenuOpen}
   <!-- Backdrop -->
   <div
     class="fixed inset-0 bg-black bg-opacity-50 z-40 md:hidden"
     role="button"
     tabindex="0"
-    aria-label={$t('nav.closeMobileMenu')}
-    on:click={() => mobileMenuOpen = false}
-    on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { mobileMenuOpen = false } }}
+    aria-label={$t('nav.closeSidebarMenu')}
+    on:click={() => sidebarMenuOpen = false}
+    on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { sidebarMenuOpen = false } }}
   ></div>
 
   <!-- Sidebar -->
   <div class="fixed top-0 right-0 h-full w-64 bg-white z-50 flex flex-col md:hidden">
-    <!-- Mobile Header -->
+    <!-- Sidebar Header -->
     <div class="flex justify-between items-center p-4 border-b">
       <!-- Left side -->
       <span class="font-bold text-base">{$t('nav.menu')}</span>
@@ -243,20 +553,20 @@
           <div class="w-2 h-2 rounded-full {$networkStatus === 'connected' ? 'bg-green-500' : 'bg-red-500'}"></div>
           <span class="text-muted-foreground text-sm">{$networkStatus === 'connected' ? $t('nav.connected') : $t('nav.disconnected')}</span>
         </div>
-        <button on:click={() => mobileMenuOpen = false}>
+        <button on:click={() => sidebarMenuOpen = false}>
           <X class="h-6 w-6" />
         </button>
       </div>
     </div>
 
-    <!-- Mobile Nav Items -->
+    <!-- Sidebar Nav Items -->
     <nav class="flex-1 p-4 space-y-2">
       {#each menuItems as item}
         <button
           on:click={() => {
             currentPage = item.id
             goto(`/${item.id}`)
-            mobileMenuOpen = false
+            sidebarMenuOpen = false
           }}
           class="w-full flex items-center rounded px-4 py-3 text-lg hover:bg-gray-100"
           aria-current={currentPage === item.id ? 'page' : undefined}
@@ -270,8 +580,9 @@
 {/if}
 {/if}
 
-    <!-- Main Content -->
-    <div class="flex-1 overflow-auto">
+  <!-- Main Content -->
+  <!-- Ensure main content doesn't go under the sticky sidebar -->
+  <div id="main-content" class="flex-1 overflow-y-auto">
       <div class="p-6">
         <!-- <Router {routes} /> -->
          
@@ -289,6 +600,14 @@
       </div>
     </div>
   </div>
+
+<!-- First Run Wizard -->
+{#if showFirstRunWizard}
+  <FirstRunWizard
+    onComplete={handleFirstRunComplete}
+    onSkip={handleFirstRunSkip}
+  />
+{/if}
+
   <!-- add Toast  -->
 <SimpleToast />
-  

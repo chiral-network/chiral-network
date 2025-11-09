@@ -8,6 +8,11 @@ repository = ""
 edition = "2021"
 default-run = "chiral-network"
 
+[lib]
+name = "chiral_network"
+path = "src/lib.rs"
+crate-type = ["lib"]
+
 [build-dependencies]
 tauri-build = { version = "2.0", features = [] }
 
@@ -20,39 +25,97 @@ tauri-plugin-os = "2.0"
 tauri-plugin-shell = "2.0"
 tauri-plugin-dialog = "2"
 tauri-plugin-store = "2"
-secp256k1 = { version = "0.24", features = ["rand", "serde"] }
-rand = "0.8"
+secp256k1 = { version = "0.24", features = ["serde", "rand-std"] }
+rand = { version = "0.8", features = ["std_rng"] }
+totp-rs = { version = "5.7.0", features = ["otpauth"] }
+ethers = { version = "2.0", features = ["ws", "rustls"] }
 hex = "0.4"
 sha3 = "0.10"
 sha2 = "0.10"
+sha1 = "0.10"
+base64 = "0.21"
 aes-gcm = "0.10"
-x25519-dalek = { version = "2.0", features = ["serde"] }
+x25519-dalek = { version = "2.0", features = ["serde", "static_secrets"] }
 hkdf = "0.12"
-pbkdf2 = "0.12"
+pbkdf2 = { version = "0.12", features = ["simple"] }
 aes = "0.8"
 ctr = "0.9"
 hmac = "0.12"
 directories = "5.0"
 reqwest = { version = "0.11", features = ["json", "blocking", "stream"] }
+url = "2.5"
+urlencoding = "2.1"
+chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1", features = ["full"] }
 flate2 = "1.0"
 tar = "0.4"
 zip = "0.6"
+futures = "0.3"
 futures-util = "0.3"
-systemstat = "0.2.5"
 sysinfo = "0.31"
 sys-locale = "0.3"
-libp2p = { version = "0.54", features = ["kad", "mdns", "noise", "tcp", "yamux", "identify", "gossipsub", "macros", "tokio", "rsa", "request-response"] }
+libp2p = { version = "0.54", features = ["kad", "mdns", "noise", "tcp", "yamux", "identify", "macros", "tokio", "request-response", "relay", "ping", "autonat", "dcutr"] }
+if-addrs = "0.10"
 async-std = { version = "1.12", features = ["attributes"] }
 async-trait = "0.1"
+lazy_static = "1.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4.4", features = ["derive"] }
 fs2 = "0.4"
+glob = "0.3"
+rs_merkle = "1.5.0"
+tokio-util = { version = "0.7", features = ["compat"] }
+tokio-socks = "0.5"
+
+# FTP client for FTP download support (sync API)
+# Using 5.3 for compatibility with connect_secure_implicit() method
+suppaftp = { version = "5.3", features = ["native-tls", "secure", "deprecated"] }
+native-tls = "0.2"
+
+# Bitswap and related dependencies
+beetswap = { git = "https://github.com/totoro-ming-lin/beetswap.git", branch = "new" }
+once_cell = "1.19"
+rlp = "0.5"
+multihash-codetable = { version = "0.1", features = ["blake3", "sha2", "sha3"] }
+cid = { version = "0.11.1", features = ["serde-codec"] }
+blockstore = { version = "0.7.0", features = ["redb"] }
+
+# ed2k protocol support (MD4 hashing for eDonkey2000)
+md4 = "0.10"
+thiserror = "1.0"
+
+# WebRTC dependencies for P2P file transfers
+webrtc = "0.10"
+tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+tauri-plugin-fs = "2"
+ed25519-dalek = { version = "2.0", features = ["rand_core", "serde"] }
+memmap2 = "0.9"
+serde_bytes = "0.11.19"
+anyhow = "1.0.100"
+
+# HTTP server dependencies
+axum = { version = "0.7", features = ["macros"] }
+tower = "0.5"
+tower-http = { version = "0.5", features = ["cors"] }
+
+[dev-dependencies]
+tempfile = "3.8"
+
+[lints.rust]
+unused_variables = "allow"
+dead_code = "allow"
 
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+
+[profile.dev]
+incremental = true
+opt-level = 1
+debug = 1
+overflow-checks = false
 
 [profile.release]
 lto = true

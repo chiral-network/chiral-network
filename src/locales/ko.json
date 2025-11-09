@@ -1,11 +1,28 @@
 {
   "settings.title": "설정",
   "settings.subtitle": "Chiral Network 환경을 구성하세요.",
-
+  "settings.diagnostics.title": "진단",
+  "settings.diagnostics.description": "환경, 저장소, 연결 상태를 점검합니다.",
+  "settings.diagnostics.run": "진단 실행",
+  "settings.diagnostics.running": "실행 중…",
+  "settings.diagnostics.environment": "환경",
+  "settings.diagnostics.i18nStorage": "언어 저장소",
+  "settings.diagnostics.bootstrapNodes": "부트스트랩 노드",
+  "settings.diagnostics.privacyConfig": "프라이버시 라우팅 설정",
+  "settings.diagnostics.privacyNeedsTrusted": "프라이버시 모드가 켜져 있으면 신뢰할 수 있는 프록시를 추가하세요.",
+  "settings.diagnostics.copyReport": "보고서 복사",
+  "settings.diagnostics.copied": "진단 보고서를 복사했습니다",
+  "settings.diagnostics.copyFailed": "복사 실패",
+  "settings.diagnostics.resultsTitle": "결과",
+  "settings.searchPlaceholder": "설정 검색...",
   "badges.unsaved": "저장되지 않은 변경사항",
-
   "storage.title": "스토리지",
   "storage.location": "저장 위치",
+  "privacy.enableProxy": "익명성을 위한 프록시 라우팅 활성화",
+  "privacy.proxyAddress": "프록시 주소",
+  "privacy.proxyHint": "SOCKS5 프록시 주소를 입력하세요 (예: Tor의 경우 127.0.0.1:9050)",
+  "privacy.anonymousMode": "익명 모드 (모든 식별 정보 숨기기)",
+  "privacy.shareAnalytics": "익명 사용 분석 공유",
   "storage.locationPick": "저장 위치 선택",
   "storage.selectLocationTitle": "저장 위치 선택",
   "storage.enterPathPrompt": "저장 경로를 입력하세요",
@@ -13,7 +30,6 @@
   "storage.maxSize": "최대 저장 용량 (GB)",
   "storage.cleanupThreshold": "자동 정리 임계값 (%)",
   "storage.enableCleanup": "저장 공간 부족 시 자동 정리 활성화",
-
   "network": {
     "title": "네트워크 개요",
     "subtitle": "네트워크 상태를 모니터링하고 피어를 찾아보세요",
@@ -22,6 +38,7 @@
       "notInstalled": "설치되지 않음",
       "downloading": "다운로드 중...",
       "starting": "시작 중...",
+      "connecting": "연결 중...",
       "connected": "연결됨",
       "disconnected": "연결 끊김"
     },
@@ -42,6 +59,28 @@
     "copied": "복사됨!",
     "copy": "복사",
     "stopNode": "카이럴 노드 중지",
+    "geth": {
+      "title": "노드 수명 주기",
+      "subtitle": "번들된 Geth 노드의 설치 상태, 실행 여부, 로그를 모니터링합니다.",
+      "refresh": "상태 새로고침",
+      "desktopOnly": "데스크톱 앱에서만 사용할 수 있습니다.",
+      "installed": "실행 파일",
+      "installedYes": "설치됨",
+      "installedNo": "없음",
+      "binaryMissing": "실행 파일 경로를 확인할 수 없습니다",
+      "running": "실행 상태",
+      "runningYes": "실행 중",
+      "runningNo": "중지됨",
+      "versionUnknown": "버전을 확인할 수 없습니다",
+      "dataDir": "데이터 디렉터리",
+      "dataDirMissing": "디렉터리가 없습니다",
+      "logHeading": "최근 로그",
+      "logEmpty": "아직 로그가 없습니다.",
+      "logUnavailable": "로그 파일을 찾을 수 없습니다.",
+      "logTruncated": "마지막 {count}줄을 표시합니다.",
+      "errorGeneric": "Geth 상태를 불러오지 못했습니다.",
+      "lastUpdated": "{time} 업데이트됨"
+    },
     "dht": {
       "title": "DHT 네트워크",
       "notConnected": "DHT가 연결되지 않았습니다",
@@ -56,8 +95,8 @@
       "peers": "연결된 피어",
       "peerId": "피어 ID",
       "bootstrapNode": "부트스트랩 노드",
-      "listenAddresses": "리스닝 주소",
-      "noListenAddresses": "아직 리스닝 주소가 없습니다",
+      "listenAddresses": "멀티주소",
+      "noListenAddresses": "아직 멀티주소가 없습니다",
       "recentEvents": "최근 이벤트",
       "disconnect": "DHT에서 연결 끊기",
       "health": {
@@ -67,6 +106,68 @@
         "failures": "부트스트랩 실패 횟수",
         "never": "없음",
         "none": "기록 없음"
+      },
+      "reachability": {
+        "title": "접근성",
+        "state": {
+          "public": "직접 (공개)",
+          "private": "릴레이 / 비공개",
+          "unknown": "알 수 없음"
+        },
+        "confidence": {
+          "low": "낮은 신뢰도",
+          "medium": "보통 신뢰도",
+          "high": "높은 신뢰도"
+        },
+        "lastProbe": "마지막 검사",
+        "lastChange": "마지막 변경",
+        "lastError": "마지막 검사 오류",
+        "observedAddrs": "관찰된 외부 주소",
+        "observedEmpty": "아직 외부 주소가 확인되지 않았습니다.",
+        "history": "최근 검사 기록",
+        "historyEmpty": "아직 접근성 검사가 기록되지 않았습니다.",
+        "summary": "요약",
+        "timestamp": "타임스탬프",
+        "stateLabel": "상태",
+        "autonatDisabled": "AutoNAT 검사 비활성화됨",
+        "copySuccess": "관찰된 주소가 복사되었습니다",
+        "copyError": "주소를 복사할 수 없습니다",
+        "genericSummary": "추가 세부 정보가 없습니다.",
+        "toast": {
+          "public": "접근성이 복원되었습니다. {summary}",
+          "private": "접근성이 저하되었습니다. {summary}",
+          "unknown": "접근성 상태가 업데이트되었습니다. {summary}"
+        }
+      },
+      "dcutr": {
+        "title": "DCUtR 홀 펀칭",
+        "enabled": "DCUtR 활성화됨",
+        "disabled": "DCUtR 비활성화됨",
+        "attempts": "홀 펀치 시도",
+        "successes": "성공",
+        "failures": "실패",
+        "successRate": "성공률",
+        "lastSuccess": "마지막 성공",
+        "lastFailure": "마지막 실패",
+        "never": "없음",
+        "description": "릴레이를 통한 직접 연결 업그레이드(DCUtR)는 NAT 홀 펀칭을 활성화하여 직접 피어 연결을 설정합니다."
+      },
+      "relay": {
+        "title": "릴레이 상태",
+        "enabled": "자동 릴레이 활성화됨",
+        "disabled": "자동 릴레이 비활성화됨",
+        "noPeer": "릴레이에 연결되지 않음",
+        "activePeer": "활성 릴레이",
+        "status": "상태",
+        "lastSuccess": "마지막 예약 성공",
+        "lastFailure": "마지막 예약 실패",
+        "renewals": "예약 갱신",
+        "evictions": "예약 제거",
+        "never": "없음",
+        "noEvictions": "제거 없음",
+        "accepted": "예약 수락됨",
+        "pending": "대기 중",
+        "failed": "실패"
       }
     },
     "networkStatus": "네트워크 상태",
@@ -79,7 +180,11 @@
       "run": "검색 실행",
       "directConnect": "직접 연결",
       "placeholder": "피어 주소 입력 (IP:Port 또는 피어 ID)",
-      "connect": "연결"
+      "connect": "연결",
+      "foundPeers": "발견된 피어: {count}",
+      "discoveryStarted": "검색이 시작되었습니다. 발견된 피어: {count}",
+      "peerAddedToInput": "피어가 입력창에 추가되었습니다",
+      "add": "추가"
     },
     "connectedPeers": {
       "title": "연결된 피어 ({count})",
@@ -112,10 +217,38 @@
       "unknown": "알 수 없음",
       "joined": "참여",
       "now": "현재",
-      "noPeers": "연결된 피어가 없습니다. 피어를 찾으려면 검색을 실행하세요."
+      "noPeers": "연결된 피어가 없습니다. 피어를 찾으려면 검색을 실행하세요.",
+      "disconnect": "연결 해제",
+      "disconnected": "피어와의 연결이 성공적으로 해제되었습니다",
+      "disconnectError": "피어 연결 해제 실패"
+    },
+    "smartPeerSelection": "스마트 피어 선택",
+    "peerSearch": "피어 검색",
+    "sendTest": "테스트 전송",
+    "peerMetrics": {
+      "refresh": "새로고침",
+      "refreshing": "새로고침 중...",
+      "cleanupInactive": "비활성 정리",
+      "error": "오류",
+      "loading": "피어 메트릭 로딩 중...",
+      "noPeers": "사용 가능한 피어 메트릭이 없습니다. DHT 서비스를 시작하고 피어에 연결하세요.",
+      "totalPeers": "전체 피어",
+      "encryptionCapable": "암호화 지원",
+      "avgReliability": "평균 신뢰도",
+      "peerId": "피어 ID",
+      "address": "주소",
+      "latency": "지연 시간",
+      "bandwidth": "대역폭",
+      "reliability": "신뢰도",
+      "successRate": "성공률",
+      "transfers": "전송",
+      "dataTransfer": "데이터 전송",
+      "encryption": "암호화",
+      "health": "상태"
     },
     "errors": {
-      "downloadOnlyTauri": "카이럴 노드 다운로드는 데스크톱 앱에서만 사용할 수 있습니다. Tauri 데스크톱 버전을 다운로드하여 실행하세요."
+      "downloadOnlyTauri": "카이럴 노드 다운로드는 데스크톱 앱에서만 사용할 수 있습니다. Tauri 데스크톱 버전을 다운로드하여 실행하세요.",
+      "dhtNotConnected": "DHT가 연결되지 않았습니다. 먼저 DHT 서비스를 시작하세요."
     },
     "maxConnections": "최대 연결 수",
     "port": "포트",
@@ -125,50 +258,86 @@
     "locationHint": "더 나은 성능을 위해 가까운 피어에 연결하는 데 도움이 됩니다.",
     "enableUpnp": "UPnP 활성화",
     "enableNat": "NAT 포트 매핑 활성화",
-    "enableDht": "DHT 활성화"
+    "enableDht": "DHT 활성화",
+    "geoDistribution": {
+      "title": "지리 분포",
+      "subtitle": "{peers}개의 피어 위치를 추적 중",
+      "topRegion": "최다 지역: {region}",
+      "noData": "위치 데이터 대기 중",
+      "tooltip": "{region}: {count}개 피어",
+      "peersShort": "{count}개 피어",
+      "emptyState": "DHT에 연결해 피어 위치를 확인하세요.",
+      "unknownNotice": "{count}개의 피어가 아직 위치를 제공하지 않았습니다."
+    },
+    "quickActions": {
+      "title": "빠른 작업",
+      "badge": "네트워크 도구",
+      "discoverPeers": {
+        "tooltip": "네트워크에서 새로운 피어 찾기",
+        "discovering": "검색 중...",
+        "button": "피어 검색"
+      },
+      "addPeer": {
+        "placeholder": "피어 주소",
+        "tooltip": "주소로 피어 추가",
+        "success": "피어가 추가되었습니다!"
+      },
+      "copyPeerId": {
+        "tooltip": "내 피어 ID 복사",
+        "tooltipUnavailable": "피어 ID를 사용할 수 없음",
+        "button": "피어 ID 복사",
+        "success": "피어 ID가 복사되었습니다!"
+      },
+      "refreshStatus": {
+        "tooltip": "노드 및 네트워크 상태 새로고침",
+        "button": "상태 새로고침",
+        "success": "네트워크 상태가 새로고침되었습니다"
+      },
+      "restartNode": {
+        "tooltip": "로컬 노드 재시작",
+        "button": "노드 재시작",
+        "success": "노드가 재시작되었습니다",
+        "notRunning": "재시작할 수 없음: 노드가 실행 중이 아닙니다"
+      }
+    }
   },
-
   "regions.usEast": "미국 동부",
   "regions.usWest": "미국 서부",
   "regions.euWest": "유럽 서부",
   "regions.apac": "아시아 태평양",
-
   "language.title": "언어",
   "language.select": "언어 선택",
   "language.english": "English",
   "language.spanish": "Español",
   "language.chinese": "中文",
   "language.korean": "한국어",
-
+  "language.russian": "Русский",
   "nav": {
     "expandSidebar": "사이드바 확장",
     "collapseSidebar": "사이드바 축소",
     "menu": "메뉴",
     "download": "다운로드",
     "upload": "업로드",
+    "torrents": "토렌트",
     "network": "네트워크",
+    "relay": "릴레이",
     "mining": "채굴",
     "proxy": "프록시",
+    "proxySelfTest": "Proxy Self-Test",
     "analytics": "분석",
+    "reputation": "평판",
     "account": "계정",
     "settings": "설정",
-    "closeMobileMenu": "모바일 메뉴 닫기",
+    "closeSidebarMenu": "사이드바 메뉴 닫기",
     "connected": "연결됨",
     "disconnected": "연결 끊김"
   },
-
   "privacy.title": "프라이버시 & 보안",
-  "privacy.enableProxy": "익명성을 위한 프록시 라우팅 사용",
-  "privacy.enableEncryption": "종단간 암호화 사용",
-  "privacy.anonymousMode": "익명 모드(식별 정보 숨김)",
-  "privacy.shareAnalytics": "익명 사용 분석 공유",
-
   "notifications.title": "알림",
   "notifications.enable": "데스크톱 알림 사용",
   "notifications.notifyComplete": "다운로드 완료 시 알림",
   "notifications.notifyError": "오류 발생 시 알림",
   "notifications.soundAlerts": "사운드 알림",
-
   "advanced.title": "고급",
   "advanced.chunkSize": "청크 크기 (KB)",
   "advanced.cacheSize": "캐시 크기 (MB)",
@@ -182,29 +351,53 @@
   "advanced.exportSettings": "설정 내보내기",
   "advanced.importSettings": "설정 가져오기",
   "advanced.invalidJsonAlert": "잘못된 JSON 파일입니다. 올바른 내보내기 파일을 선택하세요.",
-
+  "advanced.exportSuccess": "설정이 브라우저의 다운로드 폴더로 내보내졌습니다.",
+  "advanced.importSuccess": "설정을 성공적으로 가져왔습니다.",
+  "advanced.importError": "잘못된 JSON 파일입니다. 올바른 내보내기 파일을 선택하세요.",
+  "bandwidthScheduling": {
+    "title": "대역폭 스케줄링",
+    "enable": "대역폭 스케줄링 활성화",
+    "description": "특정 시간과 요일에 대해 다른 대역폭 제한을 예약합니다",
+    "schedules": "예약된 일정",
+    "scheduleName": "일정 이름",
+    "scheduleDefault": "일정 {number}",
+    "addSchedule": "일정 추가",
+    "remove": "제거",
+    "startTime": "시작 시간",
+    "endTime": "종료 시간",
+    "uploadSpeed": "업로드 속도",
+    "downloadSpeed": "다운로드 속도",
+    "uploadLimit": "업로드 제한 (KB/s, 0 = 무제한)",
+    "downloadLimit": "다운로드 제한 (KB/s, 0 = 무제한)",
+    "timeRange": "시간 범위",
+    "daysOfWeek": "요일",
+    "days": {
+      "sun": "일",
+      "mon": "월",
+      "tue": "화",
+      "wed": "수",
+      "thu": "목",
+      "fri": "금",
+      "sat": "토"
+    }
+  },
   "actions.resetDefaults": "기본값으로 재설정",
   "actions.cancel": "취소",
   "actions.save": "설정 저장",
   "actions.confirm": "재설정 확인",
-
   "confirm.title": "확실합니까?",
   "confirm.resetBody": "모든 설정이 기본값으로 초기화됩니다. 이 작업은 즉시 저장됩니다.",
-
   "validation.min": "{label} 값은 {min} 이상이어야 합니다.",
   "validation.between": "{label} 값은 {min} ~ {max} 범위여야 합니다.",
-
   "button": {
     "clearCache": "캐시 비우기",
     "clearing": "삭제 중...",
     "cleared": "✓ 삭제 완료!"
   },
-
   "account": {
     "title": "계정",
     "subtitle": "지갑과 계정 설정을 관리하세요"
   },
-
   "wallet": {
     "title": "카이럴 네트워크 지갑",
     "balance": "잔액",
@@ -221,9 +414,13 @@
       "intro": "새 계정을 만들거나 기존 계정을 가져와 카이럴 네트워크를 시작하세요:",
       "or": "또는"
     },
-    "privateKey": "개인 키"
+    "privateKey": "개인 키",
+    "hd": {
+      "create_via_phrase": "복구 구문으로 생성",
+      "import_phrase": "복구 구문 가져오기",
+      "load_from_wallet": "지갑에서 불러오기"
+    }
   },
-
   "transfer": {
     "title": "카이럴 코인 보내기",
     "recipient": {
@@ -252,7 +449,6 @@
       "none": "보류 중 트랜잭션"
     }
   },
-
   "transactions": {
     "title": "트랜잭션 내역",
     "manual": "수동 트랜잭션",
@@ -263,16 +459,15 @@
     "item": {
       "from": "보낸 사람",
       "to": "받는 사람"
-    }
+    },
+    "searchPlaceholder": "주소, 설명 또는 ID로 검색..."
   },
-
   "fees": {
     "low": "낮음",
     "market": "보통",
     "fast": "빠름",
     "estimated": "예상 수수료"
   },
-
   "keystore": {
     "title": "로컬 키스토어에 저장",
     "desc": "이 컴퓨터에 비밀번호로 암호화하여 안전하게 저장합니다.",
@@ -285,10 +480,16 @@
       "empty": "키스토어에서 계정을 찾을 수 없습니다.",
       "success": "계정을 성공적으로 불러왔습니다!",
       "successSimulated": "시뮬레이션된 계정 불러오기 성공!",
-      "error": "오류: {error}"
+      "error": "오류: {error}",
+      "savePasswordDisabled": "보안을 위해 '비밀번호 저장' 기능이 현재 비활성화되어 있습니다. 계정을 잠금 해제할 때마다 비밀번호를 입력해주세요.",
+      "savePassword": "이 컴퓨터에 비밀번호 저장 (30일 후 만료)",
+      "savePasswordWarning": "경고: 비밀번호를 로컬에 저장하는 것은 편리하지만 보안에 취약합니다. 주의해서 사용하세요.",
+      "addressMismatch": "복호화 오류: 주소가 일치하지 않습니다."
+    },
+    "password": {
+      "password": "비밀번호"
     }
   },
-
   "blacklist": {
     "title": "블랙리스트 관리",
     "subtitle": "악성/원치 않는 주소를 차단합니다",
@@ -338,7 +539,6 @@
       "parseError": "잘못된 파일 형식 — 올바른 JSON 파일을 선택하세요"
     }
   },
-
   "filters": {
     "type": "유형",
     "typeAll": "전체",
@@ -351,15 +551,10 @@
     "sortOldest": "오래된 → 최신",
     "reset": "초기화"
   },
-
   "actionsGroup": {},
-
   "actionsGroupNote": "Do not remove this key; placeholder to avoid merging issues.",
-
   "actionsObjectNote": "Real actions are under \"actions\" and below \"actions\" object. Above top-level action keys are also kept for backward compatibility.",
-
   "actionsObject": {},
-
   "actions": {
     "createAccount": "새 계정 만들기",
     "creating": "생성 중...",
@@ -379,9 +574,10 @@
     "remove": "삭제",
     "edit": "편집",
     "resetDefaults": "기본값으로 재설정",
-    "lockWallet": "지갑 잠금"
+    "lockWallet": "지갑 잠금",
+    "verifying": "확인 중...",
+    "confirm": "확인"
   },
-
   "placeholders": {
     "importPrivateKey": "가져올 개인 키를 입력",
     "password": "강력한 비밀번호 입력",
@@ -389,40 +585,45 @@
     "searchBlacklist": "블랙리스트 검색…",
     "reason": "사유 입력…"
   },
-
+  "password": {
+    "weak": "약한 비밀번호",
+    "medium": "중간 강도",
+    "strong": "강력한 비밀번호",
+    "requirements": {
+      "length": "최소 8자 이상",
+      "uppercase": "대문자 1개 포함",
+      "lowercase": "소문자 1개 포함",
+      "number": "숫자 1개 포함",
+      "special": "특수문자 1개 포함"
+    }
+  },
   "tooltips": {
     "showQr": "QR 코드 보기",
     "clearSearch": "검색 지우기"
   },
-
   "aria": {
     "copyAddress": "주소 복사",
     "copyPrivateKey": "개인 키 복사",
     "showQr": "QR 코드 보기"
   },
-
   "warnings": {
     "neverSharePrivateKey": "개인 키는 누구와도 공유하지 마세요"
   },
-
   "errors": {
     "address": {
       "mustStartWith0x": "주소는 0x로 시작해야 합니다.",
       "mustBe42": "주소 길이는 정확히 42자여야 합니다.",
-      "mustBeHex": "주소는 16진수 문자(0-9, a-f, A-F)만 포함해야 합니다."
+      "mustBeHex": "주소는 16진수 문자(0-9, a-f, A-F)만 포함해야 합니다.",
+      "blacklisted": "이 주소는 블랙리스트에 등록되어 있어 거래를 받을 수 없습니다"
     },
     "amount": {
       "invalid": "0보다 큰 올바른 금액을 입력하세요.",
       "min": "금액은 최소 {min} Chiral이어야 합니다.",
-      "insufficient": "잔액이 부족합니다 — {more} Chiral이 더 필요합니다."
+      "insufficient": "잔액이 부족합니다 — {more} Chiral이 더 필요합니다.",
+      "insufficientWithFee": "자금이 부족합니다. 총 {total} Chiral (금액 + 수수료)이 잔액 {balance} Chiral을 초과합니다."
     },
     "exportFailed": "내보내기에 실패했습니다. 다시 시도하세요.",
     "createAccount": "계정 생성 실패: {error}"
-  },
-
-  "messages": {
-    "copied": "복사됨!",
-    "failed": "실패!"
   },
   "analytics": {
     "title": "분석 대시보드",
@@ -441,6 +642,9 @@
     "activeUploads": "활성 업로드",
     "activeDownloads": "활성 다운로드",
     "queuedDownloads": "대기 중인 다운로드",
+    "completedUploads": "완료된 업로드",
+    "completedDownloads": "완료된 다운로드",
+    "uniquePeers": "고유 피어",
     "totalTransactions": "총 거래",
     "networkFiles": "네트워크 파일",
     "networkLatency": "네트워크 지연 시간",
@@ -481,7 +685,8 @@
     "multipleLogins": "다중 로그인",
     "multipleLoginsDesc": "5분 이내에 다른 국가에서 로그인했습니다",
     "failedDownloads": "실패한 다운로드",
-    "failedDownloadsDesc": "여러 번의 실패한 다운로드 시도가 감지되었습니다"
+    "failedDownloadsDesc": "여러 번의 실패한 다운로드 시도가 감지되었습니다",
+    "latencyNoNodes": "연결된 프록시 노드가 없습니다. 연결하면 지연 시간 데이터가 여기에 표시됩니다."
   },
   "proxy": {
     "title": "프록시 네트워크",
@@ -489,6 +694,10 @@
     "status": "프록시 상태",
     "active": "활성",
     "inactive": "비활성",
+    "protected": "보호됨",
+    "vulnerable": "취약함",
+    "secured": "보안됨",
+    "disabled": "비활성화됨",
     "activeNodes": "활성 노드",
     "totalBandwidth": "총 대역폭",
     "settings": "프록시 설정",
@@ -502,8 +711,85 @@
     "latency": "지연 시간",
     "disconnect": "연결 끊기",
     "connect": "연결",
+    "connecting": "연결 중...",
+    "retry": "재시도",
     "remove": "제거",
-    "alreadyAdded": "이 프록시 주소는 이미 추가되었습니다!"
+    "alreadyAdded": "이 프록시 주소는 이미 추가되었습니다!",
+    "autoReconnect": "자동 재연결",
+    "validation": {
+      "emptyAddress": "주소는 비워둘 수 없습니다",
+      "noSpaces": "주소에는 공백이 포함될 수 없습니다",
+      "invalidEnode": "잘못된 enode 형식 (enode://[128자-16진수]@ip:포트)",
+      "missingPort": "주소에는 포트가 포함되어야 합니다 (예: example.com:8080)",
+      "invalidHostname": "잘못된 호스트명",
+      "invalidPort": "포트는 1-65535 사이여야 합니다",
+      "systemPort": "시스템 포트 사용 피하기 (1024+ 사용)",
+      "invalidFormat": "잘못된 IP 주소 또는 도메인 형식"
+    },
+    "errors": {
+      "connectionTimeout": "연결 시간 초과",
+      "optimizationUnavailable": "❌ 최적화 상태를 사용할 수 없음",
+      "tauriUnavailable": "❌ Tauri API를 사용할 수 없습니다. 브라우저가 아닌 데스크톱 앱에서 이 테스트를 실행하세요."
+    },
+    "dialog": {
+      "confirmRemoval": "제거 확인",
+      "confirmMessage": "프록시 노드 제거 확인",
+      "cancel": "취소",
+      "remove": "제거"
+    },
+    "privacy": {
+      "title": "프라이버시 설정",
+      "anonymousMode": "익명 모드",
+      "anonymousModeDesc": "익명 프록시를 통해 라우팅",
+      "multiHop": "멀티홉 라우팅",
+      "multiHopDesc": "여러 프록시 노드를 통해 라우팅",
+      "currentMode": "현재 프라이버시 모드:",
+      "maxPrivacy": "최대 프라이버시 (익명 + 멀티홉)",
+      "anonymousOnly": "익명 모드",
+      "multiHopOnly": "멀티홉 라우팅",
+      "standardMode": "표준 모드"
+    },
+    "stats": {
+      "title": "프록시 라우팅 통계",
+      "availableProxies": "사용 가능한 프록시",
+      "totalRoutes": "총 경로",
+      "privacyProfile": "프라이버시 프로필",
+      "anon": "익명",
+      "standard": "표준",
+      "multi": "멀티",
+      "plusMulti": "+ 멀티홉"
+    },
+    "nodeInfo": {
+      "address": "프록시 노드 주소",
+      "peerId": "DHT 피어 ID",
+      "reliability": "신뢰성",
+      "success": "성공",
+      "attempts": "시도",
+      "mbps": "Mbps",
+      "ms": "ms",
+      "placeholder": "example.com:8080 또는 enode://..."
+    },
+    "optimization": {
+      "title": "프록시 지연 시간 최적화",
+      "currentStatus": "현재 상태",
+      "refreshStatus": "상태 새로고침",
+      "proveOptimization": "최적화 작동 증명",
+      "runningTests": "테스트 실행 중...",
+      "testResults": "테스트 결과"
+    },
+    "statusFilter": {
+      "all": "전체",
+      "online": "온라인",
+      "offline": "오프라인",
+      "connecting": "연결 중",
+      "error": "오류"
+    },
+    "sortOptions": {
+      "status": "상태별 정렬",
+      "latency": "지연 시간별 정렬",
+      "bandwidth": "대역폭별 정렬",
+      "smart": "스마트 정렬 (품질)"
+    }
   },
   "mining": {
     "title": "채굴",
@@ -516,6 +802,12 @@
     "powerUsage": "전력 사용량",
     "hw": "H/W",
     "temperature": "온도",
+    "temperatureStatus": {
+      "critical": "심각",
+      "hot": "뜨거움",
+      "warm": "따뜻함",
+      "normal": "정상"
+    },
     "control": "채굴 제어",
     "active": "채굴 활성",
     "stopped": "채굴 중지",
@@ -571,6 +863,49 @@
       "pool2": "카이럴풀 #2",
       "community": "커뮤니티 풀"
     },
+    "decentralizedPools": "탈중앙화 채굴 풀",
+    "discovering": "검색 중...",
+    "discoverPools": "풀 검색",
+    "createPool": "풀 생성",
+    "poolConfiguration": "풀 설정",
+    "poolDetails": {
+      "connectedTo": "연결됨",
+      "leave": "풀 나가기",
+      "yourHashrate": "내 해시레이트",
+      "poolHashrate": "풀 해시레이트",
+      "yourShare": "내 지분",
+      "est24hPayout": "24시간 예상 지급",
+      "shares": "공유 (A/S)",
+      "connectedMiners": "연결된 채굴자",
+      "poolFee": "풀 수수료",
+      "lastShare": "마지막 공유",
+      "soloMining": "솔로 채굴",
+      "soloMiningDesc": "솔로 채굴 중입니다. 풀을 발견하고 참여하여 보상을 공유하고 변동성을 줄이세요.",
+      "availablePools": "사용 가능한 채굴 풀",
+      "noPoolsFound": "아직 발견된 풀이 없습니다. 먼저 풀을 검색하세요.",
+      "miners": "채굴자",
+      "hashrate": "해시레이트",
+      "fee": "수수료",
+      "lastBlock": "마지막 블록",
+      "never": "없음",
+      "blocks24h": "24시간 블록",
+      "minPayout": "최소 지급액",
+      "payment": "지급",
+      "url": "URL",
+      "join": "풀 참여",
+      "createNew": "새 채굴 풀 생성",
+      "poolName": "풀 이름",
+      "poolNamePlaceholder": "내 채굴 풀",
+      "region": "지역",
+      "description": "설명",
+      "descriptionPlaceholder": "풀에 대한 간단한 설명...",
+      "feePercentage": "수수료 비율",
+      "minPayoutChiral": "최소 지급액 (Chiral)",
+      "paymentMethod": "지급 방법",
+      "note": "참고",
+      "createNote": "풀을 생성하면 자동으로 코디네이터로 설정됩니다. 풀은 탈중앙화 네트워크에 공지되어 다른 사람들이 발견하고 참여할 수 있습니다.",
+      "cancel": "취소"
+    },
     "errors": {
       "threads": "스레드는 1에서 {cpuThreads} 사이여야 합니다.",
       "intensity": "강도는 1에서 100 사이여야 합니다.",
@@ -580,6 +915,226 @@
     },
     "starting": "채굴 시작 중... (필요 시 노드가 다시 시작될 수 있습니다)"
   },
+  "reputation": {
+    "title": "평판 시스템",
+    "subtitle": "피어 신뢰 수준 및 네트워크 상태 모니터링",
+    "refreshing": "새로고침 중...",
+    "refreshData": "데이터 새로고침",
+    "hideAnalytics": "분석 숨기기",
+    "showAnalytics": "분석 표시",
+    "hideRelayLeaderboard": "릴레이 리더보드 숨기기",
+    "showRelayLeaderboard": "릴레이 리더보드 표시",
+    "loading": "평판 데이터 로딩 중...",
+    "searchPeers": "피어 검색",
+    "searchPlaceholder": "피어 ID로 검색...",
+    "filters": "필터",
+    "trustLevel": "신뢰 수준",
+    "encryption": "암호화",
+    "any": "모두",
+    "supported": "지원됨",
+    "notSupported": "지원 안 됨",
+    "minimumUptime": "최소 가동 시간",
+    "clear": "지우기",
+    "apply": "적용",
+    "showing": "{total}개 중 {filtered}개 피어 표시",
+    "view": "보기",
+    "cards": "카드",
+    "noPeersFound": "피어를 찾을 수 없음",
+    "tryAdjusting": "검색 조건이나 필터를 조정해보세요.",
+    "sortOptions": {
+      "score": "평판 점수",
+      "interactions": "총 상호작용",
+      "lastSeen": "마지막 접속"
+    },
+    "score": "평판 점수",
+    "history": "평판 기록",
+    "events": "평판 이벤트",
+    "trustScore": "신뢰 점수",
+    "penalties": "페널티",
+    "rewards": "보상",
+    "analytics": {
+      "totalPeers": "총 피어",
+      "trustedPeers": "신뢰할 수 있는 피어",
+      "avgScore": "평균 점수",
+      "trustRate": "신뢰율",
+      "trustLevelDistribution": "신뢰 수준 분포",
+      "total": "총",
+      "recentEvents": "최근 이벤트",
+      "topPerformers": "상위 성과자",
+      "interactions": "{count}개 상호작용",
+      "hoverTooltip": "{level}: {count}",
+      "prev": "이전",
+      "next": "다음",
+      "scoreFormat": "{score}/5.0 ⭐"
+    },
+    "pageTitle": "평판 시스템 - Chiral Network",
+    "sortBy": "정렬 기준",
+    "trustLevels": {
+      "Trusted": "신뢰",
+      "High": "높음",
+      "Medium": "중간",
+      "Low": "낮음",
+      "Unknown": "알 수 없음"
+    },
+    "eventTypes": {
+      "FileTransferSuccess": "파일 전송 성공",
+      "FileTransferFailure": "파일 전송 실패",
+      "PaymentSuccess": "결제 성공",
+      "PaymentFailure": "결제 실패",
+      "ConnectionEstablished": "연결 성공",
+      "ConnectionLost": "연결 끊김",
+      "DhtQueryAnswered": "DHT 쿼리 응답",
+      "StorageOffered": "저장 공간 제공",
+      "MaliciousBehaviorReport": "악의적 행동 보고",
+      "FileShared": "파일 공유"
+    },
+    "myRelay": {
+      "title": "내 릴레이 평판",
+      "subtitle": "노드가 릴레이 서버로 실행 중입니다",
+      "rankOf": "{total}개 중 순위",
+      "reputationScore": "평판 점수",
+      "successfulCircuits": "성공한 회로",
+      "reservations": "예약"
+    },
+    "pagination": {
+      "showing": "{total}개 피어 중 {start}-{end}개 표시",
+      "previous": "이전",
+      "next": "다음"
+    },
+    "card": {
+      "daysAgo": "{days}일 전",
+      "hoursAgo": "{hours}시간 전",
+      "minutesAgo": "{minutes}분 전",
+      "justNow": "방금",
+      "reputationScore": "평판 점수",
+      "transfers": "전송",
+      "interactions": "상호작용",
+      "latency": "지연",
+      "bandwidth": "대역폭",
+      "uptime": "가동 시간",
+      "encryption": "암호화",
+      "supported": "지원됨",
+      "notSupported": "지원되지 않음"
+    }
+  },
+  "relay": {
+    "title": "릴레이 인프라",
+    "subtitle": "릴레이 서버 및 네트워크 연결 관리",
+    "server": {
+      "title": "릴레이 서버",
+      "subtitle": "노드를 통해 피어 연결 지원",
+      "running": "실행 중",
+      "stopped": "중지됨",
+      "description": "NAT 뒤에 있는 피어가 네트워크에 연결하도록 돕고 평판을 얻기 위해 릴레이 서버를 실행하세요.",
+      "benefit1": "피어를 돕고 평판 포인트를 획득",
+      "benefit2": "네트워크 연결성 및 분산화 개선",
+      "benefit3": "회로를 적극적으로 릴레이할 때 대역폭 사용",
+      "enable": "릴레이 서버 활성화",
+      "disable": "릴레이 서버 비활성화",
+      "start": "서버 시작",
+      "stop": "서버 중지",
+      "starting": "시작 중...",
+      "enabling": "활성화 중...",
+      "disabling": "비활성화 중...",
+      "activeMessage": "릴레이 서버가 활성화되어 피어를 돕고 있습니다!",
+      "earningReputation": "성공적인 연결마다 평판을 얻고 있습니다.",
+      "aliasLabel": "릴레이 서버 별칭 (공개 이름)",
+      "aliasPlaceholder": "예: Alice의 빠른 릴레이 🚀",
+      "aliasHint": "이 친근한 이름은 로그에 표시되며 다른 노드가 릴레이를 통해 부트스트랩할 때 나타납니다",
+      "dhtNotRunning": "DHT 네트워크가 실행되지 않음",
+      "dhtNotRunningHint": "먼저 네트워크 페이지에서 네트워크를 시작하세요.",
+      "broadcastingAs": "다음으로 브로드캐스팅:"
+    },
+    "client": {
+      "title": "AutoRelay 클라이언트",
+      "subtitle": "필요할 때 릴레이 노드를 통해 연결",
+      "enableAutorelay": "Circuit Relay v2 (AutoRelay) 활성화",
+      "preferredRelays": "선호 릴레이 노드 (선택사항)",
+      "preferredRelaysPlaceholder": "/ip4/relay.example.com/tcp/4001/p2p/QmRelayId\n한 줄에 하나의 멀티주소",
+      "preferredRelaysHint": "릴레이로 부트스트랩 노드를 사용하려면 비워두세요",
+      "howItWorks": "작동 방식:",
+      "description": "AutoRelay는 NAT 또는 방화벽 뒤에 있을 때 자동으로 릴레이 노드를 통해 연결하여 항상 네트워크에 참여할 수 있도록 합니다."
+    },
+    "monitoring": {
+      "title": "릴레이 상태 및 모니터링"
+    },
+    "errors": {
+      "dhtNotRunning": "DHT가 실행 중이 아닙니다. 네트워크 페이지에서 먼저 네트워크를 시작하세요.",
+      "toggleFailed": "릴레이 서버 전환 실패: {error}"
+    },
+    "monitor": {
+      "statsTitle": "릴레이 풀 통계",
+      "totalRelays": "총 릴레이",
+      "connected": "연결됨",
+      "healthy": "정상",
+      "totalErrors": "총 오류",
+      "avgHealthScore": "평균 상태 점수",
+      "activeRelayTitle": "활성 릴레이",
+      "connectedBadge": "연결됨",
+      "peerId": "피어 ID:",
+      "healthScore": "상태 점수:",
+      "avgLatency": "평균 지연:",
+      "reservation": "예약:",
+      "successRate": "성공률:",
+      "relayPoolTitle": "릴레이 풀",
+      "noRelaysInPool": "풀에 릴레이가 없습니다",
+      "primaryBadge": "주요",
+      "state": "상태:",
+      "latency": "지연:",
+      "attempts": "시도:",
+      "successes": "성공:",
+      "failures": "실패:",
+      "lastSuccess": "마지막 성공:",
+      "recentErrorsLabel": "최근 오류:",
+      "recentErrorsTitle": "최근 오류",
+      "clearButton": "지우기",
+      "relayLabel": "릴레이:",
+      "retryLabel": "재시도:",
+      "errorTypes": {
+        "connectionRefused": "연결 거부됨",
+        "timeout": "시간 초과",
+        "reservationFailed": "예약 실패",
+        "expired": "만료됨",
+        "overloaded": "과부하",
+        "unreachable": "연결 불가",
+        "networkError": "네트워크 오류",
+        "authFailed": "인증 실패",
+        "protocolError": "프로토콜 오류",
+        "unknown": "알 수 없음"
+      },
+      "time": {
+        "never": "없음",
+        "justNow": "방금",
+        "minutesAgo": "{minutes}분 전",
+        "hoursAgo": "{hours}시간 전",
+        "na": "해당 없음",
+        "expired": "만료됨",
+        "seconds": "{seconds}초",
+        "minutes": "{minutes}분",
+        "hours": "{hours}시간"
+      }
+    },
+    "leaderboard": {
+      "title": "상위 릴레이 서버",
+      "subtitle": "평판 기반 릴레이 노드 순위",
+      "refresh": "새로고침",
+      "refreshing": "새로고침 중...",
+      "loading": "릴레이 평판 데이터 로딩 중...",
+      "rank": "순위",
+      "peerId": "피어 ID",
+      "score": "점수",
+      "circuits": "회로",
+      "bandwidth": "대역폭",
+      "uptime": "가동 시간",
+      "points": "점",
+      "lastSeen": "마지막 접속",
+      "totalRelays": "총 릴레이",
+      "badgedRelays": "배지 있는 릴레이",
+      "totalCircuits": "총 회로",
+      "noRelays": "릴레이 서버를 찾을 수 없음",
+      "noRelaysDesc": "리더보드에 나타나려면 릴레이 서버를 실행하세요"
+    }
+  },
   "upload": {
     "title": "파일 업로드",
     "subtitle": "Chiral 네트워크에 파일을 공유하세요",
@@ -587,33 +1142,146 @@
     "dropFilesHint": "이 카드 어디든 파일을 드래그 앤 드롭하거나 아래 \"파일 추가\"를 클릭하세요",
     "addFiles": "파일 추가",
     "sharedFiles": "공유된 파일",
+    "file": "개 파일",
     "files": "개 파일",
     "total": "총",
     "tip": "팁: 파일을 여기에 드래그 앤 드롭하여 추가할 수도 있습니다",
     "addMoreFiles": "파일 더 추가",
-    "hash": "해시",
+    "supportedFormats": "이미지, 비디오, 오디오, 문서, 코드 파일 등 지원",
+    "supportedFormatsDesktop": "데스크톱 앱은 이미지, 비디오, 오디오, 문서, 코드 파일 등을 지원합니다",
+    "hashLabel": "Merkle 해시:",
     "seeder": "시더",
     "leecher": "리처",
     "seeding": "시딩 중",
-    "copyHash": "해시 복사",
-    "hashCopied": "해시 복사됨!",
+    "copyHash": "Merkle 해시 복사",
+    "hashCopied": "Merkle 해시 복사됨!",
     "stopSharing": "공유 중지",
     "noFilesShared": "아직 공유된 파일이 없습니다",
     "addFilesHint2": "네트워크에서 공유를 시작하려면 파일을 추가하세요",
     "duplicateSkipped": "{count, plural, one {이미 공유 중인 파일입니다. 중복 항목을 건너뛰었습니다.} other {중복 파일 {count}개를 건너뛰었습니다.}}",
-    "filesAdded": "{count, plural, one {공유 목록에 파일 1개를 추가했습니다.} other {공유 목록에 파일 {count}개를 추가했습니다.}}"
+    "filesAdded": "{count, plural, one {공유 목록에 파일 1개를 추가했습니다.} other {공유 목록에 파일 {count}개를 추가했습니다.}}",
+    "fileFailed": "'{name}' 파일을 공유하지 못했습니다: {error}",
+    "storage": {
+      "title": "로컬 저장 공간",
+      "available": "여유 {space} GB",
+      "unknown": "여유 공간을 알 수 없음",
+      "lowBadge": "공간 부족",
+      "okBadge": "정상",
+      "unknownBadge": "알 수 없음",
+      "refresh": "새로고침",
+      "lastChecked": "{time} 업데이트",
+      "error": "디스크 공간을 확인할 수 없습니다",
+      "checking": "확인 중...",
+      "lowDescription": "여유 공간이 부족하면 새 파일을 공유할 수 없습니다."
+    },
+    "encryption": {
+      "title": "암호화 공유",
+      "subtitle": "특정 수신자를 위해 암호화된 파일 공유",
+      "enableForRecipient": "특정 수신자를 위한 암호화 공유 활성화",
+      "recipientPublicKey": "수신자 공개 키",
+      "publicKeyPlaceholder": "수신자의 X25519 공개 키 입력 (64자리 16진수)",
+      "publicKeyHint": "수신자의 X25519 공개 키를 입력하세요 (16진수 형식, 64자). 파일이 암호화되어 수신자만 해독할 수 있습니다. 비워두면 자신을 위해 암호화됩니다.",
+      "invalidPublicKey": "⚠️ 공개 키 형식이 잘못되었습니다. 64자리 16진수여야 합니다.",
+      "encryptedBadge": "암호화됨"
+    },
+    "currentProtocol": "현재 프로토콜",
+    "changeProtocol": "프로토콜 변경",
+    "selectProtocol": "프로토콜 선택",
+    "webrtcDescription": "WebRTC를 사용한 빠른 P2P 전송",
+    "bitswapDescription": "IPFS 호환 블록 교환 프로토콜",
+    "requireAccount": "파일을 업로드하려면 계정을 만들거나 가져오세요",
+    "uploadInProgress": "업로드가 진행 중입니다. 현재 업로드가 완료될 때까지 기다려주세요.",
+    "desktopOnly": "파일 업로드는 데스크톱 앱에서만 사용할 수 있습니다",
+    "executableBlocked": "{name}: 보안상의 이유로 실행 파일은 허용되지 않습니다",
+    "emptyFile": "{name}: 파일이 비어있습니다",
+    "publishedToDHT": "파일이 공유를 위해 DHT 네트워크에 게시되었습니다!",
+    "storedLocally": "파일이 로컬에 저장되었습니다. 다른 사용자와 공유하려면 DHT 네트워크를 시작하세요.",
+    "uploadError": "드롭한 파일 처리 중 오류가 발생했습니다. 다시 시도하거나 \"파일 추가\" 버튼을 사용하세요.",
+    "fileManagementDesktopOnly": "파일 관리는 데스크톱 앱에서만 사용할 수 있습니다",
+    "fileUpdated": "{name}이(가) 이미 존재하며 업데이트되었습니다",
+    "fileUploadedNew": "{name}이(가) 성공적으로 업로드되었습니다",
+    "hashCopiedClipboard": "Merkle 해시가 클립보드에 복사되었습니다!",
+    "desktopAppRequired": "데스크톱 앱 필요",
+    "storageMonitoringDesktopOnly": "저장 공간 모니터링은 데스크톱 애플리케이션이 필요합니다",
+    "dropFilesHere": "✨ 여기에 파일을 드롭하세요!",
+    "uploadingFiles": "🔄 파일 업로드 중...",
+    "releaseToUpload": "파일을 즉시 업로드하려면 놓으세요",
+    "dragDropWebNotAvailable": "웹 버전에서는 드래그 앤 드롭을 사용할 수 없습니다",
+    "pleaseWaitProcessing": "파일 처리 중입니다. 잠시만 기다려주세요...",
+    "dragDropRequiresDesktop": "드래그 앤 드롭은 데스크톱 앱이 필요합니다",
+    "uploading": "업로드 중...",
+    "fileUploadDesktopApp": "파일 업로드는 데스크톱 앱이 필요합니다",
+    "downloadDesktopApp": "파일을 업로드하고 공유하려면 데스크톱 버전을 다운로드하세요",
+    "desktopManagementRequired": "파일 관리를 위해 데스크톱 앱이 필요합니다",
+    "encryptedEndToEnd": "이 파일은 종단 간 암호화되어 있습니다",
+    "active": "활성",
+    "priceTooltip": "네트워크 해시 파워를 기반으로 가격이 동적으로 계산됩니다",
+    "storedLocallyBadge": "로컬에 저장됨",
+    "fileManagementTooltip": "파일 관리는 데스크톱 앱이 필요합니다",
+    "fileManagementWebNotAvailable": "웹 버전에서는 파일 관리를 사용할 수 없습니다",
+    "fileDialogError": "파일 대화 상자를 열지 못했습니다"
+  },
+  "torrent": {
+    "title": "토렌트",
+    "magnetLink": {
+      "title": "마그넷 링크에서",
+      "description": "마그넷 링크를 붙여넣어 다운로드를 시작하세요.",
+      "placeholder": "magnet:?xt=urn:btih:...",
+      "download": "다운로드"
+    },
+    "or": "또는",
+    "torrentFile": {
+      "title": ".torrent 파일에서",
+      "description": "컴퓨터에서 .torrent 파일을 업로드하세요.",
+      "choosePlaceholder": ".torrent 파일 선택...",
+      "download": "다운로드",
+      "invalidFile": "올바른 .torrent 파일을 선택하세요."
+    },
+    "seed": {
+      "title": "토렌트 생성 및 시딩",
+      "description": "네트워크와 공유할 로컬 파일을 선택하세요.",
+      "choosePlaceholder": "시딩할 파일 선택...",
+      "button": "파일 시딩",
+      "shareMagnet": "이 마그넷 링크를 공유하세요:",
+      "noFileSelected": "시딩할 파일을 선택하세요.",
+      "success": "{fileName} 시딩을 성공적으로 시작했습니다!",
+      "error": "파일 시딩 오류: {error}"
+    },
+    "activeTransfers": {
+      "title": "활성 전송",
+      "filterAll": "전체",
+      "filterChiral": "Chiral",
+      "filterBitTorrent": "BitTorrent",
+      "noTransfers": "활성 전송이 없습니다.",
+      "peers": "피어:",
+      "eta": "예상 시간:"
+    },
+    "download": {
+      "error": "오류: {error}",
+      "noIdentifier": "마그넷 링크를 제공하거나 .torrent 파일을 선택하세요.",
+      "complete": "다운로드 완료: {fileName}"
+    },
+    "clipboard": {
+      "copied": "클립보드에 복사되었습니다!"
+    }
   },
   "download": {
     "title": "파일 다운로드",
     "subtitle": "해시를 사용하여 Chiral 네트워크에서 파일 다운로드",
     "addNew": "새 다운로드 추가",
-    "addNewSubtitle": "네트워크에서 파일을 검색하고 다운로드하려면 파일 해시를 입력하세요",
-    "placeholder": "파일 해시 입력 (예: QmZ4tDuvesekqMD...)",
+    "addNewSubtitle": "새 다운로드를 시작하려면 Merkle 해시 또는 CID를 입력하세요",
+    "placeholder": "Merkle 해시 또는 CID 입력",
+    "searchByHash": "해시로 검색",
+    "searchByName": "이름으로 검색",
+    "autoClear": "자동 정리",
+    "multiSource": "다중 소스 다운로드",
+    "maxPeers": "최대 피어 수",
     "clearInput": "입력 지우기",
     "searchAndDownload": "검색 및 다운로드",
     "downloads": "다운로드",
     "searchPlaceholder": "다운로드 검색...",
     "clearSearch": "검색 지우기",
+    "clearFinished": "완료된 항목 지우기",
     "filters": {
       "all": "전체",
       "active": "활성",
@@ -624,7 +1292,7 @@
       "failed": "실패함"
     },
     "settings": {
-      "maxConcurrent": "최대 동시",
+      "maxConcurrent": "최대 동시 다운로드",
       "autoStart": "자동 시작",
       "toggleAutoStart": "자동 시작 큐 {status} 전환"
     },
@@ -637,7 +1305,7 @@
       "noFailed": "실패한 다운로드 없음."
     },
     "file": {
-      "hash": "해시",
+      "hash": "Merkle 해시",
       "queue": "큐",
       "progress": "진행률"
     },
@@ -652,10 +1320,12 @@
       "resume": "재개",
       "remove": "제거",
       "cancel": "취소",
-      "openFile": "파일 열기"
+      "openFile": "파일 열기",
+      "retry": "재시도",
+      "showInFolder": "폴더에 표시"
     },
     "notifications": {
-      "enterHash": "파일 해시를 입력하세요",
+      "enterHash": "Merkle 해시 또는 CID를 입력하세요",
       "alreadyExists": "파일이 이미 다운로드 목록에 있습니다",
       "searching": "파일 검색 중...",
       "notFound": "파일을 찾을 수 없습니다. 해시를 확인하세요",
@@ -665,6 +1335,55 @@
       "searchFailed": "검색 실패: {error}",
       "downloadFailed": "다운로드 실패: {name}",
       "downloadCompleted": "다운로드 완료: {name}"
-    }
+    },
+    "search": {
+      "status": {
+        "started": "네트워크에서 검색 중...",
+        "searching": "검색 중...",
+        "foundNotification": "{name}을(를) 찾았습니다",
+        "notFoundNotification": "네트워크에서 파일을 찾을 수 없습니다.",
+        "unknownError": "알 수 없는 오류",
+        "errorNotification": "검색 실패",
+        "completedIn": "{seconds}초 만에 완료됨",
+        "notFoundDetail": "해당 해시를 네트워크에서 찾을 수 없습니다.",
+        "errorHeadline": "검색에 실패했습니다",
+        "placeholder": "검색을 실행하여 메타데이터를 확인하세요.",
+        "addedToQueue": "\"{name}\"을(를) 다운로드 대기열에 추가했습니다"
+      },
+      "notifications": {
+        "copied": "{value} 복사 완료"
+      },
+      "history": {
+        "title": "검색 기록",
+        "clear": "기록 지우기",
+        "empty": "최근 검색 기록이 없습니다.",
+        "retry": "검색 다시 시도",
+        "foundSeeders": "{count, plural, one {시더 1명 발견} other {시더 {count}명 발견}}",
+        "notFound": "시더를 찾을 수 없음",
+        "pending": "결과 대기 중"
+      },
+      "queue": {
+        "status": {
+          "completed": "이미 다운로드가 완료되었습니다",
+          "downloading": "현재 다운로드 중입니다 ({progress}% 완료)",
+          "paused": "다운로드가 {progress}%에서 일시 중지되었습니다",
+          "queued": "이미 다운로드 대기열에 있습니다",
+          "failed": "이전에 다운로드에 실패했습니다. 다시 시도해 보세요.",
+          "seeding": "이미 이 파일을 공유 중입니다",
+          "other": "이미 다운로드 목록에 있습니다 ({status})"
+        }
+      },
+      "button": "검색",
+      "searchVersions": "버전 검색",
+      "namePlaceholder": "파일 이름 입력 (예: \"document.pdf\")"
+    },
+    "telemetry": {
+      "retrying": "{hash} 다운로드 재시도 중 (시도 {attempt}/{max})",
+      "recovered": "{hash} 다운로드가 {retries}번의 재시도 후 복구되었습니다 ({duration} ms)",
+      "failed": "{hash} 다운로드가 {attempts}번의 시도 후 실패했습니다"
+    },
+    "selectProtocol": "프로토콜 선택",
+    "currentProtocol": "현재 프로토콜",
+    "changeProtocol": "프로토콜 변경"
   }
 }

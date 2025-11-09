@@ -1,52 +1,39 @@
-﻿<script lang="ts">
+<script lang="ts">
   import Card from '$lib/components/ui/card.svelte'
   import Button from '$lib/components/ui/button.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import DropDown from "$lib/components/ui/dropDown.svelte";
   import type { MiningHistoryPoint } from '$lib/stores';
   import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw } from 'lucide-svelte'
   import { onDestroy, onMount, getContext } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
-  import { etcAccount, miningState, transactions, type Transaction } from '$lib/stores'
+  import { etcAccount, miningState } from '$lib/stores'
   import { getVersion } from "@tauri-apps/api/app";
   import { t } from 'svelte-i18n';
   import { goto } from '@mateothegreat/svelte5-router';
-
-  // Interfaces - MiningHistoryPoint is now defined in stores.ts
-  
-  // interface RecentBlock {
-  //   id: string
-  //   hash: string
-  //   reward: number
-  //   timestamp: Date
-  //   difficulty: number
-  //   nonce: number
-  // }
+  import { walletService } from '$lib/wallet';
+  import TemporaryAccountWarning from '$lib/components/TemporaryAccountWarning.svelte'; 
   
   // Local UI state only
   let isTauri = false
   let isGethRunning = false
   let currentBlock = 0
   let totalHashes = 0
-  let currentDifficulty = 4
   let lastHashUpdate = Date.now()
   let cpuThreads = navigator.hardwareConcurrency || 4
   let selectedThreads = Math.floor(cpuThreads / 2)
-  let error = '' 
+  let error = ''
 
-  //Local Stats 
-  let sessionStartRewards = 0; // snapshot of totalRewards at start 
-  let sessionStartBlocks = 0; // "blocks you foudn in session"
+  // Temporary account tracking
+  let isTemporaryAccount = false
+  let showTemporaryAccountWarning = false 
 
-
-  
   // Network statistics
   let networkHashRate = '0 H/s'
   let networkDifficulty = '0'
-  let blockReward = 5 // Chiral per block
+  let blockReward = 2 // Chiral per block
   let peerCount = 0
 
   // Statistics - preserve across page navigation
@@ -54,12 +41,17 @@
     $miningState.sessionStartTime || Date.now() : 
     Date.now()
   let estimatedTimeToBlock = 0
-  $: powerConsumption = $miningState.activeThreads * 15
-  $: efficiency = $miningState.hashRate === '0 H/s' ? 0 : parseHashRate($miningState.hashRate) / powerConsumption
-  let temperature = 45.0
-  $: if (!isTauri) {
-    temperature = 45 + ($miningState.activeThreads * 3.5)
-  }
+  $: powerConsumption = hasRealPower ? realPowerConsumption : 0
+  $: efficiency = ($miningState.hashRate === '0 H/s' || !hasRealPower) ? 0 : parseHashRate($miningState.hashRate) / powerConsumption
+  let temperature = 0.0
+  let hasRealTemperature = false
+  let temperatureLoading = true // Add loading state for temperature checks
+  let hasCompletedFirstCheck = false // Track if we've completed the first temperature check
+  let temperatureUnit: 'C' | 'F' = 'C'
+
+  // Power monitoring
+  let realPowerConsumption = 0.0
+  let hasRealPower = false
 
   // Uptime tick (forces template to re-render every second while mining)
   let uptimeNow: number = Date.now()
@@ -94,6 +86,64 @@
     const level = detectLogLevel(log)
     return logFilters[level]
   })
+
+  function parseDifficulty(difficultyStr: string): number {
+    const match = difficultyStr.match(/^([\d.]+)\s*([KGMTP]?)H?\/?s?$/i)
+    if (!match) return 0
+    
+    const value = parseFloat(match[1])
+    const unit = match[2].toUpperCase()
+    
+    switch (unit) {
+      case 'K': return value * 1000
+      case 'M': return value * 1000000
+      case 'G': return value * 1000000000
+      case 'T': return value * 1000000000000
+      case 'P': return value * 1000000000000000
+      default: return value
+    }
+  }
+
+  $: displayedTemperature = temperatureUnit === 'F' ? toFahrenheit(temperature).toFixed(1) : temperature.toFixed(1);
+
+  function parseHashRate(rateStr: string): number {
+    const match = rateStr.match(/^~?\s*([\d.]+)\s*([KMGT])H\/s$/i);
+    
+    // Fallback: If the regex fails (e.g., if the string is just "0 H/s"), return 0.
+    if (!match) return 0;
+    
+    // Match indices: 1 is the value, 2 is the unit (K, M, G, T)
+    const value = parseFloat(match[1]);
+    const unit = match[2] ? match[2].toUpperCase() : ''; // Handle base H/s case if needed, though this regex forces a unit
+    
+    switch (unit) {
+      case 'K': return value * 1000;
+      case 'M': return value * 1000000;
+      case 'G': return value * 1000000000;
+      case 'T': return value * 1000000000000;
+      default: return value; // Assumes base H/s if no unit is captured (e.g., if regex simplified)
+    }
+  }
+
+
+  $: {
+    const localHashRateNum = parseHashRate($miningState.hashRate);
+    const networkDifficultyNum = parseDifficulty(networkDifficulty);
+    
+    if (localHashRateNum > 0 && networkDifficultyNum > 0) {
+        // ETB = Difficulty / Hashrate (in seconds)
+        estimatedTimeToBlock = networkDifficultyNum / localHashRateNum;
+    } else {
+        estimatedTimeToBlock = 0;
+    }
+  }
+
+
+
+  // Function to convert Celsius to Fahrenheit
+  function toFahrenheit(celsius: number): number {
+    return (celsius * 9/5) + 32;
+  }
 
   // Determine log level from a log line and return a semantic level
   function detectLogLevel(line: string): 'error' | 'warn' | 'info' | 'other' {
@@ -143,12 +193,100 @@
 
   let validationError: string | null = null;
 
+  // Decentralized Pool Mining State
+  interface MiningPool {
+    id: string;
+    name: string;
+    url: string;
+    description: string;
+    fee_percentage: number;
+    miners_count: number;
+    total_hashrate: string;
+    last_block_time: number;
+    blocks_found_24h: number;
+    region: string;
+    status: 'Active' | 'Maintenance' | 'Full' | 'Offline';
+    min_payout: number;
+    payment_method: string;
+    created_by?: string;
+    worker?: string;
+    password?: string;
+  }
+
+  interface PoolStats {
+    connected_miners: number;
+    pool_hashrate: string;
+    your_hashrate: string;
+    your_share_percentage: number;
+    shares_submitted: number;
+    shares_accepted: number;
+    estimated_payout_24h: number;
+    last_share_time: number;
+  }
+
+  interface JoinedPoolInfo {
+    pool: MiningPool;
+    stats: PoolStats;
+    joined_at: number;
+  }
+
+  // Pool state
+  let availablePools: MiningPool[] = [];
+  let currentPool: JoinedPoolInfo | null = null;
+  let poolError: string = '';
+  let isDiscovering: boolean = false;
+  let showCreatePool: boolean = false;
+  let showPoolList: boolean = false;
+  let editingPool: MiningPool | null = null;
+  let showPoolManager: boolean = false;
+  let poolConnected: boolean = false;
+  let poolStats = {
+    connectedMiners: 0,
+    poolHashrate: '0 H/s',
+    yourHashrate: '0 H/s',
+    yourSharePercentage: 0,
+    sharesSubmitted: 0,
+    sharesAccepted: 0,
+    estimatedPayout24h: 0,
+    lastShareTime: 0
+  };
+  
+  // Pool creation form
+  let newPool = {
+    name: '',
+    description: '',
+    fee_percentage: 1.0,
+    min_payout: 1.0,
+    payment_method: 'PPLNS',
+    region: 'Global',
+    url: '',
+    worker: '',
+    password: ''
+  };
+
+  // Computed values
+  $: poolConnected = currentPool !== null;
+  $: if (currentPool) {
+    poolStats = {
+      connectedMiners: currentPool.stats.connected_miners,
+      poolHashrate: currentPool.stats.pool_hashrate,
+      yourHashrate: currentPool.stats.your_hashrate,
+      yourSharePercentage: currentPool.stats.your_share_percentage,
+      sharesSubmitted: currentPool.stats.shares_submitted,
+      sharesAccepted: currentPool.stats.shares_accepted,
+      estimatedPayout24h: currentPool.stats.estimated_payout_24h,
+      lastShareTime: currentPool.stats.last_share_time
+    };
+  }
+
   const navigation = getContext('navigation') as { setCurrentPage: (page: string) => void };
   
-  // Computed values for actual threads based on intensity
+  // Computed values for threads based on intensity
   const maxThreads = cpuThreads
-  $: actualThreads = Math.ceil(($miningState.minerIntensity / 100) * maxThreads)
-  // Don't directly modify store in reactive statement to avoid infinite loops
+  // Intensity slider directly controls selectedThreads
+  $: if (!$miningState.isMining) {
+    selectedThreads = Math.ceil(($miningState.minerIntensity / 100) * maxThreads)
+  }
 
 
   // Threads warning
@@ -167,12 +305,24 @@
             : '';
   }
 
+  $: if (!$etcAccount) {
+    // Clear mining state when no account is present
+    if ($miningState.isMining) {
+      stopMining(); // Stop mining if running
+    }
+    // Reset mining display state
+    $miningState.totalRewards = 0;
+    $miningState.blocksFound = 0;
+    $miningState.recentBlocks = [];
+  }
+
   // Button disabled if either warning exists
   $: isInvalid = !!threadsWarning || !!intensityWarning;
 
 
   let hoveredPoint: MiningHistoryPoint | null = null;
   let hoveredIndex: number | null = null;
+
 
   onMount(async () => {
     try{
@@ -185,9 +335,6 @@
 
     await checkGethStatus()
     await updateNetworkStats()
-    try {
-      seenHashes = new Set(($miningState.recentBlocks ?? []).map((b: any) => b.hash))
-    } catch{} 
     // If mining is already active from before, restore session and update stats
     if ($miningState.isMining) {
       // Restore session start time if it exists
@@ -199,20 +346,41 @@
     }
     if (isTauri) {
       await updateCpuTemperature()
+      await updatePowerConsumption()
+    }
+    
+    // Initialize pool state
+    try {
+      const poolInfo = await invoke('get_current_pool_info') as JoinedPoolInfo | null;
+      if (poolInfo) {
+        currentPool = poolInfo;
+        startPoolStatsUpdates();
+      }
+    } catch (e) {
+      console.error('Failed to get current pool info:', e);
     }
     
     // Start polling for mining stats
     statsInterval = setInterval(async () => {
       if ($miningState.isMining) {
-        await updateMiningStats() 
-        await appendNewBlocksFromBackend()
+        // Update mining stats in parallel with wallet data
+        await Promise.all([
+          updateMiningStats(),
+          // IMPORTANT: refreshTransactions must run BEFORE refreshBalance
+          // because refreshBalance depends on blocksFound set by refreshTransactions
+          (async () => {
+            await walletService.refreshTransactions();
+            await walletService.refreshBalance();
+          })()
+        ]);
       }
-      await updateNetworkStats()
+      await updateNetworkStats();
       if (isTauri) {
-        await updateCpuTemperature()
+        await updateCpuTemperature();
+        await updatePowerConsumption();
       }
-    }, 1000) as unknown as number
-  })
+    }, 1000) as unknown as number;
+  })  
   
   async function checkGethStatus() {
     try {
@@ -242,62 +410,53 @@
       const [rate, block] = await Promise.all([
         invoke('get_miner_hashrate') as Promise<string>,
         invoke('get_current_block') as Promise<number>
-      ])
-      
+      ]);
+
       currentBlock = block
-      
-      // Try to get real hash rate from logs if standard API returns 0
+
+      // Always try to get continuous hash rate estimates when mining
+      let finalHashRate = rate;
+
+      // If RPC returns 0 but we're mining, show "Mining Active"
       if (rate === '0 H/s' && $miningState.isMining) {
-        try {
-          // Get mining performance from logs
-          const [blocksFound, hashRateFromLogs] = await invoke('get_miner_performance', { 
-            dataDir: './bin/geth-data' 
-          }) as [number, number]
-          
-          if (hashRateFromLogs > 0) {
-            // Use actual hash rate from logs
-            $miningState.hashRate = formatHashRate(hashRateFromLogs)
-            if (blocksFound > $miningState.blocksFound) {
-              $miningState.blocksFound = blocksFound; 
-              //Visualization Now Handled By Backend
-            }
-          } else if ($miningState.activeThreads > 0) {
-            // Fall back to simulation if no log data yet
-            const elapsed = (Date.now() - sessionStartTime) / 1000 // seconds
-            const baseRate = $miningState.activeThreads * 85000 // 85 KH/s per thread
-            const variation = Math.sin(elapsed / 10) * baseRate * 0.1 // ±10% variation
-            const simulatedRate = baseRate + variation
-            $miningState.hashRate = `~${formatHashRate(simulatedRate)}`
-          }
-        } catch (perfError) {
-          // If performance fetch fails, fall back to simulation
-          if ($miningState.activeThreads > 0) {
-            const elapsed = (Date.now() - sessionStartTime) / 1000
-            const baseRate = $miningState.activeThreads * 85000
-            const variation = Math.sin(elapsed / 10) * baseRate * 0.1
-            const simulatedRate = baseRate + variation
-            $miningState.hashRate = `~${formatHashRate(simulatedRate)}`
-          }
-        }
-      } else if (rate !== '0 H/s') {
-        // Use actual rate if available from standard API
-        $miningState.hashRate = rate
+        finalHashRate = "Mining Active";
       }
+
+
+      if ($miningState.isMining) {
+        try {
+          // Get continuous hash rate estimates from backend
+          const [, hashRateFromLogs] = await invoke('get_miner_performance', {
+            dataDir: './bin/geth-data'
+          }) as [number, number]
+
+          // Handle backend response properly
+
+          if (hashRateFromLogs === 0) {
+            // Mining active but no blocks mined yet - show status
+            finalHashRate = $miningState.hashRate === "0 H/s" ? "Mining Active" : $miningState.hashRate;
+          } else {
+            // Have actual hash rate data from block mining
+            finalHashRate = formatHashRate(hashRateFromLogs);
+          }
+
+        } catch (perfError) {
+          console.log('Performance fetch failed:', perfError);
+          // If performance fetch fails, keep current rate
+          finalHashRate = $miningState.hashRate || rate;
+        }
+      }
+      
+      $miningState.hashRate = finalHashRate;
+
+      // Force reactivity by triggering store update every time
+      miningState.set($miningState);
+
       
       // Convert hashRate string to number for chart
       let hashRateNum = 0
       // Clean up the rate string (remove ~ and text in parentheses)
-      const cleanRate = $miningState.hashRate.replace(/[~()a-zA-Z \.]+/g, '').trim()
-      
-      if ($miningState.hashRate.includes('GH/s')) {
-        hashRateNum = parseFloat(cleanRate) * 1000000000
-      } else if ($miningState.hashRate.includes('MH/s')) {
-        hashRateNum = parseFloat(cleanRate) * 1000000
-      } else if ($miningState.hashRate.includes('KH/s')) {
-        hashRateNum = parseFloat(cleanRate) * 1000
-      } else {
-        hashRateNum = parseFloat(cleanRate) || 0
-      }
+      hashRateNum = parseHashRate($miningState.hashRate)
       
       // Update mining history for chart
       if ($miningState.isMining) {
@@ -317,63 +476,86 @@
     }
   }
   
+  
   async function updateNetworkStats() {
-    try {
-      if (isGethRunning) {
-        const promises: Promise<any>[] = [
-          invoke('get_network_stats') as Promise<[string, string]>,
-          invoke('get_current_block') as Promise<number>,
-          invoke('get_network_peer_count') as Promise<number>
-        ]
-        
-        // Also fetch account balance and blocks mined if we have an account and are mining
-        if ($etcAccount && $miningState.isMining) {
-          promises.push(invoke('get_account_balance', { 
-            address: $etcAccount.address 
-          }) as Promise<string>)
+  try {
+    if (isGethRunning) {
+      const promises: Promise<any>[] = [
+        invoke('get_network_stats') as Promise<[string, string]>,
+        invoke('get_current_block') as Promise<number>,
+        invoke('get_network_peer_count') as Promise<number>
+      ]
+      
+      // Also fetch account balance and blocks mined if we have an account and are mining
+      if ($etcAccount && $miningState.isMining) {
           promises.push(invoke('get_blocks_mined', { 
             address: $etcAccount.address 
           }) as Promise<number>)
-        }
-        
-        const results = await Promise.all(promises)
-        
-        networkDifficulty = results[0][0]
-        networkHashRate = results[0][1]
-        currentBlock = results[1]
-        peerCount = results[2]
-        
-        // Update total rewards from actual balance
-        if (results[3] !== undefined) {
-          const balance = parseFloat(results[3])
-          if (!isNaN(balance) && balance > 0) {
-            // Use actual balance as total rewards
-            $miningState.totalRewards = balance
-          }
-        }
-        
-        // Update blocks mined from blockchain query
-        if (results[4] !== undefined) {
-          const blocksMined = results[4] as number;
-          if (blocksMined > $miningState.blocksFound) {
-            $miningState.blocksFound = blocksMined;
-          }
-        }
       }
-    } catch (e) {
-      console.error('Failed to update network stats:', e)
+      
+      const results = await Promise.all(promises)
+      
+      networkDifficulty = results[0][0]
+      networkHashRate = results[0][1]
+      currentBlock = results[1]
+      peerCount = results[2]
+      
+      
+       
+              
+      // Update blocks mined from blockchain query
+      
+      
     }
+  } catch (e) {
+    console.error('Failed to update network stats:', e)
   }
+}
 
   async function updateCpuTemperature() {
+    // Only show loading state for the very first check
+    if (!hasCompletedFirstCheck) {
+      temperatureLoading = true
+    }
+
     try {
       const temp = await invoke('get_cpu_temperature') as number
-      console.log(temp)
-      if (temp > 0) {
+      if (temp && temp > 0) {
         temperature = temp
+        hasRealTemperature = true
+      } else {
+        hasRealTemperature = false
       }
     } catch (e) {
       console.error('Failed to get CPU temperature:', e)
+      hasRealTemperature = false
+    } finally {
+      if (!hasCompletedFirstCheck) {
+        temperatureLoading = false
+        hasCompletedFirstCheck = true
+      }
+    }
+  }
+
+  async function updatePowerConsumption() {
+    // Only show loading state for the very first check
+    if (!hasCompletedFirstCheck) {
+    }
+
+    try {
+      const power = await invoke('get_power_consumption') as number
+      if (power && power > 0) {
+        realPowerConsumption = power
+        hasRealPower = true
+      } else {
+        hasRealPower = false
+      }
+    } catch (e) {
+      console.error('Failed to get power consumption:', e)
+      hasRealPower = false
+    } finally {
+      if (!hasCompletedFirstCheck) {
+      }
     }
   }
   
@@ -386,10 +568,40 @@
     }
   }
   
+  async function createTemporaryAccount() {
+    try {
+      // Generate a temporary account using walletService
+      const tempAccount = await walletService.createAccount()
+
+      // Set as active account
+      etcAccount.set({
+        address: tempAccount.address,
+        private_key: tempAccount.privateKey
+      })
+
+      // Mark as temporary
+      isTemporaryAccount = true
+      showTemporaryAccountWarning = true
+
+      // Track that this account has been used for mining
+      localStorage.setItem('chiral_temp_account_mining', 'true')
+
+      return tempAccount
+    } catch (e) {
+      console.error('Failed to create temporary account:', e)
+      throw e
+    }
+  }
+
   async function startMining() {
+    // Auto-create temporary account if none exists
     if (!$etcAccount) {
-      error = $t('mining.errors.noAccount')
-      return
+      try {
+        await createTemporaryAccount()
+      } catch (e) {
+        error = $t('mining.errors.noAccount')
+        return
+      }
     }
     
     if (!isGethRunning) {
@@ -401,37 +613,25 @@
     validationError = null
     
     try {
-      // Show message that we're starting mining
-      error = $t('mining.starting')
-      
       await invoke('start_miner', {
         address: $etcAccount.address,
         threads: selectedThreads,
         dataDir: './bin/geth-data'
       })
-      
-      error = '' // Clear the status message
       $miningState.isMining = true
       sessionStartTime = Date.now()
       // Store session start time in the store for persistence
       $miningState.sessionStartTime = sessionStartTime
-      $miningState.activeThreads = actualThreads  // Use computed actualThreads
+      $miningState.activeThreads = selectedThreads  // Use selectedThreads
       totalHashes = 0 // Reset total hashes
       lastHashUpdate = Date.now()
       startUptimeTimer() 
 
-      sessionStartRewards = $miningState.totalRewards ?? 0 
-      sessionStartBlocks = $miningState.blocksFound ?? 0
-
-      
       // Start updating stats
       await updateMiningStats()
       
-      // Update power and temperature estimates
+      // Update power consumption estimates
       powerConsumption = $miningState.activeThreads * 25 * ($miningState.minerIntensity / 100)
-      if (!isTauri) {
-        temperature = 45 + ($miningState.activeThreads * 3) + ($miningState.minerIntensity / 10)
-      }
       
       // Re-check geth status since it might have restarted
       isGethRunning = true
@@ -447,25 +647,6 @@
       $miningState.isMining = false
       $miningState.hashRate = '0 H/s'
       $miningState.activeThreads = 0 
-
-      const endRewards = $miningState.totalRewards ?? 0 
-      const endBlocks  = $miningState.blocksFound ?? 0
-      const sessionReward = Math.max(0, endRewards - sessionStartRewards)  
-      const sessionBlocks = Math.max(0, endBlocks - sessionStartBlocks)
-
-      const tx: Transaction = {
-        id: Date.now(),
-        type: 'received',
-        amount: sessionReward,
-        from: 'Mining rewards',
-        date: new Date(),
-        description: sessionBlocks > 0
-          ? `Mining session payout (${sessionBlocks} block${sessionBlocks === 1 ? '' : 's'})`
-          : 'Mining session payout',
-        status: 'completed'
-      }
-      transactions.update(list => [tx, ...list])
-
 
       // Clear session start time
       $miningState.sessionStartTime = undefined
@@ -483,10 +664,272 @@
     }
   }
 
-  // Simulation removed; recent blocks come from backend
+  // Temporary account warning handlers
+  function handleDismissWarning() {
+    showTemporaryAccountWarning = false
+  }
 
-  // Keep a set of hashes we've already shown to avoid duplicates
-  let seenHashes = new Set<string>();
+  function handleCreateWallet() {
+    // Navigate to Account page to create a permanent wallet
+    goto('/account')
+  }
+
+  // Decentralized Pool Functions
+  async function discoverPools() {
+    if (!$etcAccount) {
+      poolError = 'Please create or import an account first.';
+      return;
+    }
+    
+    isDiscovering = true;
+    poolError = '';
+    
+    try {
+      console.log('🔍 Invoking discover_mining_pools command...');
+      const pools = await invoke('discover_mining_pools') as MiningPool[];
+      console.log('✅ Received pools:', pools);
+      availablePools = pools;
+      showPoolList = true;
+      await invoke('update_pool_discovery'); // Update pool stats
+    } catch (e) {
+      console.error('❌ Pool discovery error:', e);
+      poolError = String(e);
+    } finally {
+      isDiscovering = false;
+    }
+  }
+
+  async function joinPool(pool: MiningPool) {
+    if (!$etcAccount) {
+      poolError = 'Please create or import an account first.';
+      return;
+    }
+    
+    if (pool.status === 'Offline') {
+      poolError = 'Cannot join offline pool.';
+      return;
+    }
+    
+    poolError = '';
+    
+    try {
+      const joinedInfo = await invoke('join_mining_pool', { 
+        poolId: pool.id, 
+        address: $etcAccount.address 
+      }) as JoinedPoolInfo;
+      
+      currentPool = joinedInfo;
+      showPoolList = false;
+      
+      // Start periodic stats updates
+      startPoolStatsUpdates();
+    } catch (e) {
+      poolError = String(e);
+    }
+  }
+
+  async function leavePool() {
+    if (!currentPool) return;
+    
+    try {
+      await invoke('leave_mining_pool');
+      currentPool = null;
+      stopPoolStatsUpdates();
+    } catch (e) {
+      poolError = String(e);
+    }
+  }
+
+  async function createNewPool() {
+    if (!$etcAccount) {
+      poolError = 'Please create or import an account first.';
+      return;
+    }
+    
+    if (!newPool.name.trim()) {
+      poolError = 'Pool name is required.';
+      return;
+    }
+    
+    poolError = '';
+    
+    try {
+      const createdPool = await invoke('create_mining_pool', {
+        address: $etcAccount.address,
+        name: newPool.name,
+        description: newPool.description,
+        feePercentage: newPool.fee_percentage,
+        minPayout: newPool.min_payout,
+        paymentMethod: newPool.payment_method,
+        region: newPool.region,
+      }) as MiningPool;
+      
+      // Reset form
+      newPool = {
+        name: '',
+        description: '',
+        fee_percentage: 1.0,
+        min_payout: 1.0,
+        payment_method: 'PPLNS',
+        region: 'Global',
+        url: '',
+        worker: '',
+        password: ''
+      };
+      
+      showCreatePool = false;
+      
+      // Automatically join the created pool
+      await joinPool(createdPool);
+    } catch (e) {
+      poolError = String(e);
+    }
+  }
+
+  // Pool stats updates
+  let poolStatsInterval: number | null = null;
+  
+  function startPoolStatsUpdates() {
+    if (poolStatsInterval) return;
+    
+    poolStatsInterval = setInterval(async () => {
+      if (!currentPool) {
+        stopPoolStatsUpdates();
+        return;
+      }
+      
+      try {
+        const stats = await invoke('get_pool_stats') as PoolStats;
+        if (stats && currentPool) {
+          currentPool.stats = stats;
+          currentPool = { ...currentPool }; // Trigger reactivity
+        }
+      } catch (e) {
+        console.error('Failed to update pool stats:', e);
+      }
+    }, 5000) as unknown as number; // Update every 5 seconds
+  }
+  
+  function stopPoolStatsUpdates() {
+    if (poolStatsInterval) {
+      clearInterval(poolStatsInterval);
+      poolStatsInterval = null;
+    }
+  }
+
+  function getPoolStatusColor(status: string): string {
+    switch (status) {
+      case 'Active': return 'text-green-500';
+      case 'Maintenance': return 'text-yellow-500';
+      case 'Full': return 'text-orange-500';
+      case 'Offline': return 'text-red-500';
+      default: return 'text-gray-500';
+    }
+  }
+
+  function formatTimestamp(timestamp: number): string {
+    const now = Date.now() / 1000;
+    const diff = now - timestamp;
+    
+    if (diff < 60) return `${Math.floor(diff)}s ago`;
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return `${Math.floor(diff / 86400)}d ago`;
+  }
+
+  // Pool management functions
+  function editPool(pool: MiningPool) {
+    editingPool = { ...pool };
+    showPoolManager = true;
+  }
+
+  function cancelPoolEdit() {
+    editingPool = null;
+    showPoolManager = false;
+  }
+
+  function deletePool(poolId: string) {
+    // Remove pool from available pools
+    availablePools = availablePools.filter(p => p.id !== poolId);
+    
+    // If this was the current pool, leave it
+    if (currentPool && currentPool.pool.id === poolId) {
+      leavePool();
+    }
+  }
+
+  // Save changes to an existing pool (edit functionality)
+  function savePool() {
+    if (!editingPool) return;
+    
+    // Store the editing pool in a local variable to satisfy TypeScript
+    const poolToEdit = editingPool;
+    
+    // Find and update the pool in availablePools
+    availablePools = availablePools.map(pool =>
+      pool.id === poolToEdit.id
+        ? {
+            ...pool,
+            ...poolToEdit,
+            id: poolToEdit.id ?? pool.id, // Ensure id is always a string
+            name: poolToEdit.name ?? pool.name,
+            url: poolToEdit.url ?? pool.url,
+            description: poolToEdit.description ?? pool.description,
+            fee_percentage: poolToEdit.fee_percentage ?? pool.fee_percentage,
+            miners_count: poolToEdit.miners_count ?? pool.miners_count,
+            total_hashrate: poolToEdit.total_hashrate ?? pool.total_hashrate,
+            last_block_time: poolToEdit.last_block_time ?? pool.last_block_time,
+            blocks_found_24h: poolToEdit.blocks_found_24h ?? pool.blocks_found_24h,
+            region: poolToEdit.region ?? pool.region,
+            status: poolToEdit.status ?? pool.status,
+            min_payout: poolToEdit.min_payout ?? pool.min_payout,
+            payment_method: poolToEdit.payment_method ?? pool.payment_method,
+            created_by: poolToEdit.created_by ?? pool.created_by,
+            worker: poolToEdit.worker ?? pool.worker ?? '',
+            password: poolToEdit.password ?? pool.password ?? ''
+          }
+        : pool
+    );
+    editingPool = null;
+    showPoolManager = false;
+  }
+
+  // Add a new pool (for modal form)
+  function addPool() {
+    // Basic validation
+    if (!newPool.name.trim()) return;
+    // Generate a unique id for the new pool
+    const id = `pool-${Date.now()}`;
+    availablePools = [
+      ...availablePools,
+      {
+        ...newPool,
+        id,
+        status: 'Active',
+        miners_count: 1,
+        total_hashrate: '0 H/s',
+        last_block_time: 0,
+        blocks_found_24h: 0,
+        created_by: $etcAccount ? $etcAccount.address : '',
+      }
+    ];
+    // Reset form and close modal
+    newPool = {
+      name: '',
+      description: '',
+      fee_percentage: 1.0,
+      min_payout: 1.0,
+      payment_method: 'PPLNS',
+      region: 'Global',
+      url: '',
+      worker: '',
+      password: ''
+    };
+    showPoolManager = false;
+  }
+
+  // Define pools variable as an alias for availablePools for compatibility
+  $: pools = availablePools;
 
   // Pagination for recent blocks
   let pageSizes = [5, 10, 20, 50]
@@ -506,61 +949,6 @@
   // pushRecentBlock to set currentPage = 1 so the newest block is visible.
 
   $: displayedBlocks = ($miningState.recentBlocks || []).slice((currentPage - 1) * pageSize, currentPage * pageSize)
-
-  function pushRecentBlock(b: {
-    hash: string;
-    nonce?: number;
-    difficulty?: number;
-    timestamp?: Date;
-    number?: number;
-    reward?: number;
-  }) {
-    const item = {
-      id: `block-${b.hash}-${b.timestamp?.getTime() ?? Date.now()}`,
-      hash: b.hash,
-      reward: typeof b.reward === "number" ? b.reward : blockReward,
-      timestamp: b.timestamp ?? new Date(),
-      difficulty: b.difficulty ?? currentDifficulty,
-      nonce: b.nonce ?? 0,
-      number: b.number ?? 0,
-    };
-    $miningState.recentBlocks = [item, ...($miningState.recentBlocks ?? [])].slice(0, 50);
-    // Reset to first page so newly found blocks are visible
-    currentPage = 1
-  }
-
-  async function appendNewBlocksFromBackend() {
-    try {
-      if (!($etcAccount && $miningState.isMining)) return;
-      const lookback = 2000;
-      const limit = 50;
-      const blocks = await invoke('get_recent_mined_blocks_pub', {
-        address: $etcAccount.address,
-        lookback,
-        limit
-      }) as Array<{ hash: string, nonce?: string, difficulty?: string, timestamp: number, number: number, reward?: number }>;
-      for (const b of blocks) {
-        if (seenHashes.has(b.hash)) continue;
-        seenHashes.add(b.hash);
-        pushRecentBlock({
-          hash: b.hash,
-          nonce: b.nonce ? parseInt(b.nonce, 16) : undefined,
-          difficulty: b.difficulty ? parseInt(b.difficulty, 16) : undefined,
-          timestamp: new Date((b.timestamp || 0) * 1000),
-          number: b.number,
-          reward: typeof b.reward === 'number' ? b.reward : undefined
-        });
-      }
-      // Hard de-duplication by hash as a safety net
-      const uniq = new Map<string, any>();
-      for (const it of ($miningState.recentBlocks ?? [])) {
-        if (!uniq.has(it.hash)) uniq.set(it.hash, it);
-      }
-  $miningState.recentBlocks = Array.from(uniq.values()).slice(0, 50);
-    } catch (e) {
-      console.error('Failed to append recent blocks:', e);
-    } 
-  } 
   
   function formatUptime(now: number = Date.now()) {
     const uptime = now - sessionStartTime
@@ -569,21 +957,30 @@
     const seconds = Math.floor((uptime % 60000) / 1000)
     return `${hours}h ${minutes}m ${seconds}s`
   }
-  
-  function parseHashRate(rateStr: string): number {
-    const match = rateStr.match(/^([\d.]+)\s*([KMGT]?)H\/s$/i)
-    if (!match) return 0
-    
-    const value = parseFloat(match[1])
-    const unit = match[2].toUpperCase()
-    
-    switch (unit) {
-      case 'K': return value * 1000
-      case 'M': return value * 1000000
-      case 'G': return value * 1000000000
-      case 'T': return value * 1000000000000
-      default: return value
-    }
+
+  function formatTimeFromSeconds(totalSeconds: number): string {
+      if (totalSeconds < 60) {
+          return `${totalSeconds.toFixed(0)}s`;
+      }
+
+      const seconds = Math.floor(totalSeconds);
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      const remainingSeconds = seconds % 60;
+
+      let parts = [];
+      if (hours > 0) {
+          parts.push(`${hours}h`);
+      }
+      if (minutes > 0) {
+          parts.push(`${minutes}m`);
+      }
+      // Only show seconds if the total time is less than an hour, or if minutes is 0
+      if (hours === 0 && minutes < 5) { // Show seconds when time is short
+          parts.push(`${remainingSeconds}s`);
+      }
+
+      return parts.join(' ');
   }
 
   function formatHashRate(rate: number | string): string {
@@ -629,133 +1026,7 @@
       }
     }
   }
-  // Pool structure with full configuration
-  interface Pool {
-    id: string
-    name: string
-    url: string
-    worker: string
-    password: string
-  }
-
-  let pools: Pool[] = []
-  let poolOptions: { value: string; label: string }[] = []
-
-  // Initialize with default pools
-  $: {
-    pools = [
-      { id: 'solo', name: 'Solo Mining', url: '', worker: '', password: '' },
-      { id: 'pool1', name: 'Pool 1', url: 'stratum://pool1.example.com:3333', worker: 'worker1', password: 'x' },
-      { id: 'pool2', name: 'Pool 2', url: 'stratum://pool2.example.com:3333', worker: 'worker2', password: 'x' },
-      { id: 'pool3', name: 'Community Pool', url: 'stratum://community.example.com:3333', worker: 'worker3', password: 'x' }
-    ]
-    
-    // Create dropdown options
-    poolOptions = pools.map(pool => ({
-      value: pool.id,
-      label: pool.name
-    }))
-  }
-
-  // Current pool management state
-  let poolConnected = false
-  let poolUrl = 'stratum://localhost:3333'
-  let poolWorker = 'worker1'
-  let poolPassword = 'x'
-  
-  // Pool management UI state
-  let showPoolManager = false
-  let editingPool: Pool | null = null
-  let newPool: Pool = { id: '', name: '', url: '', worker: '', password: '' }
-  let poolStats = {
-    connectedMiners: 0,
-    totalShares: 0,
-    currentDifficulty: 1000000,
-    poolHashrate: 0
-  }
-  let poolStatsInterval: ReturnType<typeof setInterval> | null = null
-
-  // Mock pool stats simulation
-  function startPoolStatsSimulation() {
-    if (poolStatsInterval) {
-      clearInterval(poolStatsInterval)
-    }
-    
-    poolStatsInterval = setInterval(() => {
-      if (poolConnected) {
-        // Simulate realistic pool stats
-        poolStats.connectedMiners = Math.max(1, poolStats.connectedMiners + Math.floor(Math.random() * 3) - 1)
-        poolStats.totalShares += Math.floor(Math.random() * 5)
-        poolStats.poolHashrate = poolStats.connectedMiners * (85000 + Math.random() * 15000) // 85-100 KH/s per miner
-        poolStats.currentDifficulty = 1000000 + Math.floor(Math.random() * 100000)
-      }
-    }, 3000) // Update every 3 seconds
-  }
-
-  function stopPoolStatsSimulation() {
-    if (poolStatsInterval) {
-      clearInterval(poolStatsInterval)
-      poolStatsInterval = null
-    }
-  }
-
-  // Pool management functions
-  function getCurrentPool(): Pool | null {
-    return pools.find(pool => pool.id === $miningState.selectedPool) || null
-  }
-
-  function updateCurrentPoolConfig() {
-    const currentPool = getCurrentPool()
-    if (currentPool) {
-      poolUrl = currentPool.url
-      poolWorker = currentPool.worker
-      poolPassword = currentPool.password
-    }
-  }
-
-  function addPool() {
-    if (newPool.name && newPool.url) {
-      const poolId = `pool_${Date.now()}`
-      pools = [...pools, { ...newPool, id: poolId }]
-      newPool = { id: '', name: '', url: '', worker: '', password: '' }
-      showPoolManager = false
-    }
-  }
-
-  function editPool(pool: Pool) {
-    editingPool = { ...pool }
-    showPoolManager = true
-  }
-
-  function savePool() {
-    if (editingPool && editingPool.name && editingPool.url) {
-      pools = pools.map(pool => 
-        pool.id === editingPool!.id ? editingPool! : pool
-      )
-      editingPool = null
-      showPoolManager = false
-    }
-  }
-
-  function deletePool(poolId: string) {
-    if (poolId !== 'solo') { // Don't delete solo mining
-      pools = pools.filter(pool => pool.id !== poolId)
-      if ($miningState.selectedPool === poolId) {
-        $miningState.selectedPool = 'solo'
-      }
-    }
-  }
-
-  function cancelPoolEdit() {
-    editingPool = null
-    newPool = { id: '', name: '', url: '', worker: '', password: '' }
-    showPoolManager = false
-  }
-
-  // Update pool config when selection changes
-  $: if ($miningState.selectedPool) {
-    updateCurrentPoolConfig()
-  }
+  // Remove old pool management code - replaced with decentralized system
   
   onDestroy(async () => {
     // Don't stop mining when leaving the page - preserve state
@@ -781,7 +1052,15 @@
     <h1 class="text-3xl font-bold">{$t('mining.title')}</h1>
     <p class="text-muted-foreground mt-2">{$t('mining.subtitle')}</p>
   </div>
-  
+
+  <!-- Temporary Account Warning -->
+  {#if showTemporaryAccountWarning && isTemporaryAccount}
+    <TemporaryAccountWarning
+      onDismiss={handleDismissWarning}
+      onCreateWallet={handleCreateWallet}
+    />
+  {/if}
+
   <!-- Mining Status Cards -->
   <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
     <Card class="p-4">
@@ -803,7 +1082,7 @@
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">{$t('mining.totalRewards')}</p>
-          <p class="text-2xl font-bold">{$miningState.totalRewards.toFixed(2)} Chiral</p>
+          <p class="text-2xl font-bold">{($miningState.totalRewards || 0).toFixed(2)} Chiral</p>
           <p class="text-xs text-green-600 flex items-center gap-1 mt-1">
             <TrendingUp class="h-3 w-3" />
             {$miningState.blocksFound} {$t('mining.blocksFound')}
@@ -819,10 +1098,17 @@
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">{$t('mining.powerUsage')}</p>
-          <p class="text-2xl font-bold">{powerConsumption.toFixed(0)}W</p>
-          <p class="text-xs text-muted-foreground mt-1">
-            {efficiency.toFixed(2)} {$t('mining.hw')}
-          </p>
+          {#if hasRealPower}
+            <p class="text-2xl font-bold">{powerConsumption.toFixed(0)}W</p>
+            <p class="text-xs text-muted-foreground mt-1">
+              {efficiency.toFixed(2)} {$t('mining.hw')}
+            </p>
+          {:else}
+            <p class="text-2xl font-bold text-gray-500">N/A</p>
+            <p class="text-xs text-muted-foreground mt-1">
+              {$t('mining.hw')}
+            </p>
+          {/if}
         </div>
         <div class="p-2 bg-amber-500/10 rounded-lg">
           <Zap class="h-5 w-5 text-amber-500" />
@@ -834,17 +1120,38 @@
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">{$t('mining.temperature')}</p>
-          <p class="text-2xl font-bold">{temperature.toFixed(1)}°C</p>
+          {#if temperatureLoading}
+            <p class="text-2xl font-bold text-blue-500">--°C</p>
+          {:else if hasRealTemperature}
+            <p class="text-2xl font-bold {temperature > 80 ? 'text-red-500' : temperature > 70 ? 'text-orange-500' : temperature > 60 ? 'text-yellow-500' : 'text-green-500'}">{displayedTemperature}°{temperatureUnit}</p>
+          {:else}
+            <p class="text-2xl font-bold text-gray-500">N/A</p>
+          {/if}
           <div class="mt-1">
-            <Progress 
-              value={temperature} 
-              max={100} 
-              class="h-1 {temperature > 80 ? 'bg-red-500' : temperature > 60 ? 'bg-yellow-500' : ''}"
-            />
+            {#if temperatureLoading}
+              <p class="text-xs text-muted-foreground mt-1">Detecting temperature sensors...</p>
+            {:else if hasRealTemperature}
+              <Progress 
+                value={Math.min(temperature, 100)} 
+                max={100} 
+                class="h-2 {temperature > 80 ? '[&>div]:bg-red-500' : temperature > 70 ? '[&>div]:bg-orange-500' : temperature > 60 ? '[&>div]:bg-yellow-500' : '[&>div]:bg-green-500'}"
+              />
+              <p class="text-xs text-muted-foreground mt-1">
+                {temperature > 85 ? $t('mining.temperatureStatus.critical') : temperature > 75 ? $t('mining.temperatureStatus.hot') : temperature > 65 ? $t('mining.temperatureStatus.warm') : $t('mining.temperatureStatus.normal')}
+              </p>
+            {:else}
+              <Progress value={0} max={100} class="h-2 bg-gray-200 [&>div]:bg-gray-400 [&>div]:opacity-50" />
+              <p class="text-xs text-muted-foreground mt-1">Hardware sensor not available</p>
+            {/if}
           </div>
         </div>
-        <div class="p-2 bg-red-500/10 rounded-lg">
-          <Thermometer class="h-5 w-5 text-red-500" />
+        <div class="flex flex-col gap-2">
+            <Button size="icon" variant="outline" on:click={() => temperatureUnit = temperatureUnit === 'C' ? 'F' : 'C'}>
+                {temperatureUnit === 'C' ? '°F' : '°C'}
+            </Button>
+            <div class="p-2 {temperatureLoading ? 'bg-blue-500/20' : hasRealTemperature ? (temperature > 80 ? 'bg-red-500/20' : temperature > 70 ? 'bg-orange-500/20' : temperature > 60 ? 'bg-yellow-500/20' : 'bg-green-500/20') : 'bg-gray-500/20'} rounded-lg">
+                <Thermometer class="h-5 w-5 {temperatureLoading ? 'text-blue-500 animate-pulse' : hasRealTemperature ? (temperature > 80 ? 'text-red-500' : temperature > 70 ? 'text-orange-500' : temperature > 60 ? 'text-yellow-500' : 'text-green-500') : 'text-gray-500'}" />
+            </div>
         </div>
       </div>
     </Card>
@@ -878,142 +1185,98 @@
     </div>
     
     <div class="space-y-4">
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div class="relative">
-          <Label for="pool-select">{$t('mining.pool')}</Label>
-          <div class="flex gap-2 items-end">
-            <div class="flex-1">
-              <DropDown
-                id="pool-select"
-                options={poolOptions}
-                bind:value={$miningState.selectedPool}
-                disabled={$miningState.isMining}
-              />
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={$miningState.isMining}
-              on:click={() => showPoolManager = true}
-            >
-              Manage Pools
-            </Button>
-          </div>
-        </div>
-        
-        <!-- Pool Management Mockup -->
-        {#if $miningState.selectedPool !== 'solo'}
-          <div class="col-span-full space-y-4 p-4 bg-muted/50 rounded-lg">
-            <h3 class="font-semibold text-lg">Pool Management</h3>
-            
-            <!-- Pool Configuration -->
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <Label for="pool-url">Pool URL</Label>
-                <Input
-                  id="pool-url"
-                  bind:value={poolUrl}
-                  placeholder="stratum://localhost:3333"
-                  disabled={$miningState.isMining}
-                  class="mt-2"
-                />
-              </div>
-              <div>
-                <Label for="pool-worker">Worker Name</Label>
-                <Input
-                  id="pool-worker"
-                  bind:value={poolWorker}
-                  placeholder="worker1"
-                  disabled={$miningState.isMining}
-                  class="mt-2"
-                />
-              </div>
-              <div>
-                <Label for="pool-password">Password</Label>
-                <Input
-                  id="pool-password"
-                  bind:value={poolPassword}
-                  placeholder="x"
-                  disabled={$miningState.isMining}
-                  class="mt-2"
-                />
-              </div>
-            </div>
-            
-            <!-- Connection Status -->
-            <div class="flex items-center gap-2">
-              <div class="w-2 h-2 rounded-full {poolConnected ? 'bg-green-500' : 'bg-red-500'}"></div>
-              <span class="text-sm font-medium">
-                {poolConnected ? 'Connected to Pool' : 'Not Connected'}
-              </span>
-            </div>
-            
-            <!-- Pool Actions -->
+      <!-- Decentralized Pool Mining Section -->
+      <div class="col-span-full">
+        <div class="bg-muted/30 rounded-lg p-4 space-y-4">
+          <div class="flex items-center justify-between">
+            <h3 class="text-lg font-semibold">{$t('mining.decentralizedPools')}</h3>
             <div class="flex gap-2">
-              {#if !poolConnected}
-                <Button 
-                  disabled={$miningState.isMining}
-                  size="sm"
-                  on:click={() => {
-                    poolConnected = true
-                    startPoolStatsSimulation()
-                  }}
-                >
-                  Connect to Pool
-                </Button>
-              {:else}
-                <Button 
-                  disabled={$miningState.isMining}
-                  variant="outline"
-                  size="sm"
-                  on:click={() => {
-                    poolConnected = false
-                    stopPoolStatsSimulation()
-                  }}
-                >
-                  Disconnect
-                </Button>
-              {/if}
-              
-              <Button 
-                disabled={$miningState.isMining}
-                variant="secondary"
-                size="sm"
-              >
-                Start Pool Server
+              <Button variant="outline" size="sm" on:click={discoverPools} disabled={isDiscovering || $miningState.isMining}>
+                {#if isDiscovering}
+                  <RefreshCw class="h-4 w-4 mr-2 animate-spin" />
+                  {$t('mining.discovering')}
+                {:else}
+                  <RefreshCw class="h-4 w-4 mr-2" />
+                  {$t('mining.discoverPools')}
+                {/if}
               </Button>
-              <Button 
-                disabled={$miningState.isMining}
-                variant="destructive"
-                size="sm"
-              >
-                Stop Pool Server
+              <Button variant="secondary" size="sm" on:click={() => showCreatePool = true} disabled={$miningState.isMining}>
+                <Coins class="h-4 w-4 mr-2" />
+                {$t('mining.createPool')}
               </Button>
             </div>
-            
-            <!-- Pool Statistics (when connected) -->
-            {#if poolConnected}
+          </div>
+
+          {#if currentPool}
+            <!-- Currently Connected Pool -->
+            <div class="bg-green-500/10 border border-green-500/20 rounded-lg p-4">
+              <div class="flex items-center justify-between mb-3">
+                <div class="flex items-center gap-2">
+                  <div class="w-3 h-3 bg-green-500 rounded-full"></div>
+                  <h4 class="font-semibold text-green-700">{$t('mining.poolDetails.connectedTo')}: {currentPool.pool.name}</h4>
+                </div>
+                <Button variant="destructive" size="sm" on:click={leavePool} disabled={$miningState.isMining}>
+                  {$t('mining.poolDetails.leave')}
+                </Button>
+              </div>
+
               <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                 <div>
-                  <p class="text-muted-foreground">Connected Miners</p>
-                  <p class="font-semibold">{poolStats.connectedMiners}</p>
+                  <p class="text-muted-foreground">{$t('mining.poolDetails.yourHashrate')}</p>
+                  <p class="font-semibold">{currentPool.stats.your_hashrate}</p>
                 </div>
                 <div>
-                  <p class="text-muted-foreground">Pool Hashrate</p>
-                  <p class="font-semibold">{poolStats.poolHashrate.toFixed(2)} H/s</p>
+                  <p class="text-muted-foreground">{$t('mining.poolDetails.poolHashrate')}</p>
+                  <p class="font-semibold">{currentPool.stats.pool_hashrate}</p>
                 </div>
                 <div>
-                  <p class="text-muted-foreground">Total Shares</p>
-                  <p class="font-semibold">{poolStats.totalShares}</p>
+                  <p class="text-muted-foreground">{$t('mining.poolDetails.yourShare')}</p>
+                  <p class="font-semibold">{currentPool.stats.your_share_percentage.toFixed(2)}%</p>
                 </div>
                 <div>
-                  <p class="text-muted-foreground">Difficulty</p>
-                  <p class="font-semibold">{poolStats.currentDifficulty.toLocaleString()}</p>
+                  <p class="text-muted-foreground">{$t('mining.poolDetails.est24hPayout')}</p>
+                  <p class="font-semibold">{currentPool.stats.estimated_payout_24h.toFixed(3)} Chiral</p>
+                </div>
+                <div>
+                  <p class="text-muted-foreground">{$t('mining.poolDetails.shares')}</p>
+                  <p class="font-semibold">{currentPool.stats.shares_accepted}/{currentPool.stats.shares_submitted}</p>
+                </div>
+                <div>
+                  <p class="text-muted-foreground">{$t('mining.poolDetails.connectedMiners')}</p>
+                  <p class="font-semibold">{currentPool.stats.connected_miners}</p>
+                </div>
+                <div>
+                  <p class="text-muted-foreground">{$t('mining.poolDetails.poolFee')}</p>
+                  <p class="font-semibold">{currentPool.pool.fee_percentage}%</p>
+                </div>
+                <div>
+                  <p class="text-muted-foreground">{$t('mining.poolDetails.lastShare')}</p>
+                  <p class="font-semibold">{formatTimestamp(currentPool.stats.last_share_time)}</p>
                 </div>
               </div>
-            {/if}
-          </div>
-        {/if}
+            </div>
+          {:else}
+            <!-- Solo Mining Status -->
+            <div class="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4">
+              <div class="flex items-center gap-2">
+                <div class="w-3 h-3 bg-blue-500 rounded-full"></div>
+                <h4 class="font-semibold text-blue-700">{$t('mining.poolDetails.soloMining')}</h4>
+              </div>
+              <p class="text-sm text-muted-foreground mt-2">
+                {$t('mining.poolDetails.soloMiningDesc')}
+              </p>
+            </div>
+          {/if}
+
+          {#if poolError}
+            <div class="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
+              <p class="text-sm text-red-600">{poolError}</p>
+            </div>
+          {/if}
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         
         <div>
           <Label for="thread-count">{$t('mining.cpuThreads', { values: { cpuThreads } })}</Label>
@@ -1120,9 +1383,9 @@
         <div class="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 mt-2">
           <div class="flex items-center gap-2">
             <AlertCircle class="h-4 w-4 text-blue-500 flex-shrink-0" />
-            <p class="text-sm text-blue-600">
-              {$t('mining.errors.noAccountLink')} <button on:click={() => { navigation.setCurrentPage('account'); goto('/account'); }} class="underline font-medium">{$t('mining.accountPage')}</button>
-            </p>
+                        <p class="text-sm text-blue-600">
+                          {@html $t('mining.errors.noAccountToStart', { values: { link: '<a href="/account" class="underline font-medium">' + $t('mining.accountPage') + '</a>' } })}
+                        </p>
           </div>
         </div>
       {/if}
@@ -1153,7 +1416,8 @@
         <div class="flex justify-between items-center">
           <span class="text-sm text-muted-foreground">{$t('mining.estTimeToBlock')}</span>
           <Badge variant="outline">
-            {estimatedTimeToBlock > 0 ? `~${Math.floor(estimatedTimeToBlock / 60)} min` : $t('mining.calculating')}
+            {estimatedTimeToBlock > 0 ?
+              `~${formatTimeFromSeconds(estimatedTimeToBlock)}` : $t('mining.calculating')}
           </Badge>
         </div>
         <div class="flex justify-between items-center">
@@ -1519,9 +1783,6 @@
                 <div class="font-medium">{pool.name}</div>
                 <div class="text-sm text-muted-foreground">
                   {pool.url || 'Solo Mining'}
-                  {#if pool.worker}
-                    • {pool.worker}
-                  {/if}
                 </div>
               </div>
               <div class="flex gap-2">
@@ -1591,7 +1852,7 @@
               <Label for="pool-worker">Worker Name</Label>
               <Input
                 id="pool-worker"
-                value={editingPool ? editingPool.worker : newPool.worker}
+                value={editingPool ? (editingPool.worker ?? '') : newPool.worker}
                 on:input={(e: Event) => {
                   const target = e.target as HTMLInputElement
                   if (editingPool) {
@@ -1608,7 +1869,7 @@
               <Label for="pool-password">Password</Label>
               <Input
                 id="pool-password"
-                value={editingPool ? editingPool.password : newPool.password}
+                value={editingPool ? (editingPool.password ?? '') : newPool.password}
                 on:input={(e: Event) => {
                   const target = e.target as HTMLInputElement
                   if (editingPool) {
@@ -1640,4 +1901,192 @@
         </div>
       </div>
     </div>
-  {/if} 
+  {/if}
+
+  <!-- Old pool UI removed - using new decentralized system -->
+
+
+<!-- Pool Discovery Modal -->
+{#if showPoolList}
+  <div class="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <Card class="w-full max-w-4xl max-h-[80vh] flex flex-col">
+      <div class="p-4 border-b flex items-center justify-between">
+        <h2 class="text-lg font-semibold">{$t('mining.poolDetails.availablePools')}</h2>
+        <Button size="sm" variant="ghost" on:click={() => showPoolList = false}>
+          <X class="h-4 w-4" />
+        </Button>
+      </div>
+
+      <div class="flex-1 overflow-y-auto p-4">
+        {#if availablePools.length === 0}
+          <div class="text-center py-8">
+            <p class="text-muted-foreground">{$t('mining.poolDetails.noPoolsFound')}</p>
+          </div>
+        {:else}
+          <div class="space-y-3">
+            {#each availablePools as pool}
+              <div class="border rounded-lg p-4 hover:bg-muted/50">
+                <div class="flex items-start justify-between">
+                  <div class="flex-1">
+                    <div class="flex items-center gap-2 mb-2">
+                      <h3 class="font-semibold">{pool.name}</h3>
+                      <Badge variant="outline" class={getPoolStatusColor(pool.status)}>
+                        {pool.status}
+                      </Badge>
+                      <Badge variant="secondary">{pool.region}</Badge>
+                    </div>
+                    
+                    <p class="text-sm text-muted-foreground mb-3">{pool.description}</p>
+                    
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                      <div>
+                        <p class="text-muted-foreground">{$t('mining.poolDetails.miners')}</p>
+                        <p class="font-medium">{pool.miners_count}</p>
+                      </div>
+                      <div>
+                        <p class="text-muted-foreground">{$t('mining.poolDetails.hashrate')}</p>
+                        <p class="font-medium">{pool.total_hashrate}</p>
+                      </div>
+                      <div>
+                        <p class="text-muted-foreground">{$t('mining.poolDetails.fee')}</p>
+                        <p class="font-medium">{pool.fee_percentage}%</p>
+                      </div>
+                      <div>
+                        <p class="text-muted-foreground">{$t('mining.poolDetails.lastBlock')}</p>
+                        <p class="font-medium">{pool.last_block_time > 0 ? formatTimestamp(pool.last_block_time) : $t('mining.poolDetails.never')}</p>
+                      </div>
+                      <div>
+                        <p class="text-muted-foreground">{$t('mining.poolDetails.blocks24h')}</p>
+                        <p class="font-medium">{pool.blocks_found_24h}</p>
+                      </div>
+                      <div>
+                        <p class="text-muted-foreground">{$t('mining.poolDetails.minPayout')}</p>
+                        <p class="font-medium">{pool.min_payout} Chiral</p>
+                      </div>
+                      <div>
+                        <p class="text-muted-foreground">{$t('mining.poolDetails.payment')}</p>
+                        <p class="font-medium">{pool.payment_method}</p>
+                      </div>
+                      <div>
+                        <p class="text-muted-foreground">{$t('mining.poolDetails.url')}</p>
+                        <p class="font-mono text-xs">{pool.url}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="ml-4">
+                    <Button
+                      size="sm"
+                      on:click={() => joinPool(pool)}
+                      disabled={pool.status !== 'Active' || $miningState.isMining}
+                    >
+                      {$t('mining.poolDetails.join')}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    </Card>
+  </div>
+{/if}
+
+<!-- Create Pool Modal -->
+{#if showCreatePool}
+  <div class="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <Card class="w-full max-w-2xl">
+      <div class="p-4 border-b flex items-center justify-between">
+        <h2 class="text-lg font-semibold">{$t('mining.poolDetails.createNew')}</h2>
+        <Button size="sm" variant="ghost" on:click={() => showCreatePool = false}>
+          <X class="h-4 w-4" />
+        </Button>
+      </div>
+
+      <div class="p-4 space-y-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <Label for="pool-name">{$t('mining.poolDetails.poolName')} *</Label>
+            <Input
+              id="pool-name"
+              bind:value={newPool.name}
+              placeholder={$t('mining.poolDetails.poolNamePlaceholder')}
+              class="mt-2"
+            />
+          </div>
+          <div>
+            <Label for="pool-region">{$t('mining.poolDetails.region')}</Label>
+            <select bind:value={newPool.region} class="w-full mt-2 px-3 py-2 border rounded-md bg-background">
+              <option value="Global">Global</option>
+              <option value="Americas">Americas</option>
+              <option value="Europe">Europe</option>
+              <option value="Asia">Asia</option>
+              <option value="Oceania">Oceania</option>
+            </select>
+          </div>
+        </div>
+        
+        <div>
+          <Label for="pool-description">{$t('mining.poolDetails.description')}</Label>
+          <Input
+            id="pool-description"
+            bind:value={newPool.description}
+            placeholder={$t('mining.poolDetails.descriptionPlaceholder')}
+            class="mt-2"
+          />
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <Label for="pool-fee">{$t('mining.poolDetails.feePercentage')}</Label>
+            <Input
+              id="pool-fee"
+              type="number"
+              bind:value={newPool.fee_percentage}
+              min="0"
+              max="10"
+              step="0.1"
+              class="mt-2"
+            />
+          </div>
+          <div>
+            <Label for="pool-payout">{$t('mining.poolDetails.minPayoutChiral')}</Label>
+            <Input
+              id="pool-payout"
+              type="number"
+              bind:value={newPool.min_payout}
+              min="0.1"
+              step="0.1"
+              class="mt-2"
+            />
+          </div>
+          <div>
+            <Label for="pool-payment">{$t('mining.poolDetails.paymentMethod')}</Label>
+            <select bind:value={newPool.payment_method} class="w-full mt-2 px-3 py-2 border rounded-md bg-background">
+              <option value="PPLNS">PPLNS</option>
+              <option value="PPS">PPS</option>
+              <option value="PPS+">PPS+</option>
+              <option value="PROP">PROP</option>
+            </select>
+          </div>
+        </div>
+        
+        <div class="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3">
+          <p class="text-sm text-blue-600">
+            <strong>{$t('mining.poolDetails.note')}:</strong> {$t('mining.poolDetails.createNote')}
+          </p>
+        </div>
+
+        <div class="flex justify-end gap-2 pt-4">
+          <Button variant="outline" on:click={() => showCreatePool = false}>
+            {$t('mining.poolDetails.cancel')}
+          </Button>
+          <Button on:click={createNewPool} disabled={!newPool.name.trim()}>
+            {$t('mining.createPool')}
+          </Button>
+        </div>
+      </div>
+    </Card>
+  </div>
+{/if}

@@ -42,7 +42,7 @@
     @apply border-border;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground h-screen;
   }
 }
 
@@ -56,7 +56,9 @@
   display: inline-block;
   opacity: 0;
   transform: translateX(4px);
-  transition: opacity 0.12s ease, transform 0.12s ease;
+  transition:
+    opacity 0.12s ease,
+    transform 0.12s ease;
   pointer-events: none; /* allow hover to remain on parent */
 }
 

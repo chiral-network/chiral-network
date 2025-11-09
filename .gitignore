@@ -75,3 +75,8 @@ pnpm-lock.yaml
 
 # Local Python venv
 .venv-pdf/
+src-tauri/bin/
+src-tauri/geth-data/
+
+# Local Claude instructions (personal, not for git)
+CLAUDE.local.md

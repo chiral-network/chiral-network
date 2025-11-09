@@ -1,6 +1,6 @@
-const WebSocket = require('ws');
+import { WebSocketServer } from 'ws';
 
-const wss = new WebSocket.Server({ port: 3000 });
+const wss = new WebSocketServer({ port: 3000 });
 const clients = new Map();
 
 wss.on('connection', (ws) => {

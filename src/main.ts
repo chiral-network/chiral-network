@@ -2,10 +2,7 @@ import { mount } from "svelte";
 import App from "./App.svelte";
 import "./styles/globals.css";
 
-console.log("Main.ts loading...");
-
 const target = document.getElementById("app");
-console.log("Target element:", target);
 
 let app: any = null;
 
@@ -18,7 +15,6 @@ if (!target) {
     app = mount(App, {
       target: target,
     });
-    console.log("App mounted successfully");
   } catch (error) {
     console.error("Error mounting app:", error);
     document.body.innerHTML = `<h1 style="color: red;">Error: ${error}</h1>`;

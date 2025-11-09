@@ -19,7 +19,7 @@
         "height": 800,
         "minWidth": 390,
         "minHeight": 422,
-        "devtools": true
+        "dragDropEnabled": false
       }
     ],
     "withGlobalTauri": false,
@@ -70,5 +70,8 @@
         "installerIcon": "./icons/icon.ico"
       }
     }
+  },
+  "plugins": {
+    "process": {}
   }
 }
