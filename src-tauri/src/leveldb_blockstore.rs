@@ -1,8 +1,11 @@
-use cid::Cid;
-use rusty_leveldb::{CompressionType, DB, Options};
+use async_trait::async_trait;
+use blockstore::{Blockstore, block::CidError};
+use cid::{Cid, CidGeneric};
+use futures::future::BoxFuture;
+use rusty_leveldb::{DB, Options};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info};
 
 /// LevelDB-based blockstore for content-addressed storage
 ///
@@ -22,8 +25,7 @@ impl LevelDbBlockstore {
     /// * `path` - Directory path for the LevelDB database
     ///
     /// # Configuration
-    /// - Snappy compression enabled
-    /// - Bloom filter with 10 bits per key
+    /// - Snappy compression (compressor ID 0)
     /// - 128MB block cache
     /// - 64MB write buffer
     pub async fn open<P: AsRef<Path>>(path: P) -> Result<Self, String> {
@@ -34,17 +36,17 @@ impl LevelDbBlockstore {
         let db = tokio::task::spawn_blocking(move || -> Result<DB, String> {
             let mut options = Options::default();
 
-            // Enable Snappy compression for better disk usage
-            options.compression_type = CompressionType::SnappyCompression;
-
             // Set cache size to 128MB for better read performance
-            options.block_cache_capacity = 128 * 1024 * 1024;
+            options.block_cache_capacity_bytes = 128 * 1024 * 1024;
 
             // Set write buffer to 64MB for better write batching
             options.write_buffer_size = 64 * 1024 * 1024;
 
-            // Enable bloom filter for faster has() checks (10 bits per key)
-            options.filter_policy = rusty_leveldb::FilterPolicy::BloomFilter(10);
+            // Enable paranoid checks for data integrity
+            options.paranoid_checks = true;
+
+            // Create database if it doesn't exist
+            options.create_if_missing = true;
 
             DB::open(path, options).map_err(|e| format!("Failed to open LevelDB: {:?}", e))
         })
@@ -68,10 +70,10 @@ impl LevelDbBlockstore {
             let mut options = Options::default();
 
             // Smaller cache for in-memory (32MB)
-            options.block_cache_capacity = 32 * 1024 * 1024;
+            options.block_cache_capacity_bytes = 32 * 1024 * 1024;
             options.write_buffer_size = 16 * 1024 * 1024;
-            options.compression_type = CompressionType::SnappyCompression;
-            options.filter_policy = rusty_leveldb::FilterPolicy::BloomFilter(10);
+            options.paranoid_checks = false; // Skip checks for temp storage
+            options.create_if_missing = true;
 
             // Use a temporary directory
             let temp_dir = std::env::temp_dir().join(format!("leveldb_temp_{}", uuid::Uuid::new_v4()));
@@ -89,12 +91,12 @@ impl LevelDbBlockstore {
         })
     }
 
-    /// Store a block by its CID
+    /// Store a block by its CID (internal method)
     ///
     /// # Arguments
     /// * `cid` - Content identifier for the block
     /// * `data` - Block data bytes
-    pub async fn put(&self, cid: &Cid, data: Vec<u8>) -> Result<(), String> {
+    async fn put_internal(&self, cid: &Cid, data: Vec<u8>) -> Result<(), String> {
         let db = self.db.clone();
         let key = cid.to_bytes();
         let data_len = data.len();
@@ -111,7 +113,7 @@ impl LevelDbBlockstore {
         Ok(())
     }
 
-    /// Retrieve a block by its CID
+    /// Retrieve a block by its CID (internal method)
     ///
     /// # Arguments
     /// * `cid` - Content identifier for the block
@@ -120,7 +122,7 @@ impl LevelDbBlockstore {
     /// * `Ok(Some(data))` - Block found
     /// * `Ok(None)` - Block not found
     /// * `Err(_)` - Database error
-    pub async fn get(&self, cid: &Cid) -> Result<Option<Vec<u8>>, String> {
+    async fn get_internal(&self, cid: &Cid) -> Result<Option<Vec<u8>>, String> {
         let db = self.db.clone();
         let key = cid.to_bytes();
 
@@ -142,7 +144,7 @@ impl LevelDbBlockstore {
         Ok(result)
     }
 
-    /// Check if a block exists by its CID
+    /// Check if a block exists by its CID (internal method)
     ///
     /// # Arguments
     /// * `cid` - Content identifier to check
@@ -150,7 +152,7 @@ impl LevelDbBlockstore {
     /// # Returns
     /// * `true` if block exists
     /// * `false` if block does not exist
-    pub async fn has(&self, cid: &Cid) -> Result<bool, String> {
+    async fn has_internal(&self, cid: &Cid) -> Result<bool, String> {
         let db = self.db.clone();
         let key = cid.to_bytes();
 
@@ -165,13 +167,13 @@ impl LevelDbBlockstore {
         Ok(exists)
     }
 
-    /// Delete a block by its CID
+    /// Delete a block by its CID (internal method)
     ///
     /// This is used for garbage collection and pin management.
     ///
     /// # Arguments
     /// * `cid` - Content identifier to delete
-    pub async fn delete(&self, cid: &Cid) -> Result<(), String> {
+    async fn delete_internal(&self, cid: &Cid) -> Result<(), String> {
         let db = self.db.clone();
         let key = cid.to_bytes();
 
@@ -190,6 +192,56 @@ impl LevelDbBlockstore {
     /// Check if this is an in-memory blockstore
     pub fn is_in_memory(&self) -> bool {
         self.in_memory
+    }
+}
+
+/// Implement the blockstore::Blockstore trait for compatibility with beetswap
+impl Blockstore for LevelDbBlockstore {
+    fn get<const S: usize>(&self, cid: &CidGeneric<S>) -> BoxFuture<'_, Result<Option<Vec<u8>>, blockstore::Error>> {
+        let cid_bytes = cid.to_bytes();
+        Box::pin(async move {
+            // Convert CidGeneric<S> to Cid (CidGeneric<64>) for internal use
+            let cid_64: Cid = Cid::try_from(cid_bytes).map_err(|_| {
+                blockstore::Error::FatalDatabaseError("Failed to convert CID".to_string())
+            })?;
+            self.get_internal(&cid_64)
+                .await
+                .map_err(|e| blockstore::Error::FatalDatabaseError(e))
+        })
+    }
+
+    fn put_keyed<const S: usize>(&self, cid: &CidGeneric<S>, data: &[u8]) -> BoxFuture<'_, Result<(), blockstore::Error>> {
+        let cid_bytes = cid.to_bytes();
+        let data_vec = data.to_vec();
+        Box::pin(async move {
+            // Convert CidGeneric<S> to Cid (CidGeneric<64>) for internal use
+            let cid_64: Cid = Cid::try_from(cid_bytes).map_err(|_| {
+                blockstore::Error::FatalDatabaseError("Failed to convert CID".to_string())
+            })?;
+            self.put_internal(&cid_64, data_vec)
+                .await
+                .map_err(|e| blockstore::Error::FatalDatabaseError(e))
+        })
+    }
+
+    fn remove<const S: usize>(&self, cid: &CidGeneric<S>) -> BoxFuture<'_, Result<(), blockstore::Error>> {
+        let cid_bytes = cid.to_bytes();
+        Box::pin(async move {
+            // Convert CidGeneric<S> to Cid (CidGeneric<64>) for internal use
+            let cid_64: Cid = Cid::try_from(cid_bytes).map_err(|_| {
+                blockstore::Error::FatalDatabaseError("Failed to convert CID".to_string())
+            })?;
+            self.delete_internal(&cid_64)
+                .await
+                .map_err(|e| blockstore::Error::FatalDatabaseError(e))
+        })
+    }
+
+    fn close(self) -> BoxFuture<'static, Result<(), blockstore::Error>> {
+        Box::pin(async move {
+            // LevelDB auto-closes when dropped, no explicit close needed
+            Ok(())
+        })
     }
 }
 

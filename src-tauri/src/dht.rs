@@ -70,6 +70,7 @@ impl rr::Codec for KeyRequestCodec {
 use async_std::fs;
 use async_std::path::Path;
 use async_trait::async_trait;
+use blockstore::block::{Block, CidError};
 use crate::leveldb_blockstore::LevelDbBlockstore;
 use ethers::prelude::*;
 use tokio::task::JoinHandle;
