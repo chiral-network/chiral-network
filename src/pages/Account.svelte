@@ -3,7 +3,7 @@
   import Card from '$lib/components/ui/card.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText } from 'lucide-svelte'
+  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText, AlertCircle } from 'lucide-svelte'
   import DropDown from "$lib/components/ui/dropDown.svelte";
   import { wallet, etcAccount, blacklist} from '$lib/stores' 
   import { walletService } from '$lib/wallet';
@@ -1350,7 +1350,7 @@
             {$t('account.upgradeAccount.description')}
           </p>
           <div class="flex flex-wrap gap-2 mt-3">
-            <Button size="sm" on:click={() => (showKeystoreSave = true)}>
+            <Button size="sm" on:click={() => document.getElementById('keystore-section')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>
               {$t('account.upgradeAccount.saveToKeystore')}
             </Button>
             <Button size="sm" variant="outline" on:click={openCreateMnemonic}>
@@ -1954,7 +1954,7 @@
   {/if}
 
   {#if $etcAccount}
-  <Card class="p-6">
+  <Card class="p-6" id="keystore-section">
     <div class="flex items-center gap-2 mb-4">
       <KeyRound class="h-5 w-5 text-muted-foreground" />
       <h2 class="text-lg font-semibold">{$t('keystore.title')}</h2>

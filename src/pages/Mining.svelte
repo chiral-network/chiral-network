@@ -572,7 +572,7 @@
       // Set as active account
       etcAccount.set({
         address: tempAccount.address,
-        private_key: tempAccount.privateKey
+        private_key: tempAccount.private_key
       })
 
       // Mark as temporary
@@ -610,7 +610,7 @@
     
     try {
       await invoke('start_miner', {
-        address: $etcAccount.address,
+        address: $etcAccount?.address || '',
         threads: selectedThreads,
         dataDir: './bin/geth-data'
       })
