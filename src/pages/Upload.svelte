@@ -21,7 +21,8 @@
     Blocks,
     Globe,
     DollarSign,
-    Copy
+    Copy,
+    Share2
   } from "lucide-svelte";
   import { files, type FileItem, etcAccount } from "$lib/stores";
   import {
@@ -159,7 +160,7 @@
   $: selectedProtocol = $protocolStore;
   $: hasSelectedProtocol = selectedProtocol !== null;
 
-  function handleProtocolSelect(protocol: "WebRTC" | "Bitswap") {
+  function handleProtocolSelect(protocol: "WebRTC" | "Bitswap" | "BitTorrent") {
     protocolStore.set(protocol);
   }
 
@@ -665,6 +666,27 @@
         const fileSize = await invoke<number>('get_file_size', { filePath });
         const price = await calculateFilePrice(fileSize);
 
+        // Handle BitTorrent differently - create and seed torrent
+        if (selectedProtocol === "BitTorrent") {
+          const magnetLink = await invoke<string>('create_and_seed_torrent', { filePath });
+          
+          const torrentFile = {
+            id: `torrent-${Date.now()}-${Math.random()}`,
+            name: fileName,
+            hash: magnetLink, // Use magnet link as hash for torrents
+            size: fileSize,
+            path: filePath,
+            seederAddresses: [],
+            uploadDate: new Date(),
+            status: "seeding" as const,
+            price: 0, // BitTorrent is free
+          };
+
+          files.update(f => [...f, torrentFile]);
+          showToast(`${fileName} is now seeding as a torrent`, "success");
+          continue; // Skip the normal Chiral upload flow
+        }
+
         const metadata = await dhtService.publishFileToNetwork(filePath, price);
 
         const newFile = {
@@ -764,6 +786,8 @@
     await navigator.clipboard.writeText(hash);
     showToast(tr("upload.hashCopiedClipboard"), "success");
   }
+
+  // BitTorrent seeding functions - REMOVED: Now integrated into main upload flow
 
 </script>
 
@@ -916,8 +940,10 @@
             >
               {#if selectedProtocol === "WebRTC"}
                 <Globe class="h-5 w-5 text-blue-600" />
-              {:else}
+              {:else if selectedProtocol === "Bitswap"}
                 <Blocks class="h-5 w-5 text-blue-600" />
+              {:else}
+                <Share2 class="h-5 w-5 text-green-600" />
               {/if}
             </div>
             <div>
@@ -927,7 +953,9 @@
               <p class="text-xs text-muted-foreground">
                 {selectedProtocol === "WebRTC"
                   ? $t("upload.webrtcDescription")
-                  : $t("upload.bitswapDescription")}
+                  : selectedProtocol === "Bitswap"
+                  ? $t("upload.bitswapDescription")
+                  : $t("torrent.seed.description")}
               </p>
             </div>
           </div>
@@ -943,6 +971,8 @@
     </Card>
   {/if}
 
+  <!-- BitTorrent Seeding Section (Collapsible) - REMOVED: Now integrated as protocol option -->
+
   <Card
     class="drop-zone relative p-6 transition-all duration-200 border-dashed {isDragging
       ? 'border-primary bg-primary/5'
@@ -956,7 +986,7 @@
           <h2 class="text-2xl font-bold mb-6 text-center">
             {$t("upload.selectProtocol")}
           </h2>
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-2xl mx-auto">
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4 max-w-4xl mx-auto">
             <!-- WebRTC Option -->
             <button
               class="p-6 border-2 rounded-lg hover:border-blue-500 transition-colors duration-200 flex flex-col items-center gap-4 {selectedProtocol ===
@@ -995,6 +1025,27 @@
                 <h3 class="text-lg font-semibold mb-2">Bitswap</h3>
                 <p class="text-sm text-gray-600 dark:text-gray-400">
                   {$t("upload.bitswapDescription")}
+                </p>
+              </div>
+            </button>
+
+            <!-- BitTorrent Option -->
+            <button
+              class="p-6 border-2 rounded-lg hover:border-green-500 transition-colors duration-200 flex flex-col items-center gap-4 {selectedProtocol ===
+              'BitTorrent'
+                ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
+                : 'border-gray-200 dark:border-gray-700'}"
+              on:click={() => handleProtocolSelect("BitTorrent")}
+            >
+              <div
+                class="w-16 h-16 flex items-center justify-center bg-green-100 rounded-full"
+              >
+                <Share2 class="w-8 h-8 text-green-600" />
+              </div>
+              <div class="text-center">
+                <h3 class="text-lg font-semibold mb-2">BitTorrent</h3>
+                <p class="text-sm text-gray-600 dark:text-gray-400">
+                  {$t("torrent.seed.description")}
                 </p>
               </div>
             </button>
@@ -1230,6 +1281,22 @@
                                     aria-label="Copy file CID"
                                   >
                                     <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
+                                  </button>
+                                </div>
+                              {/if}
+
+                              {#if file.hash.startsWith('magnet:')}
+                                <div class="flex items-center gap-1">
+                                  <Badge class="bg-green-100 text-green-800 text-xs px-2 py-0.5">
+                                    <Share2 class="h-3 w-3 mr-1" />
+                                    BitTorrent
+                                  </Badge>
+                                  <button
+                                    on:click={() => handleCopy(file.hash)}
+                                    class="text-xs text-muted-foreground hover:text-primary"
+                                    title="Copy magnet link"
+                                  >
+                                    Copy Magnet Link
                                   </button>
                                 </div>
                               {/if}

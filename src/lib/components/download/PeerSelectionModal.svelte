@@ -26,6 +26,7 @@
   export let mode: 'auto' | 'manual' = 'auto';
   export let autoSelectionInfo: Array<{peerId: string; score: number; metrics: any}> | null = null;
   export let protocol: 'http' | 'webrtc' = 'http'; // Default to HTTP for WebRTC flow
+  export let isTorrent = false; // Flag to indicate torrent download (no peer selection needed)
 
   const dispatch = createEventDispatcher<{
     confirm: void;
@@ -107,18 +108,30 @@
       <div class="space-y-6">
         <!-- Header -->
         <div>
-          <h2 class="text-2xl font-bold mb-2">Select Download Peers</h2>
+          <h2 class="text-2xl font-bold mb-2">{isTorrent ? 'Confirm Download' : 'Select Download Peers'}</h2>
           <div class="flex items-center gap-2 text-muted-foreground flex-wrap">
             <span class="font-medium">{fileName}</span>
-            <span>•</span>
-            <span>{toHumanReadableSize(fileSize)}</span>
-            <span>•</span>
-            <Badge variant="secondary">
-              {peers.length} {peers.length === 1 ? 'Peer' : 'Peers'} Available
-            </Badge>
+            {#if fileSize > 0}
+              <span>•</span>
+              <span>{toHumanReadableSize(fileSize)}</span>
+            {/if}
+            {#if !isTorrent}
+              <span>•</span>
+              <Badge variant="secondary">
+                {peers.length} {peers.length === 1 ? 'Peer' : 'Peers'} Available
+              </Badge>
+            {/if}
           </div>
         </div>
 
+        {#if isTorrent}
+          <!-- Simple torrent confirmation -->
+          <div class="bg-muted/30 p-4 rounded-lg border">
+            <p class="text-sm text-muted-foreground">
+              Ready to start BitTorrent download. The torrent client will connect to peers automatically.
+            </p>
+          </div>
+        {:else}
         <!-- Protocol Selection (HTTP vs WebRTC only - Bitswap doesn't use peer selection) -->
         <div class="space-y-2">
           <div class="text-sm font-semibold text-foreground/90">Transfer Protocol</div>
@@ -327,7 +340,11 @@
           </div>
         </div>
 
+        {/if}
+        <!-- End of conditional peer selection content -->
+
         <!-- Summary -->
+        {#if !isTorrent}
         <div class="bg-muted/50 p-4 rounded-lg border space-y-2">
           <div class="flex justify-between items-center">
             <span class="font-medium text-sm">Selected Peers:</span>
@@ -356,6 +373,7 @@
             {/if}
           {/if}
         </div>
+        {/if}
 
         <!-- Actions -->
         <div class="flex justify-end gap-3 pt-2">
@@ -367,10 +385,10 @@
           </Button>
           <Button
             on:click={handleConfirm}
-            disabled={mode === 'manual' && (!isValidAllocation || selectedPeerCount === 0)}
+            disabled={!isTorrent && mode === 'manual' && (!isValidAllocation || selectedPeerCount === 0)}
           >
             <Download class="h-4 w-4 mr-2" />
-            Start Download ({selectedPeerCount} {selectedPeerCount === 1 ? 'peer' : 'peers'})
+            {isTorrent ? 'Start Download' : `Start Download (${selectedPeerCount} ${selectedPeerCount === 1 ? 'peer' : 'peers'})`}
           </Button>
         </div>
       </div>

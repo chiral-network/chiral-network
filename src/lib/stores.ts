@@ -127,7 +127,7 @@ export interface Transaction {
   txHash?: string;
   date: Date;
   description: string;
-  status: 'submitted' | 'pending' | 'success' | 'failed'; // Match API statuses
+  status: "submitted" | "pending" | "success" | "failed"; // Match API statuses
   transaction_hash?: string;
   gas_used?: number;
   gas_price?: number; // in Wei
@@ -507,7 +507,10 @@ export const activeBandwidthLimits = writable<ActiveBandwidthLimits>(
 );
 
 // Transaction polling functionality
-import { pollTransactionStatus, type TransactionStatus as ApiTransactionStatus } from './services/transactionService';
+import {
+  pollTransactionStatus,
+  type TransactionStatus as ApiTransactionStatus,
+} from "./services/transactionService";
 
 // Active polling tracker
 const activePollingTasks = new Map<string, boolean>();
@@ -519,7 +522,7 @@ export async function addTransactionWithPolling(
   transaction: Transaction
 ): Promise<void> {
   if (!transaction.transaction_hash) {
-    throw new Error('Transaction must have a hash for polling');
+    throw new Error("Transaction must have a hash for polling");
   }
 
   const txHash = transaction.transaction_hash;
@@ -531,7 +534,7 @@ export async function addTransactionWithPolling(
   }
 
   // Add to store immediately with 'submitted' status
-  transactions.update(txs => [transaction, ...txs]);
+  transactions.update((txs) => [transaction, ...txs]);
 
   // Mark as actively polling
   activePollingTasks.set(txHash, true);
@@ -542,15 +545,19 @@ export async function addTransactionWithPolling(
       txHash,
       (status: ApiTransactionStatus) => {
         // Update transaction in store on each status change
-        transactions.update(txs =>
-          txs.map(tx => {
+        transactions.update((txs) =>
+          txs.map((tx) => {
             if (tx.transaction_hash === txHash) {
               return {
                 ...tx,
-                status: status.status === 'success' ? 'success' :
-                        status.status === 'failed' ? 'failed' :
-                        status.status === 'pending' ? 'pending' :
-                        'submitted',
+                status:
+                  status.status === "success"
+                    ? "success"
+                    : status.status === "failed"
+                      ? "failed"
+                      : status.status === "pending"
+                        ? "pending"
+                        : "submitted",
                 confirmations: status.confirmations || 0,
                 block_number: status.block_number || undefined,
                 gas_used: status.gas_used || undefined,
@@ -562,19 +569,20 @@ export async function addTransactionWithPolling(
         );
       },
       120, // 2 minutes max polling
-      2000  // 2 second intervals
+      2000 // 2 second intervals
     );
   } catch (error) {
     console.error(`Failed to poll transaction ${txHash}:`, error);
 
     // Mark as failed on error
-    transactions.update(txs =>
-      txs.map(tx => {
+    transactions.update((txs) =>
+      txs.map((tx) => {
         if (tx.transaction_hash === txHash) {
           return {
             ...tx,
-            status: 'failed',
-            error_message: error instanceof Error ? error.message : 'Polling failed',
+            status: "failed",
+            error_message:
+              error instanceof Error ? error.message : "Polling failed",
           };
         }
         return tx;
@@ -592,11 +600,9 @@ export function updateTransactionStatus(
   txHash: string,
   updates: Partial<Transaction>
 ): void {
-  transactions.update(txs =>
-    txs.map(tx =>
-      tx.transaction_hash === txHash
-        ? { ...tx, ...updates }
-        : tx
+  transactions.update((txs) =>
+    txs.map((tx) =>
+      tx.transaction_hash === txHash ? { ...tx, ...updates } : tx
     )
   );
 }
