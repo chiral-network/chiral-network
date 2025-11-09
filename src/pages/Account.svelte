@@ -20,7 +20,7 @@
   import { get } from 'svelte/store'
   import { totalEarned, totalSpent, miningState } from '$lib/stores';
 
-  const tr = (k: string, params?: Record<string, any>): string => (get(t) as (key: string, params?: any) => string)(k, params)
+  const tr = (k: string, params?: Record<string, any>): string => $t(k, params)
   
   // SECURITY NOTE: Removed weak XOR obfuscation. Sensitive data should not be stored in frontend.
   // Use proper secure storage mechanisms in the backend instead.

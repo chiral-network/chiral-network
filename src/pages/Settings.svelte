@@ -34,7 +34,7 @@
   import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   import { bandwidthScheduler } from "$lib/services/bandwidthScheduler";
 
-  const translate = (key: string, params?: Record<string, any>) => $t(key, params);
+  const tr = (key: string, params?: Record<string, any>) => $t(key, params);
 
   let showResetConfirmModal = false;
   let storageSectionOpen = false;
@@ -155,11 +155,11 @@
   //   { value: "ru", label: (get(t) as any)("language.russian") },
   // ];
   $: languages = [
-    { value: "en", label: translate("language.english") },
-    { value: "es", label: translate("language.spanish") },
-    { value: "zh", label: translate("language.chinese") },
-    { value: "ko", label: translate("language.korean") },
-    { value: "ru", label: translate("language.russian") },
+    { value: "en", label: tr("language.english") },
+    { value: "es", label: tr("language.spanish") },
+    { value: "zh", label: tr("language.chinese") },
+    { value: "ko", label: tr("language.korean") },
+    { value: "ru", label: tr("language.russian") },
   ];
 
   // Initialize configuration text from arrays
@@ -429,11 +429,9 @@
     let bootstrapNodes: string[] = [];
     if (localSettings.customBootstrapNodes && localSettings.customBootstrapNodes.length > 0) {
       bootstrapNodes = localSettings.customBootstrapNodes;
-      console.log("Using custom bootstrap nodes:", bootstrapNodes);
     } else {
       try {
         bootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command");
-        console.log("Using default bootstrap nodes:", bootstrapNodes);
       } catch (error) {
         console.error("Failed to fetch bootstrap nodes:", error);
         throw error;
@@ -517,7 +515,7 @@
         defaultPath: localSettings.storagePath.startsWith("~/")
           ? localSettings.storagePath.replace("~", home)
           : localSettings.storagePath,
-        title: translate("storage.selectLocationTitle"),
+        title: tr("storage.selectLocationTitle"),
       });
 
       if (typeof result === "string") {
@@ -540,7 +538,7 @@
       } else {
         // Fallback: let user type path manually
         const newPath = prompt(
-          `${translate("storage.enterPathPrompt")} ( ${translate("storage.browserNoPicker")} )`,
+          `${tr("storage.enterPathPrompt")} ( ${tr("storage.browserNoPicker")} )`,
           localSettings.storagePath
         );
         if (newPath) {
@@ -574,7 +572,7 @@
     a.click();
     URL.revokeObjectURL(url);
     importExportFeedback = {
-      message: translate("advanced.exportSuccess", {
+      message: tr("advanced.exportSuccess", {
         default: "Settings exported to your browser's download folder.",
       }),
       type: "success",
@@ -593,7 +591,7 @@
         await saveSettings(); // This saves, updates savedSettings, and clears any old feedback.
         // Now we set the new feedback for the import action.
         importExportFeedback = {
-          message: translate("advanced.importSuccess", {
+          message: tr("advanced.importSuccess", {
             default: "Settings imported successfully.",
           }),
           type: "success",
@@ -601,7 +599,7 @@
       } catch (err) {
         console.error("Failed to import settings:", err);
         importExportFeedback = {
-          message: translate("advanced.importError", {
+          message: tr("advanced.importError", {
             default: "Invalid JSON file. Please select a valid export.",
           }),
           type: "error",
@@ -656,12 +654,12 @@
     try {
       if (isTauri) {
         const ver = await getVersion();
-        add({ id: "env", label: translate("settings.diagnostics.environment"), status: "pass", details: `Tauri ${ver}` });
+        add({ id: "env", label: tr("settings.diagnostics.environment"), status: "pass", details: `Tauri ${ver}` });
       } else {
-        add({ id: "env", label: translate("settings.diagnostics.environment"), status: "warn", details: "Web build: some checks skipped" });
+        add({ id: "env", label: tr("settings.diagnostics.environment"), status: "warn", details: "Web build: some checks skipped" });
       }
     } catch (e:any) {
-      add({ id: "env", label: translate("settings.diagnostics.environment"), status: "fail", details: String(e) });
+      add({ id: "env", label: tr("settings.diagnostics.environment"), status: "fail", details: String(e) });
     }
 
     // 2) i18n storage read/write
@@ -670,9 +668,9 @@
       await saveLocale(before || "en");
       const after = await loadLocale();
       const ok = (before || "en") === (after || "en");
-      add({ id: "i18n", label: translate("settings.diagnostics.i18nStorage"), status: ok ? "pass" : "warn", details: `value=${after ?? "null"}` });
+      add({ id: "i18n", label: tr("settings.diagnostics.i18nStorage"), status: ok ? "pass" : "warn", details: `value=${after ?? "null"}` });
     } catch (e:any) {
-      add({ id: "i18n", label: translate("settings.diagnostics.i18nStorage"), status: "fail", details: String(e) });
+      add({ id: "i18n", label: tr("settings.diagnostics.i18nStorage"), status: "fail", details: String(e) });
     }
 
     // 3) Bootstrap nodes availability (DHT)
@@ -681,12 +679,12 @@
       if (isTauri) {
         const nodes = await invoke<string[]>("get_bootstrap_nodes_command");
         const count = Array.isArray(nodes) ? nodes.length : 0;
-        add({ id: "dht", label: translate("settings.diagnostics.bootstrapNodes"), status: count > 0 ? "pass" : "fail", details: `count=${count}` });
+        add({ id: "dht", label: tr("settings.diagnostics.bootstrapNodes"), status: count > 0 ? "pass" : "fail", details: `count=${count}` });
       } else {
-        add({ id: "dht", label: translate("settings.diagnostics.bootstrapNodes"), status: "warn", details: "Skipped in web build" });
+        add({ id: "dht", label: tr("settings.diagnostics.bootstrapNodes"), status: "warn", details: "Skipped in web build" });
       }
     } catch (e:any) {
-      add({ id: "dht", label: translate("settings.diagnostics.bootstrapNodes"), status: "fail", details: String(e) });
+      add({ id: "dht", label: tr("settings.diagnostics.bootstrapNodes"), status: "fail", details: String(e) });
     }
 
     // 4) Privacy routing configuration sanity
@@ -694,12 +692,12 @@
       const ipMode = localSettings.ipPrivacyMode;
       const trusted = localSettings.trustedProxyRelays?.length ?? 0;
       if (ipMode !== "off" && trusted === 0) {
-        add({ id: "privacy", label: translate("settings.diagnostics.privacyConfig"), status: "warn", details: tr("settings.diagnostics.privacyNeedsTrusted") });
+        add({ id: "privacy", label: tr("settings.diagnostics.privacyConfig"), status: "warn", details: tr("settings.diagnostics.privacyNeedsTrusted") });
       } else {
-        add({ id: "privacy", label: translate("settings.diagnostics.privacyConfig"), status: "pass", details: `mode=${ipMode}, trusted=${trusted}` });
+        add({ id: "privacy", label: tr("settings.diagnostics.privacyConfig"), status: "pass", details: `mode=${ipMode}, trusted=${trusted}` });
       }
     } catch (e:any) {
-      add({ id: "privacy", label: translate("settings.diagnostics.privacyConfig"), status: "fail", details: String(e) });
+      add({ id: "privacy", label: tr("settings.diagnostics.privacyConfig"), status: "fail", details: String(e) });
     }
 
     // Build report text
@@ -712,9 +710,9 @@
   async function copyDiagnostics() {
     try {
       await navigator.clipboard.writeText(diagnosticsReport);
-      showToast(translate("settings.diagnostics.copied"));
+      showToast(tr("settings.diagnostics.copied"));
     } catch (e) {
-      showToast(translate("settings.diagnostics.copyFailed"), "error");
+      showToast(tr("settings.diagnostics.copyFailed"), "error");
     }
   }
 
@@ -946,22 +944,22 @@ selectedLanguage = initial; // Synchronize dropdown display value
 let sectionLabels: Record<string, string[]> = {};
 $: sectionLabels = {
   storage: [
-    translate("storage.title"),
-    translate("storage.location"),
-    translate("storage.maxSize"),
-    translate("storage.cleanupThreshold"),
-    translate("storage.enableCleanup"),
+    tr("storage.title"),
+    tr("storage.location"),
+    tr("storage.maxSize"),
+    tr("storage.cleanupThreshold"),
+    tr("storage.enableCleanup"),
   ],
   network: [
-    translate("network.title"),
-    translate("network.maxConnections"),
-    translate("network.port"),
-    translate("network.uploadLimit"),
-    translate("network.downloadLimit"),
-    translate("network.userLocation"),
-    translate("network.enableUpnp"),
-    translate("network.enableNat"),
-    translate("network.enableDht"),
+    tr("network.title"),
+    tr("network.maxConnections"),
+    tr("network.port"),
+    tr("network.uploadLimit"),
+    tr("network.downloadLimit"),
+    tr("network.userLocation"),
+    tr("network.enableUpnp"),
+    tr("network.enableNat"),
+    tr("network.enableDht"),
     "Bootstrap Nodes",
     "Custom Bootstrap Nodes",
   ],
@@ -971,30 +969,30 @@ $: sectionLabels = {
     "Schedule different bandwidth limits",
   ],
   language: [
-    translate("language.title"),
-    translate("language.select"),
+    tr("language.title"),
+    tr("language.select"),
   ],
   privacy: [
-    translate("privacy.title"),
-    translate("privacy.enableProxy"),
-    translate("privacy.anonymousMode"),
-    translate("privacy.shareAnalytics"),
+    tr("privacy.title"),
+    tr("privacy.enableProxy"),
+    tr("privacy.anonymousMode"),
+    tr("privacy.shareAnalytics"),
   ],
   notifications: [
-    translate("notifications.title"),
-    translate("notifications.enable"),
-    translate("notifications.notifyComplete"),
-    translate("notifications.notifyError"),
-    translate("notifications.soundAlerts"),
+    tr("notifications.title"),
+    tr("notifications.enable"),
+    tr("notifications.notifyComplete"),
+    tr("notifications.notifyError"),
+    tr("notifications.soundAlerts"),
   ],
   advanced: [
-    translate("advanced.title"),
-    translate("advanced.chunkSize"),
-    translate("advanced.cacheSize"),
-    translate("advanced.logLevel"),
-    translate("advanced.autoUpdate"),
-    translate("advanced.exportSettings"),
-    translate("advanced.importSettings"),
+    tr("advanced.title"),
+    tr("advanced.chunkSize"),
+    tr("advanced.cacheSize"),
+    tr("advanced.logLevel"),
+    tr("advanced.autoUpdate"),
+    tr("advanced.exportSettings"),
+    tr("advanced.importSettings"),
   ],
 };
 
@@ -2063,5 +2061,6 @@ function sectionMatches(section: string, query: string) {
     </div>
   </div>
 {/if}
+
 
 

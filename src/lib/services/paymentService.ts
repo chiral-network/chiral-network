@@ -95,7 +95,6 @@ export class PaymentService {
   static initialize() {
     // Only initialize once
     if (this.initialized) {
-      console.log("💾 Payment service already initialized, skipping...");
       return;
     }
 
