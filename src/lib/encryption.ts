@@ -118,6 +118,7 @@ export class EncryptionService {
    */
   isValidEncryptionInfo(info: any): info is EncryptionInfo {
     return (
+      info !== null &&
       typeof info === "object" &&
       typeof info.method === "string" &&
       typeof info.keyFingerprint === "string" &&
