@@ -13,7 +13,8 @@
   import { getVersion } from "@tauri-apps/api/app";
   import { t } from 'svelte-i18n';
   import { goto } from '@mateothegreat/svelte5-router';
-  import { walletService } from '$lib/wallet'; 
+  import { walletService } from '$lib/wallet';
+  import TemporaryAccountWarning from '$lib/components/TemporaryAccountWarning.svelte'; 
   
   // Local UI state only
   let isTauri = false
@@ -23,7 +24,11 @@
   let lastHashUpdate = Date.now()
   let cpuThreads = navigator.hardwareConcurrency || 4
   let selectedThreads = Math.floor(cpuThreads / 2)
-  let error = '' 
+  let error = ''
+
+  // Temporary account tracking
+  let isTemporaryAccount = false
+  let showTemporaryAccountWarning = false 
 
   // Network statistics
   let networkHashRate = '0 H/s'
@@ -563,10 +568,40 @@
     }
   }
   
+  async function createTemporaryAccount() {
+    try {
+      // Generate a temporary account using walletService
+      const tempAccount = await walletService.createAccount()
+
+      // Set as active account
+      etcAccount.set({
+        address: tempAccount.address,
+        private_key: tempAccount.privateKey
+      })
+
+      // Mark as temporary
+      isTemporaryAccount = true
+      showTemporaryAccountWarning = true
+
+      // Track that this account has been used for mining
+      localStorage.setItem('chiral_temp_account_mining', 'true')
+
+      return tempAccount
+    } catch (e) {
+      console.error('Failed to create temporary account:', e)
+      throw e
+    }
+  }
+
   async function startMining() {
+    // Auto-create temporary account if none exists
     if (!$etcAccount) {
-      error = $t('mining.errors.noAccount')
-      return
+      try {
+        await createTemporaryAccount()
+      } catch (e) {
+        error = $t('mining.errors.noAccount')
+        return
+      }
     }
     
     if (!isGethRunning) {
@@ -627,6 +662,16 @@
       error = String(e)
       console.error('Failed to stop mining:', e)
     }
+  }
+
+  // Temporary account warning handlers
+  function handleDismissWarning() {
+    showTemporaryAccountWarning = false
+  }
+
+  function handleCreateWallet() {
+    // Navigate to Account page to create a permanent wallet
+    goto('/account')
   }
 
   // Decentralized Pool Functions
@@ -1007,7 +1052,15 @@
     <h1 class="text-3xl font-bold">{$t('mining.title')}</h1>
     <p class="text-muted-foreground mt-2">{$t('mining.subtitle')}</p>
   </div>
-  
+
+  <!-- Temporary Account Warning -->
+  {#if showTemporaryAccountWarning && isTemporaryAccount}
+    <TemporaryAccountWarning
+      onDismiss={handleDismissWarning}
+      onCreateWallet={handleCreateWallet}
+    />
+  {/if}
+
   <!-- Mining Status Cards -->
   <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
     <Card class="p-4">
