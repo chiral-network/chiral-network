@@ -305,8 +305,8 @@
     "title": "Download Files",
     "subtitle": "Download files from the Chiral Network",
     "addNew": "Add New Download",
-    "addNewSubtitle": "Enter a file hash (e.g., Qm... or a magnet link) to start a new download.",
-    "placeholder": "Enter file hash or magnet link",
+    "addNewSubtitle": "Enter a Merkle hash or CID to start a new download.",
+    "placeholder": "Enter Merkle hash or CID",
     "clearInput": "Clear input",
     "searchAndDownload": "Search & Download",
     "searchByHash": "Search by Hash",
@@ -345,7 +345,7 @@
       "noFailed": "No failed downloads."
     },
     "file": {
-      "hash": "Hash",
+      "hash": "Merkle Hash",
       "queue": "Queue",
       "progress": "Progress"
     },
@@ -364,7 +364,7 @@
       "retry": "Retry"
     },
     "notifications": {
-      "enterHash": "Please enter a file hash to start downloading.",
+      "enterHash": "Please enter a Merkle hash or CID to start downloading.",
       "searching": "Searching for file metadata in the DHT...",
       "addedToQueue": "File added to the download queue.",
       "autostart": "Download automatically started.",
@@ -495,7 +495,27 @@
   },
   "account": {
     "title": "Account",
-    "subtitle": "Manage your wallet and account settings"
+    "subtitle": "Manage your wallet and account settings",
+    "firstRun": {
+      "welcome": "Welcome to Chiral Network!",
+      "description": "To start mining and earning rewards, you'll need to create a wallet account.",
+      "whyAccount": "Why do I need an account?",
+      "reason1": "Receive mining rewards to your wallet",
+      "reason2": "Secure your funds with encrypted recovery phrase",
+      "reason3": "Transfer coins to other users on the network",
+      "createWallet": "Create New Wallet",
+      "skipForNow": "Skip for Now (Create Temporary Account)",
+      "skipWarning": "If you skip, a temporary account will be created when you start mining. You can create a permanent wallet anytime from the Account page.",
+      "skipped": "First-run setup skipped. A temporary account will be created when needed.",
+      "accountCreated": "Wallet created successfully! You can now start mining.",
+      "error": "Failed to create account. Please try again."
+    },
+    "upgradeAccount": {
+      "title": "Secure Your Mining Rewards!",
+      "description": "You're using a temporary account. Save it to an encrypted keystore or create an HD wallet to protect your mining rewards from being lost.",
+      "saveToKeystore": "Save to Keystore",
+      "createHDWallet": "Create HD Wallet"
+    }
   },
   "wallet": {
     "title": "Chiral Network Wallet",
@@ -1018,7 +1038,13 @@
       "gethNotRunning": "Chiral node is not running. Please start it from the Network page",
       "noAccountLink": "Please create a Chiral Network account from the"
     },
-    "starting": "Starting mining... (may restart node if needed)"
+    "starting": "Starting mining... (may restart node if needed)",
+    "temporaryAccount": {
+      "title": "⚠️ Temporary Account - Mining Rewards at Risk!",
+      "description": "You're mining with a temporary account. Mining rewards will be lost when you close the app unless you save your account.",
+      "createWallet": "Create Permanent Wallet",
+      "goToAccount": "Go to Account Page"
+    }
   },
   "reputation": {
     "title": "Reputation System",
@@ -1249,18 +1275,19 @@
     "dropFilesHint": "Drag and drop files anywhere on this card, or click \"Add Files\" below",
     "addFiles": "Add Files",
     "sharedFiles": "Shared Files",
+    "file": "file",
     "files": "files",
     "total": "total",
     "tip": "💡 Tip: You can also drag and drop files here to add them",
     "addMoreFiles": "Add More Files",
     "supportedFormats": "Supports images, videos, audio, documents, code files and more",
     "supportedFormatsDesktop": "Desktop app supports images, videos, audio, documents, code files and more",
-    "hash": "Hash",
+    "hashLabel": "Merkle Hash:",
     "seeder": "seeder{count, plural, =1 {} other {s}}",
     "leecher": "leecher{count, plural, =1 {} other {s}}",
     "seeding": "Seeding",
-    "copyHash": "Copy hash",
-    "hashCopied": "Hash copied!",
+    "copyHash": "Copy Merkle hash",
+    "hashCopied": "Merkle hash copied!",
     "stopSharing": "Stop sharing",
     "noFilesShared": "No files shared yet",
     "addFilesHint2": "Add files to start sharing on the network",
@@ -1304,12 +1331,9 @@
     "storedLocally": "Files stored locally. Start DHT network to share with others.",
     "uploadError": "Error processing dropped files. Please try again or use the \"Add Files\" button instead.",
     "fileManagementDesktopOnly": "File management is only available in the desktop app",
-    "fileUpdated": "{name} already exists; updated to v{version}",
-    "fileUploadedNew": "{name} uploaded as v{version} (new file)",
-    "hashCopiedClipboard": "File hash copied to clipboard!",
-    "noVersionHistory": "No version history found for this file",
-    "versionHistoryTitle": "Version history for {name}:\n{list}",
-    "versionHistoryError": "Failed to load version history",
+    "fileUpdated": "{name} already exists and has been updated",
+    "fileUploadedNew": "{name} uploaded successfully",
+    "hashCopiedClipboard": "Merkle hash copied to clipboard!",
     "desktopAppRequired": "Desktop App Required",
     "storageMonitoringDesktopOnly": "Storage monitoring requires the desktop application",
     "dropFilesHere": "✨ Drop files here!",
@@ -1322,10 +1346,8 @@
     "fileUploadDesktopApp": "File upload requires the desktop app",
     "downloadDesktopApp": "Download the desktop version to upload and share files",
     "desktopManagementRequired": "Desktop app required for file management",
-    "versionHistoryTooltip": "v{version} - Click to view version history",
     "encryptedEndToEnd": "This file is encrypted end-to-end",
     "active": "Active",
-    "hashLabel": "Hash:",
     "priceTooltip": "Price calculated dynamically based on network hash power",
     "storedLocallyBadge": "Stored Locally",
     "fileManagementTooltip": "File management requires desktop app",

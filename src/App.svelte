@@ -1,20 +1,20 @@
 <script lang="ts">
     import './styles/globals.css'
-    import { Upload, Download, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Mail, Server, Share2 } from 'lucide-svelte'
+    import { Upload, Download, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Server } from 'lucide-svelte'
     import UploadPage from './pages/Upload.svelte'
     import DownloadPage from './pages/Download.svelte'
     // import ProxyPage from './pages/Proxy.svelte' // DISABLED
     import AccountPage from './pages/Account.svelte'
     import NetworkPage from './pages/Network.svelte'
     import AnalyticsPage from './pages/Analytics.svelte'
-    import TorrentDownloadPage from './pages/TorrentDownload.svelte'
+    // import TorrentDownloadPage from './pages/TorrentDownload.svelte' // INTEGRATED INTO DOWNLOAD/UPLOAD PAGES
     import SettingsPage from './pages/Settings.svelte'
     import MiningPage from './pages/Mining.svelte'
     import ReputationPage from './pages/Reputation.svelte'
     import RelayPage from './pages/Relay.svelte'
     import NotFound from './pages/NotFound.svelte'
     // import ProxySelfTest from './routes/proxy-self-test.svelte' // DISABLED
-import { networkStatus, settings, userLocation, wallet, activeBandwidthLimits } from './lib/stores'
+import { networkStatus, settings, userLocation, wallet, activeBandwidthLimits, etcAccount } from './lib/stores'
 import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
     import {onMount, setContext} from 'svelte';
@@ -23,6 +23,7 @@ import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import { setupI18n } from './i18n/i18n';
     import { t } from 'svelte-i18n';
     import SimpleToast from './lib/components/SimpleToast.svelte';
+    import FirstRunWizard from './lib/components/wallet/FirstRunWizard.svelte';
     import { startNetworkMonitoring } from './lib/services/networkService';
     import { fileService } from '$lib/services/fileService';
     import { bandwidthScheduler } from '$lib/services/bandwidthScheduler';
@@ -52,6 +53,7 @@ let schedulerRunning = false;
 let unsubscribeScheduler: (() => void) | null = null;
 let unsubscribeBandwidth: (() => void) | null = null;
 let lastAppliedBandwidthSignature: string | null = null;
+let showFirstRunWizard = false;
 
 const syncBandwidthScheduler = (config: AppSettings) => {
   const enabledSchedules = config.bandwidthSchedules?.filter(
@@ -99,7 +101,16 @@ const pushBandwidthLimits = (limits: ActiveBandwidthLimits) => {
     console.error("Failed to apply bandwidth limits:", error);
   });
 };
-    
+
+// First-run wizard handlers
+function handleFirstRunComplete() {
+  showFirstRunWizard = false;
+}
+
+function handleFirstRunSkip() {
+  showFirstRunWizard = false;
+}
+
   onMount(() => {
     let stopNetworkMonitoring: () => void = () => {};
     let unlistenSeederPayment: (() => void) | null = null;
@@ -161,6 +172,33 @@ const pushBandwidthLimits = (limits: ActiveBandwidthLimits) => {
         // setup i18n
         await setupI18n();
         loading = false;
+
+        // Check for first-run and show wizard if no account exists
+        try {
+          const firstRunCompleted = localStorage.getItem('chiral_first_run_complete');
+          const hasAccount = get(etcAccount) !== null;
+
+          // Check if there are any keystore files (Tauri only)
+          let hasKeystoreFiles = false;
+          if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+            try {
+              const keystoreFiles = await invoke<string[]>('list_keystore_accounts');
+              hasKeystoreFiles = keystoreFiles && keystoreFiles.length > 0;
+            } catch (error) {
+              console.warn('Failed to check keystore files:', error);
+            }
+          }
+
+          // Show wizard if:
+          // - First run not completed AND
+          // - No active account AND
+          // - No keystore files exist
+          if (!firstRunCompleted && !hasAccount && !hasKeystoreFiles) {
+            showFirstRunWizard = true;
+          }
+        } catch (error) {
+          console.warn('Failed to check first-run status:', error);
+        }
 
         let storedLocation: string | null = null;
         try {
@@ -231,6 +269,25 @@ const pushBandwidthLimits = (limits: ActiveBandwidthLimits) => {
       // popstate - event that tracks history of current tab
       const onPop = () => syncFromUrl();
       window.addEventListener('popstate', onPop);
+
+      // Warn before closing if there are unsaved mining rewards
+      const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+        const hasUnsavedMiningRewards = localStorage.getItem('chiral_temp_account_mining') === 'true';
+        const currentAccount = get(etcAccount);
+        const hasAccount = currentAccount !== null;
+
+        // Only warn if:
+        // 1. There's a temporary account that was used for mining
+        // 2. The account still exists (not saved to keystore)
+        // 3. First-run was skipped (indicating temporary usage)
+        const firstRunSkipped = localStorage.getItem('chiral_first_run_skipped') === 'true';
+
+        if (hasUnsavedMiningRewards && hasAccount && firstRunSkipped) {
+          event.preventDefault();
+          event.returnValue = ''; // Required for Chrome
+        }
+      };
+      window.addEventListener('beforeunload', handleBeforeUnload);
 
       // keyboard shortcuts
       const handleKeyDown = (event: KeyboardEvent) => {
@@ -333,7 +390,6 @@ const pushBandwidthLimits = (limits: ActiveBandwidthLimits) => {
       menuItems = [
         { id: 'download', label: $t('nav.download'), icon: Download },
         { id: 'upload', label: $t('nav.upload'), icon: Upload },
-        { id: 'torrents', label: $t('nav.torrents'), icon: Share2 },
         { id: 'mining', label: $t('nav.mining'), icon: Cpu },
         { id: 'network', label: $t('nav.network'), icon: Globe },
         { id: 'relay', label: $t('nav.relay'), icon: Server },
@@ -361,10 +417,6 @@ const pushBandwidthLimits = (limits: ActiveBandwidthLimits) => {
       {
         path: "upload",
         component: UploadPage
-      },
-      {
-        path: "torrents",
-        component: TorrentDownloadPage
       },
       {
         path: "network",
@@ -548,5 +600,14 @@ const pushBandwidthLimits = (limits: ActiveBandwidthLimits) => {
       </div>
     </div>
   </div>
+
+<!-- First Run Wizard -->
+{#if showFirstRunWizard}
+  <FirstRunWizard
+    onComplete={handleFirstRunComplete}
+    onSkip={handleFirstRunSkip}
+  />
+{/if}
+
   <!-- add Toast  -->
 <SimpleToast />

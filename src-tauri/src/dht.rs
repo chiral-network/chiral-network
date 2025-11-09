@@ -242,9 +242,6 @@ pub struct FileMetadata {
     /// This is now deprecated in favor of the merkle_root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_fingerprint: Option<String>,
-    // --- VERSIONING FIELDS ---
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub version: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1975,7 +1972,7 @@ async fn run_dht_node(
                                                 is_encrypted: json_val.get("is_encrypted").and_then(|v| v.as_bool()).unwrap_or(false),
                                                 encryption_method: json_val.get("encryption_method").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 key_fingerprint: json_val.get("key_fingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                                version: json_val.get("version").and_then(|v| v.as_u64()).map(|u| u as u32),
+
                                                 parent_hash: json_val.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
                                                 encrypted_key_bundle: json_val.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
@@ -2109,7 +2106,7 @@ async fn run_dht_node(
                                     "is_encrypted": metadata.is_encrypted,
                                     "encryption_method": metadata.encryption_method,
                                     "key_fingerprint": metadata.key_fingerprint,
-                                    "version": metadata.version,
+
                                     "parent_hash": metadata.parent_hash,
                                     "cids": metadata.cids, // The root CID for Bitswap
                                     "encrypted_key_bundle": metadata.encrypted_key_bundle,
@@ -2268,7 +2265,7 @@ async fn run_dht_node(
                                     "encryption_method": metadata.encryption_method,
                                     "cids": metadata.cids,
                                     "encrypted_key_bundle": metadata.encrypted_key_bundle,
-                                    "version": metadata.version,
+
                                     "info_hash": metadata.info_hash,
                                     "trackers": metadata.trackers,
                                     "parent_hash": metadata.parent_hash,
@@ -3643,7 +3640,7 @@ async fn run_dht_node(
                                                 is_encrypted: json_val.get("is_encrypted").and_then(|v| v.as_bool()).unwrap_or(false),
                                                 encryption_method: json_val.get("encryption_method").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 key_fingerprint: json_val.get("key_fingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                                version: json_val.get("version").and_then(|v| v.as_u64()).map(|u| u as u32),
+
                                                 parent_hash: json_val.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
                                                 encrypted_key_bundle: json_val.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
@@ -4245,10 +4242,6 @@ async fn handle_kademlia_event(
                                         .get("key_fingerprint")
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string()),
-                                    version: metadata_json
-                                        .get("version")
-                                        .and_then(|v| v.as_u64())
-                                        .map(|v| v as u32),
                                     parent_hash: metadata_json
                                         .get("parent_hash")
                                         .and_then(|v| v.as_str())
@@ -5868,62 +5861,8 @@ impl DhtService {
         Ok(cache.values().cloned().collect())
     }
 
-    /// Get all versions for a file name, sorted by version (desc)
-    /// Matching is performed case-insensitively so uploads that differ only by
-    /// filename case are treated as versions of the same file name.
-    pub async fn get_versions_by_file_name(
-        &self,
-        file_name: String,
-    ) -> Result<Vec<FileMetadata>, String> {
-        info!(
-            "🔍 Backend: Starting search for file versions with name: {}",
-            file_name
-        );
-
-        let all = self.get_all_file_metadata().await?;
-        info!("📁 Backend: Retrieved {} total files from cache", all.len());
-
-        // Perform case-insensitive match on file name to group versions regardless of case
-        let target = file_name.to_lowercase();
-
-        let mut versions: Vec<FileMetadata> = all
-            .into_iter()
-            .filter(|m| m.file_name.to_lowercase() == target) // case-insensitive match - get all versions
-            .collect();
-
-        info!(
-            "🎯 Backend: Found {} versions matching name '{}'",
-            versions.len(),
-            file_name
-        );
-
-        versions.sort_by(|a, b| b.version.unwrap_or(1).cmp(&a.version.unwrap_or(1)));
-
-        // Clear seeders to avoid network calls during search
-        // The seeders will be populated when the user actually tries to download
-        for version in &mut versions {
-            version.seeders = vec![]; // Clear seeders to prevent network calls
-        }
-
-        info!(
-            "✅ Backend: Returning {} versions for '{}' (seeders cleared)",
-            versions.len(),
-            file_name
-        );
-        Ok(versions)
-    }
-
-    /// Get the latest version for a file name
-    pub async fn get_latest_version_by_file_name(
-        &self,
-        file_name: String,
-    ) -> Result<Option<FileMetadata>, String> {
-        let versions = self.get_versions_by_file_name(file_name).await?;
-        Ok(versions.into_iter().max_by_key(|m| m.version.unwrap_or(1)))
-    }
-
-    /// Prepare a new FileMetadata for upload (auto-increment version, set parent_hash)
-    pub async fn prepare_versioned_metadata(
+    /// Prepare a new FileMetadata for upload
+    pub async fn prepare_file_metadata(
         &self,
         file_hash: String,
         file_name: String,
@@ -5938,34 +5877,6 @@ impl DhtService {
         price: Option<f64>,
         uploader_address: Option<String>,
     ) -> Result<FileMetadata, String> {
-        let latest = self
-            .get_latest_version_by_file_name(file_name.clone())
-            .await?;
-
-        // When a latest version for the same filename exists, only increment the version
-        // if the merkle root (content identifier) is different. If the merkle root is
-        // identical we return the same version to avoid creating duplicate versions
-        // for the same content.
-        let (version, parent_hash, is_root) = match latest {
-            Some(ref prev) => {
-                if prev.merkle_root == file_hash {
-                    // Same content: keep same version and parent/is_root values
-                    (
-                        prev.version.unwrap_or(1),
-                        prev.parent_hash.clone(),
-                        prev.is_root,
-                    )
-                } else {
-                    // Different content: increment version and set parent to previous merkle root
-                    (
-                        prev.version.map(|v| v + 1).unwrap_or(2),
-                        Some(prev.merkle_root.clone()),
-                        false, // not root if there was a previous version
-                    )
-                }
-            }
-            None => (1, None, true), // root if first version
-        };
         Ok(FileMetadata {
             merkle_root: file_hash,
             file_name,
@@ -5977,11 +5888,10 @@ impl DhtService {
             is_encrypted,
             encryption_method,
             key_fingerprint,
-            version: Some(version),
             encrypted_key_bundle: None,
-            parent_hash,
+            parent_hash: None,
             cids: None,
-            is_root,
+            is_root: true,
             download_path: None,
             price,
             uploader_address,

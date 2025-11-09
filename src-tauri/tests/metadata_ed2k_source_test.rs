@@ -122,7 +122,6 @@ fn test_file_metadata_with_ed2k_sources() {
         is_encrypted: false,
         encryption_method: None,
         key_fingerprint: None,
-        version: None,
         parent_hash: None,
         cids: None,
         encrypted_key_bundle: None,
@@ -171,7 +170,6 @@ fn test_multiple_ed2k_sources() {
         is_encrypted: false,
         encryption_method: None,
         key_fingerprint: None,
-        version: None,
         parent_hash: None,
         cids: None,
         encrypted_key_bundle: None,
@@ -198,7 +196,7 @@ fn test_empty_none_source_lists() {
         ed2k_sources: Some(vec![]), // Empty list
         file_name: String::new(), file_size: 0, file_data: vec![], seeders: vec![], created_at: 0,
         mime_type: None, is_encrypted: false, encryption_method: None, key_fingerprint: None,
-        version: None, parent_hash: None, cids: None, encrypted_key_bundle: None,
+        parent_hash: None, cids: None, encrypted_key_bundle: None,
         ftp_sources: None, http_sources: None, info_hash: None, trackers: None, is_root: true,
         download_path: None, price: None, uploader_address: None,
     };
@@ -207,7 +205,7 @@ fn test_empty_none_source_lists() {
         ed2k_sources: None, // None
         file_name: String::new(), file_size: 0, file_data: vec![], seeders: vec![], created_at: 0,
         mime_type: None, is_encrypted: false, encryption_method: None, key_fingerprint: None,
-        version: None, parent_hash: None, cids: None, encrypted_key_bundle: None,
+        parent_hash: None, cids: None, encrypted_key_bundle: None,
         ftp_sources: None, http_sources: None, info_hash: None, trackers: None, is_root: true,
         download_path: None, price: None, uploader_address: None,
     };
@@ -265,7 +263,7 @@ fn test_dht_storage_round_trip() {
         ed2k_sources: Some(vec![info]),
         file_name: "test.iso".to_string(), file_size: 12345, file_data: vec![], seeders: vec![], created_at: 0,
         mime_type: None, is_encrypted: false, encryption_method: None, key_fingerprint: None,
-        version: None, parent_hash: None, cids: None, encrypted_key_bundle: None,
+        parent_hash: None, cids: None, encrypted_key_bundle: None,
         ftp_sources: None, http_sources: None, info_hash: None, trackers: None, is_root: true,
         download_path: None, price: None, uploader_address: None,
     };
