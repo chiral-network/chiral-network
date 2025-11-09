@@ -1,13 +1,13 @@
 <script lang="ts">
     import './styles/globals.css'
-    import { Upload, Download, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Server, Share2 } from 'lucide-svelte'
+    import { Upload, Download, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Server } from 'lucide-svelte'
     import UploadPage from './pages/Upload.svelte'
     import DownloadPage from './pages/Download.svelte'
     // import ProxyPage from './pages/Proxy.svelte' // DISABLED
     import AccountPage from './pages/Account.svelte'
     import NetworkPage from './pages/Network.svelte'
     import AnalyticsPage from './pages/Analytics.svelte'
-    import TorrentDownloadPage from './pages/TorrentDownload.svelte'
+    // import TorrentDownloadPage from './pages/TorrentDownload.svelte' // INTEGRATED INTO DOWNLOAD/UPLOAD PAGES
     import SettingsPage from './pages/Settings.svelte'
     import MiningPage from './pages/Mining.svelte'
     import ReputationPage from './pages/Reputation.svelte'
@@ -333,7 +333,6 @@ const pushBandwidthLimits = (limits: ActiveBandwidthLimits) => {
       menuItems = [
         { id: 'download', label: $t('nav.download'), icon: Download },
         { id: 'upload', label: $t('nav.upload'), icon: Upload },
-        { id: 'torrents', label: $t('nav.torrents'), icon: Share2 },
         { id: 'mining', label: $t('nav.mining'), icon: Cpu },
         { id: 'network', label: $t('nav.network'), icon: Globe },
         { id: 'relay', label: $t('nav.relay'), icon: Server },
@@ -361,10 +360,6 @@ const pushBandwidthLimits = (limits: ActiveBandwidthLimits) => {
       {
         path: "upload",
         component: UploadPage
-      },
-      {
-        path: "torrents",
-        component: TorrentDownloadPage
       },
       {
         path: "network",

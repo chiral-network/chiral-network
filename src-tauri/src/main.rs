@@ -612,34 +612,6 @@ async fn set_miner_address(state: State<'_, AppState>, address: String) -> Resul
 }
 
 #[tauri::command]
-async fn get_file_versions_by_name(
-    state: State<'_, AppState>,
-    file_name: String,
-) -> Result<Vec<FileMetadata>, String> {
-    info!(
-        "🚀 Tauri command: get_file_versions_by_name called with: {}",
-        file_name
-    );
-
-    let dht = { state.dht.lock().await.as_ref().cloned() };
-    if let Some(dht) = dht {
-        info!("✅ DHT service found, calling get_versions_by_file_name");
-        let result = (*dht).get_versions_by_file_name(file_name).await;
-        match &result {
-            Ok(versions) => info!(
-                "🎉 Tauri command: Successfully returned {} versions",
-                versions.len()
-            ),
-            Err(e) => info!("❌ Tauri command: Error occurred: {}", e),
-        }
-        result
-    } else {
-        info!("❌ Tauri command: DHT not running");
-        Err("DHT not running".into())
-    }
-}
-
-#[tauri::command]
 async fn test_backend_connection(state: State<'_, AppState>) -> Result<String, String> {
     info!("🧪 Testing backend connection...");
 
@@ -733,7 +705,7 @@ async fn disconnect_from_peer(state: State<'_, AppState>, peer_id: String) -> Re
 }
 
 #[tauri::command]
-async fn upload_versioned_file(
+async fn upload_file(
     state: State<'_, AppState>,
     file_name: String,
     file_path: String,
@@ -759,9 +731,9 @@ async fn upload_versioned_file(
             .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
-        // Use the DHT versioning helper to fill in parent_hash/version
+        // Use the DHT helper to create file metadata
         let metadata = dht
-            .prepare_versioned_metadata(
+            .prepare_file_metadata(
                 file_hash.clone(),
                 file_name.clone(),
                 file_data.len() as u64, // Use file size directly from data
@@ -2927,7 +2899,6 @@ async fn upload_file_to_network(
                 encryption_method: None,
                 key_fingerprint: None,
                 parent_hash: None,
-                version: Some(1),
                 cids: None,
                 encrypted_key_bundle: None,
                 price,
@@ -2940,9 +2911,9 @@ async fn upload_file_to_network(
                 .unwrap_or(std::time::Duration::from_secs(0))
                 .as_secs();
 
-            // Use DHT helper to prepare versioned metadata so version and parent_hash are computed
+            // Use DHT helper to prepare file metadata
             match dht
-                .prepare_versioned_metadata(
+                .prepare_file_metadata(
                     file_hash.clone(),
                     file_name.to_string(),
                     file_data.len() as u64,
@@ -2969,7 +2940,7 @@ async fn upload_file_to_network(
                     }
                 }
                 Err(e) => {
-                    warn!("Failed to prepare versioned metadata: {}", e);
+                    warn!("Failed to prepare file metadata: {}", e);
                 }
             }
 
@@ -3495,7 +3466,6 @@ async fn upload_file_chunk(
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
-            version: Some(1),
             cids: Some(vec![root_cid.clone()]), // The root CID for retrieval
             encrypted_key_bundle: None,
             parent_hash: None,
@@ -5163,8 +5133,7 @@ fn main() {
             select_peers_with_strategy,
             set_peer_encryption_support,
             cleanup_inactive_peers,
-            upload_versioned_file,
-            get_file_versions_by_name,
+            upload_file,
             test_backend_connection,
             set_bandwidth_limits,
             establish_webrtc_connection,
@@ -5578,7 +5547,6 @@ struct UploadResult {
     file_size: u64,
     is_encrypted: bool,
     peer_id: String,
-    version: u32,
     cid: Option<String>, // Add CID field for Bitswap uploads
 }
 
@@ -5647,9 +5615,9 @@ async fn upload_and_publish_file(
     let mime_type = detect_mime_type_from_filename(&file_name)
         .unwrap_or_else(|| "application/octet-stream".to_string());
 
-    // 3.1) Build base metadata with versioning support
+    // 3.1) Build base metadata
     let mut metadata = dht
-        .prepare_versioned_metadata(
+        .prepare_file_metadata(
             manifest.merkle_root.clone(),
             file_name.clone(),
             file_size,
@@ -5702,9 +5670,7 @@ async fn upload_and_publish_file(
         }]);
     }
 
-    let version = metadata.version.unwrap_or(1);
-
-    info!("📦 BACKEND: Created versioned metadata (v{})", version);
+    info!("📦 BACKEND: Created file metadata");
 
     // 4) Publish metadata to DHT
     dht.publish_file(metadata, None).await?;
@@ -5749,7 +5715,6 @@ async fn upload_and_publish_file(
         file_size,
         is_encrypted: true,
         peer_id,
-        version,
         cid: None, // WebRTC uploads don't have CIDs
     })
 }

@@ -3,13 +3,11 @@
   import Input from '$lib/components/ui/input.svelte';
   import Label from '$lib/components/ui/label.svelte';
   import Button from '$lib/components/ui/button.svelte';
-  import Badge from '$lib/components/ui/badge.svelte';
   import { Search, X, History, RotateCcw, AlertCircle, CheckCircle2 } from 'lucide-svelte';
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { get } from 'svelte/store';
   import { t } from 'svelte-i18n';
 import { dhtService } from '$lib/dht';
-import { files } from '$lib/stores';
 import { paymentService } from '$lib/services/paymentService';
   import type { FileMetadata } from '$lib/dht';
   import SearchResultCard from './SearchResultCard.svelte';
@@ -26,8 +24,10 @@ import { paymentService } from '$lib/services/paymentService';
   const SEARCH_TIMEOUT_MS = 10_000; // 10 seconds for DHT searches to find peers
 
   let searchHash = '';
-  let searchMode = 'merkle_hash'; // 'merkle_hash' or 'cid'
+  let searchMode = 'merkle_hash'; // 'merkle_hash', 'cid', 'magnet', or 'torrent'
   let isSearching = false;
+  let torrentFileInput: HTMLInputElement;
+  let torrentFileName: string | null = null;
   let hasSearched = false;
   let latestStatus: SearchStatus = 'pending';
   let latestMetadata: FileMetadata | null = null;
@@ -103,6 +103,19 @@ import { paymentService } from '$lib/services/paymentService';
 
   function clearSearch() {
     searchHash = '';
+    torrentFileName = null;
+  }
+
+  function handleTorrentFileSelect(event: Event) {
+    const target = event.target as HTMLInputElement
+    const file = target.files?.[0]
+    if (file && file.name.endsWith('.torrent')) {
+      // For Tauri, we'll handle this differently in the download function
+      torrentFileName = file.name
+    } else {
+      torrentFileName = null
+      pushMessage('Please select a valid .torrent file', 'warning')
+    }
   }
 
   function hydrateFromEntry(entry: SearchHistoryEntry | undefined) {
@@ -122,6 +135,66 @@ import { paymentService } from '$lib/services/paymentService';
   }
 
   async function searchForFile() {
+    // Handle BitTorrent downloads
+    if (searchMode === 'magnet' || searchMode === 'torrent') {
+      let identifier: string | null = null
+
+      if (searchMode === 'magnet') {
+        identifier = searchHash.trim()
+        if (!identifier) {
+          pushMessage('Please enter a magnet link', 'warning')
+          return
+        }
+      } else if (searchMode === 'torrent') {
+        if (!torrentFileName) {
+          pushMessage('Please select a .torrent file', 'warning')
+          return
+        }
+        // Use the file input to get the actual file
+        const file = torrentFileInput?.files?.[0]
+        if (file) {
+          // Read the file and pass it to the backend
+          // For now, we'll just use the filename approach
+          identifier = torrentFileName
+        } else {
+          pushMessage('Please select a .torrent file', 'warning')
+          return
+        }
+      }
+
+      if (identifier) {
+        try {
+          isSearching = true
+          const { invoke } = await import("@tauri-apps/api/core")
+          
+          if (searchMode === 'torrent') {
+            // For torrent files, we need to read and pass the file content
+            const file = torrentFileInput?.files?.[0]
+            if (file) {
+              const arrayBuffer = await file.arrayBuffer()
+              const bytes = new Uint8Array(arrayBuffer)
+              await invoke('download_torrent_from_bytes', { bytes: Array.from(bytes) })
+            }
+          } else {
+            // For magnet links
+            await invoke('download_torrent', { identifier })
+          }
+          
+          searchHash = ''
+          torrentFileName = null
+          if (torrentFileInput) torrentFileInput.value = ''
+          pushMessage('Torrent download started', 'success')
+          isSearching = false
+        } catch (error) {
+          console.error("Failed to start download:", error)
+          pushMessage(`Failed to start download: ${String(error)}`, 'error')
+          isSearching = false
+        }
+      }
+      return
+    }
+
+    // Original DHT search logic for merkle_hash and cid
     const trimmed = searchHash.trim();
     if (!trimmed) {
       pushMessage(searchMode === 'hash' ? tr('download.notifications.enterHash') : 'Please enter a file name', 'warning');
@@ -133,124 +206,11 @@ import { paymentService } from '$lib/services/paymentService';
     latestMetadata = null;
     latestStatus = 'pending';
     searchError = null;
-    versionResults = [];
 
     const startedAt = performance.now();
 
     try {
-      if (searchMode === 'name_disabled') {
-        // This mode is now deprecated in favor of Merkle Hash and CID
-        pushMessage('Searching for file versions...', 'info', 2000);
-
-        try {
-          // Import invoke function for backend calls
-          const { invoke } = await import("@tauri-apps/api/core");
-
-          console.log('🔍 Starting search for file versions with name:', trimmed);
-          console.log('⏱️ Search timeout set to:', SEARCH_TIMEOUT_MS, 'ms');
-          console.log('📡 About to call invoke with get_file_versions_by_name');
-          
-          // Test if invoke is working at all
-          console.log('🧪 Testing invoke function availability...');
-          
-          // Test backend connection first
-          try {
-            console.log('🔌 Testing backend connection...');
-            const connectionTest = await invoke('test_backend_connection') as string;
-            console.log('✅ Backend connection test result:', connectionTest);
-          } catch (connectionError) {
-            console.error('❌ Backend connection test failed:', connectionError);
-            throw new Error(`Backend connection failed: ${connectionError}`);
-          }
-          
-          // Try a simpler approach - check local files first
-          console.log('🔍 Checking local files first...');
-          const localFiles = get(files);
-          const localMatches = localFiles.filter(f => f.name === trimmed);
-          if (localMatches.length > 0) {
-            console.log('✅ Found local files:', localMatches.length);
-            versionResults = localMatches.map(file => ({
-              fileHash: file.hash,
-              fileName: file.name,
-              fileSize: file.size,
-              version: file.version || 1,
-              createdAt: file.uploadDate ? Math.floor(file.uploadDate.getTime() / 1000) : Date.now() / 1000,
-              seeders: [],
-              is_encrypted: file.isEncrypted || false,
-              price: file.price ?? 0
-            })).sort((a, b) => b.version - a.version);
-            
-            latestStatus = 'found';
-            pushMessage(`Found ${versionResults.length} local version(s) of "${trimmed}"`, 'success');
-            return;
-          }
-          
-          // Add timeout for name search with multiple fallback mechanisms
-          const searchPromise = invoke('get_file_versions_by_name', { fileName: trimmed }) as Promise<any[]>;
-          const timeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => {
-              console.log('⏰ Search timeout reached!');
-              reject(new Error('Search timeout'));
-            }, SEARCH_TIMEOUT_MS)
-          );
-          
-          console.log('🏁 Starting Promise.race between search and timeout');
-          console.log('⏱️ Current time:', new Date().toISOString());
-          
-          // Add a progress indicator
-          const progressInterval = setInterval(() => {
-            console.log('⏳ Search still in progress...');
-          }, 500);
-          
-          // Add a force-complete mechanism
-          const forceCompleteTimeout = setTimeout(() => {
-            console.log('🚨 Force completing search due to background network issues');
-            clearInterval(progressInterval);
-            // Force the search to complete even if there are background issues
-            latestStatus = 'not_found';
-            searchError = 'Search completed but may have background network issues';
-            pushMessage('Search completed with potential network issues. Try again if needed.', 'warning', 6000);
-            isSearching = false;
-          }, SEARCH_TIMEOUT_MS + 1000);
-          
-          try {
-            const versions = await Promise.race([searchPromise, timeoutPromise]) as any[];
-            clearTimeout(forceCompleteTimeout);
-            clearInterval(progressInterval);
-            console.log('✅ Search results received:', versions);
-            console.log('⏱️ Search completed in:', Math.round(performance.now() - startedAt), 'ms');
-            
-            const elapsed = Math.round(performance.now() - startedAt);
-            lastSearchDuration = elapsed;
-
-            if (versions && versions.length > 0) {
-              versionResults = versions.sort((a, b) => b.version - a.version); // Sort by version descending
-              latestStatus = 'found';
-              pushMessage(`Found ${versions.length} version(s) of "${trimmed}"`, 'success');
-            } else {
-              latestStatus = 'not_found';
-              pushMessage(`No versions found for "${trimmed}"`, 'warning', 6000);
-            }
-          } catch (error) {
-            clearTimeout(forceCompleteTimeout);
-            clearInterval(progressInterval);
-            throw error;
-          }
-        } catch (nameSearchError) {
-          console.error('❌ Search by name failed:', nameSearchError);
-          latestStatus = 'error';
-          const errorMessage = nameSearchError instanceof Error ? nameSearchError.message : 'Search failed';
-          searchError = errorMessage;
-          
-          if (errorMessage === 'Search timeout') {
-            pushMessage(`Search timed out after ${SEARCH_TIMEOUT_MS / 1000} seconds. Try again or use hash search.`, 'error', 8000);
-          } else if (errorMessage.includes('DHT not running')) {
-            pushMessage('DHT service is not running. Please restart the application.', 'error', 8000);
-          } else {
-            pushMessage(`Search failed: ${errorMessage}`, 'error', 6000);
-          }
-        }
-      } else if (searchMode === 'cid') {
+      if (searchMode === 'cid') {
         const entry = dhtSearchHistory.addPending(trimmed);
         activeHistoryId = entry.id;
         pushMessage('Searching for providers by CID...', 'info', 2000);
@@ -623,48 +583,66 @@ import { paymentService } from '$lib/services/paymentService';
   <div class="space-y-4">
     <div>
       <Label for="hash-input" class="text-base font-medium">{tr('download.addNew')}</Label>
-      <p class="text-sm text-muted-foreground mt-1 mb-3">
-        {tr('download.addNewSubtitle')}
-      </p>
 
       <!-- Search Mode Switcher -->
-      <div class="flex gap-2 mb-3">
+      <div class="flex gap-2 mb-3 mt-3">
         <select bind:value={searchMode} class="px-3 py-1 text-sm rounded-md border transition-colors bg-muted/50 hover:bg-muted border-border">
             <option value="merkle_hash">Search by Merkle Hash</option>
             <option value="cid">Search by CID</option>
+            <option value="magnet">Search by Magnet Link</option>
+            <option value="torrent">Search by .torrent File</option>
         </select>
       </div>
 
       <div class="flex flex-col sm:flex-row gap-3">
-        <div class="relative flex-1 search-input-container">
-          <Input
-            id="hash-input"
-            bind:value={searchHash}
-            placeholder=""
-            class="pr-20 h-10"
-            on:focus={toggleHistoryDropdown}
-          />
-          {#if searchHash}
-            <button
-              on:click={clearSearch}
-              class="absolute right-10 top-1/2 transform -translate-y-1/2 p-1 hover:bg-muted rounded-full transition-colors"
-              type="button"
-              aria-label={tr('download.clearInput')}
+        {#if searchMode === 'torrent'}
+          <!-- File input for .torrent files -->
+          <div class="flex-1">
+            <input
+              type="file"
+              bind:this={torrentFileInput}
+              accept=".torrent"
+              class="hidden"
+              on:change={handleTorrentFileSelect}
+            />
+            <Button
+              variant="outline"
+              class="w-full h-10 justify-start"
+              on:click={() => torrentFileInput?.click()}
             >
-              <X class="h-4 w-4 text-muted-foreground hover:text-foreground" />
+              {torrentFileName || 'Select .torrent file'}
+            </Button>
+          </div>
+        {:else}
+          <div class="relative flex-1 search-input-container">
+            <Input
+              id="hash-input"
+              bind:value={searchHash}
+              placeholder={searchMode === 'magnet' ? 'magnet:?xt=urn:btih:...' : ''}
+              class="pr-20 h-10"
+              on:focus={toggleHistoryDropdown}
+            />
+            {#if searchHash}
+              <button
+                on:click={clearSearch}
+                class="absolute right-10 top-1/2 transform -translate-y-1/2 p-1 hover:bg-muted rounded-full transition-colors"
+                type="button"
+                aria-label={tr('download.clearInput')}
+              >
+                <X class="h-4 w-4 text-muted-foreground hover:text-foreground" />
+              </button>
+            {/if}
+            <button
+              on:click={toggleHistoryDropdown}
+              class="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 hover:bg-muted rounded-full transition-colors"
+              type="button"
+              aria-label="Toggle search history"
+            >
+              <History class="h-4 w-4 text-muted-foreground hover:text-foreground" />
             </button>
-          {/if}
-          <button
-            on:click={toggleHistoryDropdown}
-            class="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 hover:bg-muted rounded-full transition-colors"
-            type="button"
-            aria-label="Toggle search history"
-          >
-            <History class="h-4 w-4 text-muted-foreground hover:text-foreground" />
-          </button>
 
-          {#if showHistoryDropdown}
-            <div class="absolute top-full left-0 right-0 mt-1 bg-background border border-border rounded-md shadow-lg z-50 max-h-80 overflow-auto">
+            {#if showHistoryDropdown}
+              <div class="absolute top-full left-0 right-0 mt-1 bg-background border border-border rounded-md shadow-lg z-50 max-h-80 overflow-auto">
               {#if historyEntries.length > 0}
                 <div class="p-2 border-b border-border">
                   <div class="flex items-center justify-between">
@@ -711,14 +689,15 @@ import { paymentService } from '$lib/services/paymentService';
               {/if}
             </div>
           {/if}
-        </div>
+          </div>
+        {/if}
         <Button
           on:click={searchForFile}
-          disabled={!searchHash.trim() || isSearching}
+          disabled={(searchMode !== 'torrent' && !searchHash.trim()) || (searchMode === 'torrent' && !torrentFileName) || isSearching}
           class="h-10 px-6"
         >
           <Search class="h-4 w-4 mr-2" />
-          {isSearching ? tr('download.search.status.searching') : tr('download.search.button')}
+          {isSearching ? tr('download.search.status.searching') : (searchMode === 'magnet' || searchMode === 'torrent' ? 'Start Download' : tr('download.search.button'))}
         </Button>
       </div>
     </div>

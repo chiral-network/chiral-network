@@ -646,7 +646,6 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       price: metadata.price ?? 0,
       status: 'queued' as const,
       priority: 'normal' as const,
-      version: metadata.version, // Preserve version info if available
       seeders: metadata.seeders.length, // Convert array length to number
       seederAddresses: metadata.seeders, // Array that only contains selected seeder rather than all seeders
       // Pass encryption info to the download item
@@ -957,7 +956,6 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       seeders: downloadingFile.seederAddresses,
       createdAt: Date.now(),
       isEncrypted: downloadingFile.isEncrypted || false,
-      version: downloadingFile.version,
       manifest: downloadingFile.manifest ? JSON.stringify(downloadingFile.manifest) : undefined,
       cids: downloadingFile.cids,
       downloadPath: fullPath  // Pass the full path
@@ -1607,8 +1605,6 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
   const formatFileSize = toHumanReadableSize
 
-
-
 </script>
 
 <div class="space-y-6">
@@ -1659,10 +1655,17 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     </Card>
 
   {:else}
-    <DownloadSearchSection
-      on:download={(event) => handleSearchDownload(event.detail)}
-      on:message={handleSearchMessage}
-    />
+    <!-- Combined Download Section (Chiral DHT + BitTorrent) -->
+    <Card class="overflow-hidden">
+      <!-- Chiral DHT Search Section with integrated BitTorrent -->
+      <div class="border-b">
+        <DownloadSearchSection
+          on:download={(event) => handleSearchDownload(event.detail)}
+          on:message={handleSearchMessage}
+        />
+      </div>
+    </Card>
+
     <!-- Protocol Indicator and Switcher -->
     <Card class="p-4">
       <div class="flex items-center justify-between">
@@ -1982,11 +1985,6 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
                     <div class="flex-1 min-w-0">
                       <div class="flex items-center gap-3 mb-1">
                         <h3 class="font-semibold text-sm truncate">{file.name}</h3>
-                        {#if file.version}
-                          <Badge class="bg-blue-100 text-blue-800 text-xs px-2 py-0.5">
-                            v{file.version}
-                          </Badge>
-                        {/if}
                         {#if multiSourceProgress.has(file.hash)}
                           <Badge class="bg-purple-100 text-purple-800 text-xs px-2 py-0.5">
                             Multi-source

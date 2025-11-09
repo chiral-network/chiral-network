@@ -21,7 +21,9 @@
     Blocks,
     Globe,
     DollarSign,
-    Copy
+    Copy,
+    Share2,
+    ChevronDown
   } from "lucide-svelte";
   import { files, type FileItem, etcAccount } from "$lib/stores";
   import {
@@ -171,6 +173,12 @@
   let useEncryptedSharing = false;
   let recipientPublicKey = "";
   let showEncryptionOptions = false;
+
+  // BitTorrent seeding state
+  let showBitTorrentSection = false;
+  let seedFileInput: HTMLInputElement;
+  let seedFileName: string | null = null;
+  let newlySeededMagnet: string | null = null;
 
   // Calculate price using dynamic network metrics with safe fallbacks
   async function calculateFilePrice(sizeInBytes: number): Promise<number> {
@@ -765,6 +773,43 @@
     showToast(tr("upload.hashCopiedClipboard"), "success");
   }
 
+  // BitTorrent seeding functions
+  function handleSeedFileSelect(event: Event) {
+    const target = event.target as HTMLInputElement;
+    const file = target.files?.[0];
+    if (file) {
+      seedFileName = file.name;
+    } else {
+      seedFileName = null;
+      if (target) target.value = '';
+    }
+  }
+
+  async function startSeeding() {
+    if (!seedFileName) {
+      showToast(tr('torrent.seed.noFileSelected'), 'warning');
+      return;
+    }
+    try {
+      const result: any = await invoke('seed_file', { fileName: seedFileName });
+      if (result && result.magnet_link) {
+        newlySeededMagnet = result.magnet_link;
+      }
+      showToast(tr('torrent.seed.success', { values: { fileName: seedFileName } }), 'success');
+      seedFileName = null;
+      if (seedFileInput) seedFileInput.value = '';
+    } catch (error) {
+      console.error("Failed to start seeding:", error);
+      showToast(tr('torrent.seed.error', { values: { error: String(error) } }), 'error');
+    }
+  }
+
+  function copyToClipboard(text: string) {
+    if (!text) return;
+    navigator.clipboard.writeText(text)
+      .then(() => showToast(tr('torrent.clipboard.copied'), 'success'));
+  }
+
 </script>
 
 <div class="space-y-6">
@@ -940,6 +985,73 @@
           </button>
         </div>
       </div>
+    </Card>
+  {/if}
+
+  <!-- BitTorrent Seeding Section (Collapsible) -->
+  {#if isTauri}
+    <Card>
+      <button
+        on:click={() => showBitTorrentSection = !showBitTorrentSection}
+        class="w-full p-4 flex items-center justify-between hover:bg-muted/50 transition-colors"
+      >
+        <div class="flex items-center gap-3">
+          <div class="flex items-center justify-center w-10 h-10 bg-green-500/10 rounded-lg border border-green-500/20">
+            <Share2 class="h-5 w-5 text-green-600" />
+          </div>
+          <div class="text-left">
+            <h3 class="text-lg font-semibold">{$t("torrent.seed.title")}</h3>
+            <p class="text-sm text-muted-foreground">{$t("torrent.seed.description")}</p>
+          </div>
+        </div>
+        <ChevronDown class="h-5 w-5 transition-transform" style="transform: rotate({showBitTorrentSection ? 180 : 0}deg)" />
+      </button>
+
+      {#if showBitTorrentSection}
+        <div class="p-6 pt-0 space-y-4 border-t">
+          <div class="flex gap-2">
+            <label for="seed-file-input" class="flex-1 p-3 border border-dashed rounded-md cursor-pointer text-center text-sm text-muted-foreground hover:bg-accent transition-colors">
+              <Upload class="inline-block h-4 w-4 mr-2" />
+              {seedFileName || $t("torrent.seed.choosePlaceholder")}
+            </label>
+            <input
+              id="seed-file-input"
+              type="file"
+              bind:this={seedFileInput}
+              on:change={handleSeedFileSelect}
+              class="hidden"
+            />
+            <button
+              on:click={startSeeding}
+              disabled={!seedFileName}
+              class="px-4 py-2 bg-green-600 text-white rounded-md disabled:opacity-50 hover:bg-green-700 transition-colors font-medium"
+            >
+              {$t("torrent.seed.button")}
+            </button>
+          </div>
+
+          {#if newlySeededMagnet}
+            <div class="p-3 bg-background rounded-md border">
+              <p class="text-sm font-semibold mb-2">{$t("torrent.seed.shareMagnet")}</p>
+              <div class="flex items-center gap-2">
+                <Input
+                  type="text"
+                  readonly
+                  value={newlySeededMagnet}
+                  class="flex-1 text-xs font-mono"
+                />
+                <button
+                  on:click={() => copyToClipboard(newlySeededMagnet!)}
+                  class="p-2 hover:bg-accent rounded-md transition-colors"
+                  title={$t('torrent.clipboard.copied')}
+                >
+                  <Copy class="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          {/if}
+        </div>
+      {/if}
     </Card>
   {/if}
 
