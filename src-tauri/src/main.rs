@@ -1,34 +1,44 @@
+// Prevents additional console window on Windows in release, DO NOT REMOVE!!
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 #![cfg_attr(
     all(not(debug_assertions), target_os = "windows"),
     windows_subsystem = "windows"
 )]
 
+// Declare all modules here
+pub mod protocols;
 pub mod commands;
 pub mod analytics;
-mod bandwidth;
-mod blockchain_listener;
-mod dht;
-mod download_scheduler;
-mod download_source;
-mod encryption;
-mod ethereum;
-mod file_transfer;
-mod ftp_client;
-mod geth_downloader;
-mod headless;
-mod http_download;
-mod http_server;
-mod keystore;
-mod manager;
-mod multi_source_download;
 pub mod net;
-mod peer_selection;
-mod pool;
-mod proxy_latency;
-mod stream_auth;
-mod webrtc_service;
-mod transaction_services;  
+pub mod peer_selection;
+pub mod pool;
+pub mod proxy_latency;
+pub mod stream_auth;
+pub mod webrtc_service;
+mod transfer_events;
+pub mod transaction_services;
+pub mod bandwidth;
+pub mod blockchain_listener;
+pub mod dht;
+pub mod download_scheduler;
+pub mod download_source;
+pub mod ed2k_client;
+pub mod encryption;
+pub mod ethereum;
+pub mod file_transfer;
+pub mod ftp_client;
+pub mod ftp_downloader;
+pub mod geth_downloader;
+pub mod headless;
+pub mod http_download;
+pub mod http_server;
+pub mod keystore;
+pub mod manager;
+pub mod multi_source_download;
+pub mod bittorrent_handler;
+
+use protocols::ProtocolManager;
 
 use crate::commands::auth::{
     cleanup_expired_proxy_auth_tokens, generate_proxy_auth_token, revoke_proxy_auth_token,
@@ -46,7 +56,6 @@ use crate::stream_auth::{
     AuthMessage, HmacKeyExchangeConfirmation, HmacKeyExchangeRequest, HmacKeyExchangeResponse,
     StreamAuthService,
 };
-use chrono;
 use dht::{DhtEvent, DhtMetricsSnapshot, DhtService, FileMetadata};
 use directories::ProjectDirs;
 use ethereum::{
@@ -96,7 +105,7 @@ use tauri::{
 use tokio::time::Duration as TokioDuration;
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use totp_rs::{Algorithm, Secret, TOTP};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 use webrtc_service::{WebRTCFileRequest, WebRTCService};
 
 use crate::manager::ChunkManager; // Import the ChunkManager
@@ -268,8 +277,13 @@ struct AppState {
 
     // Relay node aliases (peer_id -> alias)
     relay_aliases: Arc<Mutex<std::collections::HashMap<String, String>>>,
+
+    // Protocol manager for handling different download/upload protocols
+    protocol_manager: Arc<ProtocolManager>,
 }
 
+/// Tauri command to trigger a download.
+/// It takes a string identifier (like a magnet link) and uses the ProtocolManager.
 #[tauri::command]
 async fn create_chiral_account(state: State<'_, AppState>) -> Result<EthAccount, String> {
     let account = create_new_account()?;
@@ -315,14 +329,29 @@ async fn import_chiral_account(
 async fn start_geth_node(
     state: State<'_, AppState>,
     data_dir: String,
-    rpc_url: Option<String>,
-) -> Result<(), String> {
+    rpc_url: Option<String>,) -> Result<(), String> {
     let mut geth = state.geth.lock().await;
     let miner_address = state.miner_address.lock().await;
     let rpc_url = rpc_url.unwrap_or_else(|| "http://127.0.0.1:8545".to_string());
-    *state.rpc_url.lock().await = rpc_url;
+    *state.rpc_url.lock().await = rpc_url.clone();
 
-    geth.start(&data_dir, miner_address.as_deref())
+    geth.start(&data_dir, miner_address.as_deref())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn download(identifier: String, state: State<'_, AppState>) -> Result<(), String> {
+    println!("Received download command for: {}", identifier);
+    state.protocol_manager.download(&identifier).await
+}
+
+/// Tauri command to seed a file.
+/// It takes a local file path, starts seeding, and returns a magnet link.
+#[tauri::command]
+async fn seed(file_path: String, state: State<'_, AppState>) -> Result<String, String> {
+    println!("Received seed command for: {}", file_path);
+    // Delegate the seed operation to the protocol manager.
+    state.protocol_manager.seed(&file_path).await
 }
 
 #[tauri::command]
@@ -971,9 +1000,8 @@ async fn start_dht_node(
         }
     }
 
-    // Disable autonat by default to prevent warnings when no servers are available
-    // Users can explicitly enable it when needed
-    let auto_enabled = enable_autonat.unwrap_or(true);
+    // AutoNAT disabled by default - users can enable in settings if needed for NAT detection
+    let auto_enabled = enable_autonat.unwrap_or(false);
     let probe_interval = autonat_probe_interval_secs.map(Duration::from_secs);
     let autonat_server_list = autonat_servers.unwrap_or_default();
 
@@ -996,8 +1024,9 @@ async fn start_dht_node(
     let chunk_storage_path = app_data_dir.join("chunk_storage");
     let chunk_manager = Arc::new(ChunkManager::new(chunk_storage_path));
 
-    // --- Hotfix: Disable AutoRelay on bootstrap nodes (and via env var)
-    let mut final_enable_autorelay = enable_autorelay.unwrap_or(true);
+    // --- AutoRelay is now disabled by default (can be enabled via config or env var)
+    // Disable AutoRelay on bootstrap nodes (and via env var)
+    let mut final_enable_autorelay = enable_autorelay.unwrap_or(false);
     if is_bootstrap.unwrap_or(false) {
         final_enable_autorelay = false;
         tracing::info!("AutoRelay disabled on bootstrap (hotfix).");
@@ -1026,7 +1055,7 @@ async fn start_dht_node(
         Some(chunk_manager), // Pass the chunk manager
         chunk_size_kb,
         cache_size_mb,
-        /* enable AutoRelay (after hotfix) */ final_enable_autorelay,
+        /* enable AutoRelay (disabled by default) */ final_enable_autorelay,
         preferred_relays.unwrap_or_default(),
         is_bootstrap.unwrap_or(false), // enable_relay_server only on bootstrap
         Some(&async_blockstore_path),
@@ -2616,7 +2645,6 @@ fn get_windows_temperature() -> Option<f32> {
                         let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
                         if let Ok(mut logged) = log_state.lock() {
                             if !*logged {
-                                info!("✅ Temperature sensor detected via WMI HighPrecision: {:.1}°C", temp_celsius);
                                 *logged = true;
                             }
                         }
@@ -2644,7 +2672,6 @@ fn get_windows_temperature() -> Option<f32> {
                         let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
                         if let Ok(mut logged) = log_state.lock() {
                             if !*logged {
-                                info!("✅ Temperature sensor detected via WMI CurrentTemperature: {:.1}°C", temp_celsius);
                                 *logged = true;
                             }
                         }
@@ -2672,7 +2699,6 @@ fn get_windows_temperature() -> Option<f32> {
                         let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
                         if let Ok(mut logged) = log_state.lock() {
                             if !*logged {
-                                info!("✅ Temperature sensor detected via MSAcpi: {:.1}°C", temp_celsius);
                                 *logged = true;
                             }
                         }
@@ -2720,10 +2746,10 @@ fn get_default_storage_path(app: tauri::AppHandle) -> Result<String, String> {
         .ok_or_else(|| "Failed to convert path to string".to_string())
 }
 
-#[tauri::command]
-fn check_directory_exists(path: String) -> bool {
-    Path::new(&path).is_dir()
-}
+// #[tauri::command]
+// fn check_directory_exists(path: String) -> bool {
+//     Path::new(&path).is_dir()
+// }
 
 #[tauri::command]
 async fn ensure_directory_exists(path: String) -> Result<(), String> {
@@ -3029,8 +3055,31 @@ async fn download_blocks_from_network(
 async fn download_file_from_network(
     state: State<'_, AppState>,
     file_hash: String,
-    _output_path: String,
+    output_path: String,  // Remove the underscore - we'll use this now
 ) -> Result<String, String> {
+    use std::path::Path;
+
+    // ✅ VALIDATE OUTPUT PATH BEFORE STARTING DOWNLOAD
+    let path = Path::new(&output_path);
+    
+    // Check if parent directory exists
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            return Err(format!(
+                "Download failed: Directory does not exist: {}",
+                parent.display()
+            ));
+        }
+        if !parent.is_dir() {
+            return Err(format!(
+                "Download failed: Path is not a directory: {}",
+                parent.display()
+            ));
+        }
+    } else {
+        return Err("Download failed: Invalid file path".to_string());
+    }
+
     let ft = {
         let ft_guard = state.file_transfer.lock().await;
         ft_guard.as_ref().cloned()
@@ -3458,6 +3507,7 @@ async fn upload_file_chunk(
             http_sources: None,
             info_hash: None,
             trackers: None,
+            ed2k_sources: None,
         };
 
         // Store complete file data locally for seeding
@@ -4714,6 +4764,29 @@ async fn reset_analytics(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+async fn reset_network_services(state: State<'_, AppState>) -> Result<(), String> {
+    // Stop DHT if running
+    if let Some(dht) = state.dht.lock().await.as_ref() {
+        let _ = dht.shutdown().await;
+    }
+    *state.dht.lock().await = None;
+
+    // Stop WebRTC if running (just clear the reference)
+    *state.webrtc.lock().await = None;
+
+    // Stop file transfer service (just clear the reference)
+    *state.file_transfer.lock().await = None;
+
+    // Stop multi-source download service (just clear the reference)
+    *state.multi_source_download.lock().await = None;
+
+    // Stop any running pumps
+    *state.file_transfer_pump.lock().await = None;
+    *state.multi_source_pump.lock().await = None;
+    Ok(())
+}
+
 // ============================================================================
 // HTTP Server Commands - Serve files via HTTP protocol
 // ============================================================================
@@ -4963,6 +5036,27 @@ fn main() {
 
             // Relay aliases
             relay_aliases: Arc::new(Mutex::new(std::collections::HashMap::new())),
+
+            // Protocol Manager            // Protocol Manager with BitTorrent support
+            protocol_manager: {
+                let mut manager = ProtocolManager::new();
+                
+                // Create default download directory
+                let download_dir = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
+                    .map(|dirs| dirs.data_dir().join("downloads"))
+                    .unwrap_or_else(|| std::env::current_dir().unwrap().join("downloads"));
+                
+                // Ensure download directory exists
+                if let Err(e) = std::fs::create_dir_all(&download_dir) {
+                    eprintln!("Failed to create download directory: {}", e);
+                }
+                
+                // Register BitTorrent handler
+                let bittorrent_handler = Arc::new(bittorrent_handler::BitTorrentHandler::new(download_dir));
+                manager.register(bittorrent_handler);
+                
+                Arc::new(manager)
+            },
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
@@ -4993,6 +5087,8 @@ fn main() {
             get_transaction_queue_status,
             get_cpu_temperature,
             get_power_consumption,
+            download,
+            seed,
             is_geth_running,
             check_geth_binary,
             get_geth_status,
@@ -5023,6 +5119,7 @@ fn main() {
             get_dht_health,
             get_dht_peer_count,
             get_dht_peer_id,
+            is_dht_running,
             get_dht_connected_peers,
             send_dht_message,
             start_file_transfer_service,
@@ -5084,6 +5181,7 @@ fn main() {
             get_resource_contribution,
             get_contribution_history,
             reset_analytics,
+            reset_network_services,
             // HTTP server commands
             start_http_server,
             stop_http_server,
@@ -5111,7 +5209,6 @@ fn main() {
             revoke_proxy_auth_token,
             cleanup_expired_proxy_auth_tokens,
             get_file_data,
-            send_chat_message,
             store_file_data,
             start_proof_of_storage_watcher,
             stop_proof_of_storage_watcher,
@@ -5482,6 +5579,7 @@ struct UploadResult {
     is_encrypted: bool,
     peer_id: String,
     version: u32,
+    cid: Option<String>, // Add CID field for Bitswap uploads
 }
 
 #[tauri::command]
@@ -5495,6 +5593,14 @@ async fn upload_and_publish_file(
     ftp_source: Option<String>,
 ) -> Result<UploadResult, String> {
     info!("📦 BACKEND: Starting upload_and_publish_file for price {:?}", price);
+
+    // CHECK: Ensure DHT is running BEFORE doing expensive operations
+    {
+        let dht_guard = state.dht.lock().await;
+        if dht_guard.is_none() {
+            return Err("DHT node is not running. Please start the DHT network before uploading files.".to_string());
+        }
+    }
 
     // 1) Encrypt, chunk, and build Merkle tree for the file
     let manifest = encrypt_file_for_recipient(
@@ -5636,6 +5742,7 @@ async fn upload_and_publish_file(
     tracing::info!("Registered file for HTTP serving: {} ({})", file_name, manifest.merkle_root);
 
     // 7) Return upload result to frontend
+    // For encrypted uploads (WebRTC), there's no CID
     Ok(UploadResult {
         merkle_root: manifest.merkle_root,
         file_name,
@@ -5643,6 +5750,7 @@ async fn upload_and_publish_file(
         is_encrypted: true,
         peer_id,
         version,
+        cid: None, // WebRTC uploads don't have CIDs
     })
 }
 
@@ -5768,85 +5876,6 @@ async fn get_file_data(state: State<'_, AppState>, file_hash: String) -> Result<
     } else {
         Err("File transfer service not running".to_string())
     }
-}
-
-#[derive(serde::Serialize, Clone)]
-struct ChatMessageForFrontend {
-    from_peer_id: String,
-    message_id: String,
-    encrypted_payload: Vec<u8>,
-    timestamp: u64,
-    signature: Vec<u8>,
-}
-
-/// Sends an E2EE chat message to a peer.
-#[tauri::command]
-async fn send_chat_message(
-    state: State<'_, AppState>,
-    recipient_peer_id: String,
-    encrypted_payload: Vec<u8>,
-    signature: Vec<u8>,
-) -> Result<(), String> {
-    debug!("send_chat_message called for peer: {}", recipient_peer_id);
-    let webrtc = state
-        .webrtc
-        .lock()
-        .await
-        .as_ref()
-        .cloned()
-        .ok_or("WebRTC service not running")?;
-
-    // 1. Check if a WebRTC connection already exists.
-    if !webrtc.get_connection_status(&recipient_peer_id).await {
-        debug!(
-            "No existing WebRTC connection to {}. Attempting to establish one.",
-            recipient_peer_id
-        );
-        let dht = state
-            .dht
-            .lock()
-            .await
-            .as_ref()
-            .cloned()
-            .ok_or("DHT service not running")?;
-
-        dht.connect_to_peer_by_id(recipient_peer_id.clone()).await?;
-
-        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-
-        if !webrtc.get_connection_status(&recipient_peer_id).await {
-            error!(
-                "Failed to establish WebRTC connection with peer {} after 5s.",
-                recipient_peer_id
-            );
-            return Err("Failed to establish WebRTC connection with peer.".to_string());
-        }
-        debug!(
-            "WebRTC connection to {} established successfully.",
-            recipient_peer_id
-        );
-    }
-
-    // 3. Construct the message payload.
-    let chat_message = webrtc_service::WebRTCChatMessage {
-        message_id: format!(
-            "msg_{}",
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-        ),
-        encrypted_payload,
-        timestamp: chrono::Utc::now().timestamp() as u64,
-        signature,
-    };
-    let message = webrtc_service::WebRTCMessage::ChatMessage(chat_message);
-    let message_bytes = serde_json::to_vec(&message)
-        .map_err(|e| format!("Failed to serialize chat message: {}", e))?;
-    debug!("Sending chat message to {}", recipient_peer_id);
-    // Correctly serialize the message to a string before sending via send_text
-    let message_str = serde_json::to_string(&message)
-        .map_err(|e| format!("Failed to serialize chat message to string: {}", e))?;
-
-    // Assuming send_data is a method that sends text. If it sends bytes, use message_bytes.
-    webrtc.send_data(&recipient_peer_id, message_bytes).await
 }
 
 #[tauri::command]
@@ -6112,4 +6141,12 @@ async fn clear_seed_list() -> Result<(), String> {
     // The actual clearing happens in the frontend via localStorage.removeItem()
     // This command is here for consistency if you add file-based storage later
     Ok(())
+}
+
+
+#[tauri::command]
+fn check_directory_exists(path: String) -> Result<bool, String> {
+    use std::path::Path;
+    let p = Path::new(&path);
+    Ok(p.exists() && p.is_dir())
 }

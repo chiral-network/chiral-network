@@ -5,7 +5,7 @@
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
-  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation, Globe, Blocks, RefreshCw, Coins } from 'lucide-svelte'
+  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation, Globe, Blocks, RefreshCw } from 'lucide-svelte'
   import { files, downloadQueue, activeTransfers, wallet } from '$lib/stores'
   import { dhtService } from '$lib/dht'
   import { paymentService } from '$lib/services/paymentService'
@@ -21,7 +21,8 @@
   import PeerSelectionService from '$lib/services/peerSelectionService'
 import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
 
-  import { invoke }  from '@tauri-apps/api/core';
+  import { invoke } from '@tauri-apps/api/core'
+  import { homeDir } from '@tauri-apps/api/path'
 
   const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params)
 
@@ -282,49 +283,89 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
 
 
         // Listen for WebRTC download completion
-        const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (event) => {
-          const data = event.payload as {
-            fileHash: string;
-            fileName: string;
-            fileSize: number;
-            data: number[]; // Array of bytes
-          };
+const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (event) => {
+  const data = event.payload as {
+    fileHash: string;
+    fileName: string;
+    fileSize: number;
+    data: number[]; // Array of bytes
+  };
 
-          // Find the file in our downloads
-          const downloadedFile = $files.find(f => f.hash === data.fileHash);
-  
-          if (downloadedFile && downloadedFile.downloadPath) {
-            try {
-              // Ensure the directory exists before writing
-              await invoke('ensure_directory_exists', { path: downloadedFile.downloadPath });
-              
-              // Write the file to disk at the user's chosen location
-              const { writeFile } = await import('@tauri-apps/plugin-fs');
-              const fileData = new Uint8Array(data.data);
-              await writeFile(downloadedFile.downloadPath, fileData);
-      
-              console.log(`✅ File saved to: ${downloadedFile.downloadPath}`);
-      
-              // Update status to completed
-              files.update(f => f.map(file => 
-                file.hash === data.fileHash
-                ? { ...file, status: 'completed', progress: 100 }
-                  : file
-              ));
-      
-              showNotification(`Successfully saved "${data.fileName}"`, 'success');
-            } catch (error) {
-              console.error('Failed to save file:', error);
-              showNotification(`Failed to save file: ${error}`, 'error');
+  try {
+    // ✅ GET SETTINGS PATH
+    const stored = localStorage.getItem("chiralSettings");
+    if (!stored) {
+      showNotification(
+        'Please configure a download path in Settings before downloading files.',
+        'error',
+        8000
+      );
+      return;
+    }
+    
+    const settings = JSON.parse(stored);
+    let storagePath = settings.storagePath;
+    
+    if (!storagePath || storagePath === '.') {
+      showNotification(
+        'Please set a valid download path in Settings.',
+        'error',
+        8000
+      );
+      return;
+    }
+    
+    // Expand ~ to home directory if needed
+    if (storagePath.startsWith("~")) {
+      const home = await homeDir();
+      storagePath = storagePath.replace("~", home);
+    }
+    
+    // Validate directory exists
+    const dirExists = await invoke('check_directory_exists', { path: storagePath });
+    if (!dirExists) {
+      showNotification(
+        `Download path "${settings.storagePath}" does not exist. Please update it in Settings.`,
+        'error',
+        8000
+      );
+      return;
+    }
 
-              files.update(f => f.map(file =>
-                file.hash === data.fileHash
-                  ? { ...file, status: 'failed' }
-                  : file
-              ));
-            }
-          }
-        });
+    // Construct full file path
+    const { join } = await import('@tauri-apps/api/path');
+    const outputPath = await join(storagePath, data.fileName);
+    
+    console.log(`✅ Saving WebRTC file to: ${outputPath}`);
+
+    // Write the file to disk
+    const { writeFile } = await import('@tauri-apps/plugin-fs');
+    const fileData = new Uint8Array(data.data);
+    await writeFile(outputPath, fileData);
+
+    console.log(`✅ File saved successfully: ${outputPath}`);
+
+    // Update status to completed
+    files.update(f => f.map(file => 
+      file.hash === data.fileHash
+        ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath }
+        : file
+    ));
+
+    showNotification(`Successfully saved "${data.fileName}"`, 'success');
+    
+  } catch (error) {
+    console.error('Failed to save WebRTC file:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    showNotification(`Failed to save file: ${errorMessage}`, 'error');
+
+    files.update(f => f.map(file =>
+      file.hash === data.fileHash
+        ? { ...file, status: 'failed' }
+        : file
+    ));
+  }
+});
 
         // Cleanup listeners on destroy
         return () => {
@@ -847,39 +888,68 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
     return
   }
 
-  // 🆕 ADD FILE SAVE DIALOG FOR BITSWAP
+  // ✅ VALIDATE SETTINGS PATH BEFORE DOWNLOADING
   try {
-    const { save } = await import('@tauri-apps/plugin-dialog');
-    
-    // Show file save dialog
-    const outputPath = await save({
-      defaultPath: downloadingFile.name,
-      filters: [{
-        name: 'All Files',
-        extensions: ['*']
-      }]
-    });
-
-    if (!outputPath) {
-      // User cancelled the save dialog
+    const stored = localStorage.getItem("chiralSettings");
+    if (!stored) {
+      showNotification(
+        'Please configure a download path in Settings before downloading files.',
+        'error',
+        8000
+      );
       files.update(f => f.map(file =>
         file.id === downloadingFile.id
-          ? { ...file, status: 'canceled' }
+          ? { ...file, status: 'failed' }
+          : file
+      ));
+      return;
+    }
+    
+    const settings = JSON.parse(stored);
+    let storagePath = settings.storagePath;
+    
+    if (!storagePath || storagePath === '.') {
+      showNotification(
+        'Please set a valid download path in Settings before downloading files.',
+        'error',
+        8000
+      );
+      files.update(f => f.map(file =>
+        file.id === downloadingFile.id
+          ? { ...file, status: 'failed' }
+          : file
+      ));
+      return;
+    }
+    
+    // Expand ~ to home directory if needed
+    if (storagePath.startsWith("~")) {
+      const home = await homeDir();
+      storagePath = storagePath.replace("~", home);
+    }
+    
+    // Validate directory exists using Tauri command
+    const dirExists = await invoke('check_directory_exists', { path: storagePath });
+    if (!dirExists) {
+      showNotification(
+        `Download path "${settings.storagePath}" does not exist. Please update it in Settings.`,
+        'error',
+        8000
+      );
+      files.update(f => f.map(file =>
+        file.id === downloadingFile.id
+          ? { ...file, status: 'failed' }
           : file
       ));
       return;
     }
 
-    console.log('✅ User selected save location:', outputPath);
+    // Construct full file path: directory + filename
+    const fullPath = `${storagePath}/${downloadingFile.name}`;
+    
+    console.log('✅ Using settings download path:', fullPath);
 
-    // Update file with download path
-    files.update(f => f.map(file =>
-      file.id === downloadingFile.id
-        ? { ...file, downloadPath: outputPath }
-        : file
-    ));
-
-    // Now start the actual Bitswap download with the output path
+    // Now start the actual Bitswap download
     const metadata = {
       fileHash: downloadingFile.hash,
       fileName: downloadingFile.name,
@@ -890,15 +960,13 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
       version: downloadingFile.version,
       manifest: downloadingFile.manifest ? JSON.stringify(downloadingFile.manifest) : undefined,
       cids: downloadingFile.cids,
-      downloadPath: outputPath // 🔥 PASS THE OUTPUT PATH
+      downloadPath: fullPath  // Pass the full path
     }
-
-    console.log('🔍 FULL metadata being sent:', JSON.stringify(metadata, null, 2));
     
     console.log('  📤 Calling dhtService.downloadFile with metadata:', metadata)
     console.log('  📦 CIDs:', downloadingFile.cids)
     console.log('  👥 Seeders:', downloadingFile.seederAddresses)
-    console.log('  💾 Download path:', outputPath)
+    console.log('  💾 Download path:', fullPath)
 
     // Start the download asynchronously
     dhtService.downloadFile(metadata)
@@ -923,13 +991,13 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
         )
       })
   } catch (error) {
-    console.error('Failed to open save dialog:', error);
+    console.error('Path validation error:', error);
     files.update(f => f.map(file =>
       file.id === downloadingFile.id
         ? { ...file, status: 'failed' }
         : file
     ))
-    showNotification('Failed to open save dialog', 'error');
+    showNotification('Failed to validate download path', 'error', 6000);
     return;
   }
 } 
@@ -1725,12 +1793,6 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
               {$t('download.clearFinished')}
             </Button>
           {/if}
-        </div>
-
-        <!-- Balance Display -->
-        <div class="flex items-center gap-2 px-3 py-1 bg-secondary rounded-md">
-          <Coins class="h-3 w-3 text-muted-foreground" />
-          <span class="text-xs font-medium">{$wallet.balance.toFixed(8)} Chiral</span>
         </div>
 
         <!-- Settings Toggle Button -->
