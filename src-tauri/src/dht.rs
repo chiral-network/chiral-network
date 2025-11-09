@@ -70,10 +70,7 @@ impl rr::Codec for KeyRequestCodec {
 use async_std::fs;
 use async_std::path::Path;
 use async_trait::async_trait;
-use blockstore::{
-    block::{Block, CidError},
-    RedbBlockstore,
-};
+use crate::leveldb_blockstore::LevelDbBlockstore;
 use ethers::prelude::*;
 use tokio::task::JoinHandle;
 
@@ -482,7 +479,7 @@ struct DhtBehaviour {
     kademlia: Kademlia<MemoryStore>,
     identify: identify::Behaviour,
     mdns: toggle::Toggle<Mdns>,
-    bitswap: beetswap::Behaviour<MAX_MULTIHASH_LENGHT, RedbBlockstore>,
+    bitswap: beetswap::Behaviour<MAX_MULTIHASH_LENGHT, LevelDbBlockstore>,
     ping: ping::Behaviour,
     proxy_rr: rr::Behaviour<ProxyCodec>,
     webrtc_signaling_rr: rr::Behaviour<WebRTCSignalingCodec>,
@@ -5038,22 +5035,22 @@ impl DhtService {
         let cache_size = cache_size_mb.unwrap_or(1024); // Default 1024 MB
         let blockstore = if let Some(path) = blockstore_db_path {
             if let Some(path_str) = path.to_str() {
-                info!("Attempting to use blockstore from disk: {}", path_str);
+                info!("Attempting to use LevelDB blockstore from disk: {}", path_str);
             }
 
-            match RedbBlockstore::open(path).await {
+            match LevelDbBlockstore::open(path).await {
                 Ok(store) => {
-                    info!("Successfully opened blockstore from disk");
+                    info!("Successfully opened LevelDB blockstore from disk");
                     Arc::new(store)
                 }
                 Err(e) => {
-                    warn!("Failed to open blockstore from disk ({}), falling back to in-memory storage", e);
-                    Arc::new(RedbBlockstore::in_memory()?)
+                    warn!("Failed to open LevelDB blockstore from disk ({}), falling back to in-memory storage", e);
+                    Arc::new(LevelDbBlockstore::in_memory().await.map_err(|e| format!("Failed to create in-memory blockstore: {}", e))?)
                 }
             }
         } else {
-            info!("Using in-memory blockstore");
-            Arc::new(RedbBlockstore::in_memory()?)
+            info!("Using in-memory LevelDB blockstore");
+            Arc::new(LevelDbBlockstore::in_memory().await.map_err(|e| format!("Failed to create in-memory blockstore: {}", e))?)
         };
         // Generate a new keypair for this node
         // If a secret is provided, derive a stable 32-byte seed via SHA-256(secret)
