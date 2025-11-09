@@ -23,7 +23,7 @@ export default defineConfig({
     target: "esnext",
     minify: "esbuild",
     rollupOptions: {
-      external: ["@tauri-apps/api/tauri", "@tauri-apps/plugin-fs"],
+      external: ["@tauri-apps/api/tauri", "@tauri-apps/plugin-fs", "@tauri-apps/plugin-process"],
     },
   },
 });
