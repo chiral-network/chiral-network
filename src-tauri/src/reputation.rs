@@ -134,13 +134,13 @@ impl TransactionVerdict {
         let mut signature_bytes_array: [u8; 64] = [0u8; 64];
         signature_bytes_array.copy_from_slice(&signature_bytes[..64]);
 
-    // ed25519_dalek in this workspace exposes `Signature::from_bytes` returning
-    // a `Signature` directly (not a `Result`), so we construct it and pass to
-    // the verifier. If the API returns a `Result` in other versions this
-    // would need to be adapted, but this matches the dependency pinned here.
-    let signature = Signature::from_bytes(&signature_bytes_array);
+        // ed25519_dalek in this workspace exposes `Signature::from_bytes` returning
+        // a `Signature` directly (not a `Result`), so we construct it and pass to
+        // the verifier. If the API returns a `Result` in other versions this
+        // would need to be adapted, but this matches the dependency pinned here.
+        let signature = Signature::from_bytes(&signature_bytes_array);
 
-    Ok(verifying_key.verify(&serialized, &signature).is_ok())
+        Ok(verifying_key.verify(&serialized, &signature).is_ok())
     }
 }
 
@@ -486,7 +486,7 @@ impl ReputationDhtService {
             http_sources: None,
             info_hash: None,
             trackers: None,
-            ed2k_sources: None,
+            ..Default::default()
         };
 
         dht_service.publish_file(metadata, None).await
@@ -511,19 +511,25 @@ impl ReputationDhtService {
     }
 
     /// Store a TransactionVerdict into the DHT for the given target.
-    pub async fn store_transaction_verdict(&self, verdict: &TransactionVerdict) -> Result<(), String> {
+    pub async fn store_transaction_verdict(
+        &self,
+        verdict: &TransactionVerdict,
+    ) -> Result<(), String> {
         let dht_service = self
             .dht_service
             .as_ref()
             .ok_or("DHT service not initialized")?;
 
         // Validate before storing
-        verdict.validate().map_err(|e| format!("Invalid verdict: {}", e))?;
+        verdict
+            .validate()
+            .map_err(|e| format!("Invalid verdict: {}", e))?;
 
         // Use the deterministic DHT key for the target
         let key = TransactionVerdict::dht_key_for_target(&verdict.target_id);
 
-        let serialized = serde_json::to_vec(verdict).map_err(|e| format!("Serialization error: {}", e))?;
+        let serialized =
+            serde_json::to_vec(verdict).map_err(|e| format!("Serialization error: {}", e))?;
 
         let metadata = crate::dht::FileMetadata {
             merkle_root: key.clone(),
@@ -549,6 +555,7 @@ impl ReputationDhtService {
             http_sources: None,
             info_hash: None,
             trackers: None,
+            ..Default::default()
         };
 
         dht_service.publish_file(metadata, None).await
@@ -557,7 +564,10 @@ impl ReputationDhtService {
     /// Retrieve TransactionVerdict entries for a target. Currently this triggers
     /// a DHT search and returns an empty vector; TODO: wire up the search result
     /// handling to collect and deserialize found verdict files.
-    pub async fn retrieve_transaction_verdicts(&self, target_id: &str) -> Result<Vec<TransactionVerdict>, String> {
+    pub async fn retrieve_transaction_verdicts(
+        &self,
+        target_id: &str,
+    ) -> Result<Vec<TransactionVerdict>, String> {
         let dht_service = self
             .dht_service
             .as_ref()
@@ -604,7 +614,7 @@ impl ReputationDhtService {
             http_sources: None,
             info_hash: None,
             trackers: None,
-            ed2k_sources: None,
+            ..Default::default()
         };
 
         dht_service.publish_file(metadata, None).await
