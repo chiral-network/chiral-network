@@ -17,7 +17,9 @@
     Activity,
     CheckCircle,
     AlertTriangle,
-    Copy
+    Copy,
+    Download as DownloadIcon,
+    Upload as UploadIcon
   } from "lucide-svelte";
   import { onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
@@ -33,6 +35,7 @@
   import Expandable from "$lib/components/ui/Expandable.svelte";
   import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   import { bandwidthScheduler } from "$lib/services/bandwidthScheduler";
+  import { settingsBackupService } from "$lib/services/settingsBackupService";
 
   const tr = (key: string, params?: Record<string, any>) => $t(key, params);
 
@@ -57,6 +60,7 @@
     notifications: boolean;
     advanced: boolean;
     diagnostics: boolean;
+    backupRestore: boolean;
   };
 
   let accordionStateInitialized = false;
@@ -136,6 +140,12 @@
   let diagnostics: DiagItem[] = [];
   let diagnosticsReport = "";
 
+  // Backup/Restore state
+  let backupRestoreSectionOpen = false;
+  let isExporting = false;
+  let isImporting = false;
+  let backupMessage: { text: string; type: 'success' | 'error' | 'warning' } | null = null;
+
   // NAT & privacy configuration text bindings
   let autonatServersText = '';
   let trustedProxyText = '';
@@ -208,6 +218,7 @@
         if (typeof parsed.notifications === "boolean") notificationsSectionOpen = parsed.notifications;
         if (typeof parsed.advanced === "boolean") advancedSectionOpen = parsed.advanced;
         if (typeof parsed.diagnostics === "boolean") diagnosticsSectionOpen = parsed.diagnostics;
+        if (typeof parsed.backupRestore === "boolean") backupRestoreSectionOpen = parsed.backupRestore;
       }
     } catch (error) {
       console.warn("Failed to restore settings accordion state:", error);
@@ -227,6 +238,7 @@
         notifications: notificationsSectionOpen,
         advanced: advancedSectionOpen,
         diagnostics: diagnosticsSectionOpen,
+        backupRestore: backupRestoreSectionOpen,
       };
       window.localStorage.setItem(ACCORDION_STORAGE_KEY, JSON.stringify(accordionState));
     } catch (error) {
@@ -382,6 +394,103 @@
       console.error("Failed to apply networking settings:", error);
       showToast("Settings saved, but networking update failed", "error");
     }
+  }
+
+  // Backup/Restore Functions
+  async function exportSettings() {
+    isExporting = true;
+    backupMessage = null;
+
+    try {
+      const result = await settingsBackupService.exportSettings(true);
+      
+      if (result.success && result.data) {
+        // Download as file
+        settingsBackupService.downloadBackupFile(result.data);
+        backupMessage = {
+          text: translate('settingsBackup.messages.exportSuccess'),
+          type: 'success'
+        };
+        showToast(translate('settingsBackup.messages.exportSuccess'), 'success');
+      } else {
+        throw new Error(result.error || 'Export failed');
+      }
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      backupMessage = {
+        text: translate('settingsBackup.messages.exportError', { values: { error: errorMsg } }),
+        type: 'error'
+      };
+      showToast(backupMessage.text, 'error');
+    } finally {
+      isExporting = false;
+      
+      // Clear message after 5 seconds
+      setTimeout(() => {
+        backupMessage = null;
+      }, 5000);
+    }
+  }
+
+  async function importSettings() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+
+      isImporting = true;
+      backupMessage = null;
+
+      try {
+        const text = await file.text();
+        const result = await settingsBackupService.importSettings(text, { merge: false });
+        
+        if (result.success && result.imported) {
+          // Update local settings from imported data
+          localSettings = { ...result.imported };
+          savedSettings = JSON.parse(JSON.stringify(localSettings));
+          settings.set(localSettings);
+          
+          if (result.warnings && result.warnings.length > 0) {
+            backupMessage = {
+              text: translate('settingsBackup.messages.importWarnings', { values: { warnings: result.warnings.join(', ') } }),
+              type: 'warning'
+            };
+            showToast(backupMessage.text, 'warning');
+          } else {
+            backupMessage = {
+              text: translate('settingsBackup.messages.importSuccess'),
+              type: 'success'
+            };
+            showToast(backupMessage.text, 'success');
+          }
+
+          // Apply new settings
+          await saveSettings();
+        } else {
+          throw new Error(result.error || 'Import failed');
+        }
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+        backupMessage = {
+          text: translate('settingsBackup.messages.importError', { values: { error: errorMsg } }),
+          type: 'error'
+        };
+        showToast(backupMessage.text, 'error');
+      } finally {
+        isImporting = false;
+        
+        // Clear message after 5 seconds
+        setTimeout(() => {
+          backupMessage = null;
+        }, 5000);
+      }
+    };
+
+    input.click();
   }
 
   async function applyPrivacyRoutingSettings() {
@@ -561,7 +670,7 @@
     }, 2000);
   }
 
-  function exportSettings() {
+  function exportSettingsOld() {
     const blob = new Blob([JSON.stringify(localSettings, null, 2)], {
       type: "application/json",
     });
@@ -579,7 +688,7 @@
     };
   }
 
-  function importSettings(event: Event) {
+  function importSettingsOld(event: Event) {
     const file = (event.target as HTMLInputElement).files?.[0];
     if (!file) return;
 
@@ -1905,7 +2014,7 @@ function sectionMatches(section: string, query: string) {
                 ? $t("button.cleared")
                 : $t("button.clearCache")}
           </Button>
-          <Button variant="outline" size="xs" on:click={exportSettings}>
+          <Button variant="outline" size="xs" on:click={exportSettingsOld}>
             {$t("advanced.exportSettings")}
           </Button>
 
@@ -1922,7 +2031,7 @@ function sectionMatches(section: string, query: string) {
               id="import-settings"
               type="file"
               accept=".json"
-              on:change={importSettings}
+              on:change={importSettingsOld}
               class="hidden"
             />
           </label>
@@ -1988,6 +2097,117 @@ function sectionMatches(section: string, query: string) {
             </ul>
           </div>
         {/if}
+      </div>
+    </Expandable>
+  {/if}
+
+  <!-- Backup & Restore -->
+  {#if sectionMatches("backup", search) || sectionMatches("restore", search) || sectionMatches("export", search) || sectionMatches("import", search)}
+    <Expandable bind:isOpen={backupRestoreSectionOpen}>
+      <div slot="title" class="flex items-center gap-3">
+        <Database class="h-6 w-6 text-purple-600" />
+        <h2 class="text-xl font-semibold text-black">{$t("settingsBackup.title")}</h2>
+      </div>
+      <div class="space-y-4">
+        <p class="text-sm text-muted-foreground">{$t("settingsBackup.description")}</p>
+
+        <!-- Export/Import Buttons -->
+        <div class="flex flex-wrap gap-3">
+          <Button 
+            size="sm" 
+            on:click={exportSettings}
+            disabled={isExporting}
+            class="min-w-[140px]"
+          >
+            {#if isExporting}
+              <RefreshCw class="h-4 w-4 mr-2 animate-spin" />
+              {$t("settingsBackup.export")}...
+            {:else}
+              <UploadIcon class="h-4 w-4 mr-2" />
+              {$t("settingsBackup.exportButton")}
+            {/if}
+          </Button>
+
+          <Button 
+            size="sm" 
+            variant="outline"
+            on:click={importSettings}
+            disabled={isImporting}
+            class="min-w-[140px]"
+          >
+            {#if isImporting}
+              <RefreshCw class="h-4 w-4 mr-2 animate-spin" />
+              {$t("settingsBackup.import")}...
+            {:else}
+              <DownloadIcon class="h-4 w-4 mr-2" />
+              {$t("settingsBackup.importButton")}
+            {/if}
+          </Button>
+        </div>
+
+        <!-- Feedback Message -->
+        {#if backupMessage}
+          <div 
+            class="p-3 rounded-lg text-sm transition-all"
+            class:bg-green-100={backupMessage.type === 'success'}
+            class:text-green-800={backupMessage.type === 'success'}
+            class:bg-red-100={backupMessage.type === 'error'}
+            class:text-red-800={backupMessage.type === 'error'}
+            class:bg-yellow-100={backupMessage.type === 'warning'}
+            class:text-yellow-800={backupMessage.type === 'warning'}
+          >
+            <div class="flex items-start gap-2">
+              {#if backupMessage.type === 'success'}
+                <CheckCircle class="h-4 w-4 mt-0.5 flex-shrink-0" />
+              {:else}
+                <AlertTriangle class="h-4 w-4 mt-0.5 flex-shrink-0" />
+              {/if}
+              <p>{backupMessage.text}</p>
+            </div>
+          </div>
+        {/if}
+
+        <!-- Info Box -->
+        <div class="p-4 bg-muted/50 rounded-lg border border-dashed">
+          <h3 class="font-medium text-sm mb-2">{$t("settingsBackup.autoBackup")}</h3>
+          <p class="text-xs text-muted-foreground mb-3">{$t("settingsBackup.autoBackupDescription")}</p>
+          
+          <!-- Auto-backups list -->
+          {#if settingsBackupService.getAutoBackups().length > 0}
+            <div class="space-y-2">
+              {#each settingsBackupService.getAutoBackups().slice(0, 3) as backup}
+                <div class="flex items-center justify-between p-2 bg-background rounded border text-xs">
+                  <span class="text-muted-foreground">
+                    {backup.date.toLocaleString()}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    on:click={async () => {
+                      const result = await settingsBackupService.restoreAutoBackup(backup.key);
+                      if (result.success) {
+                        showToast($t("settingsBackup.messages.autoBackupRestored"), 'success');
+                        // Reload settings
+                        const stored = localStorage.getItem('chiralSettings');
+                        if (stored) {
+                          localSettings = JSON.parse(stored);
+                          savedSettings = JSON.parse(JSON.stringify(localSettings));
+                        }
+                      } else {
+                        showToast($t("settingsBackup.messages.importError", { values: { error: result.error } }), 'error');
+                      }
+                    }}
+                    class="h-6 text-xs"
+                  >
+                    {$t("settingsBackup.restoreAutoBackup")}
+                  </Button>
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <p class="text-xs text-muted-foreground italic">No automatic backups available</p>
+          {/if}
+        </div>
       </div>
     </Expandable>
   {/if}

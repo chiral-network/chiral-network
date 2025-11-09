@@ -5,7 +5,7 @@
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
-  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation } from 'lucide-svelte'
+  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation, History, Download as DownloadIcon, Upload as UploadIcon, Trash2, RefreshCw } from 'lucide-svelte'
   import { files, downloadQueue, activeTransfers, wallet } from '$lib/stores'
   import { dhtService } from '$lib/dht'
   import { paymentService } from '$lib/services/paymentService'
@@ -19,6 +19,7 @@
   import { MultiSourceDownloadService, type MultiSourceProgress } from '$lib/services/multiSourceDownloadService'
   import { listen } from '@tauri-apps/api/event'
   import PeerSelectionService from '$lib/services/peerSelectionService'
+  import { downloadHistoryService, type DownloadHistoryEntry } from '$lib/services/downloadHistoryService'
 
   import { invoke } from '@tauri-apps/api/core'
   import { homeDir } from '@tauri-apps/api/path'
@@ -400,6 +401,27 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
   // Track which files have already had payment processed
   let paidFiles = new Set<string>()
+
+  // Download History state
+  let showHistory = false
+  let downloadHistory: DownloadHistoryEntry[] = []
+  let historySearchQuery = ''
+  let historyFilter: 'all' | 'completed' | 'failed' | 'canceled' = 'all'
+
+  // Load history on mount
+  $: downloadHistory = downloadHistoryService.getFilteredHistory(
+    historyFilter === 'all' ? undefined : historyFilter,
+    historySearchQuery
+  )
+
+  // Track files to add to history when they complete/fail
+  $: {
+    for (const file of $files) {
+      if (['completed', 'failed', 'canceled'].includes(file.status)) {
+        downloadHistoryService.addToHistory(file)
+      }
+    }
+  }
 
   // Show notification function
   function showNotification(message: string, type: 'success' | 'error' | 'info' | 'warning' = 'success', duration = 4000) {
@@ -1576,6 +1598,87 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     })
   }
 
+  // Download History functions
+  function exportHistory() {
+    const data = downloadHistoryService.exportHistory()
+    const blob = new Blob([data], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `chiral-download-history-${new Date().toISOString().split('T')[0]}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    showToast(tr('downloadHistory.messages.exportSuccess'), 'success')
+  }
+
+  function importHistory() {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.json'
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0]
+      if (!file) return
+
+      try {
+        const text = await file.text()
+        const result = downloadHistoryService.importHistory(text)
+        
+        if (result.success) {
+          showToast(tr('downloadHistory.messages.importSuccess', { count: result.imported }), 'success')
+          downloadHistory = downloadHistoryService.getFilteredHistory()
+        } else {
+          showToast(tr('downloadHistory.messages.importError', { error: result.error }), 'error')
+        }
+      } catch (error) {
+        showToast(tr('downloadHistory.messages.importError', { error: error instanceof Error ? error.message : 'Unknown error' }), 'error')
+      }
+    }
+    input.click()
+  }
+
+  function clearAllHistory() {
+    if (confirm(tr('downloadHistory.confirmClear'))) {
+      downloadHistoryService.clearHistory()
+      downloadHistory = []
+      showToast(tr('downloadHistory.messages.historyCleared'), 'success')
+    }
+  }
+
+  function clearFailedHistory() {
+    if (confirm(tr('downloadHistory.confirmClearFailed'))) {
+      downloadHistoryService.clearFailedDownloads()
+      downloadHistory = downloadHistoryService.getFilteredHistory()
+      showToast(tr('downloadHistory.messages.failedCleared'), 'success')
+    }
+  }
+
+  function removeHistoryEntry(hash: string) {
+    downloadHistoryService.removeFromHistory(hash)
+    downloadHistory = downloadHistoryService.getFilteredHistory()
+    showToast(tr('downloadHistory.messages.entryRemoved'), 'success')
+  }
+
+  async function redownloadFile(entry: DownloadHistoryEntry) {
+    showToast(tr('downloadHistory.messages.redownloadStarted', { name: entry.name }), 'info')
+    
+    // Create metadata object from history entry
+    const metadata: FileMetadata = {
+      fileHash: entry.hash,
+      fileName: entry.name,
+      fileSize: entry.size,
+      seeders: entry.seederAddresses || [],
+      price: entry.price || 0,
+      isEncrypted: entry.encrypted || false,
+      manifest: entry.manifest ? JSON.stringify(entry.manifest) : undefined,
+      cids: entry.cids || []
+    }
+
+    // Add to queue
+    await addToDownloadQueue(metadata)
+  }
+
   const formatFileSize = toHumanReadableSize
 
 </script>
@@ -2077,6 +2180,172 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
           </div>
         {/each}
       </div>
+    {/if}
+  </Card>
+
+  <!-- Download History Section -->
+  <Card class="p-6">
+    <div class="flex items-center justify-between mb-4">
+      <div class="flex items-center gap-3">
+        <History class="h-5 w-5" />
+        <h2 class="text-lg font-semibold">{$t('downloadHistory.title')}</h2>
+        <Badge variant="secondary">{downloadHistoryService.getStatistics().total}</Badge>
+      </div>
+      <Button
+        size="sm"
+        variant="outline"
+        on:click={() => showHistory = !showHistory}
+      >
+        {showHistory ? $t('downloadHistory.hideHistory') : $t('downloadHistory.showHistory')}
+        {#if showHistory}
+          <ChevronUp class="h-4 w-4 ml-1" />
+        {:else}
+          <ChevronDown class="h-4 w-4 ml-1" />
+        {/if}
+      </Button>
+    </div>
+
+    {#if showHistory}
+      <!-- History Controls -->
+      <div class="mb-4 space-y-3">
+        <!-- Search and Filter -->
+        <div class="flex flex-wrap gap-2">
+          <div class="relative flex-1 min-w-[200px]">
+            <Search class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              type="text"
+              bind:value={historySearchQuery}
+              placeholder={$t('downloadHistory.search')}
+              class="pl-10"
+            />
+          </div>
+          <div class="flex gap-2">
+            <Button
+              size="sm"
+              variant={historyFilter === 'all' ? 'default' : 'outline'}
+              on:click={() => historyFilter = 'all'}
+            >
+              {$t('downloadHistory.filterAll')} ({downloadHistoryService.getStatistics().total})
+            </Button>
+            <Button
+              size="sm"
+              variant={historyFilter === 'completed' ? 'default' : 'outline'}
+              on:click={() => historyFilter = 'completed'}
+            >
+              {$t('downloadHistory.filterCompleted')} ({downloadHistoryService.getStatistics().completed})
+            </Button>
+            <Button
+              size="sm"
+              variant={historyFilter === 'failed' ? 'default' : 'outline'}
+              on:click={() => historyFilter = 'failed'}
+            >
+              {$t('downloadHistory.filterFailed')} ({downloadHistoryService.getStatistics().failed})
+            </Button>
+          </div>
+        </div>
+
+        <!-- History Actions -->
+        <div class="flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            on:click={exportHistory}
+          >
+            <UploadIcon class="h-3 w-3 mr-1" />
+            {$t('downloadHistory.exportHistory')}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            on:click={importHistory}
+          >
+            <DownloadIcon class="h-3 w-3 mr-1" />
+            {$t('downloadHistory.importHistory')}
+          </Button>
+          {#if downloadHistoryService.getStatistics().failed > 0}
+            <Button
+              size="sm"
+              variant="outline"
+              on:click={clearFailedHistory}
+              class="text-orange-600 border-orange-600 hover:bg-orange-50"
+            >
+              <Trash2 class="h-3 w-3 mr-1" />
+              {$t('downloadHistory.clearFailed')}
+            </Button>
+          {/if}
+          {#if downloadHistory.length > 0}
+            <Button
+              size="sm"
+              variant="outline"
+              on:click={clearAllHistory}
+              class="text-destructive border-destructive hover:bg-destructive/10"
+            >
+              <Trash2 class="h-3 w-3 mr-1" />
+              {$t('downloadHistory.clearHistory')}
+            </Button>
+          {/if}
+        </div>
+      </div>
+
+      <!-- History List -->
+      {#if downloadHistory.length === 0}
+        <div class="text-center py-12 text-muted-foreground">
+          <History class="h-12 w-12 mx-auto mb-3 opacity-50" />
+          <p class="font-medium">{$t('downloadHistory.empty')}</p>
+          <p class="text-sm">{$t('downloadHistory.emptyDescription')}</p>
+        </div>
+      {:else}
+        <div class="space-y-2">
+          {#each downloadHistory as entry (entry.id + entry.downloadDate)}
+            <div class="flex items-center gap-3 p-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors">
+              <!-- File Icon -->
+              <div class="flex-shrink-0">
+                <svelte:component this={getFileIcon(entry.name)} class="h-5 w-5 text-muted-foreground" />
+              </div>
+
+              <!-- File Info -->
+              <div class="flex-1 min-w-0">
+                <p class="font-medium truncate">{entry.name}</p>
+                <p class="text-xs text-muted-foreground">
+                  {toHumanReadableSize(entry.size)}
+                  {#if entry.price}
+                    · {entry.price.toFixed(4)} Chiral
+                  {/if}
+                  · {new Date(entry.downloadDate).toLocaleString()}
+                </p>
+              </div>
+
+              <!-- Status Badge -->
+              <Badge
+                variant={entry.status === 'completed' ? 'default' : entry.status === 'failed' ? 'destructive' : 'secondary'}
+              >
+                {entry.status}
+              </Badge>
+
+              <!-- Actions -->
+              <div class="flex gap-1">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  on:click={() => redownloadFile(entry)}
+                  title={$t('downloadHistory.redownload')}
+                >
+                  <RefreshCw class="h-4 w-4" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  on:click={() => removeHistoryEntry(entry.hash)}
+                  title={$t('downloadHistory.remove')}
+                  class="text-muted-foreground hover:text-destructive"
+                >
+                  <X class="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
     {/if}
   </Card>
 </div>
