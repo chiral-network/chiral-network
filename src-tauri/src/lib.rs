@@ -27,3 +27,5 @@ pub mod proxy_latency;
 pub mod stream_auth;
 // Reputation system
 pub mod reputation;
+// LevelDB blockstore for Geth-compatible storage
+pub mod leveldb_blockstore;
