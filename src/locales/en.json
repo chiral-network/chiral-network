@@ -1424,5 +1424,69 @@
       "fri": "Fri",
       "sat": "Sat"
     }
+  },
+  "downloadHistory": {
+    "title": "Download History",
+    "subtitle": "View and manage your download history",
+    "showHistory": "Show History",
+    "hideHistory": "Hide History",
+    "empty": "No download history yet",
+    "emptyDescription": "Completed, failed, and canceled downloads will appear here",
+    "search": "Search history...",
+    "filterAll": "All",
+    "filterCompleted": "Completed",
+    "filterFailed": "Failed",
+    "filterCanceled": "Canceled",
+    "redownload": "Re-download",
+    "remove": "Remove",
+    "clearHistory": "Clear History",
+    "clearFailed": "Clear Failed",
+    "exportHistory": "Export History",
+    "importHistory": "Import History",
+    "confirmClear": "Are you sure you want to clear all download history? This cannot be undone.",
+    "confirmClearFailed": "Clear all failed downloads from history?",
+    "stats": {
+      "total": "Total Downloads",
+      "completed": "Completed",
+      "failed": "Failed",
+      "canceled": "Canceled",
+      "totalSize": "Total Size",
+      "totalPrice": "Total Spent"
+    },
+    "messages": {
+      "historyCleared": "Download history cleared",
+      "failedCleared": "Failed downloads cleared",
+      "entryRemoved": "Entry removed from history",
+      "exportSuccess": "History exported successfully",
+      "importSuccess": "Imported {count} history entries",
+      "importError": "Failed to import history: {error}",
+      "redownloadStarted": "Re-downloading {name}..."
+    }
+  },
+  "settingsBackup": {
+    "title": "Backup & Restore",
+    "description": "Export or import your settings configuration",
+    "export": "Export Settings",
+    "import": "Import Settings",
+    "exportButton": "Export Settings",
+    "importButton": "Import Settings",
+    "downloadBackup": "Download Backup File",
+    "selectFile": "Select Backup File",
+    "merge": "Merge with Current Settings",
+    "replace": "Replace All Settings",
+    "autoBackup": "Automatic Backups",
+    "autoBackupDescription": "Automatic backups are created before major changes",
+    "restoreAutoBackup": "Restore",
+    "messages": {
+      "exportSuccess": "Settings exported successfully",
+      "exportError": "Failed to export settings: {error}",
+      "importSuccess": "Settings imported successfully",
+      "importWarnings": "Settings imported with warnings: {warnings}",
+      "importError": "Failed to import settings: {error}",
+      "autoBackupCreated": "Automatic backup created",
+      "autoBackupRestored": "Settings restored from backup",
+      "invalidFile": "Invalid backup file format",
+      "confirmReplace": "This will replace all current settings. Continue?"
+    }
   }
 }
