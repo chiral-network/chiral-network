@@ -52,6 +52,7 @@
   // Power monitoring
   let realPowerConsumption = 0.0
   let hasRealPower = false
+  let powerLoading = true // Add loading state for power checks
 
   // Uptime tick (forces template to re-render every second while mining)
   let uptimeNow: number = Date.now()
@@ -538,10 +539,6 @@
   }
 
   async function updatePowerConsumption() {
-    // Only show loading state for the very first check
-    if (!hasCompletedFirstCheck) {
-    }
-
     try {
       const power = await invoke('get_power_consumption') as number
       if (power && power > 0) {
@@ -554,8 +551,7 @@
       console.error('Failed to get power consumption:', e)
       hasRealPower = false
     } finally {
-      if (!hasCompletedFirstCheck) {
-      }
+      powerLoading = false
     }
   }
   
@@ -576,7 +572,7 @@
       // Set as active account
       etcAccount.set({
         address: tempAccount.address,
-        private_key: tempAccount.privateKey
+        private_key: tempAccount.private_key
       })
 
       // Mark as temporary
@@ -614,7 +610,7 @@
     
     try {
       await invoke('start_miner', {
-        address: $etcAccount.address,
+        address: $etcAccount?.address || '',
         threads: selectedThreads,
         dataDir: './bin/geth-data'
       })
@@ -1098,7 +1094,10 @@
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">{$t('mining.powerUsage')}</p>
-          {#if hasRealPower}
+          {#if powerLoading}
+            <p class="text-2xl font-bold text-blue-500">--W</p>
+            <p class="text-xs text-muted-foreground mt-1">Detecting power sources...</p>
+          {:else if hasRealPower}
             <p class="text-2xl font-bold">{powerConsumption.toFixed(0)}W</p>
             <p class="text-xs text-muted-foreground mt-1">
               {efficiency.toFixed(2)} {$t('mining.hw')}
@@ -1106,7 +1105,7 @@
           {:else}
             <p class="text-2xl font-bold text-gray-500">N/A</p>
             <p class="text-xs text-muted-foreground mt-1">
-              {$t('mining.hw')}
+              Hardware sensor not available
             </p>
           {/if}
         </div>

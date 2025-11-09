@@ -23,7 +23,7 @@
   import { invoke } from '@tauri-apps/api/core'
   import { homeDir } from '@tauri-apps/api/path'
 
-  const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params)
+  const tr = (k: string, params?: Record<string, any>) => $t(k, params)
 
  // Auto-detect protocol based on file metadata
   let detectedProtocol: 'WebRTC' | 'Bitswap' | null = null

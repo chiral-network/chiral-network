@@ -10,7 +10,6 @@
   import { peers, networkStats, networkStatus, userLocation, settings } from '$lib/stores'
   import { normalizeRegion, UNKNOWN_REGION_ID } from '$lib/geo'
   import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Wifi, UserMinus, Square, Play, Download, AlertCircle } from 'lucide-svelte'
-  import { get } from 'svelte/store'
   import { onMount, onDestroy } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
@@ -30,7 +29,7 @@
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
-  const tr = (k: string, params?: Record<string, any>): string => (get(t) as (key: string, params?: any) => string)(k, params)
+  const tr = (k: string, params?: Record<string, any>): string => $t(k, params)
 
   type NatStatusPayload = {
     state: NatReachabilityState
@@ -286,11 +285,9 @@
       if ($settings.customBootstrapNodes && $settings.customBootstrapNodes.length > 0) {
         dhtBootstrapNodes = $settings.customBootstrapNodes
         dhtBootstrapNode = dhtBootstrapNodes[0] || 'No bootstrap nodes configured'
-        console.log('Using custom bootstrap nodes:', dhtBootstrapNodes)
       } else {
         dhtBootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command")
         dhtBootstrapNode = dhtBootstrapNodes[0] || 'No bootstrap nodes configured'
-        console.log('Using default bootstrap nodes:', dhtBootstrapNodes)
       }
     } catch (error) {
       console.error('Failed to fetch bootstrap nodes:', error)
