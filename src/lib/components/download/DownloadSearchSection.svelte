@@ -35,7 +35,6 @@ import { paymentService } from '$lib/services/paymentService';
   let lastSearchDuration = 0;
   let historyEntries: SearchHistoryEntry[] = [];
   let activeHistoryId: string | null = null;
-  let versionResults: any[] = [];
   let showHistoryDropdown = false;
 
   // Peer selection modal state
@@ -139,7 +138,7 @@ import { paymentService } from '$lib/services/paymentService';
     const startedAt = performance.now();
 
     try {
-      if (searchMode === 'name') {
+      if (searchMode === 'name_disabled') {
         // This mode is now deprecated in favor of Merkle Hash and CID
         pushMessage('Searching for file versions...', 'info', 2000);
 
@@ -344,37 +343,6 @@ import { paymentService } from '$lib/services/paymentService';
     );
   }
 
-  async function downloadVersion(version: any) {
-    const rawPrice =
-      typeof version.price === 'number'
-        ? version.price
-        : typeof version.price === 'string'
-          ? Number.parseFloat(version.price)
-          : undefined;
-    const price =
-      typeof rawPrice === 'number' && Number.isFinite(rawPrice)
-        ? rawPrice
-        : undefined;
-
-    // Convert version data to FileMetadata format for download
-    const metadata: FileMetadata = {
-      fileHash: version.fileHash,
-      fileName: version.fileName,
-      fileSize: version.fileSize,
-      seeders: version.seeders || [],
-      createdAt: version.createdAt * 1000, // Convert to milliseconds
-      isEncrypted: version.is_encrypted || false,
-      mimeType: version.mime_type,
-      encryptionMethod: version.encryption_method,
-      keyFingerprint: version.key_fingerprint,
-      version: version.version,
-      price,
-      uploaderAddress: version.uploader_address ?? version.uploaderAddress
-    };
-
-    // Show peer selection modal instead of direct download
-    await handleFileDownload(metadata);
-  }
 
   function statusIcon(status: string) {
     switch (status) {
@@ -672,7 +640,7 @@ import { paymentService } from '$lib/services/paymentService';
           <Input
             id="hash-input"
             bind:value={searchHash}
-            placeholder={searchMode === 'merkle_hash' ? 'Enter Merkle Hash...' : 'Enter CID...'}
+            placeholder=""
             class="pr-20 h-10"
             on:focus={toggleHistoryDropdown}
           />
@@ -761,45 +729,6 @@ import { paymentService } from '$lib/services/paymentService';
             {#if isSearching}
               <div class="rounded-md border border-dashed border-muted p-5 text-sm text-muted-foreground text-center">
                 {tr('download.search.status.searching')}
-              </div>
-            {:else if latestStatus === 'found' && versionResults.length > 0}
-              <!-- Version Results Display -->
-              <div class="space-y-3">
-                <div class="flex items-center justify-between">
-                  <h3 class="font-medium text-sm">Found {versionResults.length} version{versionResults.length === 1 ? '' : 's'}</h3>
-                  <p class="text-xs text-muted-foreground">
-                    Search completed in {(lastSearchDuration / 1000).toFixed(1)}s
-                  </p>
-                </div>
-
-                <div class="space-y-2 max-h-80 overflow-y-auto">
-                  {#each versionResults as version}
-                    <div class="flex items-center justify-between p-3 bg-muted/50 rounded-lg hover:bg-muted/70 transition-colors">
-                      <div class="flex items-center gap-3 flex-1 min-w-0">
-                        <Badge class="bg-blue-100 text-blue-800 text-xs">
-                          v{version.version}
-                        </Badge>
-                        <div class="flex-1 min-w-0">
-                          <div class="font-medium text-sm truncate">{version.fileName}</div>
-                          <div class="flex items-center gap-2 text-xs text-muted-foreground">
-                            <span>Hash: {version.fileHash.slice(0, 8)}...</span>
-                            <span>•</span>
-                            <span>{(version.fileSize / 1048576).toFixed(2)} MB</span>
-                            <span>•</span>
-                            <span>{new Date(version.createdAt * 1000).toLocaleDateString()}</span>
-                          </div>
-                        </div>
-                      </div>
-                      <Button
-                        size="sm"
-                        on:click={() => downloadVersion(version)}
-                        class="h-8 px-3"
-                      >
-                        Download
-                      </Button>
-                    </div>
-                  {/each}
-                </div>
               </div>
             {:else if latestStatus === 'found' && latestMetadata}
               <SearchResultCard
