@@ -38,7 +38,7 @@ pub mod manager;
 pub mod multi_source_download;
 pub mod bittorrent_handler;
 
-use protocols::ProtocolManager;
+use protocols::{ProtocolManager, ProtocolHandler};
 
 use crate::commands::auth::{
     cleanup_expired_proxy_auth_tokens, generate_proxy_auth_token, revoke_proxy_auth_token,
@@ -280,6 +280,9 @@ struct AppState {
 
     // Protocol manager for handling different download/upload protocols
     protocol_manager: Arc<ProtocolManager>,
+
+    // BitTorrent handler for creating and seeding torrents
+    bittorrent_handler: Arc<bittorrent_handler::BitTorrentHandler>,
 }
 
 /// Tauri command to trigger a download.
@@ -352,6 +355,15 @@ async fn seed(file_path: String, state: State<'_, AppState>) -> Result<String, S
     println!("Received seed command for: {}", file_path);
     // Delegate the seed operation to the protocol manager.
     state.protocol_manager.seed(&file_path).await
+}
+
+/// Tauri command to create and seed a BitTorrent file.
+/// It takes a local file path, creates a torrent, starts seeding, and returns a magnet link.
+#[tauri::command]
+async fn create_and_seed_torrent(file_path: String, state: State<'_, AppState>) -> Result<String, String> {
+    println!("Received create_and_seed_torrent command for: {}", file_path);
+    // Use the BitTorrent handler directly to create and seed the torrent
+    state.bittorrent_handler.seed(&file_path).await
 }
 
 #[tauri::command]
@@ -5007,7 +5019,7 @@ fn main() {
             // Relay aliases
             relay_aliases: Arc::new(Mutex::new(std::collections::HashMap::new())),
 
-            // Protocol Manager            // Protocol Manager with BitTorrent support
+            // Protocol Manager with BitTorrent support
             protocol_manager: {
                 let mut manager = ProtocolManager::new();
                 
@@ -5022,10 +5034,18 @@ fn main() {
                 }
                 
                 // Register BitTorrent handler
-                let bittorrent_handler = Arc::new(bittorrent_handler::BitTorrentHandler::new(download_dir));
+                let bittorrent_handler = Arc::new(bittorrent_handler::BitTorrentHandler::new(download_dir.clone()));
                 manager.register(bittorrent_handler);
                 
                 Arc::new(manager)
+            },
+
+            // BitTorrent handler for creating and seeding torrents
+            bittorrent_handler: {
+                let download_dir = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
+                    .map(|dirs| dirs.data_dir().join("downloads"))
+                    .unwrap_or_else(|| std::env::current_dir().unwrap().join("downloads"));
+                Arc::new(bittorrent_handler::BitTorrentHandler::new(download_dir))
             },
         })
         .invoke_handler(tauri::generate_handler![
@@ -5059,6 +5079,7 @@ fn main() {
             get_power_consumption,
             download,
             seed,
+            create_and_seed_torrent,
             is_geth_running,
             check_geth_binary,
             get_geth_status,
