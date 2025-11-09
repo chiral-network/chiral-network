@@ -1192,6 +1192,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "urlencoding",
  "uuid 1.18.1",
  "webrtc",
  "x25519-dalek",
