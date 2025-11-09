@@ -5,7 +5,7 @@
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
-  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation, Globe, Blocks, RefreshCw } from 'lucide-svelte'
+  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation } from 'lucide-svelte'
   import { files, downloadQueue, activeTransfers, wallet } from '$lib/stores'
   import { dhtService } from '$lib/dht'
   import { paymentService } from '$lib/services/paymentService'
@@ -19,24 +19,14 @@
   import { MultiSourceDownloadService, type MultiSourceProgress } from '$lib/services/multiSourceDownloadService'
   import { listen } from '@tauri-apps/api/event'
   import PeerSelectionService from '$lib/services/peerSelectionService'
-import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
 
   import { invoke } from '@tauri-apps/api/core'
   import { homeDir } from '@tauri-apps/api/path'
 
   const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params)
 
- // Protocol selection state
-  $: selectedProtocol = $protocolStore
-  $: hasSelectedProtocol = selectedProtocol !== null
-
-  function handleProtocolSelect(protocol: 'WebRTC' | 'Bitswap') {
-    protocolStore.set(protocol)
-  }
-
-  function changeProtocol() {
-    protocolStore.reset()
-  }
+ // Auto-detect protocol based on file metadata
+  let detectedProtocol: 'WebRTC' | 'Bitswap' | null = null
   onMount(() => {
     // Initialize payment service to load persisted wallet and transactions
     paymentService.initialize();
@@ -579,28 +569,11 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   async function handleSearchDownload(metadata: FileMetadata) {
     console.log('🔍 handleSearchDownload called with metadata:', metadata)
 
-    // Check protocol compatibility
+    // Auto-detect protocol based on file metadata
     const hasCids = metadata.cids && metadata.cids.length > 0
-    const isBitswapFile = hasCids
-    const isWebRTCFile = !hasCids
-
-    if (selectedProtocol === 'Bitswap' && isWebRTCFile) {
-      showNotification(
-        `Cannot download "${metadata.fileName}": This file was uploaded with WebRTC protocol. Please select WebRTC protocol to download it.`,
-        'error',
-        8000
-      )
-      return
-    }
-
-    if (selectedProtocol === 'WebRTC' && isBitswapFile) {
-      showNotification(
-        `Cannot download "${metadata.fileName}": This file was uploaded with Bitswap protocol. Please select Bitswap protocol to download it.`,
-        'error',
-        8000
-      )
-      return
-    }
+    detectedProtocol = hasCids ? 'Bitswap' : 'WebRTC'
+    
+    console.log(`🔍 Auto-detected protocol: ${detectedProtocol} (hasCids: ${hasCids})`)
 
     const allFiles = [...$downloadQueue]
     const existingFile = allFiles.find((file) => file.hash === metadata.fileHash)
@@ -783,8 +756,8 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   $: if ($files.length > 0) {
     $files.forEach(file => {
       if (file.status === 'downloading' && !activeSimulations.has(file.id)) {
-        // Start simulation only if not already active
-        if (selectedProtocol!=='Bitswap')
+    // Start simulation only if not already active
+        if (detectedProtocol!=='Bitswap')
         simulateDownloadProgress(file.id)
       }
     })
@@ -850,9 +823,9 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     }
     console.log('  ✏️ Created downloadingFile object:', downloadingFile)
     files.update(f => [...f, downloadingFile])
-    console.log('  ✅ Added file to files store, current protocol:', selectedProtocol)
+    console.log('  ✅ Added file to files store, detected protocol:', detectedProtocol)
 
-    if (selectedProtocol === "Bitswap"){
+    if (detectedProtocol === "Bitswap"){
   console.log('  🔍 Starting Bitswap download for:', downloadingFile.name)
 
   // CRITICAL: Bitswap requires CIDs to download
@@ -1613,87 +1586,16 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     <p class="text-muted-foreground mt-2">{$t('download.subtitle')}</p>
   </div>
 
-  <!-- Protocol Selection -->
-  {#if !hasSelectedProtocol}
-   <Card>
-      <div class="p-6">
-        <h2 class="text-2xl font-bold mb-6 text-center">{$t('download.selectProtocol')}</h2>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-2xl mx-auto">
-          <!-- WebRTC Option -->
-          <button
-            class="p-6 border-2 rounded-lg hover:border-blue-500 transition-colors duration-200 flex flex-col items-center gap-4 {selectedProtocol === 'WebRTC' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700'}"
-            on:click={() => handleProtocolSelect('WebRTC')}
-          >
-            <div class="w-16 h-16 flex items-center justify-center bg-blue-100 rounded-full">
-              <Globe class="w-8 h-8 text-blue-600" />
-            </div>
-            <div class="text-center">
-              <h3 class="text-lg font-semibold mb-2">WebRTC</h3>
-              <p class="text-sm text-gray-600 dark:text-gray-400">
-                {$t('upload.webrtcDescription')}
-              </p>
-            </div>
-          </button>
-
-          <!-- Bitswap Option -->
-          <button
-            class="p-6 border-2 rounded-lg hover:border-blue-500 transition-colors duration-200 flex flex-col items-center gap-4 {selectedProtocol === 'Bitswap' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700'}"
-            on:click={() => handleProtocolSelect('Bitswap')}
-          >
-            <div class="w-16 h-16 flex items-center justify-center bg-blue-100 rounded-full">
-              <Blocks class="w-8 h-8 text-blue-600" />
-            </div>
-            <div class="text-center">
-              <h3 class="text-lg font-semibold mb-2">Bitswap</h3>
-              <p class="text-sm text-gray-600 dark:text-gray-400">
-                {$t('upload.bitswapDescription')}
-              </p>
-            </div>
-          </button>
-        </div>
-      </div>
-    </Card>
-
-  {:else}
-    <!-- Combined Download Section (Chiral DHT + BitTorrent) -->
-    <Card class="overflow-hidden">
-      <!-- Chiral DHT Search Section with integrated BitTorrent -->
-      <div class="border-b">
-        <DownloadSearchSection
-          on:download={(event) => handleSearchDownload(event.detail)}
-          on:message={handleSearchMessage}
-        />
-      </div>
-    </Card>
-
-    <!-- Protocol Indicator and Switcher -->
-    <Card class="p-4">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-3">
-          <div class="flex items-center justify-center w-10 h-10 bg-gradient-to-br from-blue-500/10 to-blue-500/5 rounded-lg border border-blue-500/20">
-            {#if selectedProtocol === 'WebRTC'}
-              <Globe class="h-5 w-5 text-blue-600" />
-            {:else}
-              <Blocks class="h-5 w-5 text-blue-600" />
-            {/if}
-          </div>
-          <div>
-            <p class="text-sm font-semibold">{$t('download.currentProtocol')}: {selectedProtocol}</p>
-            <p class="text-xs text-muted-foreground">
-              {selectedProtocol === 'WebRTC' ? $t('upload.webrtcDescription') : $t('upload.bitswapDescription')}
-            </p>
-          </div>
-        </div>
-        <button
-          on:click={changeProtocol}
-          class="inline-flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium border border-input bg-background hover:bg-muted transition-colors"
-        >
-          <RefreshCw class="h-4 w-4 mr-2" />
-          {$t('download.changeProtocol')}
-        </button>
-      </div>
-    </Card>
-  {/if}
+  <!-- Combined Download Section (Chiral DHT + BitTorrent) -->
+  <Card class="overflow-hidden">
+    <!-- Chiral DHT Search Section with integrated BitTorrent -->
+    <div class="border-b">
+      <DownloadSearchSection
+        on:download={(event) => handleSearchDownload(event.detail)}
+        on:message={handleSearchMessage}
+      />
+    </div>
+  </Card>
 
   <!-- Unified Downloads List -->
   <Card class="p-6">
@@ -2049,7 +1951,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
                   </div>
                   <span class="text-foreground">{(file.progress || 0).toFixed(2)}%</span>
                 </div>
-                {#if selectedProtocol === 'Bitswap'}
+                {#if detectedProtocol === 'Bitswap' && file.totalChunks}
                   <div class="w-full bg-border rounded-full h-2 flex overflow-hidden" title={`Chunks: ${file.downloadedChunks?.length || 0} / ${file.totalChunks || '?'}`}>
                     {#if file.totalChunks && file.totalChunks > 0}
                       {@const chunkWidth = 100 / file.totalChunks}

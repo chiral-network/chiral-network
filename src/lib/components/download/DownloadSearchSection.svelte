@@ -7,8 +7,8 @@
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { get } from 'svelte/store';
   import { t } from 'svelte-i18n';
-import { dhtService } from '$lib/dht';
-import { paymentService } from '$lib/services/paymentService';
+  import { dhtService } from '$lib/dht';
+  import { paymentService } from '$lib/services/paymentService';
   import type { FileMetadata } from '$lib/dht';
   import SearchResultCard from './SearchResultCard.svelte';
   import { dhtSearchHistory, type SearchHistoryEntry, type SearchStatus } from '$lib/stores/searchHistory';
@@ -44,6 +44,11 @@ import { paymentService } from '$lib/services/paymentService';
   let selectedProtocol: 'http' | 'webrtc' = 'http';
   let availablePeers: PeerInfo[] = [];
   let autoSelectionInfo: Array<{peerId: string; score: number; metrics: any}> | null = null;
+
+  // Torrent confirmation state
+  let pendingTorrentIdentifier: string | null = null;
+  let pendingTorrentBytes: number[] | null = null;
+  let pendingTorrentType: 'magnet' | 'file' | null = null;
 
   const unsubscribe = dhtSearchHistory.subscribe((entries) => {
     historyEntries = entries;
@@ -135,7 +140,7 @@ import { paymentService } from '$lib/services/paymentService';
   }
 
   async function searchForFile() {
-    // Handle BitTorrent downloads
+    // Handle BitTorrent downloads - show confirmation instead of immediately downloading
     if (searchMode === 'magnet' || searchMode === 'torrent') {
       let identifier: string | null = null
 
@@ -165,29 +170,51 @@ import { paymentService } from '$lib/services/paymentService';
       if (identifier) {
         try {
           isSearching = true
-          const { invoke } = await import("@tauri-apps/api/core")
           
+          // Store the pending torrent info for confirmation
           if (searchMode === 'torrent') {
-            // For torrent files, we need to read and pass the file content
             const file = torrentFileInput?.files?.[0]
             if (file) {
               const arrayBuffer = await file.arrayBuffer()
               const bytes = new Uint8Array(arrayBuffer)
-              await invoke('download_torrent_from_bytes', { bytes: Array.from(bytes) })
+              pendingTorrentBytes = Array.from(bytes)
+              pendingTorrentType = 'file'
+              pendingTorrentIdentifier = torrentFileName
             }
           } else {
             // For magnet links
-            await invoke('download_torrent', { identifier })
+            pendingTorrentIdentifier = identifier
+            pendingTorrentType = 'magnet'
+            pendingTorrentBytes = null
           }
           
-          searchHash = ''
-          torrentFileName = null
-          if (torrentFileInput) torrentFileInput.value = ''
-          pushMessage('Torrent download started', 'success')
+          // Show confirmation (metadata display) instead of immediately downloading
+          latestMetadata = {
+            merkleRoot: '', // No merkle root for torrents
+            fileHash: '',
+            fileName: pendingTorrentType === 'magnet' ? 'Magnet Link Download' : (torrentFileName || 'Torrent Download'),
+            fileSize: 0, // Unknown until torrent metadata is fetched
+            seeders: [],
+            createdAt: Date.now() / 1000,
+            mimeType: undefined,
+            isEncrypted: false,
+            encryptionMethod: undefined,
+            keyFingerprint: undefined,
+            cids: undefined,
+            isRoot: true,
+            downloadPath: undefined,
+            price: undefined,
+            uploaderAddress: undefined,
+            httpSources: undefined,
+          }
+          
+          latestStatus = 'found'
+          hasSearched = true
           isSearching = false
+          pushMessage(`${pendingTorrentType === 'magnet' ? 'Magnet link' : 'Torrent file'} ready to download`, 'success')
         } catch (error) {
-          console.error("Failed to start download:", error)
-          pushMessage(`Failed to start download: ${String(error)}`, 'error')
+          console.error("Failed to prepare torrent:", error)
+          pushMessage(`Failed to prepare download: ${String(error)}`, 'error')
           isSearching = false
         }
       }
@@ -348,6 +375,13 @@ import { paymentService } from '$lib/services/paymentService';
 
   // Handle file download - show peer selection modal first
   async function handleFileDownload(metadata: FileMetadata) {
+    // Handle BitTorrent downloads (magnet/torrent) - skip peer selection
+    if (pendingTorrentType && pendingTorrentIdentifier) {
+      selectedFile = metadata;
+      showPeerSelectionModal = true;
+      return;
+    }
+
     // Check if there are any seeders
     if (!metadata.seeders || metadata.seeders.length === 0) {
       pushMessage('No seeders available for this file', 'warning');
@@ -472,6 +506,37 @@ import { paymentService } from '$lib/services/paymentService';
   async function confirmPeerSelection() {
     if (!selectedFile) return;
 
+    // Handle BitTorrent downloads (magnet/torrent)
+    if (pendingTorrentType && pendingTorrentIdentifier) {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core")
+        
+        if (pendingTorrentType === 'file' && pendingTorrentBytes) {
+          // For torrent files, pass the file bytes
+          await invoke('download_torrent_from_bytes', { bytes: pendingTorrentBytes })
+        } else if (pendingTorrentType === 'magnet') {
+          // For magnet links
+          await invoke('download_torrent', { identifier: pendingTorrentIdentifier })
+        }
+        
+        // Clear state
+        searchHash = ''
+        torrentFileName = null
+        if (torrentFileInput) torrentFileInput.value = ''
+        pendingTorrentIdentifier = null
+        pendingTorrentBytes = null
+        pendingTorrentType = null
+        
+        showPeerSelectionModal = false
+        selectedFile = null
+        pushMessage('Torrent download started', 'success')
+      } catch (error) {
+        console.error("Failed to start torrent download:", error)
+        pushMessage(`Failed to start download: ${String(error)}`, 'error')
+      }
+      return
+    }
+
     // Get selected peers and their allocations from availablePeers
     const selectedPeers = availablePeers
       .filter(p => p.selected)
@@ -576,13 +641,21 @@ import { paymentService } from '$lib/services/paymentService';
   function cancelPeerSelection() {
     showPeerSelectionModal = false;
     selectedFile = null;
+    // Clear torrent state if canceling a torrent download
+    if (pendingTorrentType) {
+      pendingTorrentIdentifier = null;
+      pendingTorrentBytes = null;
+      pendingTorrentType = null;
+      latestMetadata = null;
+      latestStatus = 'pending';
+    }
   }
 </script>
 
 <Card class="p-6">
   <div class="space-y-4">
     <div>
-      <Label for="hash-input" class="text-base font-medium">{tr('download.addNew')}</Label>
+      <Label for="hash-input" class="text-xl font-semibold">{tr('download.addNew')}</Label>
 
       <!-- Search Mode Switcher -->
       <div class="flex gap-2 mb-3 mt-3">
@@ -606,11 +679,16 @@ import { paymentService } from '$lib/services/paymentService';
               on:change={handleTorrentFileSelect}
             />
             <Button
-              variant="outline"
-              class="w-full h-10 justify-start"
+              variant="default"
+              class="w-full h-10 justify-center font-medium cursor-pointer hover:opacity-90"
               on:click={() => torrentFileInput?.click()}
             >
-              {torrentFileName || 'Select .torrent file'}
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="17 8 12 3 7 8"></polyline>
+                <line x1="12" y1="3" x2="12" y2="15"></line>
+              </svg>
+              {torrentFileName || 'Select .torrent File'}
             </Button>
           </div>
         {:else}
@@ -618,7 +696,12 @@ import { paymentService } from '$lib/services/paymentService';
             <Input
               id="hash-input"
               bind:value={searchHash}
-              placeholder={searchMode === 'magnet' ? 'magnet:?xt=urn:btih:...' : ''}
+              placeholder={
+                searchMode === 'merkle_hash' ? 'Enter Merkle root hash (SHA-256)...' :
+                searchMode === 'cid' ? 'Enter Content Identifier (CID)...' :
+                searchMode === 'magnet' ? 'magnet:?xt=urn:btih:...' :
+                ''
+              }
               class="pr-20 h-10"
               on:focus={toggleHistoryDropdown}
             />
@@ -697,7 +780,13 @@ import { paymentService } from '$lib/services/paymentService';
           class="h-10 px-6"
         >
           <Search class="h-4 w-4 mr-2" />
-          {isSearching ? tr('download.search.status.searching') : (searchMode === 'magnet' || searchMode === 'torrent' ? 'Start Download' : tr('download.search.button'))}
+          {#if isSearching}
+            {tr('download.search.status.searching')}
+          {:else if searchMode === 'magnet' || searchMode === 'torrent'}
+            Download
+          {:else}
+            {tr('download.search.button')}
+          {/if}
         </Button>
       </div>
     </div>
@@ -751,6 +840,7 @@ import { paymentService } from '$lib/services/paymentService';
   bind:mode={peerSelectionMode}
   bind:protocol={selectedProtocol}
   autoSelectionInfo={autoSelectionInfo}
+  isTorrent={pendingTorrentType !== null}
   on:confirm={confirmPeerSelection}
   on:cancel={cancelPeerSelection}
 />
