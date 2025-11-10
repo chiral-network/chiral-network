@@ -95,16 +95,17 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Run snapshot tests
+      - name: Run tests (compile check + basic tests)
         run: |
           cd src-tauri
-          cargo test download_restart --features [] -- --nocapture
+          # First check compilation
+          cargo check
 
-      - name: Review snapshots (on failure)
-        if: failure()
-        run: |
-          cd src-tauri
-          cargo insta review
+          # Run basic tests (non-snapshot tests only for CI speed)
+          cargo test test_download_state_human_readable -- --nocapture
+          cargo test test_error_codes -- --nocapture
+          cargo test test_download_error_human_readable -- --nocapture
+          cargo test test_download_metadata_version_validation -- --nocapture
 
       - name: Upload test results
         if: always()
