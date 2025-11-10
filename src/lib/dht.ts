@@ -153,9 +153,6 @@ export class DhtService {
     // Use default bootstrap nodes if none provided
     if (bootstrapNodes.length === 0) {
       bootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command");
-      console.log("Using default bootstrap nodes for network connectivity");
-    } else {
-      console.log(`Using ${bootstrapNodes.length} custom bootstrap nodes`);
     }
 
     try {
@@ -203,8 +200,6 @@ export class DhtService {
       const peerId = await invoke<string>("start_dht_node", payload);
       this.peerId = peerId;
       this.port = port;
-      console.log("DHT started with peer ID:", this.peerId);
-      console.log("Your multiaddr for others to connect:", this.getMultiaddr());
       return this.peerId;
     } catch (error) {
       console.error("Failed to start DHT:", error);
@@ -217,7 +212,6 @@ export class DhtService {
     try {
       await invoke("stop_dht_node");
       this.peerId = null;
-      console.log("DHT stopped");
     } catch (error) {
       console.error("Failed to stop DHT:", error);
       throw error;
@@ -426,9 +420,8 @@ export class DhtService {
 
     try {
       await invoke("connect_to_peer", { peerAddress });
-      console.log("Connecting to peer:", peerAddress);
 
-      // ADD: count a success (no RTT here, the backend doesn’t expose it)
+      // ADD: count a success (no RTT here, the backend doesn't expose it)
       if (__pid) {
         try {
           __rep.success(__pid);

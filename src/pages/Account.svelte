@@ -20,7 +20,7 @@
   import { get } from 'svelte/store'
   import { totalEarned, totalSpent, miningState } from '$lib/stores';
 
-  const tr = (k: string, params?: Record<string, any>): string => (get(t) as (key: string, params?: any) => string)(k, params)
+  const tr = (k: string, params?: Record<string, any>): string => $t(k, params)
   
   // SECURITY NOTE: Removed weak XOR obfuscation. Sensitive data should not be stored in frontend.
   // Use proper secure storage mechanisms in the backend instead.
@@ -588,10 +588,6 @@
             keystoreSaveMessage = tr('keystore.successSimulated');
         }
         keystorePassword = ''; // Clear password after saving
-
-        // Clear temporary account flags after successful save
-        localStorage.removeItem('chiral_temp_account_mining');
-        localStorage.removeItem('chiral_first_run_skipped');
         localStorage.setItem('chiral_first_run_complete', 'true');
     } catch (error) {
         console.error('Failed to save to keystore:', error);
@@ -749,10 +745,6 @@
     etcAccount.set({ address: ev.account.address, private_key: '0x' + ev.account.privateKeyHex });
     wallet.update(w => ({ ...w, address: ev.account.address }));
     if (isGethRunning) { await fetchBalance(); }
-
-    // Clear temporary account flags after creating HD wallet
-    localStorage.removeItem('chiral_temp_account_mining');
-    localStorage.removeItem('chiral_first_run_skipped');
     localStorage.setItem('chiral_first_run_complete', 'true');
   }
   function onHDAccountsChange(updated: HDAccountItem[]) {
@@ -1337,30 +1329,7 @@
     <p class="text-muted-foreground mt-2">{$t('account.subtitle')}</p>
   </div>
 
-  <!-- Temporary Account Upgrade Alert -->
-  {#if $etcAccount && localStorage.getItem('chiral_temp_account_mining') === 'true' && localStorage.getItem('chiral_first_run_skipped') === 'true'}
-    <div class="bg-amber-500/10 border border-amber-500/30 rounded-lg p-4">
-      <div class="flex items-start gap-3">
-        <AlertCircle class="h-5 w-5 text-amber-500 flex-shrink-0 mt-0.5" />
-        <div class="flex-1 space-y-2">
-          <h3 class="font-semibold text-amber-900 dark:text-amber-100">
-            {$t('account.upgradeAccount.title')}
-          </h3>
-          <p class="text-sm text-amber-800 dark:text-amber-200">
-            {$t('account.upgradeAccount.description')}
-          </p>
-          <div class="flex flex-wrap gap-2 mt-3">
-            <Button size="sm" on:click={() => (showKeystoreSave = true)}>
-              {$t('account.upgradeAccount.saveToKeystore')}
-            </Button>
-            <Button size="sm" variant="outline" on:click={openCreateMnemonic}>
-              {$t('account.upgradeAccount.createHDWallet')}
-            </Button>
-          </div>
-        </div>
-      </div>
-    </div>
-  {/if}
+
 
 {#if showMnemonicWizard}
   <MnemonicWizard
@@ -1954,7 +1923,7 @@
   {/if}
 
   {#if $etcAccount}
-  <Card class="p-6">
+  <Card class="p-6" id="keystore-section">
     <div class="flex items-center gap-2 mb-4">
       <KeyRound class="h-5 w-5 text-muted-foreground" />
       <h2 class="text-lg font-semibold">{$t('keystore.title')}</h2>

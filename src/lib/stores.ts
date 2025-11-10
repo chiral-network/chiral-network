@@ -168,9 +168,9 @@ const dummyFiles: FileItem[] = [
 ];
 
 const dummyWallet: WalletInfo = {
-  address: "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1",
-  balance: 1000.5,
-  pendingTransactions: 5,
+  address: "",
+  balance: 0,
+  pendingTransactions: 0,
 };
 
 // Additional dummy data

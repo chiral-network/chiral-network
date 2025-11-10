@@ -47,7 +47,7 @@
 
 
   const tr = (k: string, params?: Record<string, any>): string =>
-    (get(t) as (key: string, params?: any) => string)(k, params);
+    $t(k, params);
 
   // Check if running in Tauri environment
   const isTauri =
@@ -209,10 +209,10 @@
 
   $: storageBadgeClass =
     storageStatus === "low"
-      ? "bg-destructive text-destructive-foreground"
+      ? "bg-red-500 text-white border-red-500"
       : storageStatus === "ok"
-        ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"
-        : "bg-muted text-muted-foreground";
+        ? "bg-green-500 text-white border-green-500"
+        : "bg-gray-500 text-white border-gray-500";
 
   $: storageBadgeText =
     storageStatus === "low"
