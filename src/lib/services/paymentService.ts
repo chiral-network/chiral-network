@@ -8,10 +8,10 @@
  * - Recording transactions for both parties
  */
 
-import { wallet, transactions, type Transaction } from '$lib/stores';
-import { get } from 'svelte/store';
-import { invoke } from '@tauri-apps/api/core';
-import { walletService } from '$lib/wallet';
+import { wallet, transactions, type Transaction } from "$lib/stores";
+import { get } from "svelte/store";
+import { invoke } from "@tauri-apps/api/core";
+import { walletService } from "$lib/wallet";
 
 // type FullNetworkStats = {
 //   network_difficulty: number
@@ -95,7 +95,6 @@ export class PaymentService {
   static initialize() {
     // Only initialize once
     if (this.initialized) {
-      console.log("💾 Payment service already initialized, skipping...");
       return;
     }
 
@@ -103,22 +102,12 @@ export class PaymentService {
     const savedWallet = loadWalletFromStorage();
     if (savedWallet && typeof savedWallet.balance === "number") {
       wallet.update((w) => ({ ...w, balance: savedWallet.balance }));
-      console.log(
-        "💾 Restored wallet balance from localStorage:",
-        savedWallet.balance
-      );
-    } else {
-      console.log("💾 No saved wallet found, using current balance");
     }
 
     // Load transactions from storage
     const savedTransactions = loadTransactionsFromStorage();
     if (savedTransactions.length > 0) {
       transactions.set(savedTransactions);
-      console.log(
-        "💾 Loaded transactions from storage:",
-        savedTransactions.length
-      );
     }
 
     this.initialized = true;
@@ -348,7 +337,7 @@ export class PaymentService {
         txHash: transactionHash,
         date: new Date(),
         description: `Download: ${fileName}`,
-        status: 'success'
+        status: "success",
       };
 
       console.log("📝 Creating transaction:", newTransaction);
@@ -445,7 +434,7 @@ export class PaymentService {
         txHash: transactionHash,
         date: new Date(),
         description: `Upload payment: ${fileName}`,
-        status: 'success'
+        status: "success",
       };
 
       // Add transaction to history with persistence
@@ -465,10 +454,10 @@ export class PaymentService {
         wallet.update((w) => {
           const allTxs = get(transactions);
           const totalReceived = allTxs
-            .filter((tx) => tx.status === 'success' && tx.type === 'received')
+            .filter((tx) => tx.status === "success" && tx.type === "received")
             .reduce((sum, tx) => sum + tx.amount, 0);
           const totalSpent = allTxs
-            .filter((tx) => tx.status === 'success' && tx.type === 'sent')
+            .filter((tx) => tx.status === "success" && tx.type === "sent")
             .reduce((sum, tx) => sum + tx.amount, 0);
 
           const updated = {

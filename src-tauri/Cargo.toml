@@ -52,10 +52,9 @@ tar = "0.4"
 zip = "0.6"
 futures = "0.3"
 futures-util = "0.3"
-systemstat = "0.2.5"
 sysinfo = "0.31"
 sys-locale = "0.3"
-libp2p = { version = "0.54", features = ["kad", "mdns", "noise", "tcp", "quic", "yamux", "identify", "gossipsub", "macros", "tokio", "rsa", "request-response", "relay", "ping", "autonat", "dcutr"] }
+libp2p = { version = "0.54", features = ["kad", "mdns", "noise", "tcp", "yamux", "identify", "macros", "tokio", "request-response", "relay", "ping", "autonat", "dcutr"] }
 if-addrs = "0.10"
 async-std = { version = "1.12", features = ["attributes"] }
 async-trait = "0.1"
@@ -114,7 +113,9 @@ custom-protocol = ["tauri/custom-protocol"]
 
 [profile.dev]
 incremental = true
-opt-level = 0
+opt-level = 1
+debug = 1
+overflow-checks = false
 
 [profile.release]
 lto = true

@@ -17,7 +17,9 @@
     Activity,
     CheckCircle,
     AlertTriangle,
-    Copy
+    Copy,
+    Download as DownloadIcon,
+    Upload as UploadIcon
   } from "lucide-svelte";
   import { onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
@@ -31,8 +33,11 @@
   import { showToast } from "$lib/toast";
   import { invoke } from "@tauri-apps/api/core";
   import Expandable from "$lib/components/ui/Expandable.svelte";
-import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
+  import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   import { bandwidthScheduler } from "$lib/services/bandwidthScheduler";
+  import { settingsBackupService } from "$lib/services/settingsBackupService";
+
+  const tr = (key: string, params?: Record<string, any>) => $t(key, params);
 
   let showResetConfirmModal = false;
   let storageSectionOpen = false;
@@ -55,6 +60,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     notifications: boolean;
     advanced: boolean;
     diagnostics: boolean;
+    backupRestore: boolean;
   };
 
   let accordionStateInitialized = false;
@@ -134,6 +140,12 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   let diagnostics: DiagItem[] = [];
   let diagnosticsReport = "";
 
+  // Backup/Restore state
+  let backupRestoreSectionOpen = false;
+  let isExporting = false;
+  let isImporting = false;
+  let backupMessage: { text: string; type: 'success' | 'error' | 'warning' } | null = null;
+
   // NAT & privacy configuration text bindings
   let autonatServersText = '';
   let trustedProxyText = '';
@@ -145,12 +157,19 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     .sort((a, b) => a.label.localeCompare(b.label));
 
   let languages = [];
+  // $: languages = [
+  //   { value: "en", label: (get(t) as any)("language.english") },
+  //   { value: "es", label: (get(t) as any)("language.spanish") },
+  //   { value: "zh", label: (get(t) as any)("language.chinese") },
+  //   { value: "ko", label: (get(t) as any)("language.korean") },
+  //   { value: "ru", label: (get(t) as any)("language.russian") },
+  // ];
   $: languages = [
-    { value: "en", label: (get(t) as any)("language.english") },
-    { value: "es", label: (get(t) as any)("language.spanish") },
-    { value: "zh", label: (get(t) as any)("language.chinese") },
-    { value: "ko", label: (get(t) as any)("language.korean") },
-    { value: "ru", label: (get(t) as any)("language.russian") },
+    { value: "en", label: tr("language.english") },
+    { value: "es", label: tr("language.spanish") },
+    { value: "zh", label: tr("language.chinese") },
+    { value: "ko", label: tr("language.korean") },
+    { value: "ru", label: tr("language.russian") },
   ];
 
   // Initialize configuration text from arrays
@@ -199,6 +218,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
         if (typeof parsed.notifications === "boolean") notificationsSectionOpen = parsed.notifications;
         if (typeof parsed.advanced === "boolean") advancedSectionOpen = parsed.advanced;
         if (typeof parsed.diagnostics === "boolean") diagnosticsSectionOpen = parsed.diagnostics;
+        if (typeof parsed.backupRestore === "boolean") backupRestoreSectionOpen = parsed.backupRestore;
       }
     } catch (error) {
       console.warn("Failed to restore settings accordion state:", error);
@@ -218,6 +238,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
         notifications: notificationsSectionOpen,
         advanced: advancedSectionOpen,
         diagnostics: diagnosticsSectionOpen,
+        backupRestore: backupRestoreSectionOpen,
       };
       window.localStorage.setItem(ACCORDION_STORAGE_KEY, JSON.stringify(accordionState));
     } catch (error) {
@@ -375,6 +396,103 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     }
   }
 
+  // Backup/Restore Functions
+  async function exportSettings() {
+    isExporting = true;
+    backupMessage = null;
+
+    try {
+      const result = await settingsBackupService.exportSettings(true);
+      
+      if (result.success && result.data) {
+        // Download as file
+        settingsBackupService.downloadBackupFile(result.data);
+        backupMessage = {
+          text: translate('settingsBackup.messages.exportSuccess'),
+          type: 'success'
+        };
+        showToast(translate('settingsBackup.messages.exportSuccess'), 'success');
+      } else {
+        throw new Error(result.error || 'Export failed');
+      }
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      backupMessage = {
+        text: translate('settingsBackup.messages.exportError', { values: { error: errorMsg } }),
+        type: 'error'
+      };
+      showToast(backupMessage.text, 'error');
+    } finally {
+      isExporting = false;
+      
+      // Clear message after 5 seconds
+      setTimeout(() => {
+        backupMessage = null;
+      }, 5000);
+    }
+  }
+
+  async function importSettings() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+
+      isImporting = true;
+      backupMessage = null;
+
+      try {
+        const text = await file.text();
+        const result = await settingsBackupService.importSettings(text, { merge: false });
+        
+        if (result.success && result.imported) {
+          // Update local settings from imported data
+          localSettings = { ...result.imported };
+          savedSettings = JSON.parse(JSON.stringify(localSettings));
+          settings.set(localSettings);
+          
+          if (result.warnings && result.warnings.length > 0) {
+            backupMessage = {
+              text: translate('settingsBackup.messages.importWarnings', { values: { warnings: result.warnings.join(', ') } }),
+              type: 'warning'
+            };
+            showToast(backupMessage.text, 'warning');
+          } else {
+            backupMessage = {
+              text: translate('settingsBackup.messages.importSuccess'),
+              type: 'success'
+            };
+            showToast(backupMessage.text, 'success');
+          }
+
+          // Apply new settings
+          await saveSettings();
+        } else {
+          throw new Error(result.error || 'Import failed');
+        }
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+        backupMessage = {
+          text: translate('settingsBackup.messages.importError', { values: { error: errorMsg } }),
+          type: 'error'
+        };
+        showToast(backupMessage.text, 'error');
+      } finally {
+        isImporting = false;
+        
+        // Clear message after 5 seconds
+        setTimeout(() => {
+          backupMessage = null;
+        }, 5000);
+      }
+    };
+
+    input.click();
+  }
+
   async function applyPrivacyRoutingSettings() {
     if (typeof window === "undefined" || !("__TAURI__" in window)) {
       return;
@@ -420,11 +538,9 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     let bootstrapNodes: string[] = [];
     if (localSettings.customBootstrapNodes && localSettings.customBootstrapNodes.length > 0) {
       bootstrapNodes = localSettings.customBootstrapNodes;
-      console.log("Using custom bootstrap nodes:", bootstrapNodes);
     } else {
       try {
         bootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command");
-        console.log("Using default bootstrap nodes:", bootstrapNodes);
       } catch (error) {
         console.error("Failed to fetch bootstrap nodes:", error);
         throw error;
@@ -497,7 +613,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   }
 
   async function selectStoragePath() {
-    const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params);
+    // const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params);
     try {
       // Try Tauri first
       await getVersion(); // only works in Tauri
@@ -554,7 +670,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     }, 2000);
   }
 
-  function exportSettings() {
+  function exportSettingsOld() {
     const blob = new Blob([JSON.stringify(localSettings, null, 2)], {
       type: "application/json",
     });
@@ -565,14 +681,14 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     a.click();
     URL.revokeObjectURL(url);
     importExportFeedback = {
-      message: (get(t) as any)("advanced.exportSuccess", {
+      message: tr("advanced.exportSuccess", {
         default: "Settings exported to your browser's download folder.",
       }),
       type: "success",
     };
   }
 
-  function importSettings(event: Event) {
+  function importSettingsOld(event: Event) {
     const file = (event.target as HTMLInputElement).files?.[0];
     if (!file) return;
 
@@ -584,7 +700,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
         await saveSettings(); // This saves, updates savedSettings, and clears any old feedback.
         // Now we set the new feedback for the import action.
         importExportFeedback = {
-          message: (get(t) as any)("advanced.importSuccess", {
+          message: tr("advanced.importSuccess", {
             default: "Settings imported successfully.",
           }),
           type: "success",
@@ -592,7 +708,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
       } catch (err) {
         console.error("Failed to import settings:", err);
         importExportFeedback = {
-          message: (get(t) as any)("advanced.importError", {
+          message: tr("advanced.importError", {
             default: "Invalid JSON file. Please select a valid export.",
           }),
           type: "error",
@@ -640,7 +756,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
       diagnostics = [...diagnostics, item];
     };
 
-    const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params);
+    // const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params);
 
     // 1) Environment (Web vs Tauri)
     const isTauri = typeof window !== "undefined" && "__TAURI__" in window;
@@ -703,9 +819,9 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   async function copyDiagnostics() {
     try {
       await navigator.clipboard.writeText(diagnosticsReport);
-      showToast((get(t) as any)("settings.diagnostics.copied"));
+      showToast(tr("settings.diagnostics.copied"));
     } catch (e) {
-      showToast((get(t) as any)("settings.diagnostics.copyFailed"), "error");
+      showToast(tr("settings.diagnostics.copyFailed"), "error");
     }
   }
 
@@ -873,24 +989,86 @@ selectedLanguage = initial; // Synchronize dropdown display value
 
   let search = '';
 
-const sectionLabels: Record<string, string[]> = {
+// const sectionLabels: Record<string, string[]> = {
+//   storage: [
+//     (get(t) as any)("storage.title"),
+//     (get(t) as any)("storage.location"),
+//     (get(t) as any)("storage.maxSize"),
+//     (get(t) as any)("storage.cleanupThreshold"),
+//     (get(t) as any)("storage.enableCleanup"),
+//   ],
+//   network: [
+//     (get(t) as any)("network.title"),
+//     (get(t) as any)("network.maxConnections"),
+//     (get(t) as any)("network.port"),
+//     (get(t) as any)("network.uploadLimit"),
+//     (get(t) as any)("network.downloadLimit"),
+//     (get(t) as any)("network.userLocation"),
+//     (get(t) as any)("network.enableUpnp"),
+//     (get(t) as any)("network.enableNat"),
+//     (get(t) as any)("network.enableDht"),
+//     "Bootstrap Nodes",
+//     "Custom Bootstrap Nodes",
+//   ],
+//   bandwidthScheduling: [
+//     "Bandwidth Scheduling",
+//     "Enable Bandwidth Scheduling",
+//     "Schedule different bandwidth limits",
+//   ],
+//   language: [
+//     (get(t) as any)("language.title"),
+//     (get(t) as any)("language.select"),
+//   ],
+//   privacy: [
+//     (get(t) as any)("privacy.title"),
+//     (get(t) as any)("privacy.enableProxy"),
+//     (get(t) as any)("privacy.anonymousMode"),
+//     (get(t) as any)("privacy.shareAnalytics"),
+//   ],
+//   notifications: [
+//     (get(t) as any)("notifications.title"),
+//     (get(t) as any)("notifications.enable"),
+//     (get(t) as any)("notifications.notifyComplete"),
+//     (get(t) as any)("notifications.notifyError"),
+//     (get(t) as any)("notifications.soundAlerts"),
+//   ],
+//   advanced: [
+//     (get(t) as any)("advanced.title"),
+//     (get(t) as any)("advanced.chunkSize"),
+//     (get(t) as any)("advanced.cacheSize"),
+//     (get(t) as any)("advanced.logLevel"),
+//     (get(t) as any)("advanced.autoUpdate"),
+//     (get(t) as any)("advanced.exportSettings"),
+//     (get(t) as any)("advanced.importSettings"),
+//   ],
+// };
+
+// function sectionMatches(section: string, query: string) {
+//   if (!query) return true;
+//   const labels = sectionLabels[section] || [];
+//   return labels.some((label) =>
+//     label.toLowerCase().includes(query.toLowerCase())
+//   );
+// }
+let sectionLabels: Record<string, string[]> = {};
+$: sectionLabels = {
   storage: [
-    (get(t) as any)("storage.title"),
-    (get(t) as any)("storage.location"),
-    (get(t) as any)("storage.maxSize"),
-    (get(t) as any)("storage.cleanupThreshold"),
-    (get(t) as any)("storage.enableCleanup"),
+    tr("storage.title"),
+    tr("storage.location"),
+    tr("storage.maxSize"),
+    tr("storage.cleanupThreshold"),
+    tr("storage.enableCleanup"),
   ],
   network: [
-    (get(t) as any)("network.title"),
-    (get(t) as any)("network.maxConnections"),
-    (get(t) as any)("network.port"),
-    (get(t) as any)("network.uploadLimit"),
-    (get(t) as any)("network.downloadLimit"),
-    (get(t) as any)("network.userLocation"),
-    (get(t) as any)("network.enableUpnp"),
-    (get(t) as any)("network.enableNat"),
-    (get(t) as any)("network.enableDht"),
+    tr("network.title"),
+    tr("network.maxConnections"),
+    tr("network.port"),
+    tr("network.uploadLimit"),
+    tr("network.downloadLimit"),
+    tr("network.userLocation"),
+    tr("network.enableUpnp"),
+    tr("network.enableNat"),
+    tr("network.enableDht"),
     "Bootstrap Nodes",
     "Custom Bootstrap Nodes",
   ],
@@ -900,30 +1078,30 @@ const sectionLabels: Record<string, string[]> = {
     "Schedule different bandwidth limits",
   ],
   language: [
-    (get(t) as any)("language.title"),
-    (get(t) as any)("language.select"),
+    tr("language.title"),
+    tr("language.select"),
   ],
   privacy: [
-    (get(t) as any)("privacy.title"),
-    (get(t) as any)("privacy.enableProxy"),
-    (get(t) as any)("privacy.anonymousMode"),
-    (get(t) as any)("privacy.shareAnalytics"),
+    tr("privacy.title"),
+    tr("privacy.enableProxy"),
+    tr("privacy.anonymousMode"),
+    tr("privacy.shareAnalytics"),
   ],
   notifications: [
-    (get(t) as any)("notifications.title"),
-    (get(t) as any)("notifications.enable"),
-    (get(t) as any)("notifications.notifyComplete"),
-    (get(t) as any)("notifications.notifyError"),
-    (get(t) as any)("notifications.soundAlerts"),
+    tr("notifications.title"),
+    tr("notifications.enable"),
+    tr("notifications.notifyComplete"),
+    tr("notifications.notifyError"),
+    tr("notifications.soundAlerts"),
   ],
   advanced: [
-    (get(t) as any)("advanced.title"),
-    (get(t) as any)("advanced.chunkSize"),
-    (get(t) as any)("advanced.cacheSize"),
-    (get(t) as any)("advanced.logLevel"),
-    (get(t) as any)("advanced.autoUpdate"),
-    (get(t) as any)("advanced.exportSettings"),
-    (get(t) as any)("advanced.importSettings"),
+    tr("advanced.title"),
+    tr("advanced.chunkSize"),
+    tr("advanced.cacheSize"),
+    tr("advanced.logLevel"),
+    tr("advanced.autoUpdate"),
+    tr("advanced.exportSettings"),
+    tr("advanced.importSettings"),
   ],
 };
 
@@ -934,19 +1112,20 @@ function sectionMatches(section: string, query: string) {
     label.toLowerCase().includes(query.toLowerCase())
   );
 }
+
 </script>
 
 <div class="space-y-6">
   <div class="flex items-center justify-between">
     <div>
-      <h1 class="text-3xl font-bold">{(get(t) as any)("settings.title")}</h1>
+      <h1 class="text-3xl font-bold">{$t("settings.title")}</h1>
       <p class="text-muted-foreground mt-2">
-        {(get(t) as any)("settings.subtitle")}
+        {$t("settings.subtitle")}
       </p>
     </div>
     {#if hasChanges}
       <Badge variant="outline" class="text-orange-500"
-        >{(get(t) as any)("badges.unsaved")}</Badge
+        >{$t("badges.unsaved")}</Badge
       >
     {/if}
   </div>
@@ -955,7 +1134,7 @@ function sectionMatches(section: string, query: string) {
   <div class="mb-4 flex items-center gap-2">
     <Input
       type="text"
-      placeholder={(get(t) as any)('settings.searchPlaceholder')}
+      placeholder={$t('settings.searchPlaceholder')}
       bind:value={search}
       class="w-full"
     />
@@ -1835,7 +2014,7 @@ function sectionMatches(section: string, query: string) {
                 ? $t("button.cleared")
                 : $t("button.clearCache")}
           </Button>
-          <Button variant="outline" size="xs" on:click={exportSettings}>
+          <Button variant="outline" size="xs" on:click={exportSettingsOld}>
             {$t("advanced.exportSettings")}
           </Button>
 
@@ -1852,7 +2031,7 @@ function sectionMatches(section: string, query: string) {
               id="import-settings"
               type="file"
               accept=".json"
-              on:change={importSettings}
+              on:change={importSettingsOld}
               class="hidden"
             />
           </label>
@@ -1918,6 +2097,117 @@ function sectionMatches(section: string, query: string) {
             </ul>
           </div>
         {/if}
+      </div>
+    </Expandable>
+  {/if}
+
+  <!-- Backup & Restore -->
+  {#if sectionMatches("backup", search) || sectionMatches("restore", search) || sectionMatches("export", search) || sectionMatches("import", search)}
+    <Expandable bind:isOpen={backupRestoreSectionOpen}>
+      <div slot="title" class="flex items-center gap-3">
+        <Database class="h-6 w-6 text-purple-600" />
+        <h2 class="text-xl font-semibold text-black">{$t("settingsBackup.title")}</h2>
+      </div>
+      <div class="space-y-4">
+        <p class="text-sm text-muted-foreground">{$t("settingsBackup.description")}</p>
+
+        <!-- Export/Import Buttons -->
+        <div class="flex flex-wrap gap-3">
+          <Button 
+            size="sm" 
+            on:click={exportSettings}
+            disabled={isExporting}
+            class="min-w-[140px]"
+          >
+            {#if isExporting}
+              <RefreshCw class="h-4 w-4 mr-2 animate-spin" />
+              {$t("settingsBackup.export")}...
+            {:else}
+              <UploadIcon class="h-4 w-4 mr-2" />
+              {$t("settingsBackup.exportButton")}
+            {/if}
+          </Button>
+
+          <Button 
+            size="sm" 
+            variant="outline"
+            on:click={importSettings}
+            disabled={isImporting}
+            class="min-w-[140px]"
+          >
+            {#if isImporting}
+              <RefreshCw class="h-4 w-4 mr-2 animate-spin" />
+              {$t("settingsBackup.import")}...
+            {:else}
+              <DownloadIcon class="h-4 w-4 mr-2" />
+              {$t("settingsBackup.importButton")}
+            {/if}
+          </Button>
+        </div>
+
+        <!-- Feedback Message -->
+        {#if backupMessage}
+          <div 
+            class="p-3 rounded-lg text-sm transition-all"
+            class:bg-green-100={backupMessage.type === 'success'}
+            class:text-green-800={backupMessage.type === 'success'}
+            class:bg-red-100={backupMessage.type === 'error'}
+            class:text-red-800={backupMessage.type === 'error'}
+            class:bg-yellow-100={backupMessage.type === 'warning'}
+            class:text-yellow-800={backupMessage.type === 'warning'}
+          >
+            <div class="flex items-start gap-2">
+              {#if backupMessage.type === 'success'}
+                <CheckCircle class="h-4 w-4 mt-0.5 flex-shrink-0" />
+              {:else}
+                <AlertTriangle class="h-4 w-4 mt-0.5 flex-shrink-0" />
+              {/if}
+              <p>{backupMessage.text}</p>
+            </div>
+          </div>
+        {/if}
+
+        <!-- Info Box -->
+        <div class="p-4 bg-muted/50 rounded-lg border border-dashed">
+          <h3 class="font-medium text-sm mb-2">{$t("settingsBackup.autoBackup")}</h3>
+          <p class="text-xs text-muted-foreground mb-3">{$t("settingsBackup.autoBackupDescription")}</p>
+          
+          <!-- Auto-backups list -->
+          {#if settingsBackupService.getAutoBackups().length > 0}
+            <div class="space-y-2">
+              {#each settingsBackupService.getAutoBackups().slice(0, 3) as backup}
+                <div class="flex items-center justify-between p-2 bg-background rounded border text-xs">
+                  <span class="text-muted-foreground">
+                    {backup.date.toLocaleString()}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    on:click={async () => {
+                      const result = await settingsBackupService.restoreAutoBackup(backup.key);
+                      if (result.success) {
+                        showToast($t("settingsBackup.messages.autoBackupRestored"), 'success');
+                        // Reload settings
+                        const stored = localStorage.getItem('chiralSettings');
+                        if (stored) {
+                          localSettings = JSON.parse(stored);
+                          savedSettings = JSON.parse(JSON.stringify(localSettings));
+                        }
+                      } else {
+                        showToast($t("settingsBackup.messages.importError", { values: { error: result.error } }), 'error');
+                      }
+                    }}
+                    class="h-6 text-xs"
+                  >
+                    {$t("settingsBackup.restoreAutoBackup")}
+                  </Button>
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <p class="text-xs text-muted-foreground italic">No automatic backups available</p>
+          {/if}
+        </div>
       </div>
     </Expandable>
   {/if}
@@ -1991,5 +2281,6 @@ function sectionMatches(section: string, query: string) {
     </div>
   </div>
 {/if}
+
 
 

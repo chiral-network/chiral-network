@@ -13,7 +13,8 @@
   import { getVersion } from "@tauri-apps/api/app";
   import { t } from 'svelte-i18n';
   import { goto } from '@mateothegreat/svelte5-router';
-  import { walletService } from '$lib/wallet'; 
+  import { walletService } from '$lib/wallet';
+  import TemporaryAccountWarning from '$lib/components/TemporaryAccountWarning.svelte'; 
   
   // Local UI state only
   let isTauri = false
@@ -23,7 +24,11 @@
   let lastHashUpdate = Date.now()
   let cpuThreads = navigator.hardwareConcurrency || 4
   let selectedThreads = Math.floor(cpuThreads / 2)
-  let error = '' 
+  let error = ''
+
+  // Temporary account tracking
+  let isTemporaryAccount = false
+  let showTemporaryAccountWarning = false 
 
   // Network statistics
   let networkHashRate = '0 H/s'
@@ -47,6 +52,7 @@
   // Power monitoring
   let realPowerConsumption = 0.0
   let hasRealPower = false
+  let powerLoading = true // Add loading state for power checks
 
   // Uptime tick (forces template to re-render every second while mining)
   let uptimeNow: number = Date.now()
@@ -533,10 +539,6 @@
   }
 
   async function updatePowerConsumption() {
-    // Only show loading state for the very first check
-    if (!hasCompletedFirstCheck) {
-    }
-
     try {
       const power = await invoke('get_power_consumption') as number
       if (power && power > 0) {
@@ -549,8 +551,7 @@
       console.error('Failed to get power consumption:', e)
       hasRealPower = false
     } finally {
-      if (!hasCompletedFirstCheck) {
-      }
+      powerLoading = false
     }
   }
   
@@ -563,10 +564,40 @@
     }
   }
   
+  async function createTemporaryAccount() {
+    try {
+      // Generate a temporary account using walletService
+      const tempAccount = await walletService.createAccount()
+
+      // Set as active account
+      etcAccount.set({
+        address: tempAccount.address,
+        private_key: tempAccount.private_key
+      })
+
+      // Mark as temporary
+      isTemporaryAccount = true
+      showTemporaryAccountWarning = true
+
+      // Track that this account has been used for mining
+      localStorage.setItem('chiral_temp_account_mining', 'true')
+
+      return tempAccount
+    } catch (e) {
+      console.error('Failed to create temporary account:', e)
+      throw e
+    }
+  }
+
   async function startMining() {
+    // Auto-create temporary account if none exists
     if (!$etcAccount) {
-      error = $t('mining.errors.noAccount')
-      return
+      try {
+        await createTemporaryAccount()
+      } catch (e) {
+        error = $t('mining.errors.noAccount')
+        return
+      }
     }
     
     if (!isGethRunning) {
@@ -579,7 +610,7 @@
     
     try {
       await invoke('start_miner', {
-        address: $etcAccount.address,
+        address: $etcAccount?.address || '',
         threads: selectedThreads,
         dataDir: './bin/geth-data'
       })
@@ -627,6 +658,16 @@
       error = String(e)
       console.error('Failed to stop mining:', e)
     }
+  }
+
+  // Temporary account warning handlers
+  function handleDismissWarning() {
+    showTemporaryAccountWarning = false
+  }
+
+  function handleCreateWallet() {
+    // Navigate to Account page to create a permanent wallet
+    goto('/account')
   }
 
   // Decentralized Pool Functions
@@ -1007,7 +1048,15 @@
     <h1 class="text-3xl font-bold">{$t('mining.title')}</h1>
     <p class="text-muted-foreground mt-2">{$t('mining.subtitle')}</p>
   </div>
-  
+
+  <!-- Temporary Account Warning -->
+  {#if showTemporaryAccountWarning && isTemporaryAccount}
+    <TemporaryAccountWarning
+      onDismiss={handleDismissWarning}
+      onCreateWallet={handleCreateWallet}
+    />
+  {/if}
+
   <!-- Mining Status Cards -->
   <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
     <Card class="p-4">
@@ -1045,7 +1094,10 @@
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">{$t('mining.powerUsage')}</p>
-          {#if hasRealPower}
+          {#if powerLoading}
+            <p class="text-2xl font-bold text-blue-500">--W</p>
+            <p class="text-xs text-muted-foreground mt-1">Detecting power sources...</p>
+          {:else if hasRealPower}
             <p class="text-2xl font-bold">{powerConsumption.toFixed(0)}W</p>
             <p class="text-xs text-muted-foreground mt-1">
               {efficiency.toFixed(2)} {$t('mining.hw')}
@@ -1053,7 +1105,7 @@
           {:else}
             <p class="text-2xl font-bold text-gray-500">N/A</p>
             <p class="text-xs text-muted-foreground mt-1">
-              {$t('mining.hw')}
+              Hardware sensor not available
             </p>
           {/if}
         </div>

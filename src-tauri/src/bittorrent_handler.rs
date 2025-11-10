@@ -1,7 +1,7 @@
 use crate::protocols::ProtocolHandler;
 use async_trait::async_trait;
 use std::path::Path;
-use tracing::{info, warn, error, instrument};
+use tracing::{info, error, instrument};
 use sha1::{Sha1, Digest}; // Import Sha1 and Digest for hashing
 
 /// BitTorrent protocol handler implementing the ProtocolHandler trait.
