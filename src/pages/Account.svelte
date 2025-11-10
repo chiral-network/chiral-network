@@ -3,7 +3,7 @@
   import Card from '$lib/components/ui/card.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText, AlertCircle } from 'lucide-svelte'
+  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText } from 'lucide-svelte'
   import DropDown from "$lib/components/ui/dropDown.svelte";
   import { wallet, etcAccount, blacklist} from '$lib/stores' 
   import { walletService } from '$lib/wallet';
@@ -588,10 +588,6 @@
             keystoreSaveMessage = tr('keystore.successSimulated');
         }
         keystorePassword = ''; // Clear password after saving
-
-        // Clear temporary account flags after successful save
-        localStorage.removeItem('chiral_temp_account_mining');
-        localStorage.removeItem('chiral_first_run_skipped');
         localStorage.setItem('chiral_first_run_complete', 'true');
     } catch (error) {
         console.error('Failed to save to keystore:', error);
@@ -749,10 +745,6 @@
     etcAccount.set({ address: ev.account.address, private_key: '0x' + ev.account.privateKeyHex });
     wallet.update(w => ({ ...w, address: ev.account.address }));
     if (isGethRunning) { await fetchBalance(); }
-
-    // Clear temporary account flags after creating HD wallet
-    localStorage.removeItem('chiral_temp_account_mining');
-    localStorage.removeItem('chiral_first_run_skipped');
     localStorage.setItem('chiral_first_run_complete', 'true');
   }
   function onHDAccountsChange(updated: HDAccountItem[]) {
@@ -1337,30 +1329,7 @@
     <p class="text-muted-foreground mt-2">{$t('account.subtitle')}</p>
   </div>
 
-  <!-- Temporary Account Upgrade Alert -->
-  {#if $etcAccount && localStorage.getItem('chiral_temp_account_mining') === 'true' && localStorage.getItem('chiral_first_run_skipped') === 'true'}
-    <div class="bg-amber-500/10 border border-amber-500/30 rounded-lg p-4">
-      <div class="flex items-start gap-3">
-        <AlertCircle class="h-5 w-5 text-amber-500 flex-shrink-0 mt-0.5" />
-        <div class="flex-1 space-y-2">
-          <h3 class="font-semibold text-amber-900 dark:text-amber-100">
-            {$t('account.upgradeAccount.title')}
-          </h3>
-          <p class="text-sm text-amber-800 dark:text-amber-200">
-            {$t('account.upgradeAccount.description')}
-          </p>
-          <div class="flex flex-wrap gap-2 mt-3">
-            <Button size="sm" on:click={() => document.getElementById('keystore-section')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>
-              {$t('account.upgradeAccount.saveToKeystore')}
-            </Button>
-            <Button size="sm" variant="outline" on:click={openCreateMnemonic}>
-              {$t('account.upgradeAccount.createHDWallet')}
-            </Button>
-          </div>
-        </div>
-      </div>
-    </div>
-  {/if}
+
 
 {#if showMnemonicWizard}
   <MnemonicWizard

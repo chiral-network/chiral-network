@@ -105,10 +105,9 @@ let showFirstRunWizard = false;
 // First-run wizard handlers
 function handleFirstRunComplete() {
   showFirstRunWizard = false;
-}
-
-function handleFirstRunSkip() {
-  showFirstRunWizard = false;
+  // Navigate to account page after completing wizard
+  currentPage = 'account';
+  goto('/account');
 }
 
   onMount(() => {
@@ -188,7 +187,6 @@ function handleFirstRunSkip() {
 
         // Check for first-run and show wizard if no account exists
         try {
-          const firstRunCompleted = localStorage.getItem('chiral_first_run_complete');
           const hasAccount = get(etcAccount) !== null;
 
           // Check if there are any keystore files (Tauri only)
@@ -202,11 +200,9 @@ function handleFirstRunSkip() {
             }
           }
 
-          // Show wizard if:
-          // - First run not completed AND
-          // - No active account AND
-          // - No keystore files exist
-          if (!firstRunCompleted && !hasAccount && !hasKeystoreFiles) {
+          // Show wizard if no account AND no keystore files exist
+          // (Don't rely on first-run flag since user may have cleared data)
+          if (!hasAccount && !hasKeystoreFiles) {
             showFirstRunWizard = true;
           }
         } catch (error) {
@@ -297,24 +293,7 @@ function handleFirstRunSkip() {
       const onPop = () => syncFromUrl();
       window.addEventListener('popstate', onPop);
 
-      // Warn before closing if there are unsaved mining rewards
-      const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-        const hasUnsavedMiningRewards = localStorage.getItem('chiral_temp_account_mining') === 'true';
-        const currentAccount = get(etcAccount);
-        const hasAccount = currentAccount !== null;
 
-        // Only warn if:
-        // 1. There's a temporary account that was used for mining
-        // 2. The account still exists (not saved to keystore)
-        // 3. First-run was skipped (indicating temporary usage)
-        const firstRunSkipped = localStorage.getItem('chiral_first_run_skipped') === 'true';
-
-        if (hasUnsavedMiningRewards && hasAccount && firstRunSkipped) {
-          event.preventDefault();
-          event.returnValue = ''; // Required for Chrome
-        }
-      };
-      window.addEventListener('beforeunload', handleBeforeUnload);
 
     // keyboard shortcuts
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -417,8 +396,8 @@ function handleFirstRunSkip() {
     menuItems = [
       { id: "download", label: $t("nav.download"), icon: Download },
       { id: "upload", label: $t("nav.upload"), icon: Upload },
-      { id: "mining", label: $t("nav.mining"), icon: Cpu },
       { id: "network", label: $t("nav.network"), icon: Globe },
+      { id: "mining", label: $t("nav.mining"), icon: Cpu },
       { id: "relay", label: $t("nav.relay"), icon: Server },
       // { id: 'proxy', label: $t('nav.proxy'), icon: Shield }, // DISABLED
       { id: "analytics", label: $t("nav.analytics"), icon: BarChart3 },
@@ -672,7 +651,6 @@ function handleFirstRunSkip() {
 {#if showFirstRunWizard}
   <FirstRunWizard
     onComplete={handleFirstRunComplete}
-    onSkip={handleFirstRunSkip}
   />
 {/if}
 
