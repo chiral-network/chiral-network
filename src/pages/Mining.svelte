@@ -6,7 +6,7 @@
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
   import type { MiningHistoryPoint } from '$lib/stores';
-  import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw } from 'lucide-svelte'
+  import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw, Calculator, DollarSign } from 'lucide-svelte'
   import { onDestroy, onMount, getContext } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { etcAccount, miningState } from '$lib/stores'
@@ -52,6 +52,43 @@
   // Power monitoring
   let realPowerConsumption = 0.0
   let hasRealPower = false
+
+  // Profitability Calculator state
+  let showCalculator = false
+  let electricityCostPerKwh = 0.12 // Default: $0.12 per kWh (US average)
+  let estimatedPowerUsageWatts = 100 // Default: 100W
+  let chiralPriceUSD = 0.50 // Default: $0.50 per Chiral (user can adjust)
+  let calculatorHashRate = 0 // Will use current mining hash rate
+  let useCurrentHashRate = true
+
+  // Profitability calculation results
+  $: {
+    // Use current hash rate if mining, otherwise use manual input
+    if (useCurrentHashRate && $miningState.isMining) {
+      calculatorHashRate = parseHashRate($miningState.hashRate)
+    }
+  }
+
+  $: dailyBlocks = calculateDailyBlocks(calculatorHashRate, parseDifficulty(networkDifficulty))
+  $: dailyRevenue = dailyBlocks * blockReward * chiralPriceUSD
+  $: dailyPowerCostKwh = (estimatedPowerUsageWatts / 1000) * 24
+  $: dailyPowerCostUSD = dailyPowerCostKwh * electricityCostPerKwh
+  $: dailyProfit = dailyRevenue - dailyPowerCostUSD
+  $: monthlyProfit = dailyProfit * 30
+  $: yearlyProfit = dailyProfit * 365
+  $: breakEvenDays = dailyProfit > 0 ? 0 : Infinity // No upfront hardware cost in this model
+  $: profitMargin = dailyRevenue > 0 ? ((dailyProfit / dailyRevenue) * 100) : 0
+  $: isProfitable = dailyProfit > 0
+
+  function calculateDailyBlocks(hashRate: number, networkDiff: number): number {
+    if (hashRate === 0 || networkDiff === 0) return 0
+    
+    // Simplified calculation: blocks per day = (your hashrate / network difficulty) * blocks per day
+    // Assuming ~10 blocks per minute average (Bitcoin-like), ~14400 blocks per day
+    const blocksPerDay = 14400
+    const yourShare = hashRate / (networkDiff || 1)
+    return yourShare * blocksPerDay
+  }
 
   // Uptime tick (forces template to re-render every second while mining)
   let uptimeNow: number = Date.now()
@@ -1146,7 +1183,7 @@
           </div>
         </div>
         <div class="flex flex-col gap-2">
-            <Button size="icon" variant="outline" on:click={() => temperatureUnit = temperatureUnit === 'C' ? 'F' : 'C'}>
+            <Button size="icon" variant="outline" onclick={() => temperatureUnit = temperatureUnit === 'C' ? 'F' : 'C'}>
                 {temperatureUnit === 'C' ? '°F' : '°C'}
             </Button>
             <div class="p-2 {temperatureLoading ? 'bg-blue-500/20' : hasRealTemperature ? (temperature > 80 ? 'bg-red-500/20' : temperature > 70 ? 'bg-orange-500/20' : temperature > 60 ? 'bg-yellow-500/20' : 'bg-green-500/20') : 'bg-gray-500/20'} rounded-lg">
@@ -1191,7 +1228,7 @@
           <div class="flex items-center justify-between">
             <h3 class="text-lg font-semibold">{$t('mining.decentralizedPools')}</h3>
             <div class="flex gap-2">
-              <Button variant="outline" size="sm" on:click={discoverPools} disabled={isDiscovering || $miningState.isMining}>
+              <Button variant="outline" size="sm" onclick={discoverPools} disabled={isDiscovering || $miningState.isMining}>
                 {#if isDiscovering}
                   <RefreshCw class="h-4 w-4 mr-2 animate-spin" />
                   {$t('mining.discovering')}
@@ -1200,7 +1237,7 @@
                   {$t('mining.discoverPools')}
                 {/if}
               </Button>
-              <Button variant="secondary" size="sm" on:click={() => showCreatePool = true} disabled={$miningState.isMining}>
+              <Button variant="secondary" size="sm" onclick={() => showCreatePool = true} disabled={$miningState.isMining}>
                 <Coins class="h-4 w-4 mr-2" />
                 {$t('mining.createPool')}
               </Button>
@@ -1215,7 +1252,7 @@
                   <div class="w-3 h-3 bg-green-500 rounded-full"></div>
                   <h4 class="font-semibold text-green-700">{$t('mining.poolDetails.connectedTo')}: {currentPool.pool.name}</h4>
                 </div>
-                <Button variant="destructive" size="sm" on:click={leavePool} disabled={$miningState.isMining}>
+                <Button variant="destructive" size="sm" onclick={leavePool} disabled={$miningState.isMining}>
                   {$t('mining.poolDetails.leave')}
                 </Button>
               </div>
@@ -1284,7 +1321,7 @@
                   id="thread-count"
                   type="number"
                   bind:value={selectedThreads}
-                  on:input={(e: Event) => {
+                  oninput={(e: Event) => {
                       const target = e.currentTarget as HTMLInputElement;
                       selectedThreads = Number(target.value);
                     }}
@@ -1305,7 +1342,7 @@
                   id="intensity"
                   type="number"
                   bind:value={$miningState.minerIntensity}
-                  on:input={(e: Event) => {
+                  oninput={(e: Event) => {
                       const target = e.currentTarget as HTMLInputElement;
                       $miningState.minerIntensity = Number(target.value);
                     }}
@@ -1336,7 +1373,7 @@
         <div class="flex gap-2">
           <Button
             size="lg"
-            on:click={() => $miningState.isMining ? stopMining() : startMining()}
+            onclick={() => $miningState.isMining ? stopMining() : startMining()}
             class="min-w-[150px]"
             disabled={isInvalid || !isGethRunning}
           >
@@ -1351,7 +1388,7 @@
           <Button
             size="lg"
             variant="outline"
-            on:click={toggleLogs}
+            onclick={toggleLogs}
             title={$t('mining.showLogs')}
           >
             <Terminal class="h-4 w-4" />
@@ -1374,7 +1411,7 @@
           <div class="flex items-center gap-2">
             <AlertCircle class="h-4 w-4 text-yellow-500 flex-shrink-0" />
             <p class="text-sm text-yellow-600">
-              {$t('mining.errors.gethNotRunning')} <button on:click={() => { navigation.setCurrentPage('network'); goto('/network'); }} class="underline font-medium">{$t('mining.networkPage')}</button>
+              {$t('mining.errors.gethNotRunning')} <button onclick={() => { navigation.setCurrentPage('network'); goto('/network'); }} class="underline font-medium">{$t('mining.networkPage')}</button>
             </p>
           </div>
         </div>
@@ -1479,6 +1516,182 @@
       {/if}
     </Card>
   </div>
+
+  <!-- Mining Profitability Calculator -->
+  <Card class="p-6">
+    <div class="flex items-center justify-between mb-4">
+      <div class="flex items-center gap-2">
+        <Calculator class="w-5 h-5" />
+        <h2 class="text-lg font-semibold">Profitability Calculator</h2>
+      </div>
+      <button
+        onclick={() => showCalculator = !showCalculator}
+        class="px-3 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors text-sm"
+      >
+        {showCalculator ? 'Hide' : 'Show'} Calculator
+      </button>
+    </div>
+
+    {#if showCalculator}
+      <div class="space-y-4">
+        <!-- Input Section -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pb-4 border-b">
+          <div>
+            <label for="electricity-cost" class="block text-sm font-medium mb-1.5">
+              Electricity Cost ($/kWh)
+            </label>
+            <input
+              id="electricity-cost"
+              type="number"
+              bind:value={electricityCostPerKwh}
+              step="0.01"
+              min="0"
+              class="w-full px-3 py-2 rounded border bg-background"
+              placeholder="0.12"
+            />
+            <p class="text-xs text-muted-foreground mt-1">Average US rate: $0.12/kWh</p>
+          </div>
+
+          <div>
+            <label for="power-usage" class="block text-sm font-medium mb-1.5">
+              Estimated Power Usage (Watts)
+            </label>
+            <input
+              id="power-usage"
+              type="number"
+              bind:value={estimatedPowerUsageWatts}
+              step="10"
+              min="0"
+              class="w-full px-3 py-2 rounded border bg-background"
+              placeholder="100"
+            />
+            <p class="text-xs text-muted-foreground mt-1">CPU mining typically 50-150W</p>
+          </div>
+
+          <div>
+            <label for="chiral-price" class="block text-sm font-medium mb-1.5">
+              <DollarSign class="w-3 h-3 inline" /> Chiral Price (USD)
+            </label>
+            <input
+              id="chiral-price"
+              type="number"
+              bind:value={chiralPriceUSD}
+              step="0.01"
+              min="0"
+              class="w-full px-3 py-2 rounded border bg-background"
+              placeholder="0.50"
+            />
+            <p class="text-xs text-muted-foreground mt-1">Update with current market price</p>
+          </div>
+
+          <div>
+            <label for="calculator-hashrate" class="block text-sm font-medium mb-1.5">
+              Hash Rate (H/s)
+            </label>
+            <div class="flex gap-2">
+              <input
+                id="calculator-hashrate"
+                type="number"
+                bind:value={calculatorHashRate}
+                disabled={useCurrentHashRate}
+                step="1000"
+                min="0"
+                class="flex-1 px-3 py-2 rounded border bg-background disabled:opacity-50"
+                placeholder="10000"
+              />
+              <label class="flex items-center gap-1.5 px-3 py-2 rounded border bg-background cursor-pointer hover:bg-accent">
+                <input
+                  type="checkbox"
+                  bind:checked={useCurrentHashRate}
+                  onchange={() => {
+                    if (useCurrentHashRate) {
+                      calculatorHashRate = parseHashRate($miningState.hashRate);
+                    }
+                  }}
+                  class="w-4 h-4"
+                />
+                <span class="text-sm whitespace-nowrap">Use Current</span>
+              </label>
+            </div>
+            <p class="text-xs text-muted-foreground mt-1">
+              {useCurrentHashRate ? 'Using your current mining hashrate' : 'Enter custom hashrate'}
+            </p>
+          </div>
+        </div>
+
+        <!-- Results Section -->
+        <div class="space-y-3">
+          <h3 class="text-sm font-semibold text-muted-foreground">Estimated Profitability</h3>
+          
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div class="p-3 rounded border bg-card">
+              <p class="text-xs text-muted-foreground mb-1">Daily</p>
+              <p class="text-lg font-semibold {isProfitable ? 'text-green-600' : 'text-red-600'}">
+                ${dailyProfit.toFixed(2)}
+              </p>
+              <p class="text-xs text-muted-foreground mt-1">
+                Revenue: ${dailyRevenue.toFixed(2)} - Cost: ${dailyPowerCostUSD.toFixed(2)}
+              </p>
+            </div>
+
+            <div class="p-3 rounded border bg-card">
+              <p class="text-xs text-muted-foreground mb-1">Monthly</p>
+              <p class="text-lg font-semibold {isProfitable ? 'text-green-600' : 'text-red-600'}">
+                ${monthlyProfit.toFixed(2)}
+              </p>
+              <p class="text-xs text-muted-foreground mt-1">
+                ≈ {dailyBlocks.toFixed(2)} blocks/day × 30
+              </p>
+            </div>
+
+            <div class="p-3 rounded border bg-card">
+              <p class="text-xs text-muted-foreground mb-1">Yearly</p>
+              <p class="text-lg font-semibold {isProfitable ? 'text-green-600' : 'text-red-600'}">
+                ${yearlyProfit.toFixed(2)}
+              </p>
+              <p class="text-xs text-muted-foreground mt-1">
+                ≈ {dailyBlocks.toFixed(2)} blocks/day × 365
+              </p>
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between p-3 rounded border {isProfitable ? 'bg-green-50 dark:bg-green-950 border-green-200 dark:border-green-800' : 'bg-red-50 dark:bg-red-950 border-red-200 dark:border-red-800'}">
+            <div>
+              <p class="text-sm font-medium {isProfitable ? 'text-green-900 dark:text-green-100' : 'text-red-900 dark:text-red-100'}">
+                {isProfitable ? '✓ Profitable' : '✗ Not Profitable'}
+              </p>
+              <p class="text-xs {isProfitable ? 'text-green-700 dark:text-green-300' : 'text-red-700 dark:text-red-300'}">
+                {isProfitable ? 'Mining earnings exceed electricity costs' : 'Electricity costs exceed mining earnings'}
+              </p>
+            </div>
+            <div class="text-right">
+              <p class="text-sm font-medium {isProfitable ? 'text-green-900 dark:text-green-100' : 'text-red-900 dark:text-red-100'}">
+                Profit Margin
+              </p>
+              <p class="text-lg font-bold {isProfitable ? 'text-green-700 dark:text-green-300' : 'text-red-700 dark:text-red-300'}">
+                {profitMargin.toFixed(1)}%
+              </p>
+            </div>
+          </div>
+
+          {#if calculatorHashRate > 0 && networkDifficulty}
+            <div class="text-xs text-muted-foreground space-y-1 p-3 rounded bg-muted/30">
+              <p><strong>Calculation Details:</strong></p>
+              <p>• Your hashrate: {formatHashRate(calculatorHashRate)}</p>
+              <p>• Network difficulty: {formatDifficulty(networkDifficulty)}</p>
+              <p>• Expected blocks/day: {dailyBlocks.toFixed(4)} ({blockReward} Chiral each)</p>
+              <p>• Power consumption: {dailyPowerCostKwh.toFixed(2)} kWh/day</p>
+              <p>• Break-even Chiral price: ${dailyPowerCostUSD > 0 ? (dailyPowerCostUSD / (dailyBlocks * blockReward)).toFixed(4) : '0.0000'}/Chiral</p>
+            </div>
+          {:else}
+            <div class="text-sm text-muted-foreground text-center py-4">
+              Enable mining to see profitability estimates
+            </div>
+          {/if}
+        </div>
+      </div>
+    {/if}
+  </Card>
   
   <!-- Recent Blocks -->
   <Card class="p-6">
@@ -1492,7 +1705,7 @@
         <div class="flex items-center justify-between mb-2">
           <div class="flex items-center gap-2">
             <label for="page-size-select" class="text-sm text-muted-foreground">{$t('Page Size')}:</label>
-            <select id="page-size-select" bind:value={pageSize} on:change={() => { currentPage = 1 }} class="px-2 py-1 rounded border bg-background text-sm">
+            <select id="page-size-select" bind:value={pageSize} onchange={() => { currentPage = 1 }} class="px-2 py-1 rounded border bg-background text-sm">
               {#each pageSizes as s}
                 <option value={s}>{s}</option>
               {/each}
@@ -1500,11 +1713,11 @@
           </div>
 
           <div class="flex items-center gap-2">
-            <button class="px-2 py-1 rounded border bg-background text-sm" on:click={() => { if (currentPage > 1) currentPage -= 1 }} disabled={currentPage <= 1}>
+            <button class="px-2 py-1 rounded border bg-background text-sm" onclick={() => { if (currentPage > 1) currentPage -= 1 }} disabled={currentPage <= 1}>
               {$t('prev')}
             </button>
             <div class="text-sm text-muted-foreground">{currentPage} / {totalPages}</div>
-            <button class="px-2 py-1 rounded border bg-background text-sm" on:click={() => { if (currentPage < totalPages) currentPage += 1 }} disabled={currentPage >= totalPages}>
+            <button class="px-2 py-1 rounded border bg-background text-sm" onclick={() => { if (currentPage < totalPages) currentPage += 1 }} disabled={currentPage >= totalPages}>
               {$t('next')}
             </button>
           </div>
@@ -1545,8 +1758,8 @@
       <!-- Chart Type Toggle -->
       <div class="flex items-center gap-2 mb-2">
         <span class="text-sm text-muted-foreground">{$t('mining.chartType')}:</span>
-        <Button size="sm" variant={chartType === 'bar' ? 'default' : 'outline'} on:click={() => chartType = 'bar'}>{$t('mining.bar')}</Button>
-        <Button size="sm" variant={chartType === 'line' ? 'default' : 'outline'} on:click={() => chartType = 'line'}>{$t('mining.line')}</Button>
+        <Button size="sm" variant={chartType === 'bar' ? 'default' : 'outline'} onclick={() => chartType = 'bar'}>{$t('mining.bar')}</Button>
+        <Button size="sm" variant={chartType === 'line' ? 'default' : 'outline'} onclick={() => chartType = 'line'}>{$t('mining.line')}</Button>
       </div>
 
       <!-- Chart with Y-axis, gradients, tooltips, and axis labels -->
@@ -1576,8 +1789,8 @@
                   class="flex-1 bg-gradient-to-t from-blue-400/40 to-blue-500/80 hover:from-blue-500/60 hover:to-blue-600/90 transition-all rounded-t-md shadow-sm relative group"
                   style="height: {(point.hashRate / Math.max(...($miningState.miningHistory || []).map(h => h.hashRate))) * 100}%"
                   title="{formatHashRate(point.hashRate)}"
-                  on:mouseenter={() => { hoveredPoint = point; hoveredIndex = i; }}
-                  on:mouseleave={() => { hoveredPoint = null; hoveredIndex = null; }}
+                  onmouseenter={() => { hoveredPoint = point; hoveredIndex = i; }}
+                  onmouseleave={() => { hoveredPoint = null; hoveredIndex = null; }}
                   aria-label={formatHashRate(point.hashRate) + ' at ' + new Date(point.timestamp).toLocaleTimeString()}
                 >
                   {#if hoveredIndex === i && hoveredPoint}
@@ -1635,8 +1848,8 @@
                     role="button"
                     tabindex="0"
                     aria-label={formatHashRate(point.hashRate) + ' at ' + new Date(point.timestamp).toLocaleTimeString()}
-                    on:mouseenter={() => { hoveredPoint = point; hoveredIndex = i; }}
-                    on:mouseleave={() => { hoveredPoint = null; hoveredIndex = null; }}
+                    onmouseenter={() => { hoveredPoint = point; hoveredIndex = i; }}
+                    onmouseleave={() => { hoveredPoint = null; hoveredIndex = null; }}
                   />
                 {/each}
                 <!-- Gradient definition -->
@@ -1683,7 +1896,7 @@
       <Card class="w-full max-w-4xl max-h-[80vh] flex flex-col">
         <div class="p-4 border-b flex items-center justify-between">
           <h2 class="text-lg font-semibold">{$t('mining.logs')}</h2>
-          <Button size="sm" variant="ghost" on:click={toggleLogs}>
+          <Button size="sm" variant="ghost" onclick={toggleLogs}>
             <X class="h-4 w-4" />
           </Button>
         </div>
@@ -1712,7 +1925,7 @@
 
         <div class="p-4 border-t flex items-center justify-between">
           <div class="flex items-center gap-3">
-            <input id="auto-refresh" type="checkbox" bind:checked={autoRefresh} on:change={() => {
+            <input id="auto-refresh" type="checkbox" bind:checked={autoRefresh} onchange={() => {
               // If modal is open, start/stop the interval immediately
               if (showLogs) {
                 if (autoRefresh && !logsInterval) {
@@ -1739,7 +1952,7 @@
               {#each Object.entries(logFilters) as [level, enabled]}
                 <button
                   class="px-2 py-1 text-xs rounded {enabled ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground'}"
-                  on:click={() => logFilters[level] = !enabled}
+                  onclick={() => logFilters[level] = !enabled}
                 >
                   {level.toUpperCase()}
                 </button>
@@ -1748,11 +1961,11 @@
           </div>
 
           <div class="flex items-center gap-2">
-            <Button size="sm" variant="outline" on:click={fetchLogs}>
+            <Button size="sm" variant="outline" onclick={fetchLogs}>
               <RefreshCw class="h-3 w-3 mr-1" />
               {$t('mining.refresh')}
             </Button>
-            <Button size="sm" variant="outline" on:click={() => logs = []}>
+            <Button size="sm" variant="outline" onclick={() => logs = []}>
               {$t('mining.clear')}
             </Button>
           </div>
@@ -1769,7 +1982,7 @@
           <h2 class="text-xl font-semibold">
             {editingPool ? 'Edit Pool' : 'Manage Pools'}
           </h2>
-          <Button variant="ghost" size="sm" on:click={cancelPoolEdit}>
+          <Button variant="ghost" size="sm" onclick={cancelPoolEdit}>
             <X class="h-4 w-4" />
           </Button>
         </div>
@@ -1790,14 +2003,14 @@
                   <Button
                     variant="outline"
                     size="sm"
-                    on:click={() => editPool(pool)}
+                    onclick={() => editPool(pool)}
                   >
                     Edit
                   </Button>
                   <Button
                     variant="destructive"
                     size="sm"
-                    on:click={() => deletePool(pool.id)}
+                    onclick={() => deletePool(pool.id)}
                   >
                     Delete
                   </Button>
@@ -1819,7 +2032,7 @@
               <Input
                 id="pool-name"
                 value={editingPool ? editingPool.name : newPool.name}
-                on:input={(e: Event) => {
+                oninput={(e: Event) => {
                   const target = e.target as HTMLInputElement
                   if (editingPool) {
                     editingPool.name = target.value
@@ -1836,7 +2049,7 @@
               <Input
                 id="pool-url"
                 value={editingPool ? editingPool.url : newPool.url}
-                on:input={(e: Event) => {
+                oninput={(e: Event) => {
                   const target = e.target as HTMLInputElement
                   if (editingPool) {
                     editingPool.url = target.value
@@ -1853,7 +2066,7 @@
               <Input
                 id="pool-worker"
                 value={editingPool ? (editingPool.worker ?? '') : newPool.worker}
-                on:input={(e: Event) => {
+                oninput={(e: Event) => {
                   const target = e.target as HTMLInputElement
                   if (editingPool) {
                     editingPool.worker = target.value
@@ -1870,7 +2083,7 @@
               <Input
                 id="pool-password"
                 value={editingPool ? (editingPool.password ?? '') : newPool.password}
-                on:input={(e: Event) => {
+                oninput={(e: Event) => {
                   const target = e.target as HTMLInputElement
                   if (editingPool) {
                     editingPool.password = target.value
@@ -1886,15 +2099,15 @@
 
           <div class="flex gap-2 pt-4">
             {#if editingPool}
-              <Button on:click={savePool}>
+              <Button onclick={savePool}>
                 Save Changes
               </Button>
             {:else}
-              <Button on:click={addPool}>
+              <Button onclick={addPool}>
                 Add Pool
               </Button>
             {/if}
-            <Button variant="outline" on:click={cancelPoolEdit}>
+            <Button variant="outline" onclick={cancelPoolEdit}>
               Cancel
             </Button>
           </div>
@@ -1912,7 +2125,7 @@
     <Card class="w-full max-w-4xl max-h-[80vh] flex flex-col">
       <div class="p-4 border-b flex items-center justify-between">
         <h2 class="text-lg font-semibold">{$t('mining.poolDetails.availablePools')}</h2>
-        <Button size="sm" variant="ghost" on:click={() => showPoolList = false}>
+        <Button size="sm" variant="ghost" onclick={() => showPoolList = false}>
           <X class="h-4 w-4" />
         </Button>
       </div>
@@ -1977,7 +2190,7 @@
                   <div class="ml-4">
                     <Button
                       size="sm"
-                      on:click={() => joinPool(pool)}
+                      onclick={() => joinPool(pool)}
                       disabled={pool.status !== 'Active' || $miningState.isMining}
                     >
                       {$t('mining.poolDetails.join')}
@@ -1999,7 +2212,7 @@
     <Card class="w-full max-w-2xl">
       <div class="p-4 border-b flex items-center justify-between">
         <h2 class="text-lg font-semibold">{$t('mining.poolDetails.createNew')}</h2>
-        <Button size="sm" variant="ghost" on:click={() => showCreatePool = false}>
+        <Button size="sm" variant="ghost" onclick={() => showCreatePool = false}>
           <X class="h-4 w-4" />
         </Button>
       </div>
@@ -2079,10 +2292,10 @@
         </div>
 
         <div class="flex justify-end gap-2 pt-4">
-          <Button variant="outline" on:click={() => showCreatePool = false}>
+          <Button variant="outline" onclick={() => showCreatePool = false}>
             {$t('mining.poolDetails.cancel')}
           </Button>
-          <Button on:click={createNewPool} disabled={!newPool.name.trim()}>
+          <Button onclick={createNewPool} disabled={!newPool.name.trim()}>
             {$t('mining.createPool')}
           </Button>
         </div>
@@ -2090,3 +2303,5 @@
     </Card>
   </div>
 {/if}
+
+
