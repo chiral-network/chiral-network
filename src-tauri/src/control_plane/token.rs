@@ -311,7 +311,10 @@ fn decode_json_part<T: for<'de> Deserialize<'de>>(part: &str) -> Result<T, Resum
 
 #[cfg(test)]
 mod tests {
-    use super::*;\n    use crate::control_plane::jwks::{Jwk, JwkDocument, JwksError, JwksFetchResult, JwksFetcher};\n    use async_trait::async_trait;\n    use rand::rngs::OsRng;
+    use super::*;
+    use crate::control_plane::jwks::{Jwk, JwkDocument, JwksError, JwksFetchResult, JwksFetcher};
+    use async_trait::async_trait;
+    use rand::rngs::OsRng;
 
     struct MockFetcher {
         doc: JwkDocument,
@@ -462,4 +465,3 @@ mod tests {
         assert!(matches!(err, ResumeTokenError::ClockSkew));
     }
 }
-

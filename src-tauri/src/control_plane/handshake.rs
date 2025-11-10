@@ -93,7 +93,7 @@ impl Default for LeaseRenewalPolicy {
 impl LeaseRenewalPolicy {
     pub fn compute_trigger_instant(&self, window: &LeaseWindow) -> DateTime<Utc> {
         let lease_len = window.duration();
-        let mut lead = lease_len.mul_f64(self.lead_time_fraction);
+        let mut lead = scale_duration(lease_len, self.lead_time_fraction);
         if lead < self.min_lead_time {
             lead = self.min_lead_time;
         }
@@ -111,7 +111,7 @@ impl LeaseRenewalPolicy {
         }
         let mut rng = OsRng;
         let ratio = rng.gen_range(0.0..self.jitter_max_ratio.min(1.0));
-        base.mul_f64(ratio)
+        scale_duration(base, ratio)
     }
 }
 
@@ -201,7 +201,7 @@ impl HandshakeBackoff {
         }
         let mut rng = OsRng;
         let ratio = rng.gen_range(0.0..self.jitter_ratio.min(1.0));
-        base.mul_f64(ratio)
+        scale_duration(base, ratio)
     }
 }
 
@@ -261,4 +261,20 @@ mod tests {
         let reset_val = backoff.next_delay(HandshakeErrorKind::Timeout);
         assert!(reset_val <= Duration::seconds(5));
     }
+}
+
+fn scale_duration(duration: Duration, factor: f64) -> Duration {
+    if factor <= 0.0 || duration <= Duration::zero() {
+        return Duration::zero();
+    }
+    let millis = duration.num_milliseconds();
+    if millis <= 0 {
+        return Duration::zero();
+    }
+    let scaled = ((millis as f64) * factor).round();
+    if !scaled.is_finite() {
+        return duration;
+    }
+    let capped = scaled.clamp(0.0, i64::MAX as f64) as i64;
+    Duration::milliseconds(capped)
 }
