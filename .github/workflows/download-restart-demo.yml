@@ -106,17 +106,15 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Run tests (compile check + basic tests)
+      - name: Run tests (basic unit tests only)
         run: |
           cd src-tauri
-          # First check compilation
-          cargo check
-
-          # Run basic tests (non-snapshot tests only for CI speed)
-          cargo test test_download_state_human_readable -- --nocapture
-          cargo test test_error_codes -- --nocapture
-          cargo test test_download_error_human_readable -- --nocapture
-          cargo test test_download_metadata_version_validation -- --nocapture
+          # Run basic unit tests (non-snapshot tests only for CI speed)
+          # These tests don't require the Tauri app or frontend build
+          cargo test --lib test_download_state_human_readable -- --nocapture
+          cargo test --lib test_error_codes -- --nocapture
+          cargo test --lib test_download_error_human_readable -- --nocapture
+          cargo test --lib test_download_metadata_version_validation -- --nocapture
 
       - name: Upload test results
         if: always()
