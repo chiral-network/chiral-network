@@ -166,12 +166,11 @@ impl DownloadPersistence {
         bytes_already_downloaded: u64,
     ) -> Result<u64, PersistenceError> {
         // Ensure parent directory exists
-        if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent)?;
-        }
+        let parent = destination.parent().unwrap_or(destination);
+        fs::create_dir_all(parent)?;
         
-        // Check available disk space
-        let available = fs2::available_space(destination)?;
+        // Check available disk space on the parent directory (not the file itself)
+        let available = fs2::available_space(parent)?;
         let needed = expected_size.saturating_sub(bytes_already_downloaded);
         
         if available < needed {
