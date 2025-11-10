@@ -162,11 +162,11 @@ For publicly reachable peers with no NAT or firewall restrictions.
 Modern routers support automatic port forwarding protocols that enable NAT'd peers to become publicly reachable without manual configuration:
 
 - **UPnP (Universal Plug and Play)**: Industry-standard protocol for automatic port mapping
+  - **Built-in libp2p feature**: libp2p provides core UPnP functionality
   - Discovers IGD (Internet Gateway Device) on the local network via SSDP multicast
   - Requests external port mappings through SOAP/XML API
   - Router exposes internal service on its public IP address
   - Widely supported on consumer routers (check router settings: "UPnP" or "UPnP IGD")
-  - Integrated via libp2p's built-in UPnP behaviour for automatic handling
 
 **Benefits**:
 - Transforms NAT'd nodes into publicly reachable peers automatically
