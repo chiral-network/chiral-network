@@ -67,7 +67,7 @@
   let isGethInstalled = false
   let isStartingNode = false
   let isDownloading = false
-  let isCheckingGeth = true
+  let isCheckingGeth = false  // Start as false, will be set to true only when actually checking
   let downloadProgress = {
     downloaded: 0,
     total: 0,
@@ -972,24 +972,14 @@
       // In web mode, simulate that geth is not installed
       isGethInstalled = false
       isGethRunning = false
-      isCheckingGeth = false
       return
     }
 
     isCheckingGeth = true
     try {
       const status = await fetchGethStatus('./bin/geth-data', 1)
-      // If node is running from previous session, stop it for clean state
-      if (status.running) {
-        await invoke('stop_geth_node')
-        // Wait a moment for it to stop
-        await new Promise(resolve => setTimeout(resolve, 1000))
-        // Check status again
-        let updatedStatus = await fetchGethStatus('./bin/geth-data', 1)
-        applyGethStatus(updatedStatus)
-      } else {
-        applyGethStatus(status)
-      }
+      // Preserve the running state - don't stop the node if it's already running
+      applyGethStatus(status)
     } catch (error) {
       console.error('Failed to check geth status:', error)
     } finally {
@@ -1343,17 +1333,15 @@
     </div>
 
     <div class="space-y-3">
-      {#if isCheckingGeth}
-        <div class="text-center py-8">
-          <RefreshCw class="h-12 w-12 text-blue-500 mx-auto mb-2 animate-spin" />
-          <p class="text-sm text-muted-foreground mb-1">Checking if Geth is downloaded...</p>
-          <p class="text-xs text-muted-foreground">Please wait while we check your system</p>
-        </div>
-      {:else if !isGethInstalled}
+      {#if !isGethInstalled && !isGethRunning}
         <div class="text-center py-4">
           <Server class="h-12 w-12 text-muted-foreground mx-auto mb-2" />
-          <p class="text-sm text-muted-foreground mb-1">Geth not installed</p>
-          <p class="text-xs text-muted-foreground mb-3">Download and install the Chiral Network node</p>
+          <p class="text-sm text-muted-foreground mb-1">
+            {isCheckingGeth ? 'Checking...' : 'Geth not installed'}
+          </p>
+          {#if !isCheckingGeth}
+            <p class="text-xs text-muted-foreground mb-3">Download and install the Chiral Network node</p>
+          {/if}
           {#if downloadError}
             <div class="bg-red-500/10 border border-red-500/20 rounded-lg p-2 mb-3">
               <div class="flex items-center gap-2 justify-center">
@@ -1362,15 +1350,12 @@
               </div>
             </div>
           {/if}
-          <Button on:click={downloadGeth} disabled={isDownloading || isCheckingGeth}>
-            {#if isCheckingGeth}
-              <RefreshCw class="h-4 w-4 mr-2 animate-spin" />
-              Checking...
-            {:else}
+          {#if !isCheckingGeth}
+            <Button on:click={downloadGeth} disabled={isDownloading}>
               <Download class="h-4 w-4 mr-2" />
               Download Geth
-            {/if}
-          </Button>
+            </Button>
+          {/if}
         </div>
       {:else if isGethRunning}
         <div class="grid grid-cols-2 gap-4">
