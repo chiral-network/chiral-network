@@ -284,8 +284,7 @@ struct AppState {
     bittorrent_handler: Arc<bittorrent_handler::BitTorrentHandler>,
 }
 
-/// Tauri command to trigger a download.
-/// It takes a string identifier (like a magnet link) and uses the ProtocolManager.
+/// Tauri command to create a new Chiral account
 #[tauri::command]
 async fn create_chiral_account(state: State<'_, AppState>) -> Result<EthAccount, String> {
     let account = create_new_account()?;
