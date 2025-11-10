@@ -504,17 +504,9 @@
       "reason2": "Secure your funds with encrypted recovery phrase",
       "reason3": "Transfer coins to other users on the network",
       "createWallet": "Create New Wallet",
-      "skipForNow": "Skip for Now (Create Temporary Account)",
-      "skipWarning": "If you skip, a temporary account will be created when you start mining. You can create a permanent wallet anytime from the Account page.",
-      "skipped": "First-run setup skipped. A temporary account will be created when needed.",
+      "requiresWallet": "A wallet is required to mine, earn rewards, and transfer Chiral. Your recovery phrase will be generated in the next step.",
       "accountCreated": "Wallet created successfully! You can now start mining.",
       "error": "Failed to create account. Please try again."
-    },
-    "upgradeAccount": {
-      "title": "Secure Your Mining Rewards!",
-      "description": "You're using a temporary account. Save it to an encrypted keystore or create an HD wallet to protect your mining rewards from being lost.",
-      "saveToKeystore": "Save to Keystore",
-      "createHDWallet": "Create HD Wallet"
     }
   },
   "wallet": {
@@ -1044,6 +1036,42 @@
       "description": "You're mining with a temporary account. Mining rewards will be lost when you close the app unless you save your account.",
       "createWallet": "Create Permanent Wallet",
       "goToAccount": "Go to Account Page"
+    },
+    "calculator": {
+      "title": "Profitability Calculator",
+      "show": "Show",
+      "hide": "Hide",
+      "electricityCost": "Electricity Cost ($/kWh)",
+      "electricityCostHint": "Average US rate: $0.12/kWh",
+      "powerUsage": "Estimated Power Usage (Watts)",
+      "powerUsageHint": "CPU mining typically 50-150W",
+      "chiralPrice": "Chiral Price (USD)",
+      "chiralPriceHint": "Update with current market price",
+      "hashRate": "Hash Rate (H/s)",
+      "useCurrent": "Use Current",
+      "usingCurrent": "Using your current mining hashrate",
+      "enterCustom": "Enter custom hashrate",
+      "estimatedProfitability": "Estimated Profitability",
+      "daily": "Daily",
+      "monthly": "Monthly",
+      "yearly": "Yearly",
+      "revenue": "Revenue",
+      "cost": "Cost",
+      "profitMargin": "Profit Margin",
+      "profitable": "✓ Profitable",
+      "notProfitable": "✗ Not Profitable",
+      "profitableDesc": "Mining earnings exceed electricity costs",
+      "notProfitableDesc": "Electricity costs exceed mining earnings",
+      "calculationDetails": "Calculation Details:",
+      "yourHashrate": "Your hashrate",
+      "networkDiff": "Network difficulty",
+      "expectedBlocks": "Expected blocks/day",
+      "chiralEach": "Chiral each",
+      "powerConsumption": "Power consumption",
+      "kwhPerDay": "kWh/day",
+      "breakEvenPrice": "Break-even Chiral price",
+      "perChiral": "/Chiral",
+      "enableMining": "Enable mining to see profitability estimates"
     }
   },
   "reputation": {
@@ -1423,6 +1451,70 @@
       "thu": "Thu",
       "fri": "Fri",
       "sat": "Sat"
+    }
+  },
+  "downloadHistory": {
+    "title": "Download History",
+    "subtitle": "View and manage your download history",
+    "showHistory": "Show History",
+    "hideHistory": "Hide History",
+    "empty": "No download history yet",
+    "emptyDescription": "Completed, failed, and canceled downloads will appear here",
+    "search": "Search history...",
+    "filterAll": "All",
+    "filterCompleted": "Completed",
+    "filterFailed": "Failed",
+    "filterCanceled": "Canceled",
+    "redownload": "Re-download",
+    "remove": "Remove",
+    "clearHistory": "Clear History",
+    "clearFailed": "Clear Failed",
+    "exportHistory": "Export History",
+    "importHistory": "Import History",
+    "confirmClear": "Are you sure you want to clear all download history? This cannot be undone.",
+    "confirmClearFailed": "Clear all failed downloads from history?",
+    "stats": {
+      "total": "Total Downloads",
+      "completed": "Completed",
+      "failed": "Failed",
+      "canceled": "Canceled",
+      "totalSize": "Total Size",
+      "totalPrice": "Total Spent"
+    },
+    "messages": {
+      "historyCleared": "Download history cleared",
+      "failedCleared": "Failed downloads cleared",
+      "entryRemoved": "Entry removed from history",
+      "exportSuccess": "History exported successfully",
+      "importSuccess": "Imported {count} history entries",
+      "importError": "Failed to import history: {error}",
+      "redownloadStarted": "Re-downloading {name}..."
+    }
+  },
+  "settingsBackup": {
+    "title": "Backup & Restore",
+    "description": "Export or import your settings configuration",
+    "export": "Export Settings",
+    "import": "Import Settings",
+    "exportButton": "Export Settings",
+    "importButton": "Import Settings",
+    "downloadBackup": "Download Backup File",
+    "selectFile": "Select Backup File",
+    "merge": "Merge with Current Settings",
+    "replace": "Replace All Settings",
+    "autoBackup": "Automatic Backups",
+    "autoBackupDescription": "Automatic backups are created before major changes",
+    "restoreAutoBackup": "Restore",
+    "messages": {
+      "exportSuccess": "Settings exported successfully",
+      "exportError": "Failed to export settings: {error}",
+      "importSuccess": "Settings imported successfully",
+      "importWarnings": "Settings imported with warnings: {warnings}",
+      "importError": "Failed to import settings: {error}",
+      "autoBackupCreated": "Automatic backup created",
+      "autoBackupRestored": "Settings restored from backup",
+      "invalidFile": "Invalid backup file format",
+      "confirmReplace": "This will replace all current settings. Continue?"
     }
   }
 }

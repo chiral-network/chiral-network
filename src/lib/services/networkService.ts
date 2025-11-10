@@ -15,9 +15,6 @@ export function setupDhtEventListeners(): void {
   // Listen for peer connections
   listen<{ peer_id: string; address: string }>("dht_peer_connected", () => {
     dhtConnectedPeerCount++;
-    console.log(
-      `✅ DHT peer connected. Total connected peers: ${dhtConnectedPeerCount}`
-    );
     updateNetworkStatusFromDht();
   }).catch((err) =>
     console.error("Failed to listen to dht_peer_connected:", err)
@@ -26,9 +23,6 @@ export function setupDhtEventListeners(): void {
   // Listen for peer disconnections
   listen<{ peer_id: string }>("dht_peer_disconnected", () => {
     dhtConnectedPeerCount = Math.max(0, dhtConnectedPeerCount - 1);
-    console.log(
-      `❌ DHT peer disconnected. Total connected peers: ${dhtConnectedPeerCount}`
-    );
     updateNetworkStatusFromDht();
   }).catch((err) =>
     console.error("Failed to listen to dht_peer_disconnected:", err)
@@ -82,7 +76,6 @@ export function startNetworkMonitoring(): () => void {
 
   // Return cleanup function
   return () => {
-    console.log("⏹️ Stopping network status monitoring");
     clearInterval(interval);
   };
 }
