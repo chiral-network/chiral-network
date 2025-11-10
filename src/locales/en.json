@@ -1192,7 +1192,7 @@
       "title": "Relay Health & Monitoring"
     },
     "errors": {
-      "dhtNotRunning": "DHT is not running. Please start the network first from the Network page.",
+      "dhtNotRunning": "DHT is not running. Please start the network from the Network page.",
       "toggleFailed": "Failed to toggle relay server: {error}"
     },
     "monitor": {
