@@ -172,6 +172,7 @@ use libp2p::{
     ping::{self, Behaviour as Ping, Event as PingEvent},
     relay, request_response as rr,
     swarm::{behaviour::toggle, NetworkBehaviour, SwarmEvent},
+    upnp,
     Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
 };
 use rand::rngs::OsRng;
@@ -207,7 +208,8 @@ struct DhtBehaviour {
     autonat_server: toggle::Toggle<v2::server::Behaviour>,
     relay_client: relay::client::Behaviour,
     relay_server: toggle::Toggle<relay::Behaviour>,
-    dcutr: dcutr::Behaviour,
+    dcutr: toggle::Toggle<dcutr::Behaviour>,
+    upnp: toggle::Toggle<upnp::tokio::Behaviour>,
 }
 #[derive(Debug)]
 pub enum DhtCommand {
@@ -5516,6 +5518,7 @@ impl DhtService {
         enable_autorelay: bool,
         preferred_relays: Vec<String>,
         enable_relay_server: bool,
+        enable_upnp: bool,
         blockstore_db_path: Option<&Path>,
     ) -> Result<Self, Box<dyn Error>> {
         // ---- Hotfix: finalize AutoRelay flag (bootstrap OFF + ENV OFF)
@@ -5693,6 +5696,36 @@ impl DhtService {
         };
         let relay_server_toggle = toggle::Toggle::from(relay_server_behaviour);
 
+<<<<<<< HEAD
+=======
+        // UPnP configuration for automatic port mapping
+        let upnp_behaviour = if enable_upnp {
+            info!("🌐 UPnP enabled - attempting automatic port mapping");
+            Some(upnp::tokio::Behaviour::default())
+        } else {
+            info!("UPnP disabled");
+            None
+        };
+        let upnp_toggle = toggle::Toggle::from(upnp_behaviour);
+
+        let mut behaviour = Some(DhtBehaviour {
+            kademlia,
+            identify,
+            mdns: mdns_toggle,
+            bitswap,
+            ping: Ping::new(ping::Config::new()),
+            proxy_rr,
+            webrtc_signaling_rr,
+            key_request,
+            autonat_client: autonat_client_toggle,
+            autonat_server: autonat_server_toggle,
+            relay_client: relay_client_behaviour,
+            relay_server: relay_server_toggle,
+            dcutr: dcutr_toggle,
+            upnp: upnp_toggle,
+        });
+
+>>>>>>> 5bb6e54 (feat(upnp): implement UPnP NAT traversal in Rust backend)
         let bootstrap_set: HashSet<String> = bootstrap_nodes.iter().cloned().collect();
         let mut autonat_targets: HashSet<String> = if enable_autonat && !autonat_servers.is_empty()
         {
@@ -7588,6 +7621,7 @@ mod tests {
             false,      // enable_autorelay
             Vec::new(), // preferred_relays
             false,      // enable_relay_server
+            false,      // enable_upnp (disabled for testing)
             None,
         )
         .await
