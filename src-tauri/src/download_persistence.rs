@@ -13,7 +13,7 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 use thiserror::Error;
@@ -104,7 +104,7 @@ impl Default for PersistenceConfig {
     }
 }
 
-/// Global registry of file locks to prevent concurrent writes
+// Global registry of file locks to prevent concurrent writes
 lazy_static::lazy_static! {
     static ref FILE_LOCKS: StdMutex<HashMap<PathBuf, Arc<StdMutex<()>>>> = StdMutex::new(HashMap::new());
 }
@@ -516,9 +516,15 @@ mod tests {
         let result = persistence.preflight_storage_check(&dest_path, 1024, 0);
         assert!(result.is_ok());
         
-        // Should fail (unreasonable size)
-        let result = persistence.preflight_storage_check(&dest_path, u64::MAX, 0);
-        assert!(matches!(result, Err(PersistenceError::DiskFull { .. })));
+        // Get actual available space
+        let available = fs2::available_space(&dest_path).unwrap();
+        
+        // Should fail when requesting more than available
+        // Request available + 1GB to ensure it exceeds capacity
+        let excessive_size = available.saturating_add(1024 * 1024 * 1024);
+        let result = persistence.preflight_storage_check(&dest_path, excessive_size, 0);
+        assert!(matches!(result, Err(PersistenceError::DiskFull { .. })),
+                "Should fail when requesting {} bytes (available: {} bytes)", excessive_size, available);
     }
     
     #[test]
