@@ -88,6 +88,8 @@
       "retry": "Retry Connection",
       "connect": "Connect to DHT Network",
       "stop": "Stop DHT",
+      "cancel": "Cancel Connection",
+      "connectionCancelled": "Connection cancelled",
       "log": "Connection Log",
       "connectingToBootstrap": "Connecting to bootstrap node...",
       "attempt": "Attempt #{connectionAttempts}",

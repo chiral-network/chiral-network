@@ -96,6 +96,7 @@
   let natStatusUnlisten: (() => void) | null = null
   let lastNatState: NatReachabilityState | null = null
   let lastNatConfidence: NatConfidence | null = null
+  let cancelConnection = false
 
   // Always preserve connections - no unreliable time-based detection
   
@@ -322,7 +323,12 @@
     if (!isTauri) {
       // Mock DHT connection for web
       dhtStatus = 'connecting'
+      cancelConnection = false
       setTimeout(() => {
+        if (cancelConnection) {
+          dhtStatus = 'disconnected'
+          return
+        }
         dhtStatus = 'connected'
         dhtPeerId = '12D3KooWMockPeerIdForWebDemo123456789'
       }, 1000)
@@ -331,6 +337,7 @@
     
     try {
       dhtError = null
+      cancelConnection = false
       
       // Check if DHT is already running in backend
       const isRunning = await invoke<boolean>('is_dht_running').catch(() => false)
@@ -370,6 +377,13 @@
       // Add a small delay to show the connecting state
       await new Promise(resolve => setTimeout(resolve, 500))
       
+      // Check if user cancelled during the delay
+      if (cancelConnection) {
+        dhtStatus = 'disconnected'
+        dhtEvents = [...dhtEvents, '⚠ Connection cancelled by user']
+        return
+      }
+      
       const peerId = await dhtService.start({
         port: dhtPort,
         bootstrapNodes: dhtBootstrapNodes,
@@ -395,6 +409,13 @@
         
         // Add another small delay to show the connection attempt
         await new Promise(resolve => setTimeout(resolve, 1000))
+        
+        // Check if user cancelled during connection attempt
+        if (cancelConnection) {
+          await stopDht()
+          dhtEvents = [...dhtEvents, '⚠ Connection cancelled by user']
+          return
+        }
         
         try {
           // Try connecting to the first available bootstrap node
@@ -561,6 +582,13 @@
     }, 2000) as unknown as number
   }
   
+  function cancelDhtConnection() {
+    cancelConnection = true
+    dhtStatus = 'disconnected'
+    dhtEvents = [...dhtEvents, '⚠ Connection cancelled by user']
+    showToast($t('network.dht.connectionCancelled'), 'info')
+  }
+
   async function stopDht() {
     if (!isTauri) {
       dhtStatus = 'disconnected'
@@ -571,6 +599,7 @@
       copiedListenAddr = null
       lastNatState = null
       lastNatConfidence = null
+      cancelConnection = false
       return
     }
     
@@ -591,6 +620,7 @@
       copiedListenAddr = null
       lastNatState = null
       lastNatConfidence = null
+      cancelConnection = false
       
       // Small delay to ensure port is fully released
       await new Promise(resolve => setTimeout(resolve, 500))
@@ -1459,6 +1489,12 @@
           <p class="text-sm text-muted-foreground">{$t('network.dht.connectingToBootstrap')}</p>
           <p class="text-xs text-muted-foreground mt-1">{dhtBootstrapNode}</p>
           <p class="text-xs text-yellow-500 mt-2">{$t('network.dht.attempt', { values: { connectionAttempts: connectionAttempts } })}</p>
+          <div class="mt-4">
+            <Button variant="outline" size="sm" on:click={cancelDhtConnection}>
+              <Square class="h-4 w-4 mr-2" />
+              {$t('network.dht.cancel')}
+            </Button>
+          </div>
         </div>
       {:else}
         <div class="space-y-3">
