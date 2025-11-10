@@ -579,9 +579,6 @@
       isTemporaryAccount = true
       showTemporaryAccountWarning = true
 
-      // Track that this account has been used for mining
-      localStorage.setItem('chiral_temp_account_mining', 'true')
-
       return tempAccount
     } catch (e) {
       console.error('Failed to create temporary account:', e)
