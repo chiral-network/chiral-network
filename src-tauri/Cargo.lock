@@ -1137,6 +1137,7 @@ dependencies = [
  "hmac",
  "if-addrs",
  "lazy_static",
+ "libc",
  "libp2p",
  "md4",
  "memmap2",

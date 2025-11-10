@@ -122,32 +122,57 @@ impl DownloadPersistence {
     
     /// Validate that the destination path is sandboxed under downloads_root
     pub fn validate_destination_path(&self, dest: &Path) -> Result<PathBuf, PersistenceError> {
-        // Canonicalize both paths to resolve symlinks and '..' components
-        let canonical_dest = dest.canonicalize()
-            .or_else(|_| {
-                // If path doesn't exist yet, canonicalize parent and append filename
-                let parent = dest.parent().ok_or_else(|| {
-                    PersistenceError::PathTraversal("no parent directory".to_string())
-                })?;
-                let parent_canonical = parent.canonicalize()
-                    .map_err(|e| PersistenceError::Io(e))?;
-                let filename = dest.file_name().ok_or_else(|| {
-                    PersistenceError::PathTraversal("no filename".to_string())
-                })?;
-                Ok::<PathBuf, PersistenceError>(parent_canonical.join(filename))
-            })?;
-        
+        // Ensure downloads_root exists and get its canonical path
+        fs::create_dir_all(&self.config.downloads_root)?;
         let canonical_root = self.config.downloads_root.canonicalize()
             .map_err(|e| PersistenceError::Io(e))?;
         
-        // Check if destination is under downloads_root
-        if !canonical_dest.starts_with(&canonical_root) {
+        // Try to canonicalize the destination if it exists, otherwise normalize it
+        let normalized_dest = if let Ok(canonical_dest) = dest.canonicalize() {
+            // Path exists, use canonical form (resolves symlinks like /var -> /private/var on macOS)
+            canonical_dest
+        } else {
+            // Path doesn't exist yet, normalize it manually
+            if dest.is_absolute() {
+                self.normalize_path(dest)
+            } else {
+                // If relative, make it absolute relative to downloads_root
+                self.normalize_path(&canonical_root.join(dest))
+            }
+        };
+        
+        // Check if normalized destination is under downloads_root
+        if !normalized_dest.starts_with(&canonical_root) {
             return Err(PersistenceError::PathTraversal(
-                format!("{} is not under {}", canonical_dest.display(), canonical_root.display())
+                format!("{} is not under {}", normalized_dest.display(), canonical_root.display())
             ));
         }
         
-        Ok(canonical_dest)
+        Ok(normalized_dest)
+    }
+    
+    /// Normalize a path by resolving '..' components without requiring the path to exist
+    fn normalize_path(&self, path: &Path) -> PathBuf {
+        let mut components = Vec::new();
+        
+        for component in path.components() {
+            match component {
+                std::path::Component::ParentDir => {
+                    // Pop the last component if it's not already at root
+                    if !components.is_empty() {
+                        components.pop();
+                    }
+                }
+                std::path::Component::CurDir => {
+                    // Skip current directory references
+                }
+                _ => {
+                    components.push(component);
+                }
+            }
+        }
+        
+        components.iter().collect()
     }
     
     /// Get paths for .part and .meta.json files
@@ -515,8 +540,8 @@ mod tests {
         let result = persistence.preflight_storage_check(&dest_path, 1024, 0);
         assert!(result.is_ok());
         
-        // Get actual available space
-        let available = fs2::available_space(&dest_path).unwrap();
+        // Get actual available space on the temp directory
+        let available = fs2::available_space(temp_dir.path()).unwrap();
         
         // Should fail when requesting more than available
         // Request available + 1GB to ensure it exceeds capacity

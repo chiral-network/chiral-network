@@ -8,11 +8,9 @@
 
 use chiral_network::download_persistence::{
     DownloadMetadata, DownloadPersistence, PartFileWriter, PersistenceConfig, PersistenceError,
-    DEFAULT_FSYNC_INTERVAL,
 };
 use std::fs::{self, File};
 use std::io::{Read, Write};
-use std::path::PathBuf;
 use tempfile::TempDir;
 
 #[test]
