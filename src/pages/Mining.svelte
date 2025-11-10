@@ -1531,13 +1531,13 @@
     <div class="flex items-center justify-between mb-4">
       <div class="flex items-center gap-2">
         <Calculator class="w-5 h-5" />
-        <h2 class="text-lg font-semibold">Profitability Calculator</h2>
+        <h2 class="text-lg font-semibold">{$t('mining.calculator.title')}</h2>
       </div>
       <button
         onclick={() => showCalculator = !showCalculator}
         class="px-3 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors text-sm"
       >
-        {showCalculator ? 'Hide' : 'Show'} Calculator
+        {showCalculator ? $t('mining.calculator.hide') : $t('mining.calculator.show')} {$t('mining.calculator.title')}
       </button>
     </div>
 
@@ -1547,7 +1547,7 @@
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pb-4 border-b">
           <div>
             <label for="electricity-cost" class="block text-sm font-medium mb-1.5">
-              Electricity Cost ($/kWh)
+              {$t('mining.calculator.electricityCost')}
             </label>
             <input
               id="electricity-cost"
@@ -1558,12 +1558,12 @@
               class="w-full px-3 py-2 rounded border bg-background"
               placeholder="0.12"
             />
-            <p class="text-xs text-muted-foreground mt-1">Average US rate: $0.12/kWh</p>
+            <p class="text-xs text-muted-foreground mt-1">{$t('mining.calculator.electricityCostHint')}</p>
           </div>
 
           <div>
             <label for="power-usage" class="block text-sm font-medium mb-1.5">
-              Estimated Power Usage (Watts)
+              {$t('mining.calculator.powerUsage')}
             </label>
             <input
               id="power-usage"
@@ -1574,12 +1574,12 @@
               class="w-full px-3 py-2 rounded border bg-background"
               placeholder="100"
             />
-            <p class="text-xs text-muted-foreground mt-1">CPU mining typically 50-150W</p>
+            <p class="text-xs text-muted-foreground mt-1">{$t('mining.calculator.powerUsageHint')}</p>
           </div>
 
           <div>
             <label for="chiral-price" class="block text-sm font-medium mb-1.5">
-              <DollarSign class="w-3 h-3 inline" /> Chiral Price (USD)
+              <DollarSign class="w-3 h-3 inline" /> {$t('mining.calculator.chiralPrice')}
             </label>
             <input
               id="chiral-price"
@@ -1590,12 +1590,12 @@
               class="w-full px-3 py-2 rounded border bg-background"
               placeholder="0.50"
             />
-            <p class="text-xs text-muted-foreground mt-1">Update with current market price</p>
+            <p class="text-xs text-muted-foreground mt-1">{$t('mining.calculator.chiralPriceHint')}</p>
           </div>
 
           <div>
             <label for="calculator-hashrate" class="block text-sm font-medium mb-1.5">
-              Hash Rate (H/s)
+              {$t('mining.calculator.hashRate')}
             </label>
             <div class="flex gap-2">
               <input
@@ -1619,32 +1619,32 @@
                   }}
                   class="w-4 h-4"
                 />
-                <span class="text-sm whitespace-nowrap">Use Current</span>
+                <span class="text-sm whitespace-nowrap">{$t('mining.calculator.useCurrent')}</span>
               </label>
             </div>
             <p class="text-xs text-muted-foreground mt-1">
-              {useCurrentHashRate ? 'Using your current mining hashrate' : 'Enter custom hashrate'}
+              {useCurrentHashRate ? $t('mining.calculator.usingCurrent') : $t('mining.calculator.enterCustom')}
             </p>
           </div>
         </div>
 
         <!-- Results Section -->
         <div class="space-y-3">
-          <h3 class="text-sm font-semibold text-muted-foreground">Estimated Profitability</h3>
+          <h3 class="text-sm font-semibold text-muted-foreground">{$t('mining.calculator.estimatedProfitability')}</h3>
           
           <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div class="p-3 rounded border bg-card">
-              <p class="text-xs text-muted-foreground mb-1">Daily</p>
+              <p class="text-xs text-muted-foreground mb-1">{$t('mining.calculator.daily')}</p>
               <p class="text-lg font-semibold {isProfitable ? 'text-green-600' : 'text-red-600'}">
                 ${dailyProfit.toFixed(2)}
               </p>
               <p class="text-xs text-muted-foreground mt-1">
-                Revenue: ${dailyRevenue.toFixed(2)} - Cost: ${dailyPowerCostUSD.toFixed(2)}
+                {$t('mining.calculator.revenue')}: ${dailyRevenue.toFixed(2)} - {$t('mining.calculator.cost')}: ${dailyPowerCostUSD.toFixed(2)}
               </p>
             </div>
 
             <div class="p-3 rounded border bg-card">
-              <p class="text-xs text-muted-foreground mb-1">Monthly</p>
+              <p class="text-xs text-muted-foreground mb-1">{$t('mining.calculator.monthly')}</p>
               <p class="text-lg font-semibold {isProfitable ? 'text-green-600' : 'text-red-600'}">
                 ${monthlyProfit.toFixed(2)}
               </p>
@@ -1654,7 +1654,7 @@
             </div>
 
             <div class="p-3 rounded border bg-card">
-              <p class="text-xs text-muted-foreground mb-1">Yearly</p>
+              <p class="text-xs text-muted-foreground mb-1">{$t('mining.calculator.yearly')}</p>
               <p class="text-lg font-semibold {isProfitable ? 'text-green-600' : 'text-red-600'}">
                 ${yearlyProfit.toFixed(2)}
               </p>
@@ -1667,15 +1667,15 @@
           <div class="flex items-center justify-between p-3 rounded border {isProfitable ? 'bg-green-50 dark:bg-green-950 border-green-200 dark:border-green-800' : 'bg-red-50 dark:bg-red-950 border-red-200 dark:border-red-800'}">
             <div>
               <p class="text-sm font-medium {isProfitable ? 'text-green-900 dark:text-green-100' : 'text-red-900 dark:text-red-100'}">
-                {isProfitable ? '✓ Profitable' : '✗ Not Profitable'}
+                {isProfitable ? $t('mining.calculator.profitable') : $t('mining.calculator.notProfitable')}
               </p>
               <p class="text-xs {isProfitable ? 'text-green-700 dark:text-green-300' : 'text-red-700 dark:text-red-300'}">
-                {isProfitable ? 'Mining earnings exceed electricity costs' : 'Electricity costs exceed mining earnings'}
+                {isProfitable ? $t('mining.calculator.profitableDesc') : $t('mining.calculator.notProfitableDesc')}
               </p>
             </div>
             <div class="text-right">
               <p class="text-sm font-medium {isProfitable ? 'text-green-900 dark:text-green-100' : 'text-red-900 dark:text-red-100'}">
-                Profit Margin
+                {$t('mining.calculator.profitMargin')}
               </p>
               <p class="text-lg font-bold {isProfitable ? 'text-green-700 dark:text-green-300' : 'text-red-700 dark:text-red-300'}">
                 {profitMargin.toFixed(1)}%
@@ -1685,16 +1685,16 @@
 
           {#if calculatorHashRate > 0 && networkDifficulty}
             <div class="text-xs text-muted-foreground space-y-1 p-3 rounded bg-muted/30">
-              <p><strong>Calculation Details:</strong></p>
-              <p>• Your hashrate: {formatHashRate(calculatorHashRate)}</p>
-              <p>• Network difficulty: {formatDifficulty(networkDifficulty)}</p>
-              <p>• Expected blocks/day: {dailyBlocks.toFixed(4)} ({blockReward} Chiral each)</p>
-              <p>• Power consumption: {dailyPowerCostKwh.toFixed(2)} kWh/day</p>
-              <p>• Break-even Chiral price: ${dailyPowerCostUSD > 0 ? (dailyPowerCostUSD / (dailyBlocks * blockReward)).toFixed(4) : '0.0000'}/Chiral</p>
+              <p><strong>{$t('mining.calculator.calculationDetails')}</strong></p>
+              <p>• {$t('mining.calculator.yourHashrate')}: {formatHashRate(calculatorHashRate)}</p>
+              <p>• {$t('mining.calculator.networkDiff')}: {formatDifficulty(networkDifficulty)}</p>
+              <p>• {$t('mining.calculator.expectedBlocks')}: {dailyBlocks.toFixed(4)} ({blockReward} {$t('mining.calculator.chiralEach')})</p>
+              <p>• {$t('mining.calculator.powerConsumption')}: {dailyPowerCostKwh.toFixed(2)} {$t('mining.calculator.kwhPerDay')}</p>
+              <p>• {$t('mining.calculator.breakEvenPrice')}: ${dailyPowerCostUSD > 0 ? (dailyPowerCostUSD / (dailyBlocks * blockReward)).toFixed(4) : '0.0000'}{$t('mining.calculator.perChiral')}</p>
             </div>
           {:else}
             <div class="text-sm text-muted-foreground text-center py-4">
-              Enable mining to see profitability estimates
+              {$t('mining.calculator.enableMining')}
             </div>
           {/if}
         </div>
