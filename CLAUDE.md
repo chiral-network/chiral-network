@@ -43,6 +43,7 @@ Chiral Network is a decentralized peer-to-peer file sharing application that com
   - mDNS for local peer discovery
 - **Noise Protocol**: Cryptographic transport security
 - **Bitswap Protocol**: Efficient block exchange
+- **LevelDB Block Storage**: Content-addressed storage for file chunks (rusty-leveldb 3.0)
 - **SOCKS5 Proxy**: Privacy-focused traffic routing
 
 #### Blockchain & Security
@@ -178,6 +179,27 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
   - Circuit relay support
   - Observed address tracking
   - Health monitoring
+
+### 5.5. LevelDB Block Storage
+- **Location**: `src-tauri/src/leveldb_blockstore.rs`
+- **Database**: rusty-leveldb 3.0 (pure Rust implementation)
+- **Purpose**: Content-addressed storage for file chunks in Bitswap protocol
+- **Architecture**:
+  - Implements `blockstore::Blockstore` trait for beetswap compatibility
+  - Async wrappers around synchronous LevelDB operations using tokio::spawn_blocking
+  - Thread-safe with Arc<Mutex<DB>> for concurrent access
+  - Fallback to in-memory storage when disk operations fail
+- **Configuration**:
+  - 128MB block cache for read performance
+  - 64MB write buffer for batch write efficiency
+  - Paranoid checks enabled for data integrity
+  - Snappy compression (default compressor ID 0)
+- **Storage Paths** (platform-specific):
+  - macOS: `~/Library/Application Support/com.chiral-network.chiral-network/blockstore_db`
+  - Linux: `~/.local/share/chiral-network/blockstore_db`
+  - Windows: `%APPDATA%\chiral-network\chiral-network\blockstore_db`
+- **Geth Alignment**: Follows Geth database patterns for better ecosystem compatibility
+- **Migration**: Replaced redb with LevelDB for industry-standard block storage
 
 ### 6. WebRTC File Transfers
 - **Service**: `src/lib/services/webrtcService.ts`
