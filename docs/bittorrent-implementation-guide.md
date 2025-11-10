@@ -1,6 +1,6 @@
 # BitTorrent Implementation Guideline
 
-This document provides a detailed guide for implementing BitTorrent support within the Chiral Network. It expands on the concepts outlined in the main `architecture.md` document and provides a descriptive overview of the implementation process.
+This document provides a detailed guide for implementing BitTorrent support within the Chiral Network using the `rqbit` library. It expands on the concepts outlined in the main `architecture.md` document and provides a descriptive overview of the implementation process.
 
 ## Core Concepts
 
@@ -21,128 +21,168 @@ The `ProtocolManager` is the central orchestrator for all data transfer protocol
 
 This section describes the purpose of the key files involved in the BitTorrent implementation.
 
-*   **`src-tauri/src/protocols/mod.rs`**: This file defines the `ProtocolHandler` trait, which provides a generic interface for all data transfer protocols. This ensures that the `ProtocolManager` can interact with different protocols in a consistent way. The `ProtocolHandler` trait should include methods for downloading, seeding, and managing transfers.
+*   **`src-tauri/src/protocols.rs`**: This file defines the `ProtocolHandler` trait, which provides a generic interface for all data transfer protocols. This ensures that the `ProtocolManager` can interact with different protocols in a consistent way.
 
-*   **`src-tauri/src/protocols/bittorrent.rs`**: This file will contain the `BitTorrentHandler` struct, which implements the `ProtocolHandler` trait. This struct will encapsulate all BitTorrent-specific logic, including:
-    *   Parsing magnet links and `.torrent` files.
-    *   Managing connections to trackers and the public BitTorrent DHT.
-    *   Handling the peer-wire protocol.
-    *   Downloading and verifying torrent pieces against their SHA-1 hashes.
-
-*   **`src-tauri/src/protocols/bittorrent/parser.rs`**: This file will contain the logic for parsing `.torrent` files and magnet URIs. It will extract information such as tracker URLs, file lists, and the info hash.
+*   **`src-tauri/src/bittorrent_handler.rs`**: This file contains the `BitTorrentHandler` struct, which implements the `ProtocolHandler` trait. This struct encapsulates all BitTorrent-specific logic, using the `rqbit` library.
 
 ## Libraries and Implementation Strategy
 
-The current implementation uses a set of focused libraries to handle specific parts of the BitTorrent protocol:
-
-*   **`bendy`**: For Bencode serialization and deserialization, used for parsing `.torrent` files.
-*   **`bip_handshake`**: For handling the initial BitTorrent protocol handshake between peers.
-*   **`bip_metainfo`**: For parsing and manipulating the metainfo of torrents.
-*   **`sha1`**: For calculating the SHA-1 hashes of torrent pieces for verification.
-*   **`url`**: For parsing magnet URIs.
-
-This approach provides a high degree of control over the implementation, but it also means that much of the BitTorrent peer-wire protocol, tracker communication, and piece management needs to be implemented manually. Implementing custom extensions like BEP 10 would also require significant effort.
-
-### Alternative: High-Level BitTorrent Library
-
-An alternative approach is to use a full-featured BitTorrent library like `rqbit`. `rqbit` is a BitTorrent client written in Rust that can be used as a library. 
+To ensure a robust and feature-complete BitTorrent implementation, the Chiral Network will use the `rqbit` library. `rqbit` is a high-level, asynchronous BitTorrent client library for Rust.
 
 **Advantages of using `rqbit`:**
 
 *   **Complete Solution:** It handles all the low-level details of the BitTorrent protocol, including the peer-wire protocol, tracker communication, and DHT integration.
-*   **BEP 10 Support:** It has built-in support for the BitTorrent Extension Protocol (BEP 10), which would greatly simplify the implementation of the Chiral client identification feature.
-*   **Faster Development:** Using a high-level library would significantly speed up the development process and reduce the amount of boilerplate code.
+*   **BEP 10 Support:** It has built-in support for the BitTorrent Extension Protocol (BEP 10), which will greatly simplify the implementation of the Chiral client identification feature.
+*   **Faster Development:** Using a high-level library will significantly speed up the development process and reduce the amount of boilerplate code.
+*   **Asynchronous API:** `rqbit`'s async API integrates well with the existing Tokio-based runtime in the Chiral Network.
 
-**Trade-offs:**
-
-The choice between these two approaches is a trade-off between control and speed of development. Building the client from lower-level components offers maximum flexibility, while using a high-level library like `rqbit` provides a faster path to a robust and feature-complete implementation.
+The previous approach of using low-level libraries like `bendy`, `bip_handshake`, and `bip_metainfo` will be abandoned in favor of `rqbit`.
 
 ## Code Implementation
 
-This section provides an overview of the Rust code for the BitTorrent implementation.
+This section provides an overview of the Rust code for the BitTorrent implementation using `rqbit`.
 
-### `ProtocolHandler` Trait in `src-tauri/src/protocols/mod.rs`
+### `ProtocolHandler` Trait in `src-tauri/src/protocols.rs`
 
 This file defines the `ProtocolHandler` trait, which is the core abstraction for all protocol implementations. The trait is defined as follows:
 
 ```rust
-pub trait ProtocolHandler {
+use async_trait::async_trait;
+use std::sync::Arc;
+
+/// A trait for handling a specific download/upload protocol like BitTorrent or HTTP.
+#[async_trait]
+pub trait ProtocolHandler: Send + Sync {
+    /// Returns the name of the protocol (e.g., "bittorrent", "http").
+    fn name(&self) -> &'static str;
+
+    /// Determines if this handler can process the given identifier (e.g., a URL or magnet link).
+    fn supports(&self, identifier: &str) -> bool;
+
+    /// Initiates a download for the given identifier.
     async fn download(&self, identifier: &str) -> Result<(), String>;
+
+    /// Starts seeding a file and returns an identifier (e.g., magnet link) for others to use.
     async fn seed(&self, file_path: &str) -> Result<String, String>;
 }
 ```
- 
-*   `download`: This function takes a generic `identifier` string, which can be a magnet link, an HTTP URL, an FTP URL, or a Chiral-specific content ID. Each protocol handler will be responsible for determining if it can handle the given identifier and then initiating the download.
-*   `seed`: This function takes a file path, begins seeding it, and returns a protocol-specific identifier (e.g., a magnet URI for BitTorrent, or a Chiral content ID for the native protocol).
 
-### `BitTorrentHandler` Implementation
+### `BitTorrentHandler` Implementation with `rqbit`
 
-The `BitTorrentHandler` will be the primary interface for all BitTorrent operations. If using a library like `rqbit`, the handler would be structured as follows:
+The `BitTorrentHandler` will be the primary interface for all BitTorrent operations. It will be implemented in `src-tauri/src/bittorrent_handler.rs` and will use `rqbit` to handle the core BitTorrent logic.
 
 ```rust
+use crate::protocols::ProtocolHandler;
+use async_trait::async_trait;
+use std::path::Path;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tracing::{info, error, instrument};
+use rqbit::session::Session;
+use rqbit::torrent::Torrent;
+use rqbit::AddTorrent;
+
+/// BitTorrent protocol handler implementing the ProtocolHandler trait.
+/// This handler manages BitTorrent downloads and seeding operations using rqbit.
 pub struct BitTorrentHandler {
-    rqbit_session: Arc<Mutex<rqbit::session::Session>>,
-    // Add other necessary fields, like a channel for sending events to the rest of the application
+    rqbit_session: Arc<Session>,
+    download_directory: std::path::PathBuf,
 }
 
+impl BitTorrentHandler {
+    /// Creates a new BitTorrentHandler with the specified download directory.
+    pub async fn new(download_directory: std::path::PathBuf) -> Result<Self, String> {
+        let session = Session::new(download_directory.clone()).await.map_err(|e| e.to_string())?;
+        info!("Initializing BitTorrentHandler with download directory: {:?}", download_directory);
+        Ok(Self {
+            rqbit_session: Arc::new(session),
+            download_directory,
+        })
+    }
+}
+
+#[async_trait]
 impl ProtocolHandler for BitTorrentHandler {
-    async fn download(&self, identifier: &str) -> Result<(), String> {
-        if identifier.starts_with("magnet:") || identifier.ends_with(".torrent") {
-            let session = self.rqbit_session.lock().await;
-            session.add_torrent(identifier).await.map_err(|e| e.to_string())?;
-            Ok(())
-        }else{
-            Err("Identifier not supported by BitTorrent handler".to_string())
-        }
+    fn name(&self) -> &'static str {
+        "bittorrent"
     }
 
+    fn supports(&self, identifier: &str) -> bool {
+        identifier.starts_with("magnet:") || identifier.ends_with(".torrent")
+    }
+
+    #[instrument(skip(self), fields(protocol = "bittorrent"))]
+    async fn download(&self, identifier: &str) -> Result<(), String> {
+        info!("Starting BitTorrent download for: {}", identifier);
+        let add_torrent = if identifier.starts_with("magnet:") {
+            AddTorrent::from_url(identifier)
+        } else {
+            AddTorrent::from_file(identifier).map_err(|e| e.to_string())?
+        };
+
+        let handle = self.rqbit_session.add_torrent(add_torrent, None).await.map_err(|e| e.to_string())?;
+
+        // TODO: Add logic to monitor the download progress and handle completion.
+        // This can be done by periodically checking the status of the torrent
+        // using the handle, or by using an event stream from rqbit if available.
+
+        info!("BitTorrent download started for: {}", identifier);
+        Ok(())
+    }
+
+    #[instrument(skip(self), fields(protocol = "bittorrent"))]
     async fn seed(&self, file_path: &str) -> Result<String, String> {
-        let session = self.rqbit_session.lock().await;
-        // Use rqbit's API to create and seed a new torrent
-        // It should return a magnet link that can be shared
-        let magnet_link = session.create_and_seed_torrent(file_path).await.map_err(|e| e.to_string())?;
+        info!("Starting to seed file: {}", file_path);
+
+        let path = Path::new(file_path);
+        if !path.exists() {
+            return Err(format!("File does not exist: {}", file_path));
+        }
+
+        let add_torrent = AddTorrent::from_file(file_path).map_err(|e| e.to_string())?;
+        let handle = self.rqbit_session.add_torrent(add_torrent, None).await.map_err(|e| e.to_string())?;
+        
+        let magnet_link = handle.magnet_link().await.ok_or("Couldn't get magnet link")?;
+
+        info!("Seeding started for file: {} with magnet link: {}", file_path, magnet_link);
+        
         Ok(magnet_link)
     }
 }
 ```
 
-The handler would also be responsible for subscribing to events from the `rqbit` session, such as progress updates and peer-related events, and translating them into Chiral-specific events that can be consumed by the UI and other services.
+## Refactoring the Existing Implementation
 
-### BitTorrent Parser in `src-tauri/src/protocols/bittorrent/parser.rs`
+The current `bittorrent_handler.rs` contains a simulated implementation. This will be replaced with the `rqbit`-based implementation above. The refactoring process will involve the following steps:
 
-This file contains the data structures and parsing logic for BitTorrent files. The key components are:
-
-*   **`Torrent` enum**: Represents either a `.torrent` file (`Torrent::File`) or a magnet link (`Torrent::Magnet`).
-*   **`TorrentMetadata` struct**: Holds the data from a `.torrent` file, including the tracker URL and file information.
-*   **`Magnet` struct**: Holds the data from a magnet link, including the info hash and tracker URLs.
-*   **`parse_torrent_file` function**: Parses a `.torrent` file from a given path and returns a `TorrentMetadata` struct.
-*   **`parse_magnet_uri` function**: Parses a magnet URI and returns a `Magnet` struct.
+1.  **Add `rqbit` to `Cargo.toml`:** Add `rqbit = "0.1"` to the `[dependencies]` section of `src-tauri/Cargo.toml`.
+2.  **Remove Old Helper Functions:** The helper functions `is_magnet_link`, `is_torrent_file`, `extract_info_hash`, `create_magnet_link`, and `verify_assembled_file_integrity` in `bittorrent_handler.rs` will be removed, as `rqbit` will handle this functionality.
+3.  **Update `BitTorrentHandler::new()`:** The constructor will be updated to initialize the `rqbit::Session`.
+4.  **Update `download()` and `seed()`:** The `download` and `seed` methods will be updated to use the `rqbit` session to add and manage torrents.
+5.  **Update Tests:** The existing tests in `bittorrent_handler.rs` will need to be updated to work with the new `rqbit`-based implementation. This will involve creating a real `rqbit` session for testing and asserting that torrents are added and managed correctly. The old tests for the helper functions can be removed.
 
 ## Implementation Details
 
 ### Core Backend (Rust Architecture & Cryptography)
 
-The backend implementation will involve creating a new module for the BitTorrent protocol. This includes scaffolding the module, defining a generic `ProtocolHandler` trait, and implementing a `BitTorrentHandler` that encapsulates all BitTorrent-specific logic. This handler will be responsible for parsing torrent files and magnet links, managing peer connections, and handling the piece exchange.
+The backend implementation will be centered around the `BitTorrentHandler` in `src-tauri/src/bittorrent_handler.rs`. This handler will be responsible for all BitTorrent-related operations, delegating the complex protocol logic to `rqbit`.
 
-Cryptographic verification is a critical part of this process. The implementation must include SHA-1 hash validation for torrent pieces to ensure data integrity. A shared utility for verifying chunks, compatible with both BitTorrent and Chiral's native file transfer, should be developed.
+Cryptographic verification of torrent pieces is handled automatically by `rqbit`, which validates the SHA-1 hash of each piece as it is downloaded.
 
 ### Networking / DHT Integration
 
-To integrate BitTorrent with the Chiral network, the DHT is extended to support torrent info hashes. This enables a dual lookup mechanism, allowing peers to be discovered via both Chiral's content IDs and BitTorrent info hashes. Peers can announce their ability to seed torrents, and this activity is integrated with the reputation system to reward reliable seeders.
+`rqbit` has its own DHT implementation, which will be used for peer discovery on the public BitTorrent network. To integrate with the Chiral network, the Chiral DHT will be used to find other Chiral peers who are seeding the same torrent.
 
 #### DHT Integration Features
 
-The DHT includes several key features to support BitTorrent integration:
+The Chiral DHT will be used to enhance, not replace, the public BitTorrent DHT.
 
-*   **Dual Lookup for `info_hash`**: The DHT supports a dual lookup mechanism, allowing files to be discovered using either the Chiral Merkle root or a BitTorrent `info_hash`. When a file is published with an `info_hash`, a secondary index is created in the DHT that maps the `info_hash` to the Merkle root. This allows users to download files using standard magnet links.
-
-*   **Protocol-Aware Peer Selection**: The peer selection process is protocol-aware. The `PeerMetrics` have been updated to track the protocols supported by each peer. This allows the client to filter peers based on the required transfer protocol, ensuring that it only connects to peers that can handle the desired transfer method (e.g., WebRTC, Bitswap).
-
-*   **DHT Key Namespacing**: To prevent conflicts between different types of records in the DHT, key namespacing is used. Prefixes such as `info_hash_idx::` and `keyword_idx::` are used to ensure that `info_hash` lookups, keyword searches, and other record types do not collide.
+*   **Dual Lookup for `info_hash`**: The Chiral DHT will store mappings from a torrent's `info_hash` to the Chiral peer IDs of seeders. This allows Chiral clients to find each other directly.
+*   **Protocol-Aware Peer Selection**: The `PeerMetrics` in the Chiral network will be used to prioritize Chiral peers found through the Chiral DHT.
 
 ### Frontend / UI (Svelte)
 
-The user interface will be updated to provide a seamless experience for BitTorrent users. A new "Torrents" section will be added to the application, with UI elements for adding downloads via magnet links or `.torrent` files. The UI will also display download progress, including metrics like ETA and peer count, and provide controls for filtering sources.
+The user interface will be updated to provide a seamless experience for BitTorrent users. A new "Torrents" section will be added to the application, with UI elements for adding downloads via magnet links or `.torrent` files. The UI will also display download progress, including metrics like ETA and peer count, and provide controls for filtering sources. This will be powered by events sent from the `BitTorrentHandler` to the frontend.
 
 ### System Integration (Tauri + ProtocolManager)
 
@@ -150,20 +190,52 @@ The `BitTorrentHandler` will be registered with the `ProtocolManager` to enable 
 
 The multi-source download engine will be updated to treat the BitTorrent swarm as a valid source, and to handle torrent pieces in addition to byte ranges. Fallback logic will be implemented to ensure that downloads can continue from other sources if the BitTorrent swarm is unavailable.
 
+### Event Handling and Progress Reporting
+
+**User Expectation:** Standard. A user expects to see real-time feedback on their downloads.
+
+For a good user experience, the UI must display real-time download progress.
+
+*   **Creating a Monitoring Task:** Spawn a separate asynchronous task for each download that periodically polls the `TorrentHandle` provided by `rqbit` for statistics (e.g., download speed, downloaded bytes, peer count).
+*   **Sending Events to the Frontend:** Use Tauri's event system to send progress updates from the monitoring task to the Svelte frontend.
+*   **Handling Different Torrent States:** Handle different states of a torrent, such as "downloading", "seeding", "paused", and "error", and communicate these states to the UI.
+
+### Configuration
+
+**User Expectation:** Advanced. Power users may expect to configure client behavior.
+
+A robust implementation should allow users to configure the BitTorrent client's behavior.
+
+*   **Exposing `rqbit` Options:** Expose `rqbit`'s session settings (e.g., listen port, download/upload rate limits) to the user through the Chiral Network's settings page.
+*   **Storing and Loading Configuration:** Use `tauri-plugin-store` to persist the user's BitTorrent settings and load them when the application starts.
+*   **Applying Configuration:** Apply the saved settings when initializing the `rqbit::Session`.
+
+### Advanced Error Handling
+
+**User Expectation:** Standard for basic error handling, Advanced for a more robust custom error handling system.
+
+*   **Custom Error Types:** Create custom error types for the `BitTorrentHandler` instead of just returning strings. This will make error handling more precise and easier to debug.
+*   **User-Friendly Error Messages:** Map different types of errors (e.g., invalid magnet link, file not found, tracker error) to user-friendly messages that can be displayed in the UI.
+
 ### Testing & Validation
 
-Thorough testing is essential to ensure the stability and performance of the BitTorrent implementation. This includes unit tests for the backend logic, integration tests to validate the interaction between the different components, and end-to-end tests using real torrents. Performance benchmarks will be conducted to compare download speeds with and without BitTorrent, and to evaluate the efficiency of the multi-source download engine.
+Thorough testing is essential to ensure the stability and performance of the `rqbit`-based implementation.
+
+*   **Unit Tests:** For the logic within `BitTorrentHandler` that is not directly part of `rqbit`.
+*   **Integration Tests:** To validate the interaction between `BitTorrentHandler`, `ProtocolManager`, and the Tauri API. This should include using a real `rqbit` session with a test torrent.
+*   **End-to-End Tests:** Using real torrents to test the full download and seed lifecycle.
+*   **Advanced Testing:** Write integration tests that mock the Tauri event system to verify that progress events are being sent correctly.
 
 ## Additional Future Implementations
 
-Beyond the core implementation, several other aspects are crucial for a robust and user-friendly BitTorrent integration.
-
 ### Payment Integration
 
-Given the decoupled payment architecture, the `BitTorrentHandler` must be able to track data transfer on a per-peer basis. This includes:
+**User Expectation:** Advanced. This is a core feature of the Chiral ecosystem, but it is an advanced implementation detail.
 
-*   **Data Transfer Accounting:** Accurately measure the amount of data uploaded and downloaded from each peer in the BitTorrent swarm.
-*   **Transaction Triggering:** Trigger payment transactions on the Chiral blockchain at appropriate intervals (e.g., after a certain amount of data has been transferred, or at the end of the download).
+Given the decoupled payment architecture, the `BitTorrentHandler` must be able to track data transfer on a per-peer basis.
+
+*   **Using `rqbit` Statistics:** Use the peer statistics from `rqbit` to track the amount of data transferred to and from each peer. The `TorrentHandle` provides methods to get peer information.
+*   **Triggering Payments:** The `BitTorrentHandler` should emit a `PaymentRequired` event with the peer's ID and the amount of data transferred. A separate payment service will handle the blockchain transaction.
 
 ### Multi-Source Download Strategy
 
@@ -172,79 +244,21 @@ The `multi_source_download.rs` engine should be enhanced with a sophisticated st
 *   **Parallel Downloading:** Download different pieces of the file from multiple sources in parallel to maximize bandwidth.
 *   **Piece Selection Logic:** Implement intelligent piece selection to avoid downloading the same piece from multiple sources and to prioritize rare pieces.
 
-### Security Considerations
+### Chiral Client Identification in BitTorrent Swarms
 
-In addition to the Chiral client identification, the following security measures should be considered:
+**User Expectation:** Advanced. This is a unique feature of the Chiral Network.
 
-*   **Peer Message Validation:** Validate all messages received from peers in the BitTorrent swarm to prevent potential exploits.
-*   **Privacy (Optional):** Take measures to protect user privacy, such as using a VPN or a proxy for BitTorrent traffic.
+`rqbit`'s support for BEP 10 makes it possible to implement a custom extension for Chiral client identification.
+
+*   **Extended Handshake:** Chiral clients will include a "chiral" identifier in the extended handshake message.
+*   **Identification Message:** If two peers both support the "chiral" extension, they can exchange custom messages containing their Chiral peer ID and reputation score.
+*   **Prioritization:** Once a peer is verified as a Chiral client, the application can prioritize it for piece requests.
+
 
 ### Seeding and File Lifecycle
 
-The process of creating and seeding new torrents should be clearly defined:
+The process of creating and seeding new torrents will be handled by `rqbit`. The `BitTorrentHandler` will expose this functionality through the `seed` method, which will:
 
-*   **Torrent Creation:** Implement a user-friendly way for users to create a `.torrent` file for a local file or directory.
-*   **Magnet Link Generation:** Automatically generate a magnet link for newly created torrents.
+*   **Torrent Creation:** Use `rqbit` to create a `.torrent` file for a local file or directory.
+*   **Magnet Link Generation:** Use `rqbit` to generate a magnet link for the new torrent.
 *   **Seeding Management:** Provide a clear interface for users to manage their seeded files, including the ability to start, stop, and remove them.
-
-## Chiral Client Identification in BitTorrent Swarms
-
-To enable Chiral clients to identify and prioritize each other within a public BitTorrent swarm, a custom extension to the BitTorrent protocol will be implemented, based on **BEP 10 (BitTorrent Extension Protocol)**.
-
-*   **Handshake Extension:** Chiral clients will set a reserved bit in the BitTorrent handshake to indicate support for protocol extensions.
-*   **Extended Handshake:** Chiral clients will include a "chiral" identifier in the extended handshake message.
-*   **Identification Message:** If two peers both support the "chiral" extension, they can exchange custom messages containing their Chiral peer ID and reputation score.
-*   **Prioritization:** Once a peer is verified as a Chiral client, the application can prioritize it for piece requests, creating a "fast lane" for transfers between Chiral users.
-
-Standard BitTorrent clients will ignore this extension, ensuring full compatibility with the public swarm.
-
-### BEP 10 Custom Extension
-
-To implement the Chiral client identification, a custom BEP 10 extension will be used. This will allow Chiral clients to identify each other and create a prioritized "fast lane" for transfers.
-
-**Extended Handshake:**
-
-The extended handshake message should include a `chiral` identifier. The `m` dictionary in the extended handshake message would look something like this:
-
-```json
-{
-    "m": {
-        "chiral": 1
-    }
-}
-```
-
-**Custom Chiral Message:**
-
-Once two peers have identified each other as Chiral clients, they can exchange a custom message. This message should be Bencoded and could have the following structure:
-
-```json
-{
-    "msg_type": 1, // Custom message type for Chiral info
-    "chiral_peer_id": "<Chiral peer ID>",
-    "reputation_score": 4.5,
-    "wallet_address": "<Chiral wallet address>"
-}
-```
-
-The `BitTorrentHandler` will be responsible for sending this message after a successful extended handshake and for parsing the message received from other Chiral peers. This information can then be used by the peer selection logic to prioritize connections to other Chiral clients.
-
-## Payment Integration with `BitTorrentHandler`
-
-The `BitTorrentHandler` needs to be integrated with the payment system to reward peers for seeding. This can be achieved by:
-
-1.  **Monitoring Data Transfer:** The handler should subscribe to events from the BitTorrent library that provide information about the amount of data uploaded and downloaded to/from each peer.
-2.  **Accumulating Data:** The handler should maintain a data structure (e.g., a `HashMap`) to track the total data transferred for each peer.
-3.  **Triggering Payments:** When the amount of data transferred to a peer reaches a certain threshold (e.g., 1 MB), or after a certain time interval, the handler should emit a `PaymentRequired` event. This event should contain the peer's wallet address and the amount of data transferred.
-4.  **Handling the Event:** A separate payment service will listen for `PaymentRequired` events and handle the process of creating and sending the transaction on the Chiral blockchain.
-
-## `multi_source_download.rs` Strategy with BitTorrent
-
-The multi-source download engine will treat the BitTorrent swarm as a single, powerful source of pieces. The strategy will be as follows:
-
-1.  **Unified Piece View:** When a download starts, the engine will get a list of available pieces from the `BitTorrentHandler` (representing the entire swarm) and from any other sources (e.g., Chiral peers).
-2.  **Prioritized Piece Selection:** The engine will use a unified piece selection algorithm that prioritizes pieces based on:
-    *   **Rarity:** Request the rarest pieces first to improve the health of the swarm.
-    *   **Source Reputation:** Prioritize pieces from Chiral peers with high reputation scores.
-    *   **Source Speed:** Prioritize sources that are providing data at a higher speed.
-3.  **Parallel Downloads:** The engine will download pieces from multiple sources in parallel, constantly re-evaluating the best source for each piece based on the factors above.
