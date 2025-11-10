@@ -370,7 +370,9 @@
       "autostart": "Download automatically started.",
       "searchFailed": "Search failed: {error}",
       "downloadFailed": "Download failed for {name}.",
-      "downloadComplete": "Download complete for {name}."
+      "downloadComplete": "Download complete for {name}.",
+      "resumedSingle": "Restored 1 interrupted download. Resume it from the Downloads page.",
+      "resumedMultiple": "Restored {count} interrupted downloads. Resume them from the Downloads page."
     },
     "search": {
       "status": {

@@ -376,6 +376,9 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     }
 
     setupEventListeners()
+
+    // Smart Resume: Load and auto-resume interrupted downloads
+    loadAndResumeDownloads()
   })
 
   onDestroy(() => {
@@ -398,6 +401,9 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   // Add notification related variables
   let currentNotification: HTMLElement | null = null
   let showSettings = false // Toggle for settings panel
+
+  // Smart Resume: Track resumed downloads
+  let resumedDownloads = new Set<string>() // Track which downloads were auto-resumed
 
   // Track which files have already had payment processed
   let paidFiles = new Set<string>()
@@ -582,6 +588,104 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   //     showNotification(`Error saving "${fileName}"`, 'error');
   //   }
   // }
+
+  // Smart Resume: Save in-progress downloads to localStorage
+  function saveDownloadState() {
+    try {
+      const activeDownloads = $files.filter(f => 
+        f.status === 'downloading' || f.status === 'paused'
+      ).map(file => ({
+        id: file.id,
+        name: file.name,
+        hash: file.hash,
+        size: file.size,
+        progress: file.progress || 0,
+        status: file.status,
+        cids: file.cids,
+        seederAddresses: file.seederAddresses,
+        isEncrypted: file.isEncrypted,
+        manifest: file.manifest,
+        downloadPath: file.downloadPath,
+        downloadStartTime: file.downloadStartTime,
+        downloadedChunks: file.downloadedChunks,
+        totalChunks: file.totalChunks
+      }))
+
+      const queuedDownloads = $downloadQueue.map(file => ({
+        id: file.id,
+        name: file.name,
+        hash: file.hash,
+        size: file.size,
+        cids: file.cids,
+        seederAddresses: file.seederAddresses,
+        isEncrypted: file.isEncrypted,
+        manifest: file.manifest
+      }))
+
+      localStorage.setItem('pendingDownloads', JSON.stringify({
+        active: activeDownloads,
+        queued: queuedDownloads,
+        timestamp: Date.now()
+      }))
+    } catch (error) {
+      console.error('Failed to save download state:', error)
+    }
+  }
+
+  // Smart Resume: Load and resume interrupted downloads
+  async function loadAndResumeDownloads() {
+    try {
+      const saved = localStorage.getItem('pendingDownloads')
+      if (!saved) return
+
+      const { active, queued, timestamp } = JSON.parse(saved)
+      
+      // Only auto-resume if less than 24 hours old
+      const hoursSinceLastSave = (Date.now() - timestamp) / (1000 * 60 * 60)
+      if (hoursSinceLastSave > 24) {
+        console.log('Saved downloads are too old (>24h), skipping auto-resume')
+        localStorage.removeItem('pendingDownloads')
+        return
+      }
+
+      let resumeCount = 0
+
+      // Restore queued downloads
+      if (queued && queued.length > 0) {
+        downloadQueue.set(queued)
+        resumeCount += queued.length
+      }
+
+      // Restore active downloads (mark as paused, user can resume manually)
+      if (active && active.length > 0) {
+        const restoredFiles = active.map(file => ({
+          ...file,
+          status: 'paused' as const, // Don't auto-start, let user resume
+          speed: '0 B/s',
+          eta: 'N/A'
+        }))
+        
+        files.update(f => [...f, ...restoredFiles])
+        
+        // Track which downloads were resumed
+        active.forEach(file => resumedDownloads.add(file.id))
+        resumeCount += active.length
+      }
+
+      if (resumeCount > 0) {
+        const message = resumeCount === 1 
+          ? `Restored 1 interrupted download. Resume it from the Downloads page.`
+          : `Restored ${resumeCount} interrupted downloads. Resume them from the Downloads page.`
+        showNotification(message, 'info', 6000)
+      }
+
+      // Clear saved state after successful restore
+      localStorage.removeItem('pendingDownloads')
+    } catch (error) {
+      console.error('Failed to load download state:', error)
+      localStorage.removeItem('pendingDownloads')
+    }
+  }
 
   function handleSearchMessage(event: CustomEvent<{ message: string; type?: 'success' | 'error' | 'info' | 'warning'; duration?: number }>) {
     const { message, type = 'info', duration = 4000 } = event.detail
@@ -811,6 +915,11 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   // Auto-clear completed downloads when setting is enabled
   $: if (autoClearCompleted) {
     files.update(f => f.filter(file => file.status !== 'completed'))
+  }
+
+  // Smart Resume: Auto-save download state when files or queue changes
+  $: if ($files || $downloadQueue) {
+    saveDownloadState()
   }
 
   // New function to download from search results
@@ -1990,6 +2099,11 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
                     <div class="flex-1 min-w-0">
                       <div class="flex items-center gap-3 mb-1">
                         <h3 class="font-semibold text-sm truncate">{file.name}</h3>
+                        {#if resumedDownloads.has(file.id)}
+                          <Badge class="bg-blue-100 text-blue-800 text-xs px-2 py-0.5">
+                            Resumed
+                          </Badge>
+                        {/if}
                         {#if multiSourceProgress.has(file.hash)}
                           <Badge class="bg-purple-100 text-purple-800 text-xs px-2 py-0.5">
                             Multi-source
