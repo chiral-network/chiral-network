@@ -981,7 +981,6 @@
       const status = await fetchGethStatus('./bin/geth-data', 1)
       // If node is running from previous session, stop it for clean state
       if (status.running) {
-        console.log('Stopping node from previous session...')
         await invoke('stop_geth_node')
         // Wait a moment for it to stop
         await new Promise(resolve => setTimeout(resolve, 1000))

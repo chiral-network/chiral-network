@@ -9,7 +9,7 @@
   import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw, Calculator, DollarSign } from 'lucide-svelte'
   import { onDestroy, onMount, getContext } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
-  import { etcAccount, miningState } from '$lib/stores'
+  import { miningState } from '$lib/stores'
   import { getVersion } from "@tauri-apps/api/app";
   import { t } from 'svelte-i18n';
   import { goto } from '@mateothegreat/svelte5-router';
@@ -77,7 +77,7 @@
   $: dailyProfit = dailyRevenue - dailyPowerCostUSD
   $: monthlyProfit = dailyProfit * 30
   $: yearlyProfit = dailyProfit * 365
-  $: breakEvenDays = dailyProfit > 0 ? 0 : Infinity // No upfront hardware cost in this model
+  // $: breakEvenDays = dailyProfit > 0 ? 0 : Infinity // No upfront hardware cost in this model (unused)
   $: profitMargin = dailyRevenue > 0 ? ((dailyProfit / dailyRevenue) * 100) : 0
   $: isProfitable = dailyProfit > 0
 
@@ -343,20 +343,11 @@
             : '';
   }
 
-  $: if (!$etcAccount) {
-    // Clear mining state when no account is present
-    if ($miningState.isMining) {
-      stopMining(); // Stop mining if running
-    }
-    // Reset mining display state
-    $miningState.totalRewards = 0;
-    $miningState.blocksFound = 0;
-    $miningState.recentBlocks = [];
-  }
-
   // Button disabled if either warning exists
   $: isInvalid = !!threadsWarning || !!intensityWarning;
 
+  // Track if backend has an active account
+  let hasActiveAccount = false;
 
   let hoveredPoint: MiningHistoryPoint | null = null;
   let hoveredIndex: number | null = null;
@@ -369,6 +360,16 @@
     }
     catch{
       isTauri = false
+    }
+
+    // Check if account exists in backend
+    if (isTauri) {
+      try {
+        hasActiveAccount = await invoke<boolean>("has_active_account");
+      } catch (error) {
+        console.error("Failed to check account status:", error);
+        hasActiveAccount = false;
+      }
     }
 
     await checkGethStatus()
@@ -525,10 +526,16 @@
       ]
       
       // Also fetch account balance and blocks mined if we have an account and are mining
-      if ($etcAccount && $miningState.isMining) {
+      if (isTauri && $miningState.isMining) {
+        try {
+          const accountAddress = await invoke<string>("get_active_account_address");
           promises.push(invoke('get_blocks_mined', { 
-            address: $etcAccount.address 
+            address: accountAddress 
           }) as Promise<number>)
+        } catch (error) {
+          // Account not available, skip blocks mined check
+          console.log("No active account for blocks mined check");
+        }
       }
       
       const results = await Promise.all(promises)
@@ -604,13 +611,8 @@
   async function createTemporaryAccount() {
     try {
       // Generate a temporary account using walletService
+      // This already sets both backend and frontend account state
       const tempAccount = await walletService.createAccount()
-
-      // Set as active account
-      etcAccount.set({
-        address: tempAccount.address,
-        private_key: tempAccount.private_key
-      })
 
       // Mark as temporary
       isTemporaryAccount = true
@@ -625,12 +627,21 @@
 
   async function startMining() {
     // Auto-create temporary account if none exists
-    if (!$etcAccount) {
+    if (isTauri) {
       try {
-        await createTemporaryAccount()
-      } catch (e) {
+        const hasAccount = await invoke<boolean>("has_active_account");
+        if (!hasAccount) {
+          try {
+            await createTemporaryAccount()
+          } catch (e) {
+            error = $t('mining.errors.noAccount')
+            return
+          }
+        }
+      } catch (error) {
+        console.error("Failed to verify account status:", error);
         error = $t('mining.errors.noAccount')
-        return
+        return;
       }
     }
     
@@ -643,8 +654,11 @@
     validationError = null
     
     try {
+      // Get account address from backend
+      const accountAddress = await invoke<string>("get_active_account_address");
+      
       await invoke('start_miner', {
-        address: $etcAccount?.address || '',
+        address: accountAddress,
         threads: selectedThreads,
         dataDir: './bin/geth-data'
       })
@@ -706,9 +720,18 @@
 
   // Decentralized Pool Functions
   async function discoverPools() {
-    if (!$etcAccount) {
-      poolError = 'Please create or import an account first.';
-      return;
+    if (isTauri) {
+      try {
+        const hasAccount = await invoke<boolean>("has_active_account");
+        if (!hasAccount) {
+          poolError = 'Please create or import an account first.';
+          return;
+        }
+      } catch (error) {
+        console.error("Failed to verify account status:", error);
+        poolError = 'Please create or import an account first.';
+        return;
+      }
     }
     
     isDiscovering = true;
@@ -730,9 +753,18 @@
   }
 
   async function joinPool(pool: MiningPool) {
-    if (!$etcAccount) {
-      poolError = 'Please create or import an account first.';
-      return;
+    if (isTauri) {
+      try {
+        const hasAccount = await invoke<boolean>("has_active_account");
+        if (!hasAccount) {
+          poolError = 'Please create or import an account first.';
+          return;
+        }
+      } catch (error) {
+        console.error("Failed to verify account status:", error);
+        poolError = 'Please create or import an account first.';
+        return;
+      }
     }
     
     if (pool.status === 'Offline') {
@@ -743,9 +775,12 @@
     poolError = '';
     
     try {
+      // Get account address from backend
+      const accountAddress = await invoke<string>("get_active_account_address");
+      
       const joinedInfo = await invoke('join_mining_pool', { 
         poolId: pool.id, 
-        address: $etcAccount.address 
+        address: accountAddress
       }) as JoinedPoolInfo;
       
       currentPool = joinedInfo;
@@ -771,9 +806,18 @@
   }
 
   async function createNewPool() {
-    if (!$etcAccount) {
-      poolError = 'Please create or import an account first.';
-      return;
+    if (isTauri) {
+      try {
+        const hasAccount = await invoke<boolean>("has_active_account");
+        if (!hasAccount) {
+          poolError = 'Please create or import an account first.';
+          return;
+        }
+      } catch (error) {
+        console.error("Failed to verify account status:", error);
+        poolError = 'Please create or import an account first.';
+        return;
+      }
     }
     
     if (!newPool.name.trim()) {
@@ -784,8 +828,11 @@
     poolError = '';
     
     try {
+      // Get account address from backend
+      const accountAddress = await invoke<string>("get_active_account_address");
+      
       const createdPool = await invoke('create_mining_pool', {
-        address: $etcAccount.address,
+        address: accountAddress,
         name: newPool.name,
         description: newPool.description,
         feePercentage: newPool.fee_percentage,
@@ -925,9 +972,20 @@
   }
 
   // Add a new pool (for modal form)
-  function addPool() {
+  async function addPool() {
     // Basic validation
     if (!newPool.name.trim()) return;
+    
+    // Get account address from backend
+    let createdByAddress = '';
+    if (isTauri) {
+      try {
+        createdByAddress = await invoke<string>("get_active_account_address");
+      } catch (error) {
+        console.error("Failed to get account address:", error);
+      }
+    }
+    
     // Generate a unique id for the new pool
     const id = `pool-${Date.now()}`;
     availablePools = [
@@ -940,7 +998,7 @@
         total_hashrate: '0 H/s',
         last_block_time: 0,
         blocks_found_24h: 0,
-        created_by: $etcAccount ? $etcAccount.address : '',
+        created_by: createdByAddress,
       }
     ];
     // Reset form and close modal
@@ -1421,7 +1479,7 @@
           </div>
         </div>
       {/if}
-      {#if !$etcAccount && isGethRunning}
+      {#if !hasActiveAccount && isGethRunning}
         <div class="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 mt-2">
           <div class="flex items-center gap-2">
             <AlertCircle class="h-4 w-4 text-blue-500 flex-shrink-0" />

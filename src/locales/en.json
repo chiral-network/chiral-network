@@ -372,7 +372,9 @@
       "autostart": "Download automatically started.",
       "searchFailed": "Search failed: {error}",
       "downloadFailed": "Download failed for {name}.",
-      "downloadComplete": "Download complete for {name}."
+      "downloadComplete": "Download complete for {name}.",
+      "resumedSingle": "Restored 1 interrupted download. Resume it from the Downloads page.",
+      "resumedMultiple": "Restored {count} interrupted downloads. Resume them from the Downloads page."
     },
     "search": {
       "status": {
@@ -938,7 +940,7 @@
     "stop": "Stop Mining",
     "start": "Start Mining",
     "showLogs": "Show mining logs",
-    "networkPage": "Network page",
+    "networkPage": "Network Page.",
     "accountPage": "Account page",
     "networkStats": "Network Statistics",
     "networkHashRate": "Network Hash Rate",
@@ -1029,7 +1031,7 @@
       "intensity": "Intensity must be between 1 and 100",
       "noAccount": "Please create a Chiral Network account first in the Account page",
       "noAccountToStart": "Please create a Chiral Network account from the Account page to start mining",
-      "gethNotRunning": "Chiral node is not running. Please start it from the Network page",
+      "gethNotRunning": "Chiral node is not running. Please start it from the",
       "noAccountLink": "Please create a Chiral Network account from the"
     },
     "starting": "Starting mining... (may restart node if needed)",
@@ -1222,7 +1224,7 @@
       "title": "Relay Health & Monitoring"
     },
     "errors": {
-      "dhtNotRunning": "DHT is not running. Please start the network first from the Network page.",
+      "dhtNotRunning": "DHT is not running. Please start the network from the ",
       "toggleFailed": "Failed to toggle relay server: {error}"
     },
     "monitor": {
