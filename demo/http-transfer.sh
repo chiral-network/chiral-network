@@ -90,10 +90,27 @@ log "Step 2: Starting Node A HTTP server on port $NODE_A_PORT..."
 python3 -m http.server $NODE_A_PORT --directory "$DEMO_DIR" &
 NODE_A_PID=$!
 
-sleep 2
+sleep 3
 
 if ! kill -0 "$NODE_A_PID" 2>/dev/null; then
     error "Failed to start HTTP server"
+    exit 1
+fi
+
+# Wait for server to be ready (health check)
+log "Waiting for HTTP server to be ready..."
+MAX_RETRIES=10
+RETRY_COUNT=0
+while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+    if curl -s -f -m 2 "http://localhost:$NODE_A_PORT/test-file.bin" -o /dev/null 2>/dev/null; then
+        break
+    fi
+    RETRY_COUNT=$((RETRY_COUNT + 1))
+    sleep 1
+done
+
+if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+    error "HTTP server failed to respond after $MAX_RETRIES attempts"
     exit 1
 fi
 
