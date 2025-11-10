@@ -158,7 +158,7 @@ The network uses a multi-layered approach to ensure connectivity:
 ### 1. Direct Connection (fastest)
 For publicly reachable peers with no NAT or firewall restrictions.
 
-#### Automatic Port Forwarding (UPnP/NAT-PMP)
+#### Automatic Port Forwarding (UPnP)
 Modern routers support automatic port forwarding protocols that enable NAT'd peers to become publicly reachable without manual configuration:
 
 - **UPnP (Universal Plug and Play)**: Industry-standard protocol for automatic port mapping
@@ -166,12 +166,7 @@ Modern routers support automatic port forwarding protocols that enable NAT'd pee
   - Requests external port mappings through SOAP/XML API
   - Router exposes internal service on its public IP address
   - Widely supported on consumer routers (check router settings: "UPnP" or "UPnP IGD")
-
-- **NAT-PMP (NAT Port Mapping Protocol)**: Lightweight alternative protocol
-  - Simpler protocol designed by Apple for home routers
-  - Commonly found on Apple AirPort and BSD-based routers
-  - Uses UDP packets for port mapping requests
-  - Faster negotiation than UPnP
+  - Integrated via libp2p's built-in UPnP behaviour for automatic handling
 
 **Benefits**:
 - Transforms NAT'd nodes into publicly reachable peers automatically
@@ -180,13 +175,13 @@ Modern routers support automatic port forwarding protocols that enable NAT'd pee
 - Reduces relay bandwidth usage
 
 **Fallback Strategy**:
-- If UPnP/NAT-PMP fails (unsupported router, disabled, or restrictive firewall)
+- If UPnP fails (unsupported router, disabled, or restrictive firewall)
 - Automatically proceeds to Hole Punching (DCUtR)
 - Circuit Relay used as final fallback
 
 **Connection Priority**:
 ```
-1. Try UPnP/NAT-PMP → Direct connection if successful
+1. Try UPnP → Direct connection if successful
 2. If failed → Hole Punching (DCUtR)
 3. If failed → Circuit Relay
 ```

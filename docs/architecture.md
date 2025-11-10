@@ -535,7 +535,7 @@ Advantages:
 - Easy debugging
 - No NAT traversal needed for public IP nodes
 - Most reliable for public IP nodes
-- UPnP/NAT-PMP support enables automatic port forwarding for NAT'd nodes
+- UPnP support enables automatic port forwarding for NAT'd nodes
 
 Limitations:
 - No built-in swarming
