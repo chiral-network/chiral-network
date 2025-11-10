@@ -408,17 +408,17 @@
         // Download as file
         settingsBackupService.downloadBackupFile(result.data);
         backupMessage = {
-          text: translate('settingsBackup.messages.exportSuccess'),
+          text: $t('settingsBackup.messages.exportSuccess'),
           type: 'success'
         };
-        showToast(translate('settingsBackup.messages.exportSuccess'), 'success');
+        showToast($t('settingsBackup.messages.exportSuccess'), 'success');
       } else {
         throw new Error(result.error || 'Export failed');
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       backupMessage = {
-        text: translate('settingsBackup.messages.exportError', { values: { error: errorMsg } }),
+        text: $t('settingsBackup.messages.exportError', { values: { error: errorMsg } }),
         type: 'error'
       };
       showToast(backupMessage.text, 'error');
@@ -456,13 +456,13 @@
           
           if (result.warnings && result.warnings.length > 0) {
             backupMessage = {
-              text: translate('settingsBackup.messages.importWarnings', { values: { warnings: result.warnings.join(', ') } }),
+              text: $t('settingsBackup.messages.importWarnings', { values: { warnings: result.warnings.join(', ') } }),
               type: 'warning'
             };
             showToast(backupMessage.text, 'warning');
           } else {
             backupMessage = {
-              text: translate('settingsBackup.messages.importSuccess'),
+              text: $t('settingsBackup.messages.importSuccess'),
               type: 'success'
             };
             showToast(backupMessage.text, 'success');
@@ -476,7 +476,7 @@
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
         backupMessage = {
-          text: translate('settingsBackup.messages.importError', { values: { error: errorMsg } }),
+          text: $t('settingsBackup.messages.importError', { values: { error: errorMsg } }),
           type: 'error'
         };
         showToast(backupMessage.text, 'error');

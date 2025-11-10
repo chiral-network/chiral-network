@@ -504,17 +504,9 @@
       "reason2": "Secure your funds with encrypted recovery phrase",
       "reason3": "Transfer coins to other users on the network",
       "createWallet": "Create New Wallet",
-      "skipForNow": "Skip for Now (Create Temporary Account)",
-      "skipWarning": "If you skip, a temporary account will be created when you start mining. You can create a permanent wallet anytime from the Account page.",
-      "skipped": "First-run setup skipped. A temporary account will be created when needed.",
+      "requiresWallet": "A wallet is required to mine, earn rewards, and transfer Chiral. Your recovery phrase will be generated in the next step.",
       "accountCreated": "Wallet created successfully! You can now start mining.",
       "error": "Failed to create account. Please try again."
-    },
-    "upgradeAccount": {
-      "title": "Secure Your Mining Rewards!",
-      "description": "You're using a temporary account. Save it to an encrypted keystore or create an HD wallet to protect your mining rewards from being lost.",
-      "saveToKeystore": "Save to Keystore",
-      "createHDWallet": "Create HD Wallet"
     }
   },
   "wallet": {

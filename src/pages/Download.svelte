@@ -20,6 +20,7 @@
   import { listen } from '@tauri-apps/api/event'
   import PeerSelectionService from '$lib/services/peerSelectionService'
   import { downloadHistoryService, type DownloadHistoryEntry } from '$lib/services/downloadHistoryService'
+  import { showToast } from '$lib/toast'
 
   import { invoke } from '@tauri-apps/api/core'
   import { homeDir } from '@tauri-apps/api/path'
@@ -658,6 +659,10 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       console.log('▶️ Calling processQueue...')
       await processQueue()
     }
+  }
+
+  async function addToDownloadQueue(metadata: FileMetadata) {
+    await handleSearchDownload(metadata)
   }
 
   // Function to validate and correct maxConcurrentDownloads
@@ -1500,7 +1505,8 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
           } catch (error) {
             console.error('P2P download failed:', error);
-            showNotification("BAD","error");
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            showNotification(`P2P download failed: ${errorMessage}`, 'error');
             activeSimulations.delete(fileId);
             files.update(f => f.map(file =>
               file.id === fileId
@@ -1512,7 +1518,8 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       }
     } catch (error) {
       // Download failed
-      showNotification("BADHI", 'error');
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      showNotification(`Download failed: ${errorMessage}`, 'error');
       activeSimulations.delete(fileId);
 
       files.update(f => f.map(file =>
@@ -1669,6 +1676,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       fileName: entry.name,
       fileSize: entry.size,
       seeders: entry.seederAddresses || [],
+      createdAt: Date.now(),
       price: entry.price || 0,
       isEncrypted: entry.encrypted || false,
       manifest: entry.manifest ? JSON.stringify(entry.manifest) : undefined,
