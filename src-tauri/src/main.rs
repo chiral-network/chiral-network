@@ -5050,6 +5050,8 @@ fn main() {
             create_chiral_account,
             import_chiral_account,
             has_active_account,
+            get_active_account_address,
+            get_active_account_private_key,
             get_user_balance,
             can_afford_download,
             process_download_payment,
@@ -5542,6 +5544,26 @@ struct UploadResult {
 #[tauri::command]
 async fn has_active_account(state: State<'_, AppState>) -> Result<bool, String> {
     Ok(state.active_account.lock().await.is_some())
+}
+
+#[tauri::command]
+async fn get_active_account_address(state: State<'_, AppState>) -> Result<String, String> {
+    state
+        .active_account
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "No account is currently active. Please log in.".to_string())
+}
+
+#[tauri::command]
+async fn get_active_account_private_key(state: State<'_, AppState>) -> Result<String, String> {
+    state
+        .active_account_private_key
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "No account is currently active. Please log in.".to_string())
 }
 
 #[tauri::command]

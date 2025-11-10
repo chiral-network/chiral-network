@@ -104,6 +104,7 @@ let showFirstRunWizard = false;
 
 // First-run wizard handlers
 function handleFirstRunComplete() {
+  console.log('🎉 First-run wizard completed');
   showFirstRunWizard = false;
   // Navigate to account page after completing wizard
   currentPage = 'account';
@@ -183,11 +184,63 @@ function handleFirstRunComplete() {
 
         // setup i18n
         await setupI18n();
-        loading = false;
 
         // Check for first-run and show wizard if no account exists
+        // DO THIS BEFORE setting loading = false to prevent race conditions
         try {
-          const hasAccount = get(etcAccount) !== null;
+          // Check backend for active account
+          let hasAccount = false;
+          if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+            try {
+              hasAccount = await invoke<boolean>('has_active_account');
+              console.log('🔍 Backend has_active_account:', hasAccount);
+              
+              // If backend has account, restore it to frontend
+              if (hasAccount) {
+                try {
+                  const address = await invoke<string>('get_active_account_address');
+                  console.log('🔄 Restoring account from backend:', address);
+                  
+                  // Import wallet service to prevent sync during restoration
+                  const { walletService } = await import('./lib/wallet');
+                  walletService.setRestoringAccount(true);
+                  
+                  // Fetch private key from backend to restore it to the frontend store
+                  let privateKey = '';
+                  try {
+                    privateKey = await invoke<string>('get_active_account_private_key');
+                    console.log('🔑 Retrieved private key from backend');
+                  } catch (error) {
+                    console.warn('Failed to get private key from backend:', error);
+                  }
+                  
+                  // Restore account with private key
+                  etcAccount.set({ address, private_key: privateKey });
+                  
+                  // Update wallet with address
+                  wallet.update(w => ({ 
+                    ...w, 
+                    address
+                  }));
+                  
+                  // Re-enable syncing and trigger a sync
+                  walletService.setRestoringAccount(false);
+                  
+                  // Now sync from blockchain
+                  await walletService.refreshTransactions();
+                  await walletService.refreshBalance();
+                } catch (error) {
+                  console.error('Failed to restore account from backend:', error);
+                }
+              }
+            } catch (error) {
+              console.warn('Failed to check account status:', error);
+            }
+          } else {
+            // For web/demo mode, check frontend store
+            hasAccount = get(etcAccount) !== null;
+            console.log('🔍 Frontend etcAccount:', hasAccount);
+          }
 
           // Check if there are any keystore files (Tauri only)
           let hasKeystoreFiles = false;
@@ -195,6 +248,7 @@ function handleFirstRunComplete() {
             try {
               const keystoreFiles = await invoke<string[]>('list_keystore_accounts');
               hasKeystoreFiles = keystoreFiles && keystoreFiles.length > 0;
+              console.log('🔍 Keystore files:', keystoreFiles, 'hasKeystoreFiles:', hasKeystoreFiles);
             } catch (error) {
               console.warn('Failed to check keystore files:', error);
             }
@@ -202,12 +256,17 @@ function handleFirstRunComplete() {
 
           // Show wizard if no account AND no keystore files exist
           // (Don't rely on first-run flag since user may have cleared data)
+          console.log('🔍 Should show wizard?', !hasAccount && !hasKeystoreFiles, '(hasAccount:', hasAccount, 'hasKeystoreFiles:', hasKeystoreFiles + ')');
           if (!hasAccount && !hasKeystoreFiles) {
             showFirstRunWizard = true;
+            console.log('✅ Showing first-run wizard');
           }
         } catch (error) {
           console.warn('Failed to check first-run status:', error);
         }
+
+        // Set loading to false AFTER wizard check to prevent race conditions
+        loading = false;
 
       let storedLocation: string | null = null;
       try {

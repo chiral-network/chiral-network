@@ -5,21 +5,33 @@
   import { etcAccount, wallet, miningState } from '$lib/stores'
   import { showToast } from '$lib/toast'
   import { t } from 'svelte-i18n'
+  import { onMount } from 'svelte'
 
   export let onComplete: () => void
 
   let showMnemonicWizard = false
   let mode: 'welcome' | 'mnemonic' = 'welcome'
 
+  onMount(() => {
+    console.log('🎭 FirstRunWizard mounted, mode:', mode)
+  })
+
   function handleCreateNewWallet() {
+    console.log('🎭 Creating new wallet via mnemonic')
     mode = 'mnemonic'
     showMnemonicWizard = true
   }
 
   async function handleMnemonicComplete(ev: { mnemonic: string, passphrase: string, account: { address: string, privateKeyHex: string, index: number, change: number }, name?: string }) {
     try {
-      // Set as active account
-      etcAccount.set({ address: ev.account.address, private_key: '0x' + ev.account.privateKeyHex })
+      // Import to backend to set as active account
+      const { invoke } = await import('@tauri-apps/api/core')
+      const privateKeyWithPrefix = '0x' + ev.account.privateKeyHex
+      
+      await invoke('import_chiral_account', { privateKey: privateKeyWithPrefix })
+      
+      // Set frontend account (backend is now also set)
+      etcAccount.set({ address: ev.account.address, private_key: privateKeyWithPrefix })
       wallet.update(w => ({ ...w, address: ev.account.address, balance: 0 }))
 
       // Reset mining state for new account
@@ -29,9 +41,6 @@
         blocksFound: 0,
         recentBlocks: []
       }))
-
-      // Mark first-run as complete
-      localStorage.setItem('chiral_first_run_complete', 'true')
 
       // Encourage saving to keystore (optional - user can do later)
       showToast($t('account.firstRun.accountCreated'), 'success')
@@ -45,28 +54,15 @@
 
   async function handleCreateTestWallet() {
     try {
-      // Generate a random test address (this is NOT secure, just for testing)
-      const randomBytes = new Uint8Array(20)
-      crypto.getRandomValues(randomBytes)
-      const testAddress = '0x' + Array.from(randomBytes).map(b => b.toString(16).padStart(2, '0')).join('')
-      const testPrivateKey = '0x' + Array.from(new Uint8Array(32)).map(() => Math.floor(Math.random() * 256).toString(16).padStart(2, '0')).join('')
+      console.log('🎭 Creating test wallet')
+      // Import walletService for backend integration
+      const { walletService } = await import('$lib/wallet')
+      
+      // Create a regular account through backend
+      const account = await walletService.createAccount()
+      console.log('✅ Test wallet created:', account.address)
 
-      // Set as active account
-      etcAccount.set({ address: testAddress, private_key: testPrivateKey })
-      wallet.update(w => ({ ...w, address: testAddress, balance: 10 }))
-
-      // Reset mining state for new account
-      miningState.update(state => ({
-        ...state,
-        totalRewards: 10,
-        blocksFound: 5,
-        recentBlocks: []
-      }))
-
-      // Mark first-run as complete
-      localStorage.setItem('chiral_first_run_complete', 'true')
-
-      showToast('⚠️ TEST WALLET CREATED - DO NOT USE FOR REAL FUNDS!', 'success')
+      showToast('Test wallet "TestWallet" created!', 'success')
 
       onComplete()
     } catch (error) {
@@ -120,7 +116,7 @@
             variant="outline" 
             class="w-full py-4 border-amber-500/50 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
           >
-            ⚠️ Create Test Wallet (10 Chiral) - DO NOT USE FOR REAL FUNDS
+            ⚠️ Create Test Wallet - For Testing Only
           </Button>
         </div>
 
