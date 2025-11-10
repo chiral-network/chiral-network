@@ -243,7 +243,5 @@ log "  • Final hash match: Yes"
 log "  • Downloaded file: $DOWNLOAD_DEST"
 echo ""
 
-# Keep Node A running for inspection
-log "Node A HTTP server is still running for inspection."
-log "Press Ctrl+C to stop and cleanup."
-wait $NODE_A_PID
+# Demo complete - cleanup will run via trap
+success "Demo completed successfully. Cleaning up..."
