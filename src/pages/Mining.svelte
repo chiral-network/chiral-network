@@ -1027,6 +1027,15 @@
     if (rate < 1000000000) return `${(rate / 1000000).toFixed(2)} MH/s`
     return `${(rate / 1000000000).toFixed(2)} GH/s`
   }
+
+  function formatDifficulty(difficulty: string | number): string {
+    if (typeof difficulty === 'string') return difficulty
+    if (difficulty < 1000) return `${difficulty.toFixed(0)} H/s`
+    if (difficulty < 1000000) return `${(difficulty / 1000).toFixed(2)} KH/s`
+    if (difficulty < 1000000000) return `${(difficulty / 1000000).toFixed(2)} MH/s`
+    if (difficulty < 1000000000000) return `${(difficulty / 1000000000).toFixed(2)} GH/s`
+    return `${(difficulty / 1000000000000).toFixed(2)} TH/s`
+  }
   
   function formatNumber(num: number): string {
     if (num < 1000) return num.toString()
