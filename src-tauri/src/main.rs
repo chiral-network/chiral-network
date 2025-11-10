@@ -72,6 +72,7 @@ use ethereum::{
     get_network_hashrate,
     get_peer_count,
     get_recent_mined_blocks,
+    get_sync_status,
     start_mining,
     stop_mining,
     EthAccount,
@@ -891,6 +892,11 @@ async fn stop_miner() -> Result<(), String> {
 #[tauri::command]
 async fn get_miner_status() -> Result<bool, String> {
     get_mining_status().await
+}
+
+#[tauri::command]
+async fn get_blockchain_sync_status() -> Result<ethereum::SyncStatus, String> {
+    ethereum::get_sync_status().await
 }
 
 #[tauri::command]
@@ -5088,6 +5094,7 @@ fn main() {
             start_miner,
             stop_miner,
             get_miner_status,
+            get_blockchain_sync_status,
             get_miner_hashrate,
             get_current_block,
             get_network_stats,

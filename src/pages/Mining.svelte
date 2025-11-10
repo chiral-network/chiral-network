@@ -14,7 +14,8 @@
   import { t } from 'svelte-i18n';
   import { goto } from '@mateothegreat/svelte5-router';
   import { walletService } from '$lib/wallet';
-  import TemporaryAccountWarning from '$lib/components/TemporaryAccountWarning.svelte'; 
+  import TemporaryAccountWarning from '$lib/components/TemporaryAccountWarning.svelte';
+  import { showToast } from '$lib/toast';
   
   // Local UI state only
   let isTauri = false
@@ -25,6 +26,15 @@
   let cpuThreads = navigator.hardwareConcurrency || 4
   let selectedThreads = Math.floor(cpuThreads / 2)
   let error = ''
+
+  // Blockchain sync status
+  let isSyncing = false
+  let syncProgress = 0
+  let syncCurrentBlock = 0
+  let syncHighestBlock = 0
+  let syncBlocksRemaining = 0
+  let syncEstimatedSecondsRemaining: number | null = null
+  let lastSyncNotificationShown = false
 
   // Temporary account tracking
   let isTemporaryAccount = false
@@ -181,6 +191,47 @@
   // Function to convert Celsius to Fahrenheit
   function toFahrenheit(celsius: number): number {
     return (celsius * 9/5) + 32;
+  }
+
+  async function updateSyncStatus() {
+    try {
+      const syncStatus = await invoke('get_blockchain_sync_status') as {
+        syncing: boolean,
+        current_block: number,
+        highest_block: number,
+        progress_percent: number,
+        blocks_remaining: number,
+        estimated_seconds_remaining: number | null
+      }
+
+      const wasSyncing = isSyncing
+      isSyncing = syncStatus.syncing
+      syncProgress = syncStatus.progress_percent
+      syncCurrentBlock = syncStatus.current_block
+      syncHighestBlock = syncStatus.highest_block
+      syncBlocksRemaining = syncStatus.blocks_remaining
+      syncEstimatedSecondsRemaining = syncStatus.estimated_seconds_remaining
+
+      // Show notification when sync completes
+      if (wasSyncing && !isSyncing && !lastSyncNotificationShown && $miningState.isMining) {
+        showToast('Blockchain sync complete! Mining is now active.', 'success')
+        lastSyncNotificationShown = true
+      }
+
+      // Reset notification flag when syncing starts again
+      if (isSyncing) {
+        lastSyncNotificationShown = false
+      }
+    } catch (e) {
+      console.error('Failed to get sync status:', e)
+    }
+  }
+
+  function formatTimeRemaining(seconds: number | null): string {
+    if (seconds === null || seconds === 0) return 'Complete'
+    if (seconds < 60) return `${Math.round(seconds)}s`
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`
+    return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
   }
 
   // Determine log level from a log line and return a semantic level
@@ -414,6 +465,7 @@
         ]);
       }
       await updateNetworkStats();
+      await updateSyncStatus(); // Check blockchain sync status
       if (isTauri) {
         await updateCpuTemperature();
         await updatePowerConsumption();
@@ -1486,6 +1538,39 @@
                         <p class="text-sm text-blue-600">
                           {@html $t('mining.errors.noAccountToStart', { values: { link: '<a href="/account" class="underline font-medium">' + $t('mining.accountPage') + '</a>' } })}
                         </p>
+          </div>
+        </div>
+      {/if}
+
+      <!-- Blockchain Sync Status -->
+      {#if isSyncing}
+        <div class="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4 mt-2">
+          <div class="space-y-3">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <RefreshCw class="h-4 w-4 text-blue-500 animate-spin" />
+                <span class="text-sm font-medium text-blue-600">Blockchain Syncing...</span>
+              </div>
+              <span class="text-xs text-blue-600">{syncProgress.toFixed(1)}%</span>
+            </div>
+            <Progress value={syncProgress} max={100} class="h-2 [&>div]:bg-blue-500" />
+            <div class="grid grid-cols-2 gap-4 text-xs text-blue-600">
+              <div>
+                <span class="text-muted-foreground">Current:</span> #{syncCurrentBlock.toLocaleString()}
+              </div>
+              <div>
+                <span class="text-muted-foreground">Highest:</span> #{syncHighestBlock.toLocaleString()}
+              </div>
+              <div>
+                <span class="text-muted-foreground">Remaining:</span> {syncBlocksRemaining.toLocaleString()} blocks
+              </div>
+              <div>
+                <span class="text-muted-foreground">ETA:</span> {formatTimeRemaining(syncEstimatedSecondsRemaining)}
+              </div>
+            </div>
+            <p class="text-xs text-blue-600 mt-2">
+              ⏳ Mining will begin automatically when sync completes
+            </p>
           </div>
         </div>
       {/if}
