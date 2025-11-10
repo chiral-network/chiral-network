@@ -13,11 +13,10 @@
   let mode: 'welcome' | 'mnemonic' = 'welcome'
 
   onMount(() => {
-    console.log('🎭 FirstRunWizard mounted, mode:', mode)
+    // Wizard initialization
   })
 
   function handleCreateNewWallet() {
-    console.log('🎭 Creating new wallet via mnemonic')
     mode = 'mnemonic'
     showMnemonicWizard = true
   }
@@ -54,13 +53,11 @@
 
   async function handleCreateTestWallet() {
     try {
-      console.log('🎭 Creating test wallet')
       // Import walletService for backend integration
       const { walletService } = await import('$lib/wallet')
       
       // Create a regular account through backend
-      const account = await walletService.createAccount()
-      console.log('✅ Test wallet created:', account.address)
+      await walletService.createAccount()
 
       showToast('Test wallet "TestWallet" created!', 'success')
 

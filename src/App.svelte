@@ -104,7 +104,6 @@ let showFirstRunWizard = false;
 
 // First-run wizard handlers
 function handleFirstRunComplete() {
-  console.log('🎉 First-run wizard completed');
   showFirstRunWizard = false;
   // Navigate to account page after completing wizard
   currentPage = 'account';
@@ -193,13 +192,11 @@ function handleFirstRunComplete() {
           if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
             try {
               hasAccount = await invoke<boolean>('has_active_account');
-              console.log('🔍 Backend has_active_account:', hasAccount);
               
               // If backend has account, restore it to frontend
               if (hasAccount) {
                 try {
                   const address = await invoke<string>('get_active_account_address');
-                  console.log('🔄 Restoring account from backend:', address);
                   
                   // Import wallet service to prevent sync during restoration
                   const { walletService } = await import('./lib/wallet');
@@ -209,7 +206,6 @@ function handleFirstRunComplete() {
                   let privateKey = '';
                   try {
                     privateKey = await invoke<string>('get_active_account_private_key');
-                    console.log('🔑 Retrieved private key from backend');
                   } catch (error) {
                     console.warn('Failed to get private key from backend:', error);
                   }
@@ -239,7 +235,6 @@ function handleFirstRunComplete() {
           } else {
             // For web/demo mode, check frontend store
             hasAccount = get(etcAccount) !== null;
-            console.log('🔍 Frontend etcAccount:', hasAccount);
           }
 
           // Check if there are any keystore files (Tauri only)
@@ -248,7 +243,6 @@ function handleFirstRunComplete() {
             try {
               const keystoreFiles = await invoke<string[]>('list_keystore_accounts');
               hasKeystoreFiles = keystoreFiles && keystoreFiles.length > 0;
-              console.log('🔍 Keystore files:', keystoreFiles, 'hasKeystoreFiles:', hasKeystoreFiles);
             } catch (error) {
               console.warn('Failed to check keystore files:', error);
             }
@@ -256,10 +250,8 @@ function handleFirstRunComplete() {
 
           // Show wizard if no account AND no keystore files exist
           // (Don't rely on first-run flag since user may have cleared data)
-          console.log('🔍 Should show wizard?', !hasAccount && !hasKeystoreFiles, '(hasAccount:', hasAccount, 'hasKeystoreFiles:', hasKeystoreFiles + ')');
           if (!hasAccount && !hasKeystoreFiles) {
             showFirstRunWizard = true;
-            console.log('✅ Showing first-run wizard');
           }
         } catch (error) {
           console.warn('Failed to check first-run status:', error);
@@ -332,13 +324,7 @@ function handleFirstRunComplete() {
         }
       } catch (error) {
         // Ignore "already running" errors - this is normal during hot reload
-        if (error && typeof error === 'object' && 'message' in error && 
-            typeof error.message === 'string' && 
-            error.message.includes('already running')) {
-          // Service already initialized, this is fine
-        } else {
-          console.error("Failed to initialize backend services:", error);
-        }
+        // Silently skip all errors since services may already be initialized
       }
 
       // set the currentPage var

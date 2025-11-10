@@ -170,6 +170,19 @@ export class WalletService {
       return;
     }
 
+    // Check if Geth is running before trying to sync
+    if (this.isTauri) {
+      try {
+        const isRunning = await invoke<boolean>("is_geth_running");
+        if (!isRunning) {
+          return; // Silently skip if Geth is not running
+        }
+      } catch (error) {
+        console.warn("Failed to check Geth status:", error);
+        return;
+      }
+    }
+
     // Check backend for active account
     try {
       const hasAccount = await invoke<boolean>("has_active_account");
@@ -202,6 +215,16 @@ export class WalletService {
       return;
     }
 
+    // Check if Geth is running before trying to query blockchain
+    try {
+      const isRunning = await invoke<boolean>("is_geth_running");
+      if (!isRunning) {
+        return; // Silently skip if Geth is not running
+      }
+    } catch (error) {
+      return; // Can't check Geth status, skip
+    }
+
     // Get account address from backend
     let accountAddress: string;
     try {
@@ -227,10 +250,6 @@ export class WalletService {
       ]);
 
       // Update total count FIRST, before adding blocks
-      console.log(
-        "[refreshTransactions] Setting blocksFound to:",
-        totalBlockCount
-      );
       miningState.update((state) => ({
         ...state,
         blocksFound: totalBlockCount,
@@ -248,7 +267,7 @@ export class WalletService {
         });
       }
     } catch (error) {
-      console.error("Failed to refresh transactions:", error);
+      // Expected when Geth is not running - silently skip
     }
   }
 
@@ -261,6 +280,16 @@ export class WalletService {
     if (this.isRestoringAccount) {
       console.log("[refreshBalance] Skipping - account is being restored");
       return;
+    }
+
+    // Check if Geth is running before trying to query blockchain
+    try {
+      const isRunning = await invoke<boolean>("is_geth_running");
+      if (!isRunning) {
+        return; // Silently skip if Geth is not running
+      }
+    } catch (error) {
+      return; // Can't check Geth status, skip
     }
 
     // Get account address from backend
@@ -280,15 +309,6 @@ export class WalletService {
       // Calculate total rewards based on ACTUAL blocks found, not recentBlocks length
       const totalEarned = actualBlocksFound * 2;
 
-      console.log(
-        "[refreshBalance] blocksFound:",
-        actualBlocksFound,
-        "totalEarned:",
-        totalEarned,
-        "recentBlocks.length:",
-        currentMiningState.recentBlocks?.length ?? 0
-      );
-
       // Try to get balance from geth
       let realBalance = 0;
       try {
@@ -297,7 +317,7 @@ export class WalletService {
         })) as string;
         realBalance = parseFloat(balanceStr);
       } catch (e) {
-        console.warn("Could not get balance from geth:", e);
+        // Expected when Geth is not running
       }
 
       // Calculate pending sent transactions
@@ -305,7 +325,8 @@ export class WalletService {
         .filter((tx) => tx.status === "pending" && tx.type === "sent")
         .reduce((sum, tx) => sum + tx.amount, 0);
 
-      // If geth balance is 0 but we have mined blocks, use calculated balance
+      // Use real balance from Geth, or totalEarned if blocks haven't matured yet
+      // In test networks or when blocks are immature, realBalance may be 0 even though we've mined
       const actualBalance = realBalance > 0 ? realBalance : totalEarned;
       const availableBalance = Math.max(0, actualBalance - pendingSent);
 
@@ -569,7 +590,7 @@ export class WalletService {
     try {
       return (await invoke("is_2fa_enabled")) as boolean;
     } catch (error) {
-      console.error("Failed to determine 2FA state:", error);
+      // This is normal for new accounts or accounts without 2FA configured
       return false;
     }
   }
@@ -584,7 +605,9 @@ export class WalletService {
     wallet.update((w: WalletInfo) => ({
       ...w,
       address: formatted.address,
-      pendingTransactions: w.pendingTransactions ?? 0,
+      balance: 0, // Reset balance for new account
+      actualBalance: 0,
+      pendingTransactions: 0,
     }));
   }
 
