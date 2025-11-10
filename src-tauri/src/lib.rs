@@ -1,6 +1,7 @@
 // Library exports for testing
 pub mod analytics;
 pub mod bandwidth;
+pub mod control_plane;
 pub mod multi_source_download;
 
 // Download source abstraction
@@ -28,3 +29,4 @@ pub mod proxy_latency;
 pub mod stream_auth;
 // Reputation system
 pub mod reputation;
+
