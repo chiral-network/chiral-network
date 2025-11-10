@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';
-  import { invoke } from '@tauri-apps/api/core';
   import { settings } from '$lib/stores';
   import { dhtService } from '$lib/dht';
   import { relayErrorService } from '$lib/services/relayErrorService';
@@ -15,7 +14,7 @@
   let relayServerEnabled = false;
   let relayServerRunning = false;
   let isToggling = false;
-  let dhtIsRunning = false;
+  let dhtIsRunning: boolean | null = null;
   let relayServerAlias = '';
 
   // AutoRelay client settings
@@ -37,16 +36,10 @@
       }
     }
 
-    // Check if DHT is running
-    try {
-      const peerId = await invoke<string | null>('get_dht_peer_id');
-      dhtIsRunning = peerId !== null;
-      relayServerRunning = dhtIsRunning && relayServerEnabled;
-    } catch (error) {
-      console.error('Failed to check DHT status:', error);
-      dhtIsRunning = false;
-      relayServerRunning = false;
-    }
+    // DHT status will be checked when user starts the network
+    // Initialize with unknown state
+    dhtIsRunning = null; // null = unknown, false = not running, true = running
+    relayServerRunning = false;
   }
 
   async function saveSettings() {
@@ -101,10 +94,15 @@
       // Wait a bit for cleanup
       await new Promise(resolve => setTimeout(resolve, 500));
 
+      // Use custom bootstrap nodes if configured, otherwise use defaults
+      const bootstrapNodes = currentSettings.customBootstrapNodes && currentSettings.customBootstrapNodes.length > 0
+        ? currentSettings.customBootstrapNodes
+        : [];
+
       // Start with new config
       await dhtService.start({
         port: currentSettings.port || 4001,
-        bootstrapNodes: [], // Will use default bootstrap nodes
+        bootstrapNodes, // Use custom or default bootstrap nodes
         enableAutonat: currentSettings.enableAutonat,
         autonatProbeIntervalSeconds: currentSettings.autonatProbeInterval,
         autonatServers: currentSettings.autonatServers || [],
@@ -220,7 +218,7 @@
           </p>
         </div>
 
-        {#if !dhtIsRunning}
+        {#if dhtIsRunning === false}
           <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
             <p class="text-sm font-semibold text-yellow-900">
               {$t('relay.server.dhtNotRunning')}
@@ -229,12 +227,21 @@
               {$t('relay.server.dhtNotRunningHint')}
             </p>
           </div>
+        {:else if dhtIsRunning === null}
+          <div class="bg-blue-50 border border-blue-200 rounded-lg p-3">
+            <p class="text-sm font-semibold text-blue-900">
+              Network Not Started
+            </p>
+            <p class="text-xs text-blue-700 mt-1">
+              Start the network from the Network page to enable relay functionality.
+            </p>
+          </div>
         {/if}
 
         <div class="flex items-center justify-between">
           <Button
             on:click={toggleRelayServer}
-            disabled={!dhtIsRunning || isToggling}
+            disabled={dhtIsRunning !== true || isToggling}
             variant={relayServerEnabled ? 'destructive' : 'default'}
             class="w-full"
           >
@@ -324,7 +331,7 @@
   </div>
 
   <!-- Relay Error Monitor -->
-  {#if autoRelayEnabled && dhtIsRunning}
+  {#if autoRelayEnabled && dhtIsRunning === true}
     <div class="mt-6">
       <h2 class="text-2xl font-bold text-gray-900 mb-4">{$t('relay.monitoring.title')}</h2>
       <RelayErrorMonitor />

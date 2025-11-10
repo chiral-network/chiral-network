@@ -20,7 +20,7 @@
   import { get } from 'svelte/store'
   import { totalEarned, totalSpent, miningState } from '$lib/stores';
 
-  const tr = (k: string, params?: Record<string, any>): string => (get(t) as (key: string, params?: any) => string)(k, params)
+  const tr = (k: string, params?: Record<string, any>): string => $t(k, params)
   
   // SECURITY NOTE: Removed weak XOR obfuscation. Sensitive data should not be stored in frontend.
   // Use proper secure storage mechanisms in the backend instead.
@@ -588,6 +588,7 @@
             keystoreSaveMessage = tr('keystore.successSimulated');
         }
         keystorePassword = ''; // Clear password after saving
+        localStorage.setItem('chiral_first_run_complete', 'true');
     } catch (error) {
         console.error('Failed to save to keystore:', error);
         keystoreSaveMessage = tr('keystore.error', { error: String(error) });
@@ -744,6 +745,7 @@
     etcAccount.set({ address: ev.account.address, private_key: '0x' + ev.account.privateKeyHex });
     wallet.update(w => ({ ...w, address: ev.account.address }));
     if (isGethRunning) { await fetchBalance(); }
+    localStorage.setItem('chiral_first_run_complete', 'true');
   }
   function onHDAccountsChange(updated: HDAccountItem[]) {
     hdAccounts = updated;
@@ -1325,7 +1327,9 @@
   <div>
     <h1 class="text-3xl font-bold">{$t('account.title')}</h1>
     <p class="text-muted-foreground mt-2">{$t('account.subtitle')}</p>
-</div>
+  </div>
+
+
 
 {#if showMnemonicWizard}
   <MnemonicWizard
@@ -1919,7 +1923,7 @@
   {/if}
 
   {#if $etcAccount}
-  <Card class="p-6">
+  <Card class="p-6" id="keystore-section">
     <div class="flex items-center gap-2 mb-4">
       <KeyRound class="h-5 w-5 text-muted-foreground" />
       <h2 class="text-lg font-semibold">{$t('keystore.title')}</h2>

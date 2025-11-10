@@ -1,4 +1,3 @@
-use tauri::command;
 use tracing::info;
 use serde::Serialize;
 use crate::ethereum::{

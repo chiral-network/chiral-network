@@ -23,7 +23,6 @@ Chiral Network implements a BitTorrent-like file sharing model with instant seed
     - Instantly available when added (no upload process)
     - Identified by cryptographic hashes (SHA-256)
     - Discoverable through the DHT network
-    - Versioned for update tracking
 
 ### Basic File Sharing
 
