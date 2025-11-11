@@ -1138,6 +1138,7 @@ dependencies = [
  "if-addrs",
  "insta",
  "lazy_static",
+ "libc",
  "libp2p",
  "md4",
  "memmap2",
