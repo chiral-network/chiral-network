@@ -24,7 +24,7 @@
     Copy,
     Share2
   } from "lucide-svelte";
-  import { files, type FileItem, etcAccount } from "$lib/stores";
+  import { files, type FileItem } from "$lib/stores";
   import {
     loadSeedList,
     saveSeedList,
@@ -57,7 +57,7 @@
   function getFileIcon(fileName: string) {
     const ext = fileName.split(".").pop()?.toLowerCase() || "";
 
-    // Images
+    // Imageso
     if (
       ["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico"].includes(ext)
     )
@@ -373,12 +373,25 @@
         // dataTransfer.files becomes empty after the event completes
         const droppedFiles = Array.from(e.dataTransfer?.files || []);
 
-        if (!$etcAccount) {
-          showToast(
-            tr("upload.requireAccount"),
-            "warning",
-          );
-          return;
+        // STEP 1: Verify backend has active account before proceeding
+        if (isTauri) {
+          try {
+            const hasAccount = await invoke<boolean>("has_active_account");
+            if (!hasAccount) {
+              showToast(
+                "Please log in to your account before uploading files",
+                "error",
+              );
+              return;
+            }
+          } catch (error) {
+            console.error("Failed to verify account status:", error);
+            showToast(
+              "Failed to verify account status. Please try logging in again.",
+              "error",
+            );
+            return;
+          }
         }
 
         if (isUploading) {
@@ -389,7 +402,7 @@
           return;
         }
 
-        // CHECK: Ensure DHT is connected before attempting upload
+        // STEP 2: Ensure DHT is connected before attempting upload
         const dhtConnected = await isDhtConnected();
         if (!dhtConnected) {
           showToast(
@@ -580,12 +593,25 @@
   });
 
   async function openFileDialog() {
-    if (!$etcAccount) {
-      showToast(
-        tr("upload.requireAccount"),
-        "warning",
-      );
-      return;
+    // Verify backend has active account before proceeding
+    if (isTauri) {
+      try {
+        const hasAccount = await invoke<boolean>("has_active_account");
+        if (!hasAccount) {
+          showToast(
+            "Please log in to your account before uploading files",
+            "error",
+          );
+          return;
+        }
+      } catch (error) {
+        console.error("Failed to verify account status:", error);
+        showToast(
+          "Failed to verify account status. Please try logging in again.",
+          "error",
+        );
+        return;
+      }
     }
 
     if (isUploading) return;
@@ -636,15 +662,28 @@
   }
 
   async function addFilesFromPaths(paths: string[]) {
-    if (!$etcAccount) {
-      showToast(
-        tr("upload.requireAccount"),
-        "warning",
-      );
-      return;
+    // STEP 1: Verify backend has active account before proceeding
+    if (isTauri) {
+      try {
+        const hasAccount = await invoke<boolean>("has_active_account");
+        if (!hasAccount) {
+          showToast(
+            "Please log in to your account before uploading files",
+            "error",
+          );
+          return;
+        }
+      } catch (error) {
+        console.error("Failed to verify account status:", error);
+        showToast(
+          "Failed to verify account status. Please try logging in again.",
+          "error",
+        );
+        return;
+      }
     }
 
-    // CHECK: Ensure DHT is connected before attempting upload
+    // STEP 2: Ensure DHT is connected before attempting upload
     const dhtConnected = await isDhtConnected();
     if (!dhtConnected) {
       showToast(

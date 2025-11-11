@@ -371,8 +371,20 @@
   }
 
   function copyPrivateKey() {
-    with2FA(() => {
-      const privateKeyToCopy = $etcAccount ? $etcAccount.private_key : '';
+    with2FA(async () => {
+      let privateKeyToCopy = $etcAccount ? $etcAccount.private_key : '';
+      
+      // If private key is not in frontend store, fetch it from backend
+      if (!privateKeyToCopy && isTauri) {
+        try {
+          privateKeyToCopy = await invoke<string>('get_active_account_private_key');
+        } catch (error) {
+          console.error('Failed to get private key from backend:', error);
+          showToast('Failed to retrieve private key', 'error');
+          return;
+        }
+      }
+      
       if (privateKeyToCopy) {
         navigator.clipboard.writeText(privateKeyToCopy);
         showToast('Private key copied to clipboard!', 'success');
@@ -581,14 +593,14 @@
 
     try {
         if (isTauri) {
-            await walletService.saveToKeystore(keystorePassword);
+            // Explicitly pass the account from the frontend store
+            await walletService.saveToKeystore(keystorePassword, $etcAccount);
             keystoreSaveMessage = tr('keystore.success');
         } else {
             await new Promise(resolve => setTimeout(resolve, 1000));
             keystoreSaveMessage = tr('keystore.successSimulated');
         }
         keystorePassword = ''; // Clear password after saving
-        localStorage.setItem('chiral_first_run_complete', 'true');
     } catch (error) {
         console.error('Failed to save to keystore:', error);
         keystoreSaveMessage = tr('keystore.error', { error: String(error) });
@@ -741,11 +753,21 @@
     hdPassphrase = ev.passphrase || '';
     // set first account
     hdAccounts = [{ index: ev.account.index, change: ev.account.change, address: ev.account.address, privateKeyHex: ev.account.privateKeyHex, label: ev.name || 'Account 0' }];
-    // set as active
-    etcAccount.set({ address: ev.account.address, private_key: '0x' + ev.account.privateKeyHex });
+    
+    // Import to backend to set as active account
+    const privateKeyWithPrefix = '0x' + ev.account.privateKeyHex;
+    if (isTauri) {
+      try {
+        await invoke('import_chiral_account', { privateKey: privateKeyWithPrefix });
+      } catch (error) {
+        console.error('Failed to set backend account:', error);
+      }
+    }
+    
+    // set as active (frontend)
+    etcAccount.set({ address: ev.account.address, private_key: privateKeyWithPrefix });
     wallet.update(w => ({ ...w, address: ev.account.address }));
     if (isGethRunning) { await fetchBalance(); }
-    localStorage.setItem('chiral_first_run_complete', 'true');
   }
   function onHDAccountsChange(updated: HDAccountItem[]) {
     hdAccounts = updated;
