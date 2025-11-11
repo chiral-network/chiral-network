@@ -67,7 +67,7 @@
   let isGethInstalled = false
   let isStartingNode = false
   let isDownloading = false
-  let isCheckingGeth = true
+  let isCheckingGeth = false  // Start as false, will be set to true only when actually checking
   let downloadProgress = {
     downloaded: 0,
     total: 0,
@@ -96,6 +96,7 @@
   let natStatusUnlisten: (() => void) | null = null
   let lastNatState: NatReachabilityState | null = null
   let lastNatConfidence: NatConfidence | null = null
+  let cancelConnection = false
 
   // Always preserve connections - no unreliable time-based detection
   
@@ -322,7 +323,12 @@
     if (!isTauri) {
       // Mock DHT connection for web
       dhtStatus = 'connecting'
+      cancelConnection = false
       setTimeout(() => {
+        if (cancelConnection) {
+          dhtStatus = 'disconnected'
+          return
+        }
         dhtStatus = 'connected'
         dhtPeerId = '12D3KooWMockPeerIdForWebDemo123456789'
       }, 1000)
@@ -331,6 +337,7 @@
     
     try {
       dhtError = null
+      cancelConnection = false
       
       // Check if DHT is already running in backend
       const isRunning = await invoke<boolean>('is_dht_running').catch(() => false)
@@ -370,6 +377,13 @@
       // Add a small delay to show the connecting state
       await new Promise(resolve => setTimeout(resolve, 500))
       
+      // Check if user cancelled during the delay
+      if (cancelConnection) {
+        dhtStatus = 'disconnected'
+        dhtEvents = [...dhtEvents, '⚠ Connection cancelled by user']
+        return
+      }
+      
       const peerId = await dhtService.start({
         port: dhtPort,
         bootstrapNodes: dhtBootstrapNodes,
@@ -395,6 +409,13 @@
         
         // Add another small delay to show the connection attempt
         await new Promise(resolve => setTimeout(resolve, 1000))
+        
+        // Check if user cancelled during connection attempt
+        if (cancelConnection) {
+          await stopDht()
+          dhtEvents = [...dhtEvents, '⚠ Connection cancelled by user']
+          return
+        }
         
         try {
           // Try connecting to the first available bootstrap node
@@ -561,6 +582,13 @@
     }, 2000) as unknown as number
   }
   
+  function cancelDhtConnection() {
+    cancelConnection = true
+    dhtStatus = 'disconnected'
+    dhtEvents = [...dhtEvents, '⚠ Connection cancelled by user']
+    showToast($t('network.dht.connectionCancelled'), 'info')
+  }
+
   async function stopDht() {
     if (!isTauri) {
       dhtStatus = 'disconnected'
@@ -571,6 +599,7 @@
       copiedListenAddr = null
       lastNatState = null
       lastNatConfidence = null
+      cancelConnection = false
       return
     }
     
@@ -591,6 +620,7 @@
       copiedListenAddr = null
       lastNatState = null
       lastNatConfidence = null
+      cancelConnection = false
       
       // Small delay to ensure port is fully released
       await new Promise(resolve => setTimeout(resolve, 500))
@@ -942,25 +972,14 @@
       // In web mode, simulate that geth is not installed
       isGethInstalled = false
       isGethRunning = false
-      isCheckingGeth = false
       return
     }
 
     isCheckingGeth = true
     try {
       const status = await fetchGethStatus('./bin/geth-data', 1)
-      // If node is running from previous session, stop it for clean state
-      if (status.running) {
-        console.log('Stopping node from previous session...')
-        await invoke('stop_geth_node')
-        // Wait a moment for it to stop
-        await new Promise(resolve => setTimeout(resolve, 1000))
-        // Check status again
-        let updatedStatus = await fetchGethStatus('./bin/geth-data', 1)
-        applyGethStatus(updatedStatus)
-      } else {
-        applyGethStatus(status)
-      }
+      // Preserve the running state - don't stop the node if it's already running
+      applyGethStatus(status)
     } catch (error) {
       console.error('Failed to check geth status:', error)
     } finally {
@@ -1314,17 +1333,15 @@
     </div>
 
     <div class="space-y-3">
-      {#if isCheckingGeth}
-        <div class="text-center py-8">
-          <RefreshCw class="h-12 w-12 text-blue-500 mx-auto mb-2 animate-spin" />
-          <p class="text-sm text-muted-foreground mb-1">Checking if Geth is downloaded...</p>
-          <p class="text-xs text-muted-foreground">Please wait while we check your system</p>
-        </div>
-      {:else if !isGethInstalled}
+      {#if !isGethInstalled && !isGethRunning}
         <div class="text-center py-4">
           <Server class="h-12 w-12 text-muted-foreground mx-auto mb-2" />
-          <p class="text-sm text-muted-foreground mb-1">Geth not installed</p>
-          <p class="text-xs text-muted-foreground mb-3">Download and install the Chiral Network node</p>
+          <p class="text-sm text-muted-foreground mb-1">
+            {isCheckingGeth ? 'Checking...' : 'Geth not installed'}
+          </p>
+          {#if !isCheckingGeth}
+            <p class="text-xs text-muted-foreground mb-3">Download and install the Chiral Network node</p>
+          {/if}
           {#if downloadError}
             <div class="bg-red-500/10 border border-red-500/20 rounded-lg p-2 mb-3">
               <div class="flex items-center gap-2 justify-center">
@@ -1333,15 +1350,12 @@
               </div>
             </div>
           {/if}
-          <Button on:click={downloadGeth} disabled={isDownloading || isCheckingGeth}>
-            {#if isCheckingGeth}
-              <RefreshCw class="h-4 w-4 mr-2 animate-spin" />
-              Checking...
-            {:else}
+          {#if !isCheckingGeth}
+            <Button on:click={downloadGeth} disabled={isDownloading}>
               <Download class="h-4 w-4 mr-2" />
               Download Geth
-            {/if}
-          </Button>
+            </Button>
+          {/if}
         </div>
       {:else if isGethRunning}
         <div class="grid grid-cols-2 gap-4">
@@ -1459,6 +1473,12 @@
           <p class="text-sm text-muted-foreground">{$t('network.dht.connectingToBootstrap')}</p>
           <p class="text-xs text-muted-foreground mt-1">{dhtBootstrapNode}</p>
           <p class="text-xs text-yellow-500 mt-2">{$t('network.dht.attempt', { values: { connectionAttempts: connectionAttempts } })}</p>
+          <div class="mt-4">
+            <Button variant="outline" size="sm" on:click={cancelDhtConnection}>
+              <Square class="h-4 w-4 mr-2" />
+              {$t('network.dht.cancel')}
+            </Button>
+          </div>
         </div>
       {:else}
         <div class="space-y-3">
