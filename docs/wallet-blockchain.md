@@ -142,15 +142,11 @@ Handles all blockchain operations via **JSON-RPC**:
 2. The address becomes the node’s **on-chain identity** for earning or paying tokens.
 3. User securely backs up mnemonic/private key (never stored remotely).
 
----
-
 ### 6.2 Import Wallet
 
 1. Existing users **import a wallet** via mnemonic/private key in Clef.
 2. Wallet state is restored, including balances and transaction history.
 3. Node resumes previous seeding/downloading state with the same identity.
-
----
 
 ### 6.3 Pay for Download (Leecher Flow)
 
@@ -160,16 +156,12 @@ Handles all blockchain operations via **JSON-RPC**:
 4. Seeder receives proof of payment before transfer begins.
 5. Transaction + download logs stored locally for tracking.
 
----
-
 ### 6.4 Earn for Seeding (Seeder Flow)
 
 1. Seeder advertises files with wallet address attached.
 2. Leecher initiates payment → Clef signs → Geth broadcasts.
 3. Seeder account receives payment upon confirmation.
 4. Transaction + upload logs tracked locally.
-
----
 
 ### 6.5 View Transactions and File History
 
@@ -200,6 +192,26 @@ The **Wallet & Blockchain Layer** in Chiral Network now provides:
 - ✅ Fully decoupled from file-sharing protocols
 - ✅ Minimal transaction states (`pending` / `confirmed`)
 - ✅ Extensible for future token and smart contract logic
+
+---
+
+## **9. Future Exploration – Alloy**
+
+The current design intentionally relies on **Geth** because it provides the **most stable and complete implementation** of an Ethereum-compatible client that still supports **mining** on **Ethereum Classic (ETC)** networks.
+
+During design discussions, it was noted that:
+
+- **Geth** remains the only reliable option for mining on legacy ETH/ETC chains.
+- **Alloy** (Rust-based Ethereum SDK) does **not currently support mining**, so Geth must remain part of the architecture for now.
+- Because Geth already exposes a **wallet RPC interface**, it simplifies development to handle both **wallet** and **blockchain** functions directly through Geth’s HTTP API rather than maintaining Clef separately at this stage.
+- **Long-term goal:**
+  - Migrate wallet operations to **Alloy** for improved modularity, performance, and Rust-native integration.
+  - Retain Geth only for **mining and consensus** functions.
+  - Eventually, if the project grows and mining becomes obsolete (e.g., due to network transition or impracticality of CPU mining), **Geth could be dropped entirely**.
+
+Preliminary review of Alloy documentation suggests it **likely supports Ethereum Classic** and legacy transaction formats (see [Alloy legacy transaction example](https://alloy.rs/examples/transactions/send_legacy_transaction)), though this should be confirmed through testing.
+
+In summary, the **current approach keeps Geth as the unified node for wallet + blockchain + mining**, while **Alloy is reserved as a future candidate** for wallet abstraction once mining support is no longer a requirement.
 
 ---
 
