@@ -39,6 +39,7 @@ pub mod multi_source_download;
 
 mod logger;
 pub mod bittorrent_handler;
+pub mod download_restart;
 
 use protocols::{ProtocolManager, ProtocolHandler};
 
@@ -365,6 +366,9 @@ struct AppState {
     file_logger: Arc<Mutex<Option<logger::ThreadSafeWriter>>>,
     // BitTorrent handler for creating and seeding torrents
     bittorrent_handler: Arc<bittorrent_handler::BitTorrentHandler>,
+
+    // Download restart service for pause/resume functionality
+    download_restart: Mutex<Option<Arc<download_restart::DownloadRestartService>>>,
 }
 
 /// Tauri command to create a new Chiral account
@@ -5072,6 +5076,60 @@ async fn download_file_http(
     Ok(())
 }
 
+// Download restart Tauri commands
+
+#[tauri::command]
+async fn start_download_restart(
+    request: download_restart::StartDownloadRequest,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let dr_guard = state.download_restart.lock().await;
+    if let Some(ref service) = *dr_guard {
+        service.start_download(request).await.map_err(|e| e.to_string())
+    } else {
+        Err("Download restart service not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+async fn pause_download_restart(
+    download_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let dr_guard = state.download_restart.lock().await;
+    if let Some(ref service) = *dr_guard {
+        service.pause_download(&download_id).await.map_err(|e| e.to_string())
+    } else {
+        Err("Download restart service not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+async fn resume_download_restart(
+    download_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let dr_guard = state.download_restart.lock().await;
+    if let Some(ref service) = *dr_guard {
+        service.resume_download(&download_id).await.map_err(|e| e.to_string())
+    } else {
+        Err("Download restart service not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+async fn get_download_status_restart(
+    download_id: String,
+    state: State<'_, AppState>,
+) -> Result<download_restart::DownloadStatus, String> {
+    let dr_guard = state.download_restart.lock().await;
+    if let Some(ref service) = *dr_guard {
+        service.get_status(&download_id).await.map_err(|e| e.to_string())
+    } else {
+        Err("Download restart service not initialized".to_string())
+    }
+}
+
 #[cfg(not(test))]
 fn main() {
     // Don't initialize tracing subscriber here - we'll do it in setup() after loading settings
@@ -5216,6 +5274,9 @@ fn main() {
                     .unwrap_or_else(|| std::env::current_dir().unwrap().join("downloads"));
                 Arc::new(bittorrent_handler::BitTorrentHandler::new(download_dir))
             },
+
+            // Download restart service (will be initialized in setup)
+            download_restart: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
@@ -5382,7 +5443,12 @@ fn main() {
             check_directory_exists,
             get_multiaddresses,
             clear_seed_list,
-            get_full_network_stats
+            get_full_network_stats,
+            // Download restart commands
+            start_download_restart,
+            pause_download_restart,
+            resume_download_restart,
+            get_download_status_restart
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -5624,6 +5690,22 @@ fn main() {
                                 tracing::error!("Failed to start HTTP server: {}", e);
                                 eprintln!("⚠️  HTTP server failed to start: {}", e);
                             }
+                        }
+                    }
+                });
+            }
+
+            // Initialize download restart service
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Some(state) = app_handle.try_state::<AppState>() {
+                        let download_restart_service = Arc::new(download_restart::DownloadRestartService::new(
+                            app_handle.clone()
+                        ));
+                        if let Ok(mut dr_guard) = state.download_restart.try_lock() {
+                            *dr_guard = Some(download_restart_service);
+                            tracing::info!("Download restart service initialized");
                         }
                     }
                 });
