@@ -10,6 +10,7 @@
   import { dhtService } from '$lib/dht';
   import { paymentService } from '$lib/services/paymentService';
   import type { FileMetadata } from '$lib/dht';
+  import { buildSaveDialogOptions } from '$lib/utils/saveDialog';
   import SearchResultCard from './SearchResultCard.svelte';
   import { dhtSearchHistory, type SearchHistoryEntry, type SearchStatus } from '$lib/stores/searchHistory';
   import PeerSelectionModal, { type PeerInfo } from './PeerSelectionModal.svelte';
@@ -598,13 +599,7 @@
       const { save } = await import('@tauri-apps/plugin-dialog');
 
       // Show file save dialog
-      const outputPath = await save({
-        defaultPath: file.fileName,
-        filters: [{
-          name: 'All Files',
-          extensions: ['*']
-        }]
-      });
+      const outputPath = await save(buildSaveDialogOptions(file.fileName));
 
       if (!outputPath) {
         pushMessage('Download cancelled by user', 'info');

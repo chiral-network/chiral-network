@@ -15,6 +15,7 @@
   import { t } from 'svelte-i18n'
   import { get } from 'svelte/store'
   import { toHumanReadableSize } from '$lib/utils'
+  import { buildSaveDialogOptions } from '$lib/utils/saveDialog'
   import { initDownloadTelemetry, disposeDownloadTelemetry } from '$lib/downloadTelemetry'
   import { MultiSourceDownloadService, type MultiSourceProgress } from '$lib/services/multiSourceDownloadService'
   import { listen } from '@tauri-apps/api/event'
@@ -1190,13 +1191,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
         // Show file save dialog
         console.log("🔍 DEBUG: Opening file save dialog...");
-        const outputPath = await save({
-          defaultPath: fileToDownload.name,
-          filters: [{
-            name: 'All Files',
-            extensions: ['*']
-          }]
-        });
+        const outputPath = await save(buildSaveDialogOptions(fileToDownload.name));
         console.log("✅ DEBUG: File save dialog result:", outputPath);
 
         if (!outputPath) {
