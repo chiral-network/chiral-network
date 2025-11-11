@@ -660,7 +660,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
       // Restore active downloads (mark as paused, user can resume manually)
       if (active && active.length > 0) {
-        const restoredFiles = active.map(file => ({
+        const restoredFiles = active.map((file: any) => ({
           ...file,
           status: 'paused' as const, // Don't auto-start, let user resume
           speed: '0 B/s',
@@ -670,7 +670,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
         files.update(f => [...f, ...restoredFiles])
         
         // Track which downloads were resumed
-        active.forEach(file => resumedDownloads.add(file.id))
+        active.forEach((file: any) => resumedDownloads.add(file.id))
         resumeCount += active.length
       }
 
@@ -858,25 +858,23 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
     // Then apply status filter
     switch (filterStatus) {
-  case 'active':
-    return filtered.filter(f => f.status === 'downloading')
-  case 'paused':
-    return filtered.filter(f => f.status === 'paused')
-  case 'queued':
-    return filtered.filter(f => f.status === 'queued')
-  case 'completed':
-    return filtered.filter(f => f.status === 'completed')
-  case 'failed':
-    return filtered.filter(f => f.status === 'failed')
-  case 'canceled':
-    return filtered.filter(f => f.status === 'canceled')
-  default:
-    return filtered
-}
+      case 'active':
+        return filtered.filter(f => f.status === 'downloading')
+      case 'paused':
+        return filtered.filter(f => f.status === 'paused')
+      case 'queued':
+        return filtered.filter(f => f.status === 'queued')
+      case 'completed':
+        return filtered.filter(f => f.status === 'completed')
+      case 'failed':
+        return filtered.filter(f => f.status === 'failed')
+      case 'canceled':
+        return filtered.filter(f => f.status === 'canceled')
+      default:
+        return filtered
+    }
 
-  })()
-
-  // Calculate counts from the filtered set (excluding uploaded/seeding)
+  })()  // Calculate counts from the filtered set (excluding uploaded/seeding)
   $: allFilteredDownloads = allDownloads.filter(f => f.status !== 'uploaded' && f.status !== 'seeding')
   $: activeCount = allFilteredDownloads.filter(f => f.status === 'downloading').length
   $: pausedCount = allFilteredDownloads.filter(f => f.status === 'paused').length

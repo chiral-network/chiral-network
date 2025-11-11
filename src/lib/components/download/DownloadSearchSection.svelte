@@ -22,7 +22,10 @@
   const dispatch = createEventDispatcher<{ download: FileMetadata; message: ToastPayload }>();
   const tr = (key: string, params?: Record<string, unknown>) => (get(t) as any)(key, params);
 
-  const SEARCH_TIMEOUT_MS = 10_000; // 10 seconds for DHT searches to find peers
+  // 40 second timeout gives backend (35s) enough time, which gives Kademlia (30s) enough time
+  // Timeout hierarchy: Frontend (40s) > Backend (35s) > Kademlia (30s) + Provider delay (3-5s)
+  // This prevents premature timeouts that would kill queries that would eventually succeed
+  const SEARCH_TIMEOUT_MS = 40_000;
 
   let searchHash = '';
   let searchMode = 'merkle_hash'; // 'merkle_hash', 'cid', 'magnet', or 'torrent'

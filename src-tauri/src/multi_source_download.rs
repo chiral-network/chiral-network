@@ -315,10 +315,11 @@ impl MultiSourceDownloadService {
             }
         }
 
-        // Search for file metadata
+        // Search for file metadata with sufficient timeout for DHT queries
+        // Using 35s to match main.rs and allow full Kademlia query time (30s) + provider queries
         let metadata = match self
             .dht_service
-            .synchronous_search_metadata(file_hash.clone(), 5000)
+            .synchronous_search_metadata(file_hash.clone(), 35000)
             .await
         {
             Ok(Some(metadata)) => metadata,
