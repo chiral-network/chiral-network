@@ -7,7 +7,6 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import { Play, Pause, AlertCircle, CheckCircle, Download as DownloadIcon } from 'lucide-svelte'
-  import { t } from 'svelte-i18n'
 
   export let downloadId: string = ''
   export let sourceUrl: string = ''
@@ -32,7 +31,7 @@
   let isResuming = false
 
   // Banner messages for different restart scenarios
-  $: restartBanner = getRestartBanner(status?.state, status?.last_error)
+  $: restartBanner = getRestartBanner(status?.state, status?.last_error ?? null)
 
   function getRestartBanner(state: string | undefined, error: string | null): { type: 'info' | 'warning' | 'error' | null, message: string } | null {
     if (!state) return null
@@ -214,7 +213,6 @@
   $: canStart = !status || status.state === 'Idle' || status.state === 'Failed'
   $: canPause = status && (status.state === 'Downloading' || status.state === 'PersistingProgress')
   $: canResume = status && (status.state === 'Paused' || status.state === 'AwaitingResume')
-  $: isActive = status && !['Idle', 'Completed', 'Failed', 'Paused', 'AwaitingResume'].includes(status.state)
 </script>
 
 <Card class="p-6 space-y-4">
@@ -224,7 +222,7 @@
       Download with Pause/Resume
     </h3>
     {#if status}
-      <Badge variant={status.state === 'Completed' ? 'success' : status.state === 'Failed' ? 'destructive' : 'default'}>
+      <Badge variant={status.state === 'Completed' ? 'default' : status.state === 'Failed' ? 'destructive' : 'secondary'}>
         {stateNames[status.state] || status.state}
       </Badge>
     {/if}
