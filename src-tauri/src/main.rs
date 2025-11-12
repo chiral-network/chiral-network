@@ -1052,7 +1052,7 @@ async fn start_dht_node(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     port: u16,
-    bootstrap_nodes: Vec<String>,
+    mut bootstrap_nodes: Vec<String>,
     enable_autonat: Option<bool>,
     autonat_probe_interval_secs: Option<u64>,
     autonat_servers: Option<Vec<String>>,
@@ -1106,6 +1106,19 @@ async fn start_dht_node(
     if std::env::var("CHIRAL_DISABLE_AUTORELAY").ok().as_deref() == Some("1") {
         final_enable_autorelay = false;
         tracing::info!("AutoRelay disabled via env CHIRAL_DISABLE_AUTORELAY=1");
+    }
+
+    // PHASE 2 FIX: Merge preferred relays into bootstrap nodes
+    // This ensures relay nodes serve dual purpose:
+    // 1. Circuit Relay v2 for NAT traversal
+    // 2. DHT bootstrap for file discovery/publishing
+    if let Some(relays) = &preferred_relays {
+        for relay in relays {
+            if !bootstrap_nodes.contains(relay) {
+                info!("🔗 Adding relay {} to bootstrap nodes for DHT operations", relay);
+                bootstrap_nodes.push(relay.clone());
+            }
+        }
     }
 
     let proj_dirs = ProjectDirs::from("com", "chiral-network", "chiral-network")
