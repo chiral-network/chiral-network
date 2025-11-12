@@ -36,10 +36,27 @@
       }
     }
 
-    // DHT status will be checked when user starts the network
-    // Initialize with unknown state
-    dhtIsRunning = null; // null = unknown, false = not running, true = running
-    relayServerRunning = false;
+    // Check if DHT is actually running
+    await checkDhtStatus();
+  }
+
+  async function checkDhtStatus() {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const isRunning = await invoke<boolean>('is_dht_running').catch(() => false);
+      dhtIsRunning = isRunning;
+      
+      // If DHT is running and relay server is enabled in settings, mark it as running
+      if (isRunning && relayServerEnabled) {
+        relayServerRunning = true;
+      } else {
+        relayServerRunning = false;
+      }
+    } catch (error) {
+      console.error('Failed to check DHT status:', error);
+      dhtIsRunning = false;
+      relayServerRunning = false;
+    }
   }
 
   async function saveSettings() {
@@ -133,32 +150,47 @@
     saveSettings();
   }
 
-  onMount(async () => {
-    await loadSettings();
+  let statusCheckInterval: number | undefined;
 
-    // Initialize relay error service with preferred relays
-    const preferredRelays = preferredRelaysText
-      .split('\n')
-      .map((r) => r.trim())
-      .filter((r) => r.length > 0);
+  onMount(() => {
+    // Load settings and start status checking
+    (async () => {
+      await loadSettings();
 
-    if (preferredRelays.length > 0 || autoRelayEnabled) {
-      await relayErrorService.initialize(preferredRelays, autoRelayEnabled);
+      // Periodically check DHT status (every 3 seconds)
+      statusCheckInterval = window.setInterval(checkDhtStatus, 3000);
 
-      // Attempt to connect to best relay if AutoRelay is enabled
-      if (autoRelayEnabled && dhtIsRunning) {
-        try {
-          const result = await relayErrorService.connectToRelay();
-          if (result.success) {
-            console.log('Successfully connected to relay via error service');
-          } else {
-            console.warn('Failed to connect to relay:', result.error);
+      // Initialize relay error service with preferred relays
+      const preferredRelays = preferredRelaysText
+        .split('\n')
+        .map((r) => r.trim())
+        .filter((r) => r.length > 0);
+
+      if (preferredRelays.length > 0 || autoRelayEnabled) {
+        await relayErrorService.initialize(preferredRelays, autoRelayEnabled);
+
+        // Attempt to connect to best relay if AutoRelay is enabled
+        if (autoRelayEnabled && dhtIsRunning) {
+          try {
+            const result = await relayErrorService.connectToRelay();
+            if (result.success) {
+              console.log('Successfully connected to relay via error service');
+            } else {
+              console.warn('Failed to connect to relay:', result.error);
+            }
+          } catch (error) {
+            console.error('Error connecting to relay:', error);
           }
-        } catch (error) {
-          console.error('Error connecting to relay:', error);
         }
       }
-    }
+    })();
+
+    // Cleanup interval on unmount
+    return () => {
+      if (statusCheckInterval !== undefined) {
+        clearInterval(statusCheckInterval);
+      }
+    };
   });
 </script>
 

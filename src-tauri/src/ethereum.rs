@@ -268,6 +268,8 @@ impl GethProcess {
             .arg("--http.corsdomain")
             .arg("*")
             .arg("--syncmode")
+            .arg("snap")
+            .arg("--gcmode")
             .arg("full")
             .arg("--maxpeers")
             .arg("50")
@@ -630,6 +632,96 @@ pub async fn get_mining_status() -> Result<bool, String> {
         .ok_or("Invalid mining status response")?;
 
     Ok(is_mining)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncStatus {
+    pub syncing: bool,
+    pub current_block: u64,
+    pub highest_block: u64,
+    pub starting_block: u64,
+    pub progress_percent: f64,
+    pub blocks_remaining: u64,
+    pub estimated_seconds_remaining: Option<u64>,
+}
+
+pub async fn get_sync_status() -> Result<SyncStatus, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "eth_syncing",
+        "params": [],
+        "id": 1
+    });
+
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get sync status: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error: {}", error));
+    }
+
+    // eth_syncing returns false if not syncing, or an object if syncing
+    let result = &json_response["result"];
+    
+    if result.is_boolean() && result.as_bool() == Some(false) {
+        // Not syncing - fully synced
+        let block_number = get_block_number().await?;
+        return Ok(SyncStatus {
+            syncing: false,
+            current_block: block_number,
+            highest_block: block_number,
+            starting_block: block_number,
+            progress_percent: 100.0,
+            blocks_remaining: 0,
+            estimated_seconds_remaining: Some(0),
+        });
+    }
+
+    // Parse sync progress
+    let current_hex = result["currentBlock"].as_str().ok_or("Missing currentBlock")?;
+    let highest_hex = result["highestBlock"].as_str().ok_or("Missing highestBlock")?;
+    let starting_hex = result["startingBlock"].as_str().ok_or("Missing startingBlock")?;
+
+    let current_block = u64::from_str_radix(current_hex.trim_start_matches("0x"), 16)
+        .map_err(|e| format!("Invalid currentBlock: {}", e))?;
+    let highest_block = u64::from_str_radix(highest_hex.trim_start_matches("0x"), 16)
+        .map_err(|e| format!("Invalid highestBlock: {}", e))?;
+    let starting_block = u64::from_str_radix(starting_hex.trim_start_matches("0x"), 16)
+        .map_err(|e| format!("Invalid startingBlock: {}", e))?;
+
+    let blocks_remaining = highest_block.saturating_sub(current_block);
+    let total_blocks = highest_block.saturating_sub(starting_block);
+    let progress_percent = if total_blocks > 0 {
+        ((current_block - starting_block) as f64 / total_blocks as f64) * 100.0
+    } else {
+        100.0
+    };
+
+    // Estimate time remaining based on ~850 blocks per 8 seconds (observed rate)
+    let estimated_seconds_remaining = if blocks_remaining > 0 {
+        Some((blocks_remaining as f64 / 850.0 * 8.0) as u64)
+    } else {
+        Some(0)
+    };
+
+    Ok(SyncStatus {
+        syncing: true,
+        current_block,
+        highest_block,
+        starting_block,
+        progress_percent,
+        blocks_remaining,
+        estimated_seconds_remaining,
+    })
 }
 
 pub async fn get_hashrate() -> Result<String, String> {
@@ -1562,13 +1654,55 @@ pub async fn get_network_hashrate() -> Result<String, String> {
     let difficulty = u128::from_str_radix(&difficulty_hex[2..], 16)
         .map_err(|e| format!("Failed to parse difficulty: {}", e))?;
 
-    // For Chiral private network, estimate network hashrate from difficulty
-    // The relationship between hashrate and difficulty depends on the algorithm
-    // For Ethash on a private network with CPU mining:
-    // Network Hashrate ≈ Difficulty / Block Time
-    // This gives us the hash rate needed to mine a block at this difficulty
-    let estimated_block_time = 15.0; // seconds (Ethereum default)
-    let hashrate = difficulty as f64 / estimated_block_time;
+    // Get actual block time from recent blocks instead of using a hard-coded estimate
+    let latest_block_number_hex = json_response["result"]["number"]
+        .as_str()
+        .ok_or("Invalid block number response")?;
+    let latest_block_number = u64::from_str_radix(&latest_block_number_hex[2..], 16)
+        .map_err(|e| format!("Failed to parse block number: {}", e))?;
+    
+    let latest_timestamp_hex = json_response["result"]["timestamp"]
+        .as_str()
+        .ok_or("Invalid timestamp response")?;
+    let latest_timestamp = u64::from_str_radix(&latest_timestamp_hex[2..], 16)
+        .map_err(|e| format!("Failed to parse timestamp: {}", e))?;
+
+    // Calculate actual average block time from the last 100 blocks (or fewer if network is new)
+    let lookback_blocks = 100.min(latest_block_number.saturating_sub(1));
+    let mut actual_block_time = 15.0; // Default fallback
+    
+    if lookback_blocks > 0 {
+        let previous_block_number = latest_block_number.saturating_sub(lookback_blocks);
+        let previous_block = json!({
+            "jsonrpc": "2.0",
+            "method": "eth_getBlockByNumber",
+            "params": [format!("0x{:x}", previous_block_number), false],
+            "id": 1
+        });
+
+        if let Ok(prev_response) = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
+            .json(&previous_block)
+            .send()
+            .await
+        {
+            if let Ok(prev_json) = prev_response.json::<serde_json::Value>().await {
+                if let Some(prev_timestamp_hex) = prev_json["result"]["timestamp"].as_str() {
+                    if let Ok(prev_timestamp) = u64::from_str_radix(&prev_timestamp_hex[2..], 16) {
+                        let time_diff = latest_timestamp.saturating_sub(prev_timestamp);
+                        if time_diff > 0 {
+                            actual_block_time = time_diff as f64 / lookback_blocks as f64;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // For Chiral private network, estimate network hashrate from difficulty and actual block time
+    // Network Hashrate = Difficulty / Block Time
+    // This gives us the hash rate needed to mine a block at this difficulty in the observed time
+    let hashrate = difficulty as f64 / actual_block_time;
 
     // Convert to human-readable format
     let formatted = if hashrate >= 1_000_000_000_000.0 {

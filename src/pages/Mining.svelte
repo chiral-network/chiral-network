@@ -9,12 +9,13 @@
   import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw, Calculator, DollarSign } from 'lucide-svelte'
   import { onDestroy, onMount, getContext } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
-  import { etcAccount, miningState } from '$lib/stores'
+  import { miningState } from '$lib/stores'
   import { getVersion } from "@tauri-apps/api/app";
   import { t } from 'svelte-i18n';
   import { goto } from '@mateothegreat/svelte5-router';
   import { walletService } from '$lib/wallet';
-  import TemporaryAccountWarning from '$lib/components/TemporaryAccountWarning.svelte'; 
+  import TemporaryAccountWarning from '$lib/components/TemporaryAccountWarning.svelte';
+  import { showToast } from '$lib/toast';
   
   // Local UI state only
   let isTauri = false
@@ -25,6 +26,15 @@
   let cpuThreads = navigator.hardwareConcurrency || 4
   let selectedThreads = Math.floor(cpuThreads / 2)
   let error = ''
+
+  // Blockchain sync status
+  let isSyncing = false
+  let syncProgress = 0
+  let syncCurrentBlock = 0
+  let syncHighestBlock = 0
+  let syncBlocksRemaining = 0
+  let syncEstimatedSecondsRemaining: number | null = null
+  let lastSyncNotificationShown = false
 
   // Temporary account tracking
   let isTemporaryAccount = false
@@ -77,7 +87,7 @@
   $: dailyProfit = dailyRevenue - dailyPowerCostUSD
   $: monthlyProfit = dailyProfit * 30
   $: yearlyProfit = dailyProfit * 365
-  $: breakEvenDays = dailyProfit > 0 ? 0 : Infinity // No upfront hardware cost in this model
+  // $: breakEvenDays = dailyProfit > 0 ? 0 : Infinity // No upfront hardware cost in this model (unused)
   $: profitMargin = dailyRevenue > 0 ? ((dailyProfit / dailyRevenue) * 100) : 0
   $: isProfitable = dailyProfit > 0
 
@@ -181,6 +191,47 @@
   // Function to convert Celsius to Fahrenheit
   function toFahrenheit(celsius: number): number {
     return (celsius * 9/5) + 32;
+  }
+
+  async function updateSyncStatus() {
+    try {
+      const syncStatus = await invoke('get_blockchain_sync_status') as {
+        syncing: boolean,
+        current_block: number,
+        highest_block: number,
+        progress_percent: number,
+        blocks_remaining: number,
+        estimated_seconds_remaining: number | null
+      }
+
+      const wasSyncing = isSyncing
+      isSyncing = syncStatus.syncing
+      syncProgress = syncStatus.progress_percent
+      syncCurrentBlock = syncStatus.current_block
+      syncHighestBlock = syncStatus.highest_block
+      syncBlocksRemaining = syncStatus.blocks_remaining
+      syncEstimatedSecondsRemaining = syncStatus.estimated_seconds_remaining
+
+      // Show notification when sync completes
+      if (wasSyncing && !isSyncing && !lastSyncNotificationShown && $miningState.isMining) {
+        showToast('Blockchain sync complete! Mining is now active.', 'success')
+        lastSyncNotificationShown = true
+      }
+
+      // Reset notification flag when syncing starts again
+      if (isSyncing) {
+        lastSyncNotificationShown = false
+      }
+    } catch (e) {
+      console.error('Failed to get sync status:', e)
+    }
+  }
+
+  function formatTimeRemaining(seconds: number | null): string {
+    if (seconds === null || seconds === 0) return 'Complete'
+    if (seconds < 60) return `${Math.round(seconds)}s`
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`
+    return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
   }
 
   // Determine log level from a log line and return a semantic level
@@ -343,20 +394,11 @@
             : '';
   }
 
-  $: if (!$etcAccount) {
-    // Clear mining state when no account is present
-    if ($miningState.isMining) {
-      stopMining(); // Stop mining if running
-    }
-    // Reset mining display state
-    $miningState.totalRewards = 0;
-    $miningState.blocksFound = 0;
-    $miningState.recentBlocks = [];
-  }
-
   // Button disabled if either warning exists
   $: isInvalid = !!threadsWarning || !!intensityWarning;
 
+  // Track if backend has an active account
+  let hasActiveAccount = false;
 
   let hoveredPoint: MiningHistoryPoint | null = null;
   let hoveredIndex: number | null = null;
@@ -369,6 +411,16 @@
     }
     catch{
       isTauri = false
+    }
+
+    // Check if account exists in backend
+    if (isTauri) {
+      try {
+        hasActiveAccount = await invoke<boolean>("has_active_account");
+      } catch (error) {
+        console.error("Failed to check account status:", error);
+        hasActiveAccount = false;
+      }
     }
 
     await checkGethStatus()
@@ -413,6 +465,7 @@
         ]);
       }
       await updateNetworkStats();
+      await updateSyncStatus(); // Check blockchain sync status
       if (isTauri) {
         await updateCpuTemperature();
         await updatePowerConsumption();
@@ -525,10 +578,16 @@
       ]
       
       // Also fetch account balance and blocks mined if we have an account and are mining
-      if ($etcAccount && $miningState.isMining) {
+      if (isTauri && $miningState.isMining) {
+        try {
+          const accountAddress = await invoke<string>("get_active_account_address");
           promises.push(invoke('get_blocks_mined', { 
-            address: $etcAccount.address 
+            address: accountAddress 
           }) as Promise<number>)
+        } catch (error) {
+          // Account not available, skip blocks mined check
+          console.log("No active account for blocks mined check");
+        }
       }
       
       const results = await Promise.all(promises)
@@ -604,13 +663,8 @@
   async function createTemporaryAccount() {
     try {
       // Generate a temporary account using walletService
+      // This already sets both backend and frontend account state
       const tempAccount = await walletService.createAccount()
-
-      // Set as active account
-      etcAccount.set({
-        address: tempAccount.address,
-        private_key: tempAccount.private_key
-      })
 
       // Mark as temporary
       isTemporaryAccount = true
@@ -625,12 +679,21 @@
 
   async function startMining() {
     // Auto-create temporary account if none exists
-    if (!$etcAccount) {
+    if (isTauri) {
       try {
-        await createTemporaryAccount()
-      } catch (e) {
+        const hasAccount = await invoke<boolean>("has_active_account");
+        if (!hasAccount) {
+          try {
+            await createTemporaryAccount()
+          } catch (e) {
+            error = $t('mining.errors.noAccount')
+            return
+          }
+        }
+      } catch (error) {
+        console.error("Failed to verify account status:", error);
         error = $t('mining.errors.noAccount')
-        return
+        return;
       }
     }
     
@@ -643,8 +706,11 @@
     validationError = null
     
     try {
+      // Get account address from backend
+      const accountAddress = await invoke<string>("get_active_account_address");
+      
       await invoke('start_miner', {
-        address: $etcAccount?.address || '',
+        address: accountAddress,
         threads: selectedThreads,
         dataDir: './bin/geth-data'
       })
@@ -706,9 +772,18 @@
 
   // Decentralized Pool Functions
   async function discoverPools() {
-    if (!$etcAccount) {
-      poolError = 'Please create or import an account first.';
-      return;
+    if (isTauri) {
+      try {
+        const hasAccount = await invoke<boolean>("has_active_account");
+        if (!hasAccount) {
+          poolError = 'Please create or import an account first.';
+          return;
+        }
+      } catch (error) {
+        console.error("Failed to verify account status:", error);
+        poolError = 'Please create or import an account first.';
+        return;
+      }
     }
     
     isDiscovering = true;
@@ -730,9 +805,18 @@
   }
 
   async function joinPool(pool: MiningPool) {
-    if (!$etcAccount) {
-      poolError = 'Please create or import an account first.';
-      return;
+    if (isTauri) {
+      try {
+        const hasAccount = await invoke<boolean>("has_active_account");
+        if (!hasAccount) {
+          poolError = 'Please create or import an account first.';
+          return;
+        }
+      } catch (error) {
+        console.error("Failed to verify account status:", error);
+        poolError = 'Please create or import an account first.';
+        return;
+      }
     }
     
     if (pool.status === 'Offline') {
@@ -743,9 +827,12 @@
     poolError = '';
     
     try {
+      // Get account address from backend
+      const accountAddress = await invoke<string>("get_active_account_address");
+      
       const joinedInfo = await invoke('join_mining_pool', { 
         poolId: pool.id, 
-        address: $etcAccount.address 
+        address: accountAddress
       }) as JoinedPoolInfo;
       
       currentPool = joinedInfo;
@@ -771,9 +858,18 @@
   }
 
   async function createNewPool() {
-    if (!$etcAccount) {
-      poolError = 'Please create or import an account first.';
-      return;
+    if (isTauri) {
+      try {
+        const hasAccount = await invoke<boolean>("has_active_account");
+        if (!hasAccount) {
+          poolError = 'Please create or import an account first.';
+          return;
+        }
+      } catch (error) {
+        console.error("Failed to verify account status:", error);
+        poolError = 'Please create or import an account first.';
+        return;
+      }
     }
     
     if (!newPool.name.trim()) {
@@ -784,8 +880,11 @@
     poolError = '';
     
     try {
+      // Get account address from backend
+      const accountAddress = await invoke<string>("get_active_account_address");
+      
       const createdPool = await invoke('create_mining_pool', {
-        address: $etcAccount.address,
+        address: accountAddress,
         name: newPool.name,
         description: newPool.description,
         feePercentage: newPool.fee_percentage,
@@ -925,9 +1024,20 @@
   }
 
   // Add a new pool (for modal form)
-  function addPool() {
+  async function addPool() {
     // Basic validation
     if (!newPool.name.trim()) return;
+    
+    // Get account address from backend
+    let createdByAddress = '';
+    if (isTauri) {
+      try {
+        createdByAddress = await invoke<string>("get_active_account_address");
+      } catch (error) {
+        console.error("Failed to get account address:", error);
+      }
+    }
+    
     // Generate a unique id for the new pool
     const id = `pool-${Date.now()}`;
     availablePools = [
@@ -940,7 +1050,7 @@
         total_hashrate: '0 H/s',
         last_block_time: 0,
         blocks_found_24h: 0,
-        created_by: $etcAccount ? $etcAccount.address : '',
+        created_by: createdByAddress,
       }
     ];
     // Reset form and close modal
@@ -1421,13 +1531,46 @@
           </div>
         </div>
       {/if}
-      {#if !$etcAccount && isGethRunning}
+      {#if !hasActiveAccount && isGethRunning}
         <div class="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 mt-2">
           <div class="flex items-center gap-2">
             <AlertCircle class="h-4 w-4 text-blue-500 flex-shrink-0" />
                         <p class="text-sm text-blue-600">
                           {@html $t('mining.errors.noAccountToStart', { values: { link: '<a href="/account" class="underline font-medium">' + $t('mining.accountPage') + '</a>' } })}
                         </p>
+          </div>
+        </div>
+      {/if}
+
+      <!-- Blockchain Sync Status -->
+      {#if isSyncing}
+        <div class="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4 mt-2">
+          <div class="space-y-3">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <RefreshCw class="h-4 w-4 text-blue-500 animate-spin" />
+                <span class="text-sm font-medium text-blue-600">Blockchain Syncing...</span>
+              </div>
+              <span class="text-xs text-blue-600">{syncProgress.toFixed(1)}%</span>
+            </div>
+            <Progress value={syncProgress} max={100} class="h-2 [&>div]:bg-blue-500" />
+            <div class="grid grid-cols-2 gap-4 text-xs text-blue-600">
+              <div>
+                <span class="text-muted-foreground">Current:</span> #{syncCurrentBlock.toLocaleString()}
+              </div>
+              <div>
+                <span class="text-muted-foreground">Highest:</span> #{syncHighestBlock.toLocaleString()}
+              </div>
+              <div>
+                <span class="text-muted-foreground">Remaining:</span> {syncBlocksRemaining.toLocaleString()} blocks
+              </div>
+              <div>
+                <span class="text-muted-foreground">ETA:</span> {formatTimeRemaining(syncEstimatedSecondsRemaining)}
+              </div>
+            </div>
+            <p class="text-xs text-blue-600 mt-2">
+              ⏳ Mining will begin automatically when sync completes
+            </p>
           </div>
         </div>
       {/if}
