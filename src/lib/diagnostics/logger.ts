@@ -22,6 +22,14 @@ class DiagnosticLogger {
   private logs: LogEntry[] = [];
   private maxLogs: number = 1000;
 
+  // CSS styles for console.log %c formatting
+  private readonly STYLES = {
+    [LogLevel.DEBUG]: 'color: #888; font-weight: normal;',
+    [LogLevel.INFO]: 'color: #2196F3; font-weight: normal;',
+    [LogLevel.WARN]: 'color: #FF9800; font-weight: bold;',
+    [LogLevel.ERROR]: 'color: #F44336; font-weight: bold;'
+  } as const;
+
   log(level: LogLevel, component: string, message: string, data?: Record<string, unknown>): void {
     const entry: LogEntry = {
       timestamp: new Date().toISOString(),
