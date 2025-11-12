@@ -261,7 +261,7 @@ mod tests {
         let cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(data));
 
         // Put
-        blockstore.put(&cid, data.to_vec()).await.unwrap();
+        blockstore.put_keyed(&cid, data).await.unwrap();
 
         // Get
         let retrieved = blockstore.get(&cid).await.unwrap();
@@ -280,7 +280,7 @@ mod tests {
         assert!(!blockstore.has(&cid).await.unwrap());
 
         // Put
-        blockstore.put(&cid, data.to_vec()).await.unwrap();
+        blockstore.put_keyed(&cid, data).await.unwrap();
 
         // Should exist now
         assert!(blockstore.has(&cid).await.unwrap());
@@ -295,11 +295,11 @@ mod tests {
         let cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(data));
 
         // Put
-        blockstore.put(&cid, data.to_vec()).await.unwrap();
+        blockstore.put_keyed(&cid, data).await.unwrap();
         assert!(blockstore.has(&cid).await.unwrap());
 
-        // Delete
-        blockstore.delete(&cid).await.unwrap();
+        // Remove
+        blockstore.remove(&cid).await.unwrap();
         assert!(!blockstore.has(&cid).await.unwrap());
     }
 
@@ -311,7 +311,7 @@ mod tests {
         let data = b"test data";
         let cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(data));
 
-        blockstore.put(&cid, data.to_vec()).await.unwrap();
+        blockstore.put_keyed(&cid, data).await.unwrap();
         let retrieved = blockstore.get(&cid).await.unwrap();
         assert_eq!(retrieved, Some(data.to_vec()));
     }
@@ -325,7 +325,7 @@ mod tests {
         let data = vec![0u8; 1024 * 1024];
         let cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&data));
 
-        blockstore.put(&cid, data.clone()).await.unwrap();
+        blockstore.put_keyed(&cid, &data).await.unwrap();
         let retrieved = blockstore.get(&cid).await.unwrap();
         assert_eq!(retrieved, Some(data));
     }
@@ -342,7 +342,8 @@ mod tests {
             let handle = tokio::spawn(async move {
                 let data = format!("data {}", i);
                 let cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(data.as_bytes()));
-                bs.put(&cid, data.into_bytes()).await.unwrap();
+                let data_bytes = data.into_bytes();
+                bs.put_keyed(&cid, &data_bytes).await.unwrap();
                 cid
             });
             handles.push(handle);

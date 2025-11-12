@@ -30,6 +30,7 @@ async fn test_extract_ftp_sources_from_metadata() {
         parent_hash: None,
         cids: None,
         encrypted_key_bundle: None,
+        http_sources: None,
         ftp_sources: Some(vec![
             FtpSourceInfo {
                 url: "ftp://mirror1.example.com/file.bin".to_string(),

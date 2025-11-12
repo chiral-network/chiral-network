@@ -6933,7 +6933,7 @@ pub fn parse_magnet_uri(uri: &str) -> Result<MagnetData, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sha1::{Digest as Sha1Digest, Sha1};
+    use sha2::{Digest, Sha256};
 
     #[test]
     fn test_parse_magnet_uri_full() {
@@ -6993,7 +6993,7 @@ mod tests {
         let piece3_data = b"Short piece."; // 12 bytes
 
         // In a real torrent, these hashes would be in the .torrent file's `info.pieces` field.
-        let mut hasher = Sha1::new();
+        let mut hasher = Sha256::new();
         hasher.update(piece1_data);
         let expected_hash1 = hasher.finalize_reset();
 
@@ -7009,7 +7009,7 @@ mod tests {
         let received_piece3 = piece3_data.to_vec();
 
         // Verify each piece.
-        let mut verifier = Sha1::new();
+        let mut verifier = Sha256::new();
         verifier.update(&received_piece1);
         assert_eq!(verifier.finalize_reset(), expected_hash1);
 
@@ -7019,11 +7019,6 @@ mod tests {
         verifier.update(&received_piece3);
         assert_eq!(verifier.finalize(), expected_hash3);
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn shutdown_command_stops_dht_service() {
