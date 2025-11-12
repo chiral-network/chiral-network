@@ -1,4 +1,4 @@
-//! Simple ed2k Integration Test (Person 5: Sandy Wu)
+//! Simple ed2k Integration Test
 //! Tests the ed2k functionality through the public interface
 
 use chiral_network::download_source::{DownloadSource, Ed2kSourceInfo};
