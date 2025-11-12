@@ -235,6 +235,9 @@ export class WalletService {
     }
 
     try {
+      // Check pending transactions and update their status
+      await this.updatePendingTransactions();
+
       // Get data in parallel
       const [blocks, totalBlockCount] = await Promise.all([
         invoke("get_recent_mined_blocks_pub", {
@@ -268,6 +271,48 @@ export class WalletService {
       }
     } catch (error) {
       // Expected when Geth is not running - silently skip
+    }
+  }
+
+  async updatePendingTransactions(): Promise<void> {
+    const currentTransactions = get(transactions);
+    const pendingTransactions = currentTransactions.filter(tx => tx.status === 'pending' && tx.txHash);
+
+    if (pendingTransactions.length === 0) {
+      return;
+    }
+
+    // Check each pending transaction
+    for (const tx of pendingTransactions) {
+      try {
+        const receipt = await invoke<any>("get_transaction_receipt", {
+          txHash: tx.txHash
+        });
+
+        // If receipt exists and is not null, transaction has been mined
+        if (receipt) {
+          const success = receipt.status === "0x1" || receipt.status === 1;
+          
+          transactions.update(txs => 
+            txs.map(t => 
+              t.txHash === tx.txHash
+                ? { ...t, status: success ? "success" as const : "failed" as const }
+                : t
+            )
+          );
+
+          // Update pending count
+          if (tx.type === "sent") {
+            wallet.update(w => ({
+              ...w,
+              pendingTransactions: Math.max(0, (w.pendingTransactions ?? 0) - 1)
+            }));
+          }
+        }
+      } catch (error) {
+        // Transaction receipt not available yet or RPC error
+        console.log(`Could not get receipt for ${tx.txHash}:`, error);
+      }
     }
   }
 
@@ -336,23 +381,7 @@ export class WalletService {
         actualBalance,
       }));
 
-      // Update pending transaction status if they've been confirmed
-      // If we have pending sent transactions, check if the balance has decreased
-      // to mark them as completed
-      if (pendingSent > 0 && realBalance > 0) {
-        const expectedBalanceAfterPending = availableBalance;
-        // If real balance is lower than expected (meaning pending txs were processed),
-        // mark pending sent transactions as completed
-        if (realBalance < expectedBalanceAfterPending + pendingSent - 0.01) {
-          transactions.update((txs) =>
-            txs.map((tx) =>
-              tx.status === "pending" && tx.type === "sent"
-                ? { ...tx, status: "success" as const }
-                : tx
-            )
-          );
-        }
-      }
+      // Pending transactions are now updated via updatePendingTransactions() which checks receipts
 
       // Update mining state totalRewards (don't override blocksFound - it's set by refreshTransactions)
       miningState.update((state) => ({

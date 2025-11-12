@@ -1746,6 +1746,40 @@ pub async fn send_transaction(
     Ok(tx_hash)
 }
 
+/// Gets the transaction receipt to check if a transaction has been mined
+#[tauri::command]
+pub async fn get_transaction_receipt(tx_hash: String) -> Result<Option<serde_json::Value>, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "eth_getTransactionReceipt",
+        "params": [tx_hash],
+        "id": 1
+    });
+
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get transaction receipt: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse receipt response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error: {}", error));
+    }
+
+    // If result is null, transaction hasn't been mined yet
+    if json_response["result"].is_null() {
+        return Ok(None);
+    }
+
+    Ok(Some(json_response["result"].clone()))
+}
+
 /// Fetches the full details of a block by its number.
 /// This is used by the blockchain indexer to get reward data.
 pub async fn get_block_details_by_number(
