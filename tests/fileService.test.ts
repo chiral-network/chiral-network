@@ -1,4 +1,3 @@
-// tests/fileService.test.ts
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { FileService, fileService } from "../src/lib/services/fileService";
 import { invoke } from "@tauri-apps/api/core";
@@ -557,11 +556,6 @@ describe("FileService", () => {
   });
 
   describe("edge cases", () => {
-    beforeEach(() => {
-      // Reset only the specific mocks we need for edge case tests
-      // Don't use vi.clearAllMocks() as it's already called in global beforeEach
-    });
-
     it("should handle concurrent uploads", async () => {
       const file1 = new File(["content1"], "file1.txt");
       const file2 = new File(["content2"], "file2.txt");
@@ -577,8 +571,7 @@ describe("FileService", () => {
           return path;
         }
         if (command === "encrypt_file_for_self_upload") {
-          // BUG: uploadFile is calling invoke directly instead of encryptionService
-          // Return a manifest to make the test pass and document the issue
+          // BUG: uploadFile is calling invoke directly instead of encryptionService 
           console.log(`[MOCK] WARNING: Direct invoke to encrypt_file_for_self_upload (bypassing service)`);
           return createMockManifest();
         }
