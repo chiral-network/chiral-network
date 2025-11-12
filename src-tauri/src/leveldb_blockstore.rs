@@ -1,5 +1,4 @@
-use async_trait::async_trait;
-use blockstore::{Blockstore, block::CidError};
+use blockstore::Blockstore;
 use cid::{Cid, CidGeneric};
 use futures::future::BoxFuture;
 use rusty_leveldb::{DB, Options};

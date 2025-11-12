@@ -20,6 +20,7 @@ mod headless;
 mod http_download;
 mod http_server;
 mod keystore;
+mod leveldb_blockstore;
 mod manager;
 mod multi_source_download;
 pub mod net;
