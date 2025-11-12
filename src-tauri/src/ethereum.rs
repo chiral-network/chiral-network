@@ -264,7 +264,7 @@ impl GethProcess {
             .arg("--http.port")
             .arg("8545")
             .arg("--http.api")
-            .arg("eth,net,web3,personal,debug,miner,admin")
+            .arg("eth,net,web3,personal,debug,miner,admin,txpool")
             .arg("--http.corsdomain")
             .arg("*")
             .arg("--syncmode")
@@ -282,7 +282,10 @@ impl GethProcess {
             // Set minimum gas price to 0 to accept all transactions
             // This is important for a private network where we want all transactions to be mined
             .arg("--miner.gasprice")
-            .arg("0");
+            .arg("0")
+            // Recommend transactions for mining (include pending txs)
+            .arg("--miner.recommit")
+            .arg("1s"); // Re-create the mining block every 1 second to include new transactions
 
         // Add this line to set a shorter IPC path
         cmd.arg("--ipcpath").arg("/tmp/chiral-geth.ipc");
@@ -1727,19 +1730,15 @@ pub async fn send_transaction(
         .await
         .map_err(|e| format!("Failed to get nonce: {}", e))?;
 
-    let gas_price = provider
-        .get_gas_price()
-        .await
-        .map_err(|e| format!("Failed to get gas price: {}", e))?;
-
-    // Increase gas price by 10% to ensure it's not underpriced
-    let gas_price_adjusted = gas_price * 110 / 100;
+    // For private network with --miner.gasprice 0, we can use a minimal gas price
+    // This ensures transactions are always included in blocks
+    let gas_price = U256::from(1u64); // Use minimal gas price of 1 wei
 
     let tx = TransactionRequest::new()
         .to(to)
         .value(amount_wei)
         .gas(21000)
-        .gas_price(gas_price_adjusted)
+        .gas_price(gas_price)
         .nonce(nonce);
 
     let pending_tx = client
@@ -1748,6 +1747,9 @@ pub async fn send_transaction(
         .map_err(|e| format!("Failed to send transaction: {}", e))?;
 
     let tx_hash = format!("{:?}", pending_tx.tx_hash());
+
+    tracing::info!("Transaction sent: {} from {} to {} amount {} CHIRAL", 
+        tx_hash, from_address, to_address, amount_chiral);
 
     Ok(tx_hash)
 }
@@ -1784,6 +1786,69 @@ pub async fn get_transaction_receipt(tx_hash: String) -> Result<Option<serde_jso
     }
 
     Ok(Some(json_response["result"].clone()))
+}
+
+/// Gets transaction details by hash to check if it exists in the pool
+#[tauri::command]
+pub async fn get_transaction_by_hash(tx_hash: String) -> Result<Option<serde_json::Value>, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "eth_getTransactionByHash",
+        "params": [tx_hash],
+        "id": 1
+    });
+
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get transaction: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse transaction response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error: {}", error));
+    }
+
+    // If result is null, transaction doesn't exist
+    if json_response["result"].is_null() {
+        return Ok(None);
+    }
+
+    Ok(Some(json_response["result"].clone()))
+}
+
+/// Gets the pending transaction pool content to debug transaction issues
+#[tauri::command]
+pub async fn get_txpool_status() -> Result<serde_json::Value, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "txpool_status",
+        "params": [],
+        "id": 1
+    });
+
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get txpool status: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse txpool response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error: {}", error));
+    }
+
+    Ok(json_response["result"].clone())
 }
 
 /// Fetches the full details of a block by its number.
