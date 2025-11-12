@@ -75,7 +75,6 @@ use ethereum::{
     get_network_hashrate,
     get_peer_count,
     get_recent_mined_blocks,
-    get_sync_status,
     start_mining,
     stop_mining,
     EthAccount,
@@ -106,7 +105,6 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State,
 };
-use tokio::time::Duration as TokioDuration;
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{error, info, warn};
@@ -3181,9 +3179,13 @@ async fn download_file_from_network(
         };
 
         if let Some(dht_service) = dht {
-            // Search for file metadata in DHT with 5 second timeout
+            // Search for file metadata in DHT with 35 second timeout
+            // This is longer than the Kademlia query timeout (30s) to account for:
+            // - Provider queries that run in parallel (can take 3-5s)
+            // - Network latency and retries
+            // - Multiple query rounds for distant peers
             match dht_service
-                .synchronous_search_metadata(file_hash.clone(), 5000)
+                .synchronous_search_metadata(file_hash.clone(), 35000)
                 .await
             {
                 Ok(Some(metadata)) => {

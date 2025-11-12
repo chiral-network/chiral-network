@@ -1,7 +1,9 @@
 // Library exports for testing
 pub mod analytics;
 pub mod bandwidth;
+pub mod control_plane;
 pub mod multi_source_download;
+pub mod download_restart;
 
 // Download source abstraction
 pub mod download_source;
