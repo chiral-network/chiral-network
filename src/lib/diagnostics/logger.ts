@@ -71,7 +71,8 @@ class DiagnosticLogger {
     const style = this.getStyle(entry.level);
 
     if (typeof console !== 'undefined') {
-      console.log(`${style}${prefix} ${entry.message}`, entry.data || '');
+      // Use %c placeholder with CSS string as second argument for styled console output
+      console.log(`%c${prefix} ${entry.message}`, style, entry.data || '');
     }
   }
 
