@@ -41,7 +41,7 @@ These are two **independent** libp2p protocols serving different purposes:
 
 **Current State**: Peers can communicate through relay, but requires **manual multiaddress sharing** (peer-ID discovery).
 
-### ✅ Phase 2: Content-Based Discovery (Next Step)
+### ✅ Phase 2: Content-Based Discovery (Completed)
 - **Goal**: Automatic peer discovery by file hash using DHT
 - **Implementation Needed**:
   - When sharing a file: `put_record("file:SHA256_HASH", peer_relay_circuit_address)`
@@ -49,7 +49,7 @@ These are two **independent** libp2p protocols serving different purposes:
   - NAT'd peers publish their relay circuit addresses to DHT
 - **Result**: Fully decentralized P2P file sharing - no manual address exchange needed
 
-### 📋 Phase 3: Optimization (Future)
+### 📋 Phase 3: Optimization (Next)
 - WebRTC direct connections after initial relay handshake
 - DCUtR (Direct Connection Upgrade through Relay) for hole punching
 - Relay as fallback only, not primary transfer method
