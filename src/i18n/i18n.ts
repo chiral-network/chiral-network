@@ -10,6 +10,11 @@ register("ko", () => import("../locales/ko.json"));
 register("es", () => import("../locales/es.json"));
 register("zh", () => import("../locales/zh.json"));
 register("ru", () => import("../locales/ru.json"));
+register("pt", () => import("../locales/pt.json"));
+register("hi", () => import("../locales/hi.json"));
+register("fr", () => import("../locales/fr.json"));
+register("bn", () => import("../locales/bn.json"));
+register("ar", () => import("../locales/ar.json"));
 
 let store: any = null;
 async function ensureStore() {

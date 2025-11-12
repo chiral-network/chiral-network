@@ -3,9 +3,10 @@ use crate::download_source::{DownloadSource, Ed2kSourceInfo as DownloadEd2kSourc
 use crate::ed2k_client::{Ed2kClient, Ed2kConfig, ED2K_CHUNK_SIZE};
 use crate::ftp_downloader::{FtpDownloader, FtpCredentials};
 use crate::webrtc_service::{WebRTCFileRequest, WebRTCService};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use suppaftp::FtpStream;
 use url::Url;
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -86,6 +87,36 @@ pub type PeerAssignment = SourceAssignment;
 
 #[deprecated(note = "Use SourceStatus instead")]
 pub type PeerStatus = SourceStatus;
+
+fn normalized_sha256_hex(hash: &str) -> Option<String> {
+    let trimmed = hash.trim();
+    if trimmed.len() != 64 {
+        return None;
+    }
+
+    if trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(trimmed.to_ascii_lowercase())
+    } else {
+        None
+    }
+}
+
+fn verify_chunk_integrity(chunk: &ChunkInfo, data: &[u8]) -> Result<(), (String, String)> {
+    let expected = match normalized_sha256_hex(&chunk.hash) {
+        Some(value) => value,
+        None => return Ok(()),
+    };
+
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    let actual = hex::encode(hasher.finalize());
+
+    if actual != expected {
+        return Err((chunk.hash.clone(), actual));
+    }
+
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -906,19 +937,50 @@ impl MultiSourceDownloadService {
                                 };
 
                                 if !is_last_chunk {
-                                    let error_msg = format!("Chunk size mismatch: expected {}, got {}", chunk.size, data.len());
+                                    let error_msg = format!(
+                                        "Chunk size mismatch: expected {}, got {}",
+                                        chunk.size,
+                                        data.len()
+                                    );
+                                    {
+                                        let mut downloads_guard = downloads.write().await;
+                                        if let Some(download) = downloads_guard.get_mut(&file_hash) {
+                                            download.failed_chunks.push_back(chunk.chunk_id);
+                                        }
+                                    }
                                     let _ = event_tx.send(MultiSourceEvent::ChunkFailed {
                                         file_hash: file_hash.clone(),
                                         chunk_id: chunk.chunk_id,
                                         peer_id: ftp_url.clone(),
-                                        error: error_msg,
+                                        error: error_msg.clone(),
                                     });
                                     return;
                                 }
                             }
 
-                            // TODO: Add hash verification here once chunk hashes are properly calculated
-                            // For now, we'll skip hash verification as it needs to be implemented in the chunk calculation
+                            if let Err((expected, actual)) = verify_chunk_integrity(&chunk, &data) {
+                                let error_msg = format!(
+                                    "Chunk hash mismatch: expected {}, got {}",
+                                    expected, actual
+                                );
+                                warn!(
+                                    "FTP chunk {} hash verification failed: {}",
+                                    chunk.chunk_id, error_msg
+                                );
+                                {
+                                    let mut downloads_guard = downloads.write().await;
+                                    if let Some(download) = downloads_guard.get_mut(&file_hash) {
+                                        download.failed_chunks.push_back(chunk.chunk_id);
+                                    }
+                                }
+                                let _ = event_tx.send(MultiSourceEvent::ChunkFailed {
+                                    file_hash: file_hash.clone(),
+                                    chunk_id: chunk.chunk_id,
+                                    peer_id: ftp_url.clone(),
+                                    error: error_msg,
+                                });
+                                return;
+                            }
 
                             // Store completed chunk
                             {
@@ -1943,6 +2005,49 @@ mod tests {
     use crate::dht::DhtService;
     use crate::webrtc_service::WebRTCService;
     use std::sync::Arc;
+    use sha2::{Digest, Sha256};
+
+    #[test]
+    fn verify_chunk_integrity_accepts_matching_hash() {
+        let data = b"hello world";
+        let expected = hex::encode(Sha256::digest(data));
+        let chunk = ChunkInfo {
+            chunk_id: 0,
+            offset: 0,
+            size: data.len(),
+            hash: expected,
+        };
+
+        assert!(verify_chunk_integrity(&chunk, data).is_ok());
+    }
+
+    #[test]
+    fn verify_chunk_integrity_detects_mismatch() {
+        let data = b"hello world";
+        let expected = hex::encode(Sha256::digest(data));
+        let chunk = ChunkInfo {
+            chunk_id: 0,
+            offset: 0,
+            size: data.len(),
+            hash: expected,
+        };
+
+        let other_data = b"goodbye world";
+        assert!(verify_chunk_integrity(&chunk, other_data).is_err());
+    }
+
+    #[test]
+    fn verify_chunk_integrity_skips_non_hex_hash() {
+        let data = b"hello world";
+        let chunk = ChunkInfo {
+            chunk_id: 0,
+            offset: 0,
+            size: data.len(),
+            hash: "hash0".to_string(),
+        };
+
+        assert!(verify_chunk_integrity(&chunk, data).is_ok());
+    }
 
     // Helper function to create mock services
     fn create_mock_services() -> (Arc<DhtService>, Arc<WebRTCService>) {
