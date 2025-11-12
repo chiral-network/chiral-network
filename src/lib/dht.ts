@@ -33,6 +33,14 @@ export interface DhtConfig {
   relayServerAlias?: string; // Public alias for relay server (appears in logs and bootstrap)
 }
 
+export interface HttpSourceInfo {
+  url: string;
+  authHeader?: string;
+  verifySsl: boolean;
+  headers?: Array<[string, string]>;
+  timeoutSecs?: number;
+}
+
 export interface FileMetadata {
   fileHash: string;
   fileName: string;
@@ -46,12 +54,12 @@ export interface FileMetadata {
   isEncrypted: boolean;
   encryptionMethod?: string;
   keyFingerprint?: string;
-  version?: number;
   manifest?: string;
   isRoot?: boolean;
   cids?: string[];
   price?: number;
   uploaderAddress?: string;
+  httpSources?: HttpSourceInfo[];
 }
 
 export interface FileManifestForJs {
@@ -67,7 +75,7 @@ export const encryptionService = {
 
   async decryptFile(
     manifest: FileManifestForJs,
-    outputPath: string,
+    outputPath: string
   ): Promise<void> {
     await invoke("decrypt_and_reassemble_file", {
       manifestJs: manifest,
@@ -145,9 +153,6 @@ export class DhtService {
     // Use default bootstrap nodes if none provided
     if (bootstrapNodes.length === 0) {
       bootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command");
-      console.log("Using default bootstrap nodes for network connectivity");
-    } else {
-      console.log(`Using ${bootstrapNodes.length} custom bootstrap nodes`);
     }
 
     try {
@@ -195,8 +200,6 @@ export class DhtService {
       const peerId = await invoke<string>("start_dht_node", payload);
       this.peerId = peerId;
       this.port = port;
-      console.log("DHT started with peer ID:", this.peerId);
-      console.log("Your multiaddr for others to connect:", this.getMultiaddr());
       return this.peerId;
     } catch (error) {
       console.error("Failed to start DHT:", error);
@@ -209,14 +212,16 @@ export class DhtService {
     try {
       await invoke("stop_dht_node");
       this.peerId = null;
-      console.log("DHT stopped");
     } catch (error) {
       console.error("Failed to stop DHT:", error);
       throw error;
     }
   }
 
-  async publishFileToNetwork(filePath: string, price?: number): Promise<FileMetadata> {
+  async publishFileToNetwork(
+    filePath: string,
+    price?: number
+  ): Promise<FileMetadata> {
     try {
       // Start listening for the published_file event
       const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {
@@ -233,12 +238,16 @@ export class DhtService {
             resolve(metadata);
             // Unsubscribe once we got the event
             unlistenPromise.then((unlistenFn) => unlistenFn());
-          },
+          }
         );
 
         // Add timeout to reject the promise if publishing takes too long
         setTimeout(() => {
-          reject(new Error("File publishing timeout - no published_file event received"));
+          reject(
+            new Error(
+              "File publishing timeout - no published_file event received"
+            )
+          );
           unlistenPromise.then((unlistenFn) => unlistenFn());
         }, 120000); // 2 minute timeout for file publishing
       });
@@ -246,7 +255,7 @@ export class DhtService {
       // Trigger the backend upload with price
       await invoke("upload_file_to_network", {
         filePath,
-        price: price ?? null
+        price: price ?? null,
       });
 
       // Wait until the event arrives
@@ -257,41 +266,50 @@ export class DhtService {
     }
   }
 
-async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
-  try {
-    console.log("Initiating download for file:", fileMetadata.fileHash);
-    
-    // Use the downloadPath from metadata if provided, otherwise fall back to settings
-    let resolvedStoragePath: string;
-    
-    if (fileMetadata.downloadPath) {
-      // Use the path that was already selected by the user in the file dialog
-      resolvedStoragePath = fileMetadata.downloadPath;
-      console.log("Using provided download path:", resolvedStoragePath);
-    } else {
-      // Fallback to settings path (old behavior)
-      const stored = localStorage.getItem("chiralSettings");
-      let storagePath = "."; // Default fallback
+  async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
+    try {
+      console.log("Initiating download for file:", fileMetadata.fileHash);
 
-      if (stored) {
-        try {
-          const loadedSettings: AppSettings = JSON.parse(stored);
-          storagePath = loadedSettings.storagePath;
-        } catch (e) {
-          console.error("Failed to load settings:", e);
-        }
-      }
-      
-      // Construct full file path
-      if (storagePath.startsWith("~")) {
-        const home = await homeDir();
-        resolvedStoragePath = storagePath.replace("~", home);
+      // Use the downloadPath from metadata if provided, otherwise fall back to settings
+      let resolvedStoragePath: string;
+
+      if (fileMetadata.downloadPath) {
+        // Use the path that was already selected by the user in the file dialog
+        resolvedStoragePath = fileMetadata.downloadPath;
+        console.log("Using provided download path:", resolvedStoragePath);
       } else {
-        resolvedStoragePath = storagePath;
+        // Fallback to settings path (old behavior)
+        const stored = localStorage.getItem("chiralSettings");
+        let storagePath = "."; // Default fallback
+
+        if (stored) {
+          try {
+            const loadedSettings: AppSettings = JSON.parse(stored);
+            storagePath = loadedSettings.storagePath;
+          } catch (e) {
+            console.error("Failed to load settings:", e);
+          }
+        }
+
+        // Construct full file path
+        if (storagePath.startsWith("~")) {
+          const home = await homeDir();
+          resolvedStoragePath = storagePath.replace("~", home);
+        } else {
+          resolvedStoragePath = storagePath;
+        }
+        resolvedStoragePath += "/" + fileMetadata.fileName;
+        console.log("Using settings storage path:", resolvedStoragePath);
       }
-      resolvedStoragePath += "/" + fileMetadata.fileName;
-      console.log("Using settings storage path:", resolvedStoragePath);
-    }
+
+      // Ensure the directory exists before starting download
+      try {
+        await invoke("ensure_directory_exists", { path: resolvedStoragePath });
+      } catch (error) {
+        console.error("Failed to create download directory:", error);
+        throw new Error(`Failed to create download directory: ${error}`);
+      }
+
       // IMPORTANT: Set up the event listener BEFORE invoking the backend
       // to avoid race condition where event fires before we're listening
       const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {
@@ -304,12 +322,14 @@ async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
             resolve(event.payload);
             // Unsubscribe once we got the event
             unlistenPromise.then((unlistenFn) => unlistenFn());
-          },
+          }
         );
 
         // Add timeout to reject the promise if download takes too long
         setTimeout(() => {
-          reject(new Error("Download timeout - no file_content event received"));
+          reject(
+            new Error("Download timeout - no file_content event received")
+          );
           unlistenPromise.then((unlistenFn) => unlistenFn());
         }, 300000); // 5 minute timeout
       });
@@ -329,7 +349,7 @@ async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
           ? fileMetadata.isRoot
           : fileMetadata.cids[0] === fileMetadata.merkleRoot ||
             fileMetadata.cids.length === 1;
-      
+
       console.log("Prepared file metadata for Bitswap download:", fileMetadata);
       console.log("Calling download_blocks_from_network with:", fileMetadata);
 
@@ -339,7 +359,9 @@ async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
         downloadPath: resolvedStoragePath,
       });
 
-      console.log("Backend download initiated, waiting for file_content event...");
+      console.log(
+        "Backend download initiated, waiting for file_content event..."
+      );
 
       // Wait until the event arrives
       return await metadataPromise;
@@ -382,7 +404,7 @@ async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
     // might be from the backend saying networking isn't implemented
     if (!this.peerId) {
       console.error(
-        "DHT service peerId not set, service may not be initialized",
+        "DHT service peerId not set, service may not be initialized"
       );
       throw new Error("DHT service not initialized properly");
     }
@@ -398,9 +420,8 @@ async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
 
     try {
       await invoke("connect_to_peer", { peerAddress });
-      console.log("Connecting to peer:", peerAddress);
 
-      // ADD: count a success (no RTT here, the backend doesn’t expose it)
+      // ADD: count a success (no RTT here, the backend doesn't expose it)
       if (__pid) {
         try {
           __rep.success(__pid);
@@ -466,7 +487,7 @@ async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
 
   async searchFileMetadata(
     fileHash: string,
-    timeoutMs = 10_000,
+    timeoutMs = 10_000
   ): Promise<FileMetadata | null> {
     const trimmed = fileHash.trim();
     if (!trimmed) {
@@ -506,13 +527,13 @@ async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
                         ? result.seeders
                         : [],
                     }
-                  : null,
+                  : null
               );
               // Unsubscribe once we got the event
               unlistenPromise.then((unlistenFn) => unlistenFn());
-            },
+            }
           );
-        },
+        }
       );
 
       // Trigger the backend search

@@ -92,7 +92,7 @@ pub struct CliArgs {
 
 pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error>> {
     use tracing_subscriber::{fmt, prelude::*, EnvFilter};
-    tracing_subscriber::registry()
+    let _ = tracing_subscriber::registry()
         .with(fmt::layer())
         .with(
             EnvFilter::from_default_env()
@@ -101,10 +101,10 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
                 .add_directive("libp2p_kad=debug".parse().unwrap())
                 .add_directive("libp2p_swarm=debug".parse().unwrap()),
         )
-        .init();
+        .try_init();
 
     info!("Starting Chiral Network in headless mode");
-    info!("DHT Port: {}", args.dht_port);
+    info!("CLI args: {:#?}", args);
 
     // Add default bootstrap nodes if no custom ones specified
     let mut bootstrap_nodes = args.bootstrap.clone();
@@ -145,10 +145,6 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
     };
     // ---- finalize AutoRelay flag (bootstrap OFF + ENV OFF)
     let mut final_enable_autorelay = !args.disable_autorelay;
-    if args.is_bootstrap {
-        final_enable_autorelay = false;
-        info!("AutoRelay disabled on bootstrap (hotfix).");
-    }
     if std::env::var("CHIRAL_DISABLE_AUTORELAY").ok().as_deref() == Some("1") {
         final_enable_autorelay = false;
         info!("AutoRelay disabled via env CHIRAL_DISABLE_AUTORELAY=1");
@@ -243,7 +239,6 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             encryption_method: None,
             key_fingerprint: None,
             parent_hash: None,
-            version: Some(1),
             cids: None,
             is_root: true,
             encrypted_key_bundle: None,
@@ -251,8 +246,10 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             price: None,
             uploader_address: None,
             ftp_sources: None,
+            http_sources: None,
             info_hash: None,
             trackers: None,
+            ed2k_sources: None,
         };
 
         dht_service.publish_file(example_metadata, None).await?;
@@ -392,7 +389,7 @@ fn log_dcutr_snapshot(snapshot: &DhtMetricsSnapshot) {
     info!("   DCUtR enabled: {}", snapshot.dcutr_enabled);
 }
 
-fn get_local_ip() -> Option<String> {
+pub fn get_local_ip() -> Option<String> {
     // Try to get the local IP address
     if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
         if socket.connect("8.8.8.8:80").is_ok() {

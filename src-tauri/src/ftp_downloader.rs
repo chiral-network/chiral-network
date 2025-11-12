@@ -114,8 +114,8 @@ impl FtpDownloader {
         let credentials = creds.unwrap_or_default();
 
         debug!(
-            "Connecting to FTP server {}:{} as user '{}'",
-            host, port, credentials.username
+            "Connecting to FTP server {}:{} as user '{}' with timeout {}s",
+            host, port, credentials.username, self.config.timeout_secs
         );
 
         // Spawn blocking task since FtpStream is sync
@@ -123,12 +123,29 @@ impl FtpDownloader {
         let host_clone = host.clone();
 
         let stream = task::spawn_blocking(move || -> Result<FtpStream, String> {
-            // Connect to FTP server
-            let mut ftp_stream = FtpStream::connect(format!("{}:{}", host_clone, port))
+            // Create timeout duration
+            let timeout = Duration::from_secs(config.timeout_secs);
+
+            // Resolve address
+            let addr = format!("{}:{}", host_clone, port)
+                .parse::<std::net::SocketAddr>()
+                .map_err(|e| format!("Failed to parse address: {}", e))?;
+
+            // Connect to FTP server with timeout
+            let mut ftp_stream = FtpStream::connect_timeout(addr, timeout)
                 .map_err(|e| format!("Failed to connect to FTP server: {}", e))?;
 
-            // Note: suppaftp v6 may not expose set_timeout directly
-            // Timeout is typically set at connection level
+            // Set read/write timeouts on the underlying stream
+            ftp_stream
+                .get_ref()
+                .set_read_timeout(Some(timeout))
+                .map_err(|e| format!("Failed to set read timeout: {}", e))?;
+            ftp_stream
+                .get_ref()
+                .set_write_timeout(Some(timeout))
+                .map_err(|e| format!("Failed to set write timeout: {}", e))?;
+
+            debug!("FTP connection established with timeout configured");
 
             // Login
             ftp_stream
@@ -490,6 +507,27 @@ mod tests {
         let creds = FtpCredentials::new("user".to_string(), "pass".to_string());
         assert_eq!(creds.username, "user");
         assert_eq!(creds.password, "pass");
+    }
+
+    #[tokio::test]
+    async fn test_timeout_is_configured() {
+        // Test that timeout from config is accessible
+        let config = FtpDownloadConfig {
+            timeout_secs: 45,
+            max_retries: 3,
+            passive_mode: true,
+            connection_pool_size: 5,
+        };
+
+        let downloader = FtpDownloader::with_config(config);
+        assert_eq!(downloader.config().timeout_secs, 45);
+    }
+
+    #[tokio::test]
+    async fn test_default_timeout() {
+        // Test that default timeout is 30 seconds
+        let downloader = FtpDownloader::new();
+        assert_eq!(downloader.config().timeout_secs, 30);
     }
 
     // Integration tests with real FTP servers

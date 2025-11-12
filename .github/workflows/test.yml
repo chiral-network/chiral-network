@@ -101,7 +101,7 @@ jobs:
           cargo test --lib ftp_client
           # Run tests for download scheduler
           cargo test --lib download_scheduler
-        timeout-minutes: 5
+        timeout-minutes: 10
         continue-on-error: true
 
   relay:

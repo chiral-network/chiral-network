@@ -29,7 +29,7 @@
   "storage.cleanupThreshold": "Auto-Cleanup Threshold (%)",
   "storage.enableCleanup": "Enable automatic cleanup when storage is full",
   "network": {
-    "title": "Network Overview",
+    "title": "Network",
     "subtitle": "Monitor network health and discover peers",
     "nodeStatus": "Chiral Node Status",
     "status": {
@@ -88,6 +88,8 @@
       "retry": "Retry Connection",
       "connect": "Connect to DHT Network",
       "stop": "Stop DHT",
+      "cancel": "Cancel Connection",
+      "connectionCancelled": "Connection cancelled",
       "log": "Connection Log",
       "connectingToBootstrap": "Connecting to bootstrap node...",
       "attempt": "Attempt #{connectionAttempts}",
@@ -305,8 +307,8 @@
     "title": "Download Files",
     "subtitle": "Download files from the Chiral Network",
     "addNew": "Add New Download",
-    "addNewSubtitle": "Enter a file hash (e.g., Qm... or a magnet link) to start a new download.",
-    "placeholder": "Enter file hash or magnet link",
+    "addNewSubtitle": "Enter a Merkle hash or CID to start a new download.",
+    "placeholder": "Enter Merkle hash or CID",
     "clearInput": "Clear input",
     "searchAndDownload": "Search & Download",
     "searchByHash": "Search by Hash",
@@ -345,7 +347,7 @@
       "noFailed": "No failed downloads."
     },
     "file": {
-      "hash": "Hash",
+      "hash": "Merkle Hash",
       "queue": "Queue",
       "progress": "Progress"
     },
@@ -364,13 +366,15 @@
       "retry": "Retry"
     },
     "notifications": {
-      "enterHash": "Please enter a file hash to start downloading.",
+      "enterHash": "Please enter a Merkle hash or CID to start downloading.",
       "searching": "Searching for file metadata in the DHT...",
       "addedToQueue": "File added to the download queue.",
       "autostart": "Download automatically started.",
       "searchFailed": "Search failed: {error}",
       "downloadFailed": "Download failed for {name}.",
-      "downloadComplete": "Download complete for {name}."
+      "downloadComplete": "Download complete for {name}.",
+      "resumedSingle": "Restored 1 interrupted download. Resume it from the Downloads page.",
+      "resumedMultiple": "Restored {count} interrupted downloads. Resume them from the Downloads page."
     },
     "search": {
       "status": {
@@ -437,6 +441,7 @@
     "menu": "Menu",
     "download": "Download",
     "upload": "Upload",
+    "torrents": "Torrents",
     "network": "Network",
     "relay": "Relay",
     "mining": "Mining",
@@ -494,7 +499,19 @@
   },
   "account": {
     "title": "Account",
-    "subtitle": "Manage your wallet and account settings"
+    "subtitle": "Manage your wallet and account settings",
+    "firstRun": {
+      "welcome": "Welcome to Chiral Network!",
+      "description": "To start mining and earning rewards, you'll need to create a wallet account.",
+      "whyAccount": "Why do I need an account?",
+      "reason1": "Receive mining rewards to your wallet",
+      "reason2": "Secure your funds with encrypted recovery phrase",
+      "reason3": "Transfer coins to other users on the network",
+      "createWallet": "Create New Wallet",
+      "requiresWallet": "A wallet is required to mine, earn rewards, and transfer Chiral. Your recovery phrase will be generated in the next step.",
+      "accountCreated": "Wallet created successfully! You can now start mining.",
+      "error": "Failed to create account. Please try again."
+    }
   },
   "wallet": {
     "title": "Chiral Network Wallet",
@@ -738,10 +755,6 @@
     "exportFailed": "Export failed. Please try again.",
     "createAccount": "Failed to create account: {error}"
   },
-  "messages": {
-    "copied": "Copied!",
-    "failed": "Failed!"
-  },
   "analytics": {
     "title": "Analytics Dashboard",
     "subtitle": "Track your performance and network activity",
@@ -802,6 +815,10 @@
     "status": "Proxy Status",
     "active": "Active",
     "inactive": "Inactive",
+    "protected": "Protected",
+    "vulnerable": "Vulnerable",
+    "secured": "Secured",
+    "disabled": "Disabled",
     "activeNodes": "Active Nodes",
     "totalBandwidth": "Total Bandwidth",
     "settings": "Proxy Settings",
@@ -815,9 +832,85 @@
     "latency": "Latency",
     "disconnect": "Disconnect",
     "connect": "Connect",
+    "connecting": "Connecting...",
+    "retry": "Retry",
     "remove": "Remove",
     "alreadyAdded": "This proxy address is already added!",
-    "autoReconnect": "Auto-reconnect"
+    "autoReconnect": "Auto-reconnect",
+    "validation": {
+      "emptyAddress": "Address cannot be empty",
+      "noSpaces": "Address cannot contain spaces",
+      "invalidEnode": "Invalid enode format (enode://[128-char-hex]@ip:port)",
+      "missingPort": "Address must include port (e.g., example.com:8080)",
+      "invalidHostname": "Invalid hostname",
+      "invalidPort": "Port must be between 1-65535",
+      "systemPort": "Avoid system ports (use 1024+)",
+      "invalidFormat": "Invalid IP address or domain format"
+    },
+    "errors": {
+      "connectionTimeout": "Connection timeout",
+      "optimizationUnavailable": "❌ Optimization status unavailable",
+      "tauriUnavailable": "❌ Tauri API not available. Please run this test in the desktop application, not the browser."
+    },
+    "dialog": {
+      "confirmRemoval": "Confirm Removal",
+      "confirmMessage": "Confirm the removal of proxy node",
+      "cancel": "Cancel",
+      "remove": "Remove"
+    },
+    "privacy": {
+      "title": "Privacy Settings",
+      "anonymousMode": "Anonymous Mode",
+      "anonymousModeDesc": "Route through anonymous proxies",
+      "multiHop": "Multi-Hop Routing",
+      "multiHopDesc": "Route through multiple proxy nodes",
+      "currentMode": "Current Privacy Mode:",
+      "maxPrivacy": "Maximum Privacy (Anonymous + Multi-Hop)",
+      "anonymousOnly": "Anonymous Mode",
+      "multiHopOnly": "Multi-Hop Routing",
+      "standardMode": "Standard Mode"
+    },
+    "stats": {
+      "title": "Proxy Routing Stats",
+      "availableProxies": "Available Proxies",
+      "totalRoutes": "Total Routes",
+      "privacyProfile": "Privacy Profile",
+      "anon": "Anon",
+      "standard": "Standard",
+      "multi": "Multi",
+      "plusMulti": "+ Multi-Hop"
+    },
+    "nodeInfo": {
+      "address": "Proxy Node Address",
+      "peerId": "DHT Peer ID",
+      "reliability": "Reliability",
+      "success": "Success",
+      "attempts": "attempts",
+      "mbps": "Mbps",
+      "ms": "ms",
+      "placeholder": "example.com:8080 or enode://..."
+    },
+    "optimization": {
+      "title": "Proxy Latency Optimization",
+      "currentStatus": "Current Status",
+      "refreshStatus": "Refresh Status",
+      "proveOptimization": "Prove Optimization Works",
+      "runningTests": "Running Proof Tests...",
+      "testResults": "Test Results"
+    },
+    "statusFilter": {
+      "all": "All",
+      "online": "Online",
+      "offline": "Offline",
+      "connecting": "Connecting",
+      "error": "Error"
+    },
+    "sortOptions": {
+      "status": "Sort by status",
+      "latency": "Sort by latency",
+      "bandwidth": "Sort by bandwidth",
+      "smart": "Sort by smart (quality)"
+    }
   },
   "mining": {
     "title": "Mining",
@@ -847,7 +940,7 @@
     "stop": "Stop Mining",
     "start": "Start Mining",
     "showLogs": "Show mining logs",
-    "networkPage": "Network page",
+    "networkPage": "Network Page.",
     "accountPage": "Account page",
     "networkStats": "Network Statistics",
     "networkHashRate": "Network Hash Rate",
@@ -938,10 +1031,52 @@
       "intensity": "Intensity must be between 1 and 100",
       "noAccount": "Please create a Chiral Network account first in the Account page",
       "noAccountToStart": "Please create a Chiral Network account from the Account page to start mining",
-      "gethNotRunning": "Chiral node is not running. Please start it from the Network page",
+      "gethNotRunning": "Chiral node is not running. Please start it from the",
       "noAccountLink": "Please create a Chiral Network account from the"
     },
-    "starting": "Starting mining... (may restart node if needed)"
+    "starting": "Starting mining... (may restart node if needed)",
+    "temporaryAccount": {
+      "title": "⚠️ Temporary Account - Mining Rewards at Risk!",
+      "description": "You're mining with a temporary account. Mining rewards will be lost when you close the app unless you save your account.",
+      "createWallet": "Create Permanent Wallet",
+      "goToAccount": "Go to Account Page"
+    },
+    "calculator": {
+      "title": "Profitability Calculator",
+      "show": "Show",
+      "hide": "Hide",
+      "electricityCost": "Electricity Cost ($/kWh)",
+      "electricityCostHint": "Average US rate: $0.12/kWh",
+      "powerUsage": "Estimated Power Usage (Watts)",
+      "powerUsageHint": "CPU mining typically 50-150W",
+      "chiralPrice": "Chiral Price (USD)",
+      "chiralPriceHint": "Update with current market price",
+      "hashRate": "Hash Rate (H/s)",
+      "useCurrent": "Use Current",
+      "usingCurrent": "Using your current mining hashrate",
+      "enterCustom": "Enter custom hashrate",
+      "estimatedProfitability": "Estimated Profitability",
+      "daily": "Daily",
+      "monthly": "Monthly",
+      "yearly": "Yearly",
+      "revenue": "Revenue",
+      "cost": "Cost",
+      "profitMargin": "Profit Margin",
+      "profitable": "✓ Profitable",
+      "notProfitable": "✗ Not Profitable",
+      "profitableDesc": "Mining earnings exceed electricity costs",
+      "notProfitableDesc": "Electricity costs exceed mining earnings",
+      "calculationDetails": "Calculation Details:",
+      "yourHashrate": "Your hashrate",
+      "networkDiff": "Network difficulty",
+      "expectedBlocks": "Expected blocks/day",
+      "chiralEach": "Chiral each",
+      "powerConsumption": "Power consumption",
+      "kwhPerDay": "kWh/day",
+      "breakEvenPrice": "Break-even Chiral price",
+      "perChiral": "/Chiral",
+      "enableMining": "Enable mining to see profitability estimates"
+    }
   },
   "reputation": {
     "title": "Reputation System",
@@ -950,6 +1085,8 @@
     "refreshData": "Refresh Data",
     "hideAnalytics": "Hide Analytics",
     "showAnalytics": "Show Analytics",
+    "hideRelayLeaderboard": "Hide Relay Leaderboard",
+    "showRelayLeaderboard": "Show Relay Leaderboard",
     "loading": "Loading reputation data...",
     "viewPeers": "Peer Reputation",
     "viewRelays": "Relay Leaderboard",
@@ -1015,6 +1152,34 @@
       "StorageOffered": "Storage Offered",
       "MaliciousBehaviorReport": "Malicious Behavior Report",
       "FileShared": "File Shared"
+    },
+    "myRelay": {
+      "title": "Your Relay Reputation",
+      "subtitle": "Your node is running as a relay server",
+      "rankOf": "Rank of {total}",
+      "reputationScore": "Reputation Score",
+      "successfulCircuits": "Successful Circuits",
+      "reservations": "Reservations"
+    },
+    "pagination": {
+      "showing": "Showing {start}-{end} of {total} peers",
+      "previous": "Previous",
+      "next": "Next"
+    },
+    "card": {
+      "daysAgo": "{days}d ago",
+      "hoursAgo": "{hours}h ago",
+      "minutesAgo": "{minutes}m ago",
+      "justNow": "Just now",
+      "reputationScore": "Reputation Score",
+      "transfers": "Transfers",
+      "interactions": "Interactions",
+      "latency": "Latency",
+      "bandwidth": "Bandwidth",
+      "uptime": "Uptime",
+      "encryption": "Encryption",
+      "supported": "Supported",
+      "notSupported": "Not Supported"
     }
   },
   "relay": {
@@ -1030,20 +1195,89 @@
       "benefit2": "Improve network connectivity and decentralization",
       "benefit3": "Uses bandwidth when actively relaying circuits",
       "enable": "Enable Relay Server",
+      "disable": "Disable Relay Server",
       "start": "Start Server",
       "stop": "Stop Server",
       "starting": "Starting...",
+      "enabling": "Enabling...",
+      "disabling": "Disabling...",
       "activeMessage": "Your relay server is active and helping peers!",
-      "earningReputation": "You're earning reputation for each successful connection."
+      "earningReputation": "You're earning reputation for each successful connection.",
+      "aliasLabel": "Relay Server Alias (Public Name)",
+      "aliasPlaceholder": "e.g., Alice's Fast Relay 🚀",
+      "aliasHint": "This friendly name will appear in logs and when other nodes bootstrap through your relay",
+      "dhtNotRunning": "DHT Network Not Running",
+      "dhtNotRunningHint": "Please start the network from the Network page first.",
+      "broadcastingAs": "Broadcasting as:"
     },
     "client": {
       "title": "AutoRelay Client",
       "subtitle": "Connect through relay nodes when needed",
       "enableAutorelay": "Enable Circuit Relay v2 (AutoRelay)",
       "preferredRelays": "Preferred Relay Nodes (optional)",
+      "preferredRelaysPlaceholder": "/ip4/relay.example.com/tcp/4001/p2p/QmRelayId\nOne multiaddr per line",
       "preferredRelaysHint": "Leave empty to use bootstrap nodes as relays",
       "howItWorks": "How it works:",
       "description": "AutoRelay automatically connects through relay nodes when you're behind a NAT or firewall, ensuring you can always participate in the network."
+    },
+    "monitoring": {
+      "title": "Relay Health & Monitoring"
+    },
+    "errors": {
+      "dhtNotRunning": "DHT is not running. Please start the network from the ",
+      "toggleFailed": "Failed to toggle relay server: {error}"
+    },
+    "monitor": {
+      "statsTitle": "Relay Pool Statistics",
+      "totalRelays": "Total Relays",
+      "connected": "Connected",
+      "healthy": "Healthy",
+      "totalErrors": "Total Errors",
+      "avgHealthScore": "Average Health Score",
+      "activeRelayTitle": "Active Relay",
+      "connectedBadge": "Connected",
+      "peerId": "Peer ID:",
+      "healthScore": "Health Score:",
+      "avgLatency": "Avg Latency:",
+      "reservation": "Reservation:",
+      "successRate": "Success Rate:",
+      "relayPoolTitle": "Relay Pool",
+      "noRelaysInPool": "No relays in pool",
+      "primaryBadge": "Primary",
+      "state": "State:",
+      "latency": "Latency:",
+      "attempts": "Attempts:",
+      "successes": "Successes:",
+      "failures": "Failures:",
+      "lastSuccess": "Last success:",
+      "recentErrorsLabel": "Recent Errors:",
+      "recentErrorsTitle": "Recent Errors",
+      "clearButton": "Clear",
+      "relayLabel": "Relay:",
+      "retryLabel": "Retry:",
+      "errorTypes": {
+        "connectionRefused": "Connection Refused",
+        "timeout": "Timeout",
+        "reservationFailed": "Reservation Failed",
+        "expired": "Expired",
+        "overloaded": "Overloaded",
+        "unreachable": "Unreachable",
+        "networkError": "Network Error",
+        "authFailed": "Auth Failed",
+        "protocolError": "Protocol Error",
+        "unknown": "Unknown"
+      },
+      "time": {
+        "never": "Never",
+        "justNow": "Just now",
+        "minutesAgo": "{minutes}m ago",
+        "hoursAgo": "{hours}h ago",
+        "na": "N/A",
+        "expired": "Expired",
+        "seconds": "{seconds}s",
+        "minutes": "{minutes}m",
+        "hours": "{hours}h"
+      }
     },
     "leaderboard": {
       "title": "Top Relay Servers",
@@ -1073,18 +1307,19 @@
     "dropFilesHint": "Drag and drop files anywhere on this card, or click \"Add Files\" below",
     "addFiles": "Add Files",
     "sharedFiles": "Shared Files",
+    "file": "file",
     "files": "files",
     "total": "total",
     "tip": "💡 Tip: You can also drag and drop files here to add them",
     "addMoreFiles": "Add More Files",
     "supportedFormats": "Supports images, videos, audio, documents, code files and more",
     "supportedFormatsDesktop": "Desktop app supports images, videos, audio, documents, code files and more",
-    "hash": "Hash",
+    "hashLabel": "Merkle Hash:",
     "seeder": "seeder{count, plural, =1 {} other {s}}",
     "leecher": "leecher{count, plural, =1 {} other {s}}",
     "seeding": "Seeding",
-    "copyHash": "Copy hash",
-    "hashCopied": "Hash copied!",
+    "copyHash": "Copy Merkle hash",
+    "hashCopied": "Merkle hash copied!",
     "stopSharing": "Stop sharing",
     "noFilesShared": "No files shared yet",
     "addFilesHint2": "Add files to start sharing on the network",
@@ -1116,8 +1351,84 @@
     },
     "currentProtocol": "Current Protocol",
     "changeProtocol": "Change Protocol",
+    "selectProtocol": "Select Protocol",
     "webrtcDescription": "Fast peer-to-peer transfers using WebRTC",
-    "bitswapDescription": "IPFS-compatible block exchange protocol"
+    "bitswapDescription": "IPFS-compatible block exchange protocol",
+    "requireAccount": "Please create or import an account to upload files",
+    "uploadInProgress": "Upload already in progress. Please wait for the current upload to complete.",
+    "desktopOnly": "File upload is only available in the desktop app",
+    "executableBlocked": "{name}: Executable files are not allowed for security reasons",
+    "emptyFile": "{name}: File is empty",
+    "publishedToDHT": "Files published to DHT network for sharing!",
+    "storedLocally": "Files stored locally. Start DHT network to share with others.",
+    "uploadError": "Error processing dropped files. Please try again or use the \"Add Files\" button instead.",
+    "fileManagementDesktopOnly": "File management is only available in the desktop app",
+    "fileUpdated": "{name} already exists and has been updated",
+    "fileUploadedNew": "{name} uploaded successfully",
+    "hashCopiedClipboard": "Merkle hash copied to clipboard!",
+    "desktopAppRequired": "Desktop App Required",
+    "storageMonitoringDesktopOnly": "Storage monitoring requires the desktop application",
+    "dropFilesHere": "✨ Drop files here!",
+    "uploadingFiles": "🔄 Uploading files...",
+    "releaseToUpload": "Release to upload your files instantly",
+    "dragDropWebNotAvailable": "Drag and drop not available in web version",
+    "pleaseWaitProcessing": "Please wait while your files are being processed...",
+    "dragDropRequiresDesktop": "Drag and drop requires desktop app",
+    "uploading": "Uploading...",
+    "fileUploadDesktopApp": "File upload requires the desktop app",
+    "downloadDesktopApp": "Download the desktop version to upload and share files",
+    "desktopManagementRequired": "Desktop app required for file management",
+    "encryptedEndToEnd": "This file is encrypted end-to-end",
+    "active": "Active",
+    "priceTooltip": "Price calculated dynamically based on network hash power",
+    "storedLocallyBadge": "Stored Locally",
+    "fileManagementTooltip": "File management requires desktop app",
+    "fileManagementWebNotAvailable": "File management not available in web version",
+    "fileDialogError": "Failed to open file dialog"
+  },
+  "torrent": {
+    "title": "Torrents",
+    "magnetLink": {
+      "title": "From Magnet Link",
+      "description": "Paste a magnet link to start downloading.",
+      "placeholder": "magnet:?xt=urn:btih:...",
+      "download": "Download"
+    },
+    "or": "Or",
+    "torrentFile": {
+      "title": "From .torrent File",
+      "description": "Upload a .torrent file from your computer.",
+      "choosePlaceholder": "Choose a .torrent file...",
+      "download": "Download",
+      "invalidFile": "Please select a valid .torrent file."
+    },
+    "seed": {
+      "title": "Create & Seed Torrent",
+      "description": "Select a local file to share with the network.",
+      "choosePlaceholder": "Choose a file to seed...",
+      "button": "Seed File",
+      "shareMagnet": "Share this magnet link:",
+      "noFileSelected": "Please select a file to seed.",
+      "success": "Successfully started seeding {fileName}!",
+      "error": "Error seeding file: {error}"
+    },
+    "activeTransfers": {
+      "title": "Active Transfers",
+      "filterAll": "All",
+      "filterChiral": "Chiral",
+      "filterBitTorrent": "BitTorrent",
+      "noTransfers": "No active transfers.",
+      "peers": "Peers:",
+      "eta": "ETA:"
+    },
+    "download": {
+      "error": "Error: {error}",
+      "noIdentifier": "Please provide a magnet link or select a .torrent file.",
+      "complete": "Download complete: {fileName}"
+    },
+    "clipboard": {
+      "copied": "Copied to clipboard!"
+    }
   },
   "bandwidthScheduling": {
     "title": "Bandwidth Scheduling",
@@ -1144,6 +1455,70 @@
       "thu": "Thu",
       "fri": "Fri",
       "sat": "Sat"
+    }
+  },
+  "downloadHistory": {
+    "title": "Download History",
+    "subtitle": "View and manage your download history",
+    "showHistory": "Show History",
+    "hideHistory": "Hide History",
+    "empty": "No download history yet",
+    "emptyDescription": "Completed, failed, and canceled downloads will appear here",
+    "search": "Search history...",
+    "filterAll": "All",
+    "filterCompleted": "Completed",
+    "filterFailed": "Failed",
+    "filterCanceled": "Canceled",
+    "redownload": "Re-download",
+    "remove": "Remove",
+    "clearHistory": "Clear History",
+    "clearFailed": "Clear Failed",
+    "exportHistory": "Export History",
+    "importHistory": "Import History",
+    "confirmClear": "Are you sure you want to clear all download history? This cannot be undone.",
+    "confirmClearFailed": "Clear all failed downloads from history?",
+    "stats": {
+      "total": "Total Downloads",
+      "completed": "Completed",
+      "failed": "Failed",
+      "canceled": "Canceled",
+      "totalSize": "Total Size",
+      "totalPrice": "Total Spent"
+    },
+    "messages": {
+      "historyCleared": "Download history cleared",
+      "failedCleared": "Failed downloads cleared",
+      "entryRemoved": "Entry removed from history",
+      "exportSuccess": "History exported successfully",
+      "importSuccess": "Imported {count} history entries",
+      "importError": "Failed to import history: {error}",
+      "redownloadStarted": "Re-downloading {name}..."
+    }
+  },
+  "settingsBackup": {
+    "title": "Backup & Restore",
+    "description": "Export or import your settings configuration",
+    "export": "Export Settings",
+    "import": "Import Settings",
+    "exportButton": "Export Settings",
+    "importButton": "Import Settings",
+    "downloadBackup": "Download Backup File",
+    "selectFile": "Select Backup File",
+    "merge": "Merge with Current Settings",
+    "replace": "Replace All Settings",
+    "autoBackup": "Automatic Backups",
+    "autoBackupDescription": "Automatic backups are created before major changes",
+    "restoreAutoBackup": "Restore",
+    "messages": {
+      "exportSuccess": "Settings exported successfully",
+      "exportError": "Failed to export settings: {error}",
+      "importSuccess": "Settings imported successfully",
+      "importWarnings": "Settings imported with warnings: {warnings}",
+      "importError": "Failed to import settings: {error}",
+      "autoBackupCreated": "Automatic backup created",
+      "autoBackupRestored": "Settings restored from backup",
+      "invalidFile": "Invalid backup file format",
+      "confirmReplace": "This will replace all current settings. Continue?"
     }
   }
 }
