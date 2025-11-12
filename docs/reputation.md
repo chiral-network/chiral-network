@@ -2,8 +2,6 @@
 
 > **Status:** MVP design for transaction-backed reputation. Uptime, storage, and relay metrics will ship later as extensions once out-of-band evidence is available.
 
-> **🔑 Key Innovation:** The reputation system solves the "non-payment problem" using **signed transaction messages**. Before file transfer, the downloader creates a cryptographically signed payment promise (off-chain). If the downloader receives the file but never submits payment to the blockchain, the seeder retains the signed message as unforgeable proof for filing complaints. This enables reputation penalties even when there's no blockchain record, while keeping file transfers purely P2P without blockchain delays. See [Transaction & Payment Lifecycle](#transaction--payment-lifecycle) for details.
-
 ## Overview
 
 Chiral Network tracks peer reputation through verifiable, transaction-centric evidence. Confirmed on-chain transaction history is the authoritative ledger: every payment or settlement that finalizes on-chain becomes durable ground truth. To keep costs low and latency acceptable, clients publish signed **Transaction Verdicts** into the DHT as an index of recent interactions. Consumers fetch those verdicts for fast heuristics, but they always re-validate against the chain (or cached receipts) before acting; if a verdict cannot be bridged back to finalized chain history, it is ignored. This hybrid model lets us iterate inside today's infrastructure while reserving long-term accuracy to the blockchain. Later releases may reuse the same storage model to incorporate additional metrics (uptime, relay quality, etc.) once the supporting evidence flow exists.
@@ -98,7 +96,7 @@ The transaction flow is designed to minimize blockchain interaction during the f
        │                                                  │
        │              (B stores signed message)           │
        │                                                  │
-       │  4. File chunks via WebRTC (P2P, no blockchain) │
+       │  4. File chunks                                  │
        │<═════════════════════════════════════════════════│
        │                                                  │
        │  5. Submit payment to BLOCKCHAIN                │
@@ -144,7 +142,7 @@ from step 3 as cryptographic proof to file complaint in DHT.
    └─ B validates signature and verifies A's balance
 
 3. File Transfer (Pure P2P, No Blockchain)
-   ├─ B begins sending file chunks via WebRTC
+   ├─ B begins sending file chunks
    ├─ A receives and verifies chunks
    └─ Transfer completes when all chunks validated
 
@@ -346,7 +344,7 @@ This is the most critical reputation scenario: a downloader receives a file but 
    - Seeder stores the signed message as `evidence_blob`
 
 2. **File Transfer Phase**
-   - Seeder delivers file chunks via WebRTC
+   - Seeder delivers file chunks
    - Seeder logs delivery proof:
      - Chunk manifest (all chunks sent)
      - Transfer completion timestamp
@@ -1132,14 +1130,3 @@ async function validateDownloaderHandshake(
 - Blockchain provides ultimate source of truth
 - Reputation aggregates over time
 - System converges toward honest behavior
-
-### Result: Trust Without Centralization
-
-The signed transaction message approach enables:
-- **Fast P2P transfers** (no blockchain during transfer)
-- **Strong accountability** (cryptographic proof of promises)
-- **Decentralized reputation** (no central authority needed)
-- **Economic rationality** (cheating is unprofitable long-term)
-- **Scalability** (most operations off-chain)
-
-This creates a self-regulating network where honest behavior is incentivized and malicious actors are naturally filtered out through reputation mechanics.
