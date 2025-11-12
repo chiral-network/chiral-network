@@ -315,10 +315,11 @@ impl MultiSourceDownloadService {
             }
         }
 
-        // Search for file metadata
+        // Search for file metadata with sufficient timeout for DHT queries
+        // Using 35s to match main.rs and allow full Kademlia query time (30s) + provider queries
         let metadata = match self
             .dht_service
-            .synchronous_search_metadata(file_hash.clone(), 5000)
+            .synchronous_search_metadata(file_hash.clone(), 35000)
             .await
         {
             Ok(Some(metadata)) => metadata,
@@ -362,6 +363,23 @@ impl MultiSourceDownloadService {
                     passive_mode: true,  // Default to passive mode
                     use_ftps: false,     // Default to regular FTP
                     timeout_secs: Some(30),
+                }));
+            }
+        }
+
+        // 3. Discover ed2k sources from metadata
+        if let Some(ed2k_sources) = &metadata.ed2k_sources {
+            info!("Found {} ed2k sources for file", ed2k_sources.len());
+            
+            for ed2k_info in ed2k_sources {
+                // Convert DHT Ed2kSourceInfo to DownloadSource Ed2kSourceInfo
+                available_sources.push(DownloadSource::Ed2k(DownloadEd2kSourceInfo {
+                    server_url: ed2k_info.server_url.clone(),
+                    file_hash: ed2k_info.file_hash.clone(),
+                    file_size: ed2k_info.file_size,
+                    file_name: ed2k_info.file_name.clone(),
+                    sources: ed2k_info.sources.clone(),
+                    timeout_secs: ed2k_info.timeout,
                 }));
             }
         }
@@ -1067,6 +1085,12 @@ impl MultiSourceDownloadService {
     }
 
     /// Start downloading chunks from Ed2k network
+    /// 
+    /// This function efficiently downloads ed2k chunks by:
+    /// 1. Grouping assigned 256KB chunks by their parent 9.28MB ed2k chunk
+    /// 2. Downloading each ed2k chunk only once
+    /// 3. Extracting all needed 256KB chunks from each downloaded ed2k chunk
+    /// 4. Sorting chunks to ensure extraction happens in order
     async fn start_ed2k_chunk_downloads(
         &self,
         file_hash: &str,
@@ -1076,41 +1100,60 @@ impl MultiSourceDownloadService {
         let server_url_id = ed2k_info.server_url.clone();
 
         // Get chunk information for the assigned chunks
-        let chunks_to_download = {
+        let (chunks_info, chunks_map) = {
             let downloads = self.active_downloads.read().await;
             if let Some(download) = downloads.get(file_hash) {
-                chunk_ids
+                let chunks_info: Vec<ChunkInfo> = chunk_ids
                     .iter()
                     .filter_map(|&chunk_id| {
                         download.chunks.iter().find(|chunk| chunk.chunk_id == chunk_id).cloned()
                     })
-                    .collect::<Vec<_>>()
+                    .collect();
+                
+                let chunks_map: HashMap<u32, ChunkInfo> = chunks_info
+                    .iter()
+                    .map(|chunk| (chunk.chunk_id, chunk.clone()))
+                    .collect();
+                
+                (chunks_info, chunks_map)
             } else {
-                Vec::new()
+                (Vec::new(), HashMap::new())
             }
         };
 
-        if chunks_to_download.is_empty() {
+        if chunks_info.is_empty() {
             warn!("No chunks to download for Ed2k source");
             return;
         }
 
+        // Group chunks by ed2k chunk to avoid downloading the same ed2k chunk multiple times
+        let grouped_by_ed2k = self.group_chunks_by_ed2k_chunk(&chunk_ids, &chunks_info);
+
         let file_hash_clone = file_hash.to_string();
         let ed2k_connections: Arc<Mutex<HashMap<String, Ed2kClient>>> = Arc::clone(&self.ed2k_connections);
         let active_downloads = Arc::clone(&self.active_downloads);
+        let chunks_map_clone = Arc::new(chunks_map);
 
         // Spawn task to download chunks concurrently (limit to 2 concurrent downloads per server)
         tokio::spawn(async move {
             let semaphore = Arc::new(tokio::sync::Semaphore::new(2));
             let mut handles = Vec::new();
 
-            for chunk in chunks_to_download {
+            // Download each ed2k chunk once and extract all needed chunks from it
+            // Sort ed2k chunks by ID to process in order
+            let mut sorted_ed2k_chunks: Vec<_> = grouped_by_ed2k.into_iter().collect();
+            sorted_ed2k_chunks.sort_by_key(|(ed2k_id, _)| *ed2k_id);
+            
+            for (ed2k_chunk_id, mut our_chunk_ids) in sorted_ed2k_chunks {
+                // Sort chunk IDs within this ed2k chunk to extract in order
+                our_chunk_ids.sort();
                 let permit = semaphore.clone().acquire_owned().await;
                 let ed2k_connections_clone: Arc<Mutex<HashMap<String, Ed2kClient>>> = Arc::clone(&ed2k_connections);
                 let active_downloads_clone = Arc::clone(&active_downloads);
                 let file_hash_inner = file_hash_clone.clone();
                 let server_url_clone = server_url_id.clone();
                 let ed2k_file_hash = ed2k_info.file_hash.clone();
+                let chunks_map_clone = chunks_map_clone.clone();
 
                 let handle = tokio::spawn(async move {
                     let _permit = permit; // Hold permit until task completes
@@ -1122,72 +1165,89 @@ impl MultiSourceDownloadService {
                     };
 
                     if let Some(mut client) = ed2k_client {
-                        // Ed2k uses fixed 9.28 MB chunks, so we need to download the appropriate chunk
-                        // Calculate which Ed2k chunk this corresponds to
-                        let ed2k_chunk_index = (chunk.offset / ED2K_CHUNK_SIZE as u64) as u32;
+                        // Download the entire ed2k chunk once
+                        // Use the first chunk's hash as reference (all chunks in same ed2k chunk share the ed2k chunk hash)
+                        let first_chunk_id = our_chunk_ids[0];
+                        let expected_chunk_hash = if let Some(first_chunk) = chunks_map_clone.get(&first_chunk_id) {
+                            format!("{:032x}", first_chunk.chunk_id)
+                        } else {
+                            format!("{:032x}", first_chunk_id)
+                        };
 
-                        // For simplicity, we'll use a mock hash for now
-                        // In a real implementation, this should come from the file metadata
-                        let expected_chunk_hash = format!("{:032x}", chunk.chunk_id);
-
-                        match client.download_chunk(&ed2k_file_hash, ed2k_chunk_index, &expected_chunk_hash).await {
-                            Ok(data) => {
-                                // Verify chunk size matches expected size
-                                if data.len() != chunk.size {
-                                    let is_last_chunk = chunk.chunk_id == {
-                                        let downloads = active_downloads_clone.read().await;
-                                        downloads.get(&file_hash_inner)
-                                            .map(|d| (d.chunks.len() - 1) as u32)
-                                            .unwrap_or(0)
-                                    };
-
-                                    if !is_last_chunk {
-                                        error!(
-                                            "Ed2k chunk {} size mismatch: expected {}, got {}",
-                                            chunk.chunk_id, chunk.size, data.len()
-                                        );
-
-                                        // Mark chunk as failed and retry
-                                        let mut downloads = active_downloads_clone.write().await;
-                                        if let Some(download) = downloads.get_mut(&file_hash_inner) {
-                                            download.failed_chunks.push_back(chunk.chunk_id);
+                        match client.download_chunk(&ed2k_file_hash, ed2k_chunk_id, &expected_chunk_hash).await {
+                            Ok(ed2k_chunk_data) => {
+                                // Verify ed2k chunk size (should be 9.28 MB, except possibly the last chunk)
+                                if ed2k_chunk_data.len() != ED2K_CHUNK_SIZE && ed2k_chunk_data.len() < ED2K_CHUNK_SIZE {
+                                    error!(
+                                        "Ed2k chunk {} size mismatch: expected at least {}, got {}",
+                                        ed2k_chunk_id, ED2K_CHUNK_SIZE, ed2k_chunk_data.len()
+                                    );
+                                    
+                                    // Mark all chunks in this ed2k chunk as failed
+                                    let mut downloads = active_downloads_clone.write().await;
+                                    if let Some(download) = downloads.get_mut(&file_hash_inner) {
+                                        for chunk_id in &our_chunk_ids {
+                                            download.failed_chunks.push_back(*chunk_id);
                                         }
-
-                                        // Return client to pool
-                                        let mut connections = ed2k_connections_clone.lock().await;
-                                        connections.insert(server_url_clone.clone(), client);
-                                        return;
                                     }
+                                    
+                                    // Return client to pool
+                                    let mut connections = ed2k_connections_clone.lock().await;
+                                    connections.insert(server_url_clone.clone(), client);
+                                    return;
                                 }
 
-                                // Store completed chunk
+                                // Extract all needed chunks from the downloaded ed2k chunk
                                 let mut downloads = active_downloads_clone.write().await;
                                 if let Some(download) = downloads.get_mut(&file_hash_inner) {
-                                    let completed_chunk = CompletedChunk {
-                                        chunk_id: chunk.chunk_id,
-                                        data,
-                                        source_id: server_url_clone.clone(),
-                                        completed_at: Instant::now(),
-                                    };
+                                    for chunk_id in &our_chunk_ids {
+                                        if let Some(chunk_info) = chunks_map_clone.get(chunk_id) {
+                                            // Calculate offset within the ed2k chunk
+                                            let offset_within_ed2k = chunk_info.offset % ED2K_CHUNK_SIZE as u64;
 
-                                    download.completed_chunks.insert(chunk.chunk_id, completed_chunk);
+                                            // Extract the 256 KB chunk from the ed2k chunk
+                                            let start = offset_within_ed2k as usize;
+                                            let end = std::cmp::min(start + chunk_info.size, ed2k_chunk_data.len());
+                                            
+                                            if end <= ed2k_chunk_data.len() {
+                                                let chunk_data = ed2k_chunk_data[start..end].to_vec();
 
-                                    info!(
-                                        "Ed2k chunk {} downloaded successfully from {}",
-                                        chunk.chunk_id, server_url_clone
-                                    );
+                                                let completed_chunk = CompletedChunk {
+                                                    chunk_id: *chunk_id,
+                                                    data: chunk_data,
+                                                    source_id: server_url_clone.clone(),
+                                                    completed_at: Instant::now(),
+                                                };
+
+                                                download.completed_chunks.insert(*chunk_id, completed_chunk);
+
+                                                info!(
+                                                    "Ed2k chunk {} extracted from ed2k chunk {} (offset {})",
+                                                    chunk_id, ed2k_chunk_id, offset_within_ed2k
+                                                );
+                                            } else {
+                                                error!(
+                                                    "Cannot extract chunk {} from ed2k chunk {}: offset {} + size {} exceeds ed2k chunk size {}",
+                                                    chunk_id, ed2k_chunk_id, start, chunk_info.size, ed2k_chunk_data.len()
+                                                );
+                                                download.failed_chunks.push_back(*chunk_id);
+                                            }
+                                        }
+                                    }
                                 }
                             }
                             Err(e) => {
                                 error!(
                                     "Failed to download Ed2k chunk {}: {:?}",
-                                    chunk.chunk_id, e
+                                    ed2k_chunk_id, e
                                 );
 
-                                // Mark chunk as failed and add to retry queue
+                                // Mark all chunks in this ed2k chunk as failed
                                 let mut downloads = active_downloads_clone.write().await;
                                 if let Some(download) = downloads.get_mut(&file_hash_inner) {
-                                    download.failed_chunks.push_back(chunk.chunk_id);
+                                    for chunk_id in &our_chunk_ids {
+                                        download.failed_chunks.push_back(*chunk_id);
+                                    }
                                 }
                             }
                         }
@@ -1197,9 +1257,16 @@ impl MultiSourceDownloadService {
                         connections.insert(server_url_clone, client);
                     } else {
                         warn!("Ed2k client not found in connection pool");
+                        
+                        // Mark all chunks as failed if client not available
+                        let mut downloads = active_downloads_clone.write().await;
+                        if let Some(download) = downloads.get_mut(&file_hash_inner) {
+                            for chunk_id in &our_chunk_ids {
+                                download.failed_chunks.push_back(*chunk_id);
+                            }
+                        }
                     }
                 });
-
                 handles.push(handle);
             }
 
@@ -1244,6 +1311,89 @@ impl MultiSourceDownloadService {
     /// Calculate byte range for FTP request based on chunk info
     fn calculate_ftp_byte_range(&self, chunk_info: &ChunkInfo) -> (u64, u64) {
         (chunk_info.offset, chunk_info.size as u64)
+    }
+
+    // ============================================================================
+    // ed2k Chunk Mapping Functions (Person 4: Task 4.2 & 4.4)
+    // ============================================================================
+
+    /// Map our chunk ID to ed2k chunk ID and offset within that ed2k chunk
+    /// 
+    /// Our chunks are 256KB, ed2k chunks are 9.28 MB (9,728,000 bytes)
+    /// One ed2k chunk contains approximately 38 of our chunks (9,728,000 / 256,000 = 38)
+    /// 
+    /// Returns: (ed2k_chunk_id, offset_within_ed2k_chunk)
+    fn map_our_chunk_to_ed2k_chunk(&self, our_chunk: &ChunkInfo) -> (u32, u64) {
+        let ed2k_chunk_id = (our_chunk.offset / ED2K_CHUNK_SIZE as u64) as u32;
+        let offset_within_ed2k = our_chunk.offset % ED2K_CHUNK_SIZE as u64;
+        (ed2k_chunk_id, offset_within_ed2k)
+    }
+
+    /// Map ed2k chunk ID to range of our chunk IDs
+    /// 
+    /// Returns the range of our chunk IDs that fall within the specified ed2k chunk
+    /// 
+    /// Returns: (start_chunk_id, end_chunk_id_inclusive)
+    fn map_ed2k_chunk_to_our_chunks(
+        &self,
+        ed2k_chunk_id: u32,
+        total_file_size: u64,
+        our_chunk_size: usize,
+    ) -> (u32, u32) {
+        let ed2k_chunk_start_offset = ed2k_chunk_id as u64 * ED2K_CHUNK_SIZE as u64;
+        let ed2k_chunk_end_offset = std::cmp::min(
+            ed2k_chunk_start_offset + ED2K_CHUNK_SIZE as u64,
+            total_file_size,
+        );
+
+        let start_chunk_id = (ed2k_chunk_start_offset / our_chunk_size as u64) as u32;
+        let end_chunk_id = ((ed2k_chunk_end_offset - 1) / our_chunk_size as u64) as u32;
+
+        (start_chunk_id, end_chunk_id)
+    }
+
+    /// Group our chunk IDs by the ed2k chunk they belong to
+    /// 
+    /// This is useful for Person 5 to download entire ed2k chunks and then split them
+    /// 
+    /// Returns: HashMap<ed2k_chunk_id, Vec<our_chunk_ids>>
+    fn group_chunks_by_ed2k_chunk(
+        &self,
+        our_chunk_ids: &[u32],
+        chunks: &[ChunkInfo],
+    ) -> HashMap<u32, Vec<u32>> {
+        let mut grouped: HashMap<u32, Vec<u32>> = HashMap::new();
+
+        for &chunk_id in our_chunk_ids {
+            if let Some(chunk) = chunks.iter().find(|c| c.chunk_id == chunk_id) {
+                let (ed2k_chunk_id, _) = self.map_our_chunk_to_ed2k_chunk(chunk);
+                grouped
+                    .entry(ed2k_chunk_id)
+                    .or_insert_with(Vec::new)
+                    .push(chunk_id);
+            }
+        }
+
+        grouped
+    }
+
+    /// Calculate chunk size considering ed2k sources
+    /// 
+    /// If ed2k sources are present, returns the ed2k chunk size (9.28 MB)
+    /// Otherwise, returns the default chunk size (256 KB)
+    /// 
+    /// This is used to understand the relationship between our chunks and ed2k chunks
+    fn calculate_ed2k_aware_chunk_size(
+        &self,
+        metadata: &FileMetadata,
+    ) -> usize {
+        if metadata.ed2k_sources.is_some() && !metadata.ed2k_sources.as_ref().unwrap().is_empty() {
+            // ed2k sources present - return ed2k chunk size for reference
+            ED2K_CHUNK_SIZE
+        } else {
+            // No ed2k sources - use default chunk size
+            DEFAULT_CHUNK_SIZE
+        }
     }
 
     /// Handle source connection success

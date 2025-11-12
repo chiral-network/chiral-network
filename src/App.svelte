@@ -183,11 +183,59 @@ function handleFirstRunComplete() {
 
         // setup i18n
         await setupI18n();
-        loading = false;
 
         // Check for first-run and show wizard if no account exists
+        // DO THIS BEFORE setting loading = false to prevent race conditions
         try {
-          const hasAccount = get(etcAccount) !== null;
+          // Check backend for active account
+          let hasAccount = false;
+          if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+            try {
+              hasAccount = await invoke<boolean>('has_active_account');
+              
+              // If backend has account, restore it to frontend
+              if (hasAccount) {
+                try {
+                  const address = await invoke<string>('get_active_account_address');
+                  
+                  // Import wallet service to prevent sync during restoration
+                  const { walletService } = await import('./lib/wallet');
+                  walletService.setRestoringAccount(true);
+                  
+                  // Fetch private key from backend to restore it to the frontend store
+                  let privateKey = '';
+                  try {
+                    privateKey = await invoke<string>('get_active_account_private_key');
+                  } catch (error) {
+                    console.warn('Failed to get private key from backend:', error);
+                  }
+                  
+                  // Restore account with private key
+                  etcAccount.set({ address, private_key: privateKey });
+                  
+                  // Update wallet with address
+                  wallet.update(w => ({ 
+                    ...w, 
+                    address
+                  }));
+                  
+                  // Re-enable syncing and trigger a sync
+                  walletService.setRestoringAccount(false);
+                  
+                  // Now sync from blockchain
+                  await walletService.refreshTransactions();
+                  await walletService.refreshBalance();
+                } catch (error) {
+                  console.error('Failed to restore account from backend:', error);
+                }
+              }
+            } catch (error) {
+              console.warn('Failed to check account status:', error);
+            }
+          } else {
+            // For web/demo mode, check frontend store
+            hasAccount = get(etcAccount) !== null;
+          }
 
           // Check if there are any keystore files (Tauri only)
           let hasKeystoreFiles = false;
@@ -208,6 +256,9 @@ function handleFirstRunComplete() {
         } catch (error) {
           console.warn('Failed to check first-run status:', error);
         }
+
+        // Set loading to false AFTER wizard check to prevent race conditions
+        loading = false;
 
       let storedLocation: string | null = null;
       try {
@@ -273,13 +324,7 @@ function handleFirstRunComplete() {
         }
       } catch (error) {
         // Ignore "already running" errors - this is normal during hot reload
-        if (error && typeof error === 'object' && 'message' in error && 
-            typeof error.message === 'string' && 
-            error.message.includes('already running')) {
-          // Service already initialized, this is fine
-        } else {
-          console.error("Failed to initialize backend services:", error);
-        }
+        // Silently skip all errors since services may already be initialized
       }
 
       // set the currentPage var

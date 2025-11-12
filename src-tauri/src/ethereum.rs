@@ -268,6 +268,8 @@ impl GethProcess {
             .arg("--http.corsdomain")
             .arg("*")
             .arg("--syncmode")
+            .arg("snap")
+            .arg("--gcmode")
             .arg("full")
             .arg("--maxpeers")
             .arg("50")
@@ -630,6 +632,96 @@ pub async fn get_mining_status() -> Result<bool, String> {
         .ok_or("Invalid mining status response")?;
 
     Ok(is_mining)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncStatus {
+    pub syncing: bool,
+    pub current_block: u64,
+    pub highest_block: u64,
+    pub starting_block: u64,
+    pub progress_percent: f64,
+    pub blocks_remaining: u64,
+    pub estimated_seconds_remaining: Option<u64>,
+}
+
+pub async fn get_sync_status() -> Result<SyncStatus, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "eth_syncing",
+        "params": [],
+        "id": 1
+    });
+
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get sync status: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error: {}", error));
+    }
+
+    // eth_syncing returns false if not syncing, or an object if syncing
+    let result = &json_response["result"];
+    
+    if result.is_boolean() && result.as_bool() == Some(false) {
+        // Not syncing - fully synced
+        let block_number = get_block_number().await?;
+        return Ok(SyncStatus {
+            syncing: false,
+            current_block: block_number,
+            highest_block: block_number,
+            starting_block: block_number,
+            progress_percent: 100.0,
+            blocks_remaining: 0,
+            estimated_seconds_remaining: Some(0),
+        });
+    }
+
+    // Parse sync progress
+    let current_hex = result["currentBlock"].as_str().ok_or("Missing currentBlock")?;
+    let highest_hex = result["highestBlock"].as_str().ok_or("Missing highestBlock")?;
+    let starting_hex = result["startingBlock"].as_str().ok_or("Missing startingBlock")?;
+
+    let current_block = u64::from_str_radix(current_hex.trim_start_matches("0x"), 16)
+        .map_err(|e| format!("Invalid currentBlock: {}", e))?;
+    let highest_block = u64::from_str_radix(highest_hex.trim_start_matches("0x"), 16)
+        .map_err(|e| format!("Invalid highestBlock: {}", e))?;
+    let starting_block = u64::from_str_radix(starting_hex.trim_start_matches("0x"), 16)
+        .map_err(|e| format!("Invalid startingBlock: {}", e))?;
+
+    let blocks_remaining = highest_block.saturating_sub(current_block);
+    let total_blocks = highest_block.saturating_sub(starting_block);
+    let progress_percent = if total_blocks > 0 {
+        ((current_block - starting_block) as f64 / total_blocks as f64) * 100.0
+    } else {
+        100.0
+    };
+
+    // Estimate time remaining based on ~850 blocks per 8 seconds (observed rate)
+    let estimated_seconds_remaining = if blocks_remaining > 0 {
+        Some((blocks_remaining as f64 / 850.0 * 8.0) as u64)
+    } else {
+        Some(0)
+    };
+
+    Ok(SyncStatus {
+        syncing: true,
+        current_block,
+        highest_block,
+        starting_block,
+        progress_percent,
+        blocks_remaining,
+        estimated_seconds_remaining,
+    })
 }
 
 pub async fn get_hashrate() -> Result<String, String> {
