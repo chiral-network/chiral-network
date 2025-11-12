@@ -1654,13 +1654,55 @@ pub async fn get_network_hashrate() -> Result<String, String> {
     let difficulty = u128::from_str_radix(&difficulty_hex[2..], 16)
         .map_err(|e| format!("Failed to parse difficulty: {}", e))?;
 
-    // For Chiral private network, estimate network hashrate from difficulty
-    // The relationship between hashrate and difficulty depends on the algorithm
-    // For Ethash on a private network with CPU mining:
-    // Network Hashrate ≈ Difficulty / Block Time
-    // This gives us the hash rate needed to mine a block at this difficulty
-    let estimated_block_time = 15.0; // seconds (Ethereum default)
-    let hashrate = difficulty as f64 / estimated_block_time;
+    // Get actual block time from recent blocks instead of using a hard-coded estimate
+    let latest_block_number_hex = json_response["result"]["number"]
+        .as_str()
+        .ok_or("Invalid block number response")?;
+    let latest_block_number = u64::from_str_radix(&latest_block_number_hex[2..], 16)
+        .map_err(|e| format!("Failed to parse block number: {}", e))?;
+    
+    let latest_timestamp_hex = json_response["result"]["timestamp"]
+        .as_str()
+        .ok_or("Invalid timestamp response")?;
+    let latest_timestamp = u64::from_str_radix(&latest_timestamp_hex[2..], 16)
+        .map_err(|e| format!("Failed to parse timestamp: {}", e))?;
+
+    // Calculate actual average block time from the last 100 blocks (or fewer if network is new)
+    let lookback_blocks = 100.min(latest_block_number.saturating_sub(1));
+    let mut actual_block_time = 15.0; // Default fallback
+    
+    if lookback_blocks > 0 {
+        let previous_block_number = latest_block_number.saturating_sub(lookback_blocks);
+        let previous_block = json!({
+            "jsonrpc": "2.0",
+            "method": "eth_getBlockByNumber",
+            "params": [format!("0x{:x}", previous_block_number), false],
+            "id": 1
+        });
+
+        if let Ok(prev_response) = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
+            .json(&previous_block)
+            .send()
+            .await
+        {
+            if let Ok(prev_json) = prev_response.json::<serde_json::Value>().await {
+                if let Some(prev_timestamp_hex) = prev_json["result"]["timestamp"].as_str() {
+                    if let Ok(prev_timestamp) = u64::from_str_radix(&prev_timestamp_hex[2..], 16) {
+                        let time_diff = latest_timestamp.saturating_sub(prev_timestamp);
+                        if time_diff > 0 {
+                            actual_block_time = time_diff as f64 / lookback_blocks as f64;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // For Chiral private network, estimate network hashrate from difficulty and actual block time
+    // Network Hashrate = Difficulty / Block Time
+    // This gives us the hash rate needed to mine a block at this difficulty in the observed time
+    let hashrate = difficulty as f64 / actual_block_time;
 
     // Convert to human-readable format
     let formatted = if hashrate >= 1_000_000_000_000.0 {
