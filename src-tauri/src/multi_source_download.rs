@@ -2005,6 +2005,49 @@ mod tests {
     use crate::dht::DhtService;
     use crate::webrtc_service::WebRTCService;
     use std::sync::Arc;
+    use sha2::{Digest, Sha256};
+
+    #[test]
+    fn verify_chunk_integrity_accepts_matching_hash() {
+        let data = b"hello world";
+        let expected = hex::encode(Sha256::digest(data));
+        let chunk = ChunkInfo {
+            chunk_id: 0,
+            offset: 0,
+            size: data.len(),
+            hash: expected,
+        };
+
+        assert!(verify_chunk_integrity(&chunk, data).is_ok());
+    }
+
+    #[test]
+    fn verify_chunk_integrity_detects_mismatch() {
+        let data = b"hello world";
+        let expected = hex::encode(Sha256::digest(data));
+        let chunk = ChunkInfo {
+            chunk_id: 0,
+            offset: 0,
+            size: data.len(),
+            hash: expected,
+        };
+
+        let other_data = b"goodbye world";
+        assert!(verify_chunk_integrity(&chunk, other_data).is_err());
+    }
+
+    #[test]
+    fn verify_chunk_integrity_skips_non_hex_hash() {
+        let data = b"hello world";
+        let chunk = ChunkInfo {
+            chunk_id: 0,
+            offset: 0,
+            size: data.len(),
+            hash: "hash0".to_string(),
+        };
+
+        assert!(verify_chunk_integrity(&chunk, data).is_ok());
+    }
 
     // Helper function to create mock services
     fn create_mock_services() -> (Arc<DhtService>, Arc<WebRTCService>) {
