@@ -276,7 +276,11 @@ impl GethProcess {
             .arg("30303") // P2P listening port
             // Network address configuration
             .arg("--nat")
-            .arg("any");
+            .arg("any")
+            // Set minimum gas price to 0 to accept all transactions
+            // This is important for a private network where we want all transactions to be mined
+            .arg("--miner.gasprice")
+            .arg("0");
 
         // Add this line to set a shorter IPC path
         cmd.arg("--ipcpath").arg("/tmp/chiral-geth.ipc");
