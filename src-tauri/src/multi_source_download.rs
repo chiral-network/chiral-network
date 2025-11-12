@@ -23,7 +23,7 @@ const CHUNK_REQUEST_TIMEOUT_SECS: u64 = 60;
 #[allow(dead_code)]
 const MAX_RETRY_ATTEMPTS: u32 = 3;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
 pub struct ChunkInfo {
     pub chunk_id: u32,
@@ -1157,7 +1157,7 @@ impl MultiSourceDownloadService {
         }
 
         // Group chunks by ed2k chunk to avoid downloading the same ed2k chunk multiple times
-        let grouped_by_ed2k = self.group_chunks_by_ed2k_chunk(&chunk_ids, &chunks_info);
+        let grouped_by_ed2k = self.group_chunks_by_ed2k_chunk(&chunks_info);
 
         let file_hash_clone = file_hash.to_string();
         let ed2k_connections = Arc::clone(&self.ed2k_connections);
@@ -1166,8 +1166,6 @@ impl MultiSourceDownloadService {
 
         // Spawn task to download chunks
         tokio::spawn(async move {
-            // Group our chunks by ed2k chunk
-            let ed2k_chunk_groups = Self::group_chunks_by_ed2k_chunk_static(&chunks_to_download);
             
             // Limit concurrent ed2k chunk downloads (ed2k chunks are 9.28 MB each)
             let semaphore = Arc::new(tokio::sync::Semaphore::new(2));
@@ -1178,9 +1176,9 @@ impl MultiSourceDownloadService {
             let mut sorted_ed2k_chunks: Vec<_> = grouped_by_ed2k.into_iter().collect();
             sorted_ed2k_chunks.sort_by_key(|(ed2k_id, _)| *ed2k_id);
             
-            for (ed2k_chunk_id, mut our_chunk_ids) in sorted_ed2k_chunks {
-                // Sort chunk IDs within this ed2k chunk to extract in order
-                our_chunk_ids.sort();
+            for (ed2k_chunk_id, mut our_chunk_infos) in sorted_ed2k_chunks {
+                // Sort chunk infos within this ed2k chunk by chunk_id to extract in order
+                our_chunk_infos.sort_by_key(|chunk| chunk.chunk_id);
                 let permit = semaphore.clone().acquire_owned().await;
                 let ed2k_connections_clone = Arc::clone(&ed2k_connections);
                 let active_downloads_clone = Arc::clone(&active_downloads);
@@ -1201,12 +1199,8 @@ impl MultiSourceDownloadService {
                     if let Some(mut client) = ed2k_client {
                         // Download the entire ed2k chunk once
                         // Use the first chunk's hash as reference (all chunks in same ed2k chunk share the ed2k chunk hash)
-                        let first_chunk_id = our_chunk_ids[0];
-                        let expected_chunk_hash = if let Some(first_chunk) = chunks_map_clone.get(&first_chunk_id) {
-                            format!("{:032x}", first_chunk.chunk_id)
-                        } else {
-                            format!("{:032x}", first_chunk_id)
-                        };
+                        let first_chunk_info = &our_chunk_infos[0];
+                        let expected_chunk_hash = format!("{:032x}", first_chunk_info.chunk_id);
 
                         match client.download_chunk(&ed2k_file_hash, ed2k_chunk_id, &expected_chunk_hash).await {
                             Ok(ed2k_chunk_data) => {
@@ -1220,8 +1214,8 @@ impl MultiSourceDownloadService {
                                     // Mark all chunks in this ed2k chunk as failed
                                     let mut downloads = active_downloads_clone.write().await;
                                     if let Some(download) = downloads.get_mut(&file_hash_inner) {
-                                        for chunk_id in &our_chunk_ids {
-                                            download.failed_chunks.push_back(*chunk_id);
+                                        for chunk_info in &our_chunk_infos {
+                                            download.failed_chunks.push_back(chunk_info.chunk_id);
                                         }
                                     }
                                     
@@ -1234,38 +1228,36 @@ impl MultiSourceDownloadService {
                                 // Extract all needed chunks from the downloaded ed2k chunk
                                 let mut downloads = active_downloads_clone.write().await;
                                 if let Some(download) = downloads.get_mut(&file_hash_inner) {
-                                    for chunk_id in &our_chunk_ids {
-                                        if let Some(chunk_info) = chunks_map_clone.get(chunk_id) {
-                                            // Calculate offset within the ed2k chunk
-                                            let offset_within_ed2k = chunk_info.offset % ED2K_CHUNK_SIZE as u64;
+                                    for chunk_info in &our_chunk_infos {
+                                        // Calculate offset within the ed2k chunk
+                                        let offset_within_ed2k = chunk_info.offset % ED2K_CHUNK_SIZE as u64;
 
-                                            // Extract the 256 KB chunk from the ed2k chunk
-                                            let start = offset_within_ed2k as usize;
-                                            let end = std::cmp::min(start + chunk_info.size, ed2k_chunk_data.len());
-                                            
-                                            if end <= ed2k_chunk_data.len() {
-                                                let chunk_data = ed2k_chunk_data[start..end].to_vec();
+                                        // Extract the 256 KB chunk from the ed2k chunk
+                                        let start = offset_within_ed2k as usize;
+                                        let end = std::cmp::min(start + chunk_info.size, ed2k_chunk_data.len());
+                                        
+                                        if end <= ed2k_chunk_data.len() {
+                                            let chunk_data = ed2k_chunk_data[start..end].to_vec();
 
-                                                let completed_chunk = CompletedChunk {
-                                                    chunk_id: *chunk_id,
-                                                    data: chunk_data,
-                                                    source_id: server_url_clone.clone(),
-                                                    completed_at: Instant::now(),
-                                                };
+                                            let completed_chunk = CompletedChunk {
+                                                chunk_id: chunk_info.chunk_id,
+                                                data: chunk_data,
+                                                source_id: server_url_clone.clone(),
+                                                completed_at: Instant::now(),
+                                            };
 
-                                                download.completed_chunks.insert(*chunk_id, completed_chunk);
+                                            download.completed_chunks.insert(chunk_info.chunk_id, completed_chunk);
 
-                                                info!(
-                                                    "Ed2k chunk {} extracted from ed2k chunk {} (offset {})",
-                                                    chunk_id, ed2k_chunk_id, offset_within_ed2k
-                                                );
-                                            } else {
-                                                error!(
-                                                    "Cannot extract chunk {} from ed2k chunk {}: offset {} + size {} exceeds ed2k chunk size {}",
-                                                    chunk_id, ed2k_chunk_id, start, chunk_info.size, ed2k_chunk_data.len()
-                                                );
-                                                download.failed_chunks.push_back(*chunk_id);
-                                            }
+                                            info!(
+                                                "Ed2k chunk {} extracted from ed2k chunk {} (offset {})",
+                                                chunk_info.chunk_id, ed2k_chunk_id, offset_within_ed2k
+                                            );
+                                        } else {
+                                            error!(
+                                                "Cannot extract chunk {} from ed2k chunk {}: offset {} + size {} exceeds ed2k chunk size {}",
+                                                chunk_info.chunk_id, ed2k_chunk_id, start, chunk_info.size, ed2k_chunk_data.len()
+                                            );
+                                            download.failed_chunks.push_back(chunk_info.chunk_id);
                                         }
                                     }
                                 }
@@ -1279,8 +1271,8 @@ impl MultiSourceDownloadService {
                                 // Mark all chunks in this ed2k chunk as failed
                                 let mut downloads = active_downloads_clone.write().await;
                                 if let Some(download) = downloads.get_mut(&file_hash_inner) {
-                                    for chunk_id in &our_chunk_ids {
-                                        download.failed_chunks.push_back(*chunk_id);
+                                    for chunk_info in &our_chunk_infos {
+                                        download.failed_chunks.push_back(chunk_info.chunk_id);
                                     }
                                 }
                             }
@@ -1295,8 +1287,8 @@ impl MultiSourceDownloadService {
                         // Mark all chunks as failed if client not available
                         let mut downloads = active_downloads_clone.write().await;
                         if let Some(download) = downloads.get_mut(&file_hash_inner) {
-                            for chunk_id in &our_chunk_ids {
-                                download.failed_chunks.push_back(*chunk_id);
+                            for chunk_info in &our_chunk_infos {
+                                download.failed_chunks.push_back(chunk_info.chunk_id);
                             }
                         }
                     }
