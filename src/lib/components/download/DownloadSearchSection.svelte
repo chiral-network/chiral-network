@@ -41,7 +41,7 @@
   let showPeerSelectionModal = false;
   let selectedFile: FileMetadata | null = null;
   let peerSelectionMode: 'auto' | 'manual' = 'auto';
-  let selectedProtocol: 'http' | 'webrtc' = 'http';
+  let selectedProtocol: 'http' | 'webrtc' | 'bitswap' = 'http';
   let availablePeers: PeerInfo[] = [];
   let autoSelectionInfo: Array<{peerId: string; score: number; metrics: any}> | null = null;
 
@@ -573,7 +573,7 @@
       await handleHttpDownload(selectedFile, selectedPeers);
     } else {
       // WebRTC download flow (existing)
-      console.log(`🔍 DEBUG: Initiating WebRTC download for file: ${selectedFile.fileName}`);
+      console.log(`🔍 DEBUG: Initiating ${selectedProtocol} download for file: ${selectedFile.fileName}`);
 
       const fileWithSelectedPeers: FileMetadata & { peerAllocation?: any[] } = {
         ...selectedFile,
