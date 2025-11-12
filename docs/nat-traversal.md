@@ -41,7 +41,7 @@ These are two **independent** libp2p protocols serving different purposes:
 
 **Current State**: Peers can communicate through relay, but requires **manual multiaddress sharing** (peer-ID discovery).
 
-### 🔄 Phase 2: Content-Based Discovery (Next Step)
+### ✅ Phase 2: Content-Based Discovery (Next Step)
 - **Goal**: Automatic peer discovery by file hash using DHT
 - **Implementation Needed**:
   - When sharing a file: `put_record("file:SHA256_HASH", peer_relay_circuit_address)`
