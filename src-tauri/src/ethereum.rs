@@ -268,9 +268,9 @@ impl GethProcess {
             .arg("--http.corsdomain")
             .arg("*")
             .arg("--syncmode")
-            .arg("snap")
-            .arg("--gcmode")
             .arg("full")
+            .arg("--gcmode")
+            .arg("archive")
             .arg("--maxpeers")
             .arg("50")
             // P2P discovery settings
@@ -279,6 +279,11 @@ impl GethProcess {
             // Network address configuration
             .arg("--nat")
             .arg("any")
+            // Enable transaction pool gossip to propagate transactions across network
+            .arg("--txpool.globalslots")
+            .arg("16384") // Increase tx pool size for network-wide transactions
+            .arg("--txpool.globalqueue")
+            .arg("4096")
             // Set minimum gas price to 0 to accept all transactions
             // This is important for a private network where we want all transactions to be mined
             .arg("--miner.gasprice")
@@ -1748,8 +1753,25 @@ pub async fn send_transaction(
 
     let tx_hash = format!("{:?}", pending_tx.tx_hash());
 
-    tracing::info!("Transaction sent: {} from {} to {} amount {} CHIRAL", 
+    tracing::info!("✅ Transaction sent: {} from {} to {} amount {} CHIRAL", 
         tx_hash, from_address, to_address, amount_chiral);
+    tracing::info!("   Nonce: {}, Gas Price: {} wei, Gas Limit: 21000", nonce, gas_price);
+    
+    // Verify the transaction was added to the local txpool
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    
+    // Try to get the transaction back to verify it's in the pool
+    match get_transaction_by_hash(tx_hash.clone()).await {
+        Ok(Some(_)) => {
+            tracing::info!("✅ Transaction confirmed in local txpool: {}", tx_hash);
+        },
+        Ok(None) => {
+            tracing::warn!("⚠️  Transaction NOT found in local txpool: {}", tx_hash);
+        },
+        Err(e) => {
+            tracing::error!("❌ Failed to verify transaction in txpool: {}", e);
+        }
+    }
 
     Ok(tx_hash)
 }
