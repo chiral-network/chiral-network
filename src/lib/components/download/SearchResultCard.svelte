@@ -24,7 +24,7 @@
   let showDownloadConfirmDialog = false;
   let showPaymentConfirmDialog = false;
   let showSeedersSelection = false;
-  let selectedSeederIndex: number | null = null;
+  let selectedSeederIndex: number | null = 0;
 
   // Use reactive wallet balance from store
   $: userBalance = $wallet.balance;
@@ -62,12 +62,19 @@
   }
 
   async function handleDownload() {
+    // Skipping payment confirmation for now
     // Always show initial download confirmation dialog first
-    // showDownloadConfirmDialog = true;
+    // showDownloadConfirmDialog = true; 
+
     const freshSeeders = await dhtService.getSeedersForFile(metadata.fileHash);
     metadata.seeders = freshSeeders; 
     console.log("🔍 DEBUG: Seeders fetched:", freshSeeders);
-    showSeedersSelection = true
+
+    // Bitswap note: manual seeder selection was for demo purposes to show 
+    // peer-selection capability; now switching to intelligent peer selection.
+    // showSeedersSelection = true 
+
+    proceedWithDownload();
 
   }
 
