@@ -1,5 +1,5 @@
-import { invoke } from '@tauri-apps/api/core';
-import { get } from 'svelte/store';
+import { invoke } from "@tauri-apps/api/core";
+import { get } from "svelte/store";
 import {
   etcAccount,
   miningState,
@@ -8,7 +8,7 @@ import {
   type ETCAccount,
   type Transaction,
   type WalletInfo,
-} from '$lib/stores';
+} from "$lib/stores";
 
 const DEFAULT_POLL_INTERVAL = 15_000;
 
@@ -54,9 +54,11 @@ export class WalletService {
   private unsubscribeAccount?: () => void;
   private readonly isTauri: boolean;
   private readonly seenHashes = new Set<string>();
+  private isRestoringAccount = false; // Flag to prevent sync during account restoration
 
   constructor() {
-    this.isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+    this.isTauri =
+      typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
   }
 
   async initialize(options?: WalletServiceOptions): Promise<void> {
@@ -75,18 +77,20 @@ export class WalletService {
     }
 
     this.unsubscribeAccount = etcAccount.subscribe(async (account) => {
-      if (!account || !this.isTauri) {
+      if (!account || !this.isTauri || this.isRestoringAccount) {
         return;
       }
-      // IMPORTANT: refreshTransactions must run BEFORE refreshBalance
-      // because refreshBalance depends on blocksFound set by refreshTransactions
       try {
         await this.refreshTransactions();
         await this.refreshBalance();
       } catch (err) {
-        console.error('WalletService refresh failed', err);
+        console.error("WalletService refresh failed", err);
       }
     });
+  }
+
+  setRestoringAccount(restoring: boolean): void {
+    this.isRestoringAccount = restoring;
   }
 
   shutdown(): void {
@@ -113,11 +117,13 @@ export class WalletService {
     options?: { timestamp?: number }
   ): Promise<ApiRequestSignature> {
     if (!this.isTauri) {
-      throw new Error('Ethereum authentication headers require the desktop app');
+      throw new Error(
+        "Ethereum authentication headers require the desktop app"
+      );
     }
 
     const payload = body && body.length > 0 ? Array.from(body) : null;
-    const result = (await invoke('sign_api_request', {
+    const result = (await invoke("sign_api_request", {
       method,
       path,
       body: payload,
@@ -133,63 +139,122 @@ export class WalletService {
     }
 
     this.pollHandle = setInterval(async () => {
-      const account = get(etcAccount);
-      if (!account) {
+      // Check backend for active account
+      try {
+        const hasAccount = await invoke<boolean>("has_active_account");
+        if (!hasAccount) {
+          return;
+        }
+      } catch (error) {
+        console.error("Failed to check account status:", error);
         return;
       }
+
       // IMPORTANT: refreshTransactions must run BEFORE refreshBalance
       // because refreshBalance depends on blocksFound set by refreshTransactions
       try {
         await this.refreshTransactions();
         await this.refreshBalance();
       } catch (err) {
-        console.error('WalletService poll failed', err);
+        console.error("WalletService poll failed", err);
       }
     }, this.pollInterval);
   }
 
   private async syncFromBackend(): Promise<void> {
-    const account = get(etcAccount);
-    if (!account) {
+    // Skip sync if we're restoring an account
+    if (this.isRestoringAccount) {
+      console.log(
+        "[syncFromBackend] Skipping sync - account is being restored"
+      );
       return;
     }
+
+    // Check if Geth is running before trying to sync
+    if (this.isTauri) {
+      try {
+        const isRunning = await invoke<boolean>("is_geth_running");
+        if (!isRunning) {
+          return; // Silently skip if Geth is not running
+        }
+      } catch (error) {
+        console.warn("Failed to check Geth status:", error);
+        return;
+      }
+    }
+
+    // Check backend for active account
+    try {
+      const hasAccount = await invoke<boolean>("has_active_account");
+      if (!hasAccount) {
+        return;
+      }
+    } catch (error) {
+      console.error("Failed to check account status:", error);
+      return;
+    }
+
     // IMPORTANT: refreshTransactions must run BEFORE refreshBalance
     // because refreshBalance depends on blocksFound set by refreshTransactions
     try {
       await this.refreshTransactions();
       await this.refreshBalance();
     } catch (err) {
-      console.error('WalletService sync failed', err);
+      console.error("WalletService sync failed", err);
     }
   }
 
-  
   async refreshTransactions(): Promise<void> {
-    const account = get(etcAccount);
-    if (!account || !this.isTauri) {
+    if (!this.isTauri) {
       return;
     }
-  
+
+    // Skip if we're restoring an account
+    if (this.isRestoringAccount) {
+      console.log("[refreshTransactions] Skipping - account is being restored");
+      return;
+    }
+
+    // Check if Geth is running before trying to query blockchain
+    try {
+      const isRunning = await invoke<boolean>("is_geth_running");
+      if (!isRunning) {
+        return; // Silently skip if Geth is not running
+      }
+    } catch (error) {
+      return; // Can't check Geth status, skip
+    }
+
+    // Get account address from backend
+    let accountAddress: string;
+    try {
+      accountAddress = await invoke<string>("get_active_account_address");
+    } catch (error) {
+      // No active account
+      return;
+    }
+
     try {
       // Get data in parallel
       const [blocks, totalBlockCount] = await Promise.all([
-        invoke('get_recent_mined_blocks_pub', {
-          address: account.address,
+        invoke("get_recent_mined_blocks_pub", {
+          address: accountAddress,
           lookback: 2000,
           limit: 50,
-        }) as Promise<Array<{ hash: string; timestamp: number; reward?: number }>>,
-        invoke('get_blocks_mined', {
-          address: account.address,
-        }) as Promise<number>
+        }) as Promise<
+          Array<{ hash: string; timestamp: number; reward?: number }>
+        >,
+        invoke("get_blocks_mined", {
+          address: accountAddress,
+        }) as Promise<number>,
       ]);
-  
+
       // Update total count FIRST, before adding blocks
-      console.log('[refreshTransactions] Setting blocksFound to:', totalBlockCount);
       miningState.update((state) => ({
         ...state,
         blocksFound: totalBlockCount,
       }));
-  
+
       for (const block of blocks) {
         if (this.seenHashes.has(block.hash)) {
           continue;
@@ -202,13 +267,37 @@ export class WalletService {
         });
       }
     } catch (error) {
-      console.error('Failed to refresh transactions:', error);
+      // Expected when Geth is not running - silently skip
     }
   }
 
-async refreshBalance(): Promise<void> {
-    const account = get(etcAccount);
-    if (!account || !this.isTauri) {
+  async refreshBalance(): Promise<void> {
+    if (!this.isTauri) {
+      return;
+    }
+
+    // Skip if we're restoring an account
+    if (this.isRestoringAccount) {
+      console.log("[refreshBalance] Skipping - account is being restored");
+      return;
+    }
+
+    // Check if Geth is running before trying to query blockchain
+    try {
+      const isRunning = await invoke<boolean>("is_geth_running");
+      if (!isRunning) {
+        return; // Silently skip if Geth is not running
+      }
+    } catch (error) {
+      return; // Can't check Geth status, skip
+    }
+
+    // Get account address from backend
+    let accountAddress: string;
+    try {
+      accountAddress = await invoke<string>("get_active_account_address");
+    } catch (error) {
+      // No active account
       return;
     }
 
@@ -220,25 +309,24 @@ async refreshBalance(): Promise<void> {
       // Calculate total rewards based on ACTUAL blocks found, not recentBlocks length
       const totalEarned = actualBlocksFound * 2;
 
-      console.log('[refreshBalance] blocksFound:', actualBlocksFound, 'totalEarned:', totalEarned, 'recentBlocks.length:', currentMiningState.recentBlocks?.length ?? 0);
-
       // Try to get balance from geth
       let realBalance = 0;
       try {
-        const balanceStr = await invoke('get_account_balance', {
-          address: account.address
-        }) as string;
+        const balanceStr = (await invoke("get_account_balance", {
+          address: accountAddress,
+        })) as string;
         realBalance = parseFloat(balanceStr);
       } catch (e) {
-        console.warn('Could not get balance from geth:', e);
+        // Expected when Geth is not running
       }
 
       // Calculate pending sent transactions
       const pendingSent = get(transactions)
-        .filter((tx) => tx.status === 'pending' && tx.type === 'sent')
+        .filter((tx) => tx.status === "pending" && tx.type === "sent")
         .reduce((sum, tx) => sum + tx.amount, 0);
 
-      // If geth balance is 0 but we have mined blocks, use calculated balance
+      // Use real balance from Geth, or totalEarned if blocks haven't matured yet
+      // In test networks or when blocks are immature, realBalance may be 0 even though we've mined
       const actualBalance = realBalance > 0 ? realBalance : totalEarned;
       const availableBalance = Math.max(0, actualBalance - pendingSent);
 
@@ -258,8 +346,8 @@ async refreshBalance(): Promise<void> {
         if (realBalance < expectedBalanceAfterPending + pendingSent - 0.01) {
           transactions.update((txs) =>
             txs.map((tx) =>
-              tx.status === 'pending' && tx.type === 'sent'
-                ? { ...tx, status: 'completed' as const }
+              tx.status === "pending" && tx.type === "sent"
+                ? { ...tx, status: "success" as const }
                 : tx
             )
           );
@@ -273,26 +361,27 @@ async refreshBalance(): Promise<void> {
         // blocksFound is already correctly set by refreshTransactions
       }));
     } catch (error) {
-      console.error('Failed to refresh balance:', error);
+      console.error("Failed to refresh balance:", error);
     }
   }
-
 
   async ensureGethRunning(): Promise<boolean> {
     if (!this.isTauri) {
       return false;
     }
     try {
-      return (await invoke('is_geth_running')) as boolean;
+      return (await invoke("is_geth_running")) as boolean;
     } catch (error) {
-      console.error('Failed to check Geth status:', error);
+      console.error("Failed to check Geth status:", error);
       return false;
     }
   }
 
   async createAccount(): Promise<AccountCreationResult> {
     if (this.isTauri) {
-      const account = (await invoke('create_chiral_account')) as AccountCreationResult;
+      const account = (await invoke(
+        "create_chiral_account"
+      )) as AccountCreationResult;
       transactions.set([]);
       this.seenHashes.clear();
       this.setActiveAccount(account);
@@ -309,11 +398,11 @@ async refreshBalance(): Promise<void> {
 
   async importAccount(privateKey: string): Promise<AccountCreationResult> {
     if (!privateKey?.trim()) {
-      throw new Error('Private key is required');
+      throw new Error("Private key is required");
     }
 
     if (this.isTauri) {
-      const account = (await invoke('import_chiral_account', {
+      const account = (await invoke("import_chiral_account", {
         privateKey,
       })) as AccountCreationResult;
       transactions.set([]);
@@ -331,15 +420,20 @@ async refreshBalance(): Promise<void> {
   }
 
   async sendTransaction(toAddress: string, amount: number): Promise<string> {
-    const account = get(etcAccount);
-    if (!account) {
-      throw new Error('No active account');
-    }
     if (!this.isTauri) {
-      throw new Error('Transactions are only available in the desktop app');
+      throw new Error("Transactions are only available in the desktop app");
     }
 
-    const txHash = (await invoke('send_chiral_transaction', {
+    // Verify account exists in backend before attempting transaction
+    const hasAccount = await invoke<boolean>("has_active_account");
+    if (!hasAccount) {
+      throw new Error("No active account. Please log in.");
+    }
+
+    // Get account address from backend for transaction record
+    const accountAddress = await invoke<string>("get_active_account_address");
+
+    const txHash = (await invoke("send_chiral_transaction", {
       toAddress,
       amount,
     })) as string;
@@ -353,13 +447,13 @@ async refreshBalance(): Promise<void> {
     transactions.update((existing) => [
       {
         id: Date.now(),
-        type: 'sent',
+        type: "sent",
         amount,
         to: toAddress,
-        from: account.address,
+        from: accountAddress,
         date: new Date(),
-        description: 'Manual transfer',
-        status: 'pending',
+        description: "Manual transfer",
+        status: "pending",
         txHash,
       },
       ...existing,
@@ -368,17 +462,18 @@ async refreshBalance(): Promise<void> {
     return txHash;
   }
 
-  async saveToKeystore(password: string, account?: ETCAccount): Promise<void> {
-    const active = account ?? get(etcAccount);
-    if (!active) {
-      throw new Error('No active account to save');
-    }
+  async saveToKeystore(password: string, account: ETCAccount): Promise<void> {
     if (!this.isTauri) {
       return;
     }
-    await invoke('save_account_to_keystore', {
-      address: active.address,
-      privateKey: active.private_key,
+
+    if (!account) {
+      throw new Error("No active account to save");
+    }
+
+    await invoke("save_account_to_keystore", {
+      address: account.address,
+      privateKey: account.private_key,
       password,
     });
   }
@@ -388,19 +483,22 @@ async refreshBalance(): Promise<void> {
       return [];
     }
     try {
-      return (await invoke('list_keystore_accounts')) as string[];
+      return (await invoke("list_keystore_accounts")) as string[];
     } catch (error) {
-      console.error('Failed to list keystore accounts:', error);
+      console.error("Failed to list keystore accounts:", error);
       return [];
     }
   }
 
-  async loadFromKeystore(address: string, password: string): Promise<AccountCreationResult> {
+  async loadFromKeystore(
+    address: string,
+    password: string
+  ): Promise<AccountCreationResult> {
     if (!this.isTauri) {
-      throw new Error('Keystore access is only available in the desktop app');
+      throw new Error("Keystore access is only available in the desktop app");
     }
 
-    const account = (await invoke('load_account_from_keystore', {
+    const account = (await invoke("load_account_from_keystore", {
       address,
       password,
     })) as AccountCreationResult;
@@ -409,9 +507,24 @@ async refreshBalance(): Promise<void> {
     return account;
   }
 
-  async exportSnapshot(options?: { includePrivateKey?: boolean }): Promise<WalletExportSnapshot> {
+  async exportSnapshot(options?: {
+    includePrivateKey?: boolean;
+  }): Promise<WalletExportSnapshot> {
     const walletState = get(wallet);
     const account = get(etcAccount);
+
+    let privateKey: string | undefined = account?.private_key;
+
+    // If private key is not in frontend store and user wants to include it,
+    // fetch it from backend
+    if (options?.includePrivateKey && !privateKey && this.isTauri) {
+      try {
+        privateKey = await invoke<string>("get_active_account_private_key");
+      } catch (error) {
+        console.error("Failed to get private key from backend:", error);
+      }
+    }
+
     return {
       address: account?.address,
       balance: walletState.balance,
@@ -419,27 +532,34 @@ async refreshBalance(): Promise<void> {
       totalSpent: walletState.totalSpent,
       pendingTransactions: walletState.pendingTransactions,
       exportDate: new Date().toISOString(),
-      version: '1.0',
-      privateKey: options?.includePrivateKey ? account?.private_key : undefined,
+      version: "1.0",
+      privateKey: options?.includePrivateKey ? privateKey : undefined,
     };
   }
 
   async generateTwoFactorSetup(): Promise<TotpSetupInfo> {
     if (!this.isTauri) {
-      throw new Error('2FA is only available in the desktop app');
+      throw new Error("2FA is only available in the desktop app");
     }
-    const result = (await invoke('generate_totp_secret')) as { secret: string; otpauth_url: string };
+    const result = (await invoke("generate_totp_secret")) as {
+      secret: string;
+      otpauth_url: string;
+    };
     return {
       secret: result.secret,
       otpauthUrl: result.otpauth_url,
     };
   }
 
-  async verifyAndEnableTwoFactor(secret: string, code: string, password: string): Promise<boolean> {
+  async verifyAndEnableTwoFactor(
+    secret: string,
+    code: string,
+    password: string
+  ): Promise<boolean> {
     if (!this.isTauri) {
-      throw new Error('2FA is only available in the desktop app');
+      throw new Error("2FA is only available in the desktop app");
     }
-    return (await invoke('verify_and_enable_totp', {
+    return (await invoke("verify_and_enable_totp", {
       secret,
       code,
       password,
@@ -448,9 +568,9 @@ async refreshBalance(): Promise<void> {
 
   async verifyTwoFactor(code: string, password: string): Promise<boolean> {
     if (!this.isTauri) {
-      throw new Error('2FA is only available in the desktop app');
+      throw new Error("2FA is only available in the desktop app");
     }
-    return (await invoke('verify_totp_code', {
+    return (await invoke("verify_totp_code", {
       code,
       password,
     })) as boolean;
@@ -458,9 +578,9 @@ async refreshBalance(): Promise<void> {
 
   async disableTwoFactor(password: string): Promise<void> {
     if (!this.isTauri) {
-      throw new Error('2FA is only available in the desktop app');
+      throw new Error("2FA is only available in the desktop app");
     }
-    await invoke('disable_2fa', { password });
+    await invoke("disable_2fa", { password });
   }
 
   async isTwoFactorEnabled(): Promise<boolean> {
@@ -468,9 +588,9 @@ async refreshBalance(): Promise<void> {
       return false;
     }
     try {
-      return (await invoke('is_2fa_enabled')) as boolean;
+      return (await invoke("is_2fa_enabled")) as boolean;
     } catch (error) {
-      console.error('Failed to determine 2FA state:', error);
+      // This is normal for new accounts or accounts without 2FA configured
       return false;
     }
   }
@@ -485,12 +605,18 @@ async refreshBalance(): Promise<void> {
     wallet.update((w: WalletInfo) => ({
       ...w,
       address: formatted.address,
-      pendingTransactions: w.pendingTransactions ?? 0,
+      balance: 0, // Reset balance for new account
+      actualBalance: 0,
+      pendingTransactions: 0,
     }));
   }
 
-  private pushRecentBlock(block: { hash: string; reward?: number; timestamp?: Date }): void {
-    const reward = typeof block.reward === 'number' ? block.reward : 0;
+  private pushRecentBlock(block: {
+    hash: string;
+    reward?: number;
+    timestamp?: Date;
+  }): void {
+    const reward = typeof block.reward === "number" ? block.reward : 0;
 
     const newBlock = {
       id: `block-${block.hash}-${block.timestamp?.getTime() ?? Date.now()}`,
@@ -512,28 +638,30 @@ async refreshBalance(): Promise<void> {
       const last4 = block.hash.slice(-4);
       const tx: Transaction = {
         id: Date.now(),
-        type: 'received',
+        type: "received",
         amount: reward,
-        from: 'Mining reward',
+        from: "Mining reward",
         date: block.timestamp ?? new Date(),
         description: `Block Reward (…${last4})`,
-        status: 'completed',
+        status: "success",
       };
       transactions.update((list) => [tx, ...list]);
     }
   }
 
-  private createDemoAccount(overridePrivateKey?: string): AccountCreationResult {
+  private createDemoAccount(
+    overridePrivateKey?: string
+  ): AccountCreationResult {
     const address = this.randomHex(40);
-    const private_key = overridePrivateKey?.startsWith('0x')
+    const private_key = overridePrivateKey?.startsWith("0x")
       ? overridePrivateKey
-      : `0x${(overridePrivateKey ?? this.randomHex(64)).replace(/^0x/, '')}`;
+      : `0x${(overridePrivateKey ?? this.randomHex(64)).replace(/^0x/, "")}`;
     return { address: `0x${address}`, private_key };
   }
 
   private randomHex(length: number): string {
-    const chars = '0123456789abcdef';
-    let out = '';
+    const chars = "0123456789abcdef";
+    let out = "";
     for (let i = 0; i < length; i += 1) {
       out += chars[Math.floor(Math.random() * chars.length)];
     }

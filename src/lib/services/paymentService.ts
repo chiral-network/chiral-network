@@ -95,7 +95,6 @@ export class PaymentService {
   static initialize() {
     // Only initialize once
     if (this.initialized) {
-      console.log("💾 Payment service already initialized, skipping...");
       return;
     }
 
@@ -103,22 +102,12 @@ export class PaymentService {
     const savedWallet = loadWalletFromStorage();
     if (savedWallet && typeof savedWallet.balance === "number") {
       wallet.update((w) => ({ ...w, balance: savedWallet.balance }));
-      console.log(
-        "💾 Restored wallet balance from localStorage:",
-        savedWallet.balance
-      );
-    } else {
-      console.log("💾 No saved wallet found, using current balance");
     }
 
     // Load transactions from storage
     const savedTransactions = loadTransactionsFromStorage();
     if (savedTransactions.length > 0) {
       transactions.set(savedTransactions);
-      console.log(
-        "💾 Loaded transactions from storage:",
-        savedTransactions.length
-      );
     }
 
     this.initialized = true;
@@ -141,10 +130,6 @@ export class PaymentService {
 
     const sizeInMB = fileSizeInBytes / (1024 * 1024);
     const cost = sizeInMB * dynamicPricePerMb;
-
-    console.log(
-      `💰 File size ${sizeInMB.toFixed(3)} MB @ ${dynamicPricePerMb} = ${cost}`
-    );
 
     return parseFloat(cost.toFixed(8));
   }
@@ -183,17 +168,6 @@ export class PaymentService {
         (baseHashCost / avgHashPower) *
         network_difficulty *
         normalizationFactor;
-
-      console.log("📊 Dynamic pricing inputs:", {
-        difficulty: network_difficulty,
-        hashrate: network_hashrate,
-        active_miners,
-        power_usage,
-        avgHashPower,
-        baseHashCost,
-        normalizationFactor,
-        pricePerMB,
-      });
 
       return parseFloat(pricePerMB.toFixed(8));
     } catch (error) {
@@ -348,7 +322,7 @@ export class PaymentService {
         txHash: transactionHash,
         date: new Date(),
         description: `Download: ${fileName}`,
-        status: "completed",
+        status: "success",
       };
 
       console.log("📝 Creating transaction:", newTransaction);
@@ -445,7 +419,7 @@ export class PaymentService {
         txHash: transactionHash,
         date: new Date(),
         description: `Upload payment: ${fileName}`,
-        status: "completed",
+        status: "success",
       };
 
       // Add transaction to history with persistence
@@ -465,10 +439,10 @@ export class PaymentService {
         wallet.update((w) => {
           const allTxs = get(transactions);
           const totalReceived = allTxs
-            .filter((tx) => tx.status === "completed" && tx.type === "received")
+            .filter((tx) => tx.status === "success" && tx.type === "received")
             .reduce((sum, tx) => sum + tx.amount, 0);
           const totalSpent = allTxs
-            .filter((tx) => tx.status === "completed" && tx.type === "sent")
+            .filter((tx) => tx.status === "success" && tx.type === "sent")
             .reduce((sum, tx) => sum + tx.amount, 0);
 
           const updated = {

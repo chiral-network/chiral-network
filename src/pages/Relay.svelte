@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';
-  import { invoke } from '@tauri-apps/api/core';
   import { settings } from '$lib/stores';
   import { dhtService } from '$lib/dht';
   import { relayErrorService } from '$lib/services/relayErrorService';
@@ -15,7 +14,7 @@
   let relayServerEnabled = false;
   let relayServerRunning = false;
   let isToggling = false;
-  let dhtIsRunning = false;
+  let dhtIsRunning: boolean | null = null;
   let relayServerAlias = '';
 
   // AutoRelay client settings
@@ -37,11 +36,22 @@
       }
     }
 
-    // Check if DHT is running
+    // Check if DHT is actually running
+    await checkDhtStatus();
+  }
+
+  async function checkDhtStatus() {
     try {
-      const peerId = await invoke<string | null>('get_dht_peer_id');
-      dhtIsRunning = peerId !== null;
-      relayServerRunning = dhtIsRunning && relayServerEnabled;
+      const { invoke } = await import('@tauri-apps/api/core');
+      const isRunning = await invoke<boolean>('is_dht_running').catch(() => false);
+      dhtIsRunning = isRunning;
+      
+      // If DHT is running and relay server is enabled in settings, mark it as running
+      if (isRunning && relayServerEnabled) {
+        relayServerRunning = true;
+      } else {
+        relayServerRunning = false;
+      }
     } catch (error) {
       console.error('Failed to check DHT status:', error);
       dhtIsRunning = false;
@@ -140,32 +150,47 @@
     saveSettings();
   }
 
-  onMount(async () => {
-    await loadSettings();
+  let statusCheckInterval: number | undefined;
 
-    // Initialize relay error service with preferred relays
-    const preferredRelays = preferredRelaysText
-      .split('\n')
-      .map((r) => r.trim())
-      .filter((r) => r.length > 0);
+  onMount(() => {
+    // Load settings and start status checking
+    (async () => {
+      await loadSettings();
 
-    if (preferredRelays.length > 0 || autoRelayEnabled) {
-      await relayErrorService.initialize(preferredRelays, autoRelayEnabled);
+      // Periodically check DHT status (every 3 seconds)
+      statusCheckInterval = window.setInterval(checkDhtStatus, 3000);
 
-      // Attempt to connect to best relay if AutoRelay is enabled
-      if (autoRelayEnabled && dhtIsRunning) {
-        try {
-          const result = await relayErrorService.connectToRelay();
-          if (result.success) {
-            console.log('Successfully connected to relay via error service');
-          } else {
-            console.warn('Failed to connect to relay:', result.error);
+      // Initialize relay error service with preferred relays
+      const preferredRelays = preferredRelaysText
+        .split('\n')
+        .map((r) => r.trim())
+        .filter((r) => r.length > 0);
+
+      if (preferredRelays.length > 0 || autoRelayEnabled) {
+        await relayErrorService.initialize(preferredRelays, autoRelayEnabled);
+
+        // Attempt to connect to best relay if AutoRelay is enabled
+        if (autoRelayEnabled && dhtIsRunning) {
+          try {
+            const result = await relayErrorService.connectToRelay();
+            if (result.success) {
+              console.log('Successfully connected to relay via error service');
+            } else {
+              console.warn('Failed to connect to relay:', result.error);
+            }
+          } catch (error) {
+            console.error('Error connecting to relay:', error);
           }
-        } catch (error) {
-          console.error('Error connecting to relay:', error);
         }
       }
-    }
+    })();
+
+    // Cleanup interval on unmount
+    return () => {
+      if (statusCheckInterval !== undefined) {
+        clearInterval(statusCheckInterval);
+      }
+    };
   });
 </script>
 
@@ -225,7 +250,7 @@
           </p>
         </div>
 
-        {#if !dhtIsRunning}
+        {#if dhtIsRunning === false}
           <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
             <p class="text-sm font-semibold text-yellow-900">
               {$t('relay.server.dhtNotRunning')}
@@ -234,12 +259,21 @@
               {$t('relay.server.dhtNotRunningHint')}
             </p>
           </div>
+        {:else if dhtIsRunning === null}
+          <div class="bg-blue-50 border border-blue-200 rounded-lg p-3">
+            <p class="text-sm font-semibold text-blue-900">
+              Network Not Started
+            </p>
+            <p class="text-xs text-blue-700 mt-1">
+              Start the network from the Network page to enable relay functionality.
+            </p>
+          </div>
         {/if}
 
         <div class="flex items-center justify-between">
           <Button
             on:click={toggleRelayServer}
-            disabled={!dhtIsRunning || isToggling}
+            disabled={dhtIsRunning !== true || isToggling}
             variant={relayServerEnabled ? 'destructive' : 'default'}
             class="w-full"
           >
@@ -329,7 +363,7 @@
   </div>
 
   <!-- Relay Error Monitor -->
-  {#if autoRelayEnabled && dhtIsRunning}
+  {#if autoRelayEnabled && dhtIsRunning === true}
     <div class="mt-6">
       <h2 class="text-2xl font-bold text-gray-900 mb-4">{$t('relay.monitoring.title')}</h2>
       <RelayErrorMonitor />

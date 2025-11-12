@@ -70,5 +70,8 @@
         "installerIcon": "./icons/icon.ico"
       }
     }
+  },
+  "plugins": {
+    "process": {}
   }
 }

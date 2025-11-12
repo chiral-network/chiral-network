@@ -18,6 +18,9 @@ pub enum DownloadSource {
 
     /// FTP/FTPS download
     Ftp(FtpSourceInfo),
+
+    /// ed2k (eDonkey2000) download
+    Ed2k(Ed2kSourceInfo),
 }
 
 /// Information about a P2P download source
@@ -97,6 +100,32 @@ pub struct FtpSourceInfo {
     pub timeout_secs: Option<u64>,
 }
 
+/// Information about an ed2k (eDonkey2000) download source
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Ed2kSourceInfo {
+    /// ed2k server URL (e.g., "ed2k://|server|176.103.48.36|4661|/")
+    pub server_url: String,
+
+    /// ed2k file hash (MD4 hash in hex format)
+    pub file_hash: String,
+
+    /// File size in bytes
+    pub file_size: u64,
+
+    /// Optional file name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_name: Option<String>,
+
+    /// List of known sources (IP:Port pairs)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sources: Option<Vec<String>>,
+
+    /// Connection timeout in seconds
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+}
+
 // Default value functions
 fn default_verify_ssl() -> bool {
     true
@@ -113,6 +142,7 @@ impl DownloadSource {
             DownloadSource::P2p(_) => "P2P",
             DownloadSource::Http(_) => "HTTP",
             DownloadSource::Ftp(_) => "FTP",
+            DownloadSource::Ed2k(_) => "ED2K",
         }
     }
 
@@ -138,6 +168,14 @@ impl DownloadSource {
                     format!("FTP: {}", info.url)
                 }
             }
+            DownloadSource::Ed2k(info) => {
+                // Display file name if available, otherwise show hash prefix
+                if let Some(name) = &info.file_name {
+                    format!("ED2K: {}", name)
+                } else {
+                    format!("ED2K: {}", &info.file_hash[..8.min(info.file_hash.len())])
+                }
+            }
         }
     }
 
@@ -147,6 +185,10 @@ impl DownloadSource {
             DownloadSource::P2p(info) => info.peer_id.clone(),
             DownloadSource::Http(info) => info.url.clone(),
             DownloadSource::Ftp(info) => info.url.clone(),
+            DownloadSource::Ed2k(info) => {
+                // Use file hash as identifier
+                info.file_hash.clone()
+            }
         }
     }
 
@@ -156,6 +198,7 @@ impl DownloadSource {
             DownloadSource::P2p(info) => info.supports_encryption,
             DownloadSource::Http(info) => info.url.starts_with("https://"),
             DownloadSource::Ftp(info) => info.use_ftps,
+            DownloadSource::Ed2k(_) => false, // ed2k protocol does not natively support encryption
         }
     }
 
@@ -169,6 +212,10 @@ impl DownloadSource {
             DownloadSource::Http(_) => {
                 // HTTP is secondary
                 50
+            }
+            DownloadSource::Ed2k(_) => {
+                // ed2k is between FTP and HTTP (P2P nature but legacy protocol)
+                30
             }
             DownloadSource::Ftp(_) => {
                 // FTP is fallback
@@ -284,5 +331,110 @@ mod tests {
             timeout_secs: None,
         });
         assert_eq!(http.display_name(), "HTTP: cdn.example.com");
+    }
+
+    #[test]
+    fn test_ed2k_source_creation() {
+        let source = DownloadSource::Ed2k(Ed2kSourceInfo {
+            server_url: "ed2k://|server|176.103.48.36|4661|/".to_string(),
+            file_hash: "31D6CFE0D16AE931B73C59D7E0C089C0".to_string(),
+            file_size: 9728000,
+            file_name: Some("ubuntu.iso".to_string()),
+            sources: Some(vec!["192.168.1.1:4662".to_string()]),
+            timeout_secs: Some(30),
+        });
+
+        assert_eq!(source.source_type(), "ED2K");
+        assert!(!source.supports_encryption());
+        assert_eq!(source.priority_score(), 30);
+        assert_eq!(source.display_name(), "ED2K: ubuntu.iso");
+    }
+
+    #[test]
+    fn test_ed2k_source_without_filename() {
+        let source = DownloadSource::Ed2k(Ed2kSourceInfo {
+            server_url: "ed2k://|server|176.103.48.36|4661|/".to_string(),
+            file_hash: "31D6CFE0D16AE931B73C59D7E0C089C0".to_string(),
+            file_size: 9728000,
+            file_name: None,
+            sources: None,
+            timeout_secs: Some(30),
+        });
+
+        assert_eq!(source.display_name(), "ED2K: 31D6CFE0");
+        assert_eq!(source.identifier(), "31D6CFE0D16AE931B73C59D7E0C089C0");
+    }
+
+    #[test]
+    fn test_ed2k_priority_score() {
+        let ed2k = DownloadSource::Ed2k(Ed2kSourceInfo {
+            server_url: "ed2k://|server|176.103.48.36|4661|/".to_string(),
+            file_hash: "31D6CFE0D16AE931B73C59D7E0C089C0".to_string(),
+            file_size: 1024,
+            file_name: None,
+            sources: None,
+            timeout_secs: None,
+        });
+
+        let ftp = DownloadSource::Ftp(FtpSourceInfo {
+            url: "ftp://ftp.example.com/file.zip".to_string(),
+            username: None,
+            encrypted_password: None,
+            passive_mode: true,
+            use_ftps: false,
+            timeout_secs: None,
+        });
+
+        let http = DownloadSource::Http(HttpSourceInfo {
+            url: "https://example.com/file.zip".to_string(),
+            auth_header: None,
+            verify_ssl: true,
+            headers: None,
+            timeout_secs: None,
+        });
+
+        let p2p = DownloadSource::P2p(P2pSourceInfo {
+            peer_id: "12D3KooW".to_string(),
+            multiaddr: None,
+            reputation: Some(80),
+            supports_encryption: true,
+            protocol: None,
+        });
+
+        // Verify priority order: P2P (180) > HTTP (50) > ED2K (30) > FTP (25)
+        assert!(p2p.priority_score() > http.priority_score());
+        assert!(http.priority_score() > ed2k.priority_score());
+        assert!(ed2k.priority_score() > ftp.priority_score());
+
+        assert_eq!(ed2k.priority_score(), 30);
+        assert_eq!(ftp.priority_score(), 25);
+        assert_eq!(http.priority_score(), 50);
+        assert_eq!(p2p.priority_score(), 180);
+    }
+
+    #[test]
+    fn test_ed2k_serialization() {
+        let ed2k_info = Ed2kSourceInfo {
+            server_url: "ed2k://|server|176.103.48.36|4661|/".to_string(),
+            file_hash: "31D6CFE0D16AE931B73C59D7E0C089C0".to_string(),
+            file_size: 1024000,
+            file_name: Some("test.iso".to_string()),
+            sources: Some(vec!["192.168.1.1:4662".to_string()]),
+            timeout_secs: Some(60),
+        };
+
+        let source = DownloadSource::Ed2k(ed2k_info);
+        let json = serde_json::to_string(&source).unwrap();
+
+        // Verify JSON contains expected fields
+        assert!(json.contains("\"type\":\"ed2k\""));
+        assert!(json.contains("\"serverUrl\""));
+        assert!(json.contains("\"fileHash\""));
+        assert!(json.contains("\"fileSize\":1024000"));
+        assert!(json.contains("\"fileName\":\"test.iso\""));
+
+        // Deserialize and verify
+        let deserialized: DownloadSource = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.source_type(), "ED2K");
     }
 }

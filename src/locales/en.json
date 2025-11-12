@@ -88,6 +88,8 @@
       "retry": "Retry Connection",
       "connect": "Connect to DHT Network",
       "stop": "Stop DHT",
+      "cancel": "Cancel Connection",
+      "connectionCancelled": "Connection cancelled",
       "log": "Connection Log",
       "connectingToBootstrap": "Connecting to bootstrap node...",
       "attempt": "Attempt #{connectionAttempts}",
@@ -305,8 +307,8 @@
     "title": "Download Files",
     "subtitle": "Download files from the Chiral Network",
     "addNew": "Add New Download",
-    "addNewSubtitle": "Enter a file hash (e.g., Qm... or a magnet link) to start a new download.",
-    "placeholder": "Enter file hash or magnet link",
+    "addNewSubtitle": "Enter a Merkle hash or CID to start a new download.",
+    "placeholder": "Enter Merkle hash or CID",
     "clearInput": "Clear input",
     "searchAndDownload": "Search & Download",
     "searchByHash": "Search by Hash",
@@ -345,7 +347,7 @@
       "noFailed": "No failed downloads."
     },
     "file": {
-      "hash": "Hash",
+      "hash": "Merkle Hash",
       "queue": "Queue",
       "progress": "Progress"
     },
@@ -364,13 +366,15 @@
       "retry": "Retry"
     },
     "notifications": {
-      "enterHash": "Please enter a file hash to start downloading.",
+      "enterHash": "Please enter a Merkle hash or CID to start downloading.",
       "searching": "Searching for file metadata in the DHT...",
       "addedToQueue": "File added to the download queue.",
       "autostart": "Download automatically started.",
       "searchFailed": "Search failed: {error}",
       "downloadFailed": "Download failed for {name}.",
-      "downloadComplete": "Download complete for {name}."
+      "downloadComplete": "Download complete for {name}.",
+      "resumedSingle": "Restored 1 interrupted download. Resume it from the Downloads page.",
+      "resumedMultiple": "Restored {count} interrupted downloads. Resume them from the Downloads page."
     },
     "search": {
       "status": {
@@ -438,7 +442,6 @@
     "download": "Download",
     "upload": "Upload",
     "torrents": "Torrents",
-    "messages": "Messages",
     "network": "Network",
     "relay": "Relay",
     "mining": "Mining",
@@ -496,7 +499,19 @@
   },
   "account": {
     "title": "Account",
-    "subtitle": "Manage your wallet and account settings"
+    "subtitle": "Manage your wallet and account settings",
+    "firstRun": {
+      "welcome": "Welcome to Chiral Network!",
+      "description": "To start mining and earning rewards, you'll need to create a wallet account.",
+      "whyAccount": "Why do I need an account?",
+      "reason1": "Receive mining rewards to your wallet",
+      "reason2": "Secure your funds with encrypted recovery phrase",
+      "reason3": "Transfer coins to other users on the network",
+      "createWallet": "Create New Wallet",
+      "requiresWallet": "A wallet is required to mine, earn rewards, and transfer Chiral. Your recovery phrase will be generated in the next step.",
+      "accountCreated": "Wallet created successfully! You can now start mining.",
+      "error": "Failed to create account. Please try again."
+    }
   },
   "wallet": {
     "title": "Chiral Network Wallet",
@@ -740,10 +755,6 @@
     "exportFailed": "Export failed. Please try again.",
     "createAccount": "Failed to create account: {error}"
   },
-  "messages": {
-    "copied": "Copied!",
-    "failed": "Failed!"
-  },
   "analytics": {
     "title": "Analytics Dashboard",
     "subtitle": "Track your performance and network activity",
@@ -929,7 +940,7 @@
     "stop": "Stop Mining",
     "start": "Start Mining",
     "showLogs": "Show mining logs",
-    "networkPage": "Network page",
+    "networkPage": "Network Page.",
     "accountPage": "Account page",
     "networkStats": "Network Statistics",
     "networkHashRate": "Network Hash Rate",
@@ -1020,10 +1031,52 @@
       "intensity": "Intensity must be between 1 and 100",
       "noAccount": "Please create a Chiral Network account first in the Account page",
       "noAccountToStart": "Please create a Chiral Network account from the Account page to start mining",
-      "gethNotRunning": "Chiral node is not running. Please start it from the Network page",
+      "gethNotRunning": "Chiral node is not running. Please start it from the",
       "noAccountLink": "Please create a Chiral Network account from the"
     },
-    "starting": "Starting mining... (may restart node if needed)"
+    "starting": "Starting mining... (may restart node if needed)",
+    "temporaryAccount": {
+      "title": "⚠️ Temporary Account - Mining Rewards at Risk!",
+      "description": "You're mining with a temporary account. Mining rewards will be lost when you close the app unless you save your account.",
+      "createWallet": "Create Permanent Wallet",
+      "goToAccount": "Go to Account Page"
+    },
+    "calculator": {
+      "title": "Profitability Calculator",
+      "show": "Show",
+      "hide": "Hide",
+      "electricityCost": "Electricity Cost ($/kWh)",
+      "electricityCostHint": "Average US rate: $0.12/kWh",
+      "powerUsage": "Estimated Power Usage (Watts)",
+      "powerUsageHint": "CPU mining typically 50-150W",
+      "chiralPrice": "Chiral Price (USD)",
+      "chiralPriceHint": "Update with current market price",
+      "hashRate": "Hash Rate (H/s)",
+      "useCurrent": "Use Current",
+      "usingCurrent": "Using your current mining hashrate",
+      "enterCustom": "Enter custom hashrate",
+      "estimatedProfitability": "Estimated Profitability",
+      "daily": "Daily",
+      "monthly": "Monthly",
+      "yearly": "Yearly",
+      "revenue": "Revenue",
+      "cost": "Cost",
+      "profitMargin": "Profit Margin",
+      "profitable": "✓ Profitable",
+      "notProfitable": "✗ Not Profitable",
+      "profitableDesc": "Mining earnings exceed electricity costs",
+      "notProfitableDesc": "Electricity costs exceed mining earnings",
+      "calculationDetails": "Calculation Details:",
+      "yourHashrate": "Your hashrate",
+      "networkDiff": "Network difficulty",
+      "expectedBlocks": "Expected blocks/day",
+      "chiralEach": "Chiral each",
+      "powerConsumption": "Power consumption",
+      "kwhPerDay": "kWh/day",
+      "breakEvenPrice": "Break-even Chiral price",
+      "perChiral": "/Chiral",
+      "enableMining": "Enable mining to see profitability estimates"
+    }
   },
   "reputation": {
     "title": "Reputation System",
@@ -1171,7 +1224,7 @@
       "title": "Relay Health & Monitoring"
     },
     "errors": {
-      "dhtNotRunning": "DHT is not running. Please start the network first from the Network page.",
+      "dhtNotRunning": "DHT is not running. Please start the network from the ",
       "toggleFailed": "Failed to toggle relay server: {error}"
     },
     "monitor": {
@@ -1254,18 +1307,19 @@
     "dropFilesHint": "Drag and drop files anywhere on this card, or click \"Add Files\" below",
     "addFiles": "Add Files",
     "sharedFiles": "Shared Files",
+    "file": "file",
     "files": "files",
     "total": "total",
     "tip": "💡 Tip: You can also drag and drop files here to add them",
     "addMoreFiles": "Add More Files",
     "supportedFormats": "Supports images, videos, audio, documents, code files and more",
     "supportedFormatsDesktop": "Desktop app supports images, videos, audio, documents, code files and more",
-    "hash": "Hash",
+    "hashLabel": "Merkle Hash:",
     "seeder": "seeder{count, plural, =1 {} other {s}}",
     "leecher": "leecher{count, plural, =1 {} other {s}}",
     "seeding": "Seeding",
-    "copyHash": "Copy hash",
-    "hashCopied": "Hash copied!",
+    "copyHash": "Copy Merkle hash",
+    "hashCopied": "Merkle hash copied!",
     "stopSharing": "Stop sharing",
     "noFilesShared": "No files shared yet",
     "addFilesHint2": "Add files to start sharing on the network",
@@ -1309,12 +1363,9 @@
     "storedLocally": "Files stored locally. Start DHT network to share with others.",
     "uploadError": "Error processing dropped files. Please try again or use the \"Add Files\" button instead.",
     "fileManagementDesktopOnly": "File management is only available in the desktop app",
-    "fileUpdated": "{name} already exists; updated to v{version}",
-    "fileUploadedNew": "{name} uploaded as v{version} (new file)",
-    "hashCopiedClipboard": "File hash copied to clipboard!",
-    "noVersionHistory": "No version history found for this file",
-    "versionHistoryTitle": "Version history for {name}:\n{list}",
-    "versionHistoryError": "Failed to load version history",
+    "fileUpdated": "{name} already exists and has been updated",
+    "fileUploadedNew": "{name} uploaded successfully",
+    "hashCopiedClipboard": "Merkle hash copied to clipboard!",
     "desktopAppRequired": "Desktop App Required",
     "storageMonitoringDesktopOnly": "Storage monitoring requires the desktop application",
     "dropFilesHere": "✨ Drop files here!",
@@ -1327,26 +1378,13 @@
     "fileUploadDesktopApp": "File upload requires the desktop app",
     "downloadDesktopApp": "Download the desktop version to upload and share files",
     "desktopManagementRequired": "Desktop app required for file management",
-    "versionHistoryTooltip": "v{version} - Click to view version history",
     "encryptedEndToEnd": "This file is encrypted end-to-end",
     "active": "Active",
-    "hashLabel": "Hash:",
     "priceTooltip": "Price calculated dynamically based on network hash power",
     "storedLocallyBadge": "Stored Locally",
     "fileManagementTooltip": "File management requires desktop app",
     "fileManagementWebNotAvailable": "File management not available in web version",
     "fileDialogError": "Failed to open file dialog"
-  },
-  "messages": {
-    "title": "Messages",
-    "subtitle": "Communicate securely with your peers.",
-    "conversations": "Contacts",
-    "searchPlaceholder": "Search contacts...",
-    "inputPlaceholder": "Type an encrypted message...",
-    "selectConversation": "Select a conversation to start messaging",
-    "peer": "Peer",
-    "endToEndEncrypted": "End-to-end encrypted",
-    "refreshPeerList": "Refresh peer list"
   },
   "torrent": {
     "title": "Torrents",
@@ -1417,6 +1455,70 @@
       "thu": "Thu",
       "fri": "Fri",
       "sat": "Sat"
+    }
+  },
+  "downloadHistory": {
+    "title": "Download History",
+    "subtitle": "View and manage your download history",
+    "showHistory": "Show History",
+    "hideHistory": "Hide History",
+    "empty": "No download history yet",
+    "emptyDescription": "Completed, failed, and canceled downloads will appear here",
+    "search": "Search history...",
+    "filterAll": "All",
+    "filterCompleted": "Completed",
+    "filterFailed": "Failed",
+    "filterCanceled": "Canceled",
+    "redownload": "Re-download",
+    "remove": "Remove",
+    "clearHistory": "Clear History",
+    "clearFailed": "Clear Failed",
+    "exportHistory": "Export History",
+    "importHistory": "Import History",
+    "confirmClear": "Are you sure you want to clear all download history? This cannot be undone.",
+    "confirmClearFailed": "Clear all failed downloads from history?",
+    "stats": {
+      "total": "Total Downloads",
+      "completed": "Completed",
+      "failed": "Failed",
+      "canceled": "Canceled",
+      "totalSize": "Total Size",
+      "totalPrice": "Total Spent"
+    },
+    "messages": {
+      "historyCleared": "Download history cleared",
+      "failedCleared": "Failed downloads cleared",
+      "entryRemoved": "Entry removed from history",
+      "exportSuccess": "History exported successfully",
+      "importSuccess": "Imported {count} history entries",
+      "importError": "Failed to import history: {error}",
+      "redownloadStarted": "Re-downloading {name}..."
+    }
+  },
+  "settingsBackup": {
+    "title": "Backup & Restore",
+    "description": "Export or import your settings configuration",
+    "export": "Export Settings",
+    "import": "Import Settings",
+    "exportButton": "Export Settings",
+    "importButton": "Import Settings",
+    "downloadBackup": "Download Backup File",
+    "selectFile": "Select Backup File",
+    "merge": "Merge with Current Settings",
+    "replace": "Replace All Settings",
+    "autoBackup": "Automatic Backups",
+    "autoBackupDescription": "Automatic backups are created before major changes",
+    "restoreAutoBackup": "Restore",
+    "messages": {
+      "exportSuccess": "Settings exported successfully",
+      "exportError": "Failed to export settings: {error}",
+      "importSuccess": "Settings imported successfully",
+      "importWarnings": "Settings imported with warnings: {warnings}",
+      "importError": "Failed to import settings: {error}",
+      "autoBackupCreated": "Automatic backup created",
+      "autoBackupRestored": "Settings restored from backup",
+      "invalidFile": "Invalid backup file format",
+      "confirmReplace": "This will replace all current settings. Continue?"
     }
   }
 }

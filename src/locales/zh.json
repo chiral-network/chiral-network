@@ -312,7 +312,6 @@
     "download": "下载",
     "upload": "上传",
     "torrents": "种子",
-    "messages": "消息",
     "network": "网络",
     "relay": "中继",
     "mining": "挖矿",
@@ -649,10 +648,6 @@
     },
     "exportFailed": "导出失败。请重试。",
     "createAccount": "无法创建账户: {error}"
-  },
-  "messages": {
-    "copied": "已复制！",
-    "failed": "失败！"
   },
   "analytics": {
     "title": "分析面板",
@@ -1171,6 +1166,7 @@
     "dropFilesHint": "将文件拖到此卡片的任意位置，或点击下方的“添加文件”",
     "addFiles": "添加文件",
     "sharedFiles": "已分享文件",
+    "file": "文件",
     "files": "文件",
     "total": "总计",
     "tip": "提示：你也可以将文件拖到此处添加",
@@ -1253,17 +1249,6 @@
     "fileManagementTooltip": "文件管理需要桌面应用",
     "fileManagementWebNotAvailable": "网页版不支持文件管理",
     "fileDialogError": "无法打开文件对话框"
-  },
-  "messages": {
-    "title": "消息",
-    "subtitle": "与您的节点安全通信。",
-    "conversations": "联系人",
-    "searchPlaceholder": "搜索联系人...",
-    "inputPlaceholder": "输入加密消息...",
-    "selectConversation": "选择对话以开始发送消息",
-    "peer": "节点",
-    "endToEndEncrypted": "端到端加密",
-    "refreshPeerList": "刷新节点列表"
   },
   "torrent": {
     "title": "种子",

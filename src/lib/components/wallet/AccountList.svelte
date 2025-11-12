@@ -36,7 +36,19 @@
     return `${addr.slice(0, prefix)}…${addr.slice(-suffix)}`
   }
 
-  function selectAccount(acc: AccountItem) {
+  async function selectAccount(acc: AccountItem) {
+    // Import to backend to set as active account
+    const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+    if (isTauri && acc.privateKeyHex) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core')
+        const privateKeyWithPrefix = acc.privateKeyHex.startsWith('0x') ? acc.privateKeyHex : '0x' + acc.privateKeyHex
+        await invoke('import_chiral_account', { privateKey: privateKeyWithPrefix })
+      } catch (error) {
+        console.error('Failed to set backend account:', error)
+      }
+    }
+    
     etcAccount.set({ address: acc.address, private_key: acc.privateKeyHex || '' })
     wallet.update(w => ({ ...w, address: acc.address }))
     showToast('Selected account ' + acc.address.slice(0, 10) + '...', 'success')

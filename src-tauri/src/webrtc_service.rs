@@ -36,14 +36,6 @@ pub struct WebRTCFileRequest {
     pub recipient_public_key: Option<String>, // For encrypted transfers
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WebRTCChatMessage {
-    pub message_id: String,
-    pub encrypted_payload: Vec<u8>, // The E2EE message from your crypto layer
-    pub timestamp: u64,
-    pub signature: Vec<u8>, // Signature of the payload to verify authenticity
-}
-
 /// Sent by a downloader to request the full file manifest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebRTCManifestRequest {
@@ -189,7 +181,6 @@ pub enum WebRTCMessage {
     ManifestRequest(WebRTCManifestRequest),
     ManifestResponse(WebRTCManifestResponse),
     FileChunk(FileChunk),
-    ChatMessage(WebRTCChatMessage),
 }
 
 pub struct WebRTCService {
@@ -906,14 +897,6 @@ impl WebRTCService {
                             &bandwidth,
                         )
                         .await;
-                    }
-                    WebRTCMessage::ChatMessage(chat_message) => {
-                        info!("Received chat message {} from peer {}", chat_message.message_id, peer_id);
-                        // Just forward the entire message to the frontend.
-                        // The frontend will be responsible for decryption.
-                        if let Err(e) = app_handle.emit("incoming_chat_message", chat_message) {
-                            error!("Failed to emit incoming_chat_message event: {}", e);
-                        }
                     }
                 }
             }

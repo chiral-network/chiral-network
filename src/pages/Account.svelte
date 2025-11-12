@@ -20,7 +20,7 @@
   import { get } from 'svelte/store'
   import { totalEarned, totalSpent, miningState } from '$lib/stores';
 
-  const tr = (k: string, params?: Record<string, any>): string => (get(t) as (key: string, params?: any) => string)(k, params)
+  const tr = (k: string, params?: Record<string, any>): string => $t(k, params)
   
   // SECURITY NOTE: Removed weak XOR obfuscation. Sensitive data should not be stored in frontend.
   // Use proper secure storage mechanisms in the backend instead.
@@ -371,8 +371,20 @@
   }
 
   function copyPrivateKey() {
-    with2FA(() => {
-      const privateKeyToCopy = $etcAccount ? $etcAccount.private_key : '';
+    with2FA(async () => {
+      let privateKeyToCopy = $etcAccount ? $etcAccount.private_key : '';
+      
+      // If private key is not in frontend store, fetch it from backend
+      if (!privateKeyToCopy && isTauri) {
+        try {
+          privateKeyToCopy = await invoke<string>('get_active_account_private_key');
+        } catch (error) {
+          console.error('Failed to get private key from backend:', error);
+          showToast('Failed to retrieve private key', 'error');
+          return;
+        }
+      }
+      
       if (privateKeyToCopy) {
         navigator.clipboard.writeText(privateKeyToCopy);
         showToast('Private key copied to clipboard!', 'success');
@@ -581,7 +593,8 @@
 
     try {
         if (isTauri) {
-            await walletService.saveToKeystore(keystorePassword);
+            // Explicitly pass the account from the frontend store
+            await walletService.saveToKeystore(keystorePassword, $etcAccount);
             keystoreSaveMessage = tr('keystore.success');
         } else {
             await new Promise(resolve => setTimeout(resolve, 1000));
@@ -740,8 +753,19 @@
     hdPassphrase = ev.passphrase || '';
     // set first account
     hdAccounts = [{ index: ev.account.index, change: ev.account.change, address: ev.account.address, privateKeyHex: ev.account.privateKeyHex, label: ev.name || 'Account 0' }];
-    // set as active
-    etcAccount.set({ address: ev.account.address, private_key: '0x' + ev.account.privateKeyHex });
+    
+    // Import to backend to set as active account
+    const privateKeyWithPrefix = '0x' + ev.account.privateKeyHex;
+    if (isTauri) {
+      try {
+        await invoke('import_chiral_account', { privateKey: privateKeyWithPrefix });
+      } catch (error) {
+        console.error('Failed to set backend account:', error);
+      }
+    }
+    
+    // set as active (frontend)
+    etcAccount.set({ address: ev.account.address, private_key: privateKeyWithPrefix });
     wallet.update(w => ({ ...w, address: ev.account.address }));
     if (isGethRunning) { await fetchBalance(); }
   }
@@ -1325,7 +1349,9 @@
   <div>
     <h1 class="text-3xl font-bold">{$t('account.title')}</h1>
     <p class="text-muted-foreground mt-2">{$t('account.subtitle')}</p>
-</div>
+  </div>
+
+
 
 {#if showMnemonicWizard}
   <MnemonicWizard
@@ -1919,7 +1945,7 @@
   {/if}
 
   {#if $etcAccount}
-  <Card class="p-6">
+  <Card class="p-6" id="keystore-section">
     <div class="flex items-center gap-2 mb-4">
       <KeyRound class="h-5 w-5 text-muted-foreground" />
       <h2 class="text-lg font-semibold">{$t('keystore.title')}</h2>

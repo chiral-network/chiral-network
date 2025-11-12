@@ -1,7 +1,7 @@
 // src/lib/stores/protocolStore.ts
 import { writable } from "svelte/store";
 
-type Protocol = "WebRTC" | "Bitswap" | null;
+type Protocol = "WebRTC" | "Bitswap" | "BitTorrent" | null;
 
 // Check if we're in a browser environment
 const isBrowser =

@@ -5,7 +5,7 @@
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
-  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation, Globe, Blocks, RefreshCw, Coins } from 'lucide-svelte'
+  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation, History, Download as DownloadIcon, Upload as UploadIcon, Trash2, RefreshCw } from 'lucide-svelte'
   import { files, downloadQueue, activeTransfers, wallet } from '$lib/stores'
   import { dhtService } from '$lib/dht'
   import { paymentService } from '$lib/services/paymentService'
@@ -15,27 +15,21 @@
   import { t } from 'svelte-i18n'
   import { get } from 'svelte/store'
   import { toHumanReadableSize } from '$lib/utils'
+  import { buildSaveDialogOptions } from '$lib/utils/saveDialog'
   import { initDownloadTelemetry, disposeDownloadTelemetry } from '$lib/downloadTelemetry'
   import { MultiSourceDownloadService, type MultiSourceProgress } from '$lib/services/multiSourceDownloadService'
   import { listen } from '@tauri-apps/api/event'
   import PeerSelectionService from '$lib/services/peerSelectionService'
-import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
+  import { downloadHistoryService, type DownloadHistoryEntry } from '$lib/services/downloadHistoryService'
+  import { showToast } from '$lib/toast'
 
-  import { invoke }  from '@tauri-apps/api/core';
+  import { invoke } from '@tauri-apps/api/core'
+  import { homeDir } from '@tauri-apps/api/path'
 
-  const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params)
+  const tr = (k: string, params?: Record<string, any>) => $t(k, params)
 
- // Protocol selection state
-  $: selectedProtocol = $protocolStore
-  $: hasSelectedProtocol = selectedProtocol !== null
-
-  function handleProtocolSelect(protocol: 'WebRTC' | 'Bitswap') {
-    protocolStore.set(protocol)
-  }
-
-  function changeProtocol() {
-    protocolStore.reset()
-  }
+ // Auto-detect protocol based on file metadata
+  let detectedProtocol: 'WebRTC' | 'Bitswap' | null = null
   onMount(() => {
     // Initialize payment service to load persisted wallet and transactions
     paymentService.initialize();
@@ -282,49 +276,89 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
 
 
         // Listen for WebRTC download completion
-        const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (event) => {
-          const data = event.payload as {
-            fileHash: string;
-            fileName: string;
-            fileSize: number;
-            data: number[]; // Array of bytes
-          };
+const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (event) => {
+  const data = event.payload as {
+    fileHash: string;
+    fileName: string;
+    fileSize: number;
+    data: number[]; // Array of bytes
+  };
 
-          // Find the file in our downloads
-          const downloadedFile = $files.find(f => f.hash === data.fileHash);
-  
-          if (downloadedFile && downloadedFile.downloadPath) {
-            try {
-              // Ensure the directory exists before writing
-              await invoke('ensure_directory_exists', { path: downloadedFile.downloadPath });
-              
-              // Write the file to disk at the user's chosen location
-              const { writeFile } = await import('@tauri-apps/plugin-fs');
-              const fileData = new Uint8Array(data.data);
-              await writeFile(downloadedFile.downloadPath, fileData);
-      
-              console.log(`✅ File saved to: ${downloadedFile.downloadPath}`);
-      
-              // Update status to completed
-              files.update(f => f.map(file => 
-                file.hash === data.fileHash
-                ? { ...file, status: 'completed', progress: 100 }
-                  : file
-              ));
-      
-              showNotification(`Successfully saved "${data.fileName}"`, 'success');
-            } catch (error) {
-              console.error('Failed to save file:', error);
-              showNotification(`Failed to save file: ${error}`, 'error');
+  try {
+    // ✅ GET SETTINGS PATH
+    const stored = localStorage.getItem("chiralSettings");
+    if (!stored) {
+      showNotification(
+        'Please configure a download path in Settings before downloading files.',
+        'error',
+        8000
+      );
+      return;
+    }
+    
+    const settings = JSON.parse(stored);
+    let storagePath = settings.storagePath;
+    
+    if (!storagePath || storagePath === '.') {
+      showNotification(
+        'Please set a valid download path in Settings.',
+        'error',
+        8000
+      );
+      return;
+    }
+    
+    // Expand ~ to home directory if needed
+    if (storagePath.startsWith("~")) {
+      const home = await homeDir();
+      storagePath = storagePath.replace("~", home);
+    }
+    
+    // Validate directory exists
+    const dirExists = await invoke('check_directory_exists', { path: storagePath });
+    if (!dirExists) {
+      showNotification(
+        `Download path "${settings.storagePath}" does not exist. Please update it in Settings.`,
+        'error',
+        8000
+      );
+      return;
+    }
 
-              files.update(f => f.map(file =>
-                file.hash === data.fileHash
-                  ? { ...file, status: 'failed' }
-                  : file
-              ));
-            }
-          }
-        });
+    // Construct full file path
+    const { join } = await import('@tauri-apps/api/path');
+    const outputPath = await join(storagePath, data.fileName);
+    
+    console.log(`✅ Saving WebRTC file to: ${outputPath}`);
+
+    // Write the file to disk
+    const { writeFile } = await import('@tauri-apps/plugin-fs');
+    const fileData = new Uint8Array(data.data);
+    await writeFile(outputPath, fileData);
+
+    console.log(`✅ File saved successfully: ${outputPath}`);
+
+    // Update status to completed
+    files.update(f => f.map(file => 
+      file.hash === data.fileHash
+        ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath }
+        : file
+    ));
+
+    showNotification(`Successfully saved "${data.fileName}"`, 'success');
+    
+  } catch (error) {
+    console.error('Failed to save WebRTC file:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    showNotification(`Failed to save file: ${errorMessage}`, 'error');
+
+    files.update(f => f.map(file =>
+      file.hash === data.fileHash
+        ? { ...file, status: 'failed' }
+        : file
+    ));
+  }
+});
 
         // Cleanup listeners on destroy
         return () => {
@@ -344,6 +378,9 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
     }
 
     setupEventListeners()
+
+    // Smart Resume: Load and auto-resume interrupted downloads
+    loadAndResumeDownloads()
   })
 
   onDestroy(() => {
@@ -367,8 +404,32 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
   let currentNotification: HTMLElement | null = null
   let showSettings = false // Toggle for settings panel
 
+  // Smart Resume: Track resumed downloads
+  let resumedDownloads = new Set<string>() // Track which downloads were auto-resumed
+
   // Track which files have already had payment processed
   let paidFiles = new Set<string>()
+
+  // Download History state
+  let showHistory = false
+  let downloadHistory: DownloadHistoryEntry[] = []
+  let historySearchQuery = ''
+  let historyFilter: 'all' | 'completed' | 'failed' | 'canceled' = 'all'
+
+  // Load history on mount
+  $: downloadHistory = downloadHistoryService.getFilteredHistory(
+    historyFilter === 'all' ? undefined : historyFilter,
+    historySearchQuery
+  )
+
+  // Track files to add to history when they complete/fail
+  $: {
+    for (const file of $files) {
+      if (['completed', 'failed', 'canceled'].includes(file.status)) {
+        downloadHistoryService.addToHistory(file)
+      }
+    }
+  }
 
   // Show notification function
   function showNotification(message: string, type: 'success' | 'error' | 'info' | 'warning' = 'success', duration = 4000) {
@@ -530,6 +591,104 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
   //   }
   // }
 
+  // Smart Resume: Save in-progress downloads to localStorage
+  function saveDownloadState() {
+    try {
+      const activeDownloads = $files.filter(f => 
+        f.status === 'downloading' || f.status === 'paused'
+      ).map(file => ({
+        id: file.id,
+        name: file.name,
+        hash: file.hash,
+        size: file.size,
+        progress: file.progress || 0,
+        status: file.status,
+        cids: file.cids,
+        seederAddresses: file.seederAddresses,
+        isEncrypted: file.isEncrypted,
+        manifest: file.manifest,
+        downloadPath: file.downloadPath,
+        downloadStartTime: file.downloadStartTime,
+        downloadedChunks: file.downloadedChunks,
+        totalChunks: file.totalChunks
+      }))
+
+      const queuedDownloads = $downloadQueue.map(file => ({
+        id: file.id,
+        name: file.name,
+        hash: file.hash,
+        size: file.size,
+        cids: file.cids,
+        seederAddresses: file.seederAddresses,
+        isEncrypted: file.isEncrypted,
+        manifest: file.manifest
+      }))
+
+      localStorage.setItem('pendingDownloads', JSON.stringify({
+        active: activeDownloads,
+        queued: queuedDownloads,
+        timestamp: Date.now()
+      }))
+    } catch (error) {
+      console.error('Failed to save download state:', error)
+    }
+  }
+
+  // Smart Resume: Load and resume interrupted downloads
+  async function loadAndResumeDownloads() {
+    try {
+      const saved = localStorage.getItem('pendingDownloads')
+      if (!saved) return
+
+      const { active, queued, timestamp } = JSON.parse(saved)
+      
+      // Only auto-resume if less than 24 hours old
+      const hoursSinceLastSave = (Date.now() - timestamp) / (1000 * 60 * 60)
+      if (hoursSinceLastSave > 24) {
+        console.log('Saved downloads are too old (>24h), skipping auto-resume')
+        localStorage.removeItem('pendingDownloads')
+        return
+      }
+
+      let resumeCount = 0
+
+      // Restore queued downloads
+      if (queued && queued.length > 0) {
+        downloadQueue.set(queued)
+        resumeCount += queued.length
+      }
+
+      // Restore active downloads (mark as paused, user can resume manually)
+      if (active && active.length > 0) {
+        const restoredFiles = active.map((file: any) => ({
+          ...file,
+          status: 'paused' as const, // Don't auto-start, let user resume
+          speed: '0 B/s',
+          eta: 'N/A'
+        }))
+        
+        files.update(f => [...f, ...restoredFiles])
+        
+        // Track which downloads were resumed
+        active.forEach((file: any) => resumedDownloads.add(file.id))
+        resumeCount += active.length
+      }
+
+      if (resumeCount > 0) {
+        const message = resumeCount === 1 
+          ? `Restored 1 interrupted download. Resume it from the Downloads page.`
+          : `Restored ${resumeCount} interrupted downloads. Resume them from the Downloads page.`
+        showNotification(message, 'info', 6000)
+      }
+
+      // Clear saved state after successful restore
+      localStorage.removeItem('pendingDownloads')
+    } catch (error) {
+      console.error('Failed to load download state:', error)
+      localStorage.removeItem('pendingDownloads')
+    }
+  }
+
   function handleSearchMessage(event: CustomEvent<{ message: string; type?: 'success' | 'error' | 'info' | 'warning'; duration?: number }>) {
     const { message, type = 'info', duration = 4000 } = event.detail
     showNotification(message, type, duration)
@@ -538,28 +697,11 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
   async function handleSearchDownload(metadata: FileMetadata) {
     console.log('🔍 handleSearchDownload called with metadata:', metadata)
 
-    // Check protocol compatibility
+    // Auto-detect protocol based on file metadata
     const hasCids = metadata.cids && metadata.cids.length > 0
-    const isBitswapFile = hasCids
-    const isWebRTCFile = !hasCids
-
-    if (selectedProtocol === 'Bitswap' && isWebRTCFile) {
-      showNotification(
-        `Cannot download "${metadata.fileName}": This file was uploaded with WebRTC protocol. Please select WebRTC protocol to download it.`,
-        'error',
-        8000
-      )
-      return
-    }
-
-    if (selectedProtocol === 'WebRTC' && isBitswapFile) {
-      showNotification(
-        `Cannot download "${metadata.fileName}": This file was uploaded with Bitswap protocol. Please select Bitswap protocol to download it.`,
-        'error',
-        8000
-      )
-      return
-    }
+    detectedProtocol = hasCids ? 'Bitswap' : 'WebRTC'
+    
+    console.log(`🔍 Auto-detected protocol: ${detectedProtocol} (hasCids: ${hasCids})`)
 
     const allFiles = [...$downloadQueue]
     const existingFile = allFiles.find((file) => file.hash === metadata.fileHash)
@@ -605,7 +747,6 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
       price: metadata.price ?? 0,
       status: 'queued' as const,
       priority: 'normal' as const,
-      version: metadata.version, // Preserve version info if available
       seeders: metadata.seeders.length, // Convert array length to number
       seederAddresses: metadata.seeders, // Array that only contains selected seeder rather than all seeders
       // Pass encryption info to the download item
@@ -623,6 +764,10 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
       console.log('▶️ Calling processQueue...')
       await processQueue()
     }
+  }
+
+  async function addToDownloadQueue(metadata: FileMetadata) {
+    await handleSearchDownload(metadata)
   }
 
   // Function to validate and correct maxConcurrentDownloads
@@ -713,25 +858,23 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
 
     // Then apply status filter
     switch (filterStatus) {
-  case 'active':
-    return filtered.filter(f => f.status === 'downloading')
-  case 'paused':
-    return filtered.filter(f => f.status === 'paused')
-  case 'queued':
-    return filtered.filter(f => f.status === 'queued')
-  case 'completed':
-    return filtered.filter(f => f.status === 'completed')
-  case 'failed':
-    return filtered.filter(f => f.status === 'failed')
-  case 'canceled':
-    return filtered.filter(f => f.status === 'canceled')
-  default:
-    return filtered
-}
+      case 'active':
+        return filtered.filter(f => f.status === 'downloading')
+      case 'paused':
+        return filtered.filter(f => f.status === 'paused')
+      case 'queued':
+        return filtered.filter(f => f.status === 'queued')
+      case 'completed':
+        return filtered.filter(f => f.status === 'completed')
+      case 'failed':
+        return filtered.filter(f => f.status === 'failed')
+      case 'canceled':
+        return filtered.filter(f => f.status === 'canceled')
+      default:
+        return filtered
+    }
 
-  })()
-
-  // Calculate counts from the filtered set (excluding uploaded/seeding)
+  })()  // Calculate counts from the filtered set (excluding uploaded/seeding)
   $: allFilteredDownloads = allDownloads.filter(f => f.status !== 'uploaded' && f.status !== 'seeding')
   $: activeCount = allFilteredDownloads.filter(f => f.status === 'downloading').length
   $: pausedCount = allFilteredDownloads.filter(f => f.status === 'paused').length
@@ -743,8 +886,8 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
   $: if ($files.length > 0) {
     $files.forEach(file => {
       if (file.status === 'downloading' && !activeSimulations.has(file.id)) {
-        // Start simulation only if not already active
-        if (selectedProtocol!=='Bitswap')
+    // Start simulation only if not already active
+        if (detectedProtocol!=='Bitswap')
         simulateDownloadProgress(file.id)
       }
     })
@@ -776,6 +919,11 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
   // Auto-clear completed downloads when setting is enabled
   $: if (autoClearCompleted) {
     files.update(f => f.filter(file => file.status !== 'completed'))
+  }
+
+  // Smart Resume: Auto-save download state when files or queue changes
+  $: if ($files || $downloadQueue) {
+    saveDownloadState()
   }
 
   // New function to download from search results
@@ -810,9 +958,9 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
     }
     console.log('  ✏️ Created downloadingFile object:', downloadingFile)
     files.update(f => [...f, downloadingFile])
-    console.log('  ✅ Added file to files store, current protocol:', selectedProtocol)
+    console.log('  ✅ Added file to files store, detected protocol:', detectedProtocol)
 
-    if (selectedProtocol === "Bitswap"){
+    if (detectedProtocol === "Bitswap"){
   console.log('  🔍 Starting Bitswap download for:', downloadingFile.name)
 
   // CRITICAL: Bitswap requires CIDs to download
@@ -847,39 +995,68 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
     return
   }
 
-  // 🆕 ADD FILE SAVE DIALOG FOR BITSWAP
+  // ✅ VALIDATE SETTINGS PATH BEFORE DOWNLOADING
   try {
-    const { save } = await import('@tauri-apps/plugin-dialog');
-    
-    // Show file save dialog
-    const outputPath = await save({
-      defaultPath: downloadingFile.name,
-      filters: [{
-        name: 'All Files',
-        extensions: ['*']
-      }]
-    });
-
-    if (!outputPath) {
-      // User cancelled the save dialog
+    const stored = localStorage.getItem("chiralSettings");
+    if (!stored) {
+      showNotification(
+        'Please configure a download path in Settings before downloading files.',
+        'error',
+        8000
+      );
       files.update(f => f.map(file =>
         file.id === downloadingFile.id
-          ? { ...file, status: 'canceled' }
+          ? { ...file, status: 'failed' }
+          : file
+      ));
+      return;
+    }
+    
+    const settings = JSON.parse(stored);
+    let storagePath = settings.storagePath;
+    
+    if (!storagePath || storagePath === '.') {
+      showNotification(
+        'Please set a valid download path in Settings before downloading files.',
+        'error',
+        8000
+      );
+      files.update(f => f.map(file =>
+        file.id === downloadingFile.id
+          ? { ...file, status: 'failed' }
+          : file
+      ));
+      return;
+    }
+    
+    // Expand ~ to home directory if needed
+    if (storagePath.startsWith("~")) {
+      const home = await homeDir();
+      storagePath = storagePath.replace("~", home);
+    }
+    
+    // Validate directory exists using Tauri command
+    const dirExists = await invoke('check_directory_exists', { path: storagePath });
+    if (!dirExists) {
+      showNotification(
+        `Download path "${settings.storagePath}" does not exist. Please update it in Settings.`,
+        'error',
+        8000
+      );
+      files.update(f => f.map(file =>
+        file.id === downloadingFile.id
+          ? { ...file, status: 'failed' }
           : file
       ));
       return;
     }
 
-    console.log('✅ User selected save location:', outputPath);
+    // Construct full file path: directory + filename
+    const fullPath = `${storagePath}/${downloadingFile.name}`;
+    
+    console.log('✅ Using settings download path:', fullPath);
 
-    // Update file with download path
-    files.update(f => f.map(file =>
-      file.id === downloadingFile.id
-        ? { ...file, downloadPath: outputPath }
-        : file
-    ));
-
-    // Now start the actual Bitswap download with the output path
+    // Now start the actual Bitswap download
     const metadata = {
       fileHash: downloadingFile.hash,
       fileName: downloadingFile.name,
@@ -887,18 +1064,15 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
       seeders: downloadingFile.seederAddresses,
       createdAt: Date.now(),
       isEncrypted: downloadingFile.isEncrypted || false,
-      version: downloadingFile.version,
       manifest: downloadingFile.manifest ? JSON.stringify(downloadingFile.manifest) : undefined,
       cids: downloadingFile.cids,
-      downloadPath: outputPath // 🔥 PASS THE OUTPUT PATH
+      downloadPath: fullPath  // Pass the full path
     }
-
-    console.log('🔍 FULL metadata being sent:', JSON.stringify(metadata, null, 2));
     
     console.log('  📤 Calling dhtService.downloadFile with metadata:', metadata)
     console.log('  📦 CIDs:', downloadingFile.cids)
     console.log('  👥 Seeders:', downloadingFile.seederAddresses)
-    console.log('  💾 Download path:', outputPath)
+    console.log('  💾 Download path:', fullPath)
 
     // Start the download asynchronously
     dhtService.downloadFile(metadata)
@@ -923,13 +1097,13 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
         )
       })
   } catch (error) {
-    console.error('Failed to open save dialog:', error);
+    console.error('Path validation error:', error);
     files.update(f => f.map(file =>
       file.id === downloadingFile.id
         ? { ...file, status: 'failed' }
         : file
     ))
-    showNotification('Failed to open save dialog', 'error');
+    showNotification('Failed to validate download path', 'error', 6000);
     return;
   }
 } 
@@ -1015,13 +1189,7 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
 
         // Show file save dialog
         console.log("🔍 DEBUG: Opening file save dialog...");
-        const outputPath = await save({
-          defaultPath: fileToDownload.name,
-          filters: [{
-            name: 'All Files',
-            extensions: ['*']
-          }]
-        });
+        const outputPath = await save(buildSaveDialogOptions(fileToDownload.name));
         console.log("✅ DEBUG: File save dialog result:", outputPath);
 
         if (!outputPath) {
@@ -1439,7 +1607,8 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
 
           } catch (error) {
             console.error('P2P download failed:', error);
-            showNotification("BAD","error");
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            showNotification(`P2P download failed: ${errorMessage}`, 'error');
             activeSimulations.delete(fileId);
             files.update(f => f.map(file =>
               file.id === fileId
@@ -1451,7 +1620,8 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
       }
     } catch (error) {
       // Download failed
-      showNotification("BADHI", 'error');
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      showNotification(`Download failed: ${errorMessage}`, 'error');
       activeSimulations.delete(fileId);
 
       files.update(f => f.map(file =>
@@ -1537,9 +1707,89 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
     })
   }
 
+  // Download History functions
+  function exportHistory() {
+    const data = downloadHistoryService.exportHistory()
+    const blob = new Blob([data], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `chiral-download-history-${new Date().toISOString().split('T')[0]}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    showToast(tr('downloadHistory.messages.exportSuccess'), 'success')
+  }
+
+  function importHistory() {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.json'
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0]
+      if (!file) return
+
+      try {
+        const text = await file.text()
+        const result = downloadHistoryService.importHistory(text)
+        
+        if (result.success) {
+          showToast(tr('downloadHistory.messages.importSuccess', { count: result.imported }), 'success')
+          downloadHistory = downloadHistoryService.getFilteredHistory()
+        } else {
+          showToast(tr('downloadHistory.messages.importError', { error: result.error }), 'error')
+        }
+      } catch (error) {
+        showToast(tr('downloadHistory.messages.importError', { error: error instanceof Error ? error.message : 'Unknown error' }), 'error')
+      }
+    }
+    input.click()
+  }
+
+  function clearAllHistory() {
+    if (confirm(tr('downloadHistory.confirmClear'))) {
+      downloadHistoryService.clearHistory()
+      downloadHistory = []
+      showToast(tr('downloadHistory.messages.historyCleared'), 'success')
+    }
+  }
+
+  function clearFailedHistory() {
+    if (confirm(tr('downloadHistory.confirmClearFailed'))) {
+      downloadHistoryService.clearFailedDownloads()
+      downloadHistory = downloadHistoryService.getFilteredHistory()
+      showToast(tr('downloadHistory.messages.failedCleared'), 'success')
+    }
+  }
+
+  function removeHistoryEntry(hash: string) {
+    downloadHistoryService.removeFromHistory(hash)
+    downloadHistory = downloadHistoryService.getFilteredHistory()
+    showToast(tr('downloadHistory.messages.entryRemoved'), 'success')
+  }
+
+  async function redownloadFile(entry: DownloadHistoryEntry) {
+    showToast(tr('downloadHistory.messages.redownloadStarted', { name: entry.name }), 'info')
+    
+    // Create metadata object from history entry
+    const metadata: FileMetadata = {
+      fileHash: entry.hash,
+      fileName: entry.name,
+      fileSize: entry.size,
+      seeders: entry.seederAddresses || [],
+      createdAt: Date.now(),
+      price: entry.price || 0,
+      isEncrypted: entry.encrypted || false,
+      manifest: entry.manifest ? JSON.stringify(entry.manifest) : undefined,
+      cids: entry.cids || []
+    }
+
+    // Add to queue
+    await addToDownloadQueue(metadata)
+  }
+
   const formatFileSize = toHumanReadableSize
-
-
 
 </script>
 
@@ -1549,80 +1799,16 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
     <p class="text-muted-foreground mt-2">{$t('download.subtitle')}</p>
   </div>
 
-  <!-- Protocol Selection -->
-  {#if !hasSelectedProtocol}
-   <Card>
-      <div class="p-6">
-        <h2 class="text-2xl font-bold mb-6 text-center">{$t('download.selectProtocol')}</h2>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-2xl mx-auto">
-          <!-- WebRTC Option -->
-          <button
-            class="p-6 border-2 rounded-lg hover:border-blue-500 transition-colors duration-200 flex flex-col items-center gap-4 {selectedProtocol === 'WebRTC' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700'}"
-            on:click={() => handleProtocolSelect('WebRTC')}
-          >
-            <div class="w-16 h-16 flex items-center justify-center bg-blue-100 rounded-full">
-              <Globe class="w-8 h-8 text-blue-600" />
-            </div>
-            <div class="text-center">
-              <h3 class="text-lg font-semibold mb-2">WebRTC</h3>
-              <p class="text-sm text-gray-600 dark:text-gray-400">
-                {$t('upload.webrtcDescription')}
-              </p>
-            </div>
-          </button>
-
-          <!-- Bitswap Option -->
-          <button
-            class="p-6 border-2 rounded-lg hover:border-blue-500 transition-colors duration-200 flex flex-col items-center gap-4 {selectedProtocol === 'Bitswap' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700'}"
-            on:click={() => handleProtocolSelect('Bitswap')}
-          >
-            <div class="w-16 h-16 flex items-center justify-center bg-blue-100 rounded-full">
-              <Blocks class="w-8 h-8 text-blue-600" />
-            </div>
-            <div class="text-center">
-              <h3 class="text-lg font-semibold mb-2">Bitswap</h3>
-              <p class="text-sm text-gray-600 dark:text-gray-400">
-                {$t('upload.bitswapDescription')}
-              </p>
-            </div>
-          </button>
-        </div>
-      </div>
-    </Card>
-
-  {:else}
-    <DownloadSearchSection
-      on:download={(event) => handleSearchDownload(event.detail)}
-      on:message={handleSearchMessage}
-    />
-    <!-- Protocol Indicator and Switcher -->
-    <Card class="p-4">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-3">
-          <div class="flex items-center justify-center w-10 h-10 bg-gradient-to-br from-blue-500/10 to-blue-500/5 rounded-lg border border-blue-500/20">
-            {#if selectedProtocol === 'WebRTC'}
-              <Globe class="h-5 w-5 text-blue-600" />
-            {:else}
-              <Blocks class="h-5 w-5 text-blue-600" />
-            {/if}
-          </div>
-          <div>
-            <p class="text-sm font-semibold">{$t('download.currentProtocol')}: {selectedProtocol}</p>
-            <p class="text-xs text-muted-foreground">
-              {selectedProtocol === 'WebRTC' ? $t('upload.webrtcDescription') : $t('upload.bitswapDescription')}
-            </p>
-          </div>
-        </div>
-        <button
-          on:click={changeProtocol}
-          class="inline-flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium border border-input bg-background hover:bg-muted transition-colors"
-        >
-          <RefreshCw class="h-4 w-4 mr-2" />
-          {$t('download.changeProtocol')}
-        </button>
-      </div>
-    </Card>
-  {/if}
+  <!-- Combined Download Section (Chiral DHT + BitTorrent) -->
+  <Card class="overflow-hidden">
+    <!-- Chiral DHT Search Section with integrated BitTorrent -->
+    <div class="border-b">
+      <DownloadSearchSection
+        on:download={(event) => handleSearchDownload(event.detail)}
+        on:message={handleSearchMessage}
+      />
+    </div>
+  </Card>
 
   <!-- Unified Downloads List -->
   <Card class="p-6">
@@ -1725,12 +1911,6 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
               {$t('download.clearFinished')}
             </Button>
           {/if}
-        </div>
-
-        <!-- Balance Display -->
-        <div class="flex items-center gap-2 px-3 py-1 bg-secondary rounded-md">
-          <Coins class="h-3 w-3 text-muted-foreground" />
-          <span class="text-xs font-medium">{$wallet.balance.toFixed(8)} Chiral</span>
         </div>
 
         <!-- Settings Toggle Button -->
@@ -1920,9 +2100,9 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
                     <div class="flex-1 min-w-0">
                       <div class="flex items-center gap-3 mb-1">
                         <h3 class="font-semibold text-sm truncate">{file.name}</h3>
-                        {#if file.version}
+                        {#if resumedDownloads.has(file.id)}
                           <Badge class="bg-blue-100 text-blue-800 text-xs px-2 py-0.5">
-                            v{file.version}
+                            Resumed
                           </Badge>
                         {/if}
                         {#if multiSourceProgress.has(file.hash)}
@@ -1989,7 +2169,7 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
                   </div>
                   <span class="text-foreground">{(file.progress || 0).toFixed(2)}%</span>
                 </div>
-                {#if selectedProtocol === 'Bitswap'}
+                {#if detectedProtocol === 'Bitswap' && file.totalChunks}
                   <div class="w-full bg-border rounded-full h-2 flex overflow-hidden" title={`Chunks: ${file.downloadedChunks?.length || 0} / ${file.totalChunks || '?'}`}>
                     {#if file.totalChunks && file.totalChunks > 0}
                       {@const chunkWidth = 100 / file.totalChunks}
@@ -2115,6 +2295,172 @@ import { selectedProtocol as protocolStore } from '$lib/stores/protocolStore'
           </div>
         {/each}
       </div>
+    {/if}
+  </Card>
+
+  <!-- Download History Section -->
+  <Card class="p-6">
+    <div class="flex items-center justify-between mb-4">
+      <div class="flex items-center gap-3">
+        <History class="h-5 w-5" />
+        <h2 class="text-lg font-semibold">{$t('downloadHistory.title')}</h2>
+        <Badge variant="secondary">{downloadHistoryService.getStatistics().total}</Badge>
+      </div>
+      <Button
+        size="sm"
+        variant="outline"
+        on:click={() => showHistory = !showHistory}
+      >
+        {showHistory ? $t('downloadHistory.hideHistory') : $t('downloadHistory.showHistory')}
+        {#if showHistory}
+          <ChevronUp class="h-4 w-4 ml-1" />
+        {:else}
+          <ChevronDown class="h-4 w-4 ml-1" />
+        {/if}
+      </Button>
+    </div>
+
+    {#if showHistory}
+      <!-- History Controls -->
+      <div class="mb-4 space-y-3">
+        <!-- Search and Filter -->
+        <div class="flex flex-wrap gap-2">
+          <div class="relative flex-1 min-w-[200px]">
+            <Search class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              type="text"
+              bind:value={historySearchQuery}
+              placeholder={$t('downloadHistory.search')}
+              class="pl-10"
+            />
+          </div>
+          <div class="flex gap-2">
+            <Button
+              size="sm"
+              variant={historyFilter === 'all' ? 'default' : 'outline'}
+              on:click={() => historyFilter = 'all'}
+            >
+              {$t('downloadHistory.filterAll')} ({downloadHistoryService.getStatistics().total})
+            </Button>
+            <Button
+              size="sm"
+              variant={historyFilter === 'completed' ? 'default' : 'outline'}
+              on:click={() => historyFilter = 'completed'}
+            >
+              {$t('downloadHistory.filterCompleted')} ({downloadHistoryService.getStatistics().completed})
+            </Button>
+            <Button
+              size="sm"
+              variant={historyFilter === 'failed' ? 'default' : 'outline'}
+              on:click={() => historyFilter = 'failed'}
+            >
+              {$t('downloadHistory.filterFailed')} ({downloadHistoryService.getStatistics().failed})
+            </Button>
+          </div>
+        </div>
+
+        <!-- History Actions -->
+        <div class="flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            on:click={exportHistory}
+          >
+            <UploadIcon class="h-3 w-3 mr-1" />
+            {$t('downloadHistory.exportHistory')}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            on:click={importHistory}
+          >
+            <DownloadIcon class="h-3 w-3 mr-1" />
+            {$t('downloadHistory.importHistory')}
+          </Button>
+          {#if downloadHistoryService.getStatistics().failed > 0}
+            <Button
+              size="sm"
+              variant="outline"
+              on:click={clearFailedHistory}
+              class="text-orange-600 border-orange-600 hover:bg-orange-50"
+            >
+              <Trash2 class="h-3 w-3 mr-1" />
+              {$t('downloadHistory.clearFailed')}
+            </Button>
+          {/if}
+          {#if downloadHistory.length > 0}
+            <Button
+              size="sm"
+              variant="outline"
+              on:click={clearAllHistory}
+              class="text-destructive border-destructive hover:bg-destructive/10"
+            >
+              <Trash2 class="h-3 w-3 mr-1" />
+              {$t('downloadHistory.clearHistory')}
+            </Button>
+          {/if}
+        </div>
+      </div>
+
+      <!-- History List -->
+      {#if downloadHistory.length === 0}
+        <div class="text-center py-12 text-muted-foreground">
+          <History class="h-12 w-12 mx-auto mb-3 opacity-50" />
+          <p class="font-medium">{$t('downloadHistory.empty')}</p>
+          <p class="text-sm">{$t('downloadHistory.emptyDescription')}</p>
+        </div>
+      {:else}
+        <div class="space-y-2">
+          {#each downloadHistory as entry (entry.id + entry.downloadDate)}
+            <div class="flex items-center gap-3 p-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors">
+              <!-- File Icon -->
+              <div class="flex-shrink-0">
+                <svelte:component this={getFileIcon(entry.name)} class="h-5 w-5 text-muted-foreground" />
+              </div>
+
+              <!-- File Info -->
+              <div class="flex-1 min-w-0">
+                <p class="font-medium truncate">{entry.name}</p>
+                <p class="text-xs text-muted-foreground">
+                  {toHumanReadableSize(entry.size)}
+                  {#if entry.price}
+                    · {entry.price.toFixed(4)} Chiral
+                  {/if}
+                  · {new Date(entry.downloadDate).toLocaleString()}
+                </p>
+              </div>
+
+              <!-- Status Badge -->
+              <Badge
+                variant={entry.status === 'completed' ? 'default' : entry.status === 'failed' ? 'destructive' : 'secondary'}
+              >
+                {entry.status}
+              </Badge>
+
+              <!-- Actions -->
+              <div class="flex gap-1">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  on:click={() => redownloadFile(entry)}
+                  title={$t('downloadHistory.redownload')}
+                >
+                  <RefreshCw class="h-4 w-4" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  on:click={() => removeHistoryEntry(entry.hash)}
+                  title={$t('downloadHistory.remove')}
+                  class="text-muted-foreground hover:text-destructive"
+                >
+                  <X class="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
     {/if}
   </Card>
 </div>

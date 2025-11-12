@@ -29,8 +29,6 @@ export interface FileItem {
   timeRemaining?: number;
   visualOrder?: number; // For maintaining user's intended visual order
   downloadPath?: string; // Path where the file was downloaded
-  version?: number; // File version number for versioning system
-  isNewVersion?: boolean; // Whether this is a new version of an existing file
   speed?: string; // Download/upload speed display
   eta?: string; // Estimated time remaining display
   isEncrypted?: boolean;
@@ -110,16 +108,6 @@ export const suspiciousActivity = writable<
   }[]
 >([]);
 
-export interface ChatMessage {
-  id: string;
-  peerId: string;
-  peerNickname: string;
-  content: string;
-  timestamp: Date;
-  type: "sent" | "received";
-  read: boolean;
-}
-
 export interface NetworkStats {
   totalPeers: number;
   onlinePeers: number;
@@ -139,7 +127,16 @@ export interface Transaction {
   txHash?: string;
   date: Date;
   description: string;
-  status: "pending" | "completed";
+  status: "submitted" | "pending" | "success" | "failed"; // Match API statuses
+  transaction_hash?: string;
+  gas_used?: number;
+  gas_price?: number; // in Wei
+  confirmations?: number;
+  block_number?: number;
+  nonce?: number;
+  fee?: number; // Total fee in Wei
+  timestamp?: number;
+  error_message?: string;
 }
 
 export interface BlacklistEntry {
@@ -171,9 +168,9 @@ const dummyFiles: FileItem[] = [
 ];
 
 const dummyWallet: WalletInfo = {
-  address: "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1",
-  balance: 1000.5,
-  pendingTransactions: 5,
+  address: "",
+  balance: 0,
+  pendingTransactions: 0,
 };
 
 // Additional dummy data
@@ -205,7 +202,7 @@ const dummyTransactions: Transaction[] = [
     from: "0x8765...4321",
     date: new Date("2024-03-15"),
     description: "Storage reward",
-    status: "completed",
+    status: "success",
   },
   {
     id: 2,
@@ -214,7 +211,7 @@ const dummyTransactions: Transaction[] = [
     to: "0x1234...5678",
     date: new Date("2024-03-14"),
     description: "Proxy service",
-    status: "completed",
+    status: "success",
   },
   {
     id: 3,
@@ -223,7 +220,7 @@ const dummyTransactions: Transaction[] = [
     from: "0xabcd...ef12",
     date: new Date("2024-03-13"),
     description: "Upload reward",
-    status: "completed",
+    status: "success",
   },
   {
     id: 4,
@@ -232,7 +229,7 @@ const dummyTransactions: Transaction[] = [
     to: "0x9876...5432",
     date: new Date("2024-03-12"),
     description: "File download",
-    status: "completed",
+    status: "success",
   },
 ];
 
@@ -308,7 +305,6 @@ export const peerGeoDistribution = derived(
   }
 );
 
-export const chatMessages = writable<ChatMessage[]>([]);
 export const networkStats = writable<NetworkStats>(dummyNetworkStats);
 export const downloadQueue = writable<FileItem[]>([]);
 export const userLocation = writable<string>("US-East");
@@ -434,14 +430,14 @@ export interface AppSettings {
   preferredRelays: string[]; // Preferred relay node multiaddrs
   enableRelayServer: boolean; // Act as a relay server for other peers
   relayServerAlias: string; // Public alias/name for your relay server (appears in logs and bootstrapping)
-  autoStartDht: boolean; // Automatically start DHT network on app launch
   anonymousMode: boolean;
   shareAnalytics: boolean;
   enableNotifications: boolean;
   notifyOnComplete: boolean;
   notifyOnError: boolean;
+  notifyOnBandwidthCap: boolean;
+  notifyOnBandwidthCapDesktop: boolean;
   soundAlerts: boolean;
-  enableDHT: boolean;
   enableIPFS: boolean;
   chunkSize: number; // KB
   cacheSize: number; // MB
@@ -449,8 +445,14 @@ export interface AppSettings {
   autoUpdate: boolean;
   enableBandwidthScheduling: boolean;
   bandwidthSchedules: BandwidthScheduleEntry[];
+  monthlyUploadCapGb: number; // 0 = no cap
+  monthlyDownloadCapGb: number; // 0 = no cap
+  capWarningThresholds: number[]; // Percentages, e.g. [75, 90]
+  enableFileLogging: boolean; // Enable file-based logging
+  maxLogSizeMB: number; // Maximum size of a single log file in MB
   pricePerMb: number; // Price per MB in Chiral (e.g., 0.001)
   customBootstrapNodes: string[]; // Custom bootstrap nodes for DHT (leave empty to use defaults)
+  autoStartDHT: boolean; // Whether to automatically start DHT on app launch
 }
 
 // Export the settings store
@@ -479,14 +481,14 @@ export const settings = writable<AppSettings>({
   preferredRelays: [], // Use bootstrap nodes as relays by default
   enableRelayServer: false, // Disabled by default - enable to help relay traffic for others
   relayServerAlias: "", // Empty by default - user can set a friendly name
-  autoStartDht: false, // Disabled by default - user must opt-in
   anonymousMode: false,
   shareAnalytics: true,
   enableNotifications: true,
   notifyOnComplete: true,
   notifyOnError: true,
+  notifyOnBandwidthCap: true,
+  notifyOnBandwidthCapDesktop: false,
   soundAlerts: false,
-  enableDHT: true,
   enableIPFS: false,
   chunkSize: 256,
   cacheSize: 1024,
@@ -494,10 +496,117 @@ export const settings = writable<AppSettings>({
   autoUpdate: true,
   enableBandwidthScheduling: false,
   bandwidthSchedules: [],
+  monthlyUploadCapGb: 0,
+  monthlyDownloadCapGb: 0,
+  capWarningThresholds: [75, 90],
+  enableFileLogging: false, // Disabled by default
+  maxLogSizeMB: 10, // 10 MB per log file by default
   pricePerMb: 0.001, // Default price: 0.001, until ability to set pricePerMb is there, then change to 0.001 Chiral per MB
   customBootstrapNodes: [], // Empty by default - use hardcoded bootstrap nodes
+  autoStartDHT: false, // Don't auto-start DHT by default
 });
 
 export const activeBandwidthLimits = writable<ActiveBandwidthLimits>(
   defaultActiveBandwidthLimits
 );
+
+// Transaction polling functionality
+import {
+  pollTransactionStatus,
+  type TransactionStatus as ApiTransactionStatus,
+} from "./services/transactionService";
+
+// Active polling tracker
+const activePollingTasks = new Map<string, boolean>();
+
+/**
+ * Add a transaction and start polling for status updates
+ */
+export async function addTransactionWithPolling(
+  transaction: Transaction
+): Promise<void> {
+  if (!transaction.transaction_hash) {
+    throw new Error("Transaction must have a hash for polling");
+  }
+
+  const txHash = transaction.transaction_hash;
+
+  // Prevent duplicate polling
+  if (activePollingTasks.has(txHash)) {
+    console.warn(`Already polling transaction ${txHash}`);
+    return;
+  }
+
+  // Add to store immediately with 'submitted' status
+  transactions.update((txs) => [transaction, ...txs]);
+
+  // Mark as actively polling
+  activePollingTasks.set(txHash, true);
+
+  try {
+    // Start polling with status updates
+    await pollTransactionStatus(
+      txHash,
+      (status: ApiTransactionStatus) => {
+        // Update transaction in store on each status change
+        transactions.update((txs) =>
+          txs.map((tx) => {
+            if (tx.transaction_hash === txHash) {
+              return {
+                ...tx,
+                status:
+                  status.status === "success"
+                    ? "success"
+                    : status.status === "failed"
+                      ? "failed"
+                      : status.status === "pending"
+                        ? "pending"
+                        : "submitted",
+                confirmations: status.confirmations || 0,
+                block_number: status.block_number || undefined,
+                gas_used: status.gas_used || undefined,
+                error_message: status.error_message || undefined,
+              };
+            }
+            return tx;
+          })
+        );
+      },
+      120, // 2 minutes max polling
+      2000 // 2 second intervals
+    );
+  } catch (error) {
+    console.error(`Failed to poll transaction ${txHash}:`, error);
+
+    // Mark as failed on error
+    transactions.update((txs) =>
+      txs.map((tx) => {
+        if (tx.transaction_hash === txHash) {
+          return {
+            ...tx,
+            status: "failed",
+            error_message:
+              error instanceof Error ? error.message : "Polling failed",
+          };
+        }
+        return tx;
+      })
+    );
+  } finally {
+    activePollingTasks.delete(txHash);
+  }
+}
+
+/**
+ * Helper to update transaction status manually
+ */
+export function updateTransactionStatus(
+  txHash: string,
+  updates: Partial<Transaction>
+): void {
+  transactions.update((txs) =>
+    txs.map((tx) =>
+      tx.transaction_hash === txHash ? { ...tx, ...updates } : tx
+    )
+  );
+}

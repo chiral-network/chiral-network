@@ -23,7 +23,6 @@ Chiral Network implements a BitTorrent-like file sharing model with instant seed
     - Instantly available when added (no upload process)
     - Identified by cryptographic hashes (SHA-256)
     - Discoverable through the DHT network
-    - Versioned for update tracking
 
 ### Basic File Sharing
 
@@ -260,6 +259,31 @@ Objective: Maintain a single global configuration for determining the Chiral-to-
 
 2. Dynamic Hash-Power-Based Rate: Adjusts pricing based on the network’s mining difficulty.
 ```pricePerMB = (baseHashCost / avgHashPower) * normalizationFactor```
+
+##### Dynamic Hash-Power Based Pricing Explanation:
+
+| Variable             | What it means                             | Units (approx.)                |
+|----------------------|-------------------------------------------|--------------------------------|
+| `network_hashrate`   | Total computational power of network       | Hashes/second                  |
+| `active_miners`      | Number of active miners                    | count                          |
+| `power_usage`        | Power used by individual miner             | Watts                          |
+| `avgHashPower`       | Average hashrate per miner                 | Hashes/second per miner        |
+| `baseHashCost`       | Energy consumed per hash                   | Watts / (Hashes/second)        |
+| `normalizationFactor`| Tunable scaling factor                     | Dimensionless                  |
+| `pricePerMB`         | Final Chiral price per MB                  | Chiral / MB                    |
+
+
+- In order to calculate the price per MB (using the dynamic hashrate of the network) we use the formula: ` pricePerMB = (baseHashCost / avgHashPower) * network_difficulty * normalizationFactor`
+- Average Hash Power = Network Hash Rate / Active Miners:
+  - The average hash power per miner is calculated as the total network hashrate divided by the number of miners and this essentially gives a baseline for what an average miner contributes to the network
+- Base Hash Cost (Per Miner) = Power Usage / Max(Average Hash Power, 1)
+  - This represents the unit cost of computing one hash for the current miner, normalized to the network average. Essentially, how expensive is it for this miner to generate a hash relative to the average network power. A miner with low efficiency (High power usage and low hash output) will have a higher base hash cost.
+  - Dividing by Max(Average Hash Power, 1) ensures that we do not divide by 0 even when the network hashrate is low
+- Price Per MB = (Base Hash Cost / Average Hash Power) * Network_Difficulty * Normalization Factor`
+  - Adjust the miner’s cost by comparing it to the network average hash power and normalize the cost per hash
+  - Scale the mining difficulty based on how many hashes are needed to “mine” a block
+  - Multiply by the normalization factor (this is tunable) to convert the computational cost into price per MB
+  - Essentially gives a sense of how much it costs this miner to process data compared to the network.
 
 
 # Download Control & Payment Enforcement Protocol

@@ -1,0 +1,126 @@
+name: Download Restart Demo
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src-tauri/src/download_restart.rs'
+      - 'demo/http-transfer.sh'
+      - '.github/workflows/download-restart-demo.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src-tauri/src/download_restart.rs'
+      - 'demo/http-transfer.sh'
+      - '.github/workflows/download-restart-demo.yml'
+  workflow_dispatch:
+
+jobs:
+  demo:
+    name: Run Download Restart Demo
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run download restart demo
+        run: |
+          cd demo
+          chmod +x http-transfer.sh
+          ./http-transfer.sh
+
+      - name: Verify demo artifacts
+        run: |
+          # Check that metadata file was created
+          test -f demo/node-b-downloads/test-file.bin.meta.json
+          echo "✓ Metadata file exists"
+
+          # Check that final file exists
+          test -f demo/node-b-downloads/test-file.bin
+          echo "✓ Downloaded file exists"
+
+          # Verify file size matches
+          ORIGINAL_SIZE=$(stat -f%z demo/test-file.bin 2>/dev/null || stat -c%s demo/test-file.bin)
+          DOWNLOADED_SIZE=$(stat -f%z demo/node-b-downloads/test-file.bin 2>/dev/null || stat -c%s demo/node-b-downloads/test-file.bin)
+
+          if [ "$ORIGINAL_SIZE" -eq "$DOWNLOADED_SIZE" ]; then
+            echo "✓ File size matches: $DOWNLOADED_SIZE bytes"
+          else
+            echo "✗ File size mismatch: expected $ORIGINAL_SIZE, got $DOWNLOADED_SIZE"
+            exit 1
+          fi
+
+          # Verify SHA-256 hash
+          ORIGINAL_HASH=$(shasum -a 256 demo/test-file.bin | awk '{print $1}')
+          DOWNLOADED_HASH=$(shasum -a 256 demo/node-b-downloads/test-file.bin | awk '{print $1}')
+
+          if [ "$ORIGINAL_HASH" = "$DOWNLOADED_HASH" ]; then
+            echo "✓ SHA-256 hash matches: $DOWNLOADED_HASH"
+          else
+            echo "✗ SHA-256 hash mismatch"
+            echo "  Expected: $ORIGINAL_HASH"
+            echo "  Got: $DOWNLOADED_HASH"
+            exit 1
+          fi
+
+      - name: Upload demo artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: download-restart-demo-artifacts-${{ matrix.os }}
+          path: |
+            demo/test-file.bin
+            demo/node-b-downloads/
+          retention-days: 7
+
+  test:
+    name: Run Download Restart Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libglib2.0-dev
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Run tests (basic unit tests only)
+        run: |
+          cd src-tauri
+          # Run basic unit tests (non-snapshot tests only for CI speed)
+          # These tests don't require the Tauri app or frontend build
+          cargo test --lib test_download_state_human_readable -- --nocapture
+          cargo test --lib test_error_codes -- --nocapture
+          cargo test --lib test_download_error_human_readable -- --nocapture
+          cargo test --lib test_download_metadata_version_validation -- --nocapture
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            src-tauri/target/
+          retention-days: 7

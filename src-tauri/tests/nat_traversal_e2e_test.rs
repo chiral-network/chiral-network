@@ -32,7 +32,6 @@ fn create_test_file(hash: &str, name: &str, size: u64) -> FileMetadata {
         is_encrypted: false,
         encryption_method: None,
         key_fingerprint: None,
-        version: Some(1),
         parent_hash: None,
         cids: None,
         encrypted_key_bundle: None,
