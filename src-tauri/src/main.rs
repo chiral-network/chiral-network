@@ -104,6 +104,7 @@ use tauri::{
 };
 use tokio::time::Duration as TokioDuration;
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
+use tokio::runtime::Handle;
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{error, info, warn};
 use webrtc_service::{WebRTCFileRequest, WebRTCService};
@@ -4955,6 +4956,27 @@ fn main() {
 
     println!("Starting Chiral Network...");
 
+    let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async {
+        let download_dir = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
+            .map(|dirs| dirs.data_dir().join("downloads"))
+            .unwrap_or_else(|| std::env::current_dir().unwrap().join("downloads"));
+        
+        if let Err(e) = std::fs::create_dir_all(&download_dir) {
+            eprintln!("Failed to create download directory: {}", e);
+        }
+
+        let bittorrent_handler = bittorrent_handler::BitTorrentHandler::new(download_dir)
+            .await
+            .expect("Failed to create BitTorrent handler");
+        let bittorrent_handler_arc = Arc::new(bittorrent_handler);
+        
+        let mut manager = ProtocolManager::new();
+        manager.register(bittorrent_handler_arc.clone());
+        
+        (bittorrent_handler_arc, Arc::new(manager))
+    });
+
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
         .manage(AppState {
@@ -5018,33 +5040,10 @@ fn main() {
             relay_aliases: Arc::new(Mutex::new(std::collections::HashMap::new())),
 
             // Protocol Manager with BitTorrent support
-            protocol_manager: {
-                let mut manager = ProtocolManager::new();
-                
-                // Create default download directory
-                let download_dir = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
-                    .map(|dirs| dirs.data_dir().join("downloads"))
-                    .unwrap_or_else(|| std::env::current_dir().unwrap().join("downloads"));
-                
-                // Ensure download directory exists
-                if let Err(e) = std::fs::create_dir_all(&download_dir) {
-                    eprintln!("Failed to create download directory: {}", e);
-                }
-                
-                // Register BitTorrent handler
-                let bittorrent_handler = Arc::new(bittorrent_handler::BitTorrentHandler::new(download_dir.clone()));
-                manager.register(bittorrent_handler);
-                
-                Arc::new(manager)
-            },
+            protocol_manager: protocol_manager_arc,
 
             // BitTorrent handler for creating and seeding torrents
-            bittorrent_handler: {
-                let download_dir = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
-                    .map(|dirs| dirs.data_dir().join("downloads"))
-                    .unwrap_or_else(|| std::env::current_dir().unwrap().join("downloads"));
-                Arc::new(bittorrent_handler::BitTorrentHandler::new(download_dir))
-            },
+            bittorrent_handler: bittorrent_handler_arc,
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
