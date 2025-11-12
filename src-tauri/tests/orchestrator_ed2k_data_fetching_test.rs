@@ -1,4 +1,4 @@
-//! ed2k Data Fetching & Verification Tests (Person 5: Sandy Wu)
+//! ed2k Data Fetching & Verification Tests
 //!
 //! This module tests the ed2k data fetching implementation, including:
 //! - Downloading chunks from ed2k sources
