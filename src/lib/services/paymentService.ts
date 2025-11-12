@@ -95,7 +95,6 @@ export class PaymentService {
   static initialize() {
     // Only initialize once
     if (this.initialized) {
-      console.log("💾 Payment service already initialized, skipping...");
       return;
     }
 
@@ -131,10 +130,6 @@ export class PaymentService {
 
     const sizeInMB = fileSizeInBytes / (1024 * 1024);
     const cost = sizeInMB * dynamicPricePerMb;
-
-    console.log(
-      `💰 File size ${sizeInMB.toFixed(3)} MB @ ${dynamicPricePerMb} = ${cost}`
-    );
 
     return parseFloat(cost.toFixed(8));
   }
@@ -173,17 +168,6 @@ export class PaymentService {
         (baseHashCost / avgHashPower) *
         network_difficulty *
         normalizationFactor;
-
-      console.log("📊 Dynamic pricing inputs:", {
-        difficulty: network_difficulty,
-        hashrate: network_hashrate,
-        active_miners,
-        power_usage,
-        avgHashPower,
-        baseHashCost,
-        normalizationFactor,
-        pricePerMB,
-      });
 
       return parseFloat(pricePerMB.toFixed(8));
     } catch (error) {

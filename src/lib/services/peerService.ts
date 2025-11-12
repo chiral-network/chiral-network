@@ -1,5 +1,5 @@
-import { invoke } from '@tauri-apps/api/core';
-import type { PeerInfo } from '$lib/stores';
+import { invoke } from "@tauri-apps/api/core";
+import type { PeerInfo } from "$lib/stores";
 
 export interface BackendPeerMetrics {
   peer_id: string;
@@ -37,53 +37,57 @@ export class PeerService {
   async getConnectedPeers(): Promise<PeerInfo[]> {
     try {
       // Check if running in Tauri environment
-      const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+      const isTauri =
+        typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
       if (!isTauri) {
         // Return mock data for web development
-        console.log('PeerService: Running in web mode, returning mock data');
+        console.log("PeerService: Running in web mode, returning mock data");
         return this.getMockPeers();
       }
 
-      console.log('PeerService: Fetching connected peers from DHT...');
+      // Check if DHT is running before attempting to get peers
+      const isDhtRunning = await invoke<boolean>("is_dht_running").catch(
+        () => false
+      );
+      if (!isDhtRunning) {
+        return [];
+      }
 
       // Get connected peer IDs from DHT
-      const connectedPeerIds = await invoke<string[]>('get_dht_connected_peers');
-      console.log('PeerService: Connected peer IDs from DHT:', connectedPeerIds);
+      const connectedPeerIds = await invoke<string[]>(
+        "get_dht_connected_peers"
+      );
 
       if (connectedPeerIds.length === 0) {
-        console.log('PeerService: No connected peers found in DHT');
         return [];
       }
 
       // Try to get detailed metrics for all peers
       let peerMetrics: BackendPeerMetrics[] = [];
       try {
-        peerMetrics = await invoke<BackendPeerMetrics[]>('get_peer_metrics');
-        console.log('PeerService: Peer metrics from backend:', peerMetrics);
+        peerMetrics = await invoke<BackendPeerMetrics[]>("get_peer_metrics");
       } catch (metricsError) {
-        console.warn('PeerService: Failed to get peer metrics, will create basic peer info:', metricsError);
+        // Silently handle metrics error
       }
 
       // Filter metrics to only include connected peers and transform to PeerInfo format
       const connectedPeers: PeerInfo[] = [];
 
       for (const peerId of connectedPeerIds) {
-        const metrics = peerMetrics.find(m => m.peer_id === peerId);
+        const metrics = peerMetrics.find((m) => m.peer_id === peerId);
         if (metrics) {
           // Use detailed metrics if available
           connectedPeers.push(this.transformBackendMetricsToPeerInfo(metrics));
         } else {
           // Create basic peer info if no metrics available
-          console.log(`PeerService: No metrics for peer ${peerId}, creating basic info`);
           connectedPeers.push(this.createBasicPeerInfo(peerId));
         }
       }
 
-      console.log('PeerService: Final connected peers list:', connectedPeers);
       return connectedPeers;
     } catch (error) {
-      console.error('PeerService: Failed to get connected peers:', error);
+      console.error("PeerService: Failed to get connected peers:", error);
       // Only return empty array on error, don't fall back to mock data
       return [];
     }
@@ -94,15 +98,17 @@ export class PeerService {
    */
   async getPeerInfo(peerId: string): Promise<PeerInfo | null> {
     try {
-      const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+      const isTauri =
+        typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
       if (!isTauri) {
         const mockPeers = this.getMockPeers();
-        return mockPeers.find(p => p.id === peerId) || null;
+        return mockPeers.find((p) => p.id === peerId) || null;
       }
 
-      const peerMetrics = await invoke<BackendPeerMetrics[]>('get_peer_metrics');
-      const metrics = peerMetrics.find(m => m.peer_id === peerId);
+      const peerMetrics =
+        await invoke<BackendPeerMetrics[]>("get_peer_metrics");
+      const metrics = peerMetrics.find((m) => m.peer_id === peerId);
 
       if (!metrics) {
         return null;
@@ -110,7 +116,7 @@ export class PeerService {
 
       return this.transformBackendMetricsToPeerInfo(metrics);
     } catch (error) {
-      console.error('Failed to get peer info:', error);
+      console.error("Failed to get peer info:", error);
       return null;
     }
   }
@@ -120,16 +126,17 @@ export class PeerService {
    */
   async disconnectFromPeer(peerId: string): Promise<void> {
     try {
-      const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+      const isTauri =
+        typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
       if (!isTauri) {
-        console.log('Mock: Disconnecting from peer', peerId);
+        console.log("Mock: Disconnecting from peer", peerId);
         return;
       }
 
-      await invoke('disconnect_from_peer', { peerId });
+      await invoke("disconnect_from_peer", { peerId });
     } catch (error) {
-      console.error('Failed to disconnect from peer:', error);
+      console.error("Failed to disconnect from peer:", error);
       throw error;
     }
   }
@@ -139,16 +146,17 @@ export class PeerService {
    */
   async connectToPeer(peerAddress: string): Promise<void> {
     try {
-      const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+      const isTauri =
+        typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
       if (!isTauri) {
-        console.log('Mock: Connecting to peer', peerAddress);
+        console.log("Mock: Connecting to peer", peerAddress);
         return;
       }
 
-      await invoke('connect_to_peer', { peerAddress });
+      await invoke("connect_to_peer", { peerAddress });
     } catch (error) {
-      console.error('Failed to connect to peer:', error);
+      console.error("Failed to connect to peer:", error);
       throw error;
     }
   }
@@ -158,16 +166,17 @@ export class PeerService {
    */
   async reportMaliciousPeer(peerId: string, severity: string): Promise<void> {
     try {
-      const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+      const isTauri =
+        typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
       if (!isTauri) {
-        console.log('Mock: Reporting malicious peer', peerId, severity);
+        console.log("Mock: Reporting malicious peer", peerId, severity);
         return;
       }
 
-      await invoke('report_malicious_peer', { peerId, severity });
+      await invoke("report_malicious_peer", { peerId, severity });
     } catch (error) {
-      console.error('Failed to report malicious peer:', error);
+      console.error("Failed to report malicious peer:", error);
       throw error;
     }
   }
@@ -175,17 +184,25 @@ export class PeerService {
   /**
    * Transform backend peer metrics to frontend PeerInfo format
    */
-  private transformBackendMetricsToPeerInfo(metrics: BackendPeerMetrics): PeerInfo {
+  private transformBackendMetricsToPeerInfo(
+    metrics: BackendPeerMetrics
+  ): PeerInfo {
     // Calculate reputation from reliability and other factors with safe fallbacks
     const reliabilityScore = metrics.reliability_score || 0;
     const bandwidthScore = metrics.bandwidth_score || 0;
     const maliciousReports = metrics.malicious_reports || 0;
 
-    const reputation = Math.min(5.0, Math.max(0,
-      (reliabilityScore * 3 +
-       bandwidthScore * 1.5 +
-       Math.max(0, 1 - (maliciousReports * 0.2))) / 1.1
-    )) || 3.0; // Default to 3.0 if calculation results in NaN
+    const reputation =
+      Math.min(
+        5.0,
+        Math.max(
+          0,
+          (reliabilityScore * 3 +
+            bandwidthScore * 1.5 +
+            Math.max(0, 1 - maliciousReports * 0.2)) /
+            1.1
+        )
+      ) || 3.0; // Default to 3.0 if calculation results in NaN
 
     // Determine status based on last seen time
     const lastSeenMs = metrics.last_seen * 1000; // Convert to milliseconds
@@ -193,9 +210,11 @@ export class PeerService {
     const timeDiff = now - lastSeenMs;
 
     let status: "online" | "offline" | "away";
-    if (timeDiff < 30000) { // Less than 30 seconds
+    if (timeDiff < 30000) {
+      // Less than 30 seconds
       status = "online";
-    } else if (timeDiff < 300000) { // Less than 5 minutes
+    } else if (timeDiff < 300000) {
+      // Less than 5 minutes
       status = "away";
     } else {
       status = "offline";
@@ -214,7 +233,7 @@ export class PeerService {
       totalSize: metrics.bytes_transferred,
       joinDate: new Date(metrics.joined_at * 1000),
       lastSeen: new Date(lastSeenMs),
-      location: metrics.location || this.inferLocationFromAddress(address)
+      location: metrics.location || this.inferLocationFromAddress(address),
     };
   }
 
@@ -233,7 +252,7 @@ export class PeerService {
   private inferLocationFromAddress(peerId: string): string {
     // Use a simple hash-based approach to assign locations pseudo-randomly
     // but consistently for the same peer ID
-    const hash = peerId.split('').reduce((acc, char) => {
+    const hash = peerId.split("").reduce((acc, char) => {
       return acc + char.charCodeAt(0);
     }, 0);
 
@@ -261,7 +280,7 @@ export class PeerService {
       totalSize: 0, // Unknown
       joinDate: now, // Current time as join date
       lastSeen: now, // Current time
-      location: this.inferLocationFromAddress(peerId)
+      location: this.inferLocationFromAddress(peerId),
     };
   }
 

@@ -14,10 +14,13 @@
     RefreshCw,
     Database,
     Languages,
+    FileText,
     Activity,
     CheckCircle,
     AlertTriangle,
-    Copy
+    Copy,
+    Download as DownloadIcon,
+    Upload as UploadIcon
   } from "lucide-svelte";
   import { onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
@@ -33,8 +36,9 @@
   import Expandable from "$lib/components/ui/Expandable.svelte";
   import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   import { bandwidthScheduler } from "$lib/services/bandwidthScheduler";
+  import { settingsBackupService } from "$lib/services/settingsBackupService";
 
-  const translate = (key: string, params?: Record<string, any>) => $t(key, params);
+  const tr = (key: string, params?: Record<string, any>) => $t(key, params);
 
   let showResetConfirmModal = false;
   let storageSectionOpen = false;
@@ -57,6 +61,7 @@
     notifications: boolean;
     advanced: boolean;
     diagnostics: boolean;
+    backupRestore: boolean;
   };
 
   let accordionStateInitialized = false;
@@ -116,6 +121,8 @@
     pricePerMb: 0.001, // Default price: 0.001 Chiral per MB
     enableBandwidthScheduling: false,
     bandwidthSchedules: [],
+    enableFileLogging: false, // Logging to disk
+    maxLogSizeMB: 10, // MB per log file
   };
   let localSettings: AppSettings = JSON.parse(JSON.stringify(get(settings)));
   let savedSettings: AppSettings = JSON.parse(JSON.stringify(localSettings));
@@ -136,9 +143,18 @@
   let diagnostics: DiagItem[] = [];
   let diagnosticsReport = "";
 
+  // Backup/Restore state
+  let backupRestoreSectionOpen = false;
+  let isExporting = false;
+  let isImporting = false;
+  let backupMessage: { text: string; type: 'success' | 'error' | 'warning' } | null = null;
+
   // NAT & privacy configuration text bindings
   let autonatServersText = '';
   let trustedProxyText = '';
+  
+  // Logs directory (loaded from backend)
+  let logsDirectory: string | null = null;
   let newBootstrapNode = '';
 
   const locationOptions = GEO_REGIONS
@@ -155,11 +171,11 @@
   //   { value: "ru", label: (get(t) as any)("language.russian") },
   // ];
   $: languages = [
-    { value: "en", label: translate("language.english") },
-    { value: "es", label: translate("language.spanish") },
-    { value: "zh", label: translate("language.chinese") },
-    { value: "ko", label: translate("language.korean") },
-    { value: "ru", label: translate("language.russian") },
+    { value: "en", label: tr("language.english") },
+    { value: "es", label: tr("language.spanish") },
+    { value: "zh", label: tr("language.chinese") },
+    { value: "ko", label: tr("language.korean") },
+    { value: "ru", label: tr("language.russian") },
   ];
 
   // Initialize configuration text from arrays
@@ -208,6 +224,7 @@
         if (typeof parsed.notifications === "boolean") notificationsSectionOpen = parsed.notifications;
         if (typeof parsed.advanced === "boolean") advancedSectionOpen = parsed.advanced;
         if (typeof parsed.diagnostics === "boolean") diagnosticsSectionOpen = parsed.diagnostics;
+        if (typeof parsed.backupRestore === "boolean") backupRestoreSectionOpen = parsed.backupRestore;
       }
     } catch (error) {
       console.warn("Failed to restore settings accordion state:", error);
@@ -227,6 +244,7 @@
         notifications: notificationsSectionOpen,
         advanced: advancedSectionOpen,
         diagnostics: diagnosticsSectionOpen,
+        backupRestore: backupRestoreSectionOpen,
       };
       window.localStorage.setItem(ACCORDION_STORAGE_KEY, JSON.stringify(accordionState));
     } catch (error) {
@@ -363,8 +381,27 @@
     // Save local changes to the Svelte store
     settings.set(localSettings);
 
-    // Save to local storage
+    // Save to local storage (for web compatibility)
     localStorage.setItem("chiralSettings", JSON.stringify(localSettings));
+   
+    // Save to Tauri app data directory (for backend access)
+    
+    let isTauri = false;
+    try {
+      await getVersion();
+      isTauri = true;
+    } catch {
+
+    }
+  if (isTauri) {
+      try {
+        await invoke("save_app_settings", {
+          settingsJson: JSON.stringify(localSettings),
+        });
+      } catch (error) {
+        console.error("Failed to save settings to app data directory:", error);
+      }
+    }
     
     savedSettings = JSON.parse(JSON.stringify(localSettings));
     userLocation.set(localSettings.userLocation);
@@ -377,6 +414,7 @@
     try {
       await applyPrivacyRoutingSettings();
       await restartDhtWithProxy();
+      await updateLogConfiguration();
       showToast("Settings Updated!");
     } catch (error) {
       console.error("Failed to apply networking settings:", error);
@@ -384,6 +422,121 @@
     }
   }
 
+// Logging improvements
+  async function updateLogConfiguration() {
+    if (typeof window === "undefined" || !window.navigator.userAgent.includes("tauri")) {
+      return;
+    }
+
+    try {
+      await invoke("update_log_config", {
+        maxLogSizeMb: localSettings.maxLogSizeMB,
+        enabled: localSettings.enableFileLogging,
+      });
+    } catch (error) {
+      console.warn("Failed to update log configuration:", error);
+    }
+  }
+
+  
+  // Backup/Restore Functions
+  async function exportSettings() {
+    isExporting = true;
+    backupMessage = null;
+
+    try {
+      const result = await settingsBackupService.exportSettings(true);
+      
+      if (result.success && result.data) {
+        // Download as file
+        settingsBackupService.downloadBackupFile(result.data);
+        backupMessage = {
+          text: $t('settingsBackup.messages.exportSuccess'),
+          type: 'success'
+        };
+        showToast($t('settingsBackup.messages.exportSuccess'), 'success');
+      } else {
+        throw new Error(result.error || 'Export failed');
+      }
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      backupMessage = {
+        text: $t('settingsBackup.messages.exportError', { values: { error: errorMsg } }),
+        type: 'error'
+      };
+      showToast(backupMessage.text, 'error');
+    } finally {
+      isExporting = false;
+      
+      // Clear message after 5 seconds
+      setTimeout(() => {
+        backupMessage = null;
+      }, 5000);
+    }
+  }
+
+  async function importSettings() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+
+      isImporting = true;
+      backupMessage = null;
+
+      try {
+        const text = await file.text();
+        const result = await settingsBackupService.importSettings(text, { merge: false });
+        
+        if (result.success && result.imported) {
+          // Update local settings from imported data
+          localSettings = { ...result.imported };
+          savedSettings = JSON.parse(JSON.stringify(localSettings));
+          settings.set(localSettings);
+          
+          if (result.warnings && result.warnings.length > 0) {
+            backupMessage = {
+              text: $t('settingsBackup.messages.importWarnings', { values: { warnings: result.warnings.join(', ') } }),
+              type: 'warning'
+            };
+            showToast(backupMessage.text, 'warning');
+          } else {
+            backupMessage = {
+              text: $t('settingsBackup.messages.importSuccess'),
+              type: 'success'
+            };
+            showToast(backupMessage.text, 'success');
+          }
+
+          // Apply new settings
+          await saveSettings();
+        } else {
+          throw new Error(result.error || 'Import failed');
+        }
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+        backupMessage = {
+          text: $t('settingsBackup.messages.importError', { values: { error: errorMsg } }),
+          type: 'error'
+        };
+        showToast(backupMessage.text, 'error');
+      } finally {
+        isImporting = false;
+        
+        // Clear message after 5 seconds
+        setTimeout(() => {
+          backupMessage = null;
+        }, 5000);
+      }
+    };
+
+    input.click();
+  }
+
+  
   async function applyPrivacyRoutingSettings() {
     if (typeof window === "undefined" || !("__TAURI__" in window)) {
       return;
@@ -429,11 +582,9 @@
     let bootstrapNodes: string[] = [];
     if (localSettings.customBootstrapNodes && localSettings.customBootstrapNodes.length > 0) {
       bootstrapNodes = localSettings.customBootstrapNodes;
-      console.log("Using custom bootstrap nodes:", bootstrapNodes);
     } else {
       try {
         bootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command");
-        console.log("Using default bootstrap nodes:", bootstrapNodes);
       } catch (error) {
         console.error("Failed to fetch bootstrap nodes:", error);
         throw error;
@@ -517,7 +668,7 @@
         defaultPath: localSettings.storagePath.startsWith("~/")
           ? localSettings.storagePath.replace("~", home)
           : localSettings.storagePath,
-        title: translate("storage.selectLocationTitle"),
+        title: tr("storage.selectLocationTitle"),
       });
 
       if (typeof result === "string") {
@@ -540,7 +691,7 @@
       } else {
         // Fallback: let user type path manually
         const newPath = prompt(
-          `${translate("storage.enterPathPrompt")} ( ${translate("storage.browserNoPicker")} )`,
+          `${tr("storage.enterPathPrompt")} ( ${tr("storage.browserNoPicker")} )`,
           localSettings.storagePath
         );
         if (newPath) {
@@ -563,7 +714,7 @@
     }, 2000);
   }
 
-  function exportSettings() {
+  function exportSettingsOld() {
     const blob = new Blob([JSON.stringify(localSettings, null, 2)], {
       type: "application/json",
     });
@@ -574,14 +725,14 @@
     a.click();
     URL.revokeObjectURL(url);
     importExportFeedback = {
-      message: translate("advanced.exportSuccess", {
+      message: tr("advanced.exportSuccess", {
         default: "Settings exported to your browser's download folder.",
       }),
       type: "success",
     };
   }
 
-  function importSettings(event: Event) {
+  function importSettingsOld(event: Event) {
     const file = (event.target as HTMLInputElement).files?.[0];
     if (!file) return;
 
@@ -593,7 +744,7 @@
         await saveSettings(); // This saves, updates savedSettings, and clears any old feedback.
         // Now we set the new feedback for the import action.
         importExportFeedback = {
-          message: translate("advanced.importSuccess", {
+          message: tr("advanced.importSuccess", {
             default: "Settings imported successfully.",
           }),
           type: "success",
@@ -601,7 +752,7 @@
       } catch (err) {
         console.error("Failed to import settings:", err);
         importExportFeedback = {
-          message: translate("advanced.importError", {
+          message: tr("advanced.importError", {
             default: "Invalid JSON file. Please select a valid export.",
           }),
           type: "error",
@@ -656,12 +807,12 @@
     try {
       if (isTauri) {
         const ver = await getVersion();
-        add({ id: "env", label: translate("settings.diagnostics.environment"), status: "pass", details: `Tauri ${ver}` });
+        add({ id: "env", label: tr("settings.diagnostics.environment"), status: "pass", details: `Tauri ${ver}` });
       } else {
-        add({ id: "env", label: translate("settings.diagnostics.environment"), status: "warn", details: "Web build: some checks skipped" });
+        add({ id: "env", label: tr("settings.diagnostics.environment"), status: "warn", details: "Web build: some checks skipped" });
       }
     } catch (e:any) {
-      add({ id: "env", label: translate("settings.diagnostics.environment"), status: "fail", details: String(e) });
+      add({ id: "env", label: tr("settings.diagnostics.environment"), status: "fail", details: String(e) });
     }
 
     // 2) i18n storage read/write
@@ -670,9 +821,9 @@
       await saveLocale(before || "en");
       const after = await loadLocale();
       const ok = (before || "en") === (after || "en");
-      add({ id: "i18n", label: translate("settings.diagnostics.i18nStorage"), status: ok ? "pass" : "warn", details: `value=${after ?? "null"}` });
+      add({ id: "i18n", label: tr("settings.diagnostics.i18nStorage"), status: ok ? "pass" : "warn", details: `value=${after ?? "null"}` });
     } catch (e:any) {
-      add({ id: "i18n", label: translate("settings.diagnostics.i18nStorage"), status: "fail", details: String(e) });
+      add({ id: "i18n", label: tr("settings.diagnostics.i18nStorage"), status: "fail", details: String(e) });
     }
 
     // 3) Bootstrap nodes availability (DHT)
@@ -681,12 +832,12 @@
       if (isTauri) {
         const nodes = await invoke<string[]>("get_bootstrap_nodes_command");
         const count = Array.isArray(nodes) ? nodes.length : 0;
-        add({ id: "dht", label: translate("settings.diagnostics.bootstrapNodes"), status: count > 0 ? "pass" : "fail", details: `count=${count}` });
+        add({ id: "dht", label: tr("settings.diagnostics.bootstrapNodes"), status: count > 0 ? "pass" : "fail", details: `count=${count}` });
       } else {
-        add({ id: "dht", label: translate("settings.diagnostics.bootstrapNodes"), status: "warn", details: "Skipped in web build" });
+        add({ id: "dht", label: tr("settings.diagnostics.bootstrapNodes"), status: "warn", details: "Skipped in web build" });
       }
     } catch (e:any) {
-      add({ id: "dht", label: translate("settings.diagnostics.bootstrapNodes"), status: "fail", details: String(e) });
+      add({ id: "dht", label: tr("settings.diagnostics.bootstrapNodes"), status: "fail", details: String(e) });
     }
 
     // 4) Privacy routing configuration sanity
@@ -694,12 +845,12 @@
       const ipMode = localSettings.ipPrivacyMode;
       const trusted = localSettings.trustedProxyRelays?.length ?? 0;
       if (ipMode !== "off" && trusted === 0) {
-        add({ id: "privacy", label: translate("settings.diagnostics.privacyConfig"), status: "warn", details: tr("settings.diagnostics.privacyNeedsTrusted") });
+        add({ id: "privacy", label: tr("settings.diagnostics.privacyConfig"), status: "warn", details: tr("settings.diagnostics.privacyNeedsTrusted") });
       } else {
-        add({ id: "privacy", label: translate("settings.diagnostics.privacyConfig"), status: "pass", details: `mode=${ipMode}, trusted=${trusted}` });
+        add({ id: "privacy", label: tr("settings.diagnostics.privacyConfig"), status: "pass", details: `mode=${ipMode}, trusted=${trusted}` });
       }
     } catch (e:any) {
-      add({ id: "privacy", label: translate("settings.diagnostics.privacyConfig"), status: "fail", details: String(e) });
+      add({ id: "privacy", label: tr("settings.diagnostics.privacyConfig"), status: "fail", details: String(e) });
     }
 
     // Build report text
@@ -712,9 +863,9 @@
   async function copyDiagnostics() {
     try {
       await navigator.clipboard.writeText(diagnosticsReport);
-      showToast(translate("settings.diagnostics.copied"));
+      showToast(tr("settings.diagnostics.copied"));
     } catch (e) {
-      showToast(translate("settings.diagnostics.copyFailed"), "error");
+      showToast(tr("settings.diagnostics.copyFailed"), "error");
     }
   }
 
@@ -748,6 +899,15 @@ const saved = await loadLocale(); // 'en' | 'ko' | null
 const initial = saved || "en";
 selectedLanguage = initial; // Synchronize dropdown display value
 // (From root, setupI18n() has already been called, so only once here)
+
+// Fetch logs directory from backend (Tauri only)
+  try {
+    await getVersion();
+    logsDirectory = await invoke("get_logs_directory");
+  } catch (error) {
+    console.error("Failed to get logs directory:", error);
+  }
+
 });
 
   async function onLanguageChange(lang: string) {
@@ -946,22 +1106,22 @@ selectedLanguage = initial; // Synchronize dropdown display value
 let sectionLabels: Record<string, string[]> = {};
 $: sectionLabels = {
   storage: [
-    translate("storage.title"),
-    translate("storage.location"),
-    translate("storage.maxSize"),
-    translate("storage.cleanupThreshold"),
-    translate("storage.enableCleanup"),
+    tr("storage.title"),
+    tr("storage.location"),
+    tr("storage.maxSize"),
+    tr("storage.cleanupThreshold"),
+    tr("storage.enableCleanup"),
   ],
   network: [
-    translate("network.title"),
-    translate("network.maxConnections"),
-    translate("network.port"),
-    translate("network.uploadLimit"),
-    translate("network.downloadLimit"),
-    translate("network.userLocation"),
-    translate("network.enableUpnp"),
-    translate("network.enableNat"),
-    translate("network.enableDht"),
+    tr("network.title"),
+    tr("network.maxConnections"),
+    tr("network.port"),
+    tr("network.uploadLimit"),
+    tr("network.downloadLimit"),
+    tr("network.userLocation"),
+    tr("network.enableUpnp"),
+    tr("network.enableNat"),
+    tr("network.enableDht"),
     "Bootstrap Nodes",
     "Custom Bootstrap Nodes",
   ],
@@ -971,30 +1131,37 @@ $: sectionLabels = {
     "Schedule different bandwidth limits",
   ],
   language: [
-    translate("language.title"),
-    translate("language.select"),
+    tr("language.title"),
+    tr("language.select"),
   ],
   privacy: [
-    translate("privacy.title"),
-    translate("privacy.enableProxy"),
-    translate("privacy.anonymousMode"),
-    translate("privacy.shareAnalytics"),
+    tr("privacy.title"),
+    tr("privacy.enableProxy"),
+    tr("privacy.anonymousMode"),
+    tr("privacy.shareAnalytics"),
   ],
   notifications: [
-    translate("notifications.title"),
-    translate("notifications.enable"),
-    translate("notifications.notifyComplete"),
-    translate("notifications.notifyError"),
-    translate("notifications.soundAlerts"),
+    tr("notifications.title"),
+    tr("notifications.enable"),
+    tr("notifications.notifyComplete"),
+    tr("notifications.notifyError"),
+    tr("notifications.soundAlerts"),
+  ],
+  logs: [
+    "Logs",
+    "Enable File Logging",
+    "Maximum Log File Size",
+    "Disk logging",
+    "Debug logs",
   ],
   advanced: [
-    translate("advanced.title"),
-    translate("advanced.chunkSize"),
-    translate("advanced.cacheSize"),
-    translate("advanced.logLevel"),
-    translate("advanced.autoUpdate"),
-    translate("advanced.exportSettings"),
-    translate("advanced.importSettings"),
+    tr("advanced.title"),
+    tr("advanced.chunkSize"),
+    tr("advanced.cacheSize"),
+    tr("advanced.logLevel"),
+    tr("advanced.autoUpdate"),
+    tr("advanced.exportSettings"),
+    tr("advanced.importSettings"),
   ],
 };
 
@@ -1825,6 +1992,63 @@ function sectionMatches(section: string, query: string) {
     </Expandable>
   {/if}
 
+  <!-- Logs Settings -->
+  {#if sectionMatches("logs", search)}
+    <Expandable>
+      <div slot="title" class="flex items-center gap-3">
+        <FileText class="h-6 w-6 text-blue-600" />
+        <h2 class="text-xl font-semibold text-black">Logs</h2>
+      </div>
+      <div class="space-y-4">
+        <div class="flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="enable-file-logging"
+            bind:checked={localSettings.enableFileLogging}
+          />
+          <Label for="enable-file-logging" class="cursor-pointer">
+            Enable File Logging
+          </Label>
+        </div>
+
+        {#if localSettings.enableFileLogging}
+          <div class="ml-6 space-y-4">
+            <div class="p-3 bg-blue-50 rounded-md border border-blue-200">
+              <p class="text-xs text-blue-900">
+                Logs will be stored in:<br/>
+                <code class="bg-blue-100 px-1 rounded break-all">{logsDirectory || 'Loading...'}</code>
+                <br/><br/>
+                Old logs are automatically deleted when storage limits are reached.
+              </p>
+            </div>
+
+            <div>
+              <Label for="max-log-size">Maximum Log File Size (MB)</Label>
+              <Input
+                id="max-log-size"
+                type="number"
+                bind:value={localSettings.maxLogSizeMB}
+                min="1"
+                max="100"
+                class="mt-2"
+              />
+              <p class="text-xs text-muted-foreground mt-1">
+                When a log file reaches this size, a new log file will be created. 
+                The system will keep up to 10x this size in total logs.
+              </p>
+            </div>
+          </div>
+        {:else}
+          <div class="ml-6 p-3 bg-gray-50 rounded-md border border-gray-200">
+            <p class="text-xs text-gray-700">
+              Console logging is always enabled. Enable file logging to also save logs to disk for debugging.
+            </p>
+          </div>
+        {/if}
+      </div>
+    </Expandable>
+  {/if}
+
   <!-- Advanced Settings -->
   {#if sectionMatches("advanced", search)}
     <Expandable bind:isOpen={advancedSectionOpen}>
@@ -1907,7 +2131,7 @@ function sectionMatches(section: string, query: string) {
                 ? $t("button.cleared")
                 : $t("button.clearCache")}
           </Button>
-          <Button variant="outline" size="xs" on:click={exportSettings}>
+          <Button variant="outline" size="xs" on:click={exportSettingsOld}>
             {$t("advanced.exportSettings")}
           </Button>
 
@@ -1924,7 +2148,7 @@ function sectionMatches(section: string, query: string) {
               id="import-settings"
               type="file"
               accept=".json"
-              on:change={importSettings}
+              on:change={importSettingsOld}
               class="hidden"
             />
           </label>
@@ -1990,6 +2214,117 @@ function sectionMatches(section: string, query: string) {
             </ul>
           </div>
         {/if}
+      </div>
+    </Expandable>
+  {/if}
+
+  <!-- Backup & Restore -->
+  {#if sectionMatches("backup", search) || sectionMatches("restore", search) || sectionMatches("export", search) || sectionMatches("import", search)}
+    <Expandable bind:isOpen={backupRestoreSectionOpen}>
+      <div slot="title" class="flex items-center gap-3">
+        <Database class="h-6 w-6 text-purple-600" />
+        <h2 class="text-xl font-semibold text-black">{$t("settingsBackup.title")}</h2>
+      </div>
+      <div class="space-y-4">
+        <p class="text-sm text-muted-foreground">{$t("settingsBackup.description")}</p>
+
+        <!-- Export/Import Buttons -->
+        <div class="flex flex-wrap gap-3">
+          <Button 
+            size="sm" 
+            on:click={exportSettings}
+            disabled={isExporting}
+            class="min-w-[140px]"
+          >
+            {#if isExporting}
+              <RefreshCw class="h-4 w-4 mr-2 animate-spin" />
+              {$t("settingsBackup.export")}...
+            {:else}
+              <UploadIcon class="h-4 w-4 mr-2" />
+              {$t("settingsBackup.exportButton")}
+            {/if}
+          </Button>
+
+          <Button 
+            size="sm" 
+            variant="outline"
+            on:click={importSettings}
+            disabled={isImporting}
+            class="min-w-[140px]"
+          >
+            {#if isImporting}
+              <RefreshCw class="h-4 w-4 mr-2 animate-spin" />
+              {$t("settingsBackup.import")}...
+            {:else}
+              <DownloadIcon class="h-4 w-4 mr-2" />
+              {$t("settingsBackup.importButton")}
+            {/if}
+          </Button>
+        </div>
+
+        <!-- Feedback Message -->
+        {#if backupMessage}
+          <div 
+            class="p-3 rounded-lg text-sm transition-all"
+            class:bg-green-100={backupMessage.type === 'success'}
+            class:text-green-800={backupMessage.type === 'success'}
+            class:bg-red-100={backupMessage.type === 'error'}
+            class:text-red-800={backupMessage.type === 'error'}
+            class:bg-yellow-100={backupMessage.type === 'warning'}
+            class:text-yellow-800={backupMessage.type === 'warning'}
+          >
+            <div class="flex items-start gap-2">
+              {#if backupMessage.type === 'success'}
+                <CheckCircle class="h-4 w-4 mt-0.5 flex-shrink-0" />
+              {:else}
+                <AlertTriangle class="h-4 w-4 mt-0.5 flex-shrink-0" />
+              {/if}
+              <p>{backupMessage.text}</p>
+            </div>
+          </div>
+        {/if}
+
+        <!-- Info Box -->
+        <div class="p-4 bg-muted/50 rounded-lg border border-dashed">
+          <h3 class="font-medium text-sm mb-2">{$t("settingsBackup.autoBackup")}</h3>
+          <p class="text-xs text-muted-foreground mb-3">{$t("settingsBackup.autoBackupDescription")}</p>
+          
+          <!-- Auto-backups list -->
+          {#if settingsBackupService.getAutoBackups().length > 0}
+            <div class="space-y-2">
+              {#each settingsBackupService.getAutoBackups().slice(0, 3) as backup}
+                <div class="flex items-center justify-between p-2 bg-background rounded border text-xs">
+                  <span class="text-muted-foreground">
+                    {backup.date.toLocaleString()}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    on:click={async () => {
+                      const result = await settingsBackupService.restoreAutoBackup(backup.key);
+                      if (result.success) {
+                        showToast($t("settingsBackup.messages.autoBackupRestored"), 'success');
+                        // Reload settings
+                        const stored = localStorage.getItem('chiralSettings');
+                        if (stored) {
+                          localSettings = JSON.parse(stored);
+                          savedSettings = JSON.parse(JSON.stringify(localSettings));
+                        }
+                      } else {
+                        showToast($t("settingsBackup.messages.importError", { values: { error: result.error } }), 'error');
+                      }
+                    }}
+                    class="h-6 text-xs"
+                  >
+                    {$t("settingsBackup.restoreAutoBackup")}
+                  </Button>
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <p class="text-xs text-muted-foreground italic">No automatic backups available</p>
+          {/if}
+        </div>
       </div>
     </Expandable>
   {/if}
@@ -2063,5 +2398,6 @@ function sectionMatches(section: string, query: string) {
     </div>
   </div>
 {/if}
+
 
 

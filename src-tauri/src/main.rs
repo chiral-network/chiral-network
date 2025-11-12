@@ -36,7 +36,10 @@ pub mod http_server;
 pub mod keystore;
 pub mod manager;
 pub mod multi_source_download;
+
+mod logger;
 pub mod bittorrent_handler;
+pub mod download_restart;
 
 use protocols::{ProtocolManager, ProtocolHandler};
 
@@ -102,7 +105,6 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State,
 };
-use tokio::time::Duration as TokioDuration;
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{error, info, warn};
@@ -114,7 +116,84 @@ use blockstore::block::Block;
 use x25519_dalek::{PublicKey, StaticSecret}; // For key handling
 use suppaftp::FtpStream;
 use std::io::Write;
-use crate::dht::FtpSourceInfo;
+
+// Settings structure for backend use
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BackendSettings {
+    #[serde(rename = "storagePath")]
+    storage_path: String,
+    #[serde(rename = "enableFileLogging")]
+    enable_file_logging: bool,
+    #[serde(rename = "maxLogSizeMB")]
+    max_log_size_mb: u64,
+}
+
+impl Default for BackendSettings {
+    fn default() -> Self {
+        Self {
+            storage_path: "~/ChiralNetwork/Storage".to_string(),
+            enable_file_logging: false,
+            max_log_size_mb: 10,
+        }
+    }
+}
+
+/// Load settings from the Tauri app data directory
+fn load_settings_from_file(app_handle: &tauri::AppHandle) -> BackendSettings {
+    let app_data_dir = app_handle
+        .path()
+        .app_data_dir()
+        .expect("Failed to get app data directory");
+    
+    let settings_file = app_data_dir.join("settings.json");
+    info!("Loading settings from: {}", settings_file.display());
+    
+    if settings_file.exists() {
+        match std::fs::read_to_string(&settings_file) {
+            Ok(contents) => {
+                match serde_json::from_str::<serde_json::Value>(&contents) {
+                    Ok(json) => {
+                        // Extract only the fields we need
+                        let storage_path = json.get("storagePath")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("~/ChiralNetwork/Storage")
+                            .to_string();
+                        let enable_file_logging = json.get("enableFileLogging")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        let max_log_size_mb = json.get("maxLogSizeMB")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(10);
+                        
+                        return BackendSettings {
+                            storage_path,
+                            enable_file_logging,
+                            max_log_size_mb,
+                        };
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to parse settings file: {}. Using defaults.", e);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to read settings file: {}. Using defaults.", e);
+            }
+        }
+    }
+    
+    BackendSettings::default()
+}
+
+/// Expand tilde (~) in path to home directory
+fn expand_tilde(path: &str) -> PathBuf {
+    if path.starts_with("~/") || path == "~" {
+        if let Some(base_dirs) = directories::BaseDirs::new() {
+            return base_dirs.home_dir().join(path.strip_prefix("~/").unwrap_or(""));
+        }
+    }
+    PathBuf::from(path)
+}
 
 /// Detect MIME type from file extension
 fn detect_mime_type_from_filename(filename: &str) -> Option<String> {
@@ -281,12 +360,16 @@ struct AppState {
     // Protocol manager for handling different download/upload protocols
     protocol_manager: Arc<ProtocolManager>,
 
+    // File logger writer for dynamic log configuration updates
+    file_logger: Arc<Mutex<Option<logger::ThreadSafeWriter>>>,
     // BitTorrent handler for creating and seeding torrents
     bittorrent_handler: Arc<bittorrent_handler::BitTorrentHandler>,
+
+    // Download restart service for pause/resume functionality
+    download_restart: Mutex<Option<Arc<download_restart::DownloadRestartService>>>,
 }
 
-/// Tauri command to trigger a download.
-/// It takes a string identifier (like a magnet link) and uses the ProtocolManager.
+/// Tauri command to create a new Chiral account
 #[tauri::command]
 async fn create_chiral_account(state: State<'_, AppState>) -> Result<EthAccount, String> {
     let account = create_new_account()?;
@@ -893,6 +976,11 @@ async fn stop_miner() -> Result<(), String> {
 #[tauri::command]
 async fn get_miner_status() -> Result<bool, String> {
     get_mining_status().await
+}
+
+#[tauri::command]
+async fn get_blockchain_sync_status() -> Result<ethereum::SyncStatus, String> {
+    ethereum::get_sync_status().await
 }
 
 #[tauri::command]
@@ -3078,9 +3166,13 @@ async fn download_file_from_network(
         };
 
         if let Some(dht_service) = dht {
-            // Search for file metadata in DHT with 5 second timeout
+            // Search for file metadata in DHT with 35 second timeout
+            // This is longer than the Kademlia query timeout (30s) to account for:
+            // - Provider queries that run in parallel (can take 3-5s)
+            // - Network latency and retries
+            // - Multiple query rounds for distant peers
             match dht_service
-                .synchronous_search_metadata(file_hash.clone(), 5000)
+                .synchronous_search_metadata(file_hash.clone(), 35000)
                 .await
             {
                 Ok(Some(metadata)) => {
@@ -4746,6 +4838,87 @@ async fn reset_analytics(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+// Logger configuration commands
+/// Saves application settings to a JSON file in the app data directory
+#[tauri::command]
+async fn save_app_settings(
+    app: tauri::AppHandle,
+    settings_json: String,
+) -> Result<(), String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+    
+    // Ensure the directory exists
+    std::fs::create_dir_all(&app_data_dir)
+        .map_err(|e| format!("Failed to create app data directory: {}", e))?;
+    
+    let settings_file = app_data_dir.join("settings.json");
+    
+    std::fs::write(&settings_file, settings_json)
+        .map_err(|e| format!("Failed to write settings file: {}", e))?;
+    
+    info!("Settings saved to: {}", settings_file.display());
+    Ok(())
+}
+
+/// Updates the file logger configuration at runtime.
+/// This allows enabling/disabling file logging and changing log rotation settings
+/// without restarting the application.
+/// 
+/// All existing `info!()`, `debug!()`, `error!()` etc. calls throughout the codebase
+/// will automatically be captured and written to the log files when enabled.
+/// 
+/// Logs are always written to the AppData directory, not the user's storage directory.
+/// 
+/// Note: The tracing subscriber is initialized at startup, so changes to enable/disable
+/// logging will only affect whether logs are written to disk. Console logging remains active.
+#[tauri::command]
+async fn update_log_config(
+    app: tauri::AppHandle,
+    max_log_size_mb: u64,
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    // Get the app data directory (not the user's storage directory)
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+    
+    let logs_dir = app_data_dir.join("logs");
+    let config = logger::LogConfig::new(&logs_dir, max_log_size_mb, enabled);
+    
+    let logger_lock = state.file_logger.lock().await;
+    if let Some(ref writer) = *logger_lock {
+        writer.update_config(config).map_err(|e| e.to_string())?;
+        
+        if enabled {
+            info!("File logging enabled: {} (max size: {} MB)", logs_dir.display(), max_log_size_mb);
+            // Force a write to create the log file if it doesn't exist
+            info!("Logger configuration updated");
+        } else {
+            info!("File logging disabled");
+        }
+    } else {
+        return Err("File logger not initialized. Please restart the application.".to_string());
+    }
+    
+    Ok(())
+}
+
+/// Get the directory where logs are stored
+#[tauri::command]
+fn get_logs_directory(app: tauri::AppHandle) -> Result<String, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+    
+    let logs_dir = app_data_dir.join("logs");
+    Ok(logs_dir.to_string_lossy().to_string())
+}
 #[tauri::command]
 async fn reset_network_services(state: State<'_, AppState>) -> Result<(), String> {
     // Stop DHT if running
@@ -4905,11 +5078,71 @@ async fn download_file_http(
     Ok(())
 }
 
+// Download restart Tauri commands
+
+#[tauri::command]
+async fn start_download_restart(
+    request: download_restart::StartDownloadRequest,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let dr_guard = state.download_restart.lock().await;
+    if let Some(ref service) = *dr_guard {
+        service.start_download(request).await.map_err(|e| e.to_string())
+    } else {
+        Err("Download restart service not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+async fn pause_download_restart(
+    download_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let dr_guard = state.download_restart.lock().await;
+    if let Some(ref service) = *dr_guard {
+        service.pause_download(&download_id).await.map_err(|e| e.to_string())
+    } else {
+        Err("Download restart service not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+async fn resume_download_restart(
+    download_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let dr_guard = state.download_restart.lock().await;
+    if let Some(ref service) = *dr_guard {
+        service.resume_download(&download_id).await.map_err(|e| e.to_string())
+    } else {
+        Err("Download restart service not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+async fn get_download_status_restart(
+    download_id: String,
+    state: State<'_, AppState>,
+) -> Result<download_restart::DownloadStatus, String> {
+    let dr_guard = state.download_restart.lock().await;
+    if let Some(ref service) = *dr_guard {
+        service.get_status(&download_id).await.map_err(|e| e.to_string())
+    } else {
+        Err("Download restart service not initialized".to_string())
+    }
+}
+
 #[cfg(not(test))]
 fn main() {
-    // Initialize logging for debug builds
-    #[cfg(debug_assertions)]
-    {
+    // Don't initialize tracing subscriber here - we'll do it in setup() after loading settings
+    // so we can configure file logging properly
+    
+    // Parse command line arguments
+    use clap::Parser;
+    let args = headless::CliArgs::parse();
+
+    // For headless mode, initialize basic console logging
+    if args.headless {
         use tracing_subscriber::{fmt, prelude::*, EnvFilter};
         let mut filter = EnvFilter::from_default_env();
         
@@ -4934,14 +5167,7 @@ fn main() {
             .with(fmt::layer())
             .with(filter)
             .init();
-    }
-
-    // Parse command line arguments
-    use clap::Parser;
-    let args = headless::CliArgs::parse();
-
-    // If running in headless mode, don't start the GUI
-    if args.headless {
+            
         println!("Running in headless mode...");
 
         // Create a tokio runtime for async operations
@@ -5040,6 +5266,9 @@ fn main() {
                 Arc::new(manager)
             },
 
+          // File logger - will be initialized in setup phase after loading settings
+            file_logger: Arc::new(Mutex::new(None)),
+          
             // BitTorrent handler for creating and seeding torrents
             bittorrent_handler: {
                 let download_dir = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
@@ -5047,11 +5276,16 @@ fn main() {
                     .unwrap_or_else(|| std::env::current_dir().unwrap().join("downloads"));
                 Arc::new(bittorrent_handler::BitTorrentHandler::new(download_dir))
             },
+
+            // Download restart service (will be initialized in setup)
+            download_restart: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
             import_chiral_account,
             has_active_account,
+            get_active_account_address,
+            get_active_account_private_key,
             get_user_balance,
             can_afford_download,
             process_download_payment,
@@ -5088,6 +5322,7 @@ fn main() {
             start_miner,
             stop_miner,
             get_miner_status,
+            get_blockchain_sync_status,
             get_miner_hashrate,
             get_current_block,
             get_network_stats,
@@ -5182,7 +5417,6 @@ fn main() {
             encrypt_file_for_self_upload,
             encrypt_file_for_recipient,
             //request_file_access,
-            upload_and_publish_file,
             decrypt_and_reassemble_file,
             create_auth_session,
             verify_stream_auth,
@@ -5205,9 +5439,18 @@ fn main() {
             get_relay_reputation_stats,
             set_relay_alias,
             get_relay_alias,
+            save_app_settings,
+            update_log_config,
+            get_logs_directory,
+            check_directory_exists,
             get_multiaddresses,
             clear_seed_list,
-            get_full_network_stats
+            get_full_network_stats,
+            // Download restart commands
+            start_download_restart,
+            pause_download_restart,
+            resume_download_restart,
+            get_download_status_restart
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -5226,6 +5469,88 @@ fn main() {
             }
         })
         .setup(|app| {
+            // Load settings from disk
+            println!("Loading settings from app data directory...");
+            let settings = load_settings_from_file(&app.handle());
+            println!("Settings loaded: enable_file_logging={}, max_log_size_mb={}", 
+                  settings.enable_file_logging, settings.max_log_size_mb);
+            
+            // Initialize tracing subscriber with console output and optionally file output
+            use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+            
+            let env_filter = {
+                #[cfg(debug_assertions)]
+                {
+                    EnvFilter::from_default_env()
+                        .add_directive("chiral_network=info".parse().unwrap())
+                        .add_directive("libp2p=warn".parse().unwrap())
+                        .add_directive("libp2p_kad=warn".parse().unwrap())
+                        .add_directive("libp2p_swarm=warn".parse().unwrap())
+                        .add_directive("libp2p_mdns=warn".parse().unwrap())
+                }
+                #[cfg(not(debug_assertions))]
+                {
+                    EnvFilter::from_default_env()
+                        .add_directive("chiral_network=warn".parse().unwrap())
+                        .add_directive("libp2p=error".parse().unwrap())
+                }
+            };
+            
+            // Always create file logger (even if disabled) so it can be enabled/disabled later
+            let app_data_dir = app.path().app_data_dir()
+                .expect("Failed to get app data directory");
+            let logs_dir = app_data_dir.join("logs");
+            
+            println!("Initializing file logger at: {}", logs_dir.display());
+            
+            let log_config = logger::LogConfig::new(&logs_dir, settings.max_log_size_mb, settings.enable_file_logging);
+            
+            let file_logger_writer = match logger::RotatingFileWriter::new(log_config) {
+                Ok(writer) => {
+                    let thread_safe_writer = logger::ThreadSafeWriter::new(writer);
+                    println!("File logger initialized successfully (enabled: {})", settings.enable_file_logging);
+                    Some(thread_safe_writer)
+                }
+                Err(e) => {
+                    eprintln!("Failed to initialize file logger: {}", e);
+                    None
+                }
+            };
+            
+            // Initialize tracing subscriber with both console and file output
+            // File output will only write if enabled in config
+            if let Some(ref file_writer) = file_logger_writer {
+                tracing_subscriber::registry()
+                    .with(fmt::layer()) // Console output
+                    .with(fmt::layer().with_writer(file_writer.clone())) // File output (respects enabled flag)
+                    .with(env_filter)
+                    .init();
+            } else {
+                tracing_subscriber::registry()
+                    .with(fmt::layer()) // Console output only
+                    .with(env_filter)
+                    .init();
+            }
+            
+            info!("Chiral Network starting up...");
+            info!("Settings loaded: enable_file_logging={}, max_log_size_mb={}", 
+                  settings.enable_file_logging, settings.max_log_size_mb);
+            
+            // Store the file logger in app state so it can be updated later
+            if let Some(file_writer) = file_logger_writer {
+                if let Some(state) = app.try_state::<AppState>() {
+                    let mut file_logger = state.file_logger.blocking_lock();
+                    *file_logger = Some(file_writer.clone());
+                    
+                    // Log the current log file path if logging is enabled
+                    if settings.enable_file_logging {
+                        if let Some(path) = file_writer.current_log_file_path() {
+                            info!("Logs are being written to: {}", path.display());
+                        }
+                    }
+                }
+            }
+            
             // Clean up any orphaned geth processes on startup
             #[cfg(unix)]
             {
@@ -5367,6 +5692,22 @@ fn main() {
                                 tracing::error!("Failed to start HTTP server: {}", e);
                                 eprintln!("⚠️  HTTP server failed to start: {}", e);
                             }
+                        }
+                    }
+                });
+            }
+
+            // Initialize download restart service
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Some(state) = app_handle.try_state::<AppState>() {
+                        let download_restart_service = Arc::new(download_restart::DownloadRestartService::new(
+                            app_handle.clone()
+                        ));
+                        if let Ok(mut dr_guard) = state.download_restart.try_lock() {
+                            *dr_guard = Some(download_restart_service);
+                            tracing::info!("Download restart service initialized");
                         }
                     }
                 });
@@ -5529,35 +5870,6 @@ async fn encrypt_file_for_recipient(
     .map_err(|e| format!("Encryption task failed: {}", e))?
 }
 
-// #[tauri::command]
-// async fn request_file_access(
-//     state: State<'_, AppState>,
-//     seeder_peer_id: String,
-//     merkle_root: String,
-// ) -> Result<String, String> {
-//     let dht = state.dht.lock().await.as_ref().cloned().ok_or("DHT not running")?;
-//
-//     // 1. Get own public key
-//     let private_key_hex = state
-//         .active_account_private_key
-//         .lock()
-//         .await
-//         .clone()
-//         .ok_or("No active account to derive public key from.")?;
-//     let pk_bytes = hex::decode(private_key_hex.trim_start_matches("0x")).map_err(|_| "Invalid private key format")?;
-//     let secret_key = StaticSecret::from(<[u8; 32]>::try_from(pk_bytes).map_err(|_| "Private key is not 32 bytes")?);
-//     let public_key = PublicKey::from(&secret_key);
-//
-//     // 2. Parse seeder peer id
-//     let seeder = seeder_peer_id.parse().map_err(|_| "Invalid seeder peer ID")?;
-//
-//     // 3. Call the new DHT service method
-//     let bundle = dht.request_aes_key(seeder, merkle_root, public_key).await?;
-//
-//     // 4. Serialize the bundle to send to the frontend
-//     serde_json::to_string(&bundle).map_err(|e| e.to_string())
-// }
-
 /// Unified upload command: processes file with ChunkManager and auto-publishes to DHT
 /// Returns file metadata for frontend use
 #[derive(serde::Serialize)]
@@ -5572,225 +5884,28 @@ struct UploadResult {
 }
 
 #[tauri::command]
-async fn upload_and_publish_file(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    file_path: String,
-    file_name: Option<String>,
-    recipient_public_key: Option<String>,
-    price: Option<f64>,
-    ftp_source: Option<String>,
-) -> Result<UploadResult, String> {
-    info!("📦 BACKEND: Starting upload_and_publish_file for price {:?}", price);
-
-    // CHECK: Ensure DHT is running BEFORE doing expensive operations
-    {
-        let dht_guard = state.dht.lock().await;
-        if dht_guard.is_none() {
-            return Err("DHT node is not running. Please start the DHT network before uploading files.".to_string());
-        }
-    }
-
-    // 1) Encrypt, chunk, and build Merkle tree for the file
-    let manifest = encrypt_file_for_recipient(
-        app.clone(),
-        state.clone(),
-        file_path.clone(),
-        recipient_public_key.clone(),
-    )
-    .await?;
-
-    // 2) Extract file metadata (name, size, peer ID)
-    let file_name = file_name.unwrap_or_else(|| {
-        std::path::Path::new(&file_path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown")
-            .to_string()
-    });
-
-    let file_size: u64 = manifest.chunks.iter().map(|c| c.size as u64).sum();
-
-    let peer_id = {
-        let dht_guard = state.dht.lock().await;
-        if let Some(dht) = dht_guard.as_ref() {
-            dht.get_peer_id().await
-        } else {
-            "unknown".to_string()
-        }
-    };
-
-    // 3) Build complete FileMetadata with all protocol sources
-    let dht = {
-        let dht_guard = state.dht.lock().await;
-        dht_guard.as_ref().cloned()
-    };
-
-    let dht = dht.ok_or("DHT node is not running. Cannot publish file.")?;
-
-    let created_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-
-    let mime_type = detect_mime_type_from_filename(&file_name)
-        .unwrap_or_else(|| "application/octet-stream".to_string());
-
-    // 3.1) Build base metadata
-    let mut metadata = dht
-        .prepare_file_metadata(
-            manifest.merkle_root.clone(),
-            file_name.clone(),
-            file_size,
-            vec![], // Empty - chunks already stored in Bitswap
-            created_at,
-            Some(mime_type),
-            None,                            // encrypted_key_bundle
-            true,                            // is_encrypted
-            Some("AES-256-GCM".to_string()), // encryption_method
-            None,                            // key_fingerprint (deprecated)
-            price,
-            None,                            // uploader_address
-        )
-        .await?;
-
-    // 3.2) Add HTTP source if HTTP server is running
-    let http_addr = state.http_server_addr.lock().await;
-    if let Some(addr) = *http_addr {
-        let port = addr.port();
-        let local_ip = crate::headless::get_local_ip()
-            .unwrap_or_else(|| "127.0.0.1".to_string());
-        let http_url = format!("http://{}:{}", local_ip, port);
-
-        metadata.http_sources = Some(vec![download_source::HttpSourceInfo {
-            url: http_url.clone(),
-            auth_header: None,
-            verify_ssl: false,
-            headers: None,
-            timeout_secs: Some(30),
-        }]);
-
-        tracing::info!("Added HTTP source to metadata: {} (local IP: {})", http_url, local_ip);
-    }
-
-    // 3.3) Add FTP source if provided
-    if let Some(ftp_url) = ftp_source {
-        metadata.ftp_sources = Some(vec![FtpSourceInfo {
-            url: ftp_url,
-            username: None,
-            password: None,
-            supports_resume: false,
-            file_size: 0,
-            is_available: true,
-            last_checked: Some(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
-            ),
-        }]);
-    }
-
-    info!("📦 BACKEND: Created file metadata");
-
-    // 4) Publish metadata to DHT
-    dht.publish_file(metadata, None).await?;
-
-    info!("✅ BACKEND: Published file to DHT: {} ({})", file_name, manifest.merkle_root);
-
-    // 5) Store file data locally for seeding
-    let ft = {
-        let ft_guard = state.file_transfer.lock().await;
-        ft_guard.as_ref().cloned()
-    };
-
-    if let Some(ft) = ft {
-        let file_data = tokio::fs::read(&file_path)
-            .await
-            .map_err(|e| format!("Failed to read file for local storage: {}", e))?;
-
-        ft.store_file_data(manifest.merkle_root.clone(), file_name.clone(), file_data)
-            .await;
-
-        tracing::info!("Stored file locally for seeding: {}", manifest.merkle_root);
-    }
-
-    // 6) Register file with HTTP server for Range-based serving
-    state
-        .http_server_state
-        .register_file(http_server::HttpFileMetadata {
-            hash: manifest.merkle_root.clone(),
-            name: file_name.clone(),
-            size: file_size,
-            encrypted: true,
-        })
-        .await;
-
-    tracing::info!("Registered file for HTTP serving: {} ({})", file_name, manifest.merkle_root);
-
-    // 7) Return upload result to frontend
-    // For encrypted uploads (WebRTC), there's no CID
-    Ok(UploadResult {
-        merkle_root: manifest.merkle_root,
-        file_name,
-        file_size,
-        is_encrypted: true,
-        peer_id,
-        cid: None, // WebRTC uploads don't have CIDs
-    })
-}
-
-// async fn break_into_chunks(
-//     app: tauri::AppHandle,
-//     state: State<'_, AppState>,
-//     file_path: String,
-// ) -> Result<FileManifestForJs, String> {
-//     // Get the app data directory for chunk storage
-//     let app_data_dir = app
-//         .path()
-//         .app_data_dir()
-//         .map_err(|e| format!("Could not get app data directory: {}", e))?;
-//     let chunk_storage_path = app_data_dir.join("chunk_storage");
-
-//     // Use the active user's own public key
-//     let private_key_hex = state
-//         .active_account_private_key
-//         .lock()
-//         .await
-//         .clone()
-//         .ok_or("No account is currently active. Please log in.")?;
-//     let pk_bytes = hex::decode(private_key_hex.trim_start_matches("0x"))
-//         .map_err(|_| "Invalid private key format".to_string())?;
-//     let secret_key = StaticSecret::from(
-//         <[u8; 32]>::try_from(pk_bytes).map_err(|_| "Private key is not 32 bytes")?,
-//     );
-//     PublicKey::from(&secret_key);
-
-//     // Run the encryption in a blocking task to avoid blocking the async runtime
-//     tokio::task::spawn_blocking(move || {
-//         // Initialize ChunkManager with proper app data directory
-//         let manager = ChunkManager::new(chunk_storage_path);
-
-//         // Call the existing backend function to perform the encryption with recipient's public key
-//         let manifest = manager.chunk_and_encrypt_file(Path::new(&file_path), &recipient_pk)?;
-
-//         // Serialize the key bundle to a JSON string so it can be sent to the frontend easily.
-//         let bundle_json =
-//             serde_json::to_string(&manifest.encrypted_key_bundle).map_err(|e| e.to_string())?;
-
-//         Ok(FileManifestForJs {
-//             merkle_root: manifest.merkle_root,
-//             chunks: manifest.chunks,
-//             encrypted_key_bundle: bundle_json,
-//         })
-//     })
-//     .await
-//     .map_err(|e| format!("Encryption task failed: {}", e))?
-// }
-
-#[tauri::command]
 async fn has_active_account(state: State<'_, AppState>) -> Result<bool, String> {
     Ok(state.active_account.lock().await.is_some())
+}
+
+#[tauri::command]
+async fn get_active_account_address(state: State<'_, AppState>) -> Result<String, String> {
+    state
+        .active_account
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "No account is currently active. Please log in.".to_string())
+}
+
+#[tauri::command]
+async fn get_active_account_private_key(state: State<'_, AppState>) -> Result<String, String> {
+    state
+        .active_account_private_key
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "No account is currently active. Please log in.".to_string())
 }
 
 #[tauri::command]
@@ -5883,22 +5998,8 @@ async fn store_file_data(
     }
 }
 
-// --- New: Proof-of-Storage watcher commands & task ----------------------------------
-//
-// Summary of additions:
-// - start_proof_of_storage_watcher(contract_address, poll_interval_secs, response_timeout_secs)
-//      stores contract address in AppState and spawns a background task to watch for challenges
-// - stop_proof_of_storage_watcher() stops the background task if running
-//
-// The background task is a skeleton showing:
-//  - how to fetch challenges (TODO: integrate with your ethereum module / event subscription)
-//  - how to locate requested chunk (TODO: use your ChunkManager/FileTransferService)
-//  - how to generate Merkle proof (TODO: call your Merkle helper)
-//  - how to submit proof to contract (TODO: call ethereum::verify_proof or similar)
-//  - timeout handling for missed responses
-//
-// The TODO markers indicate where to plug in concrete project functions.
-
+// Proof-of-Storage blockchain watcher commands
+// Monitors smart contract for storage challenges and submits proofs
 #[tauri::command]
 async fn start_proof_of_storage_watcher(
     state: State<'_, AppState>,
@@ -5988,7 +6089,7 @@ async fn stop_proof_of_storage_watcher(state: State<'_, AppState>) -> Result<(),
         // Abort the task to ensure it stops immediately.
         handle.abort();
         // Awaiting the aborted handle can confirm it's terminated.
-        match tokio::time::timeout(TokioDuration::from_secs(2), handle).await {
+    match tokio::time::timeout(tokio::time::Duration::from_secs(2), handle).await {
             Ok(_) => tracing::info!("Proof watcher task successfully joined."),
             Err(_) => tracing::warn!("Proof watcher abort timed out"),
         }

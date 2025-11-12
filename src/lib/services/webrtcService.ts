@@ -93,32 +93,27 @@ export function createWebRTCSession(opts: WebRTCOptions = {}): WebRTCSession {
 
   const effectiveIceServers = sanitizeIceServers(iceServers);
   const pc = new RTCPeerConnection({ iceServers: effectiveIceServers });
-  // Ensure iceServers urls are compatible across browsers
-  try {
-    const sanitized = sanitizeIceServers(iceServers);
-    // Unfortunately RTCPeerConnection takes the config only at construction; recreate if changed
-    // We'll only recreate if sanitize changed anything
-    const changed = JSON.stringify(sanitized) !== JSON.stringify(iceServers);
-    if (changed) {
-      // Close the initial one and make a new one with sanitized servers
-      try { pc.close(); } catch (e) {}
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore
-      // Recreate PC with sanitized servers
-      // Note: This is safe here because no handlers are attached yet
-      // and will be set up below on the new pc variable
-      // We shadow const pc by declaring a new variable
-    }
-  } catch (e) {
-    // ignore
-  }
+  
   const connectionState = writable<RTCPeerConnectionState>(pc.connectionState);
   const channelState = writable<RTCDataChannelState>("closed");
 
-  let channel: RTCDataChannel | null = null;
+  // Create session object first so we can mutate channel property
+  const session: WebRTCSession = {
+    pc,
+    channel: null,
+    connectionState,
+    channelState,
+    createOffer,
+    acceptOfferCreateAnswer,
+    acceptAnswer,
+    addRemoteIceCandidate,
+    send,
+    close,
+    peerId,
+  };
 
   function bindChannel(dc: RTCDataChannel) {
-    channel = dc;
+    session.channel = dc; // Update session.channel instead of local variable
     channelState.set(dc.readyState);
     dc.onopen = () => {
       channelState.set(dc.readyState);
@@ -200,14 +195,14 @@ export function createWebRTCSession(opts: WebRTCOptions = {}): WebRTCSession {
   }
 
   function send(data: string | ArrayBuffer | Blob) {
-    if (!channel || channel.readyState !== "open")
+    if (!session.channel || session.channel.readyState !== "open")
       throw new Error("DataChannel not open");
-    channel.send(data as any);
+    session.channel.send(data as any);
   }
 
   function close() {
     try {
-      channel?.close();
+      session.channel?.close();
     } catch (e) {
       console.error("DataChannel close error:", e);
     }
@@ -238,17 +233,5 @@ export function createWebRTCSession(opts: WebRTCOptions = {}): WebRTCSession {
     });
   }
 
-  return {
-    pc,
-    channel,
-    connectionState,
-    channelState,
-    createOffer,
-    acceptOfferCreateAnswer,
-    acceptAnswer,
-    addRemoteIceCandidate,
-    send,
-    close,
-    peerId,
-  };
+  return session;
 }
