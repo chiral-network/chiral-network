@@ -268,6 +268,8 @@ impl GethProcess {
             .arg("--http.corsdomain")
             .arg("*")
             .arg("--syncmode")
+            .arg("snap")
+            .arg("--gcmode")
             .arg("full")
             .arg("--maxpeers")
             .arg("50")
