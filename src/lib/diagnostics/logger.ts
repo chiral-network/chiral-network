@@ -76,13 +76,7 @@ class DiagnosticLogger {
   }
 
   private getStyle(level: LogLevel): string {
-    const styles: Record<LogLevel, string> = {
-      [LogLevel.DEBUG]: '%c',
-      [LogLevel.INFO]: '%c',
-      [LogLevel.WARN]: '%c',
-      [LogLevel.ERROR]: '%c'
-    };
-    return styles[level];
+    return this.STYLES[level];
   }
 
   getLogs(component?: string, level?: LogLevel): LogEntry[] {
