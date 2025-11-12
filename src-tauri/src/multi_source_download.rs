@@ -315,10 +315,11 @@ impl MultiSourceDownloadService {
             }
         }
 
-        // Search for file metadata
+        // Search for file metadata with sufficient timeout for DHT queries
+        // Using 35s to match main.rs and allow full Kademlia query time (30s) + provider queries
         let metadata = match self
             .dht_service
-            .synchronous_search_metadata(file_hash.clone(), 5000)
+            .synchronous_search_metadata(file_hash.clone(), 35000)
             .await
         {
             Ok(Some(metadata)) => metadata,
@@ -362,6 +363,23 @@ impl MultiSourceDownloadService {
                     passive_mode: true,  // Default to passive mode
                     use_ftps: false,     // Default to regular FTP
                     timeout_secs: Some(30),
+                }));
+            }
+        }
+
+        // 3. Discover ed2k sources from metadata
+        if let Some(ed2k_sources) = &metadata.ed2k_sources {
+            info!("Found {} ed2k sources for file", ed2k_sources.len());
+            
+            for ed2k_info in ed2k_sources {
+                // Convert DHT Ed2kSourceInfo to DownloadSource Ed2kSourceInfo
+                available_sources.push(DownloadSource::Ed2k(DownloadEd2kSourceInfo {
+                    server_url: ed2k_info.server_url.clone(),
+                    file_hash: ed2k_info.file_hash.clone(),
+                    file_size: ed2k_info.file_size,
+                    file_name: ed2k_info.file_name.clone(),
+                    sources: ed2k_info.sources.clone(),
+                    timeout_secs: ed2k_info.timeout,
                 }));
             }
         }
@@ -1244,6 +1262,89 @@ impl MultiSourceDownloadService {
     /// Calculate byte range for FTP request based on chunk info
     fn calculate_ftp_byte_range(&self, chunk_info: &ChunkInfo) -> (u64, u64) {
         (chunk_info.offset, chunk_info.size as u64)
+    }
+
+    // ============================================================================
+    // ed2k Chunk Mapping Functions (Person 4: Task 4.2 & 4.4)
+    // ============================================================================
+
+    /// Map our chunk ID to ed2k chunk ID and offset within that ed2k chunk
+    /// 
+    /// Our chunks are 256KB, ed2k chunks are 9.28 MB (9,728,000 bytes)
+    /// One ed2k chunk contains approximately 38 of our chunks (9,728,000 / 256,000 = 38)
+    /// 
+    /// Returns: (ed2k_chunk_id, offset_within_ed2k_chunk)
+    fn map_our_chunk_to_ed2k_chunk(&self, our_chunk: &ChunkInfo) -> (u32, u64) {
+        let ed2k_chunk_id = (our_chunk.offset / ED2K_CHUNK_SIZE as u64) as u32;
+        let offset_within_ed2k = our_chunk.offset % ED2K_CHUNK_SIZE as u64;
+        (ed2k_chunk_id, offset_within_ed2k)
+    }
+
+    /// Map ed2k chunk ID to range of our chunk IDs
+    /// 
+    /// Returns the range of our chunk IDs that fall within the specified ed2k chunk
+    /// 
+    /// Returns: (start_chunk_id, end_chunk_id_inclusive)
+    fn map_ed2k_chunk_to_our_chunks(
+        &self,
+        ed2k_chunk_id: u32,
+        total_file_size: u64,
+        our_chunk_size: usize,
+    ) -> (u32, u32) {
+        let ed2k_chunk_start_offset = ed2k_chunk_id as u64 * ED2K_CHUNK_SIZE as u64;
+        let ed2k_chunk_end_offset = std::cmp::min(
+            ed2k_chunk_start_offset + ED2K_CHUNK_SIZE as u64,
+            total_file_size,
+        );
+
+        let start_chunk_id = (ed2k_chunk_start_offset / our_chunk_size as u64) as u32;
+        let end_chunk_id = ((ed2k_chunk_end_offset - 1) / our_chunk_size as u64) as u32;
+
+        (start_chunk_id, end_chunk_id)
+    }
+
+    /// Group our chunk IDs by the ed2k chunk they belong to
+    /// 
+    /// This is useful for Person 5 to download entire ed2k chunks and then split them
+    /// 
+    /// Returns: HashMap<ed2k_chunk_id, Vec<our_chunk_ids>>
+    fn group_chunks_by_ed2k_chunk(
+        &self,
+        our_chunk_ids: &[u32],
+        chunks: &[ChunkInfo],
+    ) -> HashMap<u32, Vec<u32>> {
+        let mut grouped: HashMap<u32, Vec<u32>> = HashMap::new();
+
+        for &chunk_id in our_chunk_ids {
+            if let Some(chunk) = chunks.iter().find(|c| c.chunk_id == chunk_id) {
+                let (ed2k_chunk_id, _) = self.map_our_chunk_to_ed2k_chunk(chunk);
+                grouped
+                    .entry(ed2k_chunk_id)
+                    .or_insert_with(Vec::new)
+                    .push(chunk_id);
+            }
+        }
+
+        grouped
+    }
+
+    /// Calculate chunk size considering ed2k sources
+    /// 
+    /// If ed2k sources are present, returns the ed2k chunk size (9.28 MB)
+    /// Otherwise, returns the default chunk size (256 KB)
+    /// 
+    /// This is used to understand the relationship between our chunks and ed2k chunks
+    fn calculate_ed2k_aware_chunk_size(
+        &self,
+        metadata: &FileMetadata,
+    ) -> usize {
+        if metadata.ed2k_sources.is_some() && !metadata.ed2k_sources.as_ref().unwrap().is_empty() {
+            // ed2k sources present - return ed2k chunk size for reference
+            ED2K_CHUNK_SIZE
+        } else {
+            // No ed2k sources - use default chunk size
+            DEFAULT_CHUNK_SIZE
+        }
     }
 
     /// Handle source connection success

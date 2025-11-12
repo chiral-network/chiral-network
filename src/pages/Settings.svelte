@@ -14,6 +14,7 @@
     RefreshCw,
     Database,
     Languages,
+    FileText,
     Activity,
     CheckCircle,
     AlertTriangle,
@@ -120,6 +121,8 @@
     pricePerMb: 0.001, // Default price: 0.001 Chiral per MB
     enableBandwidthScheduling: false,
     bandwidthSchedules: [],
+    enableFileLogging: false, // Logging to disk
+    maxLogSizeMB: 10, // MB per log file
   };
   let localSettings: AppSettings = JSON.parse(JSON.stringify(get(settings)));
   let savedSettings: AppSettings = JSON.parse(JSON.stringify(localSettings));
@@ -149,6 +152,9 @@
   // NAT & privacy configuration text bindings
   let autonatServersText = '';
   let trustedProxyText = '';
+  
+  // Logs directory (loaded from backend)
+  let logsDirectory: string | null = null;
   let newBootstrapNode = '';
 
   const locationOptions = GEO_REGIONS
@@ -375,8 +381,27 @@
     // Save local changes to the Svelte store
     settings.set(localSettings);
 
-    // Save to local storage
+    // Save to local storage (for web compatibility)
     localStorage.setItem("chiralSettings", JSON.stringify(localSettings));
+   
+    // Save to Tauri app data directory (for backend access)
+    
+    let isTauri = false;
+    try {
+      await getVersion();
+      isTauri = true;
+    } catch {
+
+    }
+  if (isTauri) {
+      try {
+        await invoke("save_app_settings", {
+          settingsJson: JSON.stringify(localSettings),
+        });
+      } catch (error) {
+        console.error("Failed to save settings to app data directory:", error);
+      }
+    }
     
     savedSettings = JSON.parse(JSON.stringify(localSettings));
     userLocation.set(localSettings.userLocation);
@@ -389,6 +414,7 @@
     try {
       await applyPrivacyRoutingSettings();
       await restartDhtWithProxy();
+      await updateLogConfiguration();
       showToast("Settings Updated!");
     } catch (error) {
       console.error("Failed to apply networking settings:", error);
@@ -396,6 +422,23 @@
     }
   }
 
+// Logging improvements
+  async function updateLogConfiguration() {
+    if (typeof window === "undefined" || !window.navigator.userAgent.includes("tauri")) {
+      return;
+    }
+
+    try {
+      await invoke("update_log_config", {
+        maxLogSizeMb: localSettings.maxLogSizeMB,
+        enabled: localSettings.enableFileLogging,
+      });
+    } catch (error) {
+      console.warn("Failed to update log configuration:", error);
+    }
+  }
+
+  
   // Backup/Restore Functions
   async function exportSettings() {
     isExporting = true;
@@ -408,17 +451,17 @@
         // Download as file
         settingsBackupService.downloadBackupFile(result.data);
         backupMessage = {
-          text: translate('settingsBackup.messages.exportSuccess'),
+          text: $t('settingsBackup.messages.exportSuccess'),
           type: 'success'
         };
-        showToast(translate('settingsBackup.messages.exportSuccess'), 'success');
+        showToast($t('settingsBackup.messages.exportSuccess'), 'success');
       } else {
         throw new Error(result.error || 'Export failed');
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       backupMessage = {
-        text: translate('settingsBackup.messages.exportError', { values: { error: errorMsg } }),
+        text: $t('settingsBackup.messages.exportError', { values: { error: errorMsg } }),
         type: 'error'
       };
       showToast(backupMessage.text, 'error');
@@ -456,13 +499,13 @@
           
           if (result.warnings && result.warnings.length > 0) {
             backupMessage = {
-              text: translate('settingsBackup.messages.importWarnings', { values: { warnings: result.warnings.join(', ') } }),
+              text: $t('settingsBackup.messages.importWarnings', { values: { warnings: result.warnings.join(', ') } }),
               type: 'warning'
             };
             showToast(backupMessage.text, 'warning');
           } else {
             backupMessage = {
-              text: translate('settingsBackup.messages.importSuccess'),
+              text: $t('settingsBackup.messages.importSuccess'),
               type: 'success'
             };
             showToast(backupMessage.text, 'success');
@@ -476,7 +519,7 @@
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
         backupMessage = {
-          text: translate('settingsBackup.messages.importError', { values: { error: errorMsg } }),
+          text: $t('settingsBackup.messages.importError', { values: { error: errorMsg } }),
           type: 'error'
         };
         showToast(backupMessage.text, 'error');
@@ -493,6 +536,7 @@
     input.click();
   }
 
+  
   async function applyPrivacyRoutingSettings() {
     if (typeof window === "undefined" || !("__TAURI__" in window)) {
       return;
@@ -855,6 +899,15 @@ const saved = await loadLocale(); // 'en' | 'ko' | null
 const initial = saved || "en";
 selectedLanguage = initial; // Synchronize dropdown display value
 // (From root, setupI18n() has already been called, so only once here)
+
+// Fetch logs directory from backend (Tauri only)
+  try {
+    await getVersion();
+    logsDirectory = await invoke("get_logs_directory");
+  } catch (error) {
+    console.error("Failed to get logs directory:", error);
+  }
+
 });
 
   async function onLanguageChange(lang: string) {
@@ -1093,6 +1146,13 @@ $: sectionLabels = {
     tr("notifications.notifyComplete"),
     tr("notifications.notifyError"),
     tr("notifications.soundAlerts"),
+  ],
+  logs: [
+    "Logs",
+    "Enable File Logging",
+    "Maximum Log File Size",
+    "Disk logging",
+    "Debug logs",
   ],
   advanced: [
     tr("advanced.title"),
@@ -1926,6 +1986,63 @@ function sectionMatches(section: string, query: string) {
                 {$t("notifications.soundAlerts")}
               </Label>
             </div>
+          </div>
+        {/if}
+      </div>
+    </Expandable>
+  {/if}
+
+  <!-- Logs Settings -->
+  {#if sectionMatches("logs", search)}
+    <Expandable>
+      <div slot="title" class="flex items-center gap-3">
+        <FileText class="h-6 w-6 text-blue-600" />
+        <h2 class="text-xl font-semibold text-black">Logs</h2>
+      </div>
+      <div class="space-y-4">
+        <div class="flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="enable-file-logging"
+            bind:checked={localSettings.enableFileLogging}
+          />
+          <Label for="enable-file-logging" class="cursor-pointer">
+            Enable File Logging
+          </Label>
+        </div>
+
+        {#if localSettings.enableFileLogging}
+          <div class="ml-6 space-y-4">
+            <div class="p-3 bg-blue-50 rounded-md border border-blue-200">
+              <p class="text-xs text-blue-900">
+                Logs will be stored in:<br/>
+                <code class="bg-blue-100 px-1 rounded break-all">{logsDirectory || 'Loading...'}</code>
+                <br/><br/>
+                Old logs are automatically deleted when storage limits are reached.
+              </p>
+            </div>
+
+            <div>
+              <Label for="max-log-size">Maximum Log File Size (MB)</Label>
+              <Input
+                id="max-log-size"
+                type="number"
+                bind:value={localSettings.maxLogSizeMB}
+                min="1"
+                max="100"
+                class="mt-2"
+              />
+              <p class="text-xs text-muted-foreground mt-1">
+                When a log file reaches this size, a new log file will be created. 
+                The system will keep up to 10x this size in total logs.
+              </p>
+            </div>
+          </div>
+        {:else}
+          <div class="ml-6 p-3 bg-gray-50 rounded-md border border-gray-200">
+            <p class="text-xs text-gray-700">
+              Console logging is always enabled. Enable file logging to also save logs to disk for debugging.
+            </p>
           </div>
         {/if}
       </div>

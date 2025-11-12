@@ -105,10 +105,9 @@ let showFirstRunWizard = false;
 // First-run wizard handlers
 function handleFirstRunComplete() {
   showFirstRunWizard = false;
-}
-
-function handleFirstRunSkip() {
-  showFirstRunWizard = false;
+  // Navigate to account page after completing wizard
+  currentPage = 'account';
+  goto('/account');
 }
 
   onMount(() => {
@@ -184,12 +183,59 @@ function handleFirstRunSkip() {
 
         // setup i18n
         await setupI18n();
-        loading = false;
 
         // Check for first-run and show wizard if no account exists
+        // DO THIS BEFORE setting loading = false to prevent race conditions
         try {
-          const firstRunCompleted = localStorage.getItem('chiral_first_run_complete');
-          const hasAccount = get(etcAccount) !== null;
+          // Check backend for active account
+          let hasAccount = false;
+          if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+            try {
+              hasAccount = await invoke<boolean>('has_active_account');
+              
+              // If backend has account, restore it to frontend
+              if (hasAccount) {
+                try {
+                  const address = await invoke<string>('get_active_account_address');
+                  
+                  // Import wallet service to prevent sync during restoration
+                  const { walletService } = await import('./lib/wallet');
+                  walletService.setRestoringAccount(true);
+                  
+                  // Fetch private key from backend to restore it to the frontend store
+                  let privateKey = '';
+                  try {
+                    privateKey = await invoke<string>('get_active_account_private_key');
+                  } catch (error) {
+                    console.warn('Failed to get private key from backend:', error);
+                  }
+                  
+                  // Restore account with private key
+                  etcAccount.set({ address, private_key: privateKey });
+                  
+                  // Update wallet with address
+                  wallet.update(w => ({ 
+                    ...w, 
+                    address
+                  }));
+                  
+                  // Re-enable syncing and trigger a sync
+                  walletService.setRestoringAccount(false);
+                  
+                  // Now sync from blockchain
+                  await walletService.refreshTransactions();
+                  await walletService.refreshBalance();
+                } catch (error) {
+                  console.error('Failed to restore account from backend:', error);
+                }
+              }
+            } catch (error) {
+              console.warn('Failed to check account status:', error);
+            }
+          } else {
+            // For web/demo mode, check frontend store
+            hasAccount = get(etcAccount) !== null;
+          }
 
           // Check if there are any keystore files (Tauri only)
           let hasKeystoreFiles = false;
@@ -202,16 +248,17 @@ function handleFirstRunSkip() {
             }
           }
 
-          // Show wizard if:
-          // - First run not completed AND
-          // - No active account AND
-          // - No keystore files exist
-          if (!firstRunCompleted && !hasAccount && !hasKeystoreFiles) {
+          // Show wizard if no account AND no keystore files exist
+          // (Don't rely on first-run flag since user may have cleared data)
+          if (!hasAccount && !hasKeystoreFiles) {
             showFirstRunWizard = true;
           }
         } catch (error) {
           console.warn('Failed to check first-run status:', error);
         }
+
+        // Set loading to false AFTER wizard check to prevent race conditions
+        loading = false;
 
       let storedLocation: string | null = null;
       try {
@@ -277,13 +324,7 @@ function handleFirstRunSkip() {
         }
       } catch (error) {
         // Ignore "already running" errors - this is normal during hot reload
-        if (error && typeof error === 'object' && 'message' in error && 
-            typeof error.message === 'string' && 
-            error.message.includes('already running')) {
-          // Service already initialized, this is fine
-        } else {
-          console.error("Failed to initialize backend services:", error);
-        }
+        // Silently skip all errors since services may already be initialized
       }
 
       // set the currentPage var
@@ -297,24 +338,7 @@ function handleFirstRunSkip() {
       const onPop = () => syncFromUrl();
       window.addEventListener('popstate', onPop);
 
-      // Warn before closing if there are unsaved mining rewards
-      const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-        const hasUnsavedMiningRewards = localStorage.getItem('chiral_temp_account_mining') === 'true';
-        const currentAccount = get(etcAccount);
-        const hasAccount = currentAccount !== null;
 
-        // Only warn if:
-        // 1. There's a temporary account that was used for mining
-        // 2. The account still exists (not saved to keystore)
-        // 3. First-run was skipped (indicating temporary usage)
-        const firstRunSkipped = localStorage.getItem('chiral_first_run_skipped') === 'true';
-
-        if (hasUnsavedMiningRewards && hasAccount && firstRunSkipped) {
-          event.preventDefault();
-          event.returnValue = ''; // Required for Chrome
-        }
-      };
-      window.addEventListener('beforeunload', handleBeforeUnload);
 
     // keyboard shortcuts
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -417,8 +441,8 @@ function handleFirstRunSkip() {
     menuItems = [
       { id: "download", label: $t("nav.download"), icon: Download },
       { id: "upload", label: $t("nav.upload"), icon: Upload },
-      { id: "mining", label: $t("nav.mining"), icon: Cpu },
       { id: "network", label: $t("nav.network"), icon: Globe },
+      { id: "mining", label: $t("nav.mining"), icon: Cpu },
       { id: "relay", label: $t("nav.relay"), icon: Server },
       // { id: 'proxy', label: $t('nav.proxy'), icon: Shield }, // DISABLED
       { id: "analytics", label: $t("nav.analytics"), icon: BarChart3 },
@@ -672,7 +696,6 @@ function handleFirstRunSkip() {
 {#if showFirstRunWizard}
   <FirstRunWizard
     onComplete={handleFirstRunComplete}
-    onSkip={handleFirstRunSkip}
   />
 {/if}
 

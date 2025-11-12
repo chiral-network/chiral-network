@@ -10,6 +10,7 @@
   import { dhtService } from '$lib/dht';
   import { paymentService } from '$lib/services/paymentService';
   import type { FileMetadata } from '$lib/dht';
+  import { buildSaveDialogOptions } from '$lib/utils/saveDialog';
   import SearchResultCard from './SearchResultCard.svelte';
   import { dhtSearchHistory, type SearchHistoryEntry, type SearchStatus } from '$lib/stores/searchHistory';
   import PeerSelectionModal, { type PeerInfo } from './PeerSelectionModal.svelte';
@@ -21,7 +22,10 @@
   const dispatch = createEventDispatcher<{ download: FileMetadata; message: ToastPayload }>();
   const tr = (key: string, params?: Record<string, unknown>) => (get(t) as any)(key, params);
 
-  const SEARCH_TIMEOUT_MS = 10_000; // 10 seconds for DHT searches to find peers
+  // 40 second timeout gives backend (35s) enough time, which gives Kademlia (30s) enough time
+  // Timeout hierarchy: Frontend (40s) > Backend (35s) > Kademlia (30s) + Provider delay (3-5s)
+  // This prevents premature timeouts that would kill queries that would eventually succeed
+  const SEARCH_TIMEOUT_MS = 40_000;
 
   let searchHash = '';
   let searchMode = 'merkle_hash'; // 'merkle_hash', 'cid', 'magnet', or 'torrent'
@@ -598,13 +602,7 @@
       const { save } = await import('@tauri-apps/plugin-dialog');
 
       // Show file save dialog
-      const outputPath = await save({
-        defaultPath: file.fileName,
-        filters: [{
-          name: 'All Files',
-          extensions: ['*']
-        }]
-      });
+      const outputPath = await save(buildSaveDialogOptions(file.fileName));
 
       if (!outputPath) {
         pushMessage('Download cancelled by user', 'info');
