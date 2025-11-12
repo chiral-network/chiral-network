@@ -501,7 +501,6 @@ export const settings = writable<AppSettings>({
   capWarningThresholds: [75, 90],
   enableFileLogging: false, // Disabled by default
   maxLogSizeMB: 10, // 10 MB per log file by default
-  pricePerMb: 0, // Default price: 0, until ability to set pricePerMb is there, then change to 0.001 Chiral per MB
   pricePerMb: 0.001, // Default price: 0.001, until ability to set pricePerMb is there, then change to 0.001 Chiral per MB
   customBootstrapNodes: [], // Empty by default - use hardcoded bootstrap nodes
   autoStartDHT: false, // Don't auto-start DHT by default
