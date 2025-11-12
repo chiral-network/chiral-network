@@ -5,7 +5,7 @@ use md4::{Digest, Md4};
 use crate::ftp_downloader::{FtpDownloader, FtpCredentials};
 use crate::webrtc_service::{WebRTCFileRequest, WebRTCService};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::{Sha256};
 use suppaftp::FtpStream;
 use url::Url;
 use std::collections::{HashMap, VecDeque};
