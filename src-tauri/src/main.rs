@@ -106,6 +106,7 @@ use tauri::{
     Emitter, Manager, State,
 };
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
+use tokio::runtime::Handle;
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{error, info, warn};
 use webrtc_service::{WebRTCFileRequest, WebRTCService};
@@ -523,6 +524,11 @@ async fn get_account_balance(address: String) -> Result<String, String> {
 async fn get_user_balance(state: State<'_, AppState>) -> Result<String, String> {
     let account = get_active_account(&state).await?;
     get_balance(&account).await
+}
+
+#[tauri::command]
+async fn get_transaction_receipt(tx_hash: String) -> Result<transaction_services::TransactionReceipt, String> {
+    transaction_services::get_transaction_receipt(&tx_hash).await
 }
 
 #[tauri::command]
@@ -998,6 +1004,11 @@ async fn get_network_stats() -> Result<(String, String), String> {
     let difficulty = get_network_difficulty().await?;
     let hashrate = get_network_hashrate().await?;
     Ok((difficulty, hashrate.to_string()))
+}
+
+#[tauri::command]
+async fn get_block_details_by_number(block_number: u64) -> Result<Option<serde_json::Value>, String> {
+    ethereum::get_block_details_by_number(block_number).await
 }
 
 #[tauri::command]
@@ -5196,6 +5207,27 @@ fn main() {
 
     println!("Starting Chiral Network...");
 
+    let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async {
+        let download_dir = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
+            .map(|dirs| dirs.data_dir().join("downloads"))
+            .unwrap_or_else(|| std::env::current_dir().unwrap().join("downloads"));
+        
+        if let Err(e) = std::fs::create_dir_all(&download_dir) {
+            eprintln!("Failed to create download directory: {}", e);
+        }
+
+        let bittorrent_handler = bittorrent_handler::BitTorrentHandler::new(download_dir)
+            .await
+            .expect("Failed to create BitTorrent handler");
+        let bittorrent_handler_arc = Arc::new(bittorrent_handler);
+        
+        let mut manager = ProtocolManager::new();
+        manager.register(bittorrent_handler_arc.clone());
+        
+        (bittorrent_handler_arc, Arc::new(manager))
+    });
+
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
         .manage(AppState {
@@ -5259,36 +5291,13 @@ fn main() {
             relay_aliases: Arc::new(Mutex::new(std::collections::HashMap::new())),
 
             // Protocol Manager with BitTorrent support
-            protocol_manager: {
-                let mut manager = ProtocolManager::new();
-                
-                // Create default download directory
-                let download_dir = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
-                    .map(|dirs| dirs.data_dir().join("downloads"))
-                    .unwrap_or_else(|| std::env::current_dir().unwrap().join("downloads"));
-                
-                // Ensure download directory exists
-                if let Err(e) = std::fs::create_dir_all(&download_dir) {
-                    eprintln!("Failed to create download directory: {}", e);
-                }
-                
-                // Register BitTorrent handler
-                let bittorrent_handler = Arc::new(bittorrent_handler::BitTorrentHandler::new(download_dir.clone()));
-                manager.register(bittorrent_handler);
-                
-                Arc::new(manager)
-            },
+            protocol_manager: protocol_manager_arc,
 
           // File logger - will be initialized in setup phase after loading settings
             file_logger: Arc::new(Mutex::new(None)),
           
             // BitTorrent handler for creating and seeding torrents
-            bittorrent_handler: {
-                let download_dir = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
-                    .map(|dirs| dirs.data_dir().join("downloads"))
-                    .unwrap_or_else(|| std::env::current_dir().unwrap().join("downloads"));
-                Arc::new(bittorrent_handler::BitTorrentHandler::new(download_dir))
-            },
+            bittorrent_handler: bittorrent_handler_arc,
 
             // Download restart service (will be initialized in setup)
             download_restart: Mutex::new(None),
@@ -5299,7 +5308,9 @@ fn main() {
             has_active_account,
             get_active_account_address,
             get_active_account_private_key,
+            get_account_balance,
             get_user_balance,
+            get_transaction_receipt,
             can_afford_download,
             process_download_payment,
             record_download_payment,
@@ -5339,6 +5350,7 @@ fn main() {
             get_miner_hashrate,
             get_current_block,
             get_network_stats,
+            get_block_details_by_number,
             get_miner_logs,
             get_miner_performance,
             get_blocks_mined,
