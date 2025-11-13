@@ -3,9 +3,10 @@
   import Card from '$lib/components/ui/card.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText } from 'lucide-svelte'
+  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText, AlertCircle } from 'lucide-svelte'
   import DropDown from "$lib/components/ui/dropDown.svelte";
-  import { wallet, etcAccount, blacklist} from '$lib/stores' 
+  import { wallet, etcAccount, blacklist } from '$lib/stores'
+  import { gethStatus } from '$lib/services/gethService' 
   import { walletService } from '$lib/wallet';
   import { transactions } from '$lib/stores';
   import { derived } from 'svelte/store'
@@ -13,15 +14,17 @@
   import QRCode from 'qrcode'
   import { Html5QrcodeScanner as Html5QrcodeScannerClass } from 'html5-qrcode'
   import { tick } from 'svelte'
-  import { onMount } from 'svelte'
+  import { onMount, getContext } from 'svelte'
   import { fade, fly } from 'svelte/transition'
   import { t, locale } from 'svelte-i18n'
   import { showToast } from '$lib/toast'
   import { get } from 'svelte/store'
   import { totalEarned, totalSpent, miningState } from '$lib/stores';
+  import { goto } from '@mateothegreat/svelte5-router';
 
   const tr = (k: string, params?: Record<string, any>): string => $t(k, params)
-  
+  const navigation = getContext('navigation') as { setCurrentPage: (page: string) => void };
+
   // SECURITY NOTE: Removed weak XOR obfuscation. Sensitive data should not be stored in frontend.
   // Use proper secure storage mechanisms in the backend instead.
 
@@ -1347,7 +1350,17 @@
     <p class="text-muted-foreground mt-2">{$t('account.subtitle')}</p>
   </div>
 
-
+  <!-- Warning Banner: Geth Not Running -->
+  {#if $gethStatus !== 'running'}
+    <div class="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-4">
+      <div class="flex items-center gap-3">
+        <AlertCircle class="h-5 w-5 text-yellow-500 flex-shrink-0" />
+        <p class="text-sm text-yellow-600">
+          {$t('nav.blockchainUnavailable')} <button on:click={() => { navigation.setCurrentPage('network'); goto('/network'); }} class="underline font-medium">{$t('nav.networkPageLink')}</button>. {$t('account.balanceWarning')}
+        </p>
+      </div>
+    </div>
+  {/if}
 
 {#if showMnemonicWizard}
   <MnemonicWizard
