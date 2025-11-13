@@ -1,7 +1,7 @@
 use crate::dht::{DhtService, FileMetadata, WebRTCOfferRequest};
 use crate::download_source::{DownloadSource, Ed2kSourceInfo as DownloadEd2kSourceInfo, FtpSourceInfo as DownloadFtpSourceInfo};
 use crate::ed2k_client::{Ed2kClient, Ed2kConfig, ED2K_CHUNK_SIZE};
-use md4::{Digest, Md4};
+use md4::{Md4};
 use crate::ftp_downloader::{FtpDownloader, FtpCredentials};
 use crate::webrtc_service::{WebRTCFileRequest, WebRTCService};
 use serde::{Deserialize, Serialize};
