@@ -454,6 +454,7 @@
     "proxySelfTest": "Proxy Self-Test",
     "analytics": "Analytics",
     "reputation": "Reputation",
+    "blockchain": "Blockchain",
     "account": "Account",
     "settings": "Settings",
     "connected": "Connected",
@@ -1524,6 +1525,60 @@
       "autoBackupRestored": "Settings restored from backup",
       "invalidFile": "Invalid backup file format",
       "confirmReplace": "This will replace all current settings. Continue?"
+    }
+  },
+  "blockchain": {
+    "title": "Blockchain Explorer",
+    "subtitle": "View blocks, transactions, and account balances on the Chiral Network",
+    "refresh": "Refresh",
+    "refreshed": "Data refreshed",
+    "copied": "Copied to clipboard",
+    "stats": {
+      "totalBlocks": "Total Blocks",
+      "hashrate": "Network Hashrate",
+      "difficulty": "Difficulty",
+      "peers": "Network Peers"
+    },
+    "tabs": {
+      "blocks": "Latest Blocks",
+      "search": "Search",
+      "stats": "Balance Checker"
+    },
+    "blocks": {
+      "latest": "Latest Blocks",
+      "noBlocks": "No blocks found"
+    },
+    "search": {
+      "title": "Search Blockchain",
+      "address": "Address",
+      "transaction": "Transaction",
+      "block": "Block",
+      "emptyQuery": "Please enter a search query",
+      "error": "Search failed",
+      "notFound": "Not found",
+      "addressDetails": "Address Details",
+      "addressLabel": "Address",
+      "balance": "Balance",
+      "txDetails": "Transaction Details",
+      "status": "Status",
+      "blockNumber": "Block Number",
+      "from": "From",
+      "to": "To",
+      "value": "Value",
+      "blockDetails": "Block Details",
+      "hash": "Hash",
+      "timestamp": "Timestamp"
+    },
+    "balance": {
+      "checker": "Balance Checker",
+      "address": "Address",
+      "check": "Check Balance",
+      "result": "Balance",
+      "emptyAddress": "Please enter an address",
+      "error": "Failed to check balance"
+    },
+    "error": {
+      "fetchBlocks": "Failed to fetch blocks"
     }
   }
 }

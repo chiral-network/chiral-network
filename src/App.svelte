@@ -1,6 +1,6 @@
 <script lang="ts">
     import './styles/globals.css'
-    import { Upload, Download, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Server } from 'lucide-svelte'
+    import { Upload, Download, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Server, Database } from 'lucide-svelte'
     import UploadPage from './pages/Upload.svelte'
     import DownloadPage from './pages/Download.svelte'
     // import ProxyPage from './pages/Proxy.svelte' // DISABLED
@@ -12,6 +12,7 @@
     import MiningPage from './pages/Mining.svelte'
     import ReputationPage from './pages/Reputation.svelte'
     import RelayPage from './pages/Relay.svelte'
+    import BlockchainDashboard from './pages/BlockchainDashboard.svelte'
     import NotFound from './pages/NotFound.svelte'
     // import ProxySelfTest from './routes/proxy-self-test.svelte' // DISABLED
 import { networkStatus, settings, userLocation, wallet, activeBandwidthLimits, etcAccount } from './lib/stores'
@@ -447,6 +448,7 @@ function handleFirstRunComplete() {
       // { id: 'proxy', label: $t('nav.proxy'), icon: Shield }, // DISABLED
       { id: "analytics", label: $t("nav.analytics"), icon: BarChart3 },
       { id: "reputation", label: $t("nav.reputation"), icon: Star },
+      { id: "blockchain", label: $t("nav.blockchain"), icon: Database },
       { id: "account", label: $t("nav.account"), icon: Wallet },
       { id: "settings", label: $t("nav.settings"), icon: Settings },
 
@@ -492,6 +494,10 @@ function handleFirstRunComplete() {
     {
       path: "reputation",
       component: ReputationPage,
+    },
+    {
+      path: "blockchain",
+      component: BlockchainDashboard,
     },
     {
       path: "account",

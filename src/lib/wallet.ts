@@ -9,6 +9,7 @@ import {
   type Transaction,
   type WalletInfo,
 } from "$lib/stores";
+import { showToast } from "$lib/toast";
 
 const DEFAULT_POLL_INTERVAL = 15_000;
 
@@ -325,11 +326,9 @@ export class WalletService {
         .filter((tx) => tx.status === "pending" && tx.type === "sent")
         .reduce((sum, tx) => sum + tx.amount, 0);
 
-      // Use real balance from Geth, or totalEarned if blocks haven't matured yet
-      // In test networks or when blocks are immature, realBalance may be 0 even though we've mined
-      const actualBalance = realBalance > 0 ? realBalance : totalEarned;
+      // Use real balance from Geth (no fallback - if Geth says 0, show 0)
+      const actualBalance = realBalance;
       const availableBalance = Math.max(0, actualBalance - pendingSent);
-
       wallet.update((current) => ({
         ...current,
         balance: availableBalance,
@@ -432,11 +431,15 @@ export class WalletService {
 
     // Get account address from backend for transaction record
     const accountAddress = await invoke<string>("get_active_account_address");
+    console.log(`[Transaction] Sending ${amount} CN from ${accountAddress} to ${toAddress}`);
 
     const txHash = (await invoke("send_chiral_transaction", {
       toAddress,
       amount,
     })) as string;
+
+    console.log(`[Transaction] ✅ Broadcast successful! Hash: ${txHash}`);
+    console.log(`[Transaction] Status: PENDING - monitoring for confirmation...`);
 
     wallet.update((w) => ({
       ...w,
@@ -459,7 +462,69 @@ export class WalletService {
       ...existing,
     ]);
 
+    // Start monitoring this transaction
+    this.monitorTransaction(txHash, amount, toAddress);
+
     return txHash;
+  }
+
+  private async monitorTransaction(txHash: string, amount: number, toAddress: string): Promise<void> {
+    console.log(`[TX Monitor] 👀 Monitoring ${txHash.substring(0, 10)}...`);
+
+    let attempts = 0;
+    const maxAttempts = 60;
+
+    const checkInterval = setInterval(async () => {
+      attempts++;
+
+      try {
+        const receipt = await invoke<any>("get_transaction_receipt", { txHash });
+
+        if (receipt && receipt.block_number !== null) {
+          clearInterval(checkInterval);
+
+          const confirmations = receipt.confirmations || 0;
+          const status = receipt.status === "success" ? "success" : "failed";
+
+          console.log(`[TX Monitor] ✅ ${status.toUpperCase()} in block ${receipt.block_number}`);
+          console.log(`[TX Monitor] Confirmations: ${confirmations}, Gas: ${receipt.gas_used}`);
+
+          transactions.update((txs) =>
+            txs.map((tx) =>
+              tx.txHash === txHash
+                ? { ...tx, status: status as "success" | "failed", confirmations }
+                : tx
+            )
+          );
+
+          wallet.update((w) => ({
+            ...w,
+            pendingTransactions: Math.max(0, (w.pendingTransactions ?? 0) - 1),
+          }));
+
+          await this.refreshBalance();
+
+          if (status === "success") {
+            showToast(`Transaction confirmed! ${amount} CN sent to ${toAddress.substring(0, 10)}... (Block ${receipt.block_number})`, 'success');
+          } else {
+            showToast(`Transaction failed in block ${receipt.block_number}. Your funds were not sent.`, 'error');
+          }
+
+        } else if (attempts % 6 === 0) {
+          console.log(`[TX Monitor] ⏳ Pending... (${attempts * 5}s) - Mining active?`);
+        }
+
+        if (attempts >= maxAttempts) {
+          clearInterval(checkInterval);
+          console.warn(`[TX Monitor] ⚠️ Timeout after ${maxAttempts * 5}s - check Blockchain page`);
+        }
+
+      } catch (error) {
+        if (attempts % 12 === 0) {
+          console.log(`[TX Monitor] ⏳ Still pending (${attempts * 5}s)...`);
+        }
+      }
+    }, 5000);
   }
 
   async saveToKeystore(password: string, account: ETCAccount): Promise<void> {

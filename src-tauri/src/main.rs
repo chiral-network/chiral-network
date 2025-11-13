@@ -526,6 +526,11 @@ async fn get_user_balance(state: State<'_, AppState>) -> Result<String, String> 
 }
 
 #[tauri::command]
+async fn get_transaction_receipt(tx_hash: String) -> Result<transaction_services::TransactionReceipt, String> {
+    transaction_services::get_transaction_receipt(&tx_hash).await
+}
+
+#[tauri::command]
 async fn can_afford_download(state: State<'_, AppState>, price: f64) -> Result<bool, String> {
     let account = get_active_account(&state).await?;
     let balance_str = get_balance(&account).await?;
@@ -998,6 +1003,11 @@ async fn get_network_stats() -> Result<(String, String), String> {
     let difficulty = get_network_difficulty().await?;
     let hashrate = get_network_hashrate().await?;
     Ok((difficulty, hashrate.to_string()))
+}
+
+#[tauri::command]
+async fn get_block_details_by_number(block_number: u64) -> Result<Option<serde_json::Value>, String> {
+    ethereum::get_block_details_by_number(block_number).await
 }
 
 #[tauri::command]
@@ -5299,7 +5309,9 @@ fn main() {
             has_active_account,
             get_active_account_address,
             get_active_account_private_key,
+            get_account_balance,
             get_user_balance,
+            get_transaction_receipt,
             can_afford_download,
             process_download_payment,
             record_download_payment,
@@ -5339,6 +5351,7 @@ fn main() {
             get_miner_hashrate,
             get_current_block,
             get_network_stats,
+            get_block_details_by_number,
             get_miner_logs,
             get_miner_performance,
             get_blocks_mined,
