@@ -70,32 +70,35 @@ Chiral Network supports downloading from multiple peers simultaneously:
 - **Automatic failover** if peers disconnect
 - **Chunk verification** using merkle tree
 
-#### Multi-Source/Peer Download Details:
+#### Multi-Peer Download Details:
 - Architecture:
-  - Files are split into pieces of equal length (except for the last piece). When one peer downloads a piece of the file they need, it informs the rest of the peers that “I have this piece” so that the rest of the peers can start downloading from this peer who now currently has this piece. In the same way, every other peer does the same thing
+  - Files are split into pieces of equal length (except for the last piece). If peer acceleration is enabled, then WebRTC or Bitswap will be used for piece exchange. When one peer downloads a piece of the file they need, it informs the rest of the peers that “I have this piece” so that the rest of the peers can start downloading from this peer who now currently has this piece. In the same way, every other peer does the same thing
+  - We will support downloading a file from its original single source, either HTTP, DTP. BitTorrent or ED2K -- and optionally accelerate the download using Chiral Network's Private Peer Protocols WebRTC or Bitswap.
+  - It is important to note that multiple conventional sources are NOT combined (i.e. using more than different protocol simultaneously to download a file). Instead, the main download source is simply the original URL and peers simply assist with acceleration.
 
 - Problems: 
   - How do we manage multi downloads and ensure its speed? 
   - How do the pieces get transferred and what happens when a seeder suddenly dips after a piece? 
-  - How will the rest of the peers get the other pieces? This means that we need an algorithm that distributes the other (the ones we are missing) pieces to some other random peer so that we don’t have to worry about whether the seeder shuts down after piece N
 - Solution: 
   - Give the highest priority to the rarest piece of the file. We distribute the rarest piece of the file with a selected number of peers and then make sure to transfer the rest of the pieces with as many peers as possible so that it doesn’t matter whether the seeder is active or not
   - As a result, we minimize the dependency on the original seeder for downloading the file and encouraging more P2P connections
 
 #### Strategies
-- Rarest-First Piece Selection: prioritize the download of the piece that is the rarest in the network
-  - Rarest-first piece selection strategy ensures that only the ‘unchoked’ pieces (the piece that is currently not being downloaded/leeched) are downloaded first
-  - This leads to quick distribution of pieces in the network and a reduced load on the seeder 
-  - Increased download speed since when a peer has a rare piece, every other peer would be interested in downloading it. Because of reciprocation, it would be frequently unchoked from others, allowing for better download speeds
-  - Prevent rare pieces from missing: Since we prioritize the rarest pieces first, we ensure that rate pieces don’t go missing from the network even when the seeder leaves
-
+- Rarest-First Piece Selection: prioritize the download of the rarest piece among all peers
+  - Maxmize piece distribution across peers
+  - Ensure no piece becomes unavailable if the original source disconnects
+  - Improve speed - rare pieces are more sought out which results in more reciprocation and higher unchoke rates.
 How to compute the rarest piece? There are two ways (borrowed from BitTorrent Protocols)
-  - **Have** messages: a peer in the network broadcasts which pieces of the file it has
-    - When a peer downloads a piece completely and becomes a seeder, it sends a “have” message to all of its peers. This way, every other peer internally keeps a record of which peer keeps what piece
+  - **Have** messages: When a peer downloads a piece, it broadcasts a dynamic message saying, 
+  I have piece X now."
 - **Bitfield** messages: during the initial handshake, a peer sends a Bitfield message that contains the pieces that it holds
-  - When 2 peers handshake, we send another message right after called the Bitfield message. This is basically an array of bits with 0s or 1s where 1 represents the pieces that it has and 0 representing the pieces that it doesn’t have. After exchanging the bitfield messages, the peer computes the rarest piece and prioritizes downloading of that piece first. 
+  - When 2 peers handshake, we send an array of bits with 0s or 1s where 1 represents the pieces that it has and 0 representing the pieces that it doesn’t have. After exchanging the bitfield messages, the peer computes the rarest piece and prioritizes downloading of that piece first. 
   - Also prioritize downloading of all the blocks in the piece before moving onto the next piece.Every peer maintains the piece availability across its peer set and uses it to compute the rarest piece.
 
+Download Flow Summary:
+1. Download begins from the original single protocol URL (HTTP, FTP, BT, or ED2K)
+2. Peers can also use WebRTC or BitSwap for acceleration
+3. Peers can exchange bitfield messages and compute the rarest piece OR peers can download pieces and send have message announcements
 
 ### Download Queue Management
 
