@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, getContext } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { t } from 'svelte-i18n';
   import { fade } from 'svelte/transition';
+  import { goto } from '@mateothegreat/svelte5-router';
   import Card from '$lib/components/ui/card.svelte';
   import Button from '$lib/components/ui/button.svelte';
   import Input from '$lib/components/ui/input.svelte';
@@ -19,11 +20,14 @@
     Activity,
     ChevronRight,
     Copy,
-    ExternalLink
+    ExternalLink,
+    AlertCircle
   } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
+  import { gethStatus } from '$lib/services/gethService';
 
   const tr = (k: string, params?: Record<string, any>): string => $t(k, params);
+  const navigation = getContext('navigation') as { setCurrentPage: (page: string) => void };
 
   // Tab state
   let activeTab: 'blocks' | 'search' | 'stats' = 'blocks';
@@ -267,6 +271,18 @@
       {tr('blockchain.refresh')}
     </Button>
   </div>
+
+  <!-- Warning Banner: Geth Not Running -->
+  {#if $gethStatus !== 'running'}
+    <div class="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-4">
+      <div class="flex items-center gap-3">
+        <AlertCircle class="h-5 w-5 text-yellow-500 flex-shrink-0" />
+        <p class="text-sm text-yellow-600">
+          {$t('nav.blockchainUnavailable')} <button on:click={() => { navigation.setCurrentPage('network'); goto('/network'); }} class="underline font-medium">{$t('nav.networkPageLink')}</button>.
+        </p>
+      </div>
+    </div>
+  {/if}
 
   <!-- Network Stats Cards -->
   <div class="grid grid-cols-1 md:grid-cols-4 gap-4">

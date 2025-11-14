@@ -1821,3 +1821,161 @@ pub async fn get_block_details_by_number(
 
     Ok(json_response["result"].clone().into())
 }
+
+// ============================================================================
+// Transaction History Scanning
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransactionHistoryItem {
+    pub hash: String,
+    pub from: String,
+    pub to: Option<String>,
+    pub value: String,  // Wei as string
+    pub block_number: u64,
+    pub timestamp: u64,
+    pub status: String,  // "success" or "failed"
+    pub tx_type: String, // "sent" or "received"
+    pub gas_used: Option<String>,
+    pub gas_price: Option<String>,
+}
+
+/// Scan blocks for transactions involving a specific address
+/// Returns transactions from newest to oldest
+pub async fn get_transaction_history(
+    address: &str,
+    from_block: u64,
+    to_block: u64,
+) -> Result<Vec<TransactionHistoryItem>, String> {
+    let client = reqwest::Client::new();
+    let address_lower = address.to_lowercase();
+    let mut transactions = Vec::new();
+
+    // Scan blocks from newest to oldest
+    for block_num in (from_block..=to_block).rev() {
+        // Fetch block with full transaction objects
+        let payload = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "eth_getBlockByNumber",
+            "params": [format!("0x{:x}", block_num), true],
+            "id": 1
+        });
+
+        let response = client
+            .post(&NETWORK_CONFIG.rpc_endpoint)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to fetch block {}: {}", block_num, e))?;
+
+        let json_response: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse block {}: {}", block_num, e))?;
+
+        if let Some(error) = json_response.get("error") {
+            return Err(format!("RPC error for block {}: {}", block_num, error));
+        }
+
+        let block = match json_response["result"].as_object() {
+            Some(b) => b,
+            None => continue, // No block data
+        };
+
+        // Get block timestamp
+        let timestamp = block.get("timestamp")
+            .and_then(|t| t.as_str())
+            .and_then(|t| u64::from_str_radix(t.trim_start_matches("0x"), 16).ok())
+            .unwrap_or(0);
+
+        // Check all transactions in this block
+        if let Some(txs) = block.get("transactions").and_then(|t| t.as_array()) {
+            for tx in txs {
+                let tx_obj = match tx.as_object() {
+                    Some(obj) => obj,
+                    None => continue,
+                };
+
+                let tx_hash = tx_obj.get("hash")
+                    .and_then(|h| h.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                let from = tx_obj.get("from")
+                    .and_then(|f| f.as_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+
+                let to = tx_obj.get("to")
+                    .and_then(|t| t.as_str())
+                    .map(|s| s.to_lowercase());
+
+                let value = tx_obj.get("value")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0x0")
+                    .to_string();
+
+                let gas_price = tx_obj.get("gasPrice")
+                    .and_then(|g| g.as_str())
+                    .map(|s| s.to_string());
+
+                // Check if this transaction involves our address
+                let is_from_us = from == address_lower;
+                let is_to_us = to.as_ref().map_or(false, |t| t == &address_lower);
+
+                if !is_from_us && !is_to_us {
+                    continue; // Skip transactions not involving our address
+                }
+
+                // Get transaction receipt to check status
+                let receipt_payload = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": "eth_getTransactionReceipt",
+                    "params": [tx_hash],
+                    "id": 1
+                });
+
+                let receipt_response = client
+                    .post(&NETWORK_CONFIG.rpc_endpoint)
+                    .json(&receipt_payload)
+                    .send()
+                    .await
+                    .map_err(|e| format!("Failed to fetch receipt: {}", e))?;
+
+                let receipt_json: serde_json::Value = receipt_response
+                    .json()
+                    .await
+                    .map_err(|e| format!("Failed to parse receipt: {}", e))?;
+
+                let receipt = receipt_json["result"].as_object();
+
+                let status = receipt
+                    .and_then(|r| r.get("status"))
+                    .and_then(|s| s.as_str())
+                    .map(|s| if s == "0x1" { "success" } else { "failed" })
+                    .unwrap_or("unknown")
+                    .to_string();
+
+                let gas_used = receipt
+                    .and_then(|r| r.get("gasUsed"))
+                    .and_then(|g| g.as_str())
+                    .map(|s| s.to_string());
+
+                transactions.push(TransactionHistoryItem {
+                    hash: tx_hash,
+                    from: from.clone(),
+                    to,
+                    value,
+                    block_number: block_num,
+                    timestamp,
+                    status,
+                    tx_type: if is_from_us { "sent" } else { "received" }.to_string(),
+                    gas_used,
+                    gas_price,
+                });
+            }
+        }
+    }
+
+    Ok(transactions)
+}

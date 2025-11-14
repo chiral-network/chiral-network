@@ -461,7 +461,9 @@
     "disconnected": "Disconnected",
     "expandSidebar": "Expand sidebar",
     "collapseSidebar": "Collapse sidebar",
-    "closeSidebarMenu": "Close sidebar menu"
+    "closeSidebarMenu": "Close sidebar menu",
+    "blockchainUnavailable": "Blockchain is unavailable. Please start the Chiral node from the",
+    "networkPageLink": "Network page"
   },
   "privacy.title": "Privacy & Security",
   "privacy.enableProxy": "Enable proxy routing for anonymity",
@@ -506,6 +508,7 @@
   "account": {
     "title": "Account",
     "subtitle": "Manage your wallet and account settings",
+    "balanceWarning": "Your balance may show as 0 until connected.",
     "firstRun": {
       "welcome": "Welcome to Chiral Network!",
       "description": "To start mining and earning rewards, you'll need to create a wallet account.",
@@ -573,6 +576,7 @@
   "transactions": {
     "title": "Transaction History",
     "manual": "Manual transaction",
+    "scanInfo": "Showing transactions from the last 1,000 blocks (mining rewards from last 2,000 blocks). Real blockchain data.",
     "empty": {
       "title": "No transactions yet",
       "desc": "Transactions will appear here once you send or receive Chiral"
@@ -684,6 +688,7 @@
     "typeAll": "All",
     "typeSent": "Sent",
     "typeReceived": "Received",
+    "typeMining": "Mining Rewards",
     "from": "From",
     "to": "To",
     "sort": "Sort",
