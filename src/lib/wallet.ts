@@ -345,12 +345,23 @@ export class WalletService {
       if (newTransactions.length > 0) {
         transactions.update((list) => {
           const combined = [...newTransactions, ...list];
-          // Remove duplicates by hash and sort by date
+          // Remove duplicates by hash, preferring confirmed blockchain data over pending
           const uniqueMap = new Map();
           for (const tx of combined) {
-            const key = tx.hash || `${tx.id}`;
+            const key = tx.hash || tx.txHash || `${tx.id}`;
+
             if (!uniqueMap.has(key)) {
               uniqueMap.set(key, tx);
+            } else {
+              const existing = uniqueMap.get(key);
+              // Prefer confirmed transactions over pending
+              // Prefer transactions with block_number (from blockchain) over manual entries
+              if (
+                (tx.status !== "pending" && existing?.status === "pending") ||
+                (tx.block_number && !existing?.block_number)
+              ) {
+                uniqueMap.set(key, tx);
+              }
             }
           }
           return Array.from(uniqueMap.values()).sort(
@@ -547,8 +558,9 @@ export class WalletService {
         to: toAddress,
         from: accountAddress,
         date: new Date(),
-        description: "Manual transfer",
+        description: `Sent to ${toAddress.slice(0, 10)}...`,
         status: "pending",
+        hash: txHash, // Use 'hash' to match blockchain-scanned transactions
         txHash,
       },
       ...existing,
@@ -583,7 +595,7 @@ export class WalletService {
 
           transactions.update((txs) =>
             txs.map((tx) =>
-              tx.txHash === txHash
+              tx.txHash === txHash || tx.hash === txHash
                 ? { ...tx, status: status as "success" | "failed", confirmations }
                 : tx
             )
