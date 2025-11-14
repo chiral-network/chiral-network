@@ -412,6 +412,15 @@ impl Ed2kSourceInfo {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Ed2kDownloadStatus {
+    pub progress: f32,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+    pub state: String,
+}
+
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SeederHeartbeat {
@@ -6200,7 +6209,7 @@ impl DhtService {
             return Ok(None);
         }
 
-        let timeout_duration = Duration::from_millis(timeout_ms);
+        let tzimeout_duration = Duration::from_millis(timeout_ms);
         let waiter_id = self.search_counter.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
 
@@ -6230,7 +6239,7 @@ impl DhtService {
             return Err(err.to_string());
         }
 
-        match tokio::time::timeout(timeout_duration, rx).await {
+        match tokio::time::timeout(tzimeout_duration, rx).await {
             Ok(Ok(SearchResponse::Found(metadata))) => Ok(Some(metadata)),
             Ok(Ok(SearchResponse::NotFound)) => Ok(None),
             Ok(Err(_)) => Err("Search channel closed".into()),
