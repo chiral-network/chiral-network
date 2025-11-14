@@ -17,6 +17,31 @@ pub trait ProtocolHandler: Send + Sync {
     async fn seed(&self, file_path: &str) -> Result<String, String>;
 }
 
+/// Enhanced protocol handler trait with better error handling
+#[async_trait]
+pub trait EnhancedProtocolHandler: Send + Sync {
+    /// Error type for this protocol handler
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    /// Returns the name of the protocol (e.g., "bittorrent", "http").
+    fn name(&self) -> &'static str;
+
+    /// Determines if this handler can process the given identifier (e.g., a URL or magnet link).
+    fn supports(&self, identifier: &str) -> bool;
+
+    /// Initiates a download for the given identifier with enhanced error handling.
+    async fn download_enhanced(&self, identifier: &str) -> Result<(), Self::Error>;
+
+    /// Starts seeding a file and returns an identifier with enhanced error handling.
+    async fn seed_enhanced(&self, file_path: &str) -> Result<String, Self::Error>;
+
+    /// Get user-friendly error message
+    fn format_user_error(&self, error: &Self::Error) -> String;
+
+    /// Get error category for logging
+    fn get_error_category(&self, error: &Self::Error) -> String;
+}
+
 /// Manages multiple protocol handlers to abstract away the download/upload mechanism.
 pub struct ProtocolManager {
     handlers: Vec<Arc<dyn ProtocolHandler>>,
