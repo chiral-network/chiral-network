@@ -3,9 +3,10 @@
   import Card from '$lib/components/ui/card.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText } from 'lucide-svelte'
+  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText, AlertCircle } from 'lucide-svelte'
   import DropDown from "$lib/components/ui/dropDown.svelte";
-  import { wallet, etcAccount, blacklist} from '$lib/stores' 
+  import { wallet, etcAccount, blacklist } from '$lib/stores'
+  import { gethStatus } from '$lib/services/gethService' 
   import { walletService } from '$lib/wallet';
   import { transactions } from '$lib/stores';
   import { derived } from 'svelte/store'
@@ -13,15 +14,17 @@
   import QRCode from 'qrcode'
   import { Html5QrcodeScanner as Html5QrcodeScannerClass } from 'html5-qrcode'
   import { tick } from 'svelte'
-  import { onMount } from 'svelte'
+  import { onMount, getContext } from 'svelte'
   import { fade, fly } from 'svelte/transition'
   import { t, locale } from 'svelte-i18n'
   import { showToast } from '$lib/toast'
   import { get } from 'svelte/store'
   import { totalEarned, totalSpent, miningState } from '$lib/stores';
+  import { goto } from '@mateothegreat/svelte5-router';
 
   const tr = (k: string, params?: Record<string, any>): string => $t(k, params)
-  
+  const navigation = getContext('navigation') as { setCurrentPage: (page: string) => void };
+
   // SECURITY NOTE: Removed weak XOR obfuscation. Sensitive data should not be stored in frontend.
   // Use proper secure storage mechanisms in the backend instead.
 
@@ -121,7 +124,7 @@
   let exportMessage = '';
   
   // Filtering state
-  let filterType: 'all' | 'sent' | 'received' = 'all';
+  let filterType: 'all' | 'sent' | 'received' | 'mining' = 'all';
   let filterDateFrom: string = '';
   let filterDateTo: string = '';
   let sortDescending: boolean = true;
@@ -1347,7 +1350,17 @@
     <p class="text-muted-foreground mt-2">{$t('account.subtitle')}</p>
   </div>
 
-
+  <!-- Warning Banner: Geth Not Running -->
+  {#if $gethStatus !== 'running'}
+    <div class="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-4">
+      <div class="flex items-center gap-3">
+        <AlertCircle class="h-5 w-5 text-yellow-500 flex-shrink-0" />
+        <p class="text-sm text-yellow-600">
+          {$t('nav.blockchainUnavailable')} <button on:click={() => { navigation.setCurrentPage('network'); goto('/network'); }} class="underline font-medium">{$t('nav.networkPageLink')}</button>. {$t('account.balanceWarning')}
+        </p>
+      </div>
+    </div>
+  {/if}
 
 {#if showMnemonicWizard}
   <MnemonicWizard
@@ -1760,11 +1773,16 @@
     {/if}
   <!-- Transaction History Section - Full Width -->
   <Card class="p-6 mt-4">
-    <div class="flex items-center justify-between mb-4">
+    <div class="flex items-center justify-between mb-2">
       <h2 class="text-lg font-semibold">{$t('transactions.title')}</h2>
       <History class="h-5 w-5 text-muted-foreground" />
     </div>
-    
+
+    <!-- Scan Range Info -->
+    <p class="text-xs text-muted-foreground mb-4">
+      {$t('transactions.scanInfo')}
+    </p>
+
     <!-- Search Bar -->
     <div class="mb-4">
       <div class="relative">
@@ -1795,6 +1813,7 @@
         <option value="all">{$t('filters.typeAll')}</option>
         <option value="sent">{$t('filters.typeSent')}</option>
         <option value="received">{$t('filters.typeReceived')}</option>
+        <option value="mining">{$t('filters.typeMining')}</option>
       </select>
       <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4-4 4 4-4m0 6l-4 4-4-4"></path></svg>
@@ -1877,7 +1896,7 @@
           out:fade={{ duration: 200 }}
         >
           <div class="flex items-center gap-3">
-            {#if tx.type === 'received'}
+            {#if tx.type === 'received' || tx.type === 'mining'}
               <ArrowDownLeft class="h-4 w-4 text-green-500" />
             {:else}
               <ArrowUpRight class="h-4 w-4 text-red-500" />
@@ -1890,8 +1909,8 @@
             </div>
           </div>
           <div class="text-right">
-            <p class="text-sm font-medium {tx.type === 'received' ? 'text-green-600' : 'text-red-600'}">
-              {tx.type === 'received' ? '+' : '-'}{tx.amount} Chiral
+            <p class="text-sm font-medium {tx.type === 'received' || tx.type === 'mining' ? 'text-green-600' : 'text-red-600'}">
+              {tx.type === 'received' || tx.type === 'mining' ? '+' : '-'}{tx.amount} Chiral
             </p>
             <p class="text-xs text-muted-foreground">{formatDate(tx.date)}</p>
           </div>

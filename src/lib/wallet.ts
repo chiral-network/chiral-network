@@ -236,18 +236,35 @@ export class WalletService {
     }
 
     try {
-      // Get data in parallel
-      const [blocks, totalBlockCount] = await Promise.all([
+      // Get data in parallel: mining blocks AND transaction history
+      const [blocks, totalBlockCount, txHistory] = await Promise.all([
         invoke("get_recent_mined_blocks_pub", {
           address: accountAddress,
           lookback: 2000,
           limit: 50,
         }) as Promise<
-          Array<{ hash: string; timestamp: number; reward?: number }>
+          Array<{ hash: string; timestamp: number; number: number; reward?: number }>
         >,
         invoke("get_blocks_mined", {
           address: accountAddress,
         }) as Promise<number>,
+        invoke("get_transaction_history", {
+          address: accountAddress,
+          lookback: 1000, // Scan last 1000 blocks for transactions
+        }) as Promise<
+          Array<{
+            hash: string;
+            from: string;
+            to: string | null;
+            value: string;
+            block_number: number;
+            timestamp: number;
+            status: string;
+            tx_type: string;
+            gas_used: string | null;
+            gas_price: string | null;
+          }>
+        >,
       ]);
 
       // Update total count FIRST, before adding blocks
@@ -256,6 +273,7 @@ export class WalletService {
         blocksFound: totalBlockCount,
       }));
 
+      // Process mining rewards
       for (const block of blocks) {
         if (this.seenHashes.has(block.hash)) {
           continue;
@@ -265,10 +283,96 @@ export class WalletService {
           hash: block.hash,
           timestamp: new Date((block.timestamp || 0) * 1000),
           reward: block.reward ?? 2,
+          block_number: block.number,
+        });
+      }
+
+      // Process regular transactions (sent/received)
+      const newTransactions: Transaction[] = [];
+      for (const tx of txHistory) {
+        if (this.seenHashes.has(tx.hash)) {
+          continue; // Skip already seen transactions
+        }
+        this.seenHashes.add(tx.hash);
+
+        // Convert Wei to Chiral (1 Chiral = 10^18 Wei)
+        const valueInWei = BigInt(tx.value);
+        const valueInChiral = Number(valueInWei) / 1e18;
+
+        // Skip zero-value transactions (likely contract interactions)
+        if (valueInChiral === 0) {
+          continue;
+        }
+
+        // Convert gas data from hex to numbers
+        const gasUsed = tx.gas_used
+          ? parseInt(tx.gas_used.replace("0x", ""), 16)
+          : undefined;
+
+        const gasPrice = tx.gas_price
+          ? parseInt(tx.gas_price.replace("0x", ""), 16) / 1e9 // Convert Wei to Gwei
+          : undefined;
+
+        // Calculate fee in Chiral (gas_used * gas_price in Wei, then convert to Chiral)
+        const feeInWei = gasUsed && tx.gas_price
+          ? gasUsed * parseInt(tx.gas_price.replace("0x", ""), 16)
+          : undefined;
+        const feeInChiral = feeInWei ? feeInWei / 1e18 : undefined;
+
+        const transaction: Transaction = {
+          id: Date.now() + Math.random(), // Unique ID
+          type: tx.tx_type as "sent" | "received",
+          amount: valueInChiral,
+          from: tx.tx_type === "sent" ? accountAddress : tx.from,
+          to: tx.tx_type === "received" ? accountAddress : (tx.to ?? ""),
+          date: new Date(tx.timestamp * 1000),
+          description:
+            tx.tx_type === "sent"
+              ? `Sent to ${tx.to?.slice(0, 10)}...`
+              : `Received from ${tx.from.slice(0, 10)}...`,
+          status: tx.status === "success" ? "success" : "failed",
+          hash: tx.hash,
+          block_number: tx.block_number,
+          timestamp: tx.timestamp,
+          gas_used: gasUsed,
+          gas_price: gasPrice, // Store as Gwei for display
+          fee: feeInChiral,
+        };
+
+        newTransactions.push(transaction);
+      }
+
+      // Add new transactions to store (sorted by date, newest first)
+      if (newTransactions.length > 0) {
+        transactions.update((list) => {
+          const combined = [...newTransactions, ...list];
+          // Remove duplicates by hash, preferring confirmed blockchain data over pending
+          const uniqueMap = new Map();
+          for (const tx of combined) {
+            const key = tx.hash || tx.txHash || `${tx.id}`;
+
+            if (!uniqueMap.has(key)) {
+              uniqueMap.set(key, tx);
+            } else {
+              const existing = uniqueMap.get(key);
+              // Prefer confirmed transactions over pending
+              // Prefer transactions with block_number (from blockchain) over manual entries
+              if (
+                (tx.status !== "pending" && existing?.status === "pending") ||
+                (tx.block_number && !existing?.block_number)
+              ) {
+                uniqueMap.set(key, tx);
+              }
+            }
+          }
+          return Array.from(uniqueMap.values()).sort(
+            (a, b) => b.date.getTime() - a.date.getTime()
+          );
         });
       }
     } catch (error) {
       // Expected when Geth is not running - silently skip
+      console.error("Failed to refresh transactions:", error);
     }
   }
 
@@ -455,8 +559,9 @@ export class WalletService {
         to: toAddress,
         from: accountAddress,
         date: new Date(),
-        description: "Manual transfer",
+        description: `Sent to ${toAddress.slice(0, 10)}...`,
         status: "pending",
+        hash: txHash, // Use 'hash' to match blockchain-scanned transactions
         txHash,
       },
       ...existing,
@@ -491,7 +596,7 @@ export class WalletService {
 
           transactions.update((txs) =>
             txs.map((tx) =>
-              tx.txHash === txHash
+              tx.txHash === txHash || tx.hash === txHash
                 ? { ...tx, status: status as "success" | "failed", confirmations }
                 : tx
             )
@@ -680,6 +785,7 @@ export class WalletService {
     hash: string;
     reward?: number;
     timestamp?: Date;
+    block_number?: number;
   }): void {
     const reward = typeof block.reward === "number" ? block.reward : 0;
 
@@ -703,12 +809,14 @@ export class WalletService {
       const last4 = block.hash.slice(-4);
       const tx: Transaction = {
         id: Date.now(),
-        type: "received",
+        type: "mining",
         amount: reward,
         from: "Mining reward",
         date: block.timestamp ?? new Date(),
         description: `Block Reward (…${last4})`,
         status: "success",
+        block_number: block.block_number,
+        hash: block.hash,
       };
       transactions.update((list) => [tx, ...list]);
     }
