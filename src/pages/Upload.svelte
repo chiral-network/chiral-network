@@ -707,7 +707,7 @@
 
         // Handle BitTorrent differently - create and seed torrent
         if (selectedProtocol === "BitTorrent") {
-          const magnetLink = await invoke<string>('create_and_seed_torrent', { filePath });
+          const magnetLink = await invoke<string>('torrent_seed', { filePath, announceUrls: null });
           
           const torrentFile = {
             id: `torrent-${Date.now()}-${Math.random()}`,
