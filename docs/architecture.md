@@ -546,14 +546,15 @@ Advantages:
 - Simple implementation
 - Works through proxies/firewalls
 - Easy debugging
-- No NAT traversal needed
+- No NAT traversal needed for public IP nodes
 - Most reliable for public IP nodes
+- UPnP support (libp2p built-in feature) automatically attempts port forwarding for NAT'd nodes
 
 Limitations:
 - No built-in swarming
 - Single-source per request
 - Higher overhead
-- Requires public IP or port forwarding
+- Requires public IP, manual port forwarding, or UPnP-capable router
 ```
 
 ##### 2. WebTorrent Protocol (WebRTC) (Default for NAT'd Nodes)
@@ -773,24 +774,30 @@ function selectDefaultSeedingProtocol(): Protocol {
   // Check if node has public IP
   if (hasPublicIP()) {
     return Protocol.HTTP; // DEFAULT for public IP nodes
-  } else {
-    // Behind NAT
-    // [DECISION NEEDED]: WebTorrent or BitTorrent as default?
-    return Protocol.WebTorrent; // Current default for NAT'd nodes
-    // OR
-    // return Protocol.BitTorrent;  // Alternative (needs discussion)
   }
+  
+  // Behind NAT - try UPnP first
+  if (tryUPnPPortForward()) {
+    return Protocol.HTTP; // Use HTTP if UPnP succeeds
+  }
+  
+  // UPnP failed or unavailable
+  // [DECISION NEEDED]: WebTorrent or BitTorrent as default?
+  return Protocol.WebTorrent; // Current default for NAT'd nodes
+  // OR
+  // return Protocol.BitTorrent;  // Alternative (needs discussion)
 }
 ```
 
 **Default Protocol Matrix**:
 
 ```
-Network Capability      → Default Seeding Protocol
-─────────────────────────────────────────────────
-Public IP               → HTTP
-Behind NAT              → WebTorrent (or BitTorrent? TBD)
-Browser Only            → WebTorrent (only option)
+Network Capability              → Default Seeding Protocol
+───────────────────────────────────────────────────────────
+Public IP                       → HTTP
+Behind NAT + UPnP Available     → HTTP (auto port forward)
+Behind NAT + UPnP Failed        → WebTorrent (or BitTorrent? TBD)
+Browser Only                    → WebTorrent (only option)
 ```
 
 #### Protocol Selection Strategy (Downloader Side)
