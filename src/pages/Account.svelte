@@ -124,7 +124,7 @@
   let exportMessage = '';
   
   // Filtering state
-  let filterType: 'all' | 'sent' | 'received' = 'all';
+  let filterType: 'all' | 'sent' | 'received' | 'mining' = 'all';
   let filterDateFrom: string = '';
   let filterDateTo: string = '';
   let sortDescending: boolean = true;
@@ -1813,6 +1813,7 @@
         <option value="all">{$t('filters.typeAll')}</option>
         <option value="sent">{$t('filters.typeSent')}</option>
         <option value="received">{$t('filters.typeReceived')}</option>
+        <option value="mining">{$t('filters.typeMining')}</option>
       </select>
       <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4-4 4 4-4m0 6l-4 4-4-4"></path></svg>
@@ -1895,7 +1896,7 @@
           out:fade={{ duration: 200 }}
         >
           <div class="flex items-center gap-3">
-            {#if tx.type === 'received'}
+            {#if tx.type === 'received' || tx.type === 'mining'}
               <ArrowDownLeft class="h-4 w-4 text-green-500" />
             {:else}
               <ArrowUpRight class="h-4 w-4 text-red-500" />
@@ -1908,8 +1909,8 @@
             </div>
           </div>
           <div class="text-right">
-            <p class="text-sm font-medium {tx.type === 'received' ? 'text-green-600' : 'text-red-600'}">
-              {tx.type === 'received' ? '+' : '-'}{tx.amount} Chiral
+            <p class="text-sm font-medium {tx.type === 'received' || tx.type === 'mining' ? 'text-green-600' : 'text-red-600'}">
+              {tx.type === 'received' || tx.type === 'mining' ? '+' : '-'}{tx.amount} Chiral
             </p>
             <p class="text-xs text-muted-foreground">{formatDate(tx.date)}</p>
           </div>

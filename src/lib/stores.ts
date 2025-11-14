@@ -120,7 +120,7 @@ export interface NetworkStats {
 
 export interface Transaction {
   id: number;
-  type: "sent" | "received";
+  type: "sent" | "received" | "mining";
   amount: number;
   to?: string;
   from?: string;

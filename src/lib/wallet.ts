@@ -243,7 +243,7 @@ export class WalletService {
           lookback: 2000,
           limit: 50,
         }) as Promise<
-          Array<{ hash: string; timestamp: number; reward?: number }>
+          Array<{ hash: string; timestamp: number; number: number; reward?: number }>
         >,
         invoke("get_blocks_mined", {
           address: accountAddress,
@@ -283,6 +283,7 @@ export class WalletService {
           hash: block.hash,
           timestamp: new Date((block.timestamp || 0) * 1000),
           reward: block.reward ?? 2,
+          block_number: block.number,
         });
       }
 
@@ -784,6 +785,7 @@ export class WalletService {
     hash: string;
     reward?: number;
     timestamp?: Date;
+    block_number?: number;
   }): void {
     const reward = typeof block.reward === "number" ? block.reward : 0;
 
@@ -807,12 +809,14 @@ export class WalletService {
       const last4 = block.hash.slice(-4);
       const tx: Transaction = {
         id: Date.now(),
-        type: "received",
+        type: "mining",
         amount: reward,
         from: "Mining reward",
         date: block.timestamp ?? new Date(),
         description: `Block Reward (…${last4})`,
         status: "success",
+        block_number: block.block_number,
+        hash: block.hash,
       };
       transactions.update((list) => [tx, ...list]);
     }
