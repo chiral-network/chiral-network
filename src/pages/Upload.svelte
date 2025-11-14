@@ -717,6 +717,7 @@
             path: filePath,
             seederAddresses: [],
             uploadDate: new Date(),
+            seeders: 1,
             status: "seeding" as const,
             price: 0, // BitTorrent is free
           };
