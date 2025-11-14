@@ -116,6 +116,9 @@ use blockstore::block::Block;
 use x25519_dalek::{PublicKey, StaticSecret}; // For key handling
 use suppaftp::FtpStream;
 use std::io::Write;
+use crate::dht::Ed2kSourceInfo;
+use crate::ed2k_client::{Ed2kClient, Ed2kServerInfo, Ed2kSearchResult};
+use crate::dht::Ed2kDownloadStatus;
 
 // Settings structure for backend use
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -523,6 +526,11 @@ async fn get_account_balance(address: String) -> Result<String, String> {
 async fn get_user_balance(state: State<'_, AppState>) -> Result<String, String> {
     let account = get_active_account(&state).await?;
     get_balance(&account).await
+}
+
+#[tauri::command]
+async fn get_transaction_receipt(tx_hash: String) -> Result<transaction_services::TransactionReceipt, String> {
+    transaction_services::get_transaction_receipt(&tx_hash).await
 }
 
 #[tauri::command]
@@ -998,6 +1006,11 @@ async fn get_network_stats() -> Result<(String, String), String> {
     let difficulty = get_network_difficulty().await?;
     let hashrate = get_network_hashrate().await?;
     Ok((difficulty, hashrate.to_string()))
+}
+
+#[tauri::command]
+async fn get_block_details_by_number(block_number: u64) -> Result<Option<serde_json::Value>, String> {
+    ethereum::get_block_details_by_number(block_number).await
 }
 
 #[tauri::command]
@@ -3117,6 +3130,134 @@ async fn start_ftp_download(
 }
 
 #[tauri::command]
+async fn add_ed2k_source(
+    file_hash: String,
+    ed2k_link: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+
+    let ed2k_info = Ed2kSourceInfo::from_ed2k_link(&ed2k_link)
+        .map_err(|e| format!("Invalid ed2k link: {}", e))?;
+
+    let dht_guard = state.dht.lock().await;
+    let dht = dht_guard.as_ref().ok_or("DHT not initialized")?;
+
+    let metadata_opt = dht
+        .synchronous_search_metadata(file_hash.clone(), 3000)
+        .await?;
+
+    let mut metadata = metadata_opt.ok_or("Metadata not found")?;
+
+    let mut list = metadata.ed2k_sources.take().unwrap_or_default();
+    list.push(ed2k_info);
+    metadata.ed2k_sources = Some(list);
+
+    dht.publish_file(metadata, None).await?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn list_ed2k_sources(
+    file_hash: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<Ed2kSourceInfo>, String> {
+
+    let dht_guard = state.dht.lock().await;
+    let dht = dht_guard.as_ref().ok_or("DHT not initialized")?;
+
+    let metadata_opt = dht
+        .synchronous_search_metadata(file_hash.clone(), 3000)
+        .await?;
+
+    let metadata = metadata_opt.ok_or(format!("Metadata not found for {}", file_hash))?;
+
+    Ok(metadata.ed2k_sources.unwrap_or_default())
+}
+
+#[tauri::command]
+async fn remove_ed2k_source(
+    file_hash: String,
+    server_url: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+
+    let dht_guard = state.dht.lock().await;
+    let dht = dht_guard.as_ref().ok_or("DHT not initialized")?;
+
+    let metadata_opt = dht
+        .synchronous_search_metadata(file_hash.clone(), 3000)
+        .await?;
+
+    let mut metadata = metadata_opt.ok_or("Metadata not found")?;
+
+    if let Some(list) = &mut metadata.ed2k_sources {
+        list.retain(|s| s.server_url != server_url);
+    }
+
+    dht.publish_file(metadata, None).await?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn test_ed2k_connection(
+    server_url: String,
+) -> Result<Ed2kServerInfo, String> {
+    use crate::ed2k_client::Ed2kClient;
+    
+    let mut client = Ed2kClient::new(server_url.clone());
+    
+    // Try to connect
+    client.connect().await
+        .map_err(|e| format!("Connection failed: {}", e))?;
+    
+    // Get server info
+    let server_info = client.get_server_info().await
+        .map_err(|e| e.to_string())?;
+    
+    Ok(server_info)
+}
+
+#[tauri::command]
+async fn search_ed2k_file(
+    query: String,
+    server_url: Option<String>,
+) -> Result<Vec<Ed2kSearchResult>, String> {
+    let server = server_url.unwrap_or_else(|| 
+        "ed2k://|server|176.103.48.36|4661|/".to_string()
+    );
+    let mut client = Ed2kClient::new(server);
+
+    client.connect().await.map_err(|e| e.to_string())?;
+    let results = client.search(&query).await
+        .map_err(|e| e.to_string())?;
+
+    Ok(results)
+}
+
+#[tauri::command]
+async fn get_ed2k_download_status(
+    file_hash: String,
+    state: State<'_, AppState>,
+) -> Result<Ed2kDownloadStatus, String> {
+    // Since ED2K downloading is not implemented yet,
+    // return a placeholder status
+    Ok(Ed2kDownloadStatus {
+        progress: 0.0,
+        downloaded_bytes: 0,
+        total_bytes: 0,
+        state: format!("No ED2K download active for {}", file_hash),
+    })
+}
+
+#[tauri::command]
+fn parse_ed2k_link(ed2k_link: String) -> Result<Ed2kSourceInfo, String> {
+    Ed2kSourceInfo::from_ed2k_link(&ed2k_link)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn download_blocks_from_network(
     state: State<'_, AppState>,
     file_metadata: FileMetadata,
@@ -5196,6 +5337,27 @@ fn main() {
 
     println!("Starting Chiral Network...");
 
+    let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async {
+        let download_dir = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
+            .map(|dirs| dirs.data_dir().join("downloads"))
+            .unwrap_or_else(|| std::env::current_dir().unwrap().join("downloads"));
+        
+        if let Err(e) = std::fs::create_dir_all(&download_dir) {
+            eprintln!("Failed to create download directory: {}", e);
+        }
+
+        let bittorrent_handler = bittorrent_handler::BitTorrentHandler::new(download_dir)
+            .await
+            .expect("Failed to create BitTorrent handler");
+        let bittorrent_handler_arc = Arc::new(bittorrent_handler);
+        
+        let mut manager = ProtocolManager::new();
+        manager.register(bittorrent_handler_arc.clone());
+        
+        (bittorrent_handler_arc, Arc::new(manager))
+    });
+
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
         .manage(AppState {
@@ -5259,36 +5421,13 @@ fn main() {
             relay_aliases: Arc::new(Mutex::new(std::collections::HashMap::new())),
 
             // Protocol Manager with BitTorrent support
-            protocol_manager: {
-                let mut manager = ProtocolManager::new();
-                
-                // Create default download directory
-                let download_dir = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
-                    .map(|dirs| dirs.data_dir().join("downloads"))
-                    .unwrap_or_else(|| std::env::current_dir().unwrap().join("downloads"));
-                
-                // Ensure download directory exists
-                if let Err(e) = std::fs::create_dir_all(&download_dir) {
-                    eprintln!("Failed to create download directory: {}", e);
-                }
-                
-                // Register BitTorrent handler
-                let bittorrent_handler = Arc::new(bittorrent_handler::BitTorrentHandler::new(download_dir.clone()));
-                manager.register(bittorrent_handler);
-                
-                Arc::new(manager)
-            },
+            protocol_manager: protocol_manager_arc,
 
           // File logger - will be initialized in setup phase after loading settings
             file_logger: Arc::new(Mutex::new(None)),
           
             // BitTorrent handler for creating and seeding torrents
-            bittorrent_handler: {
-                let download_dir = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
-                    .map(|dirs| dirs.data_dir().join("downloads"))
-                    .unwrap_or_else(|| std::env::current_dir().unwrap().join("downloads"));
-                Arc::new(bittorrent_handler::BitTorrentHandler::new(download_dir))
-            },
+            bittorrent_handler: bittorrent_handler_arc,
 
             // Download restart service (will be initialized in setup)
             download_restart: Mutex::new(None),
@@ -5299,7 +5438,9 @@ fn main() {
             has_active_account,
             get_active_account_address,
             get_active_account_private_key,
+            get_account_balance,
             get_user_balance,
+            get_transaction_receipt,
             can_afford_download,
             process_download_payment,
             record_download_payment,
@@ -5339,6 +5480,7 @@ fn main() {
             get_miner_hashrate,
             get_current_block,
             get_network_stats,
+            get_block_details_by_number,
             get_miner_logs,
             get_miner_performance,
             get_blocks_mined,
@@ -5420,6 +5562,14 @@ fn main() {
             get_contribution_history,
             reset_analytics,
             reset_network_services,
+            // ed2k server commands
+            add_ed2k_source,
+            list_ed2k_sources,
+            remove_ed2k_source,
+            test_ed2k_connection,
+            search_ed2k_file,
+            get_ed2k_download_status,
+            parse_ed2k_link,
             // HTTP server commands
             start_http_server,
             stop_http_server,

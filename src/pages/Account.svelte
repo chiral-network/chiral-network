@@ -492,8 +492,6 @@
     if (!isAddressValid || !isAmountValid || sendAmount <= 0) return
     
     try {
-      showToast('Sending transaction...', 'info')
-      
       await walletService.sendTransaction(recipientAddress, sendAmount)
       
       // Clear form
@@ -502,8 +500,6 @@
       rawAmountInput = ''
       
       showToast('Transaction submitted!', 'success')
-      
-      
       
     } catch (error) {
       console.error('Transaction failed:', error)

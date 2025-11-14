@@ -3,8 +3,11 @@ use super::jwks::{JwksCache, JwksError, JwksFetcher};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use chrono::{DateTime, Duration, Utc};
-use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signature, SigningKey};
+#[cfg(test)]
+use ed25519_dalek::VerifyingKey;
 use ed25519_dalek::Signer;
+#[cfg(test)]
 use ed25519_dalek::Verifier;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
