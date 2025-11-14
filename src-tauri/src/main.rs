@@ -1058,6 +1058,22 @@ async fn get_recent_mined_blocks_pub(
 ) -> Result<Vec<MinedBlock>, String> {
     get_recent_mined_blocks(&address, lookback, limit).await
 }
+
+#[tauri::command]
+async fn get_transaction_history(
+    address: String,
+    lookback: u64,
+) -> Result<Vec<ethereum::TransactionHistoryItem>, String> {
+    // Get current block number
+    let current_block = ethereum::get_block_number().await?;
+
+    // Calculate from_block (current - lookback, but not less than 0)
+    let from_block = current_block.saturating_sub(lookback);
+
+    // Scan transactions
+    ethereum::get_transaction_history(&address, from_block, current_block).await
+}
+
 #[tauri::command]
 async fn start_dht_node(
     app: tauri::AppHandle,
@@ -5351,6 +5367,7 @@ fn main() {
             get_current_block,
             get_network_stats,
             get_block_details_by_number,
+            get_transaction_history,
             get_miner_logs,
             get_miner_performance,
             get_blocks_mined,

@@ -1773,11 +1773,16 @@
     {/if}
   <!-- Transaction History Section - Full Width -->
   <Card class="p-6 mt-4">
-    <div class="flex items-center justify-between mb-4">
+    <div class="flex items-center justify-between mb-2">
       <h2 class="text-lg font-semibold">{$t('transactions.title')}</h2>
       <History class="h-5 w-5 text-muted-foreground" />
     </div>
-    
+
+    <!-- Scan Range Info -->
+    <p class="text-xs text-muted-foreground mb-4">
+      {$t('transactions.scanInfo')}
+    </p>
+
     <!-- Search Bar -->
     <div class="mb-4">
       <div class="relative">

@@ -236,8 +236,8 @@ export class WalletService {
     }
 
     try {
-      // Get data in parallel
-      const [blocks, totalBlockCount] = await Promise.all([
+      // Get data in parallel: mining blocks AND transaction history
+      const [blocks, totalBlockCount, txHistory] = await Promise.all([
         invoke("get_recent_mined_blocks_pub", {
           address: accountAddress,
           lookback: 2000,
@@ -248,6 +248,23 @@ export class WalletService {
         invoke("get_blocks_mined", {
           address: accountAddress,
         }) as Promise<number>,
+        invoke("get_transaction_history", {
+          address: accountAddress,
+          lookback: 1000, // Scan last 1000 blocks for transactions
+        }) as Promise<
+          Array<{
+            hash: string;
+            from: string;
+            to: string | null;
+            value: string;
+            block_number: number;
+            timestamp: number;
+            status: string;
+            tx_type: string;
+            gas_used: string | null;
+            gas_price: string | null;
+          }>
+        >,
       ]);
 
       // Update total count FIRST, before adding blocks
@@ -256,6 +273,7 @@ export class WalletService {
         blocksFound: totalBlockCount,
       }));
 
+      // Process mining rewards
       for (const block of blocks) {
         if (this.seenHashes.has(block.hash)) {
           continue;
@@ -267,8 +285,82 @@ export class WalletService {
           reward: block.reward ?? 2,
         });
       }
+
+      // Process regular transactions (sent/received)
+      const newTransactions: Transaction[] = [];
+      for (const tx of txHistory) {
+        if (this.seenHashes.has(tx.hash)) {
+          continue; // Skip already seen transactions
+        }
+        this.seenHashes.add(tx.hash);
+
+        // Convert Wei to Chiral (1 Chiral = 10^18 Wei)
+        const valueInWei = BigInt(tx.value);
+        const valueInChiral = Number(valueInWei) / 1e18;
+
+        // Skip zero-value transactions (likely contract interactions)
+        if (valueInChiral === 0) {
+          continue;
+        }
+
+        // Convert gas data from hex to numbers
+        const gasUsed = tx.gas_used
+          ? parseInt(tx.gas_used.replace("0x", ""), 16)
+          : undefined;
+
+        const gasPrice = tx.gas_price
+          ? parseInt(tx.gas_price.replace("0x", ""), 16) / 1e9 // Convert Wei to Gwei
+          : undefined;
+
+        // Calculate fee in Chiral (gas_used * gas_price in Wei, then convert to Chiral)
+        const feeInWei = gasUsed && tx.gas_price
+          ? gasUsed * parseInt(tx.gas_price.replace("0x", ""), 16)
+          : undefined;
+        const feeInChiral = feeInWei ? feeInWei / 1e18 : undefined;
+
+        const transaction: Transaction = {
+          id: Date.now() + Math.random(), // Unique ID
+          type: tx.tx_type as "sent" | "received",
+          amount: valueInChiral,
+          from: tx.tx_type === "sent" ? accountAddress : tx.from,
+          to: tx.tx_type === "received" ? accountAddress : (tx.to ?? ""),
+          date: new Date(tx.timestamp * 1000),
+          description:
+            tx.tx_type === "sent"
+              ? `Sent to ${tx.to?.slice(0, 10)}...`
+              : `Received from ${tx.from.slice(0, 10)}...`,
+          status: tx.status === "success" ? "success" : "failed",
+          hash: tx.hash,
+          block_number: tx.block_number,
+          timestamp: tx.timestamp,
+          gas_used: gasUsed,
+          gas_price: gasPrice, // Store as Gwei for display
+          fee: feeInChiral,
+        };
+
+        newTransactions.push(transaction);
+      }
+
+      // Add new transactions to store (sorted by date, newest first)
+      if (newTransactions.length > 0) {
+        transactions.update((list) => {
+          const combined = [...newTransactions, ...list];
+          // Remove duplicates by hash and sort by date
+          const uniqueMap = new Map();
+          for (const tx of combined) {
+            const key = tx.hash || `${tx.id}`;
+            if (!uniqueMap.has(key)) {
+              uniqueMap.set(key, tx);
+            }
+          }
+          return Array.from(uniqueMap.values()).sort(
+            (a, b) => b.date.getTime() - a.date.getTime()
+          );
+        });
+      }
     } catch (error) {
       // Expected when Geth is not running - silently skip
+      console.error("Failed to refresh transactions:", error);
     }
   }
 

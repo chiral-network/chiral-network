@@ -125,6 +125,7 @@ export interface Transaction {
   to?: string;
   from?: string;
   txHash?: string;
+  hash?: string; // Transaction hash (primary identifier)
   date: Date;
   description: string;
   status: "submitted" | "pending" | "success" | "failed"; // Match API statuses

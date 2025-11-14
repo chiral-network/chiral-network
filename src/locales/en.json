@@ -576,6 +576,7 @@
   "transactions": {
     "title": "Transaction History",
     "manual": "Manual transaction",
+    "scanInfo": "Showing transactions from the last 1,000 blocks (mining rewards from last 2,000 blocks). Real blockchain data.",
     "empty": {
       "title": "No transactions yet",
       "desc": "Transactions will appear here once you send or receive Chiral"
