@@ -729,6 +729,7 @@ mod tests {
             false,     // enable_autorelay
             vec![],    // preferred_relays
             false,     // enable_relay_server
+            false,     // enable_upnp (disabled for testing)
             None,      // blockstore_db_path
         )
         .await
