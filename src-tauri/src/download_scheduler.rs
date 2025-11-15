@@ -2,7 +2,10 @@
 // Example integration of unified download source abstraction
 // This module demonstrates how to use DownloadSource in scheduling and logging
 
-use crate::download_source::{DownloadSource, Ed2kSourceInfo, FtpSourceInfo, HttpSourceInfo, P2pSourceInfo};
+use crate::download_source::{
+    BitTorrentSourceInfo, DownloadSource, Ed2kSourceInfo, FtpSourceInfo, HttpSourceInfo,
+    P2pSourceInfo,
+};
 use crate::ftp_client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -132,6 +135,7 @@ impl DownloadScheduler {
             DownloadSource::Ed2k(info) => {
                 self.handle_ed2k_download(task_id, info)
             }
+            DownloadSource::BitTorrent(info) => self.handle_bittorrent_download(task_id, info),
         }
     }
 
@@ -226,6 +230,20 @@ impl DownloadScheduler {
         Ok(())
     }
 
+    fn handle_bittorrent_download(
+        &self,
+        task_id: &str,
+        info: &BitTorrentSourceInfo,
+    ) -> Result<(), String> {
+        info!(
+            task_id = %task_id,
+            magnet_uri = %info.magnet_uri,
+            "Initiating BitTorrent download (placeholder)"
+        );
+        warn!("BitTorrent downloads are not yet fully implemented");
+        Ok(())
+    }
+
     /// Get statistics about source types in use
     pub fn get_source_statistics(&self) -> SourceStatistics {
         let mut stats = SourceStatistics::default();
@@ -237,6 +255,7 @@ impl DownloadScheduler {
                     DownloadSource::Http(_) => stats.http_count += 1,
                     DownloadSource::Ftp(_) => stats.ftp_count += 1,
                     DownloadSource::Ed2k(_) => stats.ed2k_count += 1,
+                    DownloadSource::BitTorrent(_) => stats.bittorrent_count += 1,
                 }
             }
         }
@@ -288,6 +307,7 @@ pub struct SourceStatistics {
     pub http_count: usize,
     pub ftp_count: usize,
     pub ed2k_count: usize,
+    pub bittorrent_count: usize,
 }
 
 #[cfg(test)]

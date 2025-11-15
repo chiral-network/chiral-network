@@ -21,6 +21,9 @@ pub enum DownloadSource {
 
     /// ed2k (eDonkey2000) download
     Ed2k(Ed2kSourceInfo),
+
+    /// BitTorrent download
+    BitTorrent(BitTorrentSourceInfo),
 }
 
 /// Information about a P2P download source
@@ -126,6 +129,15 @@ pub struct Ed2kSourceInfo {
     pub timeout_secs: Option<u64>,
 }
 
+/// Information about a BitTorrent download source
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BitTorrentSourceInfo {
+    /// Magnet URI for the torrent
+    pub magnet_uri: String,
+}
+
+
 // Default value functions
 fn default_verify_ssl() -> bool {
     true
@@ -143,6 +155,7 @@ impl DownloadSource {
             DownloadSource::Http(_) => "HTTP",
             DownloadSource::Ftp(_) => "FTP",
             DownloadSource::Ed2k(_) => "ED2K",
+            DownloadSource::BitTorrent(_) => "BitTorrent",
         }
     }
 
@@ -176,6 +189,15 @@ impl DownloadSource {
                     format!("ED2K: {}", &info.file_hash[..8.min(info.file_hash.len())])
                 }
             }
+            DownloadSource::BitTorrent(info) => {
+                // Extract info hash from magnet link for display
+                if let Some(xt) = info.magnet_uri.split('&').find(|s| s.starts_with("xt=urn:btih:")) {
+                    let info_hash = &xt[11..];
+                    format!("BitTorrent: {}", &info_hash[..8.min(info_hash.len())])
+                } else {
+                    "BitTorrent".to_string()
+                }
+            }
         }
     }
 
@@ -189,6 +211,7 @@ impl DownloadSource {
                 // Use file hash as identifier
                 info.file_hash.clone()
             }
+            DownloadSource::BitTorrent(info) => info.magnet_uri.clone(),
         }
     }
 
@@ -199,6 +222,7 @@ impl DownloadSource {
             DownloadSource::Http(info) => info.url.starts_with("https://"),
             DownloadSource::Ftp(info) => info.use_ftps,
             DownloadSource::Ed2k(_) => false, // ed2k protocol does not natively support encryption
+            DownloadSource::BitTorrent(_) => true, // BitTorrent protocol has its own encryption
         }
     }
 
@@ -208,6 +232,10 @@ impl DownloadSource {
             DownloadSource::P2p(info) => {
                 // P2P is preferred, bonus for high reputation
                 100 + info.reputation.unwrap_or(50) as u32
+            }
+            DownloadSource::BitTorrent(_) => {
+                // BitTorrent is a high-priority source
+                90
             }
             DownloadSource::Http(_) => {
                 // HTTP is secondary
@@ -366,7 +394,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ed2k_priority_score() {
+    fn test_priority_scores() {
         let ed2k = DownloadSource::Ed2k(Ed2kSourceInfo {
             server_url: "ed2k://|server|176.103.48.36|4661|/".to_string(),
             file_hash: "31D6CFE0D16AE931B73C59D7E0C089C0".to_string(),
@@ -401,15 +429,34 @@ mod tests {
             protocol: None,
         });
 
-        // Verify priority order: P2P (180) > HTTP (50) > ED2K (30) > FTP (25)
-        assert!(p2p.priority_score() > http.priority_score());
+        let bittorrent = DownloadSource::BitTorrent(BitTorrentSourceInfo {
+            magnet_uri: "magnet:?xt=urn:btih:08ada5a7a6183aae1e09d831df6748d566095a10".to_string(),
+        });
+
+        // Verify priority order: P2P (180) > BitTorrent (90) > HTTP (50) > ED2K (30) > FTP (25)
+        assert!(p2p.priority_score() > bittorrent.priority_score());
+        assert!(bittorrent.priority_score() > http.priority_score());
         assert!(http.priority_score() > ed2k.priority_score());
         assert!(ed2k.priority_score() > ftp.priority_score());
 
+        assert_eq!(p2p.priority_score(), 180);
+        assert_eq!(bittorrent.priority_score(), 90);
+        assert_eq!(http.priority_score(), 50);
         assert_eq!(ed2k.priority_score(), 30);
         assert_eq!(ftp.priority_score(), 25);
-        assert_eq!(http.priority_score(), 50);
-        assert_eq!(p2p.priority_score(), 180);
+    }
+
+    #[test]
+    fn test_bittorrent_source_creation() {
+        let source = DownloadSource::BitTorrent(BitTorrentSourceInfo {
+            magnet_uri: "magnet:?xt=urn:btih:08ada5a7a6183aae1e09d831df6748d566095a10&dn=Sintel".to_string(),
+        });
+
+        assert_eq!(source.source_type(), "BitTorrent");
+        assert!(source.supports_encryption());
+        assert_eq!(source.priority_score(), 90);
+        assert_eq!(source.display_name(), "BitTorrent: 08ada5a7");
+        assert_eq!(source.identifier(), "magnet:?xt=urn:btih:08ada5a7a6183aae1e09d831df6748d566095a10&dn=Sintel");
     }
 
     #[test]

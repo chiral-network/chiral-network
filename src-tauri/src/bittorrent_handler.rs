@@ -1,14 +1,15 @@
 use crate::protocols::ProtocolHandler;
 use async_trait::async_trait;
-use librqbit::{AddTorrent, Session, SessionOptions};
+use librqbit::{AddTorrent, Session, ManagedTorrent, SessionOptions};
 use std::path::Path;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tokio::time::{self, Duration};
-use tracing::{info, instrument, error, warn};
+use tracing::{error, info, instrument, warn};
 use thiserror::Error;
 
 /// Custom error type for BitTorrent operations
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 pub enum BitTorrentError {
     /// Session initialization failed
     #[error("Failed to initialize BitTorrent session: {message}")]
@@ -47,10 +48,9 @@ pub enum BitTorrentError {
     HandleUnavailable,
 
     /// Generic I/O error
-    #[error("I/O error: {source}")]
+    #[error("I/O error: {message}")]
     IoError {
-        #[from]
-        source: std::io::Error,
+        message: String,
     },
 
     /// Configuration error
@@ -64,6 +64,12 @@ pub enum BitTorrentError {
     /// Unknown error from librqbit
     #[error("Unknown BitTorrent error: {message}")]
     Unknown { message: String },
+}
+
+impl From<std::io::Error> for BitTorrentError {
+    fn from(err: std::io::Error) -> Self {
+        BitTorrentError::IoError { message: err.to_string() }
+    }
 }
 
 impl BitTorrentError {
@@ -132,6 +138,17 @@ impl BitTorrentError {
     }
 }
 
+/// Events sent by the BitTorrent download monitor
+#[derive(Debug)]
+pub enum BitTorrentEvent {
+    /// Download progress update
+    Progress { downloaded: u64, total: u64 },
+    /// Download has completed successfully
+    Completed,
+    /// Download has failed
+    Failed(BitTorrentError),
+}
+
 /// Convert BitTorrentError to String for compatibility with ProtocolHandler trait
 impl From<BitTorrentError> for String {
     fn from(error: BitTorrentError) -> Self {
@@ -141,6 +158,7 @@ impl From<BitTorrentError> for String {
 
 /// BitTorrent protocol handler implementing the ProtocolHandler trait.
 /// This handler manages BitTorrent downloads and seeding operations using librqbit.
+#[derive(Clone)]
 pub struct BitTorrentHandler {
     rqbit_session: Arc<Session>,
     download_directory: std::path::PathBuf,
@@ -187,100 +205,14 @@ impl BitTorrentHandler {
         })
     }
 
-    /// Validate magnet link format
-    fn validate_magnet_link(url: &str) -> Result<(), BitTorrentError> {
-        if !url.starts_with("magnet:?xt=urn:btih:") {
-            return Err(BitTorrentError::InvalidMagnetLink {
-                url: url.to_string(),
-            });
-        }
-
-        // Extract info hash to validate length
-        if let Some(hash_start) = url.find("urn:btih:") {
-            let hash_start = hash_start + 9; // Length of "urn:btih:"
-            let hash_end = url[hash_start..].find('&').unwrap_or(url.len() - hash_start) + hash_start;
-            let hash = &url[hash_start..hash_end];
-            
-            // Check hash length (40 chars for SHA-1, 64 for SHA-256)
-            if hash.len() != 40 && hash.len() != 64 {
-                return Err(BitTorrentError::InvalidMagnetLink {
-                    url: url.to_string(),
-                });
-            }
-
-            // Check if hash contains only hex characters
-            if !hash.chars().all(|c| c.is_ascii_hexdigit()) {
-                return Err(BitTorrentError::InvalidMagnetLink {
-                    url: url.to_string(),
-                });
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Validate torrent file path
-    fn validate_torrent_file(path: &str) -> Result<(), BitTorrentError> {
-        let file_path = Path::new(path);
-        
-        if !file_path.exists() {
-            return Err(BitTorrentError::TorrentFileError {
-                message: format!("Torrent file not found: {}", path),
-            });
-        }
-
-        if !file_path.is_file() {
-            return Err(BitTorrentError::TorrentFileError {
-                message: format!("Path is not a file: {}", path),
-            });
-        }
-
-        if !path.ends_with(".torrent") {
-            return Err(BitTorrentError::TorrentFileError {
-                message: format!("File does not have .torrent extension: {}", path),
-            });
-        }
-
-        Ok(())
-    }
-
-    /// Map generic errors to our custom error type
-    fn map_generic_error(error: impl std::fmt::Display) -> BitTorrentError {
-        let error_msg = error.to_string();
-        
-        if error_msg.contains("network") || error_msg.contains("connection") {
-            BitTorrentError::NetworkError {
-                message: error_msg,
-            }
-        } else if error_msg.contains("timeout") {
-            BitTorrentError::DownloadTimeout { timeout_secs: 30 }
-        } else if error_msg.contains("parse") || error_msg.contains("invalid") {
-            BitTorrentError::TorrentParsingError { 
-                message: error_msg.clone() 
-            }
-        } else {
-            BitTorrentError::Unknown {
-                message: error_msg,
-            }
-        }
-    }
-}
-
-#[async_trait]
-impl ProtocolHandler for BitTorrentHandler {
-    fn name(&self) -> &'static str {
-        "bittorrent"
-    }
-
-    fn supports(&self, identifier: &str) -> bool {
-        identifier.starts_with("magnet:") || identifier.ends_with(".torrent")
-    }
-
-    #[instrument(skip(self), fields(protocol = "bittorrent"))]
-    async fn download(&self, identifier: &str) -> Result<(), String> {
+    /// Starts a download and returns a handle to the torrent.
+    /// This method is non-blocking.
+    pub async fn start_download(
+        &self,
+        identifier: &str,
+    ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
         info!("Starting BitTorrent download for: {}", identifier);
 
-        // Validate input based on type
         let add_torrent = if identifier.starts_with("magnet:") {
             Self::validate_magnet_link(identifier).map_err(|e| {
                 error!("Magnet link validation failed: {}", e);
@@ -311,16 +243,17 @@ impl ProtocolHandler for BitTorrentHandler {
 
         let handle = add_torrent_response
             .into_handle()
-            .ok_or_else(|| {
-                error!("Failed to get torrent handle");
-                BitTorrentError::HandleUnavailable
-            })?;
+            .ok_or(BitTorrentError::HandleUnavailable)?;
 
-        info!(
-            "BitTorrent download started for: {}. Monitoring progress...",
-            identifier
-        );
+        Ok(handle)
+    }
 
+    /// Monitors a torrent download and sends progress events.
+    pub async fn monitor_download(
+        &self,
+        handle: Arc<ManagedTorrent>,
+        event_tx: mpsc::Sender<BitTorrentEvent>,
+    ) {
         let mut interval = time::interval(Duration::from_secs(1));
         let mut no_progress_count = 0;
         const MAX_NO_PROGRESS_ITERATIONS: u32 = 300; // 5 minutes with 1-second intervals
@@ -330,38 +263,158 @@ impl ProtocolHandler for BitTorrentHandler {
             let stats = handle.stats();
             let downloaded = stats.progress_bytes;
             let total = stats.total_bytes;
-            let progress = if total > 0 {
-                (downloaded as f64 / total as f64) * 100.0
-            } else {
-                0.0
-            };
 
-            info!(
-                "Download progress for {}: {:.2}% ({}/{} bytes)",
-                identifier, progress, downloaded, total
-            );
+            if event_tx.is_closed() {
+                error!("Failed to send progress event, receiver dropped.");
+                return;
+            }
+
+            if let Err(_) = event_tx
+                .send(BitTorrentEvent::Progress { downloaded, total })
+                .await
+            {
+                error!("Failed to send progress event, receiver dropped.");
+                return;
+            }
 
             // Check for completion
             if total > 0 && downloaded >= total {
-                info!("Download completed for {}", identifier);
-                break;
+                info!("Download completed for torrent");
+                let _ = event_tx.send(BitTorrentEvent::Completed).await;
+                return;
             }
 
             // Check for timeout (no progress for extended period)
             if downloaded == 0 {
                 no_progress_count += 1;
                 if no_progress_count >= MAX_NO_PROGRESS_ITERATIONS {
-                    error!("Download timeout: no progress after {} seconds", MAX_NO_PROGRESS_ITERATIONS);
-                    return Err(BitTorrentError::DownloadTimeout {
-                        timeout_secs: MAX_NO_PROGRESS_ITERATIONS as u64,
-                    }.into());
+                    error!(
+                        "Download timeout: no progress after {} seconds",
+                        MAX_NO_PROGRESS_ITERATIONS
+                    );
+                    let _ = event_tx
+                        .send(BitTorrentEvent::Failed(BitTorrentError::DownloadTimeout {
+                            timeout_secs: MAX_NO_PROGRESS_ITERATIONS as u64,
+                        }))
+                        .await;
+                    return;
                 }
             } else {
                 no_progress_count = 0; // Reset counter when progress is made
             }
         }
+    }
+
+    /// Validate magnet link format
+    fn validate_magnet_link(url: &str) -> Result<(), BitTorrentError> {
+        if !url.starts_with("magnet:?xt=urn:btih:") {
+            return Err(BitTorrentError::InvalidMagnetLink {
+                url: url.to_string(),
+            });
+        }
+
+        // Extract info hash to validate length
+        if let Some(hash_start) = url.find("urn:btih:") {
+            let hash_start = hash_start + 9; // Length of "urn:btih:"
+            let hash_end = url[hash_start..]
+                .find('&')
+                .unwrap_or(url.len() - hash_start)
+                + hash_start;
+            let hash = &url[hash_start..hash_end];
+
+            // Check hash length (40 chars for SHA-1, 64 for SHA-256)
+            if hash.len() != 40 && hash.len() != 64 {
+                return Err(BitTorrentError::InvalidMagnetLink {
+                    url: url.to_string(),
+                });
+            }
+
+            // Check if hash contains only hex characters
+            if !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err(BitTorrentError::InvalidMagnetLink {
+                    url: url.to_string(),
+                });
+            }
+        }
 
         Ok(())
+    }
+
+    /// Validate torrent file path
+    fn validate_torrent_file(path: &str) -> Result<(), BitTorrentError> {
+        let file_path = Path::new(path);
+
+        if !file_path.exists() {
+            return Err(BitTorrentError::TorrentFileError {
+                message: format!("Torrent file not found: {}", path),
+            });
+        }
+
+        if !file_path.is_file() {
+            return Err(BitTorrentError::TorrentFileError {
+                message: format!("Path is not a file: {}", path),
+            });
+        }
+
+        if !path.ends_with(".torrent") {
+            return Err(BitTorrentError::TorrentFileError {
+                message: format!("File does not have .torrent extension: {}", path),
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Map generic errors to our custom error type
+    fn map_generic_error(error: impl std::fmt::Display) -> BitTorrentError {
+        let error_msg = error.to_string();
+
+        if error_msg.contains("network") || error_msg.contains("connection") {
+            BitTorrentError::NetworkError {
+                message: error_msg,
+            }
+        } else if error_msg.contains("timeout") {
+            BitTorrentError::DownloadTimeout { timeout_secs: 30 }
+        } else if error_msg.contains("parse") || error_msg.contains("invalid") {
+            BitTorrentError::TorrentParsingError {
+                message: error_msg.clone(),
+            }
+        } else {
+            BitTorrentError::Unknown {
+                message: error_msg,
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl ProtocolHandler for BitTorrentHandler {
+    fn name(&self) -> &'static str {
+        "bittorrent"
+    }
+
+    fn supports(&self, identifier: &str) -> bool {
+        identifier.starts_with("magnet:") || identifier.ends_with(".torrent")
+    }
+
+    #[instrument(skip(self), fields(protocol = "bittorrent"))]
+    async fn download(&self, identifier: &str) -> Result<(), String> {
+        let handle = self.start_download(identifier).await?;
+        let (tx, mut rx) = mpsc::channel(10);
+
+        let self_arc = Arc::new(self.clone());
+        tokio::spawn(async move {
+            self_arc.monitor_download(handle, tx).await;
+        });
+
+        while let Some(event) = rx.recv().await {
+            match event {
+                BitTorrentEvent::Completed => return Ok(()),
+                BitTorrentEvent::Failed(e) => return Err(e.into()),
+                _ => {}
+            }
+        }
+        Err("Monitoring channel closed unexpectedly.".to_string())
     }
 
     #[instrument(skip(self), fields(protocol = "bittorrent"))]
@@ -394,7 +447,8 @@ impl ProtocolHandler for BitTorrentHandler {
         warn!("Seeding functionality not yet implemented");
         Err(BitTorrentError::SeedingError {
             message: "Seeding functionality is not yet implemented".to_string(),
-        }.into())
+        }
+        .into())
     }
 }
 
@@ -415,7 +469,10 @@ impl BitTorrentHandler {
         if let Ok(_) = Self::validate_magnet_link(magnet) {
             if let Some(hash_start) = magnet.find("urn:btih:") {
                 let hash_start = hash_start + 9;
-                let hash_end = magnet[hash_start..].find('&').unwrap_or(magnet.len() - hash_start) + hash_start;
+                let hash_end = magnet[hash_start..]
+                    .find('&')
+                    .unwrap_or(magnet.len() - hash_start)
+                    + hash_start;
                 Some(magnet[hash_start..hash_end].to_string())
             } else {
                 None
@@ -442,42 +499,73 @@ mod tests {
 
     #[test]
     fn test_validate_magnet_link_valid() {
-        assert!(BitTorrentHandler::validate_magnet_link("magnet:?xt=urn:btih:1234567890abcdef1234567890abcdef12345678").is_ok());
-        assert!(BitTorrentHandler::validate_magnet_link("magnet:?xt=urn:btih:ABCDEF1234567890ABCDEF1234567890ABCDEF12&dn=test").is_ok());
+        assert!(BitTorrentHandler::validate_magnet_link(
+            "magnet:?xt=urn:btih:1234567890abcdef1234567890abcdef12345678"
+        )
+        .is_ok());
+        assert!(BitTorrentHandler::validate_magnet_link(
+            "magnet:?xt=urn:btih:ABCDEF1234567890ABCDEF1234567890ABCDEF12&dn=test"
+        )
+        .is_ok());
     }
 
     #[test]
     fn test_validate_magnet_link_invalid() {
         assert!(BitTorrentHandler::validate_magnet_link("http://example.com").is_err());
         assert!(BitTorrentHandler::validate_magnet_link("magnet:?xt=urn:btih:invalid").is_err());
-        assert!(BitTorrentHandler::validate_magnet_link("magnet:?xt=urn:btih:123").is_err()); // Too short
+        assert!(BitTorrentHandler::validate_magnet_link("magnet:?xt=urn:btih:123").is_err());
+        // Too short
     }
 
     #[test]
     fn test_validate_torrent_file() {
         let temp_dir = tempdir().unwrap();
         let torrent_path = create_test_file(temp_dir.path(), "test.torrent", "content");
-        
-        assert!(BitTorrentHandler::validate_torrent_file(torrent_path.to_str().unwrap()).is_ok());
+
+        assert!(
+            BitTorrentHandler::validate_torrent_file(torrent_path.to_str().unwrap()).is_ok()
+        );
         assert!(BitTorrentHandler::validate_torrent_file("/nonexistent/file.torrent").is_err());
-        
+
         let txt_path = create_test_file(temp_dir.path(), "test.txt", "content");
         assert!(BitTorrentHandler::validate_torrent_file(txt_path.to_str().unwrap()).is_err());
     }
 
     #[test]
     fn test_error_user_messages() {
-        let error = BitTorrentError::InvalidMagnetLink { url: "invalid".to_string() };
+        let error = BitTorrentError::InvalidMagnetLink {
+            url: "invalid".to_string(),
+        };
         assert!(error.user_message().contains("magnet link format"));
 
-        let error = BitTorrentError::NetworkError { message: "connection failed".to_string() };
+        let error = BitTorrentError::NetworkError {
+            message: "connection failed".to_string(),
+        };
         assert!(error.user_message().contains("Network connection failed"));
     }
 
     #[test]
     fn test_error_categories() {
-        assert_eq!(BitTorrentError::InvalidMagnetLink { url: "test".to_string() }.category(), "validation");
-        assert_eq!(BitTorrentError::NetworkError { message: "test".to_string() }.category(), "network");
-        assert_eq!(BitTorrentError::FileSystemError { message: "test".to_string() }.category(), "filesystem");
+        assert_eq!(
+            BitTorrentError::InvalidMagnetLink {
+                url: "test".to_string()
+            }
+            .category(),
+            "validation"
+        );
+        assert_eq!(
+            BitTorrentError::NetworkError {
+                message: "test".to_string()
+            }
+            .category(),
+            "network"
+        );
+        assert_eq!(
+            BitTorrentError::FileSystemError {
+                message: "test".to_string()
+            }
+            .category(),
+            "filesystem"
+        );
     }
 }

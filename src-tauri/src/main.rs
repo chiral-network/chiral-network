@@ -2938,7 +2938,7 @@ async fn start_file_transfer_service(
     };
 
     if let Some(dht_service) = dht_arc {
-        let multi_source_service = MultiSourceDownloadService::new(dht_service, webrtc_arc.clone());
+        let multi_source_service = MultiSourceDownloadService::new(dht_service, webrtc_arc.clone(), state.bittorrent_handler.clone());
         let multi_source_arc = Arc::new(multi_source_service);
 
         {
