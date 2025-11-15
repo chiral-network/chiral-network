@@ -858,9 +858,19 @@ async fn upload_file(
             ft_guard.as_ref().cloned()
         };
         if let Some(ft) = ft {
-            ft.store_file_data(file_hash.clone(), file_name, file_data)
+            ft.store_file_data(file_hash.clone(), file_name.clone(), file_data.clone())
                 .await;
         }
+
+        // Register file with HTTP server for HTTP downloads
+        state.http_server_state.register_file(http_server::HttpFileMetadata {
+            hash: file_hash.clone(),
+            name: file_name.clone(),
+            size: file_data.len() as u64,
+            encrypted: is_encrypted,
+        }).await;
+        
+        tracing::info!("Registered file with HTTP server: {} ({})", file_name, file_hash);
 
         dht.publish_file(metadata.clone(), None).await?;
         Ok(metadata)
@@ -3076,6 +3086,16 @@ async fn upload_file_to_network(
                     ft.store_file_data(file_hash.clone(), file_name.to_string(), file_data.clone())
                         .await;
 
+                    // Register file with HTTP server for HTTP downloads
+                    state.http_server_state.register_file(http_server::HttpFileMetadata {
+                        hash: file_hash.clone(),
+                        name: file_name.to_string(),
+                        size: file_data.len() as u64,
+                        encrypted: false,
+                    }).await;
+                    
+                    info!("Registered file with HTTP server: {} ({})", file_name, file_hash);
+
                     match dht.publish_file(metadata.clone(), None).await {
                         Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
                         Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
@@ -5218,14 +5238,24 @@ async fn download_file_http(
         merkle_root,
         seeder_url
     );
+    
+    tracing::info!("Output path: {}", output_path);
 
     // Create progress channel
-    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel(100);
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<http_download::HttpDownloadProgress>(100);
 
     // Spawn progress event emitter
     let app_handle = app.clone();
-    tokio::spawn(async move {
+    let emit_task = tokio::spawn(async move {
         while let Some(progress) = progress_rx.recv().await {
+            tracing::info!(
+                "HTTP download progress: {}/{} chunks, {}/{} bytes, status: {:?}",
+                progress.chunks_downloaded,
+                progress.chunks_total,
+                progress.bytes_downloaded,
+                progress.bytes_total,
+                progress.status
+            );
             let _ = app_handle.emit("http_download_progress", &progress);
         }
     });
@@ -5234,18 +5264,28 @@ async fn download_file_http(
     let client = http_download::HttpDownloadClient::new();
 
     // Start download using Range requests
-    client
+    let result = client
         .download_file(
             &seeder_url,
             &merkle_root,
             std::path::Path::new(&output_path),
             Some(progress_tx),
         )
-        .await?;
-
-    tracing::info!("HTTP download completed: {}", output_path);
-
-    Ok(())
+        .await;
+    
+    // Wait for progress emitter to finish
+    drop(emit_task);
+    
+    match result {
+        Ok(()) => {
+            tracing::info!("HTTP download completed successfully: {}", output_path);
+            Ok(())
+        }
+        Err(e) => {
+            tracing::error!("HTTP download failed: {}", e);
+            Err(e)
+        }
+    }
 }
 
 // Download restart Tauri commands

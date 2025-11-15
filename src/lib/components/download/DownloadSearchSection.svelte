@@ -621,15 +621,27 @@
       const merkleRoot = file.fileHash || file.merkleRoot || '';
 
       console.log(`📡 Starting HTTP download from ${seederUrl}`);
-      await invoke('download_file_http', {
-        seederUrl,
-        merkleRoot,
-        outputPath
-      });
+      console.log(`   File hash: ${merkleRoot}`);
+      console.log(`   Output path: ${outputPath}`);
+      
+      pushMessage(`Starting HTTP download to ${outputPath}`, 'info');
+      
+      try {
+        await invoke('download_file_http', {
+          seederUrl,
+          merkleRoot,
+          outputPath
+        });
 
-      pushMessage(`HTTP download started successfully`, 'success');
+        pushMessage(`HTTP download completed successfully! File saved to: ${outputPath}`, 'success', 8000);
+        console.log(`✅ HTTP download completed: ${outputPath}`);
+      } catch (invokeError) {
+        // Log the actual error from Rust
+        console.error('❌ HTTP download invoke error:', invokeError);
+        throw invokeError;
+      }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorMessage = error instanceof Error ? error.message : String(error);
       pushMessage(`HTTP download failed: ${errorMessage}`, 'error', 6000);
       console.error('HTTP download failed:', error);
     }
