@@ -858,9 +858,19 @@ async fn upload_file(
             ft_guard.as_ref().cloned()
         };
         if let Some(ft) = ft {
-            ft.store_file_data(file_hash.clone(), file_name, file_data)
+            ft.store_file_data(file_hash.clone(), file_name.clone(), file_data.clone())
                 .await;
         }
+
+        // Register file with HTTP server for HTTP downloads
+        state.http_server_state.register_file(http_server::HttpFileMetadata {
+            hash: file_hash.clone(),
+            name: file_name.clone(),
+            size: file_data.len() as u64,
+            encrypted: is_encrypted,
+        }).await;
+        
+        tracing::info!("Registered file with HTTP server: {} ({})", file_name, file_hash);
 
         dht.publish_file(metadata.clone(), None).await?;
         Ok(metadata)
@@ -3076,6 +3086,16 @@ async fn upload_file_to_network(
                     ft.store_file_data(file_hash.clone(), file_name.to_string(), file_data.clone())
                         .await;
 
+                    // Register file with HTTP server for HTTP downloads
+                    state.http_server_state.register_file(http_server::HttpFileMetadata {
+                        hash: file_hash.clone(),
+                        name: file_name.to_string(),
+                        size: file_data.len() as u64,
+                        encrypted: false,
+                    }).await;
+                    
+                    info!("Registered file with HTTP server: {} ({})", file_name, file_hash);
+
                     match dht.publish_file(metadata.clone(), None).await {
                         Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
                         Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
@@ -5218,14 +5238,24 @@ async fn download_file_http(
         merkle_root,
         seeder_url
     );
+    
+    tracing::info!("Output path: {}", output_path);
 
     // Create progress channel
-    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel(100);
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<http_download::HttpDownloadProgress>(100);
 
     // Spawn progress event emitter
     let app_handle = app.clone();
-    tokio::spawn(async move {
+    let emit_task = tokio::spawn(async move {
         while let Some(progress) = progress_rx.recv().await {
+            tracing::info!(
+                "HTTP download progress: {}/{} chunks, {}/{} bytes, status: {:?}",
+                progress.chunks_downloaded,
+                progress.chunks_total,
+                progress.bytes_downloaded,
+                progress.bytes_total,
+                progress.status
+            );
             let _ = app_handle.emit("http_download_progress", &progress);
         }
     });
@@ -5234,18 +5264,28 @@ async fn download_file_http(
     let client = http_download::HttpDownloadClient::new();
 
     // Start download using Range requests
-    client
+    let result = client
         .download_file(
             &seeder_url,
             &merkle_root,
             std::path::Path::new(&output_path),
             Some(progress_tx),
         )
-        .await?;
-
-    tracing::info!("HTTP download completed: {}", output_path);
-
-    Ok(())
+        .await;
+    
+    // Wait for progress emitter to finish
+    drop(emit_task);
+    
+    match result {
+        Ok(()) => {
+            tracing::info!("HTTP download completed successfully: {}", output_path);
+            Ok(())
+        }
+        Err(e) => {
+            tracing::error!("HTTP download failed: {}", e);
+            Err(e)
+        }
+    }
 }
 
 // Download restart Tauri commands
@@ -5355,15 +5395,40 @@ fn main() {
 
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
     let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async {
+        // Allow multiple instances by using CHIRAL_INSTANCE_ID environment variable
+        let instance_id = std::env::var("CHIRAL_INSTANCE_ID")
+            .ok()
+            .and_then(|id| id.parse::<u16>().ok())
+            .unwrap_or(1);
+        
+        let instance_suffix = if instance_id == 1 {
+            String::new()
+        } else {
+            format!("-{}", instance_id)
+        };
+        
         let download_dir = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
-            .map(|dirs| dirs.data_dir().join("downloads"))
-            .unwrap_or_else(|| std::env::current_dir().unwrap().join("downloads"));
+            .map(|dirs| dirs.data_dir().join(format!("downloads{}", instance_suffix)))
+            .unwrap_or_else(|| std::env::current_dir().unwrap().join(format!("downloads{}", instance_suffix)));
         
         if let Err(e) = std::fs::create_dir_all(&download_dir) {
             eprintln!("Failed to create download directory: {}", e);
         }
 
-        let bittorrent_handler = bittorrent_handler::BitTorrentHandler::new(download_dir)
+        println!("Instance ID: {}", instance_id);
+        println!("Using download directory: {:?}", download_dir);
+
+        // Calculate port range based on instance ID to avoid conflicts
+        // Instance 1: 6881-6891, Instance 2: 6892-6902, etc.
+        let base_port = 6881 + ((instance_id - 1) * 11);
+        let port_range = base_port..(base_port + 10);
+        
+        println!("Using BitTorrent port range: {}-{}", port_range.start, port_range.end);
+
+        let bittorrent_handler = bittorrent_handler::BitTorrentHandler::new_with_port_range(
+            download_dir,
+            Some(port_range)
+        )
             .await
             .expect("Failed to create BitTorrent handler");
         let bittorrent_handler_arc = Arc::new(bittorrent_handler);

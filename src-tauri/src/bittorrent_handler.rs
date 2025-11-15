@@ -1,6 +1,6 @@
 use crate::protocols::ProtocolHandler;
 use async_trait::async_trait;
-use librqbit::{AddTorrent, Session, ManagedTorrent};
+use librqbit::{AddTorrent, Session, ManagedTorrent, SessionOptions};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -167,11 +167,34 @@ pub struct BitTorrentHandler {
 impl BitTorrentHandler {
     /// Creates a new BitTorrentHandler with the specified download directory.
     pub async fn new(download_directory: std::path::PathBuf) -> Result<Self, BitTorrentError> {
-        let session = Session::new(download_directory.clone()).await.map_err(|e| {
+        Self::new_with_port_range(download_directory, None).await
+    }
+
+    /// Creates a new BitTorrentHandler with a specific port range to avoid conflicts.
+    pub async fn new_with_port_range(
+        download_directory: std::path::PathBuf,
+        listen_port_range: Option<std::ops::Range<u16>>,
+    ) -> Result<Self, BitTorrentError> {
+        let mut opts = SessionOptions::default();
+        
+        // Set port range if provided (helps run multiple instances)
+        if let Some(range) = listen_port_range {
+            opts.listen_port_range = Some(range);
+        }
+        
+        // Use instance-specific DHT config if available (for multiple instances)
+        // The DHT state file will be stored in the download directory
+        opts.dht_config = Some(librqbit::dht::PersistentDhtConfig {
+            config_filename: Some(download_directory.join("dht.json")),
+            dump_interval: Some(Duration::from_secs(300)), // Save DHT state every 5 minutes
+        });
+        
+        let session = Session::new_with_opts(download_directory.clone(), opts).await.map_err(|e| {
             BitTorrentError::SessionInit {
                 message: format!("Failed to create session: {}", e),
             }
         })?;
+        
         info!(
             "Initializing BitTorrentHandler with download directory: {:?}",
             download_directory
