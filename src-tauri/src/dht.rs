@@ -664,6 +664,10 @@ pub enum DhtCommand {
         info_hash: String,
         sender: oneshot::Sender<Option<FileMetadata>>,
     },
+    SearchPeersByInfohash {
+        info_hash: String,
+        sender: oneshot::Sender<Result<Vec<String>, String>>,
+    },
     SearchFile(String),
     DownloadFile(FileMetadata, String),
     ConnectPeer(String),
@@ -2594,6 +2598,18 @@ async fn run_dht_node(
                                 // This is the first step of the two-step lookup.
                                 let search = PendingInfohashSearch { id: 0, sender };
                                 pending_infohash_searches.lock().await.insert(query_id, search);
+                            }
+                            Some(DhtCommand::SearchPeersByInfohash { info_hash, sender }) => {
+                                let key = kad::RecordKey::new(&info_hash.as_bytes());
+                                let query_id = swarm.behaviour_mut().kademlia.get_providers(key);
+                                info!("Searching for torrent providers (info_hash): {} (query: {:?})", info_hash, query_id);
+
+                                get_providers_queries.lock().await.insert(query_id, (info_hash.clone(), std::time::Instant::now()));
+                                let pending_query = PendingProviderQuery {
+                                    id: 0,
+                                    sender,
+                                };
+                                pending_provider_queries.lock().await.insert(info_hash, pending_query);
                             }
                             Some(DhtCommand::SetPrivacyProxies { addresses }) => {
                                 info!("Updating privacy proxy targets ({} addresses)", addresses.len());
@@ -7042,6 +7058,20 @@ impl DhtService {
             .await
             .map_err(|e| e.to_string())?;
         receiver.await.map_err(|e| e.to_string())
+    }
+}
+
+impl DhtService {
+    /// Finds Chiral peers in the DHT that are seeding a torrent with the given info_hash.
+    pub async fn search_peers_by_infohash(&self, info_hash: String) -> Result<Vec<String>, String> {
+        let (sender, receiver) = oneshot::channel();
+        self.cmd_tx
+            .send(DhtCommand::SearchPeersByInfohash { info_hash, sender })
+            .await
+            .map_err(|e| e.to_string())?;
+        
+        // Wait for the DHT query to complete
+        receiver.await.map_err(|e| e.to_string())?
     }
 }
 
