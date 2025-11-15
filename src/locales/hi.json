@@ -1525,6 +1525,190 @@
       "invalidFile": "Formato de arquivo de backup inválido",
       "confirmReplace": "Isso substituirá todas as configurações atuais. Continuar?"
     }
+  },
+  "blockchain": {
+    "title": "ब्लॉकचेन एक्सप्लोरर",
+    "subtitle": "किरल नेटवर्क पर ब्लॉक, लेनदेन और खाते की शेष राशि देखें",
+    "refresh": "रीफ्रेश करें",
+    "refreshed": "डेटा रीफ़्रेश किया गया",
+    "copied": "क्लिपबोर्ड में कॉपी किया गया",
+    "stats": {
+      "totalBlocks": "कुल ब्लॉक",
+      "hashrate": "नेटवर्क हैशरेट",
+      "difficulty": "कठिनाई स्तर",
+      "peers": "नेटवर्क पीयर"
+    },
+    "tabs": {
+      "blocks": "नवीनतम ब्लॉक",
+      "search": "खोज",
+      "stats": "बैलेंस चेकर"
+    },
+    "blocks": {
+      "latest": "नवीनतम ब्लॉक",
+      "noBlocks": "कोई ब्लॉक नहीं मिला"
+    },
+    "search": {
+      "title": "ब्लॉकचेन में खोजें",
+      "address": "पता",
+      "transaction": "लेनदेन",
+      "block": "ब्लॉक",
+      "emptyQuery": "कृपया खोज प्रश्न दर्ज करें",
+      "error": "खोज विफल रही: {error}",
+      "unknownError": "अज्ञात त्रुटि",
+      "invalidBlock": "अमान्य ब्लॉक संख्या",
+      "notFound": "नहीं मिला",
+      "addressDetails": "पते का विवरण",
+      "addressLabel": "पता",
+      "balance": "बैलेंस",
+      "txDetails": "लेनदेन का विवरण",
+      "status": "स्थिति",
+      "blockNumber": "ब्लॉक संख्या",
+      "from": "से",
+      "to": "तक",
+      "value": "मान",
+      "blockDetails": "ब्लॉक का विवरण",
+      "hash": "हैश",
+      "timestamp": "टाइमस्टैम्प"
+    },
+    "balance": {
+      "checker": "बैलेंस चेकर",
+      "address": "पता",
+      "check": "बैलेंस जांचें",
+      "result": "बैलेंस",
+      "emptyAddress": "कृपया एक पता दर्ज करें",
+      "error": "बैलेंस जांच विफल: {error}",
+      "errorLabel": "त्रुटि"
+    },
+    "error": {
+      "fetchBlocks": "ब्लॉक प्राप्त करने में विफल"
+    }
+  },
+  "toasts": {
+    "common": {
+      "copied": "कॉपी किया गया!"
+    },
+    "wallet": {
+      "accountList": {
+        "selected": "Selected account {address}...",
+        "derived": "Derived account #{index}",
+        "deriveError": "Derivation failed: {error}",
+        "keystorePrompt": "Enter keystore password",
+        "keystoreSaved": "Saved to keystore",
+        "keystoreError": "Keystore save failed: {error}"
+      },
+      "mnemonic": {
+        "ready": "Wallet ready",
+        "copied": "Recovery phrase copied to clipboard"
+      },
+      "transaction": {
+        "confirmed": "Transaction confirmed! {amount} CN sent to {address}... (Block {block})",
+        "failed": "Transaction failed in block {block}. Your funds were not sent."
+      }
+    },
+    "account": {
+      "firstRun": {
+        "testWalletCreated": "Test wallet \"TestWallet\" created!",
+        "testWalletError": "Failed to create test wallet"
+      },
+      "addressCopied": "Address copied to clipboard!",
+      "privateKey": {
+        "fetchError": "Failed to retrieve private key",
+        "copied": "Private key copied to clipboard!",
+        "missing": "No private key available"
+      },
+      "transaction": {
+        "cancelled": "Transaction cancelled",
+        "submitted": "Transaction submitted!",
+        "error": "Transaction failed: {error}"
+      },
+      "created": "Account Created Successfully!",
+      "createError": "Failed to create account: {error}",
+      "import": {
+        "invalidFormat": "Invalid private key format",
+        "success": "Account imported successfully!",
+        "error": "Failed to import account: {error}",
+        "fileInvalid": "Invalid file format: privateKey field not found",
+        "fileSuccess": "Private key loaded from file successfully!",
+        "fileReadError": "Error reading file: {error}",
+        "fileLoadError": "Error loading file: {error}"
+      },
+      "2fa": {
+        "desktopOnly": "2FA is only available in the desktop app.",
+        "setupError": "Failed to start 2FA setup: {error}",
+        "enabled": "Two-Factor Authentication has been enabled!",
+        "disabled": "Two-Factor Authentication has been disabled.",
+        "disableError": "Failed to disable 2FA: {error}"
+      },
+      "logout": {
+        "locked": "Wallet locked and session cleared",
+        "error": "Error during logout: {error}"
+      }
+    },
+    "mining": {
+      "syncComplete": "Blockchain sync complete! Mining is now active."
+    },
+    "blockchain": {
+      "noBlocks": "कोई ब्लॉक नहीं मिला। ब्लॉक बनाने के लिए माइनिंग शुरू करें।",
+      "fetchError": "ब्लॉक प्राप्त करने में विफल: {error}"
+    },
+    "settings": {
+      "updated": "सेटिंग्स अपडेट हो गईं!",
+      "networkingError": "सेटिंग्स सहेजी गईं, लेकिन नेटवर्क अपडेट विफल रहा",
+      "proxyRelayWarning": "हाइड माई IP सक्षम करने से पहले कम से कम एक विश्वसनीय प्रॉक्सी रिले जोड़ें।"
+    },
+    "analytics": {
+      "direction": {
+        "upload": "अपलोड",
+        "download": "डाउनलोड"
+      },
+      "bandwidthWarning": "{direction} सीमा चेतावनी: {used} जीबी उपयोग किए गए ({percent}% / {cap} जीबी)।",
+      "bandwidthTitle": "{direction} सीमा चेतावनी"
+    },
+    "upload": {
+      "loginRequired": "फाइल अपलोड करने से पहले कृपया अपने खाते में लॉग इन करें",
+      "verifyAccountFailed": "खाते की स्थिति सत्यापित करने में विफल। कृपया दोबारा लॉग इन करें।",
+      "dhtDisconnected": "DHT नेटवर्क कनेक्टेड नहीं है। फाइल अपलोड करने से पहले DHT नेटवर्क शुरू करें।",
+      "fileSuccess": "{name} सफलतापूर्वक अपलोड हुआ",
+      "torrentSeeding": "{name} अब टॉरेंट के रूप में सीड हो रहा है"
+    },
+    "network": {
+      "signalingConnected": "सिग्नलिंग सर्वर से जुड़ गया",
+      "signalingError": "वेब मोड परीक्षण के लिए सिग्नलिंग सर्वर से कनेक्शन विफल",
+      "peerAddressRequired": "कृपया एक पीयर पता दर्ज करें",
+      "dhtRequired": "DHT कनेक्ट नहीं है। पहले DHT शुरू करें।",
+      "alreadyConnected": "पीयर पहले से जुड़ा हुआ है",
+      "connecting": "DHT के माध्यम से पीयर से कनेक्ट किया जा रहा है...",
+      "connectionSuccess": "कनेक्शन सफल!",
+      "connectionFailed": "कनेक्शन विफल। पीयर अनुपलब्ध हो सकता है या पता अमान्य है।",
+      "connectError": "पीयर से कनेक्ट करने में विफल: {error}",
+      "signalingMissing": "सिग्नलिंग सर्वर कनेक्टेड नहीं है। पहले DHT शुरू करें।",
+      "peerNotFound": "खोजे गए पीयर्स में {peer} नहीं मिला",
+      "messageReceived": "पीयर से प्राप्त: {message}",
+      "webrtcConnected": "पीयर से सफलतापूर्वक कनेक्ट हुआ!",
+      "webrtcFailed": "पीयर से कनेक्शन विफल",
+      "dataChannelOpen": "डेटा चैनल खुला है - अब आप संदेश भेज सकते हैं!",
+      "dataChannelClosed": "डेटा चैनल बंद",
+      "webrtcError": "WebRTC त्रुटि: {error}",
+      "webrtcConnecting": "पीयर से कनेक्ट किया जा रहा है: {peer}",
+      "webrtcCreateError": "कनेक्शन बनाने में विफल: {error}",
+      "noConnection": "कोई सक्रिय WebRTC कनेक्शन नहीं है",
+      "messageSent": "परीक्षण संदेश भेजा गया: {message}",
+      "sendError": "संदेश भेजने में विफल: {error}",
+      "gethInstalled": "Geth पहले से ही स्थापित है",
+      "gethDownloadError": "Geth डाउनलोड करने में विफल: {error}"
+    },
+    "download": {
+      "payment": {
+        "invalidAddress": "भुगतान संसाधित नहीं किया जा सकता: अपलोडर का वॉलेट पता गायब या अमान्य है",
+        "failed": "भुगतान विफल: {error}",
+        "successWithHash": "भुगतान सफल! लेनदेन: {hash}...",
+        "success": "भुगतान सफल!"
+      }
+    },
+    "transactions": {
+      "copied": "{label} क्लिपबोर्ड पर कॉपी किया गया",
+      "copyError": "{label} कॉपी करने में विफल",
+      "exported": "लेनदेन निर्यात किया गया"
+    }
   }
 }
-

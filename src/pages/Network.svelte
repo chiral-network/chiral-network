@@ -735,10 +735,15 @@
             }
           }
         });
-        showToast('Connected to signaling server', 'success');
+        // showToast('Connected to signaling server', 'success');
+        showToast(tr('toasts.network.signalingConnected'), 'success');
       } catch (error) {
         console.error('Failed to connect to signaling server:', error);
-        showToast('Failed to connect to signaling server for web mode testing', 'error');
+        // showToast('Failed to connect to signaling server for web mode testing', 'error');
+        showToast(
+          tr('toasts.network.signalingError'),
+          'error'
+        );
         return;
       }
     }
@@ -751,7 +756,8 @@
   
   async function connectToPeer() {
     if (!newPeerAddress.trim()) {
-      showToast('Please enter a peer address', 'error');
+      // showToast('Please enter a peer address', 'error');
+      showToast(tr('toasts.network.peerAddressRequired'), 'error');
       return;
     }
 
@@ -760,7 +766,8 @@
     // In Tauri mode, use DHT backend for P2P connections
     if (isTauri) {
       if (dhtStatus !== 'connected') {
-        showToast('DHT not connected. Please start DHT first.', 'error');
+        // showToast('DHT not connected. Please start DHT first.', 'error');
+        showToast(tr('toasts.network.dhtRequired'), 'error');
         return;
       }
 
@@ -773,13 +780,15 @@
       );
 
       if (isAlreadyConnected) {
-        showToast('Peer is already connected', 'info');
+        // showToast('Peer is already connected', 'info');
+        showToast(tr('toasts.network.alreadyConnected'), 'info');
         newPeerAddress = '';
         return;
       }
 
       try {
-        showToast('Connecting to peer via DHT...', 'info');
+        // showToast('Connecting to peer via DHT...', 'info');
+        showToast(tr('toasts.network.connecting'), 'info');
         const currentPeerCount = $peers.length;
         await invoke('connect_to_peer', { peerAddress });
 
@@ -790,21 +799,28 @@
         setTimeout(async () => {
           await refreshConnectedPeers();
           if ($peers.length > currentPeerCount) {
-            showToast('Connection Success!', 'success');
+            // showToast('Connection Success!', 'success');
+            showToast(tr('toasts.network.connectionSuccess'), 'success')
           } else {
-            showToast('Connection failed. Peer may be unreachable or address invalid.', 'error');
+            // showToast('Connection failed. Peer may be unreachable or address invalid.', 'error');
+            showToast(tr('toasts.network.connectionFailed'), 'error');
           }
         }, 2000);
       } catch (error) {
         console.error('Failed to connect to peer:', error);
-        showToast('Failed to connect to peer: ' + error, 'error');
+        // showToast('Failed to connect to peer: ' + error, 'error');
+        showToast(
+          tr('toasts.network.connectError', { values: { error: String(error) } }),
+          'error'
+        );
       }
       return;
     }
 
     // In web mode, use WebRTC for testing
     if (!signalingConnected) {
-      showToast('Signaling server not connected. Please start DHT first.', 'error');
+      // showToast('Signaling server not connected. Please start DHT first.', 'error');
+      showToast(tr('toasts.network.signalingMissing'), 'error');
       return;
     }
 
@@ -813,7 +829,11 @@
     // Check if peer exists in discovered peers
     // if (!discoveredPeers.includes(peerId)) {
     if (!webDiscoveredPeers.includes(peerId)) {
-      showToast(`Peer ${peerId} not found in discovered peers`, 'warning');
+      // showToast(`Peer ${peerId} not found in discovered peers`, 'warning');
+      showToast(
+        tr('toasts.network.peerNotFound', { values: { peer: peerId } }),
+        'warning'
+      );
       // Still attempt connection in case peer was discovered recently
     }
 
@@ -823,18 +843,24 @@
         signaling,
         isInitiator: true,
         onMessage: (data) => {
-          showToast('Received from peer: ' + data, 'info');
+          // showToast('Received from peer: ' + data, 'info');
+          showToast(
+            tr('toasts.network.messageReceived', { values: { message: String(data) } }),
+            'info'
+          )
         },
         onConnectionStateChange: (state) => {
           console.log('[WebRTC] Connection state:', state);
 
           // Only show toasts for important states (not every intermediate state)
           if (state === 'connected') {
-            showToast('Successfully connected to peer!', 'success');
+            // showToast('Successfully connected to peer!', 'success');
+            showToast(tr('toasts.network.webrtcConnected'), 'success');
             // Add minimal PeerInfo to peers store if not present
             addConnectedPeer(peerId);
           } else if (state === 'failed') {
-            showToast('Connection to peer failed', 'error');
+            // showToast('Connection to peer failed', 'error');
+            showToast(tr('toasts.network.webrtcFailed'), 'error');
             // Mark peer as offline / remove from peers list
             markPeerDisconnected(peerId);
           } else if (state === 'disconnected' || state === 'closed') {
@@ -844,16 +870,22 @@
           }
         },
         onDataChannelOpen: () => {
-          showToast('Data channel open - you can now send messages!', 'success');
+          // showToast('Data channel open - you can now send messages!', 'success');
+          showToast(tr('toasts.network.dataChannelOpen'), 'success');
           // Ensure peer is listed as connected when data channel opens
           addConnectedPeer(peerId);
         },
         onDataChannelClose: () => {
-          showToast('Data channel closed', 'warning');
+          // showToast('Data channel closed', 'warning');
+          showToast(tr('toasts.network.dataChannelClosed'), 'warning');
           markPeerDisconnected(peerId);
         },
         onError: (e) => {
-          showToast('WebRTC error: ' + e, 'error');
+          // showToast('WebRTC error: ' + e, 'error');
+          showToast(
+            tr('toasts.network.webrtcError', { values: { error: String(e) } }),
+            'error'
+          );
           console.error('WebRTC error:', e);
         }
       });
@@ -882,29 +914,46 @@
 
       // Create offer asynchronously (don't await to avoid freezing UI)
       webrtcSession.createOffer();
-      showToast('Connecting to peer: ' + peerId, 'success');
+      // showToast('Connecting to peer: ' + peerId, 'success');
+      showToast(
+        tr('toasts.network.webrtcConnecting', { values: { peer: peerId } }),
+        'success'
+      );
 
       // Clear input on successful connection attempt
       newPeerAddress = '';
 
     } catch (error) {
       console.error('Failed to create WebRTC session:', error);
-      showToast('Failed to create connection: ' + error, 'error');
+      // showToast('Failed to create connection: ' + error, 'error');
+      showToast(
+        tr('toasts.network.webrtcCreateError', { values: { error: String(error) } }),
+        'error'
+      );
     }
   }
   
   function sendTestMessage() {
     if (!webrtcSession || !webrtcSession.channel || webrtcSession.channel.readyState !== 'open') {
-      showToast('No active WebRTC connection', 'error');
+      // showToast('No active WebRTC connection', 'error');
+      showToast(tr('toasts.network.noConnection'), 'error');
       return;
     }
     
     const testMessage = `Hello from ${signaling.getClientId()} at ${new Date().toLocaleTimeString()}`;
     try {
       webrtcSession.send(testMessage);
-      showToast('Test message sent: ' + testMessage, 'success');
+      // showToast('Test message sent: ' + testMessage, 'success');
+      showToast(
+        tr('toasts.network.messageSent', { values: { message: testMessage } }),
+        'success'
+      );
     } catch (error) {
-      showToast('Failed to send message: ' + error, 'error');
+      // showToast('Failed to send message: ' + error, 'error');
+      showToast(
+        tr('toasts.network.sendError', { values: { error: String(error) } }),
+        'error'
+      );
     }
   }
   
@@ -1001,7 +1050,8 @@
         // Geth is already installed, update state and return
         applyGethStatus(status)
         isCheckingGeth = false
-        showToast('Geth is already installed', 'info')
+        // showToast('Geth is already installed', 'info')
+        showToast(tr('toasts.network.gethInstalled'), 'info')
         return
       }
     } catch (error) {
@@ -1027,7 +1077,11 @@
     } catch (e) {
       downloadError = String(e)
       isDownloading = false
-      showToast('Failed to download Geth: ' + e, 'error')
+      // showToast('Failed to download Geth: ' + e, 'error')
+      showToast(
+        tr('toasts.network.gethDownloadError', { values: { error: String(e) } }),
+        'error'
+      )
     }
   }
 

@@ -1525,5 +1525,190 @@
       "invalidFile": "Invalid backup file format",
       "confirmReplace": "This will replace all current settings. Continue?"
     }
+  },
+  "blockchain": {
+    "title": "مستكشف سلسلة الكتل",
+    "subtitle": "اعرض الكتل والمعاملات وأرصدة الحسابات على شبكة كايرال",
+    "refresh": "تحديث",
+    "refreshed": "تم تحديث البيانات",
+    "copied": "تم النسخ إلى الحافظة",
+    "stats": {
+      "totalBlocks": "إجمالي الكتل",
+      "hashrate": "معدل الهاش للشبكة",
+      "difficulty": "الصعوبة",
+      "peers": "أقران الشبكة"
+    },
+    "tabs": {
+      "blocks": "أحدث الكتل",
+      "search": "بحث",
+      "stats": "مدقق الرصيد"
+    },
+    "blocks": {
+      "latest": "أحدث الكتل",
+      "noBlocks": "لم يتم العثور على كتل"
+    },
+    "search": {
+      "title": "البحث في سلسلة الكتل",
+      "address": "العنوان",
+      "transaction": "المعاملة",
+      "block": "الكتلة",
+      "emptyQuery": "يرجى إدخال عبارة بحث",
+      "error": "فشل البحث: {error}",
+      "unknownError": "خطأ غير معروف",
+      "invalidBlock": "رقم كتلة غير صالح",
+      "notFound": "غير موجود",
+      "addressDetails": "تفاصيل العنوان",
+      "addressLabel": "العنوان",
+      "balance": "الرصيد",
+      "txDetails": "تفاصيل المعاملة",
+      "status": "الحالة",
+      "blockNumber": "رقم الكتلة",
+      "from": "من",
+      "to": "إلى",
+      "value": "القيمة",
+      "blockDetails": "تفاصيل الكتلة",
+      "hash": "التجزئة",
+      "timestamp": "الطابع الزمني"
+    },
+    "balance": {
+      "checker": "مدقق الرصيد",
+      "address": "العنوان",
+      "check": "تحقق من الرصيد",
+      "result": "الرصيد",
+      "emptyAddress": "يرجى إدخال عنوان",
+      "error": "فشل التحقق من الرصيد: {error}",
+      "errorLabel": "خطأ"
+    },
+    "error": {
+      "fetchBlocks": "فشل في جلب الكتل"
+    }
+  },
+  "toasts": {
+    "common": {
+      "copied": "تم النسخ!"
+    },
+    "wallet": {
+      "accountList": {
+        "selected": "Selected account {address}...",
+        "derived": "Derived account #{index}",
+        "deriveError": "Derivation failed: {error}",
+        "keystorePrompt": "Enter keystore password",
+        "keystoreSaved": "Saved to keystore",
+        "keystoreError": "Keystore save failed: {error}"
+      },
+      "mnemonic": {
+        "ready": "Wallet ready",
+        "copied": "Recovery phrase copied to clipboard"
+      },
+      "transaction": {
+        "confirmed": "Transaction confirmed! {amount} CN sent to {address}... (Block {block})",
+        "failed": "Transaction failed in block {block}. Your funds were not sent."
+      }
+    },
+    "account": {
+      "firstRun": {
+        "testWalletCreated": "Test wallet \"TestWallet\" created!",
+        "testWalletError": "Failed to create test wallet"
+      },
+      "addressCopied": "Address copied to clipboard!",
+      "privateKey": {
+        "fetchError": "Failed to retrieve private key",
+        "copied": "Private key copied to clipboard!",
+        "missing": "No private key available"
+      },
+      "transaction": {
+        "cancelled": "Transaction cancelled",
+        "submitted": "Transaction submitted!",
+        "error": "Transaction failed: {error}"
+      },
+      "created": "Account Created Successfully!",
+      "createError": "Failed to create account: {error}",
+      "import": {
+        "invalidFormat": "Invalid private key format",
+        "success": "Account imported successfully!",
+        "error": "Failed to import account: {error}",
+        "fileInvalid": "Invalid file format: privateKey field not found",
+        "fileSuccess": "Private key loaded from file successfully!",
+        "fileReadError": "Error reading file: {error}",
+        "fileLoadError": "Error loading file: {error}"
+      },
+      "2fa": {
+        "desktopOnly": "2FA is only available in the desktop app.",
+        "setupError": "Failed to start 2FA setup: {error}",
+        "enabled": "Two-Factor Authentication has been enabled!",
+        "disabled": "Two-Factor Authentication has been disabled.",
+        "disableError": "Failed to disable 2FA: {error}"
+      },
+      "logout": {
+        "locked": "Wallet locked and session cleared",
+        "error": "Error during logout: {error}"
+      }
+    },
+    "mining": {
+      "syncComplete": "Blockchain sync complete! Mining is now active."
+    },
+    "blockchain": {
+      "noBlocks": "لم يتم العثور على أي كتل. ابدأ التعدين لإنشاء كتل.",
+      "fetchError": "فشل في جلب الكتل: {error}"
+    },
+    "settings": {
+      "updated": "تم تحديث الإعدادات!",
+      "networkingError": "تم حفظ الإعدادات، لكن فشل تحديث الشبكة",
+      "proxyRelayWarning": "أضف على الأقل مرحل وكيل موثوق قبل تفعيل إخفاء عنوان IP."
+    },
+    "analytics": {
+      "direction": {
+        "upload": "رفع",
+        "download": "تنزيل"
+      },
+      "bandwidthWarning": "تحذير حد {direction}: تم استهلاك {used} جيجابايت ({percent}% من {cap} جيجابايت).",
+      "bandwidthTitle": "تحذير حد {direction}"
+    },
+    "upload": {
+      "loginRequired": "يرجى تسجيل الدخول إلى حسابك قبل تحميل الملفات",
+      "verifyAccountFailed": "فشل التحقق من حالة الحساب. يرجى تسجيل الدخول مرة أخرى.",
+      "dhtDisconnected": "شبكة DHT غير متصلة. يرجى تشغيل شبكة DHT قبل تحميل الملفات.",
+      "fileSuccess": "تم تحميل {name} بنجاح",
+      "torrentSeeding": "{name} يقوم الآن بالبذر كتورنت"
+    },
+    "network": {
+      "signalingConnected": "تم الاتصال بخادم الإشارات",
+      "signalingError": "فشل الاتصال بخادم الإشارات لاختبار وضع الويب",
+      "peerAddressRequired": "يرجى إدخال عنوان نظير",
+      "dhtRequired": "شبكة DHT غير متصلة. يرجى تشغيل DHT أولاً.",
+      "alreadyConnected": "النظير متصل بالفعل",
+      "connecting": "جارٍ الاتصال بالنظير عبر DHT...",
+      "connectionSuccess": "تم الاتصال بنجاح!",
+      "connectionFailed": "فشل الاتصال. قد يكون النظير غير متاح أو العنوان غير صالح.",
+      "connectError": "فشل الاتصال بالنظير: {error}",
+      "signalingMissing": "خادم الإشارات غير متصل. يرجى تشغيل DHT أولاً.",
+      "peerNotFound": "لم يتم العثور على النظير {peer} بين الأقران المكتشفين",
+      "messageReceived": "تم الاستلام من النظير: {message}",
+      "webrtcConnected": "تم الاتصال بالنظير بنجاح!",
+      "webrtcFailed": "فشل الاتصال بالنظير",
+      "dataChannelOpen": "قناة البيانات مفتوحة - يمكنك الآن إرسال الرسائل!",
+      "dataChannelClosed": "تم إغلاق قناة البيانات",
+      "webrtcError": "خطأ WebRTC: {error}",
+      "webrtcConnecting": "جارٍ الاتصال بالنظير: {peer}",
+      "webrtcCreateError": "فشل إنشاء الاتصال: {error}",
+      "noConnection": "لا يوجد اتصال WebRTC نشط",
+      "messageSent": "تم إرسال رسالة اختبار: {message}",
+      "sendError": "فشل إرسال الرسالة: {error}",
+      "gethInstalled": "تم تثبيت Geth بالفعل",
+      "gethDownloadError": "فشل تنزيل Geth: {error}"
+    },
+    "download": {
+      "payment": {
+        "invalidAddress": "لا يمكن معالجة الدفع: عنوان محفظة الرافع مفقود أو غير صالح",
+        "failed": "فشل الدفع: {error}",
+        "successWithHash": "تم الدفع بنجاح! المعاملة: {hash}...",
+        "success": "تم الدفع بنجاح!"
+      }
+    },
+    "transactions": {
+      "copied": "تم نسخ {label} إلى الحافظة",
+      "copyError": "فشل نسخ {label}",
+      "exported": "تم تصدير المعاملة"
+    }
   }
 }

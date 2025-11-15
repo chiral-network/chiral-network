@@ -79,7 +79,8 @@
 
       if (currentBlockNumber === 0) {
         console.log('No blocks mined yet. Is Geth running? Is mining active?');
-        showToast('No blocks found. Start mining to create blocks.', 'info');
+        // showToast('No blocks found. Start mining to create blocks.', 'info');
+        showToast(tr('toasts.blockchain.noBlocks'), 'info');
         latestBlocks = [];
         return;
       }
@@ -116,7 +117,11 @@
       latestBlocks = blocks;
     } catch (error: any) {
       console.error('Failed to fetch blocks:', error);
-      showToast('Failed to fetch blocks: ' + error, 'error');
+      // showToast('Failed to fetch blocks: ' + error, 'error');
+      showToast(
+        tr('toasts.blockchain.fetchError', { values: { error: String(error) } }),
+        'error'
+      );
     } finally {
       isLoadingBlocks = false;
     }
@@ -139,7 +144,8 @@
   // Search functionality
   async function performSearch() {
     if (!searchQuery.trim()) {
-      showToast(tr('blockchain.search.emptyQuery') || 'Please enter a search query', 'warning');
+      // showToast(tr('blockchain.search.emptyQuery') || 'Please enter a search query', 'warning');
+      showToast(tr('blockchain.search.emptyQuery'), 'warning');
       return;
     }
 
@@ -170,7 +176,8 @@
         // Get block by number
         const blockNumber = parseInt(searchQuery.trim());
         if (isNaN(blockNumber)) {
-          throw new Error('Invalid block number');
+          // throw new Error('Invalid block number');
+          throw new Error(tr('blockchain.search.invalidBlock'));
         }
         const blockDetails = await invoke<any>('get_block_details_by_number', {
           blockNumber
@@ -182,8 +189,17 @@
       }
     } catch (error: any) {
       console.error('Search error:', error);
-      showToast(tr('blockchain.search.error') || 'Search failed: ' + error.message, 'error');
-      searchResult = { error: error.message || 'Search failed' };
+      // showToast(tr('blockchain.search.error') || 'Search failed: ' + error.message, 'error');
+      const errorMessage =
+        error instanceof Error && error.message
+          ? error.message
+          : tr('blockchain.search.unknownError');
+      const displayMessage = tr('blockchain.search.error', {
+        values: { error: errorMessage }
+      });
+      showToast(displayMessage, 'error');
+      searchResult = { error: displayMessage };
+      // searchResult = { error: error.message || 'Search failed' };
     } finally {
       isSearching = false;
     }
@@ -192,7 +208,8 @@
   // Check balance
   async function checkBalance() {
     if (!balanceAddress.trim()) {
-      showToast(tr('blockchain.balance.emptyAddress') || 'Please enter an address', 'warning');
+      // showToast(tr('blockchain.balance.emptyAddress') || 'Please enter an address', 'warning');
+      showToast(tr('blockchain.balance.emptyAddress'), 'warning');
       return;
     }
 
@@ -206,7 +223,16 @@
       balanceResult = balance;
     } catch (error: any) {
       console.error('Balance check error:', error);
-      showToast(tr('blockchain.balance.error') || 'Failed to check balance', 'error');
+      // showToast(tr('blockchain.balance.error') || 'Failed to check balance', 'error');
+      const errorMessage =
+        error instanceof Error && error.message
+          ? error.message
+          : tr('blockchain.search.unknownError');
+      showToast(
+        tr('blockchain.balance.error', { values: { error: errorMessage } }),
+        'error'
+      );
+      balanceResult = tr('blockchain.balance.errorLabel');
       balanceResult = 'Error';
     } finally {
       isCheckingBalance = false;
@@ -227,7 +253,8 @@
   // Copy to clipboard
   function copyToClipboard(text: string) {
     navigator.clipboard.writeText(text);
-    showToast(tr('blockchain.copied') || 'Copied to clipboard', 'success');
+    // showToast(tr('blockchain.copied') || 'Copied to clipboard', 'success');
+    showToast(tr('blockchain.copied'), 'success');
   }
 
   // Refresh data
@@ -236,7 +263,8 @@
       fetchLatestBlocks(),
       fetchNetworkStats()
     ]);
-    showToast(tr('blockchain.refreshed') || 'Data refreshed', 'success');
+    // showToast(tr('blockchain.refreshed') || 'Data refreshed', 'success');
+    showToast(tr('blockchain.refreshed'), 'success');
   }
 
   onMount(() => {

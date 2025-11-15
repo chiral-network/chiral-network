@@ -1525,6 +1525,190 @@
       "invalidFile": "Formato de arquivo de backup inválido",
       "confirmReplace": "Isso substituirá todas as configurações atuais. Continuar?"
     }
+  },
+  "blockchain": {
+    "title": "Explorador de blockchain",
+    "subtitle": "Visualize blocos, transações e saldos de contas na Rede Chiral",
+    "refresh": "Atualizar",
+    "refreshed": "Dados atualizados",
+    "copied": "Copiado para a área de transferência",
+    "stats": {
+      "totalBlocks": "Total de blocos",
+      "hashrate": "Taxa de hash da rede",
+      "difficulty": "Dificuldade",
+      "peers": "Pares da rede"
+    },
+    "tabs": {
+      "blocks": "Blocos recentes",
+      "search": "Buscar",
+      "stats": "Verificador de saldo"
+    },
+    "blocks": {
+      "latest": "Blocos recentes",
+      "noBlocks": "Nenhum bloco encontrado"
+    },
+    "search": {
+      "title": "Pesquisar na blockchain",
+      "address": "Endereço",
+      "transaction": "Transação",
+      "block": "Bloco",
+      "emptyQuery": "Digite um termo de pesquisa",
+      "error": "A pesquisa falhou: {error}",
+      "unknownError": "Erro desconhecido",
+      "invalidBlock": "Número de bloco inválido",
+      "notFound": "Não encontrado",
+      "addressDetails": "Detalhes do endereço",
+      "addressLabel": "Endereço",
+      "balance": "Saldo",
+      "txDetails": "Detalhes da transação",
+      "status": "Status",
+      "blockNumber": "Número do bloco",
+      "from": "De",
+      "to": "Para",
+      "value": "Valor",
+      "blockDetails": "Detalhes do bloco",
+      "hash": "Hash",
+      "timestamp": "Registro de data e hora"
+    },
+    "balance": {
+      "checker": "Verificador de saldo",
+      "address": "Endereço",
+      "check": "Verificar saldo",
+      "result": "Saldo",
+      "emptyAddress": "Digite um endereço",
+      "error": "Falha ao verificar o saldo: {error}",
+      "errorLabel": "Erro"
+    },
+    "error": {
+      "fetchBlocks": "Falha ao buscar os blocos"
+    }
+  },
+  "toasts": {
+    "common": {
+      "copied": "Copiado!"
+    },
+    "wallet": {
+      "accountList": {
+        "selected": "Selected account {address}...",
+        "derived": "Derived account #{index}",
+        "deriveError": "Derivation failed: {error}",
+        "keystorePrompt": "Enter keystore password",
+        "keystoreSaved": "Saved to keystore",
+        "keystoreError": "Keystore save failed: {error}"
+      },
+      "mnemonic": {
+        "ready": "Wallet ready",
+        "copied": "Recovery phrase copied to clipboard"
+      },
+      "transaction": {
+        "confirmed": "Transaction confirmed! {amount} CN sent to {address}... (Block {block})",
+        "failed": "Transaction failed in block {block}. Your funds were not sent."
+      }
+    },
+    "account": {
+      "firstRun": {
+        "testWalletCreated": "Test wallet \"TestWallet\" created!",
+        "testWalletError": "Failed to create test wallet"
+      },
+      "addressCopied": "Address copied to clipboard!",
+      "privateKey": {
+        "fetchError": "Failed to retrieve private key",
+        "copied": "Private key copied to clipboard!",
+        "missing": "No private key available"
+      },
+      "transaction": {
+        "cancelled": "Transaction cancelled",
+        "submitted": "Transaction submitted!",
+        "error": "Transaction failed: {error}"
+      },
+      "created": "Account Created Successfully!",
+      "createError": "Failed to create account: {error}",
+      "import": {
+        "invalidFormat": "Invalid private key format",
+        "success": "Account imported successfully!",
+        "error": "Failed to import account: {error}",
+        "fileInvalid": "Invalid file format: privateKey field not found",
+        "fileSuccess": "Private key loaded from file successfully!",
+        "fileReadError": "Error reading file: {error}",
+        "fileLoadError": "Error loading file: {error}"
+      },
+      "2fa": {
+        "desktopOnly": "2FA is only available in the desktop app.",
+        "setupError": "Failed to start 2FA setup: {error}",
+        "enabled": "Two-Factor Authentication has been enabled!",
+        "disabled": "Two-Factor Authentication has been disabled.",
+        "disableError": "Failed to disable 2FA: {error}"
+      },
+      "logout": {
+        "locked": "Wallet locked and session cleared",
+        "error": "Error during logout: {error}"
+      }
+    },
+    "mining": {
+      "syncComplete": "Blockchain sync complete! Mining is now active."
+    },
+    "blockchain": {
+      "noBlocks": "Nenhum bloco encontrado. Inicie a mineração para criar blocos.",
+      "fetchError": "Falha ao buscar os blocos: {error}"
+    },
+    "settings": {
+      "updated": "Configurações atualizadas!",
+      "networkingError": "Configurações salvas, mas a atualização de rede falhou",
+      "proxyRelayWarning": "Adicione pelo menos um proxy confiável antes de ativar Ocultar meu IP."
+    },
+    "analytics": {
+      "direction": {
+        "upload": "Envio",
+        "download": "Download"
+      },
+      "bandwidthWarning": "Alerta de limite de {direction}: {used} GB consumidos ({percent}% de {cap} GB).",
+      "bandwidthTitle": "Alerta de limite de {direction}"
+    },
+    "upload": {
+      "loginRequired": "Faça login na sua conta antes de enviar arquivos",
+      "verifyAccountFailed": "Não foi possível verificar o status da conta. Faça login novamente.",
+      "dhtDisconnected": "A rede DHT não está conectada. Inicie a rede DHT antes de enviar arquivos.",
+      "fileSuccess": "{name} enviado com sucesso",
+      "torrentSeeding": "{name} agora está semeando como torrent"
+    },
+    "network": {
+      "signalingConnected": "Conectado ao servidor de sinalização",
+      "signalingError": "Falha ao conectar ao servidor de sinalização para testes no modo web",
+      "peerAddressRequired": "Insira um endereço de par",
+      "dhtRequired": "DHT não conectado. Inicie o DHT primeiro.",
+      "alreadyConnected": "O par já está conectado",
+      "connecting": "Conectando ao par via DHT...",
+      "connectionSuccess": "Conexão bem-sucedida!",
+      "connectionFailed": "Falha na conexão. O par pode estar indisponível ou o endereço é inválido.",
+      "connectError": "Falha ao conectar ao par: {error}",
+      "signalingMissing": "Servidor de sinalização não conectado. Inicie o DHT primeiro.",
+      "peerNotFound": "Par {peer} não encontrado entre os pares descobertos",
+      "messageReceived": "Recebido do par: {message}",
+      "webrtcConnected": "Conectado ao par com sucesso!",
+      "webrtcFailed": "Falha na conexão com o par",
+      "dataChannelOpen": "Canal de dados aberto - agora você pode enviar mensagens!",
+      "dataChannelClosed": "Canal de dados fechado",
+      "webrtcError": "Erro WebRTC: {error}",
+      "webrtcConnecting": "Conectando ao par: {peer}",
+      "webrtcCreateError": "Falha ao criar a conexão: {error}",
+      "noConnection": "Nenhuma conexão WebRTC ativa",
+      "messageSent": "Mensagem de teste enviada: {message}",
+      "sendError": "Falha ao enviar mensagem: {error}",
+      "gethInstalled": "Geth já está instalado",
+      "gethDownloadError": "Falha ao baixar o Geth: {error}"
+    },
+    "download": {
+      "payment": {
+        "invalidAddress": "Não é possível processar o pagamento: o endereço da carteira do uploader está ausente ou é inválido",
+        "failed": "Pagamento falhou: {error}",
+        "successWithHash": "Pagamento bem-sucedido! Transação: {hash}...",
+        "success": "Pagamento bem-sucedido!"
+      }
+    },
+    "transactions": {
+      "copied": "{label} copiado para a área de transferência",
+      "copyError": "Falha ao copiar {label}",
+      "exported": "Transação exportada"
+    }
   }
 }
-
