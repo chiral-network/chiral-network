@@ -93,9 +93,17 @@
 
   function copyToClipboard(text: string, label: string) {
     navigator.clipboard.writeText(text).then(() => {
-      showToast(`${label} copied to clipboard`, 'success')
+      // showToast(`${label} copied to clipboard`, 'success')
+      showToast(
+        tr('toasts.transactions.copied', { values: { label } }),
+        'success'
+      )
     }).catch(() => {
-      showToast(`Failed to copy ${label}`, 'error')
+      // showToast(`Failed to copy ${label}`, 'error')
+      showToast(
+        tr('toasts.transactions.copyError', { values: { label } }),
+        'error'
+      )
     })
   }
 
@@ -151,7 +159,8 @@
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
     
-    showToast('Transaction exported', 'success')
+    // showToast('Transaction exported', 'success')
+    showToast(tr('toasts.transactions.exported'), 'success')
   }
 
   function handleBackdropClick(e: MouseEvent) {

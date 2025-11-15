@@ -370,7 +370,8 @@
     navigator.clipboard.writeText(addressToCopy);
     
     
-    showToast('Address copied to clipboard!', 'success')
+    // showToast('Address copied to clipboard!', 'success')
+    showToast(tr('toasts.account.addressCopied'), 'success')
   }
 
   function copyPrivateKey() {
@@ -383,17 +384,20 @@
           privateKeyToCopy = await invoke<string>('get_active_account_private_key');
         } catch (error) {
           console.error('Failed to get private key from backend:', error);
-          showToast('Failed to retrieve private key', 'error');
+          // showToast('Failed to retrieve private key', 'error');
+          showToast(tr('toasts.account.privateKey.fetchError'), 'error');
           return;
         }
       }
       
       if (privateKeyToCopy) {
         navigator.clipboard.writeText(privateKeyToCopy);
-        showToast('Private key copied to clipboard!', 'success');
+        // showToast('Private key copied to clipboard!', 'success');
+        showToast(tr('toasts.account.privateKey.copied'), 'success');
       }
       else {
-        showToast('No private key available', 'error');
+        // showToast('No private key available', 'error');
+        showToast(tr('toasts.account.privateKey.missing'), 'error');
       }
     });
   }
@@ -488,7 +492,8 @@
     isConfirming = false
     countdown = 0
     // User intentionally cancelled during countdown
-    showToast('Transaction cancelled', 'warning')
+    // showToast('Transaction cancelled', 'warning')
+    showToast(tr('toasts.account.transaction.cancelled'), 'warning')
   }
 
   async function sendTransaction() {
@@ -502,11 +507,16 @@
       sendAmount = 0
       rawAmountInput = ''
       
-      showToast('Transaction submitted!', 'success')
+      // showToast('Transaction submitted!', 'success')
+      showToast(tr('toasts.account.transaction.submitted'), 'success')
       
     } catch (error) {
       console.error('Transaction failed:', error)
-      showToast('Transaction failed: ' + String(error), 'error')
+      // showToast('Transaction failed: ' + String(error), 'error')
+      showToast(
+        tr('toasts.account.transaction.error', { values: { error: String(error) } }),
+        'error'
+      )
       
       // Refresh balance to get accurate state
       await fetchBalance()
@@ -570,14 +580,19 @@
     transactions.set([])
     blacklist.set([])   
 
-    showToast('Account Created Successfully!', 'success')
+    // showToast('Account Created Successfully!', 'success')
+    showToast(tr('toasts.account.created'), 'success')
     
     if (isGethRunning) {
       await walletService.refreshBalance()
     }
   } catch (error) {
     console.error('Failed to create Chiral account:', error)
-    showToast('Failed to create account: ' + String(error), 'error')
+    // showToast('Failed to create account: ' + String(error), 'error')
+    showToast(
+      tr('toasts.account.createError', { values: { error: String(error) } }),
+      'error'
+    )
     alert(tr('errors.createAccount', { error: String(error) }))
   } finally {
     isCreatingAccount = false
@@ -657,7 +672,8 @@
     // Validate private key format before attempting import
     const validation = validatePrivateKeyFormat(importPrivateKey)
     if (!validation.isValid) {
-      showToast(validation.error || 'Invalid private key format', 'error')
+      // showToast(validation.error || 'Invalid private key format', 'error')
+      showToast(validation.error || tr('toasts.account.import.invalidFormat'), 'error')
       return
     }
 
@@ -673,7 +689,8 @@
       importPrivateKey = ''
 
 
-      showToast('Account imported successfully!', 'success')
+      // showToast('Account imported successfully!', 'success')
+      showToast(tr('toasts.account.import.success'), 'success')
 
       if (isGethRunning) {
         await walletService.refreshBalance()
@@ -682,7 +699,11 @@
       console.error('Failed to import Chiral account:', error)
 
 
-      showToast('Failed to import account: ' + String(error), 'error')
+      // showToast('Failed to import account: ' + String(error), 'error')
+      showToast(
+        tr('toasts.account.import.error', { values: { error: String(error) } }),
+        'error'
+      )
 
       alert('Failed to import account: ' + error)
     } finally {
@@ -709,17 +730,23 @@
           
           // Validate the JSON structure
           if (!accountData.privateKey) {
-            showToast('Invalid file format: privateKey field not found', 'error');
+            // showToast('Invalid file format: privateKey field not found', 'error');
+            showToast(tr('toasts.account.import.fileInvalid'), 'error');
             return;
           }
           
           // Extract and set the private key
           importPrivateKey = accountData.privateKey;
-          showToast('Private key loaded from file successfully!', 'success');
+          // showToast('Private key loaded from file successfully!', 'success');
+          showToast(tr('toasts.account.import.fileSuccess'), 'success');
           
         } catch (error) {
           console.error('Error reading file:', error);
-          showToast('Error reading file: ' + String(error), 'error');
+          // showToast('Error reading file: ' + String(error), 'error');
+          showToast(
+            tr('toasts.account.import.fileReadError', { values: { error: String(error) } }),
+            'error'
+          );
         }
       };
       
@@ -730,7 +757,11 @@
       
     } catch (error) {
       console.error('Error loading file:', error);
-      showToast('Error loading file: ' + String(error), 'error');
+      // showToast('Error loading file: ' + String(error), 'error');
+      showToast(
+        tr('toasts.account.import.fileLoadError', { values: { error: String(error) } }),
+        'error'
+      );
     }
   }
 
@@ -911,7 +942,8 @@
   // This would be called by the "Enable 2FA" button
   async function setup2FA() {
     if (!isTauri) {
-      showToast('2FA is only available in the desktop app.', 'warning');
+      // showToast('2FA is only available in the desktop app.', 'warning');
+      showToast(tr('toasts.account.2fa.desktopOnly'), 'warning');
       return;
     }
 
@@ -925,7 +957,11 @@
       twoFaErrorMessage = '';
     } catch (err) {
       console.error('Failed to setup 2FA:', err);
-      showToast('Failed to start 2FA setup: ' + String(err), 'error');
+      // showToast('Failed to start 2FA setup: ' + String(err), 'error');
+      showToast(
+        tr('toasts.account.2fa.setupError', { values: { error: String(err) } }),
+        'error'
+      );
     }
   }
 
@@ -945,7 +981,8 @@
       if (success) {
         is2faEnabled = true; 
         show2faSetupModal = false;
-        showToast('Two-Factor Authentication has been enabled!', 'success');
+        // showToast('Two-Factor Authentication has been enabled!', 'success');
+        showToast(tr('toasts.account.2fa.enabled'), 'success');
       } else {
         // Don't clear password, but clear code
         twoFaErrorMessage = 'Invalid code. Please try again.';
@@ -1005,10 +1042,15 @@
       try { // The password is provided in the with2FA prompt
         await walletService.disableTwoFactor(twoFaPassword);
         is2faEnabled = false;
-        showToast('Two-Factor Authentication has been disabled.', 'warning');
+        // showToast('Two-Factor Authentication has been disabled.', 'warning');
+        showToast(tr('toasts.account.2fa.disabled'), 'warning');
       } catch (error) {
         console.error('Failed to disable 2FA:', error);
-        showToast('Failed to disable 2FA: ' + String(error), 'error');
+        // showToast('Failed to disable 2FA: ' + String(error), 'error');
+        showToast(
+          tr('toasts.account.2fa.disableError', { values: { error: String(error) } }),
+          'error'
+        );
       }
     });
   }
@@ -1274,11 +1316,16 @@
       privateKeyVisible = false;
       
       // Show success message
-      showToast('Wallet locked and session cleared', 'success');
+      // showToast('Wallet locked and session cleared', 'success');
+      showToast(tr('toasts.account.logout.locked'), 'success');
       
     } catch (error) {
       console.error('Error during logout:', error);
-      showToast('Error during logout: ' + String(error), 'error');
+      // showToast('Error during logout: ' + String(error), 'error');
+      showToast(
+        tr('toasts.account.logout.error', { values: { error: String(error) } }),
+        'error'
+      );
     }
   }
 
@@ -2309,7 +2356,8 @@
             <p class="text-xs text-muted-foreground">{$t('security.2fa.setup.step2_manual')}</p>
             <div class="flex items-center gap-2 bg-secondary p-2 rounded">
               <code class="text-sm font-mono break-all">{totpSetupInfo.secret}</code>
-              <Button size="icon" variant="ghost" on:click={() => { navigator.clipboard.writeText(totpSetupInfo?.secret || ''); showToast('Copied!', 'success'); }}>
+              <!-- <Button size="icon" variant="ghost" on:click={() => { navigator.clipboard.writeText(totpSetupInfo?.secret || ''); showToast('Copied!', 'success'); }}> -->
+              <Button size="icon" variant="ghost" on:click={() => { navigator.clipboard.writeText(totpSetupInfo?.secret || ''); showToast(tr('toasts.common.copied'), 'success'); }}>
                 <Copy class="h-4 w-4" />
               </Button>
             </div>
