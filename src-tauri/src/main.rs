@@ -5355,15 +5355,40 @@ fn main() {
 
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
     let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async {
+        // Allow multiple instances by using CHIRAL_INSTANCE_ID environment variable
+        let instance_id = std::env::var("CHIRAL_INSTANCE_ID")
+            .ok()
+            .and_then(|id| id.parse::<u16>().ok())
+            .unwrap_or(1);
+        
+        let instance_suffix = if instance_id == 1 {
+            String::new()
+        } else {
+            format!("-{}", instance_id)
+        };
+        
         let download_dir = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
-            .map(|dirs| dirs.data_dir().join("downloads"))
-            .unwrap_or_else(|| std::env::current_dir().unwrap().join("downloads"));
+            .map(|dirs| dirs.data_dir().join(format!("downloads{}", instance_suffix)))
+            .unwrap_or_else(|| std::env::current_dir().unwrap().join(format!("downloads{}", instance_suffix)));
         
         if let Err(e) = std::fs::create_dir_all(&download_dir) {
             eprintln!("Failed to create download directory: {}", e);
         }
 
-        let bittorrent_handler = bittorrent_handler::BitTorrentHandler::new(download_dir)
+        println!("Instance ID: {}", instance_id);
+        println!("Using download directory: {:?}", download_dir);
+
+        // Calculate port range based on instance ID to avoid conflicts
+        // Instance 1: 6881-6891, Instance 2: 6892-6902, etc.
+        let base_port = 6881 + ((instance_id - 1) * 11);
+        let port_range = base_port..(base_port + 10);
+        
+        println!("Using BitTorrent port range: {}-{}", port_range.start, port_range.end);
+
+        let bittorrent_handler = bittorrent_handler::BitTorrentHandler::new_with_port_range(
+            download_dir,
+            Some(port_range)
+        )
             .await
             .expect("Failed to create BitTorrent handler");
         let bittorrent_handler_arc = Arc::new(bittorrent_handler);
