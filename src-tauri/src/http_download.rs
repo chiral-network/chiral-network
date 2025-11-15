@@ -233,27 +233,44 @@ impl HttpDownloadClient {
     ) -> Result<HttpFileMetadata, String> {
         let url = format!("{}/files/{}/metadata", seeder_url, file_hash);
 
-        tracing::debug!("Fetching metadata from: {}", url);
+        tracing::info!("Fetching metadata from: {}", url);
 
         let response = self
             .http_client
             .get(&url)
             .send()
             .await
-            .map_err(|e| format!("Failed to fetch metadata: {}", e))?;
+            .map_err(|e| {
+                let err_msg = format!("Failed to fetch metadata from {}: {}", url, e);
+                tracing::error!("{}", err_msg);
+                err_msg
+            })?;
 
         if !response.status().is_success() {
-            return Err(format!(
+            let err_msg = format!(
                 "Metadata request failed: {} ({})",
                 response.status(),
                 url
-            ));
+            );
+            tracing::error!("{}", err_msg);
+            return Err(err_msg);
         }
 
         let metadata: HttpFileMetadata = response
             .json()
             .await
-            .map_err(|e| format!("Failed to parse metadata: {}", e))?;
+            .map_err(|e| {
+                let err_msg = format!("Failed to parse metadata from {}: {}", url, e);
+                tracing::error!("{}", err_msg);
+                err_msg
+            })?;
+
+        tracing::info!(
+            "Successfully fetched metadata: {} (size: {}, encrypted: {})",
+            metadata.name,
+            metadata.size,
+            metadata.encrypted
+        );
 
         Ok(metadata)
     }
@@ -423,21 +440,36 @@ impl HttpDownloadClient {
         chunks: &[Vec<u8>],
         output_path: &Path,
     ) -> Result<(), String> {
+        // Ensure parent directory exists
+        if let Some(parent) = output_path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| format!("Failed to create parent directory: {}", e))?;
+        }
+
+        tracing::info!("Creating output file: {}", output_path.display());
+
         let mut file = File::create(output_path)
             .await
-            .map_err(|e| format!("Failed to create output file: {}", e))?;
+            .map_err(|e| format!("Failed to create output file at {}: {}", output_path.display(), e))?;
+
+        tracing::info!("Writing {} chunks to file...", chunks.len());
 
         for (index, chunk) in chunks.iter().enumerate() {
             file.write_all(chunk)
                 .await
-                .map_err(|e| format!("Failed to write chunk {}: {}", index, e))?;
+                .map_err(|e| format!("Failed to write chunk {} to {}: {}", index, output_path.display(), e))?;
         }
 
         file.flush()
             .await
-            .map_err(|e| format!("Failed to flush file: {}", e))?;
+            .map_err(|e| format!("Failed to flush file {}: {}", output_path.display(), e))?;
 
-        tracing::info!("Assembled file: {} ({} chunks)", output_path.display(), chunks.len());
+        tracing::info!("Successfully assembled file: {} ({} chunks, {} bytes)", 
+            output_path.display(), 
+            chunks.len(),
+            chunks.iter().map(|c| c.len()).sum::<usize>()
+        );
 
         Ok(())
     }

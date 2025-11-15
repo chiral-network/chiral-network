@@ -38,7 +38,9 @@ function saveWalletToStorage(walletData: any) {
 
 function saveTransactionsToStorage(txs: Transaction[]) {
   try {
-    localStorage.setItem("chiral_transactions", JSON.stringify(txs));
+    const serialized = JSON.stringify(txs);
+    localStorage.setItem("chiral_transactions", serialized);
+    console.log(`💾 Saved ${txs.length} transactions to localStorage (${(serialized.length / 1024).toFixed(2)} KB)`);
   } catch (error) {
     console.error("Failed to save transactions to localStorage:", error);
   }
@@ -57,14 +59,20 @@ function loadWalletFromStorage() {
 function loadTransactionsFromStorage(): Transaction[] {
   try {
     const saved = localStorage.getItem("chiral_transactions");
-    if (!saved) return [];
+    if (!saved) {
+      console.log("📭 No transactions found in localStorage");
+      return [];
+    }
 
     const parsed = JSON.parse(saved);
     // Convert date strings back to Date objects
-    return parsed.map((tx: any) => ({
+    const transactions = parsed.map((tx: any) => ({
       ...tx,
       date: new Date(tx.date),
     }));
+    
+    console.log(`📬 Loaded ${transactions.length} transactions from localStorage`);
+    return transactions;
   } catch (error) {
     console.error("Failed to load transactions from localStorage:", error);
     return [];
@@ -130,8 +138,21 @@ export class PaymentService {
 
     const sizeInMB = fileSizeInBytes / (1024 * 1024);
     const cost = sizeInMB * dynamicPricePerMb;
+    
+    // Ensure minimum cost of 0.0001 Chiral for any file download
+    const minimumCost = 0.0001;
+    const finalCost = Math.max(cost, minimumCost);
 
-    return parseFloat(cost.toFixed(8));
+    console.log(`📊 Download cost calculation:`, {
+      fileSizeBytes: fileSizeInBytes,
+      fileSizeMB: sizeInMB.toFixed(4),
+      pricePerMB: dynamicPricePerMb.toFixed(8),
+      calculatedCost: cost.toFixed(8),
+      minimumCost: minimumCost.toFixed(8),
+      finalCost: finalCost.toFixed(8)
+    });
+
+    return parseFloat(finalCost.toFixed(8));
   }
 
   /**
@@ -153,7 +174,18 @@ export class PaymentService {
         active_miners,
         power_usage,
       } = stats;
-      if (network_hashrate <= 0) return 0;
+
+      console.log(`📈 Network stats for pricing:`, {
+        difficulty: network_difficulty,
+        hashrate: network_hashrate,
+        miners: active_miners,
+        power: power_usage
+      });
+
+      if (network_hashrate <= 0) {
+        console.warn("⚠️ Network hashrate is 0, using fallback price");
+        return 0.001;
+      }
 
       // --- Average hash power per miner ---
       const avgHashPower =
@@ -169,6 +201,7 @@ export class PaymentService {
         network_difficulty *
         normalizationFactor;
 
+      console.log(`💵 Calculated price per MB: ${pricePerMB.toFixed(8)}`);
       return parseFloat(pricePerMB.toFixed(8));
     } catch (error) {
       console.warn("⚠️ Failed to fetch dynamic pricing from network:", error);
