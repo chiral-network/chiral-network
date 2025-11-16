@@ -886,14 +886,16 @@ async fn upload_file(
         let mut metadata_with_http = metadata.clone();
         if let Some(http_addr) = *state.http_server_addr.lock().await {
             use crate::download_source::HttpSourceInfo;
+            // Replace 0.0.0.0 with 127.0.0.1 so clients can actually connect
+            let url = format!("http://{}", http_addr).replace("0.0.0.0", "127.0.0.1");
             metadata_with_http.http_sources = Some(vec![HttpSourceInfo {
-                url: format!("http://{}", http_addr),
+                url: url.clone(),
                 auth_header: None,
                 verify_ssl: true,
                 headers: None,
                 timeout_secs: None,
             }]);
-            tracing::info!("Added HTTP source to metadata: http://{}", http_addr);
+            tracing::info!("Added HTTP source to metadata: {}", url);
         }
 
         dht.publish_file(metadata_with_http.clone(), None).await?;
@@ -1424,8 +1426,11 @@ async fn start_dht_node(
 
     {
         let mut dht_guard = state.dht.lock().await;
-        *dht_guard = Some(dht_arc);
+        *dht_guard = Some(dht_arc.clone());
     }
+
+    // Also attach DHT to HTTP server state for provider-side metrics
+    state.http_server_state.set_dht(dht_arc).await;
 
     Ok(peer_id)
 }
@@ -5291,9 +5296,11 @@ async fn get_http_server_status(
 #[tauri::command]
 async fn download_file_http(
     app: tauri::AppHandle,
+    state: State<'_, AppState>,
     seeder_url: String,
     merkle_root: String,
     output_path: String,
+    peer_id: Option<String>,
 ) -> Result<(), String> {
     tracing::info!(
         "Starting HTTP Range-based download: {} from {}",
@@ -5302,6 +5309,17 @@ async fn download_file_http(
     );
     
     tracing::info!("Output path: {}", output_path);
+
+    // Get our local peer ID to send to provider
+    let downloader_peer_id = if let Some(dht) = state.dht.lock().await.as_ref() {
+        Some(dht.get_peer_id().await)
+    } else {
+        None
+    };
+    
+    if let Some(ref local_id) = downloader_peer_id {
+        tracing::info!("📤 Downloader peer ID: {}", local_id);
+    }
 
     // Create progress channel
     let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<http_download::HttpDownloadProgress>(100);
@@ -5322,8 +5340,10 @@ async fn download_file_http(
         }
     });
 
-    // Create HTTP download client (Range-based, no chunk storage needed)
-    let client = http_download::HttpDownloadClient::new();
+    // Create HTTP download client with downloader peer ID
+    let client = http_download::HttpDownloadClient::new_with_peer_id(downloader_peer_id);
+
+    let start_time = std::time::Instant::now();
 
     // Start download using Range requests
     let result = client
@@ -5340,11 +5360,38 @@ async fn download_file_http(
     
     match result {
         Ok(()) => {
-            tracing::info!("HTTP download completed successfully: {}", output_path);
+            let duration_ms = start_time.elapsed().as_millis() as u64;
+            
+            // Get file size
+            let file_size = tokio::fs::metadata(&output_path)
+                .await
+                .map(|m| m.len())
+                .unwrap_or(0);
+            
+            tracing::info!("HTTP download completed successfully: {} ({} bytes in {} ms)", 
+                output_path, file_size, duration_ms);
+            
+            // Record successful transfer metrics if peer_id provided
+            if let Some(ref peer_id_str) = peer_id {
+                if let Some(dht) = state.dht.lock().await.as_ref() {
+                    dht.record_transfer_success(peer_id_str, file_size, duration_ms).await;
+                    tracing::info!("📊 Recorded successful transfer for peer: {}", peer_id_str);
+                }
+            }
+            
             Ok(())
         }
         Err(e) => {
             tracing::error!("HTTP download failed: {}", e);
+            
+            // Record failed transfer metrics if peer_id provided
+            if let Some(ref peer_id_str) = peer_id {
+                if let Some(dht) = state.dht.lock().await.as_ref() {
+                    dht.record_transfer_failure(peer_id_str, "http_download_error").await;
+                    tracing::info!("📊 Recorded failed transfer for peer: {}", peer_id_str);
+                }
+            }
+            
             Err(e)
         }
     }

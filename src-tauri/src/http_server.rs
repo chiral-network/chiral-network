@@ -10,8 +10,11 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Mutex};
 use tower_http::cors::{Any, CorsLayer};
+
+// Import DhtService for metrics tracking
+use crate::dht::DhtService;
 
 /// HTTP Server for serving files via Range requests
 ///
@@ -45,6 +48,9 @@ pub struct HttpServerState {
     /// Maps file_hash → HttpFileMetadata
     /// Tracks which files are available for HTTP download
     pub files: Arc<RwLock<HashMap<String, HttpFileMetadata>>>,
+    
+    /// DHT service for recording provider-side metrics
+    pub dht: Arc<Mutex<Option<Arc<DhtService>>>>,
 }
 
 impl HttpServerState {
@@ -56,7 +62,15 @@ impl HttpServerState {
         Self {
             storage_dir,
             files: Arc::new(RwLock::new(HashMap::new())),
+            dht: Arc::new(Mutex::new(None)),
         }
+    }
+    
+    /// Set DHT service for metrics tracking
+    pub async fn set_dht(&self, dht: Arc<DhtService>) {
+        let mut dht_lock = self.dht.lock().await;
+        *dht_lock = Some(dht);
+        tracing::info!("✅ DHT service attached to HTTP server for metrics tracking");
     }
 
     /// Register a file for HTTP serving
@@ -154,6 +168,16 @@ async fn serve_file(
 ) -> Response {
     tracing::debug!("Serving file: {}", file_hash);
 
+    // Extract downloader peer ID from headers for metrics tracking
+    let downloader_peer_id = headers
+        .get("X-Downloader-Peer-ID")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    
+    if let Some(ref peer_id) = downloader_peer_id {
+        tracing::info!("📥 Download request from peer: {}", peer_id);
+    }
+
     // Check if file is registered
     let metadata = match state.get_file_metadata(&file_hash).await {
         Some(m) => m,
@@ -193,13 +217,30 @@ async fn serve_file(
         .get("range")
         .and_then(|v| v.to_str().ok());
 
-    if let Some(range_str) = range_header {
+    let response = if let Some(range_str) = range_header {
         // Serve partial content (Range request)
         serve_file_range(&file_path, range_str, metadata.size).await
     } else {
         // Serve entire file
         serve_entire_file(&file_path, metadata.size).await
+    };
+    
+    // Record provider-side metrics if downloader peer ID is available
+    if let Some(ref peer_id) = downloader_peer_id {
+        let file_size = metadata.size;
+        let state_clone = state.clone();
+        let peer_id_clone = peer_id.clone();
+        
+        // Spawn async task to record metrics (don't block response)
+        tokio::spawn(async move {
+            if let Some(dht) = state_clone.dht.lock().await.as_ref() {
+                dht.record_transfer_success(&peer_id_clone, file_size, 0).await;
+                tracing::info!("📊 Provider: Recorded upload to peer {}", peer_id_clone);
+            }
+        });
     }
+    
+    response
 }
 
 /// Serve a byte range from a file (206 Partial Content)

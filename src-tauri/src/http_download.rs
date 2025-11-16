@@ -78,6 +78,8 @@ pub struct HttpDownloadClient {
     http_client: Client,
     /// Semaphore to limit concurrent chunk downloads
     download_semaphore: std::sync::Arc<Semaphore>,
+    /// Downloader's peer ID to send to provider for metrics tracking
+    downloader_peer_id: Option<String>,
 }
 
 impl HttpDownloadClient {
@@ -88,6 +90,19 @@ impl HttpDownloadClient {
                 .build()
                 .expect("Failed to create HTTP client"),
             download_semaphore: std::sync::Arc::new(Semaphore::new(MAX_CONCURRENT_CHUNKS)),
+            downloader_peer_id: None,
+        }
+    }
+
+    /// Create with downloader peer ID for provider-side metrics tracking
+    pub fn new_with_peer_id(downloader_peer_id: Option<String>) -> Self {
+        Self {
+            http_client: Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .expect("Failed to create HTTP client"),
+            download_semaphore: std::sync::Arc::new(Semaphore::new(MAX_CONCURRENT_CHUNKS)),
+            downloader_peer_id,
         }
     }
 
@@ -99,6 +114,7 @@ impl HttpDownloadClient {
                 .build()
                 .expect("Failed to create HTTP client"),
             download_semaphore: std::sync::Arc::new(Semaphore::new(MAX_CONCURRENT_CHUNKS)),
+            downloader_peer_id: None,
         }
     }
 
@@ -223,7 +239,7 @@ impl HttpDownloadClient {
         Ok(())
     }
 
-    /// Fetch file metadata from HTTP seeder
+    /// Fetch file metadata from seeder
     ///
     /// Calls: GET /files/{file_hash}/metadata
     async fn fetch_metadata(
@@ -235,16 +251,19 @@ impl HttpDownloadClient {
 
         tracing::info!("Fetching metadata from: {}", url);
 
-        let response = self
-            .http_client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| {
-                let err_msg = format!("Failed to fetch metadata from {}: {}", url, e);
-                tracing::error!("{}", err_msg);
-                err_msg
-            })?;
+        // Build request with optional peer ID header
+        let mut request = self.http_client.get(&url);
+        
+        if let Some(ref peer_id) = self.downloader_peer_id {
+            request = request.header("X-Downloader-Peer-ID", peer_id);
+            tracing::debug!("📤 Adding downloader peer ID header: {}", peer_id);
+        }
+
+        let response = request.send().await.map_err(|e| {
+            let err_msg = format!("Failed to fetch metadata from {}: {}", url, e);
+            tracing::error!("{}", err_msg);
+            err_msg
+        })?;
 
         if !response.status().is_success() {
             let err_msg = format!(
@@ -256,14 +275,11 @@ impl HttpDownloadClient {
             return Err(err_msg);
         }
 
-        let metadata: HttpFileMetadata = response
-            .json()
-            .await
-            .map_err(|e| {
-                let err_msg = format!("Failed to parse metadata from {}: {}", url, e);
-                tracing::error!("{}", err_msg);
-                err_msg
-            })?;
+        let metadata: HttpFileMetadata = response.json().await.map_err(|e| {
+            let err_msg = format!("Failed to parse metadata from {}: {}", url, e);
+            tracing::error!("{}", err_msg);
+            err_msg
+        })?;
 
         tracing::info!(
             "Successfully fetched metadata: {} (size: {}, encrypted: {})",
@@ -334,6 +350,7 @@ impl HttpDownloadClient {
             let file_hash = file_hash.to_string();
             let total_chunks = ranges.len();
             let semaphore = self.download_semaphore.clone();
+            let downloader_peer_id = self.downloader_peer_id.clone();
 
             // Spawn task for each chunk (but semaphore limits concurrency)
             let task = tokio::spawn(async move {
@@ -351,13 +368,16 @@ impl HttpDownloadClient {
                     url
                 );
 
-                // Make request with Range header
-                let response = client
+                // Make request with Range header and optional peer ID
+                let mut request = client
                     .get(&url)
-                    .header("Range", format!("bytes={}-{}", start, end))
-                    .send()
-                    .await
-                    .map_err(|e| format!("Failed to download chunk {}: {}", index, e))?;
+                    .header("Range", format!("bytes={}-{}", start, end));
+                
+                if let Some(ref peer_id) = downloader_peer_id {
+                    request = request.header("X-Downloader-Peer-ID", peer_id);
+                }
+                
+                let response = request.send().await.map_err(|e| format!("Failed to download chunk {}: {}", index, e))?;
 
                 // Verify 206 Partial Content response
                 if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
