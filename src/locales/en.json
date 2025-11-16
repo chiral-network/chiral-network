@@ -1559,7 +1559,9 @@
       "transaction": "Transaction",
       "block": "Block",
       "emptyQuery": "Please enter a search query",
-      "error": "Search failed",
+      "error": "Search failed: {error}",
+      "unknownError": "Unknown error",
+      "invalidBlock": "Invalid block number",
       "notFound": "Not found",
       "addressDetails": "Address Details",
       "addressLabel": "Address",
@@ -1580,10 +1582,139 @@
       "check": "Check Balance",
       "result": "Balance",
       "emptyAddress": "Please enter an address",
-      "error": "Failed to check balance"
+      "error": "Failed to check balance: {error}",
+      "errorLabel": "Error"
     },
     "error": {
       "fetchBlocks": "Failed to fetch blocks"
+    }
+  },
+  "toasts": {
+    "common": {
+      "copied": "Copied!"
+    },
+    "wallet": {
+      "accountList": {
+        "selected": "Selected account {address}...",
+        "derived": "Derived account #{index}",
+        "deriveError": "Derivation failed: {error}",
+        "keystorePrompt": "Enter keystore password",
+        "keystoreSaved": "Saved to keystore",
+        "keystoreError": "Keystore save failed: {error}"
+      },
+      "mnemonic": {
+        "ready": "Wallet ready",
+        "copied": "Recovery phrase copied to clipboard"
+      },
+      "transaction": {
+        "confirmed": "Transaction confirmed! {amount} CN sent to {address}... (Block {block})",
+        "failed": "Transaction failed in block {block}. Your funds were not sent."
+      }
+    },
+    "account": {
+      "firstRun": {
+        "testWalletCreated": "Test wallet \"TestWallet\" created!",
+        "testWalletError": "Failed to create test wallet"
+      },
+      "addressCopied": "Address copied to clipboard!",
+      "privateKey": {
+        "fetchError": "Failed to retrieve private key",
+        "copied": "Private key copied to clipboard!",
+        "missing": "No private key available"
+      },
+      "transaction": {
+        "cancelled": "Transaction cancelled",
+        "submitted": "Transaction submitted!",
+        "error": "Transaction failed: {error}"
+      },
+      "created": "Account Created Successfully!",
+      "createError": "Failed to create account: {error}",
+      "import": {
+        "invalidFormat": "Invalid private key format",
+        "success": "Account imported successfully!",
+        "error": "Failed to import account: {error}",
+        "fileInvalid": "Invalid file format: privateKey field not found",
+        "fileSuccess": "Private key loaded from file successfully!",
+        "fileReadError": "Error reading file: {error}",
+        "fileLoadError": "Error loading file: {error}"
+      },
+      "2fa": {
+        "desktopOnly": "2FA is only available in the desktop app.",
+        "setupError": "Failed to start 2FA setup: {error}",
+        "enabled": "Two-Factor Authentication has been enabled!",
+        "disabled": "Two-Factor Authentication has been disabled.",
+        "disableError": "Failed to disable 2FA: {error}"
+      },
+      "logout": {
+        "locked": "Wallet locked and session cleared",
+        "error": "Error during logout: {error}"
+      }
+    },
+    "mining": {
+      "syncComplete": "Blockchain sync complete! Mining is now active."
+    },
+    "blockchain": {
+      "noBlocks": "No blocks found. Start mining to create blocks.",
+      "fetchError": "Failed to fetch blocks: {error}"
+    },
+    "settings": {
+      "updated": "Settings Updated!",
+      "networkingError": "Settings saved, but networking update failed",
+      "proxyRelayWarning": "Add at least one trusted proxy relay before enabling Hide My IP."
+    },
+    "analytics": {
+      "direction": {
+        "upload": "Upload",
+        "download": "Download"
+      },
+      "bandwidthWarning": "{direction} cap warning: {used} GB consumed ({percent}% of {cap} GB).",
+      "bandwidthTitle": "{direction} cap warning"
+    },
+    "upload": {
+      "loginRequired": "Please log in to your account before uploading files",
+      "verifyAccountFailed": "Failed to verify account status. Please try logging in again.",
+      "dhtDisconnected": "DHT network is not connected. Please start the DHT network before uploading files.",
+      "fileSuccess": "{name} uploaded successfully",
+      "torrentSeeding": "{name} is now seeding as a torrent"
+    },
+    "network": {
+      "signalingConnected": "Connected to signaling server",
+      "signalingError": "Failed to connect to signaling server for web mode testing",
+      "peerAddressRequired": "Please enter a peer address",
+      "dhtRequired": "DHT not connected. Please start DHT first.",
+      "alreadyConnected": "Peer is already connected",
+      "connecting": "Connecting to peer via DHT...",
+      "connectionSuccess": "Connection Success!",
+      "connectionFailed": "Connection failed. Peer may be unreachable or address invalid.",
+      "connectError": "Failed to connect to peer: {error}",
+      "signalingMissing": "Signaling server not connected. Please start DHT first.",
+      "peerNotFound": "Peer {peer} not found in discovered peers",
+      "messageReceived": "Received from peer: {message}",
+      "webrtcConnected": "Successfully connected to peer!",
+      "webrtcFailed": "Connection to peer failed",
+      "dataChannelOpen": "Data channel open - you can now send messages!",
+      "dataChannelClosed": "Data channel closed",
+      "webrtcError": "WebRTC error: {error}",
+      "webrtcConnecting": "Connecting to peer: {peer}",
+      "webrtcCreateError": "Failed to create connection: {error}",
+      "noConnection": "No active WebRTC connection",
+      "messageSent": "Test message sent: {message}",
+      "sendError": "Failed to send message: {error}",
+      "gethInstalled": "Geth is already installed",
+      "gethDownloadError": "Failed to download Geth: {error}"
+    },
+    "download": {
+      "payment": {
+        "invalidAddress": "Cannot process payment: uploader wallet address is missing or invalid",
+        "failed": "Payment failed: {error}",
+        "successWithHash": "Payment successful! Transaction: {hash}...",
+        "success": "Payment successful!"
+      }
+    },
+    "transactions": {
+      "copied": "{label} copied to clipboard",
+      "copyError": "Failed to copy {label}",
+      "exported": "Transaction exported"
     }
   }
 }

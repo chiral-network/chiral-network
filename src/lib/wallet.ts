@@ -10,6 +10,13 @@ import {
   type WalletInfo,
 } from "$lib/stores";
 import { showToast } from "$lib/toast";
+import { t } from "svelte-i18n";
+
+type TranslateParams = { values?: Record<string, unknown>; default?: string };
+type TranslateFn = (key: string, params?: TranslateParams) => string;
+
+const tr: TranslateFn = (key, params) =>
+  (get(t) as unknown as TranslateFn)(key, params);
 
 const DEFAULT_POLL_INTERVAL = 15_000;
 
@@ -243,7 +250,12 @@ export class WalletService {
           lookback: 2000,
           limit: 50,
         }) as Promise<
-          Array<{ hash: string; timestamp: number; number: number; reward?: number }>
+          Array<{
+            hash: string;
+            timestamp: number;
+            number: number;
+            reward?: number;
+          }>
         >,
         invoke("get_blocks_mined", {
           address: accountAddress,
@@ -314,9 +326,10 @@ export class WalletService {
           : undefined;
 
         // Calculate fee in Chiral (gas_used * gas_price in Wei, then convert to Chiral)
-        const feeInWei = gasUsed && tx.gas_price
-          ? gasUsed * parseInt(tx.gas_price.replace("0x", ""), 16)
-          : undefined;
+        const feeInWei =
+          gasUsed && tx.gas_price
+            ? gasUsed * parseInt(tx.gas_price.replace("0x", ""), 16)
+            : undefined;
         const feeInChiral = feeInWei ? feeInWei / 1e18 : undefined;
 
         const transaction: Transaction = {
@@ -535,7 +548,9 @@ export class WalletService {
 
     // Get account address from backend for transaction record
     const accountAddress = await invoke<string>("get_active_account_address");
-    console.log(`[Transaction] Sending ${amount} CN from ${accountAddress} to ${toAddress}`);
+    console.log(
+      `[Transaction] Sending ${amount} CN from ${accountAddress} to ${toAddress}`
+    );
 
     const txHash = (await invoke("send_chiral_transaction", {
       toAddress,
@@ -543,7 +558,9 @@ export class WalletService {
     })) as string;
 
     console.log(`[Transaction] ✅ Broadcast successful! Hash: ${txHash}`);
-    console.log(`[Transaction] Status: PENDING - monitoring for confirmation...`);
+    console.log(
+      `[Transaction] Status: PENDING - monitoring for confirmation...`
+    );
 
     wallet.update((w) => ({
       ...w,
@@ -573,7 +590,11 @@ export class WalletService {
     return txHash;
   }
 
-  private async monitorTransaction(txHash: string, amount: number, toAddress: string): Promise<void> {
+  private async monitorTransaction(
+    txHash: string,
+    amount: number,
+    toAddress: string
+  ): Promise<void> {
     console.log(`[TX Monitor] 👀 Monitoring ${txHash.substring(0, 10)}...`);
 
     let attempts = 0;
@@ -583,7 +604,9 @@ export class WalletService {
       attempts++;
 
       try {
-        const receipt = await invoke<any>("get_transaction_receipt", { txHash });
+        const receipt = await invoke<any>("get_transaction_receipt", {
+          txHash,
+        });
 
         if (receipt && receipt.block_number !== null) {
           clearInterval(checkInterval);
@@ -591,13 +614,21 @@ export class WalletService {
           const confirmations = receipt.confirmations || 0;
           const status = receipt.status === "success" ? "success" : "failed";
 
-          console.log(`[TX Monitor] ✅ ${status.toUpperCase()} in block ${receipt.block_number}`);
-          console.log(`[TX Monitor] Confirmations: ${confirmations}, Gas: ${receipt.gas_used}`);
+          console.log(
+            `[TX Monitor] ✅ ${status.toUpperCase()} in block ${receipt.block_number}`
+          );
+          console.log(
+            `[TX Monitor] Confirmations: ${confirmations}, Gas: ${receipt.gas_used}`
+          );
 
           transactions.update((txs) =>
             txs.map((tx) =>
               tx.txHash === txHash || tx.hash === txHash
-                ? { ...tx, status: status as "success" | "failed", confirmations }
+                ? {
+                    ...tx,
+                    status: status as "success" | "failed",
+                    confirmations,
+                  }
                 : tx
             )
           );
@@ -610,20 +641,44 @@ export class WalletService {
           await this.refreshBalance();
 
           if (status === "success") {
-            showToast(`Transaction confirmed! ${amount} CN sent to ${toAddress.substring(0, 10)}... (Block ${receipt.block_number})`, 'success');
+            // showToast(
+            //   `Transaction confirmed! ${amount} CN sent to ${toAddress.substring(0, 10)}... (Block ${receipt.block_number})`,
+            //   "success"
+            // );
+            showToast(
+              tr("toasts.wallet.transaction.confirmed", {
+                values: {
+                  amount,
+                  address: toAddress.substring(0, 10),
+                  block: receipt.block_number,
+                },
+              }),
+              "success"
+            );
           } else {
-            showToast(`Transaction failed in block ${receipt.block_number}. Your funds were not sent.`, 'error');
+            // showToast(
+            //   `Transaction failed in block ${receipt.block_number}. Your funds were not sent.`,
+            //   "error"
+            // );
+            showToast(
+              tr("toasts.wallet.transaction.failed", {
+                values: { block: receipt.block_number },
+              }),
+              "error"
+            );
           }
-
         } else if (attempts % 6 === 0) {
-          console.log(`[TX Monitor] ⏳ Pending... (${attempts * 5}s) - Mining active?`);
+          console.log(
+            `[TX Monitor] ⏳ Pending... (${attempts * 5}s) - Mining active?`
+          );
         }
 
         if (attempts >= maxAttempts) {
           clearInterval(checkInterval);
-          console.warn(`[TX Monitor] ⚠️ Timeout after ${maxAttempts * 5}s - check Blockchain page`);
+          console.warn(
+            `[TX Monitor] ⚠️ Timeout after ${maxAttempts * 5}s - check Blockchain page`
+          );
         }
-
       } catch (error) {
         if (attempts % 12 === 0) {
           console.log(`[TX Monitor] ⏳ Still pending (${attempts * 5}s)...`);
