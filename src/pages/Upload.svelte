@@ -178,7 +178,8 @@
     const sizeInMB = sizeInBytes / 1_048_576; // Convert bytes to MB
 
     try {
-      const dynamicPrice = await paymentService.calculateDownloadCost(sizeInBytes);
+      // const dynamicPrice = await paymentService.calculateDownloadCost(sizeInBytes);
+      const dynamicPrice = 0; // please 0 until eth/transfer/persistent wallet is working.
       if (Number.isFinite(dynamicPrice) && dynamicPrice > 0) {
         return Number(dynamicPrice.toFixed(8));
       }
@@ -464,7 +465,9 @@
                     fileData,
                   },
                 );
-                const filePrice = await calculateFilePrice(file.size);
+                // const filePrice = await calculateFilePrice(file.size);
+                // please 0 until eth/transfer/persistent wallet is working.
+                const filePrice = 0;
 
                 const metadata = await dhtService.publishFileToNetwork(tempFilePath, filePrice);
 
@@ -703,7 +706,9 @@
 
         // Get file size to calculate price
         const fileSize = await invoke<number>('get_file_size', { filePath });
-        const price = await calculateFilePrice(fileSize);
+        // const price = await calculateFilePrice(fileSize);
+        // please 0 until eth/transfer/persistent wallet is working.
+        const price = 0;
 
         // Handle BitTorrent differently - create and seed torrent
         if (selectedProtocol === "BitTorrent") {

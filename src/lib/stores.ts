@@ -475,7 +475,7 @@ export const settings = writable<AppSettings>({
   ipPrivacyMode: "off",
   trustedProxyRelays: [],
   disableDirectNatTraversal: false,
-  enableAutonat: false, // Disabled by default - enable if you need NAT detection
+  enableAutonat: true, // Disabled by default - enable if you need NAT detection
   autonatProbeInterval: 30, // 30 seconds default
   autonatServers: [], // Use bootstrap nodes by default
   enableAutorelay: false, // Disabled by default - enable if you need relay connections

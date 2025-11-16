@@ -652,7 +652,7 @@ struct DhtBehaviour {
     autonat_server: toggle::Toggle<v2::server::Behaviour>,
     relay_client: relay::client::Behaviour,
     relay_server: toggle::Toggle<relay::Behaviour>,
-    dcutr: toggle::Toggle<dcutr::Behaviour>,
+    dcutr:dcutr::Behaviour,
 }
 #[derive(Debug)]
 pub enum DhtCommand {
@@ -4926,9 +4926,9 @@ async fn handle_dcutr_event(
     event_tx: &mpsc::Sender<DhtEvent>,
 ) {
     let mut metrics_guard = metrics.lock().await;
-    if !metrics_guard.dcutr_enabled {
-        return;
-    }
+    // if !metrics_guard.dcutr_enabled {
+    //     return;
+    // }
 
     let dcutr::Event {
         remote_peer_id,
@@ -5449,10 +5449,14 @@ impl DhtService {
     ) -> Result<Self, Box<dyn Error>> {
         // ---- Hotfix: finalize AutoRelay flag (bootstrap OFF + ENV OFF)
         let mut final_enable_autorelay = enable_autorelay;
-        if is_bootstrap {
-            final_enable_autorelay = false;
-            info!("AutoRelay disabled on bootstrap (hotfix).");
-        }
+
+        // force enable autorelay to facilitate autonat/dcutr
+        final_enable_autorelay = true;
+        info!("FINAL ENABLE AUTORELAY {}", enable_autorelay);
+        // if is_bootstrap {
+        //     final_enable_autorelay = false;
+        //     info!("AutoRelay disabled on bootstrap (hotfix).");
+        // }
         if std::env::var("CHIRAL_DISABLE_AUTORELAY").ok().as_deref() == Some("1") {
             final_enable_autorelay = false;
             info!("AutoRelay disabled via env CHIRAL_DISABLE_AUTORELAY=1");
@@ -5499,7 +5503,7 @@ impl DhtService {
         // Create a Kademlia behaviour with tuned configuration
         let store = MemoryStore::new(local_peer_id);
         let mut kad_cfg = KademliaConfig::new(StreamProtocol::new("/chiral/kad/1.0.0"));
-        let bootstrap_interval = Duration::from_secs(30);
+        let bootstrap_interval = Duration::from_secs(1);
         if is_bootstrap {
             // These settings result in node to not provide files, only acts as a router
             kad_cfg.set_record_ttl(Some(Duration::from_secs(0)));
@@ -5601,13 +5605,14 @@ impl DhtService {
         let mdns_toggle = toggle::Toggle::from(mdns_opt);
 
         // DCUtR requires relay to be enabled
-        let dcutr_behaviour = if enable_autonat {
-            info!("DCUtR enabled (requires relay for hole-punching coordination)");
-            Some(dcutr::Behaviour::new(local_peer_id))
-        } else {
-            None
-        };
-        let dcutr_toggle = toggle::Toggle::from(dcutr_behaviour);
+        // let dcutr_behaviour = if enable_autonat {
+        //     info!("DCUtR enabled (requires relay for hole-punching coordination)");
+        //     Some(dcutr::Behaviour::new(local_peer_id))
+        // } else {
+        //     None
+        // };
+        let dcutr_toggle = dcutr::Behaviour::new(local_peer_id);
+
 
         // Relay server configuration
         let relay_server_behaviour = if enable_relay_server {
