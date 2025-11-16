@@ -29,7 +29,8 @@ use tower_http::cors::{Any, CorsLayer};
 /// File metadata for HTTP serving
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpFileMetadata {
-    pub hash: String,
+    pub hash: String,        // The merkle_root (used for lookups/DHT)
+    pub file_hash: String,   // The SHA-256 file hash (used for storage filename)
     pub name: String,
     pub size: u64,
     pub encrypted: bool,
@@ -110,15 +111,21 @@ async fn serve_metadata(
     Path(file_hash): Path<String>,
     State(state): State<Arc<HttpServerState>>,
 ) -> Response {
-    tracing::debug!("Serving metadata for: {}", file_hash);
+    tracing::info!("🔍 Metadata request for: {}", file_hash);
+    
+    // Debug: List all registered files
+    let files = state.files.read().await;
+    tracing::info!("📋 Currently registered files: {:?}", files.keys().collect::<Vec<_>>());
+    drop(files);
 
     match state.get_file_metadata(&file_hash).await {
         Some(metadata) => {
-            tracing::info!("Served metadata for {}: {}", file_hash, metadata.name);
+            tracing::info!("✅ Served metadata for {}: {} (file_hash: {})", 
+                file_hash, metadata.name, metadata.file_hash);
             (StatusCode::OK, Json(metadata)).into_response()
         }
         None => {
-            tracing::warn!("Metadata not found: {}", file_hash);
+            tracing::warn!("❌ Metadata not found for: {}", file_hash);
             (
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse {
@@ -162,8 +169,8 @@ async fn serve_file(
         }
     };
 
-    // Build file path
-    let file_path = state.storage_dir.join(&file_hash);
+    // Build file path using the actual file_hash (SHA-256) used for storage
+    let file_path = state.storage_dir.join(&metadata.file_hash);
 
     // Check if file exists on disk
     if !file_path.exists() {

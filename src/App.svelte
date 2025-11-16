@@ -165,6 +165,7 @@ function handleFirstRunComplete() {
                 payload.file_name,
                 payload.file_size,
                 payload.downloader_address,
+                payload.downloader_peer_id || payload.downloader_address, // Use peer ID or fallback to address
                 payload.transaction_hash,
               );
 
