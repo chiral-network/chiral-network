@@ -1129,8 +1129,14 @@ async fn start_dht_node(
                         }
                     }
                     DhtEvent::DownloadedFile(metadata) => {
-                        let payload = serde_json::json!(metadata);
+                        let payload = serde_json::json!(metadata.clone());
                         let _ = app_handle.emit("file_content", payload);
+
+                        if let Err(err) =
+                            dht_clone_for_pump.promote_downloaded_file(metadata).await
+                        {
+                            warn!("Failed to promote downloaded file to seeder: {}", err);
+                        }
                     }
                     DhtEvent::PublishedFile(metadata) => {
                         let payload = serde_json::json!(metadata);
@@ -2319,7 +2325,7 @@ async fn start_ftp_download(
         .map_err(|e| format!("Failed to create output file: {}", e))?;
 
     // Retrieve file and stream in chunks
-    ftp.retr(path, |mut reader| {
+    ftp.retr(path, |reader| {
         let mut buffer = [0u8; 65536]; // 64 KB
         loop {
             let bytes_read = reader
@@ -4321,6 +4327,7 @@ fn main() {
             get_relay_alias,
             get_multiaddresses,
             clear_seed_list,
+            stop_seeding_file,
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -5254,3 +5261,22 @@ fn check_directory_exists(path: String) -> Result<bool, String> {
     let p = Path::new(&path);
     Ok(p.exists() && p.is_dir())
 }
+
+
+#[tauri::command]
+async fn stop_seeding_file(
+    state: State<'_, AppState>,
+    file_hash: String,
+) -> Result<(), String> {
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    if let Some(dht_service) = dht {
+        dht_service.stop_publishing_file(file_hash).await
+    } else {
+        Err("DHT service not available".to_string())
+    }
+}
+

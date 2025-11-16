@@ -493,6 +493,7 @@ pub enum DhtCommand {
     },
     SearchFile(String),
     DownloadFile(FileMetadata, String),
+    PromoteDownload(FileMetadata),
     ConnectPeer(String),
     ConnectToPeerById(PeerId),
     DisconnectPeer(PeerId),
@@ -2190,6 +2191,132 @@ async fn run_dht_node(
                         info!("INSERTING INTO ROOT QUERY MAPPING");
                         root_query_mapping.lock().await.insert(root_query_id, file_metadata);
                     }
+                    Some(DhtCommand::PromoteDownload(mut metadata)) => {
+                        info!(
+                            "Promoting downloaded file {} to seeder",
+                            metadata.merkle_root
+                        );
+                        let now = unix_timestamp();
+                        let peer_id_str = peer_id.to_string();
+
+                        let existing_heartbeats = {
+                            let cache = seeder_heartbeats_cache.lock().await;
+                            cache
+                                .get(&metadata.merkle_root)
+                                .map(|entry| entry.heartbeats.clone())
+                                .unwrap_or_default()
+                        };
+
+                        let mut heartbeat_entries = existing_heartbeats;
+                        upsert_heartbeat(&mut heartbeat_entries, &peer_id_str, now);
+                        let active_heartbeats = prune_heartbeats(heartbeat_entries, now);
+                        metadata.seeders = heartbeats_to_peer_list(&active_heartbeats);
+
+                        let dht_metadata = serde_json::json!({
+                            "file_hash": metadata.merkle_root,
+                            "merkle_root": metadata.merkle_root,
+                            "file_name": metadata.file_name,
+                            "file_size": metadata.file_size,
+                            "created_at": metadata.created_at,
+                            "mime_type": metadata.mime_type,
+                            "is_encrypted": metadata.is_encrypted,
+                            "encryption_method": metadata.encryption_method,
+                            "key_fingerprint": metadata.key_fingerprint,
+                            "version": metadata.version,
+                            "parent_hash": metadata.parent_hash,
+                            "cids": metadata.cids,
+                            "encrypted_key_bundle": metadata.encrypted_key_bundle,
+                            "info_hash": metadata.info_hash,
+                            "trackers": metadata.trackers,
+                            "seeders": metadata.seeders,
+                            "seederHeartbeats": active_heartbeats,
+                            "price": metadata.price,
+                            "uploader_address": metadata.uploader_address,
+                        });
+
+                        {
+                            let mut cache = seeder_heartbeats_cache.lock().await;
+                            cache.insert(
+                                metadata.merkle_root.clone(),
+                                FileHeartbeatCacheEntry {
+                                    heartbeats: active_heartbeats.clone(),
+                                    metadata: dht_metadata.clone(),
+                                },
+                            );
+                        }
+
+                        let record_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
+                        {
+                            let mut pending = pending_heartbeat_updates.lock().await;
+                            pending.insert(metadata.merkle_root.clone());
+                        }
+                        swarm
+                            .behaviour_mut()
+                            .kademlia
+                            .get_record(record_key.clone());
+
+                        let dht_record_data = match serde_json::to_vec(&dht_metadata) {
+                            Ok(data) => data,
+                            Err(e) => {
+                                error!(
+                                    "Failed to serialize metadata while promoting download: {}",
+                                    e
+                                );
+                                continue;
+                            }
+                        };
+
+                        let record = Record {
+                            key: record_key.clone(),
+                            value: dht_record_data,
+                            publisher: Some(peer_id),
+                            expires: None,
+                        };
+
+                        let connected_peers_count = connected_peers.lock().await.len();
+                        let min_replication_peers = 3;
+                        let quorum = if connected_peers_count >= min_replication_peers {
+                            kad::Quorum::All
+                        } else {
+                            kad::Quorum::One
+                        };
+
+                        match swarm.behaviour_mut().kademlia.put_record(record, quorum) {
+                            Ok(query_id) => {
+                                info!(
+                                    "Registered as seeder for {} (query id: {:?}, quorum: {:?})",
+                                    metadata.merkle_root, query_id, quorum
+                                );
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Failed to register downloaded file {}: {}",
+                                    metadata.merkle_root, e
+                                );
+                                continue;
+                            }
+                        }
+
+                        let provider_key =
+                            kad::RecordKey::new(&metadata.merkle_root.as_bytes());
+                        if let Err(e) =
+                            swarm.behaviour_mut().kademlia.start_providing(provider_key)
+                        {
+                            error!(
+                                "Failed to advertise as provider for {}: {}",
+                                metadata.merkle_root, e
+                            );
+                        }
+
+                        if let Err(e) =
+                            event_tx.send(DhtEvent::PublishedFile(metadata.clone())).await
+                        {
+                            error!(
+                                "Failed to emit PublishedFile event for download promotion: {}",
+                                e
+                            );
+                        }
+                    }
 
                     Some(DhtCommand::StopPublish(file_hash)) => {
                         let key = kad::RecordKey::new(&file_hash);
@@ -3032,13 +3159,14 @@ async fn run_dht_node(
                                         };
 
                                     // Create active download with memory-mapped file
-                            match ActiveDownload::new(
-                                metadata.clone(),
-                                file_queries,
-                                &download_path,
-                                metadata.file_size,
-                                chunk_offsets,
-                            ) {
+                                    match ActiveDownload::new(
+                                        metadata.clone(),
+                                        file_queries,
+                                        &download_path,
+                                        metadata.file_size,
+                                        chunk_offsets,
+                                        cids.clone(),
+                                    ) {
                                 Ok(active_download) => {
                                     let active_download = Arc::new(tokio::sync::Mutex::new(active_download));
 
@@ -3103,6 +3231,24 @@ async fn run_dht_node(
                                                 chunk_index + 1,
                                                 active_download.total_chunks,
                                                 file_hash);
+
+                                            if let Some(chunk_cid) =
+                                                active_download.chunk_cid(chunk_index)
+                                            {
+                                                if let Err(e) = swarm
+                                                    .behaviour_mut()
+                                                    .bitswap
+                                                    .insert_block::<MAX_MULTIHASH_LENGHT>(
+                                                        chunk_cid,
+                                                        data.clone(),
+                                                    )
+                                                {
+                                                    warn!(
+                                                        "Failed to store chunk {} for file {} in Bitswap: {}",
+                                                        chunk_index, file_hash, e
+                                                    );
+                                                }
+                                            }
 
                                             let _ = event_tx.send(DhtEvent::BitswapChunkDownloaded {
                                                 file_hash: file_hash.clone(),
@@ -3173,17 +3319,26 @@ if active_download.is_complete() {
 
                                 // Send completion events for finished downloads
                              // Send completion events for finished downloads
-                                for metadata in completed_downloads {
-                                    info!("Emitting DownloadedFile event for: {}", metadata.merkle_root);
+                                // Send completion events for finished downloads
+for metadata in completed_downloads {
+    info!(
+        "Emitting DownloadedFile event for: {}",
+        metadata.merkle_root
+    );
 
-                                    if let Err(e) = event_tx.send(DhtEvent::DownloadedFile(metadata.clone())).await {
-                                        error!("Failed to send DownloadedFile event: {}", e);
-                                    }
+    if let Err(e) = event_tx
+        .send(DhtEvent::DownloadedFile(metadata.clone()))
+        .await
+    {
+        error!("Failed to send DownloadedFile event: {}", e);
+    }
 
-                                    // Just remove from active downloads - file is already finalized
-                                    info!("Removing from active_downloads...");
-                                    active_downloads.lock().await.remove(&metadata.merkle_root);
-                                }
+    info!(
+        "Removing {} from active_downloads...",
+        metadata.merkle_root
+    );
+    active_downloads.lock().await.remove(&metadata.merkle_root);
+}
                             }
                         }
                         beetswap::Event::GetQueryError {
@@ -4774,6 +4929,7 @@ struct ActiveDownload {
     received_chunks: Arc<std::sync::Mutex<HashSet<u32>>>,
     total_chunks: u32,
     chunk_offsets: Vec<u64>,
+    chunk_cids: Vec<Cid>,
 }
 
 impl ActiveDownload {
@@ -4784,6 +4940,7 @@ impl ActiveDownload {
     download_path: &PathBuf,  // Already the full file path from get_available_download_path
     total_size: u64,
     chunk_offsets: Vec<u64>,
+    chunk_cids: Vec<Cid>,
     ) -> std::io::Result<Self> {
     let total_chunks = queries.len() as u32;
 
@@ -4816,6 +4973,7 @@ impl ActiveDownload {
         received_chunks: Arc::new(std::sync::Mutex::new(HashSet::new())),
         total_chunks,
         chunk_offsets,
+        chunk_cids,
     })
     }
 
@@ -4879,6 +5037,7 @@ impl ActiveDownload {
 
         info!("Successfully finalized file: {:?}", self.final_file_path);
         Ok(())
+
     }
 
     /// Clean up temp file (only call if download fails/is cancelled)
@@ -4907,6 +5066,10 @@ impl ActiveDownload {
             .map(|chunks| chunks.len())
             .unwrap_or(0)
     }
+
+    fn chunk_cid(&self, chunk_index: u32) -> Option<Cid> {
+        self.chunk_cids.get(chunk_index as usize).cloned()
+    }
 }
 
 impl Clone for ActiveDownload {
@@ -4919,7 +5082,8 @@ impl Clone for ActiveDownload {
             mmap: Arc::clone(&self.mmap),
             received_chunks: Arc::clone(&self.received_chunks),
             total_chunks: self.total_chunks,
-            chunk_offsets: self.chunk_offsets.clone(),
+    chunk_offsets: self.chunk_offsets.clone(),
+            chunk_cids: self.chunk_cids.clone(),
         }
     }
 }
@@ -5641,6 +5805,20 @@ impl DhtService {
             .send(DhtCommand::DownloadFile(file_metadata, download_path))
             .await
             .map_err(|e| e.to_string())
+    }
+
+    pub async fn promote_downloaded_file(
+        &self,
+        metadata: FileMetadata,
+    ) -> Result<(), String> {
+        self.cmd_tx
+            .send(DhtCommand::PromoteDownload(metadata.clone()))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        self.cache_remote_file(&metadata).await;
+        self.start_file_heartbeat(&metadata.merkle_root).await?;
+        Ok(())
     }
 
     pub async fn publish_encrypted_file(
@@ -7021,3 +7199,4 @@ mod tests {
         assert_eq!(guard.listen_addrs.len(), 2);
     }
 }
+
