@@ -192,7 +192,7 @@
           </div>
           <div>
             <h2 id="receipt-title" class="text-2xl font-bold text-gray-900 dark:text-gray-100">
-              {tr('transactions.receipt.title')}
+              {tr('Transaction Receipt')}
             </h2>
             <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
               Transaction Details
@@ -264,7 +264,7 @@
             <!-- From Address -->
             <div class="space-y-2">
               <label for="from-address" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                {tr('transactions.receipt.from')}
+                From
               </label>
               <div class="group relative">
                 <div class="flex items-center space-x-3 p-4 bg-gray-50 dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
@@ -289,7 +289,7 @@
             <!-- To Address -->
             <div class="space-y-2">
               <label for="to-address" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                {tr('transactions.receipt.to')}
+                {tr('To')}
               </label>
               <div class="group relative">
                 <div class="flex items-center space-x-3 p-4 bg-gray-50 dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
@@ -314,7 +314,7 @@
             <!-- Transaction Hash -->
             <div class="space-y-2">
               <label for="tx-hash" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                {tr('transactions.receipt.hash')}
+                {tr('Transaction Receipt Hash')}
               </label>
               <div class="group relative">
                 <div class="flex items-center space-x-3 p-4 bg-gray-50 dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
@@ -339,7 +339,7 @@
             <!-- Block Number -->
             <div class="space-y-2">
               <label for="block-number" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                {tr('transactions.receipt.blockNumber')}
+                {tr('Transaction Receipt Block Number')}
               </label>
               <div class="group relative">
                 <div class="flex items-center space-x-3 p-4 bg-gray-50 dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
@@ -367,12 +367,12 @@
         <div class="space-y-6">
           <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100 flex items-center">
             <Zap class="w-5 h-5 mr-2 text-yellow-600" />
-            {tr('transactions.receipt.gasInfo')}
+            {tr('Transaction Receipt Gas Information')}
           </h3>
           <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div class="space-y-2">
               <label for="gas-used" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                {tr('transactions.receipt.gasUsed')}
+                {tr('Transaction Receipt Gas Used')}
               </label>
               <div class="p-4 bg-gradient-to-r from-blue-50 to-blue-100 dark:from-blue-900/20 dark:to-blue-800/20 rounded-xl border border-blue-200 dark:border-blue-700">
                 <div class="flex items-center space-x-3">
@@ -387,7 +387,7 @@
             </div>
             <div class="space-y-2">
               <label for="gas-price" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                {tr('transactions.receipt.gasPrice')}
+                {tr('Transaction Receipt Gas Price')}
               </label>
               <div class="p-4 bg-gradient-to-r from-green-50 to-green-100 dark:from-green-900/20 dark:to-green-800/20 rounded-xl border border-green-200 dark:border-green-700">
                 <div class="flex items-center space-x-3">
@@ -402,7 +402,7 @@
             </div>
             <div class="space-y-2">
               <label for="fee" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                {tr('transactions.receipt.fee')}
+                {tr('Transaction Receipt Fee')}
               </label>
               <div class="p-4 bg-gradient-to-r from-purple-50 to-purple-100 dark:from-purple-900/20 dark:to-purple-800/20 rounded-xl border border-purple-200 dark:border-purple-700">
                 <div class="flex items-center space-x-3">
@@ -427,7 +427,7 @@
 
           <div class="space-y-2">
             <label for="timestamp" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
-              {tr('transactions.receipt.timestamp')}
+              {tr('Transaction Receipt Timestamp')}
             </label>
             <div id="timestamp" class="p-4 bg-gradient-to-r from-indigo-50 to-indigo-100 dark:from-indigo-900/20 dark:to-indigo-800/20 rounded-xl border border-indigo-200 dark:border-indigo-700">
               <div class="flex items-center space-x-3">
@@ -484,7 +484,7 @@
               on:click={onClose}
               class="px-6 py-2"
             >
-              {tr('common.close')}
+              Close
             </Button>
             <Button
               on:click={() => {
