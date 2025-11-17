@@ -694,16 +694,26 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   // Smart Resume: Load and resume interrupted downloads
   async function loadAndResumeDownloads() {
     try {
+      // Check if we've already restored in this session
+      if (sessionStorage.getItem('downloadsRestored') === 'true') {
+        console.log('Downloads already restored in this session, skipping')
+        return
+      }
+
       const saved = localStorage.getItem('pendingDownloads')
-      if (!saved) return
+      if (!saved) {
+        sessionStorage.setItem('downloadsRestored', 'true')
+        return
+      }
 
       const { active, queued, timestamp } = JSON.parse(saved)
-      
+
       // Only auto-resume if less than 24 hours old
       const hoursSinceLastSave = (Date.now() - timestamp) / (1000 * 60 * 60)
       if (hoursSinceLastSave > 24) {
         console.log('Saved downloads are too old (>24h), skipping auto-resume')
         localStorage.removeItem('pendingDownloads')
+        sessionStorage.setItem('downloadsRestored', 'true')
         return
       }
 
@@ -715,34 +725,38 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
         resumeCount += queued.length
       }
 
-      // Restore active downloads (mark as paused, user can resume manually)
+      // Restore active downloads - check for duplicates by ID before adding
       if (active && active.length > 0) {
         const restoredFiles = active.map((file: any) => ({
           ...file,
-          status: 'paused' as const, // Don't auto-start, let user resume
+          status: 'paused' as const,
           speed: '0 B/s',
           eta: 'N/A'
         }))
-        
-        files.update(f => [...f, ...restoredFiles])
-        
-        // Track which downloads were resumed
+
+        files.update(f => {
+          const existingIds = new Set(f.map(file => file.id))
+          const newFiles = restoredFiles.filter(file => !existingIds.has(file.id))
+          return [...f, ...newFiles]
+        })
+
         active.forEach((file: any) => resumedDownloads.add(file.id))
         resumeCount += active.length
       }
 
       if (resumeCount > 0) {
-        const message = resumeCount === 1 
+        const message = resumeCount === 1
           ? `Restored 1 interrupted download. Resume it from the Downloads page.`
           : `Restored ${resumeCount} interrupted downloads. Resume them from the Downloads page.`
         showNotification(message, 'info', 6000)
       }
 
-      // Clear saved state after successful restore
       localStorage.removeItem('pendingDownloads')
+      sessionStorage.setItem('downloadsRestored', 'true')
     } catch (error) {
       console.error('Failed to load download state:', error)
       localStorage.removeItem('pendingDownloads')
+      sessionStorage.setItem('downloadsRestored', 'true')
     }
   }
 
