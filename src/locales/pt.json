@@ -580,6 +580,19 @@
       "from": "De",
       "to": "Para"
     },
+    "receipt": {
+      "title": "Recibo de Transação",
+      "from": "De",
+      "to": "Para",
+      "hash": "Hash da Transação",
+      "blockNumber": "Número do Bloco",
+      "gasInfo": "Informações do Gás",
+      "gasUsed": "Gás Usado",
+      "gasPrice": "Preço do Gás",
+      "fee": "Taxa de Transação",
+      "timestamp": "Carimbo de data/hora",
+      "close": "Fechar Recibo"
+    },
     "searchPlaceholder": "Pesquisar por endereço, descrição ou ID..."
   },
   "keystore": {
