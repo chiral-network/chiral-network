@@ -362,7 +362,6 @@
             </div>
           </div>
         </div>
-Number
         <!-- Gas Information -->
         <div class="space-y-6">
           <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100 flex items-center">
