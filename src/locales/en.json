@@ -585,6 +585,19 @@
       "from": "From",
       "to": "To"
     },
+    "receipt": {
+      "title": "Transaction Receipt",
+      "from": "From",
+      "to": "To",
+      "hash": "Transaction Hash",
+      "blockNumber": "Block Number",
+      "gasInfo": "Gas Information",
+      "gasUsed": "Gas Used",
+      "gasPrice": "Gas Price",
+      "fee": "Transaction Fee",
+      "timestamp": "Timestamp",
+      "close": "Close Receipt"
+    },
     "searchPlaceholder": "Search by address, description, or ID..."
   },
   "keystore": {
