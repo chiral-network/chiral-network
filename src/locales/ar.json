@@ -580,6 +580,19 @@
       "from": "From",
       "to": "To"
     },
+    "receipt": {
+      "title": "إيصال المعاملة",
+      "from": "من",
+      "to": "إلى",
+      "hash": "해시 المعاملة",
+      "blockNumber": "رقم الكتلة",
+      "gasInfo": "معلومات الغاز",
+      "gasUsed": "الغاز المستخدم",
+      "gasPrice": "سعر الغاز",
+      "fee": "رسوم المعاملة",
+      "timestamp": "الطابع الزمني",
+      "close": "إغلاق الإيصال"
+    },
     "searchPlaceholder": "Search by address, description, or ID..."
   },
   "keystore": {

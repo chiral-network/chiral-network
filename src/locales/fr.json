@@ -580,6 +580,19 @@
       "from": "From",
       "to": "To"
     },
+    "receipt": {
+      "title": "Reçu de transaction",
+      "from": "De",
+      "to": "À",
+      "hash": "Hash de la transaction",
+      "blockNumber": "Numéro du bloc",
+      "gasInfo": "Informations sur le gaz",
+      "gasUsed": "Gaz utilisé",
+      "gasPrice": "Prix du gaz",
+      "fee": "Frais de transaction",
+      "timestamp": "Horodatage",
+      "close": "Fermer le reçu"
+    },
     "searchPlaceholder": "Search by address, description, or ID..."
   },
   "keystore": {
